@@ -1,5 +1,6 @@
 import { crc32, deflateSync } from 'node:zlib';
 import { type APIRequestContext, type Locator, type Page, type Response } from '@playwright/test';
+import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } from './helpers';
 
@@ -11,7 +12,9 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * decision 2026-10-22), which anyone reads, on the public profile and as the small round image of
  * the member's bylines (the post page, a 댓글, a community card). Replacing it removes the earlier
  * one at once, deleting it asks first and removes it too, and the nickname's first letter comes
- * back everywhere; Back from MY 설정 to the profile shows each change. The type sniffing, the size,
+ * back everywhere; Back from MY 설정 to the profile shows each change. A member facing a re-consent
+ * stays on MY 설정 and deletes the image with a session alone, while a new image goes to the step
+ * and comes back (owner decision 2026-10-22, ADR-0079). The type sniffing, the size,
  * the EXIF removal, the crop, the restriction hook and the permissions are the API's tests
  * (profile-image.controller.test.ts, image.test.ts, public-items*.test.ts, private-data.test.ts);
  * this walks the screens.
@@ -114,6 +117,47 @@ function uploadsSent(page: Page): () => number {
   return () => sent;
 }
 
+/**
+ * `GET /me` in this page answering as the server would after a revision of the terms that changed
+ * members' rights, while `on`; agreeing on the step turns it off (profile.spec.ts draws it the same
+ * way — no spec can bring about a re-consent for real).
+ */
+async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    const response = await route.fetch();
+    state.on = false;
+    await route.fulfill({ response });
+  });
+  return state;
+}
+
+/** The consent step of a re-consent, agreed on screen. */
+async function agreeAgain(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+    copy.onboardingReconsentReason,
+  );
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
+}
+
 /** React's hydration complaints in the browser's console from now on (likes.spec.ts says why). */
 function hydrationErrors(page: Page): string[] {
   const seen: string[] = [];
@@ -209,14 +253,15 @@ test.describe('프로필 이미지', () => {
     await expect(card.getByTestId('profile-image-notice')).toHaveText(copy.errProfileImageType);
     expect((await meOf(page.request)).profile.imageUrl).toBeNull();
 
-    // --- a strip 41 times wider than tall (82×2): the server refuses it by its shape, past the
-    // measured 40:1 (owner decision 2026-10-22), with the `pixels` sentence.
+    // --- a strip 33 times wider than tall (66×2): the server refuses it by its shape, past the
+    // one bound of both kinds, #46's measured 32:1 (owner decisions 2026-10-22), with the `pixels`
+    // sentence — '이미지가 너무 크거나 프레임이 너무 많습니다', the owner's.
     const thin = page.waitForResponse(isUpload);
     await file.setInputFiles({
       name: 'strip.png',
       mimeType: 'image/png',
       buffer: bandsPng(
-        Array.from({ length: 41 }, () => RED),
+        Array.from({ length: 33 }, () => RED),
         2,
       ),
     });
@@ -336,5 +381,99 @@ test.describe('프로필 이미지', () => {
     );
     await expect(page.getByTestId('post-author-image')).toHaveCount(0);
     expect(hydration).toEqual([]);
+  });
+
+  test('재동의가 남은 회원도 MY 설정의 프로필 이미지 카드에서 로그인만으로 이미지를 지우고, 새 이미지는 보내지 않고 남은 단계로 갔다가 마치면 MY 설정으로 돌아오며, 재동의를 모른 채 보낸 올리기가 거절되면 알림 없이 단계로 간다', async ({
+    page,
+  }) => {
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const initial = (Array.from(me.profile.nickname.trim())[0] ?? '').toLocaleUpperCase('ko-KR');
+    // An image set while nothing was left — straight at the API.
+    const set = await page.request.put(
+      `/api/v1/me/profile-image?expectedAccountId=${encodeURIComponent(me.id)}`,
+      { headers: { 'content-type': 'image/png' }, data: bandsPng([GREEN], 64) },
+    );
+    expect(set.status(), await set.text()).toBe(200);
+    const imageUrl = (await meOf(page.request)).profile.imageUrl;
+    if (imageUrl === null) throw new Error('the upload left no image');
+
+    const settings = '/my/settings';
+    const viaStep = `/onboarding?next=${encodeURIComponent(settings)}`;
+    const uploads = uploadsSent(page);
+    const reconsent = await asReconsent(page);
+    /** The browser's read of `GET /me`, which says the step is left — the card waits for it. */
+    const meRead = () =>
+      page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/v1/me' &&
+          response.request().method() === 'GET',
+      );
+    const openAsReconsent = async () => {
+      reconsent.on = true;
+      const read = meRead();
+      await page.goto(settings);
+      await read;
+      await expect(page).toHaveURL(settings);
+    };
+    const card = page.getByTestId('settings-profile-image');
+    const image = card.getByTestId('profile-image-preview-image');
+
+    // --- MY 설정 stays open for the re-consent, with the member's image and both buttons.
+    await openAsReconsent();
+    await expectImage(image, imageUrl);
+    await expect(card.getByTestId('profile-image-upload')).toHaveText(copy.profileImageReplace);
+    await expect(card.getByTestId('profile-image-delete')).toBeVisible();
+
+    // --- a new image: no picker, nothing sent — the step, and back on MY 설정 once agreed, the
+    // image as it was.
+    await card.getByTestId('profile-image-upload').click();
+    await expect(page).toHaveURL(viaStep);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expectImage(image, imageUrl);
+    expect(uploads()).toBe(0);
+
+    // --- an upload sent while `GET /me` said nothing was left, refused for the re-consent: the
+    // hook reads `GET /me` again, which now names the step, and the card goes there without a word.
+    const isTheUpload = (url: URL) => url.pathname === '/api/v1/me/profile-image';
+    await page.route(isTheUpload, async (route) => {
+      if (route.request().method() !== 'PUT') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: 'ONBOARDING_REQUIRED',
+            message: 'Onboarding required',
+            details: { steps: ['consent'] },
+          },
+        },
+      });
+    });
+    await card
+      .getByTestId('profile-image-file')
+      .setInputFiles({ name: 'new.png', mimeType: 'image/png', buffer: bandsPng([BLUE], 32) });
+    await expect(page).toHaveURL(viaStep);
+    expect(uploads()).toBe(1);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expect(card.getByTestId('profile-image-notice')).toHaveCount(0);
+    await expectImage(image, imageUrl);
+    await page.unroute(isTheUpload);
+
+    // --- deleting: sent with a session alone, right here (owner decision 2026-10-22).
+    await openAsReconsent();
+    await card.getByTestId('profile-image-delete').click();
+    await page.getByTestId('profile-image-delete-confirm').click();
+    await expect(page.getByText(copy.profileImageDeleted)).toBeVisible();
+    await expect(page).toHaveURL(settings);
+    await expect(image).toHaveCount(0);
+    await expect(card.getByTestId('profile-image-preview')).toHaveText(initial);
+    expect((await meOf(page.request)).profile.imageUrl).toBeNull();
+    expect((await page.request.get(imageUrl)).status()).toBe(404);
+    // Nothing more was uploaded on the way.
+    expect(uploads()).toBe(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

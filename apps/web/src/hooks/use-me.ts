@@ -373,8 +373,9 @@ export async function putProfileImage({
  * through `storeMe`, as the 소개's does, so the card and every observer show the new image at once
  * — a new upload is a new address, so no cache shows the old image under it. The 403 for another
  * account asks for the session again; an ONBOARDING_REQUIRED — a revision asked for the consent
- * again while the screen was open — asks `['me']` again, and the gate takes the member on. A refused
- * file (IMAGE_NOT_ALLOWED) is neither: the card says why.
+ * again while the screen was open — asks `['me']` again, and the gate, or on MY 설정 the step
+ * (`useSettingsStep`), takes the member on. A refused file (IMAGE_NOT_ALLOWED) is neither: the card
+ * says why.
  */
 export function uploadProfileImageOptions(
   queryClient: QueryClient,

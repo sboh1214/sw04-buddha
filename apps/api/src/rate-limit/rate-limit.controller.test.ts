@@ -12,7 +12,7 @@
  */
 import { createHash } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { createMarket, createMedia, createPost } from '@buddha/db/test';
+import { createMarket, createMedia, createPost, createProfileImage } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
   DEFAULT_RATE_LIMITS,
@@ -738,6 +738,32 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
           })
         ).statusCode,
       ).toBe(304);
+    });
+
+    it('counts a profile image’s read in the same bucket as a post’s (#141)', async () => {
+      // The same route serves a member's profile image (ADR-0079): every byline draws it, so it is
+      // the read most pages make — counted per address in `mediaRead`, as a post's image is.
+      const member = await signUpTestUser(t);
+      const image = await createProfileImage(t.db, { userId: member.id });
+      const peer = '203.0.113.33';
+      const revalidate = () =>
+        t.app.inject({
+          method: 'GET',
+          url: `/api/v1/media/${image.id}`,
+          headers: { 'if-none-match': `"${image.id}"` },
+          remoteAddress: peer,
+        });
+      const first = await revalidate();
+      expect(first.statusCode).toBe(304);
+      expect(first.headers['x-ratelimit-limit']).toBe('3');
+      expect(first.headers['x-ratelimit-remaining']).toBe('2');
+      expect((await revalidate()).statusCode).toBe(304);
+      expect((await revalidate()).statusCode).toBe(304);
+      expect((await revalidate()).statusCode).toBe(429);
+      // The default is the address's own: its other requests go on.
+      expect((await anonymous('/api/v1/categories', peer)).statusCode).toBe(200);
+      const keys = (await redis.keys(`${RATE_LIMIT_KEY_PREFIX}:mediaRead:*`)).sort();
+      expect(keys).toEqual([expect.stringMatching(/^rl:mediaRead:any:[0-9a-f]{32}$/)]);
     });
 
     it('skips a peer RATE_LIMIT_UNCOUNTED_PEERS names, on both halves — a web host elsewhere', async () => {

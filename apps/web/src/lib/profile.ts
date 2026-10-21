@@ -219,9 +219,10 @@ export function profileItemFailure(error: unknown): ProfileItemFailure {
 /**
  * What a save of a public item is, as the server tells them apart (`assertPublicItemOnboarding`,
  * ADR-0078 decision 4, 7-8 and 7-11): `clear` — the 소개 emptied, interest categories dropped and
- * none added — asks for a session alone, an account facing a re-consent included (owner decision
- * 2026-10-21 answer 2); `replace` — a 소개 with text, a category the account did not have — is for
- * an account that has done its onboarding.
+ * none added, the image deleted (#141) — asks for a session alone, an account facing a re-consent
+ * included (owner decisions 2026-10-21 answer 2 and 2026-10-22); `replace` — a 소개 with text, a
+ * category the account did not have, any image uploaded — is for an account that has done its
+ * onboarding.
  */
 export type PublicItemEdit = 'clear' | 'replace';
 

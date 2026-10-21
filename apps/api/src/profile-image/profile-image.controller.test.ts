@@ -9,9 +9,16 @@
  * object right after the commit, so a slow store holds no lock and a store that will not remove it
  * leaves unreachable bytes, logged — and its address stops; two writes of one member take turns on
  * the profile row; the deletion needs sign-in only; a social login's photo is never shown; another
- * account's cookie changes nothing. The restriction's hook is public-items-sanctioned.test.ts's.
- * Skips when TEST_* are unset.
+ * account's cookie changes nothing. The upload goes the post images' hardened way (#46, ADR-0073;
+ * ADR-0079 결과 5): refused unread before its body for a foreign page, no session, a step of the
+ * onboarding left or a length over the limit; one of the account's three uploads in flight — its
+ * post images' and this together — until its conversion and store have settled; within the bytes
+ * the process receives at once; cut after the idle time; and its read holds a share of the image
+ * reads' budget. The restriction's hook is public-items-sanctioned.test.ts's. Skips when TEST_* are
+ * unset.
  */
+import { type IncomingHttpHeaders, type ServerResponse, request as httpRequest } from 'node:http';
+import { finished } from 'node:stream';
 import { schema } from '@buddha/db';
 import {
   completeOnboarding,
@@ -32,12 +39,28 @@ import { Logger } from '@nestjs/common';
 import { eq } from 'drizzle-orm';
 import { type LightMyRequestResponse } from 'fastify';
 import sharp from 'sharp';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { IMAGE_BODY_LIMIT } from '../media/image-body.js';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  IMAGE_BODY_LIMIT,
+  IMAGE_UPLOADS_PER_ACCOUNT,
+  IMAGE_UPLOAD_IDLE_SECONDS,
+  IMAGE_UPLOAD_RECEIVING_BYTES,
+  imageUploadIdle,
+  imageUploadsInFlight,
+  imageUploadsReceiving,
+} from '../media/image-body.js';
+import {
+  IMAGE_READ_BUDGET_BYTES,
+  IMAGE_READ_BUSY_RETRY_SECONDS,
+  imageReads,
+} from '../media/image-reads.js';
 import { IMAGE_BUSY_RETRY_SECONDS, OneAtATime, imageConversions } from '../media/image.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
+import { SESSION_COOKIE } from '../openapi/document.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
+import { ProfileImageService } from './profile-image.service.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const TRUSTED_ORIGIN = 'http://localhost:3000';
@@ -57,7 +80,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
   let member: TestUser;
 
   beforeAll(async () => {
-    t = await createTestApp();
+    // Listening too: the upload path's specs send a body a piece at a time, or hang up mid-way,
+    // which needs a socket (`inject` sends its whole payload at once).
+    t = await createTestApp({ listen: true });
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
@@ -66,6 +91,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     await t.reset();
     member = await signUpTestUser(t);
     await completeOnboarding(t.db, { userId: member.id });
+  });
+  afterEach(async () => {
+    imageUploadIdle.ms = IMAGE_UPLOAD_IDLE_SECONDS * 1000;
+    // Every upload a spec began has given its share back and left its account's uploads in flight.
+    await vi.waitFor(() => {
+      expect(imageUploadsReceiving.size).toBe(0);
+      expect(imageUploadsInFlight.size).toBe(0);
+    });
   });
 
   const upload = (
@@ -182,22 +215,27 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect((await read(imageUrl!, { 'if-none-match': `"${imageId}"` })).statusCode).toBe(304);
 
     // Every public face of the member carries the same address (ADR-0069 decision 5, #37-6).
-    const faces = await publicFaces(post.id);
+    const faces = await publicFaces(post.id, market.id);
     expect(faces).toEqual(faces.map(() => expect.objectContaining({ imageUrl }) as unknown));
-    expect(faces).toHaveLength(4);
+    expect(faces).toHaveLength(5);
   });
 
-  /** The member's face on the profile, the community list, the post page and its comments. */
-  async function publicFaces(postId: string): Promise<PostAuthor[]> {
+  /**
+   * The member's face on every public route that shows a person (`showsPerson`): the profile, the
+   * community list, the post page, its comments and the 토론 of the post's market (#47).
+   */
+  async function publicFaces(postId: string, marketId: string): Promise<PostAuthor[]> {
     const profile = await read(`/api/v1/profiles/${await publicIdOf()}`);
     const list = await read('/api/v1/posts');
     const page = await read(`/api/v1/posts/${postId}`);
     const comments = await read(`/api/v1/posts/${postId}/comments`);
+    const discussion = await read(`/api/v1/markets/${marketId}/posts`);
     return [
       profile.json<{ data: { member: PostAuthor } }>().data.member,
       list.json<{ data: { author: PostAuthor }[] }>().data[0]!.author,
       page.json<{ data: { author: PostAuthor } }>().data.author,
       comments.json<{ data: { comment: { author: PostAuthor } }[] }>().data[0]!.comment.author,
+      discussion.json<{ data: { author: PostAuthor }[] }>().data[0]!.author,
     ];
   }
 
@@ -333,8 +371,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect(reasonOf(await upload(over)).error.details).toEqual({ reason: 'size' });
     const broken = (await photo()).subarray(0, 40);
     expect(reasonOf(await upload(broken)).error.details).toEqual({ reason: 'unreadable' });
-    // Longer than 40 times its short side (owner decision 2026-10-22), as for a post's image.
-    expect(reasonOf(await upload(await photo(410, 10))).error.details).toEqual({
+    // Longer than 32 times its short side (owner decisions 2026-10-22: one bound, #46's), as for a
+    // post's image.
+    expect(reasonOf(await upload(await photo(330, 10))).error.details).toEqual({
       reason: 'pixels',
     });
     // An absurd body is cut by the parser (413), as for a post's image.
@@ -529,7 +568,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect(await mediaRows()).toEqual([]);
     expect(t.storage.objects.size).toBe(0);
     expect((await read(imageUrl)).statusCode).toBe(404);
-    const faces = await publicFaces(post.id);
+    const faces = await publicFaces(post.id, market.id);
     expect(faces).toEqual(faces.map(() => expect.objectContaining({ imageUrl: null }) as unknown));
     // Nothing left to delete changes nothing.
     expect(meOf(await remove()).profile.imageUrl).toBeNull();
@@ -544,7 +583,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     const market = await createMarket(t.db);
     const post = await createPost(t.db, { marketId: market.id, authorId: member.id });
     await createComment(t.db, { postId: post.id, authorId: member.id });
-    const faces = await publicFaces(post.id);
+    const faces = await publicFaces(post.id, market.id);
     expect(faces).toEqual(faces.map(() => expect.objectContaining({ imageUrl: null }) as unknown));
     expect(meOf(await read('/api/v1/me', { cookie: member.cookie })).profile.imageUrl).toBeNull();
   });
@@ -607,5 +646,393 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect(me.onboarding.completed).toBe(false);
     expect(await mediaRows()).toEqual([]);
     expect(t.storage.objects.size).toBe(0);
+  });
+
+  // ---- the upload path: #46's gate and bounds (ADR-0079 결과 5) ------------------------------
+
+  interface RawAnswer {
+    status: number;
+    headers: IncomingHttpHeaders;
+    body: string;
+  }
+
+  /**
+   * An upload over a real socket (`inject` sends its whole payload at once) — to
+   * `PUT /me/profile-image`, or with `post` to `POST /media/images`, the account's other upload
+   * route — its body announced at `length` (null: none, so Node sends it chunked) and only `first`
+   * of it sent, by `who` (the member unless said). The answer, and the request to send the rest on
+   * — or to hang up.
+   */
+  function rawUpload(
+    length: number | null,
+    first: Buffer,
+    options: { who?: TestUser; cookie?: string; origin?: string | null; post?: boolean } = {},
+  ): { request: ReturnType<typeof httpRequest>; answer: Promise<RawAnswer> } {
+    const who = options.who ?? member;
+    const origin = options.origin === undefined ? TRUSTED_ORIGIN : options.origin;
+    const path = options.post === true ? '/api/v1/media/images' : '/api/v1/me/profile-image';
+    const request = httpRequest(`${t.url!}${path}?expectedAccountId=${who.id}`, {
+      method: options.post === true ? 'POST' : 'PUT',
+      headers: {
+        'content-type': 'image/jpeg',
+        cookie: options.cookie ?? who.cookie,
+        ...(origin === null ? {} : { origin }),
+        ...(length === null ? {} : { 'content-length': String(length) }),
+      },
+    });
+    // A hang-up of ours, or the API closing a connection it refused.
+    request.on('error', () => undefined);
+    const answer = new Promise<RawAnswer>((resolve) => {
+      request.on('response', (response) => {
+        const chunks: Buffer[] = [];
+        response.on('data', (chunk: Buffer) => chunks.push(chunk));
+        response.on('end', () => {
+          resolve({
+            status: response.statusCode ?? 0,
+            headers: response.headers,
+            body: Buffer.concat(chunks).toString(),
+          });
+        });
+      });
+    });
+    request.write(first);
+    return { request, answer };
+  }
+
+  /** `answer` if it comes within 3s, a failure otherwise: an answer that waited for the body. */
+  async function beforeTheBody<T>(answer: Promise<T>): Promise<T> {
+    let timer: NodeJS.Timeout | undefined;
+    const waited = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        reject(new Error('no answer before the body was sent'));
+      }, 3_000);
+    });
+    try {
+      return await Promise.race([answer, waited]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** A post's image of the member's, through `inject` — the account's other upload route. */
+  const uploadPostImage = (body: Buffer) =>
+    t.app.inject({
+      method: 'POST',
+      url: `/api/v1/media/images?expectedAccountId=${member.id}`,
+      headers: { origin: TRUSTED_ORIGIN, 'content-type': 'image/jpeg', cookie: member.cookie },
+      payload: body,
+    });
+
+  /** The API's own side of every profile upload sent over a socket from now on, until `stop`. */
+  function serverAnswers(): { answers: ServerResponse[]; stop: () => void } {
+    const server = t.app.getHttpServer();
+    const answers: ServerResponse[] = [];
+    const seen = (request: { url?: string }, response: ServerResponse) => {
+      if (request.url?.startsWith('/api/v1/me/profile-image') === true) answers.push(response);
+    };
+    server.on('request', seen);
+    return { answers, stop: () => server.off('request', seen) };
+  }
+
+  /** Once the API has seen `response` end — its client gone. */
+  const ended = (response: ServerResponse) =>
+    new Promise<void>((resolve) => {
+      finished(response, () => {
+        resolve();
+      });
+    });
+
+  it('refuses unread, before its body has come, a made-up cookie, a foreign page, an account with a step left and a length over the limit', async () => {
+    // Each announced at the parser's limit (or past it) and only begun: were the body read first,
+    // the answer would wait for the rest of it, which never comes.
+    const newcomer = await signUpTestUser(t);
+    const reconsent = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: reconsent.id });
+    await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, reconsent.id));
+    await createConsents(t.db, { userId: reconsent.id, versions: { terms: 'draft-1999-01-01' } });
+    const begun = Buffer.alloc(1024);
+    const cases = [
+      {
+        sent: rawUpload(IMAGE_BODY_LIMIT, begun, { cookie: `${SESSION_COOKIE}=x`, origin: null }),
+        want: { status: 401, code: 'UNAUTHENTICATED' },
+      },
+      {
+        sent: rawUpload(IMAGE_BODY_LIMIT, begun, { origin: 'https://evil.example' }),
+        want: { status: 403, code: 'FORBIDDEN' },
+      },
+      // The onboarding is asked before the body too (OnboardedGuard runs only after it): a new
+      // account, and one held back by a re-consent.
+      {
+        sent: rawUpload(IMAGE_BODY_LIMIT, begun, { who: newcomer }),
+        want: { status: 409, code: 'ONBOARDING_REQUIRED' },
+      },
+      {
+        sent: rawUpload(IMAGE_BODY_LIMIT, begun, { who: reconsent }),
+        want: { status: 409, code: 'ONBOARDING_REQUIRED' },
+      },
+      {
+        sent: rawUpload(IMAGE_BODY_LIMIT + 1, begun),
+        want: { status: 413, code: 'VALIDATION_ERROR' },
+      },
+    ];
+    try {
+      for (const { sent, want } of cases) {
+        const res = await beforeTheBody(sent.answer);
+        const { code } = (JSON.parse(res.body) as { error: { code: string } }).error;
+        expect({ status: res.status, code }).toEqual(want);
+      }
+      // None was let in: no share of the budget taken, no place of the account's.
+      expect(imageUploadsReceiving.size).toBe(0);
+      expect(imageUploadsInFlight.size).toBe(0);
+    } finally {
+      for (const { sent } of cases) sent.request.destroy();
+    }
+    // A type no route reads is refused as on every route (415), unread.
+    const pdf = await upload('%PDF-1.7', { type: 'application/pdf' });
+    expect(pdf.statusCode).toBe(415);
+    expect(pdf.json<{ error: { code: string } }>().error.code).toBe('VALIDATION_ERROR');
+    expect(await mediaRows()).toEqual([]);
+  });
+
+  it('counts a profile image among the account’s three uploads in flight, with its post images: a fourth of either is refused unread with Retry-After', async () => {
+    const image = await photo();
+    const half = Math.floor(image.length / 2);
+    // The profile image and two post images, each only half sent.
+    const three = [
+      rawUpload(image.length, image.subarray(0, half)),
+      rawUpload(image.length, image.subarray(0, half), { post: true }),
+      rawUpload(image.length, image.subarray(0, half), { post: true }),
+    ];
+    let fourth: ReturnType<typeof rawUpload> | undefined;
+    try {
+      await vi.waitFor(() => {
+        expect(imageUploadsInFlight.of(member.id)).toBe(IMAGE_UPLOADS_PER_ACCOUNT);
+      });
+      expect(imageUploadsReceiving.size).toBe(3 * image.length);
+      // A fourth — a profile image or a post's — answered before its body, holding nothing.
+      fourth = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(1024));
+      const busy = await beforeTheBody(fourth.answer);
+      expect(busy.status).toBe(429);
+      expect(busy.headers['retry-after']).toBe(String(IMAGE_BUSY_RETRY_SECONDS));
+      expect(JSON.parse(busy.body)).toMatchObject({
+        error: { code: 'RATE_LIMITED', details: { retryAfterSeconds: IMAGE_BUSY_RETRY_SECONDS } },
+      });
+      expect((await uploadPostImage(image)).statusCode).toBe(429);
+      expect(imageUploadsInFlight.of(member.id)).toBe(3);
+      // The profile image's body comes: stored, and its place is the account's again.
+      three[0]!.request.end(image.subarray(half));
+      const stored = await three[0]!.answer;
+      expect(stored.status).toBe(200);
+      await vi.waitFor(() => {
+        expect(imageUploadsInFlight.of(member.id)).toBe(2);
+      });
+      expect((await upload(await png(), { type: 'image/png' })).statusCode).toBe(200);
+    } finally {
+      for (const { request } of three) request.destroy();
+      fourth?.request.destroy();
+    }
+    // Hung up on: every place comes back.
+    await vi.waitFor(() => {
+      expect(imageUploadsInFlight.of(member.id)).toBe(0);
+    });
+  });
+
+  it('receives a profile image within the process’s budget, a body of no declared length held at the parser’s limit: past the budget, refused unread with Retry-After', async () => {
+    const image = await photo();
+    const half = Math.floor(image.length / 2);
+    // Sent chunked (owner decision 2026-10-21 answer 5): held at the most the parser reads.
+    const chunked = rawUpload(null, image.subarray(0, half));
+    let others: (() => void) | null = null;
+    try {
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(IMAGE_BODY_LIMIT);
+      });
+      // Other uploads hold the rest of the 64MiB: one more is refused before its body.
+      others = imageUploadsReceiving.take(IMAGE_UPLOAD_RECEIVING_BYTES - IMAGE_BODY_LIMIT);
+      expect(others).not.toBeNull();
+      const full = await upload(await photo());
+      expect(full.statusCode).toBe(429);
+      expect(full.headers['retry-after']).toBe(String(IMAGE_BUSY_RETRY_SECONDS));
+      expect(full.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+      others?.();
+      others = null;
+      // The chunked body ends: stored, its share back by the time it is answered.
+      chunked.request.end(image.subarray(half));
+      expect((await chunked.answer).status).toBe(200);
+      expect(imageUploadsReceiving.size).toBe(0);
+    } finally {
+      others?.();
+      chunked.request.destroy();
+    }
+    expect(await mediaRows()).toHaveLength(1);
+  });
+
+  it('cuts a profile upload whose body sends no byte for the idle time: answered 408, its share and its place back', async () => {
+    // The owner's 30 seconds (owner decision 2026-10-21 answer 4), shortened for the spec.
+    imageUploadIdle.ms = 300;
+    const silent = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(0));
+    silent.request.flushHeaders();
+    try {
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(IMAGE_BODY_LIMIT);
+      });
+      const res = await silent.answer;
+      expect(res.status).toBe(408);
+      expect(res.headers.connection).toBe('close');
+      expect(JSON.parse(res.body)).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+      expect(imageUploadsReceiving.size).toBe(0);
+      await vi.waitFor(() => {
+        expect(imageUploadsInFlight.of(member.id)).toBe(0);
+      });
+    } finally {
+      silent.request.destroy();
+    }
+    expect(await mediaRows()).toEqual([]);
+  });
+
+  it('holds a profile upload’s place until its conversion and store have settled, even when its client hangs up once its body is in', async () => {
+    // The conversion held until let go: were the place given back when the client hangs up, an
+    // account could keep the conversion queue full with uploads it never waits for.
+    const real = imageConversions.run.bind(imageConversions);
+    let letGo!: () => void;
+    const held = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    const run = vi.spyOn(imageConversions, 'run').mockImplementation(async (task) => {
+      await held;
+      return real(task);
+    });
+    const server = serverAnswers();
+    const image = await photo();
+    const raw = rawUpload(image.length, image);
+    try {
+      raw.request.end();
+      await vi.waitFor(() => {
+        expect(run).toHaveBeenCalledTimes(1);
+      });
+      expect(imageUploadsReceiving.size).toBe(0);
+      expect(imageUploadsInFlight.of(member.id)).toBe(1);
+      expect(server.answers).toHaveLength(1);
+      const gone = ended(server.answers[0]!);
+      raw.request.destroy();
+      await gone;
+      // Its work goes on, and holds its place.
+      expect(imageUploadsInFlight.of(member.id)).toBe(1);
+      letGo();
+      await vi.waitFor(() => {
+        expect(imageUploadsInFlight.of(member.id)).toBe(0);
+      });
+    } finally {
+      letGo();
+      server.stop();
+      raw.request.destroy();
+      run.mockRestore();
+    }
+    // Stored all the same — its work had started before its client went: the member's image now.
+    expect(await imageIdOf()).not.toBeNull();
+    expect(await mediaRows()).toHaveLength(1);
+  });
+
+  it('stores nothing for a profile upload whose client went before its handler ran, its place back at once', async () => {
+    // Read off the prototype as a function of its own (`real.call` gives it the guard back).
+    const real = Reflect.get(OnboardedGuard.prototype, 'canActivate');
+    let letGo!: () => void;
+    const held = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    let entered!: () => void;
+    const reached = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let first = true;
+    const guard = vi
+      .spyOn(OnboardedGuard.prototype, 'canActivate')
+      .mockImplementation(async function (this: OnboardedGuard, context) {
+        if (first) {
+          first = false;
+          entered();
+          await held;
+        }
+        return real.call(this, context);
+      });
+    const replaces = vi.spyOn(ProfileImageService.prototype, 'replace');
+    const server = serverAnswers();
+    const image = await photo();
+    const raw = rawUpload(image.length, image);
+    try {
+      raw.request.end();
+      await reached;
+      expect(imageUploadsInFlight.of(member.id)).toBe(1);
+      const response = server.answers[0]!;
+      const gone = ended(response);
+      raw.request.destroy();
+      await gone;
+      expect(imageUploadsInFlight.of(member.id)).toBe(0);
+      letGo();
+      await vi.waitFor(() => {
+        expect(response.writableEnded).toBe(true);
+      });
+      expect(replaces).not.toHaveBeenCalled();
+      expect(await mediaRows()).toEqual([]);
+      expect(t.storage.objects.size).toBe(0);
+    } finally {
+      letGo();
+      server.stop();
+      raw.request.destroy();
+      guard.mockRestore();
+      replaces.mockRestore();
+    }
+    expect(meOf(await upload(image)).profile.imageUrl).not.toBeNull();
+  });
+
+  it('reads a profile image within the image reads’ budget, its row’s size held while it is read: past the budget, refused unread with Retry-After', async () => {
+    const { imageUrl } = meOf(await upload(await png(), { type: 'image/png' })).profile;
+    const [row] = await mediaRows();
+    const getObject = t.storage.get.bind(t.storage);
+    const held: number[] = [];
+    const get = vi.spyOn(t.storage, 'get').mockImplementation((key, options) => {
+      held.push(imageReads.size);
+      return getObject(key, options);
+    });
+    try {
+      const others = imageReads.take(IMAGE_READ_BUDGET_BYTES);
+      expect(others).not.toBeNull();
+      try {
+        const busy = await read(imageUrl!);
+        expect(busy.statusCode).toBe(429);
+        expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+        expect(busy.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+        expect(get).not.toHaveBeenCalled();
+      } finally {
+        others?.();
+      }
+      const res = await read(imageUrl!);
+      expect(res.statusCode).toBe(200);
+      expect(held).toEqual([row!.byteSize]);
+      await vi.waitFor(() => {
+        expect(imageReads.size).toBe(0);
+      });
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('answers a profile image whose object is gone as not found, and a store that fails as a failure', async () => {
+    // The member's image now, its object never stored: the store answers it is not there (S3's
+    // NoSuchKey alone — @buddha/storage), and the read says so.
+    const image = await createProfileImage(t.db, { userId: member.id });
+    expect((await read(`/api/v1/media/${image.id}`)).statusCode).toBe(404);
+    await t.storage.put(image.storageKey, await png(), image.contentType);
+    // Any other failure of the store is not an image that is gone.
+    const get = vi.spyOn(t.storage, 'get').mockRejectedValueOnce(new Error('store down'));
+    try {
+      expect((await read(`/api/v1/media/${image.id}`)).statusCode).toBe(500);
+    } finally {
+      get.mockRestore();
+    }
+    expect((await read(`/api/v1/media/${image.id}`)).statusCode).toBe(200);
+    await vi.waitFor(() => {
+      expect(imageReads.size).toBe(0);
+    });
   });
 });

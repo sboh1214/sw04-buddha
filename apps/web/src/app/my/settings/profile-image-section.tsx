@@ -6,6 +6,7 @@ import { useRef, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useDeleteProfileImage, useMe, useUploadProfileImage } from '@/hooks/use-me';
+import { useSettingsStep } from '@/hooks/use-settings-step';
 import { nameInitial } from '@/lib/posts';
 import {
   PROFILE_IMAGE_ACCEPT,
@@ -13,6 +14,7 @@ import {
   profileImagePrecheck,
   profileImageRefusalMessage,
   profileImageUploadFailure,
+  profileItemSaveGoesToStep,
 } from '@/lib/profile';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
@@ -21,7 +23,11 @@ import { SettingsSection } from './section';
  * 프로필 이미지 (#141, ADR-0079; ADR-0069 decision 3 #37-6, decision 4 #141): the public profile's
  * image, set here (decision 4 #41: «MY 설정») by a direct upload — never a social login's photo —
  * and shown on the profile and as the small round image of every byline (#37-6). Without one, both
- * draw the nickname's first letter, as this card does.
+ * draw the nickname's first letter, as this card does. An account facing a re-consent alone stays
+ * on this page (the gate's exception, ONBOARDING_EXEMPT_PAGES) and deletes its image here with a
+ * session alone (owner decision 2026-10-22: «재동의만 남은 계정의 프로필 이미지 지우기 →
+ * 로그인만으로»); a new image goes to the step first, coming back here (`useSettingsStep`, as the
+ * 소개's new text does — ADR-0078 7-24, ADR-0079 결정 9).
  */
 export function ProfileImageSection() {
   const { data: me, isPending } = useMe();
@@ -58,7 +64,13 @@ export function ProfileImageSection() {
  *   and nothing more is asked.
  * - 삭제 asks first — the image is removed at once and never comes back (decision 4 #141), as a
  *   post's or a comment's deletion asks — and then the nickname's first letter is drawn again.
- *   Sign-in is all the server asks of a deletion, during a restriction too (#37-9, decision 7).
+ *   Sign-in is all the server asks of a deletion, during a restriction too (#37-9, decision 7) and
+ *   for an account facing a re-consent (owner decision 2026-10-22).
+ * - With a step left — a re-consent, the only one the gate keeps on this page — 올리기 / 바꾸기 opens
+ *   no picker: a new image is for an onboarded account only (the server would refuse it), so it goes
+ *   to the step (`profileItemSaveGoesToStep`), which comes back here; an upload the server refused
+ *   for the onboarding — sent before `GET /me` said a step is left — goes there too, without a word
+ *   (`afterRefusal`).
  *
  * Each answer is the whole profile, whose image address goes into `['me']` (the hooks), and the
  * router drops the pages it kept for Back and Forward (`router.refresh()`, bio-section.tsx says
@@ -78,6 +90,7 @@ function ProfileImageFields({
   const upload = useUploadProfileImage();
   const remove = useDeleteProfileImage();
   const router = useRouter();
+  const step = useSettingsStep();
   const fileInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   // Whether the dialog closes on a deletion that went through: the 삭제 button it opened from is
@@ -107,8 +120,18 @@ function ProfileImageFields({
       toaster.create({ type: 'success', title: copy.profileImageSaved });
       router.refresh();
     } catch (error) {
+      // The hook has asked `['me']` again for an ONBOARDING_REQUIRED: the gate or the step follows.
+      if (step.afterRefusal(error)) return;
       say(profileImageUploadFailure(error));
     }
+  };
+
+  const pick = () => {
+    if (profileItemSaveGoesToStep('replace', step.stepLeft)) {
+      step.toStep();
+      return;
+    }
+    fileInput.current?.click();
   };
 
   const onDelete = async () => {
@@ -158,7 +181,7 @@ function ProfileImageFields({
             loading={upload.isPending}
             loadingText={copy.profileImageUploading}
             disabled={busy}
-            onClick={() => fileInput.current?.click()}
+            onClick={pick}
             data-testid="profile-image-upload"
           >
             {imageUrl === null ? copy.profileImageUpload : copy.profileImageReplace}

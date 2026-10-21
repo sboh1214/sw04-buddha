@@ -51,10 +51,11 @@ export class ProfileImageService {
    * `PUT /me/profile-image`: checks and converts the upload, stores it as the member's profile
    * image and removes the one it replaces. A new image is a new value of a public item, so the
    * restriction is asked before anything is decoded — a conversion is the dearest step — and again
-   * under the lock, with the onboarding (OnboardedGuard asked it before the handler ran, so the
-   * conversion is never paid for; this holds it to the commit), where the answers hold until the
-   * write commits. The guard runs after Fastify has read the body: refusing an unonboarded account
-   * before the body is read is the restack's (ADR-0079 결과 5).
+   * under the lock, with the onboarding (the body parser's gate asked it before the body was read
+   * and OnboardedGuard before the handler ran, so the conversion is never paid for; this holds it to
+   * the commit), where the answers hold until the write commits. The controller runs this as part of
+   * the upload the gate let in (`runUploadWork`): the account's place among its three uploads in
+   * flight is held until it has settled.
    *
    * The object is written before its row, as a post's upload is (MediaService): a row never names
    * an object that is not there, and when the transaction fails the object is removed again (a
@@ -158,7 +159,9 @@ export class ProfileImageService {
    * transaction after 30 seconds), and a commit lost after the object went can never leave a
    * profile naming an image without bytes. Best effort: a store that will not remove it leaves
    * bytes nothing names, which no reader can reach — logged with the key for an operator, and the
-   * member's change stands (ADR-0079 7-5; whether it should is the owner's question in 결과 4).
+   * member's change stands (ADR-0079 7-5). The owner's answer of 2026-10-22 on this reads «바꾸기
+   * 거절(지금대로)» — a refusal, called the way it is now, which it is not: ADR-0079 결과 4 asks
+   * again, and this stays as it is until then.
    */
   private async removeObject(storageKey: string): Promise<void> {
     await this.storage.delete(storageKey).catch((error: unknown) => {

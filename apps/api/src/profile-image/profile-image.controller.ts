@@ -1,4 +1,4 @@
-import { Body, Controller, HttpCode, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, HttpCode, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import { ApiBody, ApiConsumes, ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   IMAGE_MAX_BYTES,
@@ -10,7 +10,7 @@ import {
   type Me,
   type UploadImageQuery,
 } from '@buddha/shared';
-import { type FastifyReply } from 'fastify';
+import { type FastifyReply, type FastifyRequest } from 'fastify';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
@@ -18,13 +18,12 @@ import { SessionGuard } from '../auth/session.guard.js';
 import { AppError } from '../common/errors/app-error.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
 import { MeService } from '../me/me.service.js';
-import { IMAGE_UPLOAD_CONTENT_TYPES } from '../media/image-body.js';
+import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from '../media/image-body.js';
+import { IMAGE_BINARY } from '../media/image-response.js';
 import { IMAGE_BUSY_RETRY_SECONDS, IMAGE_MAX_SIDE_RATIO } from '../media/image.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ProfileImageService } from './profile-image.service.js';
-
-const BINARY = { schema: { type: 'string', format: 'binary' } } as const;
 
 /**
  * `/api/v1/me/profile-image` (#141, ADR-0079): the member's profile image, uploaded and deleted in
@@ -47,8 +46,14 @@ export class ProfileImageController {
    * body parser and gate — image-body.ts's IMAGE_UPLOAD_ROUTES), with the account the screen shows
    * in the query (`expectedAccountId`): the body is the file, and the cookie alone would put the
    * image on whichever account signed in last in another tab. A new public item: for accounts that
-   * finished the onboarding (OnboardedGuard), and refused during a writing or an account
-   * restriction (#37-9, decision 7 — the service asks).
+   * finished the onboarding (the gate before the body, OnboardedGuard after it), and refused during
+   * a writing or an account restriction (#37-9, decision 7 — the service asks).
+   *
+   * The conversion and the store run as part of the upload the gate let in (`runUploadWork`), as a
+   * post's image's do (MediaController.upload): the account's place among its three uploads in
+   * flight — a post's images and its profile image counted together — is held until they settle,
+   * even when the client has hung up meanwhile, and a client gone before they start has nothing
+   * stored: there is no one to answer.
    */
   @Put()
   @UseGuards(OnboardedGuard)
@@ -62,13 +67,19 @@ export class ProfileImageController {
       'image is removed',
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
-  @ApiBody(BINARY)
+  @ApiBody(IMAGE_BINARY)
   @ApiData(meSchema)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body parser's
   // hook before the body is read — image-body.ts), a query whose `expectedAccountId` is not the
   // cookie's account (details name the field; nothing stored), or a new image under a writing or an
-  // account restriction (no field named). RATE_LIMITED (every route documents it) is also the
-  // answer when too many conversions are waiting (image.ts), as for a post's image.
+  // account restriction (no field named). UNAUTHENTICATED and ONBOARDING_REQUIRED are answered by
+  // that hook too, before the body is read, and so is a body declared over the parser's limit
+  // (413, VALIDATION_ERROR); a body that sends no byte for 30 seconds is cut (408,
+  // VALIDATION_ERROR — image-body.ts). RATE_LIMITED (every route documents it) is also the answer,
+  // with `Retry-After`, when the account has three uploads in flight — its post images' and this
+  // one together — or the uploads being received hold the process's budget (that hook again,
+  // unread — image-body.ts) and when too many conversions are waiting (image.ts), as for a post's
+  // image.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -81,8 +92,9 @@ export class ProfileImageController {
     @CurrentUser() user: SessionUser,
     @Query({ schema: uploadImageQuerySchema }) query: UploadImageQuery,
     @Body() body: unknown,
+    @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
-  ): Promise<Me> {
+  ): Promise<Me | undefined> {
     assertExpectedAccount(user.id, query.expectedAccountId);
     if (!(body instanceof Buffer)) {
       throw new AppError('VALIDATION_ERROR', {
@@ -92,8 +104,11 @@ export class ProfileImageController {
         ],
       });
     }
+    const work = runUploadWork(request, () => this.images.replace(user.id, new Uint8Array(body)));
+    // The client has gone already: there is no one to answer.
+    if (work === undefined) return undefined;
     try {
-      await this.images.replace(user.id, new Uint8Array(body));
+      await work;
     } catch (error) {
       // Too many conversions waiting (image.ts `imageConversions`): the header every other 429 of
       // the API carries, with the same seconds as `details.retryAfterSeconds`.

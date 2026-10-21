@@ -1612,7 +1612,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(await bioOf()).toBeNull();
   });
 
-  describe('the profile image (migration 0037, #141)', () => {
+  describe('the profile image (migration 0038, #141)', () => {
     /** The image a profile names, read back. */
     const imageOf = async (userId: string) =>
       (
