@@ -21,13 +21,87 @@ const COLOUR_TYPE = { 1: 0, 2: 4, 3: 2, 4: 6 } as const;
 
 type Channels = keyof typeof COLOUR_TYPE;
 
-function header(width: number, height: number, channels: Channels, depth: 8 | 16): Buffer {
+/**
+ * A PNG's kind as its file stores it: channels, bits a sample, Adam7-interlaced or not — or indices
+ * into a palette — and a transparent colour or a palette's alpha (a `tRNS` chunk).
+ */
+export interface PngKind {
+  readonly channels?: Channels;
+  readonly depth?: 8 | 16;
+  readonly interlaced?: boolean;
+  /**
+   * Indices of this many bits into a palette (colour type 3, with a `PLTE` chunk) in place of
+   * `channels` and `depth`.
+   */
+  readonly palette?: 1 | 2 | 4 | 8;
+  /**
+   * A `tRNS` chunk: for a palette, its first entry's alpha; for grey or RGB (`channels` 1 or 3),
+   * the colour that is transparent (black — every pixel here). A PNG with an alpha channel has none.
+   */
+  readonly transparent?: boolean;
+}
+
+/** Bits a pixel as the file stores it: a palette index, or every channel's sample. */
+function bitsPerPixel({ channels = 3, depth = 8, palette }: PngKind): number {
+  return palette ?? channels * depth;
+}
+
+function header(width: number, height: number, kind: PngKind): Buffer {
+  const { channels = 3, depth = 8, interlaced = false, palette, transparent = false } = kind;
+  if (transparent && palette === undefined && channels !== 1 && channels !== 3) {
+    throw new Error('a PNG with an alpha channel has no transparent colour');
+  }
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
-  ihdr.writeUInt8(depth, 8);
-  ihdr.writeUInt8(COLOUR_TYPE[channels], 9);
-  return chunk('IHDR', ihdr); // compression, filter and interlace: 0
+  ihdr.writeUInt8(palette ?? depth, 8);
+  ihdr.writeUInt8(palette === undefined ? COLOUR_TYPE[channels] : 3, 9);
+  ihdr.writeUInt8(interlaced ? 1 : 0, 12); // compression and filter: 0
+  return chunk('IHDR', ihdr);
+}
+
+/**
+ * The chunks a palette or a transparent colour adds after the header (and its profile) and before
+ * the pixels: `PLTE` (black and white) and `tRNS`.
+ */
+function paletteAndTransparency({ channels = 3, palette, transparent = false }: PngKind) {
+  const chunks: Buffer[] = [];
+  if (palette !== undefined) chunks.push(chunk('PLTE', Buffer.from([0, 0, 0, 255, 255, 255])));
+  if (transparent) {
+    // A palette: its first entry half transparent. Grey or RGB: one sample a channel, two bytes
+    // whatever the depth — 0, black.
+    const colour = Buffer.alloc(channels === 1 ? 2 : 6);
+    chunks.push(chunk('tRNS', palette === undefined ? colour : Buffer.from([128])));
+  }
+  return chunks;
+}
+
+/** Adam7's seven passes: where each starts in a block of 8×8 pixels and how far apart it samples. */
+const ADAM7 = [
+  [0, 0, 8, 8],
+  [4, 0, 8, 8],
+  [0, 4, 4, 8],
+  [2, 0, 4, 4],
+  [0, 2, 2, 4],
+  [1, 0, 2, 2],
+  [0, 1, 1, 2],
+] as const;
+
+/**
+ * The bytes of a `width`×`height` image's rows before they are deflated: each row its filter byte
+ * and its pixels, `bits` each, filled out to a whole byte — for an interlaced one, the rows of each
+ * of Adam7's passes in turn (a pass with no pixels has no rows).
+ */
+function rawLength(width: number, height: number, bits: number, interlaced: boolean) {
+  const row = (pixels: number) => 1 + Math.ceil((pixels * bits) / 8);
+  if (!interlaced) return row(width) * height;
+  let length = 0;
+  for (const [x, y, dx, dy] of ADAM7) {
+    const passWidth = Math.max(0, Math.ceil((width - x) / dx));
+    const passHeight = Math.max(0, Math.ceil((height - y) / dy));
+    if (passWidth > 0) length += row(passWidth) * passHeight;
+  }
+  return length;
 }
 
 /** An `eXIf` chunk holding only the EXIF orientation tag (big-endian TIFF, one IFD entry). */
@@ -130,27 +204,29 @@ function embeddedProfile(grey: boolean): Buffer {
 }
 
 /**
- * A real PNG of `width`×`height` with `channels` channels of `depth` bits, every sample 0 — so it
- * deflates to almost nothing (5,000,000×10 grey is 49KB) and decodes to its full size — tagged
- * with an EXIF `orientation` when given, and with an embedded ICC profile (grey or RGB, as its
- * channels are) when `profile` is set.
+ * A real PNG of `width`×`height` of the given kind (8-bit RGB unless it says otherwise),
+ * Adam7-interlaced when `interlaced` is set, every sample 0 — so it deflates to almost nothing
+ * (5,000,000×10 grey is 49KB) and decodes to its full size — tagged with an EXIF `orientation`
+ * when given, and with an embedded ICC profile (grey or RGB, as its channels are — RGB for a
+ * palette) when `profile` is set.
  */
 export function pngOf(
   width: number,
   height: number,
   {
-    channels = 3,
-    depth = 8,
     orientation,
     profile = false,
-  }: { channels?: Channels; depth?: 8 | 16; orientation?: number; profile?: boolean } = {},
+    ...kind
+  }: PngKind & { orientation?: number; profile?: boolean } = {},
 ): Buffer {
-  // Each row is its filter byte (0, none) and its samples.
-  const rows = Buffer.alloc((1 + (width * channels * depth) / 8) * height);
+  const { channels = 3, interlaced = false, palette } = kind;
+  // Each row is its filter byte (0, none) and its pixels.
+  const rows = Buffer.alloc(rawLength(width, height, bitsPerPixel(kind), interlaced));
   return Buffer.concat([
     SIGNATURE,
-    header(width, height, channels, depth),
-    ...(profile ? [embeddedProfile(channels <= 2)] : []),
+    header(width, height, kind),
+    ...(profile ? [embeddedProfile(palette === undefined && channels <= 2)] : []),
+    ...paletteAndTransparency(kind),
     ...(orientation === undefined ? [] : [exifOrientation(orientation)]),
     chunk('IDAT', deflateSync(rows)),
     chunk('IEND', Buffer.alloc(0)),
@@ -158,14 +234,15 @@ export function pngOf(
 }
 
 /**
- * An RGB PNG whose header claims `width`×`height` over a few bytes of pixel data: a bomb, which
- * must be refused from its header (the decoder would fail on the data only after allocating the
- * image).
+ * A PNG whose header claims `width`×`height` (8-bit RGB unless `kind` says otherwise) over a few
+ * bytes of pixel data: a bomb, which must be refused from its header (the decoder would fail on
+ * the data only after allocating the image).
  */
-export function pngHeaderOnly(width: number, height: number): Buffer {
+export function pngHeaderOnly(width: number, height: number, kind: PngKind = {}): Buffer {
   return Buffer.concat([
     SIGNATURE,
-    header(width, height, 3, 8),
+    header(width, height, kind),
+    ...paletteAndTransparency(kind),
     chunk('IDAT', deflateSync(Buffer.alloc(64))),
     chunk('IEND', Buffer.alloc(0)),
   ]);

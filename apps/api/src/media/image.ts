@@ -62,14 +62,12 @@ export const IMAGE_EXTENSION: Readonly<Record<ImageContentType, string>> = {
 
 /**
  * The memory one conversion may take, in bytes: what the decoder and the resize hold at their
- * peak for one frame. One conversion runs at a time (`imageConversions`), so this plus the API's
- * own use stays under its container's 448 MiB (deploy/compose.yaml) with room left.
- *
- * A known exception, open with the owner (ADR-0073 결과 4 (1)): a thin PNG with alpha or 16-bit
- * colour — 8-bit RGBA and 16-bit grey + alpha, RGB or RGBA, interlaced or not, and 8-bit grey +
- * alpha that embeds an ICC profile (an interlaced 8-bit RGB sits at the edge) — passes every check
- * here and still takes more: up to ~275MiB by libvips' count, ~360MiB at the process's peak
- * (16-bit RGBA at 32:1 with a profile; IMAGE_MAX_SIDE_RATIO).
+ * peak for one frame, by libvips' own count. One conversion runs at a time (`imageConversions`),
+ * so this plus the API's own use stays under its container's 448 MiB (deploy/compose.yaml) with
+ * room left. The header checks keep a frame within it: a JPEG, GIF or WebP frame by what it
+ * holds per pixel (`decodeBytesPerPixel`), a PNG frame by its kind's largest frame, measured at
+ * every shape up to IMAGE_MAX_SIDE_RATIO (PNG_LARGEST_FRAME_PIXELS — owner 2026-10-22, ADR-0073
+ * 9-8).
  */
 export const IMAGE_DECODE_BUDGET_BYTES = 128 * 1024 * 1024;
 
@@ -89,43 +87,107 @@ export const IMAGE_DECODE_BUDGET_BYTES = 128 * 1024 * 1024;
  * tall costs little, but which side a file stores as its width is not what a person sees (EXIF
  * turns it), and the owner's rule is the long side over the short.
  *
- * Not every PNG fits at this ratio: a thin one with alpha or 16-bit colour can take up to ~275MiB
- * — the known exception in IMAGE_DECODE_BUDGET_BYTES, open with the owner (ADR-0073 결과 4 (1)).
+ * Most PNG kinds with alpha, 16-bit samples or interlacing hold more at the same shape — at this
+ * ratio up to ~275MiB at the most pixels they were allowed before — so each PNG kind has its own
+ * largest frame, measured at every shape up to this ratio (PNG_LARGEST_FRAME_PIXELS, owner
+ * 2026-10-22); 16-bit grey and interlaced 8-bit grey keep the bound they had
+ * (IMAGE_MAX_INPUT_PIXELS, and 41,943,040 for interlaced 16-bit grey).
+ *
+ * The thin shapes cost what they do because the frame is fitted inside IMAGE_MAX_DIMENSION: a
+ * change to it, to this ratio or to IMAGE_DECODE_BUDGET_BYTES, or to sharp or libvips, needs these
+ * measurements and PNG_LARGEST_FRAME_PIXELS' again (ADR-0073 결과 5).
  */
 export const IMAGE_MAX_SIDE_RATIO = 32;
 
 /**
- * What a conversion holds per pixel of one frame, at its peak, in bytes — measured on the pipeline
- * below (sharp 0.35.5, cache off, one thread, a quarter turn by EXIF where it costs more), at and
- * around the bound, near square, rounded up (ADR-0073 9-8; a thinner PNG, or one that embeds an
- * ICC profile, can take more — IMAGE_DECODE_BUDGET_BYTES):
+ * What a conversion holds per pixel of a JPEG, GIF or WebP frame, at its peak, in bytes — measured
+ * on the pipeline below (sharp 0.35.5, cache off, one thread, a quarter turn by EXIF where it costs
+ * more), at and around the bound, near square, rounded up — and at the bound within
+ * IMAGE_DECODE_BUDGET_BYTES as thin as IMAGE_MAX_SIDE_RATIO lets it be too (ADR-0073 9-8; a PNG
+ * has PNG_LARGEST_FRAME_PIXELS):
  *
  * - a baseline JPEG is shrunk while it is decoded (libjpeg's shrink-on-load), so even 48
  *   megapixels peak near 45MB: 1 byte;
  * - a progressive JPEG keeps every coefficient until the last scan: up to 10 (4:4:4);
- * - a PNG is decoded a band of rows at a time, 0.6 per sample (a 16-bit sample is two) — but an
- *   interlaced one (Adam7) is decoded whole: 1.6 per sample;
  * - a GIF frame is unpacked whole with the frame before it: 16; a WebP frame (read as an
  *   animation, a still one too): 15. The frames of an animation are decoded one after another,
  *   so the frame counts here and all of them only against IMAGE_MAX_INPUT_PIXELS.
  */
 export function decodeBytesPerPixel(
-  contentType: ImageContentType,
-  metadata: Pick<Metadata, 'channels' | 'depth' | 'isProgressive'>,
+  contentType: Exclude<ImageContentType, 'image/png'>,
+  metadata: Pick<Metadata, 'isProgressive'>,
 ): number {
   switch (contentType) {
     case 'image/jpeg':
       return metadata.isProgressive ? 10 : 1;
-    case 'image/png': {
-      const samples = (metadata.channels ?? 4) * (metadata.depth === 'ushort' ? 2 : 1);
-      // In tenths, so 4 samples are 2.4 and not 2.4000000000000004.
-      return (samples * (metadata.isProgressive ? 16 : 6)) / 10;
-    }
     case 'image/gif':
       return 16;
     case 'image/webp':
       return 15;
   }
+}
+
+/** A PNG's channels as it decodes: grey, grey + alpha, RGB, RGBA. */
+type PngChannels = Metadata['channels'];
+
+/**
+ * The largest frame a PNG may have, in pixels (owner 2026-10-22, ADR-0073 9-8), by what its header
+ * says it decodes to — its channels (a palette decodes to RGB, or RGBA with transparency; grey or
+ * RGB with a transparent colour, to grey + alpha or RGBA), 8 bits a sample (1 to 8 decode as 8)
+ * or 16 — then [not interlaced, interlaced]: so that converting any frame the header checks let
+ * through stays within IMAGE_DECODE_BUDGET_BYTES, whatever its shape up to IMAGE_MAX_SIDE_RATIO
+ * and with an embedded ICC profile (anyone can put one in a file, and sharp turns the pixels into
+ * sRGB before the resize — but not a 16-bit grey or grey + alpha one's). `image.test.ts` checks
+ * that sharp's header reads palette and transparent-colour PNGs as the kind they decode to.
+ *
+ * Not a cost per pixel: what a PNG conversion holds depends on the frame's shape far more than on
+ * its pixels. libvips reads a plain PNG a band of rows at a time and an interlaced one whole, and
+ * the resize holds input rows as wide as the frame, most where libvips' integral vertical shrink
+ * is about to step up — a vertical factor just under 4, 6, 8 … (sharp fits the frame inside
+ * IMAGE_MAX_DIMENSION and rounds the output height): 16-bit RGBA at 3.5 megapixels took 127MiB as
+ * 8195×427 (a factor of 3.99) and 79MiB as 8195×424 (4.0).
+ *
+ * Measured by libvips' high-water mark on the pipeline below (sharp 0.35.5, libvips 8.18.7, cache
+ * off, one thread, macOS arm64) with a hand-made profile (a real Display P3 one measured the same,
+ * and so did palette, transparent-colour and 1- to 4-bit PNGs against the kind they decode to):
+ * the bound's wide frames from 1:1 to 32:1 every 50 to 100 px, every 4 to 8 px around those widths
+ * and at 32:1 with the heights whose factor is just under the step, and up to 4:1 turned a quarter
+ * by EXIF (sharp turns after the resize; a frame stored tall holds far less). Each value is a
+ * multiple of 100,000 at which the costliest of them took at most 126MiB — room under the budget
+ * for the shapes between — or the bound the kind had before where that was already within; 8-bit
+ * RGBA, for one, takes a 5K screenshot (14.7 megapixels) and refuses 8000×6000.
+ * `image-memory.test.ts` converts each kind's costliest frame — only those shapes, so a change to
+ * IMAGE_MAX_DIMENSION (which places the shrink's steps), the budget, the ratio or
+ * IMAGE_MAX_INPUT_PIXELS, or to sharp or libvips, needs the measurement again (ADR-0073 결과 5).
+ * The values are this pipeline's: another — a profile image's square cut to 512px (#141) — has
+ * costliest shapes of its own and is measured on its own before it uses them.
+ */
+export const PNG_LARGEST_FRAME_PIXELS: Readonly<
+  Record<PngChannels, Readonly<Record<8 | 16, readonly [plain: number, interlaced: number]>>>
+> = {
+  1: {
+    8: [IMAGE_MAX_INPUT_PIXELS, IMAGE_MAX_INPUT_PIXELS],
+    16: [IMAGE_MAX_INPUT_PIXELS, 41_943_040],
+  },
+  2: { 8: [37_000_000, 24_500_000], 16: [25_900_000, 17_300_000] },
+  3: { 8: [IMAGE_MAX_INPUT_PIXELS, 26_400_000], 16: [13_100_000, 10_300_000] },
+  4: { 8: [19_700_000, 15_700_000], 16: [3_300_000, 4_600_000] },
+};
+
+/**
+ * The most pixels one frame of this image may have (step 3 of `processImage`): a PNG's from
+ * PNG_LARGEST_FRAME_PIXELS, any other's from IMAGE_DECODE_BUDGET_BYTES and what it holds per pixel.
+ */
+export function largestFramePixels(
+  contentType: ImageContentType,
+  metadata: Pick<Metadata, 'channels' | 'depth' | 'isProgressive'>,
+): number {
+  if (contentType !== 'image/png') {
+    return Math.floor(IMAGE_DECODE_BUDGET_BYTES / decodeBytesPerPixel(contentType, metadata));
+  }
+  return PNG_LARGEST_FRAME_PIXELS[metadata.channels][metadata.depth === 'ushort' ? 16 : 8][
+    metadata.isProgressive ? 1 : 0
+  ];
 }
 
 /** How long a client refused for a full queue waits before sending again. */
@@ -191,10 +253,10 @@ export interface ProcessedImage {
  * 1. Not empty, at most IMAGE_MAX_BYTES (the content-type parser stops a larger body first).
  * 2. One of the four types by its magic number (`sniffImageType`), and the decoder agrees.
  * 3. Small enough to decode, read from the header before anything is decoded (a decompression
- *    bomb is a few bytes): one frame no thinner than IMAGE_MAX_SIDE_RATIO allows and within
- *    IMAGE_DECODE_BUDGET_BYTES by its format (`decodeBytesPerPixel`), else `pixels`; every frame
- *    together within IMAGE_MAX_INPUT_PIXELS, else `frames` for an animation and `pixels` for a
- *    still — sharp's own limit is a second fence.
+ *    bomb is a few bytes): one frame no thinner than IMAGE_MAX_SIDE_RATIO allows and no larger
+ *    than its format's largest frame (`largestFramePixels` — within IMAGE_DECODE_BUDGET_BYTES),
+ *    else `pixels`; every frame together within IMAGE_MAX_INPUT_PIXELS, else `frames` for an
+ *    animation and `pixels` for a still — sharp's own limit is a second fence.
  * 4. Turned upright by its EXIF orientation, then shrunk to fit IMAGE_MAX_DIMENSION on its long side
  *    (never enlarged); an animated GIF or WebP keeps every frame and its timing.
  * 5. Encoded again in its own type. sharp writes no metadata unless asked, so EXIF (the place and
@@ -230,7 +292,7 @@ export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
   const frameHeight = metadata.pageHeight ?? totalHeight;
   if (
     Math.max(width, frameHeight) > IMAGE_MAX_SIDE_RATIO * Math.min(width, frameHeight) ||
-    width * frameHeight * decodeBytesPerPixel(contentType, metadata) > IMAGE_DECODE_BUDGET_BYTES
+    width * frameHeight > largestFramePixels(contentType, metadata)
   ) {
     throw imageRefused('pixels');
   }

@@ -5,17 +5,19 @@
  * 2,048px and never enlarged, an animation keeps its frames and timing, and a decompression bomb
  * is refused from its header. No database.
  */
-import { IMAGE_MAX_BYTES, IMAGE_MAX_DIMENSION } from '@buddha/shared';
+import { IMAGE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_INPUT_PIXELS } from '@buddha/shared';
 import sharp from 'sharp';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
-import { pngHeaderOnly, pngOf } from '../test/png.js';
+import { type PngKind, pngHeaderOnly, pngOf } from '../test/png.js';
 import {
   IMAGE_DECODE_BUDGET_BYTES,
   IMAGE_MAX_SIDE_RATIO,
   OneAtATime,
+  PNG_LARGEST_FRAME_PIXELS,
   decodeBytesPerPixel,
   imageConversions,
+  largestFramePixels,
   processImage,
   sniffImageType,
 } from './image.js';
@@ -55,6 +57,25 @@ async function refusal(bytes: Uint8Array): Promise<unknown> {
     throw error;
   }
   throw new Error('accepted');
+}
+
+/** A frame of exactly `pixels`, wider than tall and no thinner than the ratio allows. */
+function frameOf(pixels: number): readonly [width: number, height: number] {
+  let height = Math.floor(Math.sqrt(pixels));
+  while (pixels % height !== 0 || pixels / height > IMAGE_MAX_SIDE_RATIO * height) height -= 1;
+  return [pixels / height, height];
+}
+
+/**
+ * What the header checks make of a PNG of this kind at exactly `bound` pixels and one column past
+ * it: at the bound the header passes and the decoder gets the few bytes of pixels there are
+ * (`unreadable`); a column more is refused before anything is decoded (`pixels`).
+ */
+async function atAndPast(kind: PngKind, bound: number) {
+  const [width, height] = frameOf(bound);
+  const at = await refusal(pngHeaderOnly(width, height, kind));
+  const past = await refusal(pngHeaderOnly(width + 1, height, kind));
+  return { kind, width, height, at, past };
 }
 
 describe('sniffImageType: the content decides, never the name', () => {
@@ -192,6 +213,96 @@ describe('processImage', () => {
     expect(await refusal(await solid(5_000, 5_000).jpeg({ progressive: true }).toBuffer())).toBe(
       'pixels',
     );
+    // An 8-bit RGBA PNG of 8000×6000 (48 megapixels, under the 50 million every frame together may
+    // have) is past that kind's largest frame (owner 2026-10-22).
+    expect(await refusal(pngHeaderOnly(8_000, 6_000, { channels: 4 }))).toBe('pixels');
+  });
+
+  it('refuses a PNG past its kind’s largest frame from its header, and decodes one at it', async () => {
+    for (const channels of [1, 2, 3, 4] as const) {
+      for (const depth of [8, 16] as const) {
+        for (const interlaced of [false, true]) {
+          const kind: PngKind = { channels, depth, interlaced };
+          const bound = PNG_LARGEST_FRAME_PIXELS[channels][depth][interlaced ? 1 : 0];
+          expect(await atAndPast(kind, bound)).toMatchObject({ at: 'unreadable', past: 'pixels' });
+        }
+      }
+    }
+  });
+
+  it('bounds a palette or transparent-colour PNG by what it decodes to, from its header', async () => {
+    // ADR-0073 9-8: a palette decodes to 8-bit RGB, or RGBA with transparency (a tRNS chunk) —
+    // whatever its bits an index (1 to 8); grey or RGB with a transparent colour, to grey + alpha
+    // or RGBA at its own depth. The bound is chosen by what sharp's header says it decodes to
+    // (`channels`, `depth`), so a reading that left out the transparency would give such a PNG
+    // the larger bound of the kind without alpha — 50 million pixels where RGBA's is 19.7 million
+    // — which every case here would catch, either at the bound or a column past it.
+    const { 1: grey, 2: greyAlpha, 3: rgb, 4: rgba } = PNG_LARGEST_FRAME_PIXELS;
+    const cases: readonly (readonly [PngKind, number])[] = [
+      [{ palette: 8 }, rgb[8][0]],
+      [{ palette: 8, interlaced: true }, rgb[8][1]],
+      [{ palette: 1, interlaced: true }, rgb[8][1]],
+      [{ palette: 8, transparent: true }, rgba[8][0]],
+      [{ palette: 4, transparent: true }, rgba[8][0]],
+      [{ palette: 2, transparent: true }, rgba[8][0]],
+      [{ palette: 1, transparent: true }, rgba[8][0]],
+      [{ palette: 8, transparent: true, interlaced: true }, rgba[8][1]],
+      [{ channels: 1, transparent: true }, greyAlpha[8][0]],
+      [{ channels: 1, transparent: true, interlaced: true }, greyAlpha[8][1]],
+      [{ channels: 1, depth: 16, transparent: true }, greyAlpha[16][0]],
+      [{ channels: 3, transparent: true }, rgba[8][0]],
+      [{ channels: 3, transparent: true, interlaced: true }, rgba[8][1]],
+      [{ channels: 3, depth: 16, transparent: true }, rgba[16][0]],
+      [{ channels: 3, depth: 16, transparent: true, interlaced: true }, rgba[16][1]],
+    ];
+    // Each bound differs from the bound of the same kind without the transparency, so a case tells
+    // the two apart; an interlaced opaque palette's, from every other 8-bit kind's.
+    for (const depth of [8, 16] as const) {
+      for (const interlaced of [0, 1] as const) {
+        expect(rgba[depth][interlaced]).not.toBe(rgb[depth][interlaced]);
+        expect(greyAlpha[depth][interlaced]).not.toBe(grey[depth][interlaced]);
+      }
+    }
+    for (const other of [grey, greyAlpha, rgba]) expect(other[8][1]).not.toBe(rgb[8][1]);
+    for (const [kind, bound] of cases) {
+      expect(await atAndPast(kind, bound)).toMatchObject({ at: 'unreadable', past: 'pixels' });
+    }
+  });
+
+  it('bounds sharp’s own palette PNGs — the kind pngquant writes — by what they decode to', async () => {
+    const translucent = () =>
+      sharp({
+        create: {
+          width: 64,
+          height: 32,
+          channels: 4,
+          background: { r: 10, g: 200, b: 30, alpha: 0.5 },
+        },
+      });
+    const files = [
+      // [file, bits an index, whether it has a tRNS chunk, its bound]
+      [await solid(64, 32).png({ palette: true }).toBuffer(), 8, false, [3, 8, 0]],
+      [await translucent().png({ palette: true }).toBuffer(), 8, true, [4, 8, 0]],
+      [await translucent().png({ palette: true, colours: 2 }).toBuffer(), 1, true, [4, 8, 0]],
+      [
+        await translucent().png({ palette: true, progressive: true }).toBuffer(),
+        8,
+        true,
+        [4, 8, 1],
+      ],
+    ] as const;
+    for (const [file, bits, transparent, [channels, depth, interlaced]] of files) {
+      // A palette PNG (colour type 3) of those bits, with or without its transparency.
+      expect([file[24], file[25], file.includes('tRNS')]).toEqual([bits, 3, transparent]);
+      expect(largestFramePixels('image/png', await sharp(file).metadata())).toBe(
+        PNG_LARGEST_FRAME_PIXELS[channels][depth][interlaced],
+      );
+      expect(await processImage(file)).toMatchObject({
+        contentType: 'image/png',
+        width: 64,
+        height: 32,
+      });
+    }
   });
 
   it('refuses a frame over 32 times longer than wide, either way round, from its header', async () => {
@@ -235,19 +346,58 @@ describe('processImage', () => {
     expect(gif).toMatchObject({ contentType: 'image/gif', width: 2_048, height: 1_152 });
   });
 
-  it('bounds a frame by its format’s measured cost per pixel', () => {
-    const still = { channels: 4, depth: 'uchar', isProgressive: false } as const;
-    expect(decodeBytesPerPixel('image/jpeg', { ...still, channels: 3 })).toBe(1);
-    expect(decodeBytesPerPixel('image/jpeg', { ...still, isProgressive: true })).toBe(10);
-    expect(decodeBytesPerPixel('image/png', still)).toBe(2.4);
-    expect(decodeBytesPerPixel('image/png', { ...still, channels: 3 })).toBe(1.8);
-    expect(decodeBytesPerPixel('image/png', { ...still, depth: 'ushort' })).toBe(4.8);
-    expect(decodeBytesPerPixel('image/png', { ...still, isProgressive: true })).toBe(6.4);
+  it('bounds a frame by its format’s measured largest frame', () => {
+    const still = { channels: 3, depth: 'uchar', isProgressive: false } as const;
+    expect(decodeBytesPerPixel('image/jpeg', still)).toBe(1);
+    expect(decodeBytesPerPixel('image/jpeg', { isProgressive: true })).toBe(10);
     expect(decodeBytesPerPixel('image/gif', still)).toBe(16);
     expect(decodeBytesPerPixel('image/webp', still)).toBe(15);
-    // A 4K frame (3840×2160) fits every format; the budget is the API's, well under its 448 MiB.
-    expect(3_840 * 2_160 * 16).toBeLessThan(IMAGE_DECODE_BUDGET_BYTES);
+    // A JPEG, GIF or WebP frame: the budget over what one of its pixels holds — a 4K frame
+    // (3840×2160) fits every one; the budget is the API's, well under its 448 MiB. A baseline
+    // JPEG's (a byte a pixel) is past the 50 million every frame together may have.
+    expect(largestFramePixels('image/jpeg', still)).toBe(134_217_728);
+    expect(largestFramePixels('image/jpeg', { ...still, isProgressive: true })).toBe(13_421_772);
+    expect(largestFramePixels('image/gif', still)).toBe(8_388_608);
+    expect(largestFramePixels('image/webp', still)).toBe(8_947_848);
+    expect(3_840 * 2_160).toBeLessThan(largestFramePixels('image/gif', still));
     expect(IMAGE_DECODE_BUDGET_BYTES).toBe(128 * 1024 * 1024);
+    // A PNG frame: its kind's measured value (owner 2026-10-22; `image-memory.test.ts` converts
+    // each kind's costliest shape at it), by the channels it decodes to, 8 or 16 bits a sample,
+    // interlaced or not. 8-bit grey (interlaced too), plain 8-bit RGB and plain 16-bit grey keep
+    // the 50 million pixels every frame together may have, and interlaced 16-bit grey the bound it
+    // had (128MiB at 3.2 bytes a pixel).
+    expect(PNG_LARGEST_FRAME_PIXELS).toEqual({
+      1: {
+        8: [IMAGE_MAX_INPUT_PIXELS, IMAGE_MAX_INPUT_PIXELS],
+        16: [IMAGE_MAX_INPUT_PIXELS, 41_943_040],
+      },
+      2: { 8: [37_000_000, 24_500_000], 16: [25_900_000, 17_300_000] },
+      3: { 8: [IMAGE_MAX_INPUT_PIXELS, 26_400_000], 16: [13_100_000, 10_300_000] },
+      4: { 8: [19_700_000, 15_700_000], 16: [3_300_000, 4_600_000] },
+    });
+    const png = (channels: 1 | 2 | 3 | 4, depth: 'uchar' | 'ushort', isProgressive: boolean) =>
+      largestFramePixels('image/png', { channels, depth, isProgressive });
+    expect(png(4, 'uchar', false)).toBe(PNG_LARGEST_FRAME_PIXELS[4][8][0]);
+    expect(png(2, 'ushort', false)).toBe(PNG_LARGEST_FRAME_PIXELS[2][16][0]);
+    expect(png(3, 'uchar', true)).toBe(PNG_LARGEST_FRAME_PIXELS[3][8][1]);
+    expect(png(4, 'ushort', true)).toBe(PNG_LARGEST_FRAME_PIXELS[4][16][1]);
+    // Each is at most what every frame together may have, measured kind by kind — not always
+    // lower with alpha, 16 bits or interlacing: plain 16-bit grey and interlaced 8-bit grey keep the
+    // 50 million, and interlaced 16-bit RGBA was measured higher than plain (an interlaced PNG is
+    // decoded whole, so its costliest shape is another). A 5K screenshot in RGBA (5120×2880) fits.
+    for (const byDepth of Object.values(PNG_LARGEST_FRAME_PIXELS)) {
+      for (const [plain, interlaced] of Object.values(byDepth)) {
+        expect(plain).toBeLessThanOrEqual(IMAGE_MAX_INPUT_PIXELS);
+        expect(interlaced).toBeLessThanOrEqual(IMAGE_MAX_INPUT_PIXELS);
+      }
+    }
+    expect(PNG_LARGEST_FRAME_PIXELS[4][8][0]).toBeLessThan(PNG_LARGEST_FRAME_PIXELS[3][8][0]);
+    expect(PNG_LARGEST_FRAME_PIXELS[3][16][0]).toBeLessThan(PNG_LARGEST_FRAME_PIXELS[3][8][0]);
+    expect(PNG_LARGEST_FRAME_PIXELS[3][8][1]).toBeLessThan(PNG_LARGEST_FRAME_PIXELS[3][8][0]);
+    expect(PNG_LARGEST_FRAME_PIXELS[1][16][0]).toBe(IMAGE_MAX_INPUT_PIXELS);
+    expect(PNG_LARGEST_FRAME_PIXELS[1][8][1]).toBe(IMAGE_MAX_INPUT_PIXELS);
+    expect(PNG_LARGEST_FRAME_PIXELS[4][16][1]).toBeGreaterThan(PNG_LARGEST_FRAME_PIXELS[4][16][0]);
+    expect(5_120 * 2_880).toBeLessThanOrEqual(PNG_LARGEST_FRAME_PIXELS[4][8][0]);
   });
 });
 
