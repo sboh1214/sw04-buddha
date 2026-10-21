@@ -1201,7 +1201,8 @@ export const copy = {
   authoredReplyKind: '답글',
   // 숨긴 것의 표시(본인에게만). 사유는 신고 사유 가운데 하나와 운영자 설명(있으면)이고(오너 결정
   // 2026-10-22), #50의 조치 기록이 남길 때부터 보인다. '숨김' 줄 옆의 '삭제'는 글·댓글 화면의 삭제와
-  // 같은 단추·확인 문구(postDelete*·commentDelete*)를 쓴다.
+  // 같은 단추·확인 문구(postDelete*·commentDelete*)를 쓰고, 확인 창은 그 문장 위 한 줄에 그 항목(글의
+  // 제목이나 본문 첫 줄, 댓글의 첫 줄 — 회원이 쓴 글자라 문구가 아니다)을 말한다(오너 결정 2026-10-22 3차).
   authoredHidden: '숨김',
   authoredHiddenReason: '숨김 사유',
   authoredHiddenNote: '운영자 설명',

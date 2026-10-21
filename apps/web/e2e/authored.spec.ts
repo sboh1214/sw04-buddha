@@ -35,11 +35,14 @@ import {
  * items stay listed and #140 the withdrawn account's 404 (ADR-0080 결과 5).
  */
 
-/** A post straight at the API with the context's cookie: this spec's subject is its author. */
+/**
+ * A post straight at the API with the context's cookie: this spec's subject is its author. `null`
+ * is a post with no title (#45-1); each line of `text` is a paragraph of its own.
+ */
 async function postThroughApi(
   context: APIRequestContext,
   marketId: string,
-  title: string,
+  title: string | null,
   text: string,
 ): Promise<string> {
   const me = await meOf(context);
@@ -47,7 +50,12 @@ async function postThroughApi(
     data: {
       marketId,
       title,
-      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+      body: {
+        type: 'doc',
+        content: text
+          .split('\n')
+          .map((line) => ({ type: 'paragraph', content: [{ type: 'text', text: line }] })),
+      },
       expectedAccountId: me.id,
     },
   });
@@ -467,14 +475,18 @@ test.describe('작성자별 글·댓글', () => {
     const tag = freshTag();
     const market = await createOpenMarket(admin);
     await signUp(page, freshEmail());
+    // The middle post has no title and the middle comment two lines: what names them is the first.
+    // The comment's first line is longer than the 300 characters a name keeps to (a comment can be
+    // 1,000 on one line, #45-3) and holds a web address with nowhere to break.
+    const longLine = `댓글 2 ${tag} https://example.com/${'a'.repeat(400)}`;
     const [olderPost, middlePost, newestPost] = [
       await postThroughApi(page.request, market.id, `글 1 ${tag}`, tag),
-      await postThroughApi(page.request, market.id, `글 2 ${tag}`, tag),
+      await postThroughApi(page.request, market.id, null, `글 2 ${tag}\n둘째 줄 ${tag}`),
       await postThroughApi(page.request, market.id, `글 3 ${tag}`, tag),
     ];
     const [olderComment, middleComment, newestComment] = [
       await commentThroughApi(page.request, olderPost, null, `댓글 1 ${tag}`),
-      await commentThroughApi(page.request, olderPost, null, `댓글 2 ${tag}`),
+      await commentThroughApi(page.request, olderPost, null, `${longLine}\n둘째 줄 ${tag}`),
       await commentThroughApi(page.request, olderPost, null, `댓글 3 ${tag}`),
     ];
 
@@ -490,11 +502,20 @@ test.describe('작성자별 글·댓글', () => {
       [middleComment, { reason: { code: 'off_topic', note: null } }],
       [newestComment, { reason: null }],
     ]);
-    // Each 삭제 is named by its item (ADR-0080 7-19): a post by its title, a comment by its text.
+    // Each 삭제 says which item it deletes, in its dialog and in its accessible name (owner decision
+    // 2026-10-22, 3rd; ADR-0080 7-19): a post by its title — or its first line, having none — and
+    // a comment by its own first line, at most its first 300 characters (a card's preview's cut,
+    // POST_EXCERPT_MAX_LENGTH; all of these are one UTF-16 unit each).
+    const itemName = new Map<string, string>([
+      [newestPost, `글 3 ${tag}`],
+      [middlePost, `글 2 ${tag}`],
+      [middleComment, longLine.slice(0, 300)],
+      [newestComment, `댓글 3 ${tag}`],
+    ]);
     const deleteName = new Map<string, string>([
       [newestPost, `글 3 ${tag} ${copy.postDelete}`],
       [middlePost, `글 2 ${tag} ${copy.postDelete}`],
-      [middleComment, `댓글 2 ${tag} ${copy.commentDelete}`],
+      [middleComment, `${longLine.slice(0, 300)} ${copy.commentDelete}`],
       [newestComment, `댓글 3 ${tag} ${copy.commentDelete}`],
     ]);
     const isMyListRead = (url: URL) =>
@@ -627,7 +648,60 @@ test.describe('작성자별 글·댓글', () => {
     await expect(page.getByRole('alertdialog')).toBeVisible();
     await expect(dialog).toContainText(copy.postDeleteTitle);
     await expect(dialog).toContainText(copy.postDeleteBody);
-    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(copy.postDeleteBody);
+    /**
+     * The dialog says which item, on a line of its own between its title and the warning (owner
+     * decision 2026-10-22, 3rd): this post has no title, so its first line and not the rest of
+     * its text. A screen reader hears the item with the title, as the dialog's name, and the
+     * warning alone as its description — never the member's words running on into the warning
+     * (ADR-0080 7-19).
+     *
+     * And the line stays in the dialog at either width: it breaks within itself (nothing wider
+     * than it, a long address included), it keeps to three lines — the long comment's line is
+     * more and is cut to them, so this sees the cut — and the dialog stays on the screen. The
+     * page's own width cannot tell: the dialog sits in a fixed positioner, which adds nothing to
+     * the document's scroll width.
+     */
+    const expectItemSaid = async (id: string, title: string, warning: string) => {
+      const line = dialog.getByTestId('authored-hidden-delete-item');
+      await expect(line).toHaveText(itemName.get(id) ?? '');
+      await expect(
+        dialog.locator(
+          '[data-testid="authored-hidden-delete-item"] + [data-testid="authored-hidden-delete-description"]',
+        ),
+      ).toHaveText(warning);
+      await expect(page.getByRole('alertdialog')).toHaveAccessibleName(
+        `${title} ${itemName.get(id) ?? ''}`,
+      );
+      await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(warning);
+      await expect(dialog).not.toContainText(`둘째 줄 ${tag}`);
+      const fit = await line.evaluate((element) => {
+        const lineHeight = Number.parseFloat(getComputedStyle(element).lineHeight);
+        return {
+          lineHeight,
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          clientHeight: element.clientHeight,
+          scrollHeight: element.scrollHeight,
+          breaksWithin: element.scrollWidth <= element.clientWidth,
+          threeLinesAtMost: element.clientHeight <= 3 * lineHeight + 1,
+          cut: element.scrollHeight > element.clientHeight + 1,
+        };
+      });
+      expect(fit).toMatchObject({
+        breaksWithin: true,
+        threeLinesAtMost: true,
+        cut: id === middleComment,
+      });
+      const box = await dialog.boundingBox();
+      const viewport = page.viewportSize();
+      expect(box).not.toBeNull();
+      expect(viewport).not.toBeNull();
+      if (box !== null && viewport !== null) {
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+      }
+    };
+    await expectItemSaid(middlePost, copy.postDeleteTitle, copy.postDeleteBody);
     await page.getByTestId('authored-hidden-delete-cancel').click();
     await expect(dialog).toHaveCount(0);
     await expectPosts(myPosts, [newestPost, middlePost, olderPost]);
@@ -670,7 +744,7 @@ test.describe('작성자별 글·댓글', () => {
       .click();
     await expect(dialog).toContainText(copy.commentDeleteTitle);
     await expect(dialog).toContainText(copy.commentDeleteBody);
-    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(copy.commentDeleteBody);
+    await expectItemSaid(newestComment, copy.commentDeleteTitle, copy.commentDeleteBody);
     const deletedComment = page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
@@ -709,6 +783,7 @@ test.describe('작성자별 글·댓글', () => {
     await itemOf(myComments, commentCard(middleComment))
       .getByTestId('authored-hidden-delete')
       .click();
+    await expectItemSaid(middleComment, copy.commentDeleteTitle, copy.commentDeleteBody); // its first line's first 300
     const refusedComment = refusal(`/api/v1/comments/${middleComment}/delete`);
     await page.getByTestId('authored-hidden-delete-confirm').click();
     expect((await refusedComment).status()).toBe(404);
@@ -721,6 +796,7 @@ test.describe('작성자별 글·댓글', () => {
     await expectPosts(myPosts, [newestPost, olderPost]);
     await elsewhere(`/api/v1/posts/${newestPost}/delete`);
     await itemOf(myPosts, postCard(newestPost)).getByTestId('authored-hidden-delete').click();
+    await expectItemSaid(newestPost, copy.postDeleteTitle, copy.postDeleteBody); // its title
     const refusedPost = refusal(`/api/v1/posts/${newestPost}/delete`);
     await page.getByTestId('authored-hidden-delete-confirm').click();
     expect((await refusedPost).status()).toBe(404);

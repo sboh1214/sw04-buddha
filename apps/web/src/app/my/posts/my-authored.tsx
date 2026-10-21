@@ -10,7 +10,6 @@ import { PostCard } from '@/components/post/post-card';
 import { copy } from '@/copy';
 import { useMyComments, useMyPosts } from '@/hooks/use-authored';
 import { type MyComment, type MyPost } from '@/lib/api';
-import { hiddenDeleteName } from '@/lib/authored';
 import { Section, SessionEnded, useSessionEnded } from '../portfolio';
 import { DeleteHiddenItem } from './delete-hidden';
 
@@ -105,10 +104,9 @@ function MyPostItem({ post }: { post: MyPost }) {
           hidden={post.hidden}
           action={
             <DeleteHiddenItem
-              tab="posts"
               id={post.id}
               postId={post.id}
-              name={hiddenDeleteName({ tab: 'posts', title: post.title, excerpt: post.excerpt })}
+              item={{ tab: 'posts', title: post.title, excerpt: post.excerpt }}
             />
           }
         />
@@ -127,10 +125,9 @@ function MyCommentItem({ comment }: { comment: MyComment }) {
           hidden={comment.hidden}
           action={
             <DeleteHiddenItem
-              tab="comments"
               id={comment.id}
               postId={comment.post.id}
-              name={hiddenDeleteName({ tab: 'comments', body: comment.body })}
+              item={{ tab: 'comments', body: comment.body }}
             />
           }
         />

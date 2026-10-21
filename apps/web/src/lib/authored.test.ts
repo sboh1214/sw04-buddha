@@ -1,4 +1,4 @@
-import { REPORT_REASONS } from '@buddha/shared';
+import { POST_EXCERPT_MAX_LENGTH, REPORT_REASONS } from '@buddha/shared';
 import { hashKey, partialMatchKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -13,6 +13,7 @@ import {
   commentKindLabel,
   commentedPostText,
   hiddenDeleteName,
+  hiddenItemName,
   hiddenNoticeView,
   myAuthoredKey,
   profileAuthoredKey,
@@ -182,21 +183,57 @@ describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
     expect(withoutAuthoredItem(undefined, 'a')).toBeUndefined();
   });
 
-  it('names each 삭제 by its item, ending with the word on screen (ADR-0080 7-19)', () => {
+  it('names the hidden item its 삭제 deletes: a post by its title or first line, a comment by its own first line (owner decision 2026-10-22, 3rd)', () => {
     // A post as its card's heading names it: the title, or the first line of its text.
+    expect(hiddenItemName({ tab: 'posts', title: '금리 전망', excerpt: '본문' })).toBe('금리 전망');
+    expect(hiddenItemName({ tab: 'posts', title: null, excerpt: '첫 줄\n둘째 줄' })).toBe('첫 줄');
+    // A comment (a 대댓글 too) by the first non-empty line of its own text, trimmed.
+    expect(hiddenItemName({ tab: 'comments', body: '\n  첫 댓글  \n더' })).toBe('첫 댓글');
+    // Never its post's: two comments under one post are named apart.
+    expect(hiddenItemName({ tab: 'comments', body: '둘째 댓글' })).not.toBe(
+      hiddenItemName({ tab: 'comments', body: '첫 댓글' }),
+    );
+  });
+
+  it('names an item whose first line is longer by its first 300 characters, as a card’s preview is cut (ADR-0080 7-19)', () => {
+    // The cap the dialog's line and the button's name keep to, and what the ADR says it is.
+    expect(POST_EXCERPT_MAX_LENGTH).toBe(300);
+    // A comment can be 1,000 characters on one line (#45-3): its first 300, cut where they end,
+    // without the rest of the line or the lines after it.
+    const line = `${'가'.repeat(150)}${'a'.repeat(850)}`;
+    expect(hiddenItemName({ tab: 'comments', body: `${line}\n둘째 줄` })).toBe(line.slice(0, 300));
+    expect(hiddenDeleteName({ tab: 'comments', body: line })).toBe(
+      `${line.slice(0, 300)} ${copy.commentDelete}`,
+    );
+    // Counted in code points, as a comment's length is: an emoji is one.
+    expect([...hiddenItemName({ tab: 'comments', body: '😀'.repeat(400) })]).toHaveLength(300);
+    // A first line within the cap is whole, however long the lines after it.
+    expect(hiddenItemName({ tab: 'comments', body: `짧은 줄\n${'b'.repeat(900)}` })).toBe(
+      '짧은 줄',
+    );
+    // An untitled post's excerpt comes cut to the same 300 from the server; the web cuts no shorter.
+    expect(hiddenItemName({ tab: 'posts', title: null, excerpt: 'a'.repeat(300) })).toBe(
+      'a'.repeat(300),
+    );
+  });
+
+  it('names each 삭제 by its item, ending with the word on screen (ADR-0080 7-19)', () => {
     expect(hiddenDeleteName({ tab: 'posts', title: '금리 전망', excerpt: '본문' })).toBe(
       `금리 전망 ${copy.postDelete}`,
     );
     expect(hiddenDeleteName({ tab: 'posts', title: null, excerpt: '첫 줄\n둘째 줄' })).toBe(
       `첫 줄 ${copy.postDelete}`,
     );
-    // A comment by its own first line, never its post's: two under one post read apart.
     expect(hiddenDeleteName({ tab: 'comments', body: '\n  첫 댓글  \n더' })).toBe(
       `첫 댓글 ${copy.commentDelete}`,
     );
-    expect(hiddenDeleteName({ tab: 'comments', body: '둘째 댓글' })).not.toBe(
-      hiddenDeleteName({ tab: 'comments', body: '첫 댓글' }),
-    );
+    // The name is the item the dialog shows, then the word: one naming for both (3rd answer).
+    for (const item of [
+      { tab: 'posts', title: null, excerpt: '첫 줄\n둘째 줄' },
+      { tab: 'comments', body: '대댓글 첫 줄\n둘째 줄' },
+    ] as const) {
+      expect(hiddenDeleteName(item).startsWith(`${hiddenItemName(item)} `)).toBe(true);
+    }
   });
 });
 

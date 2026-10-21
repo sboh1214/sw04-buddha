@@ -166,22 +166,37 @@ export function hiddenNoticeView(hidden: HiddenNotice): {
   };
 }
 
+/** A hidden item MY offers to delete: a post on the 글 tab, a 댓글 or 대댓글 on the 댓글 tab. */
+export type HiddenItem =
+  { tab: 'posts'; title: string | null; excerpt: string } | { tab: 'comments'; body: string };
+
+/**
+ * What names a hidden item where MY's 삭제 has to say which it deletes — its confirm dialog and the
+ * button's accessible name (owner decision 2026-10-22, 3rd: «MY 내 글의 숨긴 항목 삭제 확인창 →
+ * 항목을 말함(글 제목/첫 줄·댓글 첫 줄, 단추 이름에도)»). A post as its card's heading names it —
+ * its title, or the first line of its text when it has none (post-card.tsx) — and a 댓글 or 대댓글
+ * by the first line of its own text: its post's would name every hidden comment under one post
+ * alike. Either is at most POST_EXCERPT_MAX_LENGTH (300) characters, as a card's preview is:
+ * `postFirstLine` takes the first line of `postExcerpt`, which cuts the text there (a post's
+ * `excerpt` comes so cut from the server), so a longer first line — a comment's can be 1,000
+ * characters on one line — is named by its first 300 code points, cut where they end.
+ */
+export function hiddenItemName(item: HiddenItem): string {
+  return item.tab === 'posts'
+    ? (item.title ?? postFirstLine(item.excerpt))
+    : postFirstLine(item.body);
+}
+
 /**
  * The accessible name of MY's 삭제 beside a hidden item's '숨김' line (ADR-0080 7-19): the item it
- * deletes, then the button's own word, as every repeated per-item button here is named
- * (market-search.tsx's 삭제, market-picker.tsx's 고르기). A list can hold several hidden items, and
- * the button stands before its card, so '삭제' alone would read alike for each and before the
- * item it acts on. A post is named as its card's heading names it — its title, or the first line
- * of its text when it has none (post-card.tsx) — and a 댓글 or 대댓글 by the first line of its own
- * text: its post's would name every hidden comment under one post alike. The words on screen stay
- * '삭제' (the post page's and the comment area's), which the name ends with.
+ * deletes (`hiddenItemName`), then the button's own word, as every repeated per-item button here
+ * is named (market-search.tsx's 삭제, market-picker.tsx's 고르기). A list can hold several hidden
+ * items, and the button stands before its card, so '삭제' alone would read alike for each and
+ * before the item it acts on. The words on screen stay '삭제' (the post page's and the comment
+ * area's), which the name ends with.
  */
-export function hiddenDeleteName(
-  item: { tab: 'posts'; title: string | null; excerpt: string } | { tab: 'comments'; body: string },
-): string {
-  return item.tab === 'posts'
-    ? `${item.title ?? postFirstLine(item.excerpt)} ${copy.postDelete}`
-    : `${postFirstLine(item.body)} ${copy.commentDelete}`;
+export function hiddenDeleteName(item: HiddenItem): string {
+  return `${hiddenItemName(item)} ${item.tab === 'posts' ? copy.postDelete : copy.commentDelete}`;
 }
 
 /**
