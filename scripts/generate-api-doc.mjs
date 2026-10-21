@@ -387,6 +387,12 @@ const ERROR_NOTES = {
     '이미 공지 3개가 고정되어 있어 더 고정할 수 없다(#138). `details.limit` 이 동시에 고정할 수 있는 수다. 자동으로 풀리는 공지는 없으니 하나를 풀고(`POST /api/v1/admin/notices/{noticeId}/unpin`) 다시 고정한다.',
   NOTICE_EDIT_CONFLICT:
     '공지 수정 화면을 연 뒤 그 공지가 먼저 고쳐졌다 — 누가 고쳤든(다른 운영자든 같은 운영자의 다른 탭이든) 같다(#138, 오너 결정 2026-10-21). 아무것도 바꾸지 않았다. 요청의 `expectedEditedAt` 이 공지의 지금 `editedAt` 과 다르다 — `details.editedAt` 이 지금의 판이다(한 번도 고치지 않았으면 null). 최신 공지를 다시 읽고(`GET /api/v1/admin/notices/{noticeId}`) 그 `editedAt` 으로 다시 보낸다.',
+  REPORT_NOT_ALLOWED:
+    '신고를 받지 않았다(#50). `details.reason` 이 까닭을 말한다 — `own`(자기 글·댓글·프로필이다), `duplicate`(같은 사람 — 본인확인한 번호가 같은 사람 — 이 그 대상에 낸 신고가 아직 처리되지 않았다. 처리된 뒤에는 다시 신고할 수 있다), `deleted`(작성자가 지워 자리표시로 남은 글이나 댓글이다), `hidden`(운영 정책에 따라 숨긴 글이나 댓글이다). 화면에서 빠진 글이나 댓글(아래가 없는 지운 것)과 없는 프로필은 `NOT_FOUND` 다.',
+  REPORT_LIMITED:
+    '신고를 받지 않았다(#50, 429). 같은 사람(본인확인한 번호)이 지난 24시간에 낸 신고가 `details.limit`(20)건이다. `details.retryAfterSeconds` 는 그 가운데 가장 오래된 신고가 24시간을 넘는 때까지의 초를 분 단위로 올린 값이다. 운영자 계정에는 한도가 없다.',
+  MODERATION_NOT_ALLOWED:
+    '운영 조치나 신고 처리를 받지 않는다(#50). `details.reason` 이 까닭을 말한다 — `own`(처리하는 운영자 자신의 글·댓글·프로필이거나 그것에 들어온 신고다. 다른 운영자가 처리한다), `hidden`(이미 숨긴 글이나 댓글이다), `deleted`(작성자가 지운 글이나 댓글이다), `nothing_to_remove`(지울 소개나 이미지가 없거나 이미 자동 닉네임이다), `cancelled`(이미 취소한 조치다), `resolved`(이미 처리한 신고다), `not_theirs`(경고의 대상이 그 회원의 것이 아니다).',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

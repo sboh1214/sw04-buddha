@@ -9,7 +9,9 @@
  * it (#48) and A's likes of both, made with the keyed hash of A's number (#49), a pinned notice
  * whose operator — its writer, editor and pinner, and its image's uploader — is A, with an earlier
  * version kept for operators, and a notice A wrote and never pinned, which is not public (#138),
- * and a 소개 and an interest category on A's public profile (#41). Then:
+ * a 소개 and an interest category on A's public profile (#41), an operator's hiding of A's post
+ * with its reason (#50), a report A filed and a report another member filed on A's post (#50).
+ * Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -46,11 +48,13 @@ import {
   createComment,
   createCommentLike,
   createMedia,
+  createModerationAction,
   createNotice,
   createPhoneVerification,
   createPost,
   createPostLike,
   createProfileImage,
+  createReport,
   createSearch,
   createStartGrant,
   createUser,
@@ -171,6 +175,10 @@ interface Fixture {
     watchlist: string;
     posts: string;
     comments: string;
+    /** A's report (#50). */
+    reports: string;
+    /** The action an operator took on A (#50). */
+    actions: string;
   };
   sentinels: readonly Sentinel[];
 }
@@ -357,6 +365,11 @@ const NEVER_SHOWN: readonly string[] = [
   // pinned — only a pinned notice is public (owner decision 2026-10-21).
   'notice revision',
   'unpinned notice',
+  // #50: a report on A's post another member filed — nobody but operators reads it, A least of
+  // all (#45-13: the reporter is never shown to the member reported) — and the operator who acted
+  // on A (#45-13), whose account id is in no answer.
+  'report on A',
+  'moderator id',
 ];
 
 interface OwnerCase {
@@ -624,12 +637,43 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   'GET /me/posts': {
     query: { cursor: (fixture) => fixture.cursors.posts, limit: LIMIT },
     status: 200,
-    own: ['hidden post'],
+    // #50: the hiding's reason, the operator's explanation among it (ADR-0080).
+    own: ['hidden post', 'moderation note'],
   },
   'GET /me/comments': {
     query: { cursor: (fixture) => fixture.cursors.comments, limit: LIMIT },
     status: 200,
     own: ['hidden comment'],
+  },
+  // B's cookie naming A's account (#50), reporting A's post, comment and profile: refused before
+  // anything is read or written — no report of B's (below). B's own report is checked there too.
+  'POST /posts/:postId/reports': {
+    params: { postId: (fixture) => fixture.post.id },
+    body: (fixture) => ({ reason: 'spam', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'POST /comments/:commentId/reports': {
+    params: { commentId: (fixture) => fixture.comment.id },
+    body: (fixture) => ({ reason: 'spam', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'POST /profiles/:publicId/reports': {
+    params: { publicId: (fixture) => fixture.publicId },
+    body: (fixture) => ({ reason: 'impersonation', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's reports and the actions taken on B (#50), paged from A's: B has none, so nothing of A's
+  // may come back. A's own show A's report and the operator's reason on A's hidden post — never
+  // the report another member filed on A's post, nor the operator (`NEVER_SHOWN`).
+  'GET /me/reports': {
+    query: { cursor: (fixture) => fixture.cursors.reports, limit: LIMIT },
+    status: 200,
+    own: ['report description'],
+  },
+  'GET /me/moderation/actions': {
+    query: { cursor: (fixture) => fixture.cursors.actions, limit: LIMIT },
+    status: 200,
+    own: ['moderation note'],
   },
   // The file is the body, so the account rides in the query: B naming A is refused before the
   // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
@@ -1158,6 +1202,35 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       createdAt: new Date(comment.createdAt.getTime() + 2_000),
       hiddenAt: new Date(),
     });
+    // The operator's hiding of that post (#50), with the explanation A reads on MY 내 글 and on MY's
+    // record of actions — never the operator, and never anywhere public (`moderation`).
+    const moderationNote = `leak-moderation-note-${tag}`;
+    const hiding = await createModerationAction(t.db, {
+      userId: a.id,
+      createdBy: admin.id,
+      postId: hiddenPost.id,
+      reason: 'harassment',
+      note: moderationNote,
+    });
+    // A report A filed on another member's profile (#50), with A's description: A's own record,
+    // nobody else's. And a report the admin filed on A's post, pending: nobody but operators reads
+    // it, A included (`NEVER_SHOWN`, #45-13).
+    const reportText = `leak-report-${tag}`;
+    const report = await createReport(t.db, {
+      reporterId: a.id,
+      reportedUserId: maker.user.id,
+      reporterPhoneHash: phoneHash,
+      reason: 'other',
+      description: reportText,
+    });
+    const reportOnA = `leak-report-on-a-${tag}`;
+    await createReport(t.db, {
+      reporterId: admin.id,
+      reportedUserId: a.id,
+      postId: post.id,
+      reason: 'other',
+      description: reportOnA,
+    });
 
     // A notice (#138) A operated, pinned, with A's image in it (its object in the test's store)
     // and an earlier version kept for operators: the notice routes are called with it, and
@@ -1269,6 +1342,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         watchlist: cursorAfter({ createdAt: watch.watch.watchedAt, id: watched.id }),
         posts: cursorAfter(hiddenPost),
         comments: cursorAfter(hiddenComment),
+        reports: cursorAfter(report),
+        actions: cursorAfter(hiding),
       },
       sentinels: [
         text('user id', a.id),
@@ -1284,6 +1359,10 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('unpinned notice', unpinnedNoticeText),
         text('hidden post', hiddenPostText),
         text('hidden comment', hiddenCommentText),
+        text('moderation note', moderationNote),
+        text('report description', reportText),
+        text('report on A', reportOnA),
+        text('moderator id', admin.id),
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
@@ -1667,6 +1746,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         // #49: the likes B's refused unlikes would have taken back.
         t.db.select().from(schema.postLikes),
         t.db.select().from(schema.commentLikes),
+        // #50: the reports B's refused reports would have written.
+        t.db.select().from(schema.reports).orderBy(schema.reports.id),
+        t.db.select().from(schema.moderationActions).orderBy(schema.moderationActions.id),
       ])),
       [...t.storage.objects.keys()].sort(),
     ];
@@ -1835,6 +1917,23 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       });
     }
     expect(await postState()).toEqual(postsBefore);
+
+    // B reporting A's post as B itself is taken (#50), and its answer — B's own report — holds
+    // nothing of A's but what the public reads of the post (its title and start, not sentinels).
+    const reported = await call(routeOf('POST /posts/:postId/reports'), {
+      params: { postId: f.post.id },
+      body: { reason: 'spam', expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect({ status: reported.statusCode, leaks: leaked(reported.body) }).toEqual({
+      status: 201,
+      leaks: [],
+    });
+    const mine = await call(routeOf('GET /me/reports'), { cookie: f.b.cookie });
+    expect({ status: mine.statusCode, leaks: leaked(mine.body) }).toEqual({
+      status: 200,
+      leaks: [],
+    });
   });
 
   // ---- the market room --------------------------------------------------------------------

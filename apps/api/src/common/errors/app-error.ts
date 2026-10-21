@@ -54,6 +54,14 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // admin or the same one from another tab, owner decisions 2026-10-21 7 and (2차) 1): a conflict
   // with its version, which a save from the latest one passes.
   NOTICE_EDIT_CONFLICT: HttpStatus.CONFLICT,
+  // The target's state or the reporter refuses the report (one's own, a pending one of the same
+  // person, a placeholder, #50): a conflict with that state.
+  REPORT_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The person's fixed daily count of reports (#45-15), refused like a rate limit: the same
+  // request passes later.
+  REPORT_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
+  // The item's, the action's or the report's state refuses the operator's write (#50): a conflict.
+  MODERATION_NOT_ALLOWED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

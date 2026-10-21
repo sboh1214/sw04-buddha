@@ -8,6 +8,7 @@ import {
   Field,
   HStack,
   Input,
+  Link as ChakraLink,
   Skeleton,
   Stack,
   Text,
@@ -20,6 +21,8 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
+import type { Route } from 'next';
+import NextLink from 'next/link';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
@@ -31,6 +34,7 @@ import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
 import { api, isApiError, unwrap, type AdminUser } from '@/lib/api';
 import { boundedInteger } from '@/lib/form-schema';
 import { readFailed } from '@/lib/query-client';
+import { adminUserModerationPath } from '@/lib/moderation';
 
 const ADMIN_USERS_KEY = ['admin', 'users'] as const;
 
@@ -191,6 +195,16 @@ function UserCard({ user }: { user: AdminUser }) {
               <Text fontSize="sm" color="fg.muted">
                 {user.email}
               </Text>
+              {/* The member's reports and actions, and the actions taken without a report (#50,
+                  ADR-0081; decision 4 #50 «신고 없는 조치»). */}
+              <ChakraLink asChild fontSize="sm" color="brand.fg">
+                <NextLink
+                  href={adminUserModerationPath(user.id) as Route}
+                  data-testid="admin-user-moderation"
+                >
+                  {copy.adminModerationOpenMember}
+                </NextLink>
+              </ChakraLink>
             </Stack>
             <Text fontSize="lg" fontWeight="bold" data-testid="admin-user-balance">
               {formatCoin(parseCoinAmount(user.balance.availableCoin))}

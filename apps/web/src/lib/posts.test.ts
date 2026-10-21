@@ -30,6 +30,7 @@ import {
   postEditGoneAfter,
   postFirstLine,
   postGoneAfter,
+  postHeadingElement,
   postKey,
   postListQuery,
   postPageMetadata,
@@ -576,6 +577,26 @@ describe('a post without a title', () => {
     expect(postFirstLine('\n  첫 줄  \n둘째 줄')).toBe('첫 줄');
     expect(postFirstLine('한 줄')).toBe('한 줄');
     expect(postFirstLine('')).toBe('');
+  });
+});
+
+describe('a post body’s headings', () => {
+  it('start at h3 on the post page, under its h1 and the post’s h2', () => {
+    expect([1, 2, 3].map((level) => postHeadingElement(level).tag)).toEqual(['h3', 'h4', 'h5']);
+    // Anything else draws as the editor's last level, as before.
+    expect(postHeadingElement(7)).toEqual({ tag: 'h5', ariaLevel: 5 });
+  });
+
+  it('start at h4 under a title that is an h3 (an earlier version of a notice, #138)', () => {
+    expect([1, 2, 3].map((level) => postHeadingElement(level, 4).tag)).toEqual(['h4', 'h5', 'h6']);
+  });
+
+  it('start at h5 under the operators’ page h3 and a block’s h4, past h6 as an ARIA heading', () => {
+    expect([1, 2, 3].map((level) => postHeadingElement(level, 5))).toEqual([
+      { tag: 'h5', ariaLevel: 5 },
+      { tag: 'h6', ariaLevel: 6 },
+      { tag: 'div', ariaLevel: 7 },
+    ]);
   });
 });
 

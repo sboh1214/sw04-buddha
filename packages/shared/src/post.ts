@@ -127,7 +127,7 @@ export type PostState = (typeof POST_STATES)[number];
 /**
  * A post page. `published`: the whole post. A post its author deleted is `deleted` only while
  * comments hang under it (#45-5: '삭제된 글입니다', the author hidden, never restored) — with none
- * left it is gone (NOT_FOUND). `hidden`: an operator hid it (#45-5, the action comes with #50):
+ * left it is gone (NOT_FOUND). `hidden`: an operator hid it (#45-5, #50's hiding):
  * '운영 정책에 따라 숨긴 글입니다', nothing of the post but its market. Neither placeholder names the
  * author or keeps a word of the post; the original stays for operators only. The comments under
  * any of the three stay readable (`GET /posts/:postId/comments`, #48), and `commentCount` counts

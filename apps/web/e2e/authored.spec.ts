@@ -24,13 +24,14 @@ import {
  * Anyone, signed in or not, goes from a byline — a post's or a 대댓글's — to the profile, to an item
  * there and on to its market (#51's acceptance criteria).
  *
- * What no screen can make yet is drawn from the API's own answers changed in the browser
- * (`page.route`, as start-grant.spec.ts does): a hidden item, which MY marks '숨김' with its reason
- * and offers to delete (the hiding comes with #50 — the row itself stays published, so the 삭제
- * goes through the real delete route and the lists after it are the server's; deleting a row that
- * is really hidden is the API's test), and a list longer than a page, which takes a smaller `limit`
- * on the browser's requests. The exclusions on the profile against MY are the API's
- * (authored.controller.test.ts, private-data.test.ts). Restricted members and withdrawn accounts are tested nowhere yet: neither
+ * A hidden item MY marks '숨김' with its reason and offers to delete: one test hides a post and a
+ * comment for real through #50's operator routes (ADR-0081) and deletes them from MY; another draws
+ * the marks' every shape — a reason with and without the operator's explanation, and none — from
+ * the API's own answers changed in the browser (`page.route`, as start-grant.spec.ts does: the rows
+ * stay published, so its 삭제 goes through the real delete route and the lists after it are the
+ * server's). A list longer than a page takes a smaller `limit` on the browser's requests. The
+ * exclusions on the profile against MY are the API's (authored.controller.test.ts,
+ * private-data.test.ts). Restricted members and withdrawn accounts are tested nowhere yet: neither
  * state exists and the lists read neither, so #185/#139 add the test that a restricted member's
  * items stay listed and #140 the withdrawn account's 404 (ADR-0080 결과 5).
  */
@@ -845,5 +846,84 @@ test.describe('작성자별 글·댓글', () => {
     await page.getByTestId('my-view-profile').click();
     await expectCounts(page, 1, 1);
     await expectPosts(page.getByTestId('profile-posts-list'), [olderPost]);
+  });
+
+  test('운영자가 정말로 숨긴 글·댓글은 MY 내 글에 숨김과 그 조치의 사유·운영자 설명으로 보이고, 그 줄 옆의 삭제로 지우면 목록에서 빠진다(#51이 #50에 남긴 시험)', async ({
+    admin,
+    page,
+  }) => {
+    const tag = freshTag();
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `숨겨질 글 ${tag}`, tag);
+    const keptPost = await postThroughApi(page.request, market.id, `남는 글 ${tag}`, tag);
+    const commentId = await commentThroughApi(page.request, keptPost, null, `숨겨질 댓글 ${tag}`);
+
+    // An operator hides the post and the comment through #50's routes, each with a report reason
+    // and, for the post, the explanation the author reads (owner decision 2026-10-22).
+    const operator = await meOf(admin);
+    const note = `같은 링크를 반복했습니다 ${tag}`;
+    const hidePost = await admin.post(`/api/v1/admin/moderation/posts/${postId}/hide`, {
+      data: { reason: 'spam', note, expectedAccountId: operator.id },
+    });
+    expect(hidePost.status(), await hidePost.text()).toBe(200);
+    const hideComment = await admin.post(`/api/v1/admin/moderation/comments/${commentId}/hide`, {
+      data: { reason: 'off_topic', note: null, expectedAccountId: operator.id },
+    });
+    expect(hideComment.status(), await hideComment.text()).toBe(200);
+
+    const myPosts = page.getByTestId('my-posts-list');
+    const myComments = page.getByTestId('my-comments-list');
+    await page.goto('/my/posts');
+    await expectPosts(myPosts, [keptPost, postId]);
+    const hiddenPost = itemOf(myPosts, `post-card-${postId}`);
+    await expect(hiddenPost.getByTestId('authored-hidden')).toContainText(copy.authoredHidden);
+    await expect(hiddenPost.getByTestId('authored-hidden-reason')).toHaveText(
+      `${copy.authoredHiddenReason}: ${copy.reportReasonSpam}`,
+    );
+    await expect(hiddenPost.getByTestId('authored-hidden-note')).toHaveText(
+      `${copy.authoredHiddenNote}: ${note}`,
+    );
+    await expect(
+      itemOf(myPosts, `post-card-${keptPost}`).getByTestId('authored-hidden'),
+    ).toHaveCount(0);
+
+    // The public sees the placeholder only.
+    const publicPost = await page.request.get(`/api/v1/posts/${postId}`);
+    expect(((await publicPost.json()) as { data: { state: string } }).data.state).toBe('hidden');
+
+    // 삭제 beside the line: the author's delete route takes the hidden post, which leaves MY.
+    await hiddenPost.getByTestId('authored-hidden-delete').click();
+    const deletedPost = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === `/api/v1/posts/${postId}/delete`,
+    );
+    await page.getByTestId('authored-hidden-delete-confirm').click();
+    expect((await deletedPost).status()).toBe(200);
+    await expect(page.getByText(copy.postDeletedToast)).toBeVisible();
+    await expectPosts(myPosts, [keptPost]);
+    // Nothing hung under it, so it is gone from every view.
+    expect((await page.request.get(`/api/v1/posts/${postId}`)).status()).toBe(404);
+
+    // The comment the same, on the 댓글 tab, with its reason and no explanation.
+    await page.getByTestId('my-authored-tab-comments').click();
+    await expectComments(myComments, [commentId]);
+    const hiddenComment = itemOf(myComments, `authored-comment-${commentId}`);
+    await expect(hiddenComment.getByTestId('authored-hidden-reason')).toHaveText(
+      `${copy.authoredHiddenReason}: ${copy.reportReasonOffTopic}`,
+    );
+    await expect(hiddenComment.getByTestId('authored-hidden-note')).toHaveCount(0);
+    await hiddenComment.getByTestId('authored-hidden-delete').click();
+    const deletedComment = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === `/api/v1/comments/${commentId}/delete`,
+    );
+    await page.getByTestId('authored-hidden-delete-confirm').click();
+    expect((await deletedComment).status()).toBe(200);
+    await expect(page.getByText(copy.commentDeletedToast)).toBeVisible();
+    await expect(page.getByText(copy.authoredCommentsEmpty)).toBeVisible();
+    await expectComments(myComments, []);
   });
 });

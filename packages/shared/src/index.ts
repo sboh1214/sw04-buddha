@@ -30,6 +30,7 @@ export * from './market-maker/risk.js';
 export * from './market-maker/terms.js';
 export * from './media.js';
 export * from './me.js';
+export * from './moderation.js';
 export * from './nickname.js';
 export * from './notice.js';
 export * from './onboarding.js';

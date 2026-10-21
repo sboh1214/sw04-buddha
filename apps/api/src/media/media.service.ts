@@ -200,6 +200,24 @@ export class MediaService {
   }
 
   /**
+   * Any stored image, whatever shows it — for operators only (`GET /admin/media/:mediaId`, #50): a
+   * hidden or deleted post's, an earlier version's, a profile image an operator removed and keeps
+   * (#37-10). Null for an unknown id.
+   */
+  async findStored(mediaId: string): Promise<ShownImage | null> {
+    const { mediaObjects } = schema;
+    const [row] = await this.db
+      .select({
+        storageKey: mediaObjects.storageKey,
+        contentType: mediaObjects.contentType,
+        byteSize: mediaObjects.byteSize,
+      })
+      .from(mediaObjects)
+      .where(eq(mediaObjects.id, mediaId));
+    return row ? shownImage(row) : null;
+  }
+
+  /**
    * The bytes of a shown image, or null when its object is gone (logged: no request causes it).
    * `signal` gives the read up (the client went): it then rejects.
    */

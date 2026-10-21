@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  AUTO_NICKNAME_ALPHABET,
   AUTO_NICKNAME_PREFIX,
+  AUTO_NICKNAME_SUFFIX_LENGTH,
   NICKNAME_CHANGE_INTERVAL_DAYS,
   isAutoNickname,
   keptNicknameViolation,
@@ -100,6 +102,16 @@ describe('nickname rules (#57-6)', () => {
       'USER_A7K2',
     ]) {
       expect(isAutoNickname(typed), typed).toBe(false);
+    }
+  });
+
+  it('draws from the trigger’s 32 characters, which the shape holds (#50 draws from them too)', () => {
+    expect(AUTO_NICKNAME_ALPHABET).toHaveLength(32);
+    expect(new Set(AUTO_NICKNAME_ALPHABET).size).toBe(32);
+    expect(AUTO_NICKNAME_ALPHABET).not.toMatch(/[01OI]/);
+    for (const char of AUTO_NICKNAME_ALPHABET) {
+      const auto = `${AUTO_NICKNAME_PREFIX}${char.repeat(AUTO_NICKNAME_SUFFIX_LENGTH)}`;
+      expect(isAutoNickname(auto), auto).toBe(true);
     }
   });
 

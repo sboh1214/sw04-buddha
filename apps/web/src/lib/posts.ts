@@ -448,6 +448,33 @@ export function postFirstLine(text: string): string {
 }
 
 /**
+ * Where a post body's headings start (the level of the editor's 제목 1): 3 on the post page and a
+ * notice's, under the page's `h1` and the title's `h2` (A-M4-31); 4 under a title that is an `h3` —
+ * an earlier version of a notice on the admin's screen (#138); 5 where the body sits deeper still —
+ * the operators' moderation page, under its `h3` and a block's `h4` (#50, ADR-0081).
+ */
+export type PostHeadingStart = 3 | 4 | 5;
+
+/**
+ * The element a body heading of `level` (the editor's 1–3; anything else as 3) is drawn as, the
+ * levels counted on from `from` — h3/h4/h5, h4/h5/h6, or h5/h6 and, past HTML's last heading, a
+ * `div` with `role="heading"` and `aria-level` 7 — so a screen reader's outline keeps the post's
+ * headings under the page's own wherever the body sits.
+ */
+export function postHeadingElement(
+  level: number,
+  from: PostHeadingStart = 3,
+): { tag: 'h3' | 'h4' | 'h5' | 'h6' | 'div'; ariaLevel: number } {
+  const depth = level === 1 || level === 2 || level === 3 ? level : 3;
+  const ariaLevel = from + depth - 1;
+  const tags = { 3: 'h3', 4: 'h4', 5: 'h5', 6: 'h6' } as const;
+  return {
+    tag: ariaLevel <= 6 ? tags[ariaLevel as keyof typeof tags] : 'div',
+    ariaLevel,
+  };
+}
+
+/**
  * Whether the viewer wrote the post: its author's public id is the viewer's (`Me.profile.publicId`,
  * never the account id, which no public answer carries — ADR-0069 decision 5). Decides only
  * whether the screen offers 수정 and 삭제; the server checks the author on every write.

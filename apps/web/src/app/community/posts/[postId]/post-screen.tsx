@@ -18,6 +18,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useId, useRef, useState } from 'react';
+import { ReportButton } from '@/components/moderation/report-button';
 import { CommentsSection } from '@/components/post/comments-section';
 import { LikeButton, LikesUnreadableNotice } from '@/components/post/like-button';
 import { PostByline } from '@/components/post/post-author';
@@ -28,6 +29,7 @@ import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
 import { type Post, type PostMarket } from '@/lib/api';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { authorPublicIdOf } from '@/lib/moderation';
 import {
   COMMUNITY_PATH,
   communityPath,
@@ -49,12 +51,13 @@ import { useSession } from '@/lib/use-session';
  * as an `h2` only a screen reader sees, so the body's `h3`–`h5` always sit under one), the byline
  * (author, time, 수정됨), the body, its 좋아요 (#49, ADR-0076: the public count, and the reader's
  * own toggle once the browser knows who reads — with a line beside it when the reader's likes could
- * not be read, owner decision 2026-10-20, answer 10) and the market it belongs to — a link to its
+ * not be read, owner decision 2026-10-20, answer 10), 신고 for a reader who did not write it (#50,
+ * ADR-0081 — `ReportButton`, decided in the browser) and the market it belongs to — a link to its
  * detail, which opens in every status, and to the community list of that market. Its author also
  * gets 수정 and 삭제 (`isOwnPost`, by the public id of `GET /me`, so nothing of it is in the HTML). A
- * hidden or deleted post is its placeholder and its market only (#45-5) — no count and no 좋아요,
- * as it takes none. Under either come the post's comments (#48, ADR-0074): a placeholder keeps
- * them readable (N04 §6), and only a published post takes new ones.
+ * hidden or deleted post is its placeholder and its market only (#45-5) — no count, no 좋아요 and
+ * no 신고, as it takes none. Under either come the post's comments (#48, ADR-0074): a placeholder
+ * keeps them readable (N04 §6), and only a published post takes new ones.
  *
  * The onboarding gate lets an account that finished its onboarding once and faces a re-consent
  * alone open this page (`ONBOARDING_EXEMPT_PAGES`, 오너 결정 2026-10-20): deleting one's own post
@@ -157,6 +160,10 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
               count={post.likeCount}
             />
             <LikesUnreadableNotice postId={post.id} />
+            <ReportButton
+              subject={{ type: 'post', postId: post.id }}
+              authorPublicId={authorPublicIdOf(post.author)}
+            />
           </HStack>
         </>
       )}

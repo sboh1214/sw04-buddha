@@ -7,6 +7,7 @@ import {
   LEDGER_REF_TYPES,
   MARKET_EVENT_TYPES,
   MEDIA_KINDS,
+  MODERATION_ACTION_TYPES,
   PAYMENT_EVENT_TYPES,
   PAYMENT_PROVIDERS,
   PHONE_VERIFICATION_SEND_OUTCOMES,
@@ -82,6 +83,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'media_objects.content_type': IMAGE_CONTENT_TYPES,
   // Generated (#141): the profile image's kind its foreign key requires, NULL without an image.
   'profiles.image_kind': MEDIA_KINDS.filter((kind) => kind === 'profile_image'),
+  // #50: what an operator did to a member, held by a CHECK so #185 and #139 can add theirs.
+  'moderation_actions.type': MODERATION_ACTION_TYPES,
 };
 
 /**

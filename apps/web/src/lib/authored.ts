@@ -147,11 +147,11 @@ export function reportReasonLabel(code: ReportReason): string {
 
 /**
  * What MY '내 글' says beside an item an operator hid (#45-5: '숨김' and the reason, to the member
- * alone): the mark always; once the hiding carries a reason, its line — the report reason the
- * operator picked (owner decision 2026-10-22: «사유 목록 중 하나 + 운영자 설명») — and the
- * operator's explanation on a line of its own when they wrote one. The reason comes with #50's
- * moderation records; until then no hiding records one (`reason: null`), and the mark stands alone
- * rather than a line that says nothing.
+ * alone): the mark always, and the reason's line — the report reason the operator picked for the
+ * standing hiding (owner decision 2026-10-22: «사유 목록 중 하나 + 운영자 설명»; #50's
+ * `moderation_actions`, ADR-0081) — with the operator's explanation on a line of its own when they
+ * wrote one. `reason: null` only for an item hidden with no hiding recorded, which no path writes
+ * now (ADR-0081 7-24): then the mark stands alone rather than a line that says nothing.
  */
 export function hiddenNoticeView(hidden: HiddenNotice): {
   mark: string;

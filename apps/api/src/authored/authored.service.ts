@@ -13,9 +13,11 @@ import {
   type MyComment,
   type MyPost,
   type PostSummary,
+  type ReportReason,
   type Role,
 } from '@buddha/shared';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, isNull, type SQL } from 'drizzle-orm';
+import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { visibleCommentCountSql } from '../comments/comment-queries.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -72,6 +74,8 @@ interface PostRow {
   createdAt: Date;
   editedAt: Date | null;
   hiddenAt: Date | null;
+  hideReason: ReportReason | null;
+  hideNote: string | null;
   author: AuthorRow;
   market: MarketRow;
   commentCount: number;
@@ -85,6 +89,8 @@ interface CommentRow {
   createdAt: Date;
   editedAt: Date | null;
   hiddenAt: Date | null;
+  hideReason: ReportReason | null;
+  hideNote: string | null;
   author: AuthorRow;
   likeCount: number;
   post: {
@@ -155,13 +161,24 @@ function commentOf(row: CommentRow): AuthoredComment {
 /**
  * What MY '내 글' says of a hidden item (#45-5): that it is hidden, and the reason — one of the
  * report reasons and the operator's explanation, if any (`{ code, note }`, owner decision
- * 2026-10-22, ADR-0080). The reason is #50's to record — its moderation records carry the hiding,
- * its reason and its reversal, and it reads the latest hiding's reason here — and nothing records
- * one before them, so it is null today.
+ * 2026-10-22, ADR-0080) — the standing hiding's (#50, ADR-0081: `moderation_actions`, its
+ * `reason` and `note`). Never the operator who hid it, nor anything of a report (#45-13). Null
+ * only for an item hidden with no hiding recorded (nothing writes one now).
  */
-function hiddenNoticeOf(row: { hiddenAt: Date | null }): HiddenNotice | null {
-  return row.hiddenAt === null ? null : { reason: null };
+function hiddenNoticeOf(row: {
+  hiddenAt: Date | null;
+  hideReason: ReportReason | null;
+  hideNote: string | null;
+}): HiddenNotice | null {
+  if (row.hiddenAt === null) return null;
+  return { reason: row.hideReason === null ? null : { code: row.hideReason, note: row.hideNote } };
 }
+
+/**
+ * The standing hiding of an item (#50, `moderation_actions`), joined under its own name: one at
+ * most per item (`moderation_actions_standing_*_hide_idx`), so the join adds no row.
+ */
+const standingHide = alias(schema.moderationActions, 'standing_hide');
 
 /**
  * 작성자별 글·댓글 목록 (#51, ADR-0080): a member's posts and comments, newest first, a page at a
@@ -238,6 +255,8 @@ export class AuthoredService {
         createdAt: posts.createdAt,
         editedAt: posts.editedAt,
         hiddenAt: posts.hiddenAt,
+        hideReason: standingHide.reason,
+        hideNote: standingHide.note,
         author: authorColumns,
         market: marketColumns,
         commentCount: visibleCommentCountSql(posts.id),
@@ -247,6 +266,7 @@ export class AuthoredService {
       .innerJoin(profiles, eq(profiles.userId, posts.authorId))
       .innerJoin(markets, eq(markets.id, posts.marketId))
       .innerJoin(categories, eq(categories.id, markets.categoryId))
+      .leftJoin(standingHide, standingHideOf(standingHide.postId, posts.id))
       .where(
         and(
           eq(posts.authorId, authorId),
@@ -281,6 +301,8 @@ export class AuthoredService {
         createdAt: postComments.createdAt,
         editedAt: postComments.editedAt,
         hiddenAt: postComments.hiddenAt,
+        hideReason: standingHide.reason,
+        hideNote: standingHide.note,
         author: authorColumns,
         likeCount: commentLikeCountSql(postComments.id),
         post: {
@@ -297,6 +319,7 @@ export class AuthoredService {
       .innerJoin(posts, eq(posts.id, postComments.postId))
       .innerJoin(markets, eq(markets.id, posts.marketId))
       .innerJoin(categories, eq(categories.id, markets.categoryId))
+      .leftJoin(standingHide, standingHideOf(standingHide.commentId, postComments.id))
       .where(
         and(
           eq(postComments.authorId, authorId),
@@ -311,6 +334,15 @@ export class AuthoredService {
       .limit(query.limit + 1);
     return pageOf(rows, query.limit);
   }
+}
+
+/** The join condition of an item's standing hiding: the item's own, not cancelled. */
+function standingHideOf(itemColumn: AnyPgColumn, item: AnyPgColumn): SQL {
+  return and(
+    eq(itemColumn, item),
+    eq(standingHide.type, 'hide'),
+    isNull(standingHide.cancelledAt),
+  ) as SQL;
 }
 
 /** The page a query read one row past the limit for, and the cursor of the next one. */

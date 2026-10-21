@@ -39,6 +39,9 @@ const OPERATION_RECORDS = [
   'GET /admin/admins/changes',
   'GET /admin/notices/:noticeId/actions',
   'GET /admin/notices/:noticeId/revisions',
+  // #50: the reports, their processing and the moderation actions (N04 §6, ADR-0056 1-2).
+  'GET /admin/reports',
+  'GET /admin/moderation/actions',
 ];
 
 describe('admin access (static)', () => {

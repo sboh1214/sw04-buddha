@@ -1,0 +1,1346 @@
+/**
+ * 운영 처리 (#50, ADR-0081; ADR-0069 decision 2 #45-5, #45-11…#45-14, decision 3 #37-10, decision 4
+ * #50 rows) against the docker `test` profile: the operators' report queue, moderation pages and
+ * actions, and what the members read of them. Pinned: a hiding takes a post or a comment out of
+ * every public view at once and resolves the pending reports on it (the reporters read 조치함), its
+ * author reads the reason on MY 내 글 and on the record of actions — never the operator, a report or
+ * a reporter — and a cancellation shows it again; a dismissal changes nothing the public reads and
+ * the reporters read 기각; a warning is a record and a notice; the nickname goes back to an auto
+ * nickname (held from the others, kept for operators), the 소개 is emptied and the image removed and
+ * kept for operators only; an operator never acts on themselves, another does; every action,
+ * cancellation and dismissal is recorded with its reason, operator and time; every admin reads the
+ * queue, the pages and every report with its reporter. Two operators at once: one hiding of an item
+ * stands, and an action takes the reports it resolves in the order a dismissal does (no deadlock).
+ * Skips when TEST_* are unset.
+ */
+import * as crypto from 'node:crypto';
+import { schema } from '@buddha/db';
+import {
+  completeOnboarding,
+  createComment,
+  createMarket,
+  createPost,
+  createProfileImage,
+  createReport,
+  createUser,
+} from '@buddha/db/test';
+import {
+  AUTO_NICKNAME_ALPHABET,
+  AUTO_NICKNAME_PATTERN,
+  AUTO_NICKNAME_PREFIX,
+  DISMISS_REPORTS_MAX,
+  MODERATION_REASON_MAX_LENGTH,
+  NICKNAME_CHANGE_INTERVAL_DAYS,
+  adminCommentModerationSchema,
+  adminModerationActionSchema,
+  adminPostModerationSchema,
+  adminReportGroupSchema,
+  adminUserModerationSchema,
+  commentThreadSchema,
+  myCommentSchema,
+  myModerationActionSchema,
+  myPostSchema,
+  myReportSchema,
+  postSchema,
+  type AdminModerationAction,
+  type AdminReportGroup,
+  type MyModerationAction,
+  type MyReport,
+  type Post,
+  type PostSummary,
+} from '@buddha/shared';
+import { and, eq } from 'drizzle-orm';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { AdminGuard } from '../auth/admin.guard.js';
+import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { hasTestInfra } from '../test/setup-env.js';
+import { waitForLockWaiter } from '../test/wait.js';
+
+// The nickname reset's draw (`randomInt`), steerable per test (`withDraws`); the real one otherwise.
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof crypto>();
+  return { ...actual, randomInt: vi.fn(actual.randomInt) };
+});
+
+/** setup-env.ts fixes WEB_ORIGIN to this. */
+const TRUSTED_ORIGIN = 'http://localhost:3000';
+
+const UNKNOWN = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
+
+const DAY_MS = 24 * 60 * 60 * 1_000;
+const HOUR_MS = 60 * 60 * 1_000;
+
+type Res = { statusCode: number; body: string; json: <T>() => T };
+
+describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
+  let t: TestApp;
+  let author: TestUser;
+  let reporter: TestUser;
+  let admin: TestUser;
+  let other: TestUser;
+  let market: Awaited<ReturnType<typeof createMarket>>;
+  let post: Awaited<ReturnType<typeof createPost>>;
+  let comment: Awaited<ReturnType<typeof createComment>>;
+
+  beforeAll(async () => {
+    t = await createTestApp();
+  });
+  afterAll(async () => {
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
+  });
+  beforeEach(async () => {
+    await t.reset();
+    author = await onboarded();
+    reporter = await onboarded();
+    admin = await anAdmin();
+    other = await anAdmin();
+    market = await createMarket(t.db, { title: '기준금리 인하' });
+    post = await createPost(t.db, {
+      marketId: market.id,
+      authorId: author.id,
+      title: '근거 글',
+      text: '본문 첫 줄',
+    });
+    comment = await createComment(t.db, { postId: post.id, authorId: author.id, body: '댓글' });
+  });
+
+  async function onboarded(): Promise<TestUser> {
+    const user = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: user.id });
+    return user;
+  }
+  async function anAdmin(): Promise<TestUser> {
+    const user = await onboarded();
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, user.id));
+    await t.app.get(AdminGuard).invalidate(user.id);
+    return user;
+  }
+
+  const send = (url: string, payload: Record<string, unknown>, who: TestUser) =>
+    t.app.inject({
+      method: 'POST',
+      url: `/api/v1${url}`,
+      headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+      payload: JSON.stringify({ expectedAccountId: who.id, ...payload }),
+    });
+  const read = (url: string, who?: TestUser) =>
+    t.app.inject({
+      method: 'GET',
+      url: `/api/v1${url}`,
+      headers: who ? { cookie: who.cookie } : {},
+    });
+  const dataOf = <T>(res: Res, status = 200): T => {
+    expect(res.statusCode, res.body).toBe(status);
+    return res.json<{ data: T }>().data;
+  };
+  const actionOf = (res: Res): AdminModerationAction =>
+    adminModerationActionSchema.parse(dataOf(res));
+  const refusalOf = (res: Res) => {
+    expect(res.statusCode, res.body).toBe(409);
+    const error = res.json<{ error: { code: string; details: { reason: string } } }>().error;
+    expect(error.code).toBe('MODERATION_NOT_ALLOWED');
+    return error.details.reason;
+  };
+  const report = async (path: string, who: TestUser = reporter, reason = 'spam') =>
+    myReportSchema.parse(dataOf<unknown>(await send(`${path}/reports`, { reason }, who), 201));
+  const myReports = async (who: TestUser = reporter): Promise<MyReport[]> =>
+    dataOf<unknown[]>(await read('/me/reports', who)).map((item) => myReportSchema.parse(item));
+  const myActions = async (who: TestUser = author): Promise<MyModerationAction[]> =>
+    dataOf<unknown[]>(await read('/me/moderation/actions', who)).map((item) =>
+      myModerationActionSchema.parse(item),
+    );
+  const postPage = async (postId = post.id): Promise<Post> =>
+    postSchema.parse(dataOf(await read(`/posts/${postId}`)));
+  const cards = async (): Promise<PostSummary[]> => dataOf(await read('/posts'));
+  const audits = (type: string) =>
+    t.db.select().from(schema.adminActions).where(eq(schema.adminActions.type, type));
+  const queue = async (status?: 'pending' | 'resolved', who: TestUser = admin) =>
+    dataOf<unknown[]>(await read(`/admin/reports${status ? `?status=${status}` : ''}`, who)).map(
+      (item) => adminReportGroupSchema.parse(item),
+    );
+  const reportRow = async (id: string) => {
+    const [row] = await t.db.select().from(schema.reports).where(eq(schema.reports.id, id));
+    return row!;
+  };
+  const profileRow = async (userId: string) => {
+    const [row] = await t.db
+      .select()
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, userId));
+    return row!;
+  };
+  const changeNickname = (who: TestUser, nickname: string) =>
+    t.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/me',
+      headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+      payload: JSON.stringify({ nickname, expectedAccountId: who.id }),
+    });
+
+  /**
+   * Runs `whileHeld` while another connection holds what `statements` take in an open transaction
+   * — another operator's write in flight — and commits it once the request waits on it.
+   */
+  async function whileLocked<T>(
+    statements: [string, unknown[]][],
+    whileHeld: () => Promise<T>,
+  ): Promise<T> {
+    const holder = await t.db.$client.connect();
+    let pending: Promise<T> | undefined;
+    let committed = false;
+    try {
+      await holder.query('BEGIN');
+      for (const [text, values] of statements) await holder.query(text, values);
+      pending = whileHeld();
+      await waitForLockWaiter(holder, 'the request on what another transaction holds');
+      await holder.query('COMMIT');
+      committed = true;
+      return await pending;
+    } finally {
+      if (!committed) await holder.query('ROLLBACK');
+      holder.release();
+      await pending?.catch(() => undefined);
+    }
+  }
+
+  /**
+   * Runs `run` with the nickname reset drawing the auto nicknames `nicknames` name, in order (four
+   * of AUTO_NICKNAME_ALPHABET each, `randomInt(max)`), and the real draw again after — every other
+   * form (`randomInt(min, max)`, the factories' phone numbers) is the real one throughout.
+   */
+  async function withDraws<T>(nicknames: readonly string[], run: () => Promise<T>): Promise<T> {
+    const draws = nicknames.flatMap((nickname) =>
+      [...nickname.slice(AUTO_NICKNAME_PREFIX.length)].map((char) =>
+        AUTO_NICKNAME_ALPHABET.indexOf(char),
+      ),
+    );
+    const draw = vi.mocked(crypto.randomInt) as unknown as Mock<(...args: number[]) => number>;
+    const real = draw.getMockImplementation()!;
+    draw.mockImplementation((...args) =>
+      args.length === 1 && draws.length > 0 ? draws.shift()! : real(...args),
+    );
+    try {
+      return await run();
+    } finally {
+      draw.mockImplementation(real);
+    }
+  }
+
+  describe('hiding', () => {
+    it('takes a post out of every public view at once, resolves its reports and tells its author why', async () => {
+      const first = await report(`/posts/${post.id}`);
+      const second = await report(`/posts/${post.id}`, await onboarded(), 'harassment');
+      const onComment = await report(`/comments/${comment.id}`);
+      const action = actionOf(
+        await send(
+          `/admin/moderation/posts/${post.id}/hide`,
+          { reason: 'harassment', note: ' 욕설 ' },
+          admin,
+        ),
+      );
+      expect(action).toMatchObject({
+        type: 'hide',
+        user: { id: author.id },
+        subject: { type: 'post', postId: post.id },
+        reason: { code: 'harassment', note: '욕설' },
+        createdBy: { id: admin.id },
+        cancelledAt: null,
+        endsAt: null,
+        removed: null,
+        reportCount: 2,
+      });
+      // The public: the placeholder, out of the list and the author's profile.
+      expect(await postPage()).toMatchObject({ state: 'hidden', id: post.id });
+      expect((await cards()).map((card) => card.id)).not.toContain(post.id);
+      const [profile] = await t.db
+        .select({ publicId: schema.profiles.publicId })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, author.id));
+      expect(dataOf<unknown[]>(await read(`/profiles/${profile!.publicId}/posts`))).toEqual([]);
+      // No new comment under it, no edit by its author.
+      const refusedComment = await send(
+        `/posts/${post.id}/comments`,
+        { body: '새 댓글' },
+        reporter,
+      );
+      expect(refusedComment.statusCode).toBe(409);
+      // The author: '숨김' and the reason on MY 내 글, the action on MY's record — no operator.
+      const [mine] = dataOf<unknown[]>(await read('/me/posts', author)).map((item) =>
+        myPostSchema.parse(item),
+      );
+      expect(mine?.hidden).toEqual({ reason: { code: 'harassment', note: '욕설' } });
+      const [received] = await myActions();
+      expect(received).toEqual({
+        id: action.id,
+        type: 'hide',
+        reason: { code: 'harassment', note: '욕설' },
+        subject: { type: 'post', id: post.id, title: '근거 글', excerpt: '본문 첫 줄' },
+        createdAt: action.createdAt,
+        endsAt: null,
+        cancelledAt: null,
+      });
+      const body = (await read('/me/moderation/actions', author)).body;
+      expect(body).not.toContain(admin.id);
+      expect(body).not.toContain(reporter.id);
+      // The reporters: 조치함 with when; the comment's report still waits.
+      const statuses = Object.fromEntries((await myReports()).map((r) => [r.id, r.status]));
+      expect(statuses).toEqual({ [first.id]: 'actioned', [onComment.id]: 'pending' });
+      const [resolved] = await t.db
+        .select()
+        .from(schema.reports)
+        .where(eq(schema.reports.id, second.id));
+      expect(resolved).toMatchObject({
+        status: 'actioned',
+        resolvedBy: admin.id,
+        actionId: action.id,
+      });
+      expect(resolved?.resolvedAt).not.toBeNull();
+      // Recorded: the action and the audit row, in one transaction.
+      const [audit] = await audits('moderation_post_hide');
+      expect(audit).toMatchObject({
+        adminId: admin.id,
+        targetType: 'moderation_action',
+        targetId: action.id,
+        payload: {
+          actionId: action.id,
+          postId: post.id,
+          userId: author.id,
+          reason: 'harassment',
+          note: '욕설',
+        },
+      });
+      expect((audit?.payload as { reportIds: string[] }).reportIds.sort()).toEqual(
+        [first.id, second.id].sort(),
+      );
+    });
+
+    it('takes a comment out of the comment list, as its placeholder', async () => {
+      const action = actionOf(
+        await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
+      );
+      expect(action.subject).toEqual({ type: 'comment', commentId: comment.id, postId: post.id });
+      const [thread] = dataOf<unknown[]>(await read(`/posts/${post.id}/comments`)).map((item) =>
+        commentThreadSchema.parse(item),
+      );
+      expect(thread?.comment).toEqual({ state: 'hidden', id: comment.id });
+      expect((await myActions())[0]).toMatchObject({
+        type: 'hide',
+        subject: { type: 'comment', id: comment.id, postId: post.id, excerpt: '댓글' },
+      });
+      expect(await audits('moderation_comment_hide')).toHaveLength(1);
+    });
+
+    it('refuses a hidden, a deleted, an unknown item and the operator’s own; another operator hides it', async () => {
+      const hidden = actionOf(
+        await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin),
+      );
+      expect(
+        refusalOf(await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, other)),
+      ).toBe('hidden');
+      const deleted = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        deletedAt: new Date(),
+      });
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/posts/${deleted.id}/hide`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('deleted');
+      expect(
+        (await send(`/admin/moderation/posts/${UNKNOWN}/hide`, { reason: 'spam' }, admin))
+          .statusCode,
+      ).toBe(404);
+      expect(
+        (await send(`/admin/moderation/comments/${UNKNOWN}/hide`, { reason: 'spam' }, admin))
+          .statusCode,
+      ).toBe(404);
+      // 기타 needs the explanation the member reads.
+      expect(
+        (await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'other' }, admin))
+          .statusCode,
+      ).toBe(400);
+      // An operator's own post: refused to them, taken by another (decision 4 #50).
+      const own = await createPost(t.db, { marketId: market.id, authorId: admin.id });
+      await report(`/posts/${own.id}`);
+      expect(
+        refusalOf(await send(`/admin/moderation/posts/${own.id}/hide`, { reason: 'spam' }, admin)),
+      ).toBe('own');
+      const byOther = actionOf(
+        await send(`/admin/moderation/posts/${own.id}/hide`, { reason: 'spam' }, other),
+      );
+      expect(byOther).toMatchObject({
+        user: { id: admin.id },
+        createdBy: { id: other.id },
+        reportCount: 1,
+      });
+      expect(hidden.id).not.toBe(byOther.id);
+    });
+
+    it('shows the item again once cancelled with a reason, and keeps the reports resolved', async () => {
+      const onPost = await report(`/posts/${post.id}`);
+      const hidden = actionOf(
+        await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin),
+      );
+      const cancelled = actionOf(
+        await send(
+          `/admin/moderation/actions/${hidden.id}/cancel`,
+          { reason: ' 이의 인정 ' },
+          other,
+        ),
+      );
+      expect(cancelled).toMatchObject({
+        id: hidden.id,
+        cancelledBy: { id: other.id },
+        cancelReason: '이의 인정',
+      });
+      expect(cancelled.cancelledAt).not.toBeNull();
+      expect((await postPage()).state).toBe('published');
+      expect((await cards()).map((card) => card.id)).toContain(post.id);
+      const [mine] = dataOf<unknown[]>(await read('/me/posts', author)).map((item) =>
+        myPostSchema.parse(item),
+      );
+      expect(mine?.hidden).toBeNull();
+      // The member reads it cancelled; the reporter's result stands.
+      expect((await myActions())[0]?.cancelledAt).toBe(cancelled.cancelledAt);
+      expect((await myReports()).find((r) => r.id === onPost.id)?.status).toBe('actioned');
+      // Once only; never by the member acted on.
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/actions/${hidden.id}/cancel`, { reason: '다시' }, admin),
+        ),
+      ).toBe('cancelled');
+      const [audit] = await audits('moderation_cancel');
+      expect(audit).toMatchObject({
+        adminId: other.id,
+        targetId: hidden.id,
+        payload: { actionId: hidden.id, type: 'hide', userId: author.id, reason: '이의 인정' },
+      });
+      // Hidden again later: a new action.
+      actionOf(await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin));
+      expect((await postPage()).state).toBe('hidden');
+      expect(
+        (await send(`/admin/moderation/actions/${UNKNOWN}/cancel`, { reason: '없음' }, admin))
+          .statusCode,
+      ).toBe(404);
+      expect(
+        (await send(`/admin/moderation/actions/${hidden.id}/cancel`, { reason: ' ' }, admin))
+          .statusCode,
+      ).toBe(400);
+      expect(
+        (
+          await send(
+            `/admin/moderation/actions/${hidden.id}/cancel`,
+            { reason: 'x'.repeat(MODERATION_REASON_MAX_LENGTH + 1) },
+            admin,
+          )
+        ).statusCode,
+      ).toBe(400);
+    });
+
+    it('refuses a comment’s hiding on the operator’s own, a deleted and a hidden comment', async () => {
+      const own = await createComment(t.db, { postId: post.id, authorId: admin.id });
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/comments/${own.id}/hide`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('own');
+      const deleted = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        deletedAt: new Date(),
+      });
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/comments/${deleted.id}/hide`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('deleted');
+      // Hidden with no hiding recorded: the comment's own column answers, not the standing
+      // hiding's index.
+      const hidden = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        hiddenAt: new Date(),
+      });
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/comments/${hidden.id}/hide`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('hidden');
+      expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+      const [kept] = await t.db
+        .select({ hiddenAt: schema.postComments.hiddenAt })
+        .from(schema.postComments)
+        .where(eq(schema.postComments.id, deleted.id));
+      expect(kept?.hiddenAt).toBeNull();
+      // Another operator hides the operator's own.
+      actionOf(await send(`/admin/moderation/comments/${own.id}/hide`, { reason: 'spam' }, other));
+    });
+
+    it('answers a second hiding of one item `hidden`, at once and past the item’s lock', async () => {
+      const [one, two] = await Promise.all([
+        send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin),
+        send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, other),
+      ]);
+      expect([one.statusCode, two.statusCode].sort()).toEqual([200, 409]);
+      expect(refusalOf(one.statusCode === 409 ? one : two)).toBe('hidden');
+      // Another operator's hiding of the comment recorded meanwhile without its column (in
+      // flight): the standing hiding's index answers, as the same refusal.
+      const late = await whileLocked(
+        [
+          [
+            'INSERT INTO moderation_actions (type, user_id, comment_id, reason, created_by) VALUES ($1, $2, $3, $4, $5)',
+            ['hide', author.id, comment.id, 'spam', other.id],
+          ],
+        ],
+        () => send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
+      );
+      expect(refusalOf(late)).toBe('hidden');
+      const actions = await t.db.select().from(schema.moderationActions);
+      expect(
+        actions.map((action) => [action.postId ?? action.commentId, action.createdBy]),
+      ).toEqual(
+        expect.arrayContaining([
+          [post.id, expect.any(String)],
+          [comment.id, other.id],
+        ]),
+      );
+      expect(actions).toHaveLength(2);
+    });
+
+    it('takes the reports it resolves in id order, the order a dismissal takes them', async () => {
+      // r1 came first and sorts last by id, r2 came after and sorts first. A dismissal locks them
+      // r2 then r1; an action must too, or a dismissal and an action at once could each hold one
+      // the other waits for (a deadlock, a 500 to one operator).
+      const r1 = 'ffffffff-ffff-4fff-bfff-ffffffffffff';
+      const r2 = '00000000-0000-4000-8000-000000000001';
+      const second = await onboarded();
+      for (const [id, who, hoursAgo, hash] of [
+        [r1, reporter, 2, 'a'],
+        [r2, second, 1, 'b'],
+      ] as const) {
+        await t.db.insert(schema.reports).values({
+          id,
+          targetType: 'post',
+          postId: post.id,
+          reportedUserId: author.id,
+          reporterId: who.id,
+          reporterPhoneHash: hash.repeat(64),
+          reason: 'spam',
+          createdAt: new Date(Date.now() - hoursAgo * HOUR_MS),
+        });
+      }
+      const holder = await t.db.$client.connect();
+      let hiding: ReturnType<typeof send> | undefined;
+      try {
+        await holder.query('BEGIN');
+        // Another operator's dismissal of r1, in flight.
+        await holder.query('SELECT id FROM reports WHERE id = $1 FOR UPDATE', [r1]);
+        hiding = send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin);
+        await waitForLockWaiter(holder, 'the hiding on the report another transaction holds');
+        // The hiding holds r2 already: it took it before it came to r1.
+        await expect(
+          holder.query('SELECT id FROM reports WHERE id = $1 FOR UPDATE NOWAIT', [r2]),
+        ).rejects.toMatchObject({ code: '55P03' });
+      } finally {
+        await holder.query('ROLLBACK');
+        holder.release();
+      }
+      expect(actionOf(await hiding).reportCount).toBe(2);
+    });
+
+    it('shows a comment again once its hiding is cancelled', async () => {
+      const hidden = actionOf(
+        await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
+      );
+      const cancelled = actionOf(
+        await send(`/admin/moderation/actions/${hidden.id}/cancel`, { reason: '이의 인정' }, other),
+      );
+      const [thread] = dataOf<unknown[]>(await read(`/posts/${post.id}/comments`)).map((item) =>
+        commentThreadSchema.parse(item),
+      );
+      expect(thread?.comment).toMatchObject({ state: 'published', id: comment.id, body: '댓글' });
+      const mine = dataOf<unknown[]>(await read('/me/comments', author))
+        .map((item) => myCommentSchema.parse(item))
+        .find((item) => item.id === comment.id);
+      expect(mine?.hidden).toBeNull();
+      expect((await myActions())[0]).toMatchObject({
+        id: hidden.id,
+        cancelledAt: cancelled.cancelledAt,
+      });
+      // The standing hiding is gone: the comment is hidden again by a new action.
+      const again = actionOf(
+        await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
+      );
+      expect(again.id).not.toBe(hidden.id);
+    });
+
+    it('names an item the member deleted since by its kind alone on their record (#45-5)', async () => {
+      const onPost = actionOf(
+        await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin),
+      );
+      const onComment = actionOf(
+        await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
+      );
+      // The author deletes both afterwards (a hidden item stays theirs to delete, #45-5).
+      await t.db
+        .update(schema.posts)
+        .set({ deletedAt: new Date() })
+        .where(eq(schema.posts.id, post.id));
+      await t.db
+        .update(schema.postComments)
+        .set({ deletedAt: new Date() })
+        .where(eq(schema.postComments.id, comment.id));
+      const record = await myActions();
+      expect(record.find((action) => action.id === onPost.id)?.subject).toEqual({
+        type: 'post',
+        id: post.id,
+        title: null,
+        excerpt: null,
+      });
+      expect(record.find((action) => action.id === onComment.id)?.subject).toEqual({
+        type: 'comment',
+        id: comment.id,
+        postId: post.id,
+        excerpt: null,
+      });
+      const body = (await read('/me/moderation/actions', author)).body;
+      for (const text of ['근거 글', '본문 첫 줄', '댓글']) expect(body).not.toContain(text);
+    });
+
+    it('refuses to cancel an action on the operator themselves', async () => {
+      const own = await createPost(t.db, { marketId: market.id, authorId: admin.id });
+      const hidden = actionOf(
+        await send(`/admin/moderation/posts/${own.id}/hide`, { reason: 'spam' }, other),
+      );
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/actions/${hidden.id}/cancel`, { reason: '내 글' }, admin),
+        ),
+      ).toBe('own');
+    });
+  });
+
+  describe('dismissing', () => {
+    it('closes the reports named with nothing done: the public reads the same, the reporters 기각', async () => {
+      const first = await report(`/posts/${post.id}`);
+      // A report that arrives while the operator's screen shows the first alone: not named, so
+      // not closed — the operator has not read it.
+      const second = await onboarded();
+      const later = await report(`/posts/${post.id}`, second, 'harassment');
+      const before = await postPage();
+      const res = dataOf<{ reports: unknown[] }>(
+        await send('/admin/reports/dismiss', { reportIds: [first.id], reason: '위반 아님' }, admin),
+      );
+      expect(res.reports).toHaveLength(1);
+      expect(res.reports[0]).toMatchObject({
+        id: first.id,
+        status: 'dismissed',
+        resolvedBy: { id: admin.id },
+        dismissalReason: '위반 아님',
+        actionId: null,
+      });
+      expect(await postPage()).toEqual(before);
+      expect((await myReports())[0]).toMatchObject({ id: first.id, status: 'dismissed' });
+      expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+      const [audit] = await audits('report_dismiss');
+      expect(audit).toMatchObject({
+        adminId: admin.id,
+        targetType: null,
+        payload: { reportIds: [first.id], reason: '위반 아님' },
+      });
+      expect((await myReports(second))[0]).toMatchObject({ id: later.id, status: 'pending' });
+      // The queue counts it as the one pending, its reasons the pending ones' alone.
+      expect(await queue()).toEqual([
+        expect.objectContaining({
+          pendingCount: 1,
+          reportCount: 2,
+          reasons: [{ reason: 'harassment', count: 1 }],
+        }),
+      ]);
+      expect(
+        refusalOf(
+          await send(
+            '/admin/reports/dismiss',
+            { reportIds: [first.id, later.id], reason: '다시' },
+            admin,
+          ),
+        ),
+      ).toBe('resolved');
+      expect((await myReports()).find((r) => r.id === first.id)?.status).toBe('dismissed');
+      expect((await reportRow(later.id)).status).toBe('pending');
+    });
+
+    it('takes DISMISS_REPORTS_MAX reports at a time, so a target with more is dismissed in turns', async () => {
+      // More pending reports on one post than one dismissal takes: one each from as many people.
+      const ids: string[] = [];
+      const start = Date.now() - DAY_MS;
+      for (let i = 0; i <= DISMISS_REPORTS_MAX; i += 1) {
+        const someone = await createUser(t.db);
+        const row = await createReport(t.db, {
+          reporterId: someone.user.id,
+          reportedUserId: author.id,
+          postId: post.id,
+          createdAt: new Date(start + i * 1_000),
+        });
+        ids.push(row.id);
+      }
+      const all = await send(
+        '/admin/reports/dismiss',
+        { reportIds: ids, reason: '위반 아님' },
+        admin,
+      );
+      expect(all.statusCode).toBe(400);
+      expect(all.json<{ error: { code: string; details: unknown } }>().error).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [expect.objectContaining({ path: ['reportIds'] })],
+      });
+      expect((await queue())[0]?.pendingCount).toBe(DISMISS_REPORTS_MAX + 1);
+      // The oldest DISMISS_REPORTS_MAX, as the screen sends them; the newest waits for the next.
+      const oldest = ids.slice(0, DISMISS_REPORTS_MAX);
+      const res = dataOf<{ reports: unknown[] }>(
+        await send('/admin/reports/dismiss', { reportIds: oldest, reason: '위반 아님' }, admin),
+      );
+      expect(res.reports).toHaveLength(DISMISS_REPORTS_MAX);
+      expect((await queue()).map((group) => group.pendingCount)).toEqual([1]);
+      expect((await reportRow(ids.at(-1)!)).status).toBe('pending');
+      dataOf(
+        await send(
+          '/admin/reports/dismiss',
+          { reportIds: ids.slice(-1), reason: '위반 아님' },
+          admin,
+        ),
+      );
+      expect(await queue()).toEqual([]);
+    });
+
+    it('refuses the operator’s own reports, unknown ones and a missing reason', async () => {
+      const own = await createPost(t.db, { marketId: market.id, authorId: admin.id });
+      const onOwn = await report(`/posts/${own.id}`);
+      expect(
+        refusalOf(
+          await send('/admin/reports/dismiss', { reportIds: [onOwn.id], reason: '없음' }, admin),
+        ),
+      ).toBe('own');
+      const notFound = await send(
+        '/admin/reports/dismiss',
+        { reportIds: [UNKNOWN], reason: '없음' },
+        admin,
+      );
+      expect(notFound.statusCode).toBe(404);
+      expect(
+        (await send('/admin/reports/dismiss', { reportIds: [onOwn.id] }, other)).statusCode,
+      ).toBe(400);
+      // A reason longer than its column: the body's refusal, never the database's (a 500).
+      expect(
+        (
+          await send(
+            '/admin/reports/dismiss',
+            { reportIds: [onOwn.id], reason: 'x'.repeat(MODERATION_REASON_MAX_LENGTH + 1) },
+            other,
+          )
+        ).statusCode,
+      ).toBe(400);
+      expect((await reportRow(onOwn.id)).status).toBe('pending');
+      // One report named twice, in two cases, is one.
+      const res = dataOf<{ reports: { id: string }[] }>(
+        await send(
+          '/admin/reports/dismiss',
+          { reportIds: [onOwn.id, onOwn.id.toUpperCase()], reason: '없음' },
+          other,
+        ),
+      );
+      expect(res.reports.map((row) => row.id)).toEqual([onOwn.id]);
+      const [audit] = await audits('report_dismiss');
+      expect(audit?.payload).toEqual({ reportIds: [onOwn.id], reason: '없음' });
+    });
+  });
+
+  describe('warning', () => {
+    it('records a warning and the member’s notice, resolving the reports on its subject', async () => {
+      const onComment = await report(`/comments/${comment.id}`);
+      const onPost = await report(`/posts/${post.id}`);
+      const action = actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/warn`,
+          {
+            reason: 'harassment',
+            note: '다음에는 숨깁니다',
+            subject: { type: 'comment', commentId: comment.id },
+          },
+          admin,
+        ),
+      );
+      expect(action).toMatchObject({
+        type: 'warning',
+        user: { id: author.id },
+        subject: { type: 'comment', commentId: comment.id, postId: post.id },
+        reportCount: 1,
+      });
+      // Nothing else changes: the comment and the post are as they were.
+      expect((await postPage()).state).toBe('published');
+      const statuses = Object.fromEntries((await myReports()).map((r) => [r.id, r.status]));
+      expect(statuses).toEqual({ [onComment.id]: 'actioned', [onPost.id]: 'pending' });
+      expect((await myActions())[0]).toMatchObject({
+        type: 'warning',
+        reason: { code: 'harassment', note: '다음에는 숨깁니다' },
+        subject: { type: 'comment', id: comment.id },
+      });
+      // Without a subject: about nothing in particular.
+      const plain = actionOf(
+        await send(`/admin/moderation/users/${author.id}/warn`, { reason: 'spam' }, admin),
+      );
+      expect(plain.subject).toBeNull();
+      expect((await myActions())[0]).toMatchObject({ id: plain.id, subject: null });
+      expect(await audits('moderation_warning')).toHaveLength(2);
+    });
+
+    it('resolves the reports on the post or the profile it is about, by any case of the id', async () => {
+      const onPost = await report(`/posts/${post.id}`);
+      const onComment = await report(`/comments/${comment.id}`);
+      const onProfile = await report(
+        `/profiles/${await publicIdOf(author.id)}`,
+        reporter,
+        'impersonation',
+      );
+      // An upper-case id is the same post: its reports are matched on the lower-case key.
+      const aboutPost = actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/warn`,
+          { reason: 'spam', subject: { type: 'post', postId: post.id.toUpperCase() } },
+          admin,
+        ),
+      );
+      expect(aboutPost).toMatchObject({
+        subject: { type: 'post', postId: post.id },
+        reportCount: 1,
+      });
+      expect(await reportRow(onPost.id)).toMatchObject({
+        status: 'actioned',
+        actionId: aboutPost.id,
+        resolvedBy: admin.id,
+      });
+      // Without a subject the profile's reports wait; about the profile they are resolved.
+      actionOf(await send(`/admin/moderation/users/${author.id}/warn`, { reason: 'spam' }, admin));
+      expect((await reportRow(onProfile.id)).status).toBe('pending');
+      const aboutProfile = actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/warn`,
+          { reason: 'impersonation', subject: { type: 'profile' } },
+          admin,
+        ),
+      );
+      expect(aboutProfile).toMatchObject({ subject: null, reportCount: 1 });
+      expect(await reportRow(onProfile.id)).toMatchObject({
+        status: 'actioned',
+        actionId: aboutProfile.id,
+      });
+      const statuses = Object.fromEntries((await myReports()).map((r) => [r.id, r.status]));
+      expect(statuses).toEqual({
+        [onPost.id]: 'actioned',
+        [onComment.id]: 'pending',
+        [onProfile.id]: 'actioned',
+      });
+      // The member reads a warning about the profile as one about nothing in particular (7-9).
+      expect((await myActions()).find((action) => action.id === aboutProfile.id)?.subject).toBe(
+        null,
+      );
+      const audit = (await audits('moderation_warning')).find(
+        (row) => row.targetId === aboutProfile.id,
+      );
+      expect((audit?.payload as { reportIds: string[] }).reportIds).toEqual([onProfile.id]);
+    });
+
+    it('refuses a subject not the member’s, an unknown member and the operator themselves', async () => {
+      const mine = await createPost(t.db, { marketId: market.id, authorId: reporter.id });
+      expect(
+        refusalOf(
+          await send(
+            `/admin/moderation/users/${author.id}/warn`,
+            { reason: 'spam', subject: { type: 'post', postId: mine.id } },
+            admin,
+          ),
+        ),
+      ).toBe('not_theirs');
+      expect(
+        (await send(`/admin/moderation/users/unknown-user/warn`, { reason: 'spam' }, admin))
+          .statusCode,
+      ).toBe(404);
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/users/${admin.id}/warn`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('own');
+      actionOf(await send(`/admin/moderation/users/${admin.id}/warn`, { reason: 'spam' }, other));
+    });
+  });
+
+  describe('profile items (#37-10)', () => {
+    it('gives the nickname back to an auto nickname, held from the others and kept for operators', async () => {
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: '사칭닉네임' })
+        .where(eq(schema.profiles.userId, author.id));
+      const onProfile = await report(
+        `/profiles/${await publicIdOf(author.id)}`,
+        reporter,
+        'impersonation',
+      );
+      const action = actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/nickname-reset`,
+          { reason: 'impersonation' },
+          admin,
+        ),
+      );
+      expect(action).toMatchObject({
+        type: 'nickname_reset',
+        subject: null,
+        removed: { item: 'nickname', nickname: '사칭닉네임' },
+        reportCount: 1,
+      });
+      const [profile] = await t.db
+        .select()
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, author.id));
+      expect(profile?.nickname).toMatch(AUTO_NICKNAME_PATTERN);
+      // Not the member's change: their 30-day interval is untouched.
+      expect(profile?.nicknameChangedAt).toBeNull();
+      // The nickname given up is held from other accounts (#57-6).
+      const [hold] = await t.db
+        .select()
+        .from(schema.nicknameHolds)
+        .where(eq(schema.nicknameHolds.nickname, '사칭닉네임'));
+      expect(hold?.userId).toBe(author.id);
+      const taken = await t.app.inject({
+        method: 'PATCH',
+        url: '/api/v1/me',
+        headers: {
+          origin: TRUSTED_ORIGIN,
+          'content-type': 'application/json',
+          cookie: reporter.cookie,
+        },
+        payload: JSON.stringify({ nickname: '사칭닉네임', expectedAccountId: reporter.id }),
+      });
+      expect(taken.statusCode).toBe(409);
+      expect((await myReports()).find((r) => r.id === onProfile.id)?.status).toBe('actioned');
+      expect((await myActions())[0]).toMatchObject({
+        type: 'nickname_reset',
+        subject: { type: 'profile' },
+      });
+      // An auto nickname already has nothing to take away.
+      expect(
+        refusalOf(
+          await send(
+            `/admin/moderation/users/${author.id}/nickname-reset`,
+            { reason: 'impersonation' },
+            admin,
+          ),
+        ),
+      ).toBe('nothing_to_remove');
+      expect(await audits('moderation_nickname_reset')).toHaveLength(1);
+      // Never changed since the onboarding, the member picks a nickname at once — the old one
+      // too: it is held from the others only.
+      expect((await changeNickname(author, '사칭닉네임')).statusCode).toBe(200);
+    });
+
+    it('leaves the member’s own 30-day interval running: a recent change is waited out (7-12)', async () => {
+      // The member changed to the nickname reported a day ago.
+      const changedAt = new Date(Date.now() - DAY_MS);
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: '사칭닉네임', nicknameChangedAt: changedAt })
+        .where(eq(schema.profiles.userId, author.id));
+      actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/nickname-reset`,
+          { reason: 'impersonation' },
+          admin,
+        ),
+      );
+      expect((await profileRow(author.id)).nicknameChangedAt).toEqual(changedAt);
+      const res = await changeNickname(author, '새닉네임');
+      expect(res.statusCode, res.body).toBe(409);
+      expect(res.json<{ error: unknown }>().error).toMatchObject({
+        code: 'NICKNAME_NOT_ALLOWED',
+        details: {
+          reason: 'change_interval',
+          nextChangeAt: new Date(
+            changedAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
+          ).toISOString(),
+        },
+      });
+    });
+
+    it('draws past a nickname held from the member and one another account has in any case', async () => {
+      const [held, taken, free] = ['user_2222', 'user_3333', 'user_4444'];
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: '사칭닉네임' })
+        .where(eq(schema.profiles.userId, author.id));
+      // Given up by another account a day ago: held from the member (#57-6).
+      await t.db
+        .insert(schema.nicknameHolds)
+        .values({ nickname: held, userId: reporter.id, releasedAt: new Date(Date.now() - DAY_MS) });
+      // Another account's nickname, in another case.
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: 'User_3333' })
+        .where(eq(schema.profiles.userId, other.id));
+      actionOf(
+        await withDraws([held, taken, free], () =>
+          send(`/admin/moderation/users/${author.id}/nickname-reset`, { reason: 'spam' }, admin),
+        ),
+      );
+      expect((await profileRow(author.id)).nickname).toBe(free);
+      // Ten draws that are all held: nothing changes, and the operator is told it failed.
+      const third = await onboarded();
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: '두번째사칭' })
+        .where(eq(schema.profiles.userId, third.id));
+      const failed = await withDraws(Array<string>(10).fill(held), () =>
+        send(`/admin/moderation/users/${third.id}/nickname-reset`, { reason: 'spam' }, admin),
+      );
+      expect(failed.statusCode).toBe(500);
+      expect(failed.json<{ error: { code: string } }>().error.code).toBe('INTERNAL');
+      expect((await profileRow(third.id)).nickname).toBe('두번째사칭');
+      expect(
+        await t.db
+          .select()
+          .from(schema.nicknameHolds)
+          .where(eq(schema.nicknameHolds.nickname, '두번째사칭')),
+      ).toEqual([]);
+      expect(
+        await t.db
+          .select()
+          .from(schema.moderationActions)
+          .where(eq(schema.moderationActions.userId, third.id)),
+      ).toEqual([]);
+      expect(await audits('moderation_nickname_reset')).toHaveLength(1);
+    });
+
+    it('refuses every profile item on the operator themselves', async () => {
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: '운영자닉네임', bio: '운영자 소개' })
+        .where(eq(schema.profiles.userId, admin.id));
+      const image = await createProfileImage(t.db, { userId: admin.id, contentType: 'image/png' });
+      for (const route of ['nickname-reset', 'bio-clear', 'image-remove']) {
+        expect(
+          refusalOf(
+            await send(`/admin/moderation/users/${admin.id}/${route}`, { reason: 'spam' }, admin),
+          ),
+        ).toBe('own');
+      }
+      expect(await profileRow(admin.id)).toMatchObject({
+        nickname: '운영자닉네임',
+        bio: '운영자 소개',
+        imageId: image.id,
+      });
+      expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+    });
+
+    it('empties the 소개, kept for operators', async () => {
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/users/${author.id}/bio-clear`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('nothing_to_remove');
+      await t.db
+        .update(schema.profiles)
+        .set({ bio: '홍보 링크' })
+        .where(eq(schema.profiles.userId, author.id));
+      const action = actionOf(
+        await send(`/admin/moderation/users/${author.id}/bio-clear`, { reason: 'spam' }, admin),
+      );
+      expect(action.removed).toEqual({ item: 'bio', bio: '홍보 링크' });
+      const profile = dataOf<{ bio: string | null }>(
+        await read(`/profiles/${await publicIdOf(author.id)}`),
+      );
+      expect(profile.bio).toBeNull();
+    });
+
+    it('removes the image: served to nobody, kept for operators at their own address', async () => {
+      const image = await createProfileImage(t.db, { userId: author.id, contentType: 'image/png' });
+      await t.storage.put(image.storageKey, new Uint8Array([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+      expect((await read(`/media/${image.id}`)).statusCode).toBe(200);
+      const action = actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/image-remove`,
+          { reason: 'personal_info' },
+          admin,
+        ),
+      );
+      expect(action.removed).toEqual({
+        item: 'image',
+        imageUrl: `/api/v1/admin/media/${image.id}`,
+      });
+      expect((await read(`/media/${image.id}`)).statusCode).toBe(404);
+      const [row] = await t.db
+        .select()
+        .from(schema.mediaObjects)
+        .where(eq(schema.mediaObjects.id, image.id));
+      expect(row).toMatchObject({ kind: 'profile_image' });
+      expect(row?.attachedAt).not.toBeNull();
+      const kept = await read(`/admin/media/${image.id}`, other);
+      expect(kept.statusCode).toBe(200);
+      expect(kept.headers['content-type']).toBe('image/png');
+      expect(kept.headers['cache-control']).toBe('private, no-store');
+      expect((await read(`/admin/media/${image.id}`, author)).statusCode).toBe(403);
+      // Nothing left to remove.
+      expect(
+        refusalOf(
+          await send(
+            `/admin/moderation/users/${author.id}/image-remove`,
+            { reason: 'spam' },
+            admin,
+          ),
+        ),
+      ).toBe('nothing_to_remove');
+    });
+  });
+
+  describe('the operators’ reads', () => {
+    it('groups the queue by target, the one waiting longest first, then the processed ones', async () => {
+      const profilePublicId = await publicIdOf(author.id);
+      await report(`/posts/${post.id}`);
+      await report(`/comments/${comment.id}`);
+      await report(`/posts/${post.id}`, await onboarded(), 'harassment');
+      const onProfile = await report(`/profiles/${profilePublicId}`, reporter, 'impersonation');
+      const pending = await queue(undefined, other);
+      expect(pending.map((group) => group.target)).toEqual([
+        { type: 'post', postId: post.id },
+        { type: 'comment', commentId: comment.id, postId: post.id },
+        { type: 'profile', userId: author.id },
+      ]);
+      expect(pending[0]).toMatchObject({
+        user: { id: author.id },
+        state: 'published',
+        title: '근거 글',
+        excerpt: '본문 첫 줄',
+        pendingCount: 2,
+        reportCount: 2,
+        reporterCount: 2,
+        reasons: [
+          { reason: 'spam', count: 1 },
+          { reason: 'harassment', count: 1 },
+        ],
+        lastResolvedAt: null,
+      });
+      // A page at a time.
+      const page = await read('/admin/reports?limit=2', admin);
+      const meta = page.json<{ meta: { nextCursor: string | null } }>().meta;
+      expect(meta.nextCursor).not.toBeNull();
+      const next = dataOf<AdminReportGroup[]>(
+        await read(`/admin/reports?limit=2&cursor=${encodeURIComponent(meta.nextCursor!)}`, admin),
+      );
+      expect(next.map((group) => group.target.type)).toEqual(['profile']);
+      // Processed, the target moves to the resolved part.
+      await send(
+        '/admin/reports/dismiss',
+        { reportIds: [onProfile.id], reason: '위반 아님' },
+        admin,
+      );
+      expect((await queue()).map((group) => group.target.type)).toEqual(['post', 'comment']);
+      const resolved = await queue('resolved');
+      expect(resolved).toEqual([
+        expect.objectContaining({
+          target: { type: 'profile', userId: author.id },
+          pendingCount: 0,
+          firstPendingAt: null,
+          reasons: [{ reason: 'impersonation', count: 1 }],
+        }),
+      ]);
+    });
+
+    it('pages the processed targets, the latest processing first', async () => {
+      const now = Date.now();
+      const processed = [
+        { postId: post.id, hoursAgo: 3 },
+        { commentId: comment.id, hoursAgo: 2 },
+        { hoursAgo: 1 },
+      ];
+      for (const { hoursAgo, ...target } of processed) {
+        await createReport(t.db, {
+          ...target,
+          reporterId: reporter.id,
+          reportedUserId: author.id,
+          status: 'dismissed',
+          resolvedAt: new Date(now - hoursAgo * HOUR_MS),
+          resolvedBy: admin.id,
+          dismissalReason: '위반 아님',
+          createdAt: new Date(now - 5 * HOUR_MS),
+        });
+      }
+      const first = await read('/admin/reports?status=resolved&limit=2', admin);
+      expect(dataOf<AdminReportGroup[]>(first).map((group) => group.target)).toEqual([
+        { type: 'profile', userId: author.id },
+        { type: 'comment', commentId: comment.id, postId: post.id },
+      ]);
+      const cursor = first.json<{ meta: { nextCursor: string | null } }>().meta.nextCursor;
+      expect(cursor).not.toBeNull();
+      const second = await read(
+        `/admin/reports?status=resolved&limit=2&cursor=${encodeURIComponent(cursor!)}`,
+        admin,
+      );
+      expect(dataOf<AdminReportGroup[]>(second).map((group) => group.target)).toEqual([
+        { type: 'post', postId: post.id },
+      ]);
+      expect(second.json<{ meta: { nextCursor: string | null } }>().meta.nextCursor).toBeNull();
+    });
+
+    it('shows a post whatever its state, its history, its reports with their reporters and the author’s record', async () => {
+      await t.db.insert(schema.postRevisions).values({
+        postId: post.id,
+        title: '처음 제목',
+        body: {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: '처음' }] }],
+        },
+        bodyText: '처음',
+        imageIds: [],
+        writtenAt: new Date(Date.now() - 60_000),
+      });
+      const first = await report(`/posts/${post.id}`);
+      const onProfile = await report(
+        `/profiles/${await publicIdOf(author.id)}`,
+        reporter,
+        'impersonation',
+      );
+      // The comments under it, reported or not: a 대댓글 after its 댓글, and one gone from every
+      // view, which operators still reach.
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: reporter.id,
+        parentId: comment.id,
+        body: '대댓글',
+        createdAt: new Date(Date.now() + 2_000),
+      });
+      const gone = await createComment(t.db, {
+        postId: post.id,
+        authorId: reporter.id,
+        body: '지운 댓글',
+        createdAt: new Date(Date.now() + 1_000),
+        deletedAt: new Date(Date.now() + 3_000),
+      });
+      const warned = actionOf(
+        await send(`/admin/moderation/users/${author.id}/warn`, { reason: 'spam' }, admin),
+      );
+      const hidden = actionOf(
+        await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin),
+      );
+      // The author deletes it afterwards: the original stays for operators.
+      await t.db
+        .update(schema.posts)
+        .set({ deletedAt: new Date() })
+        .where(eq(schema.posts.id, post.id));
+      const page = adminPostModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/posts/${post.id}`, other)),
+      );
+      expect(page).toMatchObject({
+        id: post.id,
+        state: 'deleted',
+        title: '근거 글',
+        author: { id: author.id },
+        revisions: [{ title: '처음 제목' }],
+        reporterCount: 1,
+      });
+      expect(page.reports).toHaveLength(1);
+      expect(page.reports[0]).toMatchObject({
+        id: first.id,
+        reporter: { id: reporter.id },
+        status: 'actioned',
+        actionId: hidden.id,
+      });
+      expect(page.actions.map((action) => action.id)).toEqual([hidden.id]);
+      expect(page.authorActions.map((action) => action.id)).toEqual([hidden.id, warned.id]);
+      expect(
+        page.comments.map(({ id, parentId, author: by, state, excerpt }) => ({
+          id,
+          parentId,
+          author: by.id,
+          state,
+          excerpt,
+        })),
+      ).toEqual([
+        { id: comment.id, parentId: null, author: author.id, state: 'published', excerpt: '댓글' },
+        {
+          id: reply.id,
+          parentId: comment.id,
+          author: reporter.id,
+          state: 'published',
+          excerpt: '대댓글',
+        },
+        { id: gone.id, parentId: null, author: reporter.id, state: 'gone', excerpt: '지운 댓글' },
+      ]);
+      expect((await read(`/admin/moderation/posts/${UNKNOWN}`, admin)).statusCode).toBe(404);
+
+      const commentPage = adminCommentModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/comments/${comment.id}`, admin)),
+      );
+      expect(commentPage).toMatchObject({
+        id: comment.id,
+        state: 'published',
+        body: '댓글',
+        post: { id: post.id, state: 'deleted' },
+        authorActions: [{ id: hidden.id }, { id: warned.id }],
+      });
+
+      const userPage = adminUserModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/users/${author.id}`, admin)),
+      );
+      expect(userPage.user.id).toBe(author.id);
+      // The profile's reports alone: the member's post report is the post's (its 기각 and the
+      // warning's default subject act on this list).
+      expect(userPage.reports.map((row) => row.id)).toEqual([onProfile.id]);
+      expect(userPage.reporterCount).toBe(1);
+      expect(userPage.actions.map((action) => action.id)).toEqual([hidden.id, warned.id]);
+      expect((await read('/admin/moderation/users/unknown-user', admin)).statusCode).toBe(404);
+
+      const all = dataOf<AdminModerationAction[]>(await read('/admin/moderation/actions', other));
+      expect(all.map((action) => action.id)).toEqual([hidden.id, warned.id]);
+    });
+
+    it('never tells the member reported who reported, and keeps every count off the public answers', async () => {
+      await report(`/posts/${post.id}`);
+      actionOf(await send(`/admin/moderation/posts/${post.id}/hide`, { reason: 'spam' }, admin));
+      for (const url of ['/me/posts', '/me/comments', '/me/moderation/actions', '/me/reports']) {
+        const body = (await read(url, author)).body;
+        expect({
+          url,
+          reporter: body.includes(reporter.id),
+          admin: body.includes(admin.id),
+        }).toEqual({
+          url,
+          reporter: false,
+          admin: false,
+        });
+      }
+      const publicAnswer = (await read(`/posts/${post.id}`)).body;
+      expect(publicAnswer).not.toMatch(/report|moderation|warning/i);
+      // The action's row holds the operator; the member's answer does not.
+      const rows = await t.db
+        .select()
+        .from(schema.moderationActions)
+        .where(
+          and(
+            eq(schema.moderationActions.userId, author.id),
+            eq(schema.moderationActions.createdBy, admin.id),
+          ),
+        );
+      expect(rows).toHaveLength(1);
+    });
+  });
+
+  async function publicIdOf(userId: string): Promise<string> {
+    const [row] = await t.db
+      .select({ publicId: schema.profiles.publicId })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, userId));
+    return row!.publicId;
+  }
+});

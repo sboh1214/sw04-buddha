@@ -14,7 +14,9 @@ import { identifierWords } from './excluded.js';
  * and every market's watch count to nobody but the member (#37 for #89, ADR-0061 decision 3,
  * ADR-0064). A member's recorded searches are listed by ADR-0066's own choice: the owner decided
  * they are recorded and shown to the member (#15, ADR-0061 decision 3), not who else may see them.
- * A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080).
+ * A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080). Reports and the
+ * operators' actions are operators' (N04 §6, #45-13), the reporter's own reports and the member's
+ * own actions theirs (#50, ADR-0081).
  * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
@@ -47,6 +49,7 @@ export const PRIVATE_DATA_IDS = [
   'risk-flag',
   'author-holding',
   'moderation',
+  'reports',
   'market-maker',
 ] as const;
 export type PrivateDataId = (typeof PRIVATE_DATA_IDS)[number];
@@ -372,8 +375,8 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
   },
   {
     id: 'risk-flag',
-    name: '내부 위험 플래그',
-    basis: 'N04 §2',
+    name: '내부 위험 플래그(운영 조치·제재의 기록 포함)',
+    basis: 'N04 §2, ADR-0069 결정 2(#45-12)·결정 3(#37-8), ADR-0081',
     fields: [
       ['risk'],
       ['flag'],
@@ -389,8 +392,19 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['restricted'],
       ['restriction'],
       ['restrictions'],
+      // #50 (ADR-0081): the operators' actions on a member — a warning among them — are the
+      // sanction record #37-8 keeps to the member and operators (ADR-0069 decision 2 #45-12: «내부
+      // 위험 플래그로 보고 … 공개 응답 어디에도 싣지 않는다»). The writing (#185) and the account
+      // restriction (#139) join the same record.
+      ['sanction'],
+      ['sanctions'],
+      ['sanctioned'],
+      ['warning'],
+      ['warnings'],
+      ['warned'],
+      ['penalty'],
+      ['penalties'],
     ],
-    pending: '위험 플래그를 두는 기능이 아직 없다(범위는 #37)',
   },
   {
     id: 'author-holding',
@@ -432,6 +446,17 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['moderator'],
       ['moderators'],
     ],
+  },
+  {
+    id: 'reports',
+    name: '신고(신고자·신고 수·신고 내용·처리 결과)',
+    basis: 'N04 §6, ADR-0069 결정 2(#45-10·#45-13), ADR-0056 결정 1-2, ADR-0081',
+    // A report is its reporter's and operators' (#50): the reporter reads their own reports and
+    // their results on MY (`GET /me/reports`), every admin reads every report (ADR-0056 1-2), and
+    // nobody else reads any — not the member reported, who never learns who reported (#45-10,
+    // #45-13), and not the public, which never sees whether or how often anything was reported
+    // (N04 §6; #45-10 «자동 숨김 없다»: a count of reports decides nothing either).
+    fields: [['report'], ['reports'], ['reported'], ['reporter'], ['reporters'], ['reporting']],
   },
   {
     id: 'market-maker',

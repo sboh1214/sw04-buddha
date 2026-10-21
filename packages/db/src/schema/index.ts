@@ -31,6 +31,7 @@ export * from './market-settlement-steps.js';
 export * from './markets.js';
 export * from './media-deletions.js';
 export * from './media-objects.js';
+export * from './moderation.js';
 export * from './nickname-holds.js';
 export * from './notices.js';
 export * from './orders.js';

@@ -4,6 +4,7 @@ import { Alert, Badge, Box, Button, HStack, Heading, Stack, Text } from '@chakra
 import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import { SanctionBanner } from '@/components/moderation/sanction-banner';
 import { MarketPicker } from '@/components/post/market-picker';
 import { PostForm } from '@/components/post/post-form';
 import { WriteGate } from '@/components/post/write-gate';
@@ -28,7 +29,8 @@ import { useSession } from '@/lib/use-session';
  * never changed once sent — before that, '다른 시장 고르기' opens the picker in place and keeps
  * the title, the body and its images); without one, the picker, which puts the market picked into
  * the address (`?market=`), so a reload or a sign-in comes back to it. A post is sent once, then
- * the screen goes to its page.
+ * the screen goes to its page. Above either, for a member under a sanction in force, its banner
+ * (`SanctionBanner`, ADR-0069 decision 4 #50 — none with #50 alone, ADR-0081 7-8).
  *
  * The market the form shows is the screen's own (`writeScreenMarket`, lib/posts.ts, where every
  * step of it is tested): the page's read (`lookup`) settles it as it comes, and a market picked
@@ -56,35 +58,38 @@ export function WriteScreen({ lookup }: { lookup: WriteMarketLookup }) {
         {copy.postWriteTitle}
       </Heading>
       <WriteGate back={view.back}>
-        {(writer) =>
-          view.kind === 'form' ? (
-            <WriteForm market={view.market} accountId={writer.accountId} onRepick={pick} />
-          ) : view.kind === 'failed' ? (
-            <Stack gap="3" align="flex-start" data-testid="post-write-market-failed">
-              <Alert.Root status="error" role="alert">
-                <Alert.Indicator />
-                <Alert.Content>
-                  <Alert.Description>{copy.postWriteMarketLoadError}</Alert.Description>
-                </Alert.Content>
-              </Alert.Root>
-              <Button
-                size="sm"
-                variant="outline"
-                loading={retrying}
-                onClick={() => startRetry(() => router.refresh())}
-                data-testid="post-write-market-retry"
-              >
-                {copy.retry}
-              </Button>
-            </Stack>
-          ) : (
-            <MarketPicker
-              prompt={copy.marketPickerPrompt}
-              onPick={pick}
-              testId="post-write-market-picker"
-            />
-          )
-        }
+        {(writer) => (
+          <Stack gap="6">
+            <SanctionBanner testId="post-write-sanction-banner" />
+            {view.kind === 'form' ? (
+              <WriteForm market={view.market} accountId={writer.accountId} onRepick={pick} />
+            ) : view.kind === 'failed' ? (
+              <Stack gap="3" align="flex-start" data-testid="post-write-market-failed">
+                <Alert.Root status="error" role="alert">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Description>{copy.postWriteMarketLoadError}</Alert.Description>
+                  </Alert.Content>
+                </Alert.Root>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  loading={retrying}
+                  onClick={() => startRetry(() => router.refresh())}
+                  data-testid="post-write-market-retry"
+                >
+                  {copy.retry}
+                </Button>
+              </Stack>
+            ) : (
+              <MarketPicker
+                prompt={copy.marketPickerPrompt}
+                onPick={pick}
+                testId="post-write-market-picker"
+              />
+            )}
+          </Stack>
+        )}
       </WriteGate>
     </Stack>
   );

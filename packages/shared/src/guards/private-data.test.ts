@@ -47,12 +47,13 @@ describe('PRIVATE_DATA (#113)', () => {
         'risk-flag',
         'author-holding',
         'moderation',
+        'reports',
         'market-maker',
       ]),
     );
     expect(
       PRIVATE_DATA.filter((item) => item.pending !== undefined).map((item) => item.id),
-    ).toEqual(['risk-flag', 'market-maker']);
+    ).toEqual(['market-maker']);
   });
 });
 
@@ -140,6 +141,10 @@ describe('findPrivateField', () => {
     ['riskFlags', 'risk-flag'],
     ['needsReview', 'risk-flag'],
     ['isSuspended', 'risk-flag'],
+    ['sanctionEndsAt', 'risk-flag'],
+    ['activeSanctions', 'risk-flag'],
+    ['warningCount', 'risk-flag'],
+    ['warned_at', 'risk-flag'],
     ['authorPosition', 'author-holding'],
     ['author_side', 'author-holding'],
     ['hidden', 'moderation'],
@@ -153,6 +158,12 @@ describe('findPrivateField', () => {
     ['moderatedAt', 'moderation'],
     ['moderatorId', 'moderation'],
     ['moderators', 'moderation'],
+    ['reportCount', 'reports'],
+    ['reports', 'reports'],
+    ['reporterId', 'reports'],
+    ['reported_by', 'reports'],
+    ['isReported', 'reports'],
+    ['reportingUsers', 'reports'],
     ['hasBot', 'market-maker'],
     ['bot_status', 'market-maker'],
     ['marketMakerInventory', 'market-maker'],
