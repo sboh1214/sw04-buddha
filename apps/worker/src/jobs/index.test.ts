@@ -14,6 +14,7 @@ import {
   createPosition,
   createStartGrant,
   createUser,
+  createWriteLimitEvent,
   hasTestDb,
   setReleaseSetting,
   type TestDb,
@@ -311,6 +312,25 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     });
     expect(
       logs.filter((line) => line.msg === 'orphan upload clean-up').map((line) => line.level),
+    ).toEqual([30, 20]);
+  });
+
+  it('community.records_purge reports JSON-safe counts, quiet when it deleted nothing (#187)', async () => {
+    await createWriteLimitEvent(t.db, {
+      action: 'comment',
+      createdAt: new Date(Date.now() - 25 * 60 * MINUTE_MS),
+    });
+    await createWriteLimitEvent(t.db, { action: 'comment' });
+    const result = await run({ name: JOB_NAMES.communityRecordsPurge });
+    expect(result).toEqual({ writeLimitEvents: 1, linkUses: 0 });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(await t.db.select().from(schema.writeLimitEvents)).toHaveLength(1);
+    expect(await run({ name: JOB_NAMES.communityRecordsPurge })).toEqual({
+      writeLimitEvents: 0,
+      linkUses: 0,
+    });
+    expect(
+      logs.filter((line) => line.msg === 'community records purge').map((line) => line.level),
     ).toEqual([30, 20]);
   });
 

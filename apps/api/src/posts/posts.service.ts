@@ -8,6 +8,7 @@ import {
   decodeKeyset,
   encodeKeyset,
   mediaPath,
+  postDocumentLinks,
   postExcerpt,
   postImageNotUsableMessage,
   type CursorQuery,
@@ -46,9 +47,11 @@ import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { postLikeCountSql } from '../likes/like-queries.js';
+import { LinkReviewService } from '../link-review/link-review.service.js';
 import { inCategory, likePattern } from '../markets/market.service.js';
 import { assertWriter } from '../moderation/restrictions.js';
 import { type Page } from '../wallet/wallet.service.js';
+import { WriteLimitsService, type Writer } from '../write-limits/write-limits.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 /** Reads that run either inside a transaction or on the pool. */
@@ -174,7 +177,11 @@ export function publicStateOf(
  */
 @Injectable()
 export class PostsService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly limits: WriteLimitsService,
+    private readonly links: LinkReviewService,
+  ) {}
 
   /**
    * The columns both public reads select: the post, its author's public face, its market, how
@@ -355,13 +362,16 @@ export class PostsService {
    * `POST /posts`: a post on a market in any public status (#45-6). The market must exist and not
    * be a draft (NOT_FOUND naming `marketId`, as the public never sees a draft); every image must be
    * the author's own upload, taken by no other post (`claimImages`). An author under a writing
-   * restriction is refused before anything is read (RESTRICTED, `checkWriter`, #185). Nothing
-   * about the author's trading is read or attached (N05 §2).
+   * restriction is refused before anything is read (RESTRICTED, `checkWriter`, #185). Then the post
+   * counts against the person's limits (#187: 3 in 10 minutes, 20 a day — WRITE_LIMITED, nothing
+   * written) and its links go to the repetition rules (#187: a flag on the operators' review list at
+   * most, never a refusal). Nothing about the author's trading is read or attached (N05 §2).
    */
   async create(authorId: string, marketId: string, content: PostContent): Promise<PublishedPost> {
     const id = randomUUID();
+    const links = postDocumentLinks(content.body.document);
     await this.db.transaction(async (tx) => {
-      await this.checkWriter(tx, authorId);
+      const writer = await this.checkWriter(tx, authorId);
       const { markets } = schema;
       const [market] = await tx
         .select({ status: markets.status })
@@ -374,6 +384,7 @@ export class PostsService {
         });
       }
       await this.claimImages(tx, authorId, content.body.imageIds, id);
+      await this.limits.take(tx, writer, 'post');
       await tx.insert(schema.posts).values({
         id,
         marketId,
@@ -384,6 +395,7 @@ export class PostsService {
         imageIds: content.body.imageIds,
       });
       await this.attachImages(tx, id, content.body.imageIds);
+      await this.links.record(tx, writer, { postId: id }, marketId, links);
     });
     return this.published(id);
   }
@@ -396,13 +408,18 @@ export class PostsService {
    * (POST_NOT_EDITABLE, #45-5) — and, asked first, any under the author's writing restriction
    * (RESTRICTED, #185: «자기 글·댓글 수정», deleting stays open). An image the edit takes out stays
    * attached for the history and is no longer served (`GET /media/:mediaId` serves the current
-   * body's).
+   * body's). An edit that changes something counts against the person's edit limits (#187: posts'
+   * and comments' edits together, 10 in 10 minutes and 50 a day — WRITE_LIMITED, nothing written),
+   * and the links it puts in that the post did not have go to the repetition rules (#187 «수정으로
+   * 넣거나 바꾼 링크도 본다»).
    */
   async update(authorId: string, postId: string, content: PostContent): Promise<PublishedPost> {
+    const links = postDocumentLinks(content.body.document);
     await this.db.transaction(async (tx) => {
       // The writer before the post's row (`checkWriter`): the profile's lock comes first, as in an
-      // operator's restriction that names the post — and the writer's refusal before the post's.
-      await this.checkWriter(tx, authorId);
+      // operator's restriction that names the post — and the writer's refusal before the post's —
+      // and the writer's number lock next, as in every counted write.
+      const writer = await this.checkWriter(tx, authorId);
       const current = await this.lockOwnPost(tx, authorId, postId);
       if (current.hiddenAt !== null) {
         const details: PostNotEditableDetails = { reason: 'hidden' };
@@ -415,6 +432,7 @@ export class PostsService {
         return;
       }
       await this.claimImages(tx, authorId, content.body.imageIds, postId);
+      await this.limits.take(tx, writer, 'edit');
       await tx.insert(schema.postRevisions).values({
         postId,
         title: current.title,
@@ -434,6 +452,9 @@ export class PostsService {
         })
         .where(eq(schema.posts.id, postId));
       await this.attachImages(tx, postId, content.body.imageIds);
+      const had = new Set(postDocumentLinks(current.body));
+      const added = links.filter((link) => !had.has(link));
+      await this.links.record(tx, writer, { postId }, current.marketId, added);
     });
     return this.published(postId);
   }
@@ -465,23 +486,33 @@ export class PostsService {
    * of the write is locked — the one place the rules on the writer plug in: `assertWriter` — the
    * writer's profile held until the commit, the onboarding (#57-8) and #185's 작성 제한 (RESTRICTED
    * with its end; it blocks writing and editing, never deleting, ADR-0069 decision 2 #45-12) — and
-   * #187's frequency limits next (posts 3 in 10 minutes and 20 a day, edits 10 in 10 minutes and
-   * 50 a day, counted per verified number's keyed hash, admins exempt, #45-15 and decision 7).
+   * then #187's: the writer's number held (WriteLimitsService.lockWriter — the limits count the
+   * person, decision 7). Answers the writer, whose write the caller counts
+   * (`WriteLimitsService.take`: posts 3 in 10 minutes and 20 a day, edits 10 in 10 minutes and 50
+   * a day, admins exempt, #45-15 and decision 7) once it is certain, and whose links it records.
    */
-  private async checkWriter(tx: Tx, authorId: string): Promise<void> {
+  private async checkWriter(tx: Tx, authorId: string): Promise<Writer> {
     await assertWriter(tx, authorId);
+    return this.limits.lockWriter(tx, authorId);
   }
 
   /**
    * The author's own post, locked for the write: NOT_FOUND when it is unknown or deleted (gone
    * for its author too), FORBIDDEN when another account wrote it.
+   *
+   * FOR NO KEY UPDATE, the lock the write's own UPDATE takes (no key changes): it waits for, and
+   * holds off, a comment or a like being written under the post (FOR SHARE) as FOR UPDATE did, but
+   * not the foreign-key check of another write naming the post — #187's review list and link uses
+   * (`link_flags`, `link_uses`, FOR KEY SHARE). An edit holds this row while it waits for its links'
+   * lock (LinkReviewService.record), and the write holding that lock may put this post on the
+   * review list: with FOR UPDATE the two would wait for each other (ADR-0083 7-13).
    */
   private async lockOwnPost(tx: Tx, authorId: string, postId: string) {
     const [current] = await tx
       .select()
       .from(schema.posts)
       .where(eq(schema.posts.id, postId))
-      .for('update');
+      .for('no key update');
     if (!current || current.deletedAt !== null) throw postNotFound();
     if (current.authorId !== authorId) {
       throw new AppError('FORBIDDEN', { message: 'Only its author changes a post' });

@@ -10,8 +10,8 @@ import {
 } from './queues.js';
 
 describe('queues', () => {
-  it('declares the queues from PLAN 9, the start grant’s wallet queue (#70) and the media queue (#46)', () => {
-    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats', 'wallet', 'media']);
+  it('declares the queues from PLAN 9, the start grant’s wallet queue (#70), the media queue (#46) and the community queue (#187)', () => {
+    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats', 'wallet', 'media', 'community']);
   });
 
   it('takes its names from @buddha/shared, the module the API produces with', () => {
@@ -48,13 +48,14 @@ describe('queues', () => {
     expect(DEFAULT_JOB_OPTIONS.backoff).toEqual({ type: 'exponential', delay: 1_000 });
   });
 
-  it('schedules the daily audit, the per-minute scans and payment, and the hourly orphan clean-up', () => {
+  it('schedules the daily audit, the per-minute scans and payment, and the hourly clean-ups', () => {
     expect(JOB_SCHEDULES.map((schedule) => schedule.id)).toEqual([
       'ledger-audit-daily',
       'market-close-scan',
       'market-finalize-scan',
       'start-grant-pay',
       'media-orphan-cleanup',
+      'community-records-purge',
     ]);
     const byId = Object.fromEntries(JOB_SCHEDULES.map((schedule) => [schedule.id, schedule]));
     expect(byId['market-close-scan']).toMatchObject({
@@ -78,6 +79,12 @@ describe('queues', () => {
       queue: 'media',
       name: JOB_NAMES.mediaOrphanCleanup,
       repeat: { pattern: '17 * * * *', tz: 'Asia/Seoul' },
+    });
+    // #187 (ADR-0083): the write limits' and the link rules' records past their 24-hour windows.
+    expect(byId['community-records-purge']).toMatchObject({
+      queue: 'community',
+      name: JOB_NAMES.communityRecordsPurge,
+      repeat: { pattern: '37 * * * *', tz: 'Asia/Seoul' },
     });
     // A scan carries no market id: that is what makes the handler scan (marketJobDataSchema).
     for (const schedule of JOB_SCHEDULES) {

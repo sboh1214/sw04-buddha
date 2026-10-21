@@ -24,6 +24,7 @@ import {
 import { firstValue } from './market-ssr';
 import { profilePath } from './profile';
 import { restrictedMessage } from './restriction';
+import { writeLimitedMessage } from './write-limits';
 
 /**
  * 근거 글과 커뮤니티 (#46, ADR-0073) as the screens read them: the community list's URL and its
@@ -696,12 +697,16 @@ export function postPageMetadata(post: Post | null): Metadata {
  *   shared module that writes the server's messages reads them): no text, too long, too many
  *   images, or an image the writer cannot use — an upload no post took is removed after
  *   ORPHAN_MEDIA_HOURS, and another post may have taken it (`refusedImageIds` names which);
+ * - WRITE_LIMITED (#187): the person's posts or edits reached a limit — which one, and the time
+ *   it can write again in the screen's zone (`formatDate`, lib/write-limits.ts);
  * - a request that never reached the API, and anything else.
  */
 export function postWriteErrorMessage(error: unknown, formatDate: (iso: string) => string): string {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   const restricted = restrictedMessage(error, 'writing', formatDate);
   if (restricted !== undefined) return restricted;
+  const limited = writeLimitedMessage(error, formatDate);
+  if (limited !== undefined) return limited;
   if (isApiError(error, 'POST_NOT_EDITABLE')) return copy.errPostNotEditable;
   if (isApiError(error, 'NOT_FOUND')) {
     return validationField(error) === 'marketId' ? copy.errPostMarketUnavailable : copy.errPostGone;

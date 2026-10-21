@@ -5,6 +5,7 @@ import {
   CONSENT_ITEMS,
   IMAGE_CONTENT_TYPES,
   LEDGER_REF_TYPES,
+  LINK_FLAG_REASONS,
   MARKET_EVENT_TYPES,
   MEDIA_KINDS,
   MODERATION_ACTION_TYPES,
@@ -17,6 +18,7 @@ import {
   SETTLEMENT_STEP_STATUSES,
   START_GRANT_NUMBER_SOURCES,
   WATCH_EVENT_ACTIONS,
+  WRITE_LIMIT_ACTIONS,
   findExcludedIdentifier,
   identifierWords,
   namesPersonalProbability,
@@ -89,6 +91,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'moderation_actions.type': MODERATION_ACTION_TYPES,
   // #185: how an operator brought a writing restriction's end forward (감경, 조기 해제).
   'restriction_end_changes.kind': RESTRICTION_END_CHANGE_KINDS,
+  // #187 (ADR-0083): what a write limit counts, and why a link is on the review list.
+  'write_limit_events.action': WRITE_LIMIT_ACTIONS,
+  'link_flags.reason': LINK_FLAG_REASONS,
 };
 
 /**

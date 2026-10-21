@@ -45,6 +45,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
   stats: [JOB_NAMES.marketTraderCount],
   wallet: [JOB_NAMES.startGrantPay],
   media: [JOB_NAMES.mediaOrphanCleanup],
+  community: [JOB_NAMES.communityRecordsPurge],
 };
 
 /**
@@ -104,6 +105,14 @@ export const JOB_SCHEDULES = [
     queue: 'media',
     name: JOB_NAMES.mediaOrphanCleanup,
     repeat: { pattern: '17 * * * *', tz: 'Asia/Seoul' },
+  },
+  // #187 (ADR-0083): the write limits' and the repetition rules' records older than their 24-hour
+  // windows, hourly at :37 — off the hour and away from the orphan clean-up.
+  {
+    id: 'community-records-purge',
+    queue: 'community',
+    name: JOB_NAMES.communityRecordsPurge,
+    repeat: { pattern: '37 * * * *', tz: 'Asia/Seoul' },
   },
 ] as const satisfies readonly {
   id: string;

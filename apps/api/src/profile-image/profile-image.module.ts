@@ -3,6 +3,7 @@ import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { MeModule } from '../me/me.module.js';
 import { MediaModule } from '../media/media.module.js';
+import { WriteLimitsModule } from '../write-limits/write-limits.module.js';
 import { ProfileImageController } from './profile-image.controller.js';
 import { ProfileImageService } from './profile-image.service.js';
 
@@ -14,8 +15,9 @@ import { ProfileImageService } from './profile-image.service.js';
  * routes up the OpenAPI document — and it stands last in AppModule, after both.
  */
 @Module({
-  // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard).
-  imports: [DbModule, AuthModule, MediaModule, MeModule],
+  // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard); WriteLimitsModule
+  // is the daily upload limit a profile image counts against with a post's (#187).
+  imports: [DbModule, AuthModule, MediaModule, MeModule, WriteLimitsModule],
   controllers: [ProfileImageController],
   providers: [ProfileImageService],
 })

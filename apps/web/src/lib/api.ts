@@ -235,6 +235,11 @@ export type AdminGrantBody = components['schemas']['AdminGrantBody'];
  * against the service's daily limit, and seven Korean days, newest first.
  */
 export type AdminSmsStatus = components['schemas']['AdminSmsStatus'];
+/**
+ * One entry of `GET /admin/link-flags` (#187, ADR-0083): a post or a comment a repeated-link rule
+ * caught — the link as compared, the rule, when, and the item as it is now.
+ */
+export type AdminLinkFlag = components['schemas']['AdminLinkFlag'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -248,14 +253,26 @@ export class ApiError extends Error {
    * the API cannot be reached (next.config.ts), a gateway in front of the API a 502, 503 or 504.
    */
   readonly enveloped: boolean;
+  /**
+   * When the answer reached the browser (`Date.now()`, ms): what an answer's relative wait counts
+   * from. A refusal is often worded again on a later render (a comment box's refusal is read from
+   * the mutation's error on every render), so the instant is stamped once, here, and a wait such
+   * as WRITE_LIMITED's `retryAfterSeconds` names the same time on every render (lib/write-limits.ts).
+   */
+  readonly receivedAt: number;
 
-  constructor(status: number, envelope: ErrorEnvelope['error'] | undefined) {
+  constructor(
+    status: number,
+    envelope: ErrorEnvelope['error'] | undefined,
+    receivedAt: number = Date.now(),
+  ) {
     super(envelope?.message ?? `API error ${String(status)}`);
     this.name = 'ApiError';
     this.status = status;
     this.code = envelope?.code ?? (status === 401 ? 'UNAUTHENTICATED' : 'INTERNAL');
     this.details = envelope?.details;
     this.enveloped = envelope !== undefined;
+    this.receivedAt = receivedAt;
   }
 }
 

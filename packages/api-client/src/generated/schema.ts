@@ -143,6 +143,23 @@ export type paths = {
         patch: operations["adminUpdateCoupon"];
         trace?: never;
     };
+    "/api/v1/admin/link-flags": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The repeated-link review list, newest first: each post or comment a rule caught (the same person put the link in 3 or more posts and comments within 24 hours, or 3 or more people did), the link, the rule and when, with the item as it is now */
+        get: operations["adminListLinkFlags"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets": {
         parameters: {
             query?: never;
@@ -1933,6 +1950,43 @@ export type components = {
             reason: string;
             userId: string;
         };
+        AdminLinkFlag: {
+            /** Format: date-time */
+            flaggedAt: string;
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            reason: "same_account" | "many_accounts";
+            target: {
+                author: {
+                    nickname: string;
+                    publicId: string;
+                    userId: string;
+                };
+                /** Format: uuid */
+                commentId: string | null;
+                /** Format: date-time */
+                createdAt: string;
+                /** Format: date-time */
+                deletedAt: string | null;
+                /** Format: date-time */
+                editedAt: string | null;
+                excerpt: string;
+                /** Format: date-time */
+                hiddenAt: string | null;
+                /** @enum {string} */
+                kind: "post" | "comment";
+                market: {
+                    /** Format: uuid */
+                    id: string;
+                    slug: string;
+                    title: string;
+                };
+                /** Format: uuid */
+                postId: string;
+            };
+            url: string;
+        };
         AdminMarket: {
             category: {
                 nameKo: string;
@@ -2483,7 +2537,7 @@ export type components = {
             reportIds: string[];
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -4321,6 +4375,77 @@ export interface operations {
             };
             /** @description NOT_FOUND */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListLinkFlags: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminLinkFlag"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -8138,7 +8263,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RATE_LIMITED */
+            /** @description WRITE_LIMITED | RATE_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -10149,7 +10274,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RATE_LIMITED */
+            /** @description WRITE_LIMITED | RATE_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -10973,7 +11098,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RATE_LIMITED */
+            /** @description WRITE_LIMITED | RATE_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -11299,7 +11424,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RATE_LIMITED */
+            /** @description WRITE_LIMITED | RATE_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -11430,7 +11555,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RATE_LIMITED */
+            /** @description WRITE_LIMITED | RATE_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -11565,7 +11690,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RATE_LIMITED */
+            /** @description WRITE_LIMITED | RATE_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;

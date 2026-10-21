@@ -25,6 +25,7 @@ import {
 } from './api';
 import { POSTS_KEY, isOwnPost, mapKept, withAuthorImage } from './posts';
 import { isRestricted, restrictedMessage } from './restriction';
+import { writeLimitedMessage } from './write-limits';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
@@ -916,6 +917,9 @@ function notAllowedReason(details: unknown): CommentNotAllowedReason | undefined
  *   (`restrictedMessage`), the way to 조치·신고 내역 under it (`isRestricted`); deleting one's own
  *   never meets it either (#45-12);
  * - VALIDATION_ERROR on `body`, told apart by `commentBodyRefusalOf`: no text, or too long;
+ * - WRITE_LIMITED (#187): the person's comments or edits reached a limit — which one, and the time
+ *   it can write again in the screen's zone (`formatDate`, lib/write-limits.ts); deleting one's
+ *   own never meets it;
  * - a request that never reached the API, and anything else.
  */
 export function commentWriteErrorMessage(
@@ -926,6 +930,8 @@ export function commentWriteErrorMessage(
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   const restricted = restrictedMessage(error, 'writing', formatDate);
   if (restricted !== undefined) return restricted;
+  const limited = writeLimitedMessage(error, formatDate);
+  if (limited !== undefined) return limited;
   if (isApiError(error, 'COMMENT_NOT_ALLOWED')) {
     const reason = notAllowedReason(error.details);
     return reason === undefined ? copy.errCommentNotAllowed : NOT_ALLOWED_MESSAGES[reason];

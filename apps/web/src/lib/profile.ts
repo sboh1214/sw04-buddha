@@ -394,8 +394,10 @@ export function interestsStepFailure(
 
 /**
  * What a refused upload says: as a post image's (`imageUploadErrorMessage` — the server's reason,
- * the cookie as another account, ONBOARDING_REQUIRED, an unreachable server, a failed upload) with
- * the profile image's reasons, and a writing restriction (RESTRICTED, #185, ADR-0082) as a public
+ * the cookie as another account, ONBOARDING_REQUIRED, the day's uploads at their limit with the
+ * time it can upload again (WRITE_LIMITED, #187 — a profile image counts with a post's images,
+ * owner decision 2026-10-22), an unreachable server, a failed upload) with the profile image's
+ * reasons, and a writing restriction (RESTRICTED, #185, ADR-0082) as a public
  * profile item's refusal — until when in the member's zone (`formatDate`) or 무기한 and that
  * deleting the image stays open, the card adding the way to 조치·신고 내역 (`isRestricted`).
  */
@@ -405,7 +407,8 @@ export function profileImageUploadFailure(
 ): string {
   // Never an upload given up while it waited to be sent again (`UploadAbandoned`, the one thing
   // said as nothing with `gateMoves` false): the card's sends are never given up (hooks/use-me.ts).
-  // A 429 here is one still refused after the card sent the file again: a failed upload.
+  // A 429 here is one still refused after the card sent the file again: a failed upload — but for
+  // WRITE_LIMITED (#187), never sent again, which says its limit and time.
   return (
     imageUploadErrorMessage(error, false, formatDate, profileImageRefusalMessage, 'profile') ??
     copy.errImageUpload

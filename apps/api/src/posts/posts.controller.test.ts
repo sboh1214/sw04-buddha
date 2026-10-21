@@ -201,9 +201,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
   });
 
   it('writes on a market in every public status, never a draft or an unknown one', async () => {
-    for (const status of ['closed', 'resolved', 'settled', 'voided'] as const) {
+    // The last by the other account: one person writes 3 posts in 10 minutes at most (#187).
+    const writers = [author, author, author, other];
+    for (const [index, status] of (
+      ['closed', 'resolved', 'settled', 'voided'] as const
+    ).entries()) {
       const ended = await createMarket(t.db, { status });
-      const res = await write({ marketId: ended.id });
+      const who = writers[index]!;
+      const res = await write({ marketId: ended.id, expectedAccountId: who.id }, who);
       expect({ status, code: res.statusCode }).toEqual({ status, code: 201 });
     }
     const draft = await createMarket(t.db, { status: 'draft' });

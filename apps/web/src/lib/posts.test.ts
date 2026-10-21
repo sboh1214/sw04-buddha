@@ -78,6 +78,14 @@ const member = (over: Partial<Extract<PostAuthor, { kind: 'member' }>> = {}): Po
 const refusal = (status: number, code: string, details?: unknown) =>
   new ApiError(status, { code, message: 'x', details } as never);
 
+/** A WRITE_LIMITED answer (#187) that arrived at 2026-10-21 15:41:30 in Seoul. */
+const limited = (reason: string, limit: number, retryAfterSeconds: number) =>
+  new ApiError(
+    429,
+    { code: 'WRITE_LIMITED', message: 'x', details: { reason, limit, retryAfterSeconds } } as never,
+    Date.parse('2026-10-21T06:41:30.000Z'),
+  );
+
 describe('the community URL', () => {
   it('keeps a uuid market (lower-cased), a category and a trimmed term', () => {
     expect(
@@ -997,6 +1005,22 @@ describe('a refused write', () => {
     expect(
       postWriteErrorMessage(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }), zone),
     ).toBe(`${copy.errRestrictedWriting}(무기한).`);
+  });
+
+  it('says which limit refused a post or an edit, and when it can be written again (#187)', () => {
+    expect(postWriteErrorMessage(limited('posts_10m', 3, 600), formatKst)).toBe(
+      `${copy.errWriteLimitPosts10m} 2026. 10. 21. 오후 3:52${copy.writeLimitRetryWrite}`,
+    );
+    expect(postWriteErrorMessage(limited('posts_24h', 20, 7_200), formatKst)).toBe(
+      `${copy.errWriteLimitPosts24h} 2026. 10. 21. 오후 5:42${copy.writeLimitRetryWrite}`,
+    );
+    expect(postWriteErrorMessage(limited('edits_24h', 50, 60), formatKst)).toBe(
+      `${copy.errWriteLimitEdits24h} 2026. 10. 21. 오후 3:43${copy.writeLimitRetryEdit}`,
+    );
+    // The zone is the screen's: the time is formatted by what the page passes.
+    expect(postWriteErrorMessage(limited('posts_10m', 3, 600), () => '그때')).toBe(
+      `${copy.errWriteLimitPosts10m} 그때${copy.writeLimitRetryWrite}`,
+    );
   });
 
   it('says an unreachable server apart from anything else', () => {

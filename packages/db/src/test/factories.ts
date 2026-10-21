@@ -23,6 +23,8 @@ import {
   type Role,
   type SettlementStep,
   type SettlementStepStatus,
+  type LinkFlagReason,
+  type WriteLimitAction,
 } from '@buddha/shared';
 import { eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
@@ -34,6 +36,8 @@ import {
   consentRecords,
   fills,
   ledgerEntries,
+  linkFlags,
+  linkUses,
   marketLinks,
   marketSearches,
   marketSettlementSteps,
@@ -56,6 +60,7 @@ import {
   releaseSettings,
   reports,
   user,
+  writeLimitEvents,
 } from '../schema/index.js';
 import { storedReleaseSettingValue } from '../release-settings.js';
 import { payStartGrant, recordStartGrant } from '../start-grants.js';
@@ -1146,4 +1151,79 @@ export async function createReport(db: Db, input: CreateReportInput) {
     })
     .returning();
   return report!;
+}
+
+export interface CreateWriteLimitEventInput {
+  /** The writer's number as its keyed hash (64 lower-case hex). Default: a random one. */
+  phoneHash?: string;
+  action: WriteLimitAction;
+  /** Default: the database clock. A window test sets an earlier time. */
+  createdAt?: Date;
+}
+
+/**
+ * A write the limits count (#187, ADR-0083), as the API's WriteLimitsService leaves it: the
+ * `write_limit_events` row only — no post, comment or image behind it, which the limits never read.
+ * For a test that needs a number's earlier writes, at the times it names.
+ */
+export async function createWriteLimitEvent(db: Db, input: CreateWriteLimitEventInput) {
+  const [row] = await db
+    .insert(writeLimitEvents)
+    .values({
+      phoneHash: input.phoneHash ?? randomPhoneHash(),
+      action: input.action,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreateLinkUseInput {
+  /** The link in `normaliseLink`'s form; stored as given. */
+  url: string;
+  phoneHash?: string;
+  /** Exactly one of the two: the post or the comment that took the link. */
+  postId?: string;
+  commentId?: string;
+  /** Default: now. */
+  usedAt?: Date;
+}
+
+/** A link a post or a comment took (#187), as the API's LinkReviewService records it. */
+export async function createLinkUse(db: Db, input: CreateLinkUseInput) {
+  const [row] = await db
+    .insert(linkUses)
+    .values({
+      url: input.url,
+      phoneHash: input.phoneHash ?? randomPhoneHash(),
+      postId: input.postId ?? null,
+      commentId: input.commentId ?? null,
+      usedAt: input.usedAt ?? new Date(),
+    })
+    .returning();
+  return row!;
+}
+
+export interface CreateLinkFlagInput {
+  url: string;
+  reason: LinkFlagReason;
+  postId?: string;
+  commentId?: string;
+  /** Default: the database clock. */
+  flaggedAt?: Date;
+}
+
+/** An entry of the repeated-link review list (#187), as the API's LinkReviewService writes one. */
+export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
+  const [row] = await db
+    .insert(linkFlags)
+    .values({
+      url: input.url,
+      reason: input.reason,
+      postId: input.postId ?? null,
+      commentId: input.commentId ?? null,
+      ...(input.flaggedAt === undefined ? {} : { flaggedAt: input.flaggedAt }),
+    })
+    .returning();
+  return row!;
 }

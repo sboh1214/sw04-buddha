@@ -375,8 +375,13 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
   },
   {
     id: 'risk-flag',
-    name: '내부 위험 플래그(운영 조치·제재의 기록 포함)',
-    basis: 'N04 §2, ADR-0069 결정 2(#45-12)·결정 3(#37-8), ADR-0081',
+    name: '내부 위험 플래그(운영 조치·제재의 기록과 반복 링크의 운영 검토 목록 포함)',
+    basis: 'N04 §2, ADR-0069 결정 2(#45-12)·결정 3(#37-8), ADR-0081, ADR-0083',
+    // #187's repeated-link review list (`link_flags`, ADR-0083) is one too: which posts and
+    // comments were put on it, why and when are the operators' (`GET /admin/link-flags`), and a
+    // public post or comment never says it was flagged (`flagged`, `linkFlags`), nor that a link of
+    // it repeats (`repeatedLink`). The write limits' records (`write_limit_events`) are nobody's to
+    // read: a refusal tells its writer alone when to write again.
     fields: [
       ['risk'],
       ['flag'],
@@ -392,6 +397,8 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['restricted'],
       ['restriction'],
       ['restrictions'],
+      ['repeated', 'link'],
+      ['repeated', 'links'],
       // #50 (ADR-0081): the operators' actions on a member — a warning among them — are the
       // sanction record #37-8 keeps to the member and operators (ADR-0069 decision 2 #45-12: «내부
       // 위험 플래그로 보고 … 공개 응답 어디에도 싣지 않는다»). The writing (#185) and the account

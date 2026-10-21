@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
+import { LinkReviewModule } from '../link-review/link-review.module.js';
+import { WriteLimitsModule } from '../write-limits/write-limits.module.js';
 import { CommentCursors } from './comment-cursor.js';
 import { CommentsController, PostCommentsController } from './comments.controller.js';
 import { CommentsService } from './comments.service.js';
@@ -11,8 +13,9 @@ import { CommentsService } from './comments.service.js';
  * shows (comment-queries.ts), without this module.
  */
 @Module({
-  // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard).
-  imports: [DbModule, AuthModule],
+  // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard); the write limits
+  // and the repeated-link rules (#187) count every comment and edit.
+  imports: [DbModule, AuthModule, WriteLimitsModule, LinkReviewModule],
   controllers: [PostCommentsController, CommentsController],
   providers: [CommentsService, CommentCursors],
 })

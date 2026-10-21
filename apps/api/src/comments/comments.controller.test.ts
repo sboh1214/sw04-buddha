@@ -37,10 +37,12 @@ import {
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { LinkReviewService } from '../link-review/link-review.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { PostsService } from '../posts/posts.service.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
+import { WriteLimitsService } from '../write-limits/write-limits.service.js';
 import { CommentCursors } from './comment-cursor.js';
 import { CommentsService } from './comments.service.js';
 
@@ -485,7 +487,12 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       casing: 'snake_case',
       logger: { logQuery: (text, values) => statements.push({ text, values }) },
     });
-    const service = new CommentsService(recording, t.app.get(CommentCursors));
+    const service = new CommentsService(
+      recording,
+      t.app.get(CommentCursors),
+      t.app.get(WriteLimitsService),
+      t.app.get(LinkReviewService),
+    );
     /** Rows of `post_comments` a plan's scans read: those they kept and those they filtered out. */
     const commentRowsRead = (plan: ExplainedPlan): number =>
       (plan['Relation Name'] === 'post_comments'
@@ -851,6 +858,8 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       const sorted = new CommentsService(
         tx as unknown as Db,
         t.app.get(CommentCursors),
+        t.app.get(WriteLimitsService),
+        t.app.get(LinkReviewService),
       ) as unknown as {
         firstReplies(threadIds: string[]): Promise<{ id: string }[]>;
         replies(
@@ -1188,17 +1197,18 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
 
   it('counts the comments the public reads, on the card and the post page', async () => {
     expect((await card())?.commentCount).toBe(0);
+    // The 대댓글 by the other account: one person writes 5 comments a minute at most (#187).
     const comment = await written();
-    const shownReply = await reply(comment.id);
-    const hidden = await reply(comment.id);
-    const deleted = await reply(comment.id);
+    const shownReply = await reply(comment.id, '답입니다', other);
+    const hidden = await reply(comment.id, '답입니다', other);
+    const deleted = await reply(comment.id, '답입니다', other);
     const deletedThread = await written();
-    const underDeleted = await reply(deletedThread.id);
+    const underDeleted = await reply(deletedThread.id, '답입니다', other);
     const hiddenThread = await written();
-    const underHidden = await reply(hiddenThread.id);
+    const underHidden = await reply(hiddenThread.id, '답입니다', other);
     await hide('postComments', hidden.id);
     await hide('postComments', hiddenThread.id);
-    await remove(deleted.id);
+    await remove(deleted.id, other);
     await remove(deletedThread.id);
     // Read in full: the 댓글, one 대댓글 under it, and the 대댓글 under the deleted and the hidden 댓글.
     expect((await card())?.commentCount).toBe(4);
@@ -1497,8 +1507,9 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
   it('counts a comment written while the post’s deletion waited, answering with the placeholder', async () => {
     // The holder stands in for a comment being written, the post's row held shared as
     // CommentsService.create holds it: the author's deletion waits on the row and then counts the
-    // comment. Its own FOR UPDATE is not what makes it wait here — its UPDATE waits on the share
-    // lock as well — so this pins that the placeholder is decided after the wait (ADR-0074).
+    // comment. Its own row lock (FOR NO KEY UPDATE) is not what makes it wait here — its UPDATE
+    // waits on the share lock as well — so this pins that the placeholder is decided after the wait
+    // (ADR-0074).
     const comment = '1c7a7b4f-3d2e-4d9f-8a1b-2c3d4e5f6a71';
     const res = await whileLocked(
       [

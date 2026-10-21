@@ -30,6 +30,8 @@ import {
   consentRecords,
   fills,
   ledgerEntries,
+  linkFlags,
+  linkUses,
   marketLinks,
   marketSearchTerms,
   marketSearches,
@@ -67,6 +69,7 @@ import {
   startGrantNumbers,
   startGrants,
   user,
+  writeLimitEvents,
 } from './schema/index.js';
 import { closeDb, createDb } from './client.js';
 import { storedReleaseSettingValue } from './release-settings.js';
@@ -78,6 +81,8 @@ import {
   createMarketLink,
   createComment,
   createCommentLike,
+  createLinkFlag,
+  createLinkUse,
   createMedia,
   createModerationAction,
   createNotice,
@@ -92,6 +97,7 @@ import {
   createStartGrant,
   createUser,
   createWatch,
+  createWriteLimitEvent,
   randomPhoneHash,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
@@ -2442,6 +2448,128 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('write limits and repeated links (migration 0038, #187)', () => {
+    /** A post with a 댓글 under it, by a new account. */
+    async function linkFixture() {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      return { author, post, comment };
+    }
+
+    it('records a counted write by number, kind and time only, never rewritten', async () => {
+      const hash = randomPhoneHash();
+      const event = await createWriteLimitEvent(t.db, { phoneHash: hash, action: 'post' });
+      expect(event).toMatchObject({ phoneHash: hash, action: 'post' });
+      for (const action of ['comment', 'edit', 'upload'] as const) {
+        await createWriteLimitEvent(t.db, { phoneHash: hash, action });
+      }
+      await expect(
+        t.db.insert(writeLimitEvents).values({ phoneHash: hash, action: 'report' as 'post' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'write_limit_events_action_check',
+      );
+      for (const phoneHash of ['01012345678', 'A'.repeat(64), 'a'.repeat(63)]) {
+        await expect(createWriteLimitEvent(t.db, { phoneHash, action: 'post' })).rejects.toSatisfy(
+          (e) =>
+            sqlState(e) === '23514' && sqlConstraint(e) === 'write_limit_events_phone_hash_check',
+        );
+      }
+      await expect(
+        t.db
+          .update(writeLimitEvents)
+          .set({ action: 'edit' })
+          .where(eq(writeLimitEvents.id, event.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      // The worker's purge deletes a row once it left the longest window.
+      await t.db.delete(writeLimitEvents).where(eq(writeLimitEvents.id, event.id));
+      expect(await t.db.select().from(writeLimitEvents)).toHaveLength(3);
+    });
+
+    it('records a link use of exactly one post or comment, never rewritten', async () => {
+      const { post, comment } = await linkFixture();
+      const url = 'https://example.com/a';
+      const onPost = await createLinkUse(t.db, { url, postId: post.id });
+      await createLinkUse(t.db, { url, commentId: comment.id });
+      await expect(createLinkUse(t.db, { url })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'link_uses_target_check',
+      );
+      await expect(
+        createLinkUse(t.db, { url, postId: post.id, commentId: comment.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'link_uses_target_check',
+      );
+      await expect(
+        createLinkUse(t.db, { url, postId: post.id, phoneHash: 'x'.repeat(64) }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'link_uses_phone_hash_check',
+      );
+      await expect(
+        t.db.update(linkUses).set({ url: 'https://b.example' }).where(eq(linkUses.id, onPost.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await t.db.delete(linkUses).where(eq(linkUses.id, onPost.id));
+      expect(await t.db.select().from(linkUses)).toHaveLength(1);
+    });
+
+    it('keeps a review-list entry once per item, link and rule, and never changes or removes it', async () => {
+      const { post, comment } = await linkFixture();
+      const url = 'https://example.com/a';
+      const flag = await createLinkFlag(t.db, { url, reason: 'same_account', postId: post.id });
+      // The same item, link and rule again: refused, the empty comment column notwithstanding.
+      await expect(
+        createLinkFlag(t.db, { url, reason: 'same_account', postId: post.id }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' && sqlConstraint(e) === 'link_flags_url_reason_target_unique',
+      );
+      await expect(
+        createLinkFlag(t.db, { url, reason: 'same_account', commentId: comment.id }),
+      ).resolves.toBeDefined();
+      await expect(
+        createLinkFlag(t.db, { url, reason: 'same_account', commentId: comment.id }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23505');
+      // Another rule or another link is another entry.
+      await createLinkFlag(t.db, { url, reason: 'many_accounts', postId: post.id });
+      await createLinkFlag(t.db, {
+        url: 'https://b.example',
+        reason: 'same_account',
+        postId: post.id,
+      });
+      await expect(
+        createLinkFlag(t.db, { url, reason: 'body_repeat' as 'same_account', postId: post.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'link_flags_reason_check',
+      );
+      await expect(createLinkFlag(t.db, { url, reason: 'same_account' })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'link_flags_target_check',
+      );
+      await expect(
+        t.db.update(linkFlags).set({ url: 'https://c.example' }).where(eq(linkFlags.id, flag.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(t.db.delete(linkFlags).where(eq(linkFlags.id, flag.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '42501',
+      );
+      // The relations resolve both ways.
+      const withPost = await t.db.query.linkFlags.findFirst({
+        where: eq(linkFlags.id, flag.id),
+        with: { post: true, comment: true },
+      });
+      expect(withPost?.post?.id).toBe(post.id);
+      expect(withPost?.comment).toBeNull();
+      const postWith = await t.db.query.posts.findFirst({
+        where: eq(posts.id, post.id),
+        with: { linkFlags: true },
+      });
+      expect(postWith?.linkFlags).toHaveLength(3);
+      const commentWith = await t.db.query.postComments.findFirst({
+        where: eq(postComments.id, comment.id),
+        with: { linkFlags: true },
+      });
+      expect(commentWith?.linkFlags.map((row) => row.reason)).toEqual(['same_account']);
+    });
+  });
+
   describe('the direct AMM is gone (migration 0017, #125)', () => {
     it('has dropped its market columns, the slippage guards and market_mechanism', async () => {
       const { rows } = await t.db.execute<{ table: string; column: string }>(sql`
@@ -4629,7 +4757,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
             'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
-            'profile_interest_categories', 'post_likes', 'comment_likes')
+            'profile_interest_categories', 'post_likes', 'comment_likes',
+            'write_limit_events', 'link_uses', 'link_flags')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -4677,6 +4806,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Migration 0035 (#49): a like is inserted and an unlike deletes it, never rewritten.
       expect(privs('post_likes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       expect(privs('comment_likes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      // Migration 0038 (#187): a counted write and a link use are inserted and purged after a day,
+      // never rewritten; a review-list entry is inserted and kept as it is.
+      expect(privs('write_limit_events')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      expect(privs('link_uses')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      expect(privs('link_flags')).toEqual(['INSERT', 'SELECT']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

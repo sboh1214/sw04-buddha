@@ -99,6 +99,10 @@ export class MediaController {
     'ONBOARDING_REQUIRED',
     'IMAGE_NOT_ALLOWED',
     'RESTRICTED',
+    // The person's images, a profile image's included, reached 50 a day (#187).
+    'WRITE_LIMITED',
+    // Written out beside WRITE_LIMITED: an explicit 429 replaces the global one (document.ts).
+    'RATE_LIMITED',
   )
   async upload(
     @CurrentUser() user: SessionUser,
