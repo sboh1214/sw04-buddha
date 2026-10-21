@@ -136,16 +136,36 @@ export function withMoreReplies(
 }
 
 /**
+ * The reply pages one read on reads at most for one thread (오너 결정 2026-10-22 답 1: 5 pages, 250
+ * 대댓글): a new 대댓글's read of its thread's unread 대댓글 (`readOnReplies`) and a read of the
+ * comment pages reading a thread on as far as the screen had it (`threadsReadOn`), both in
+ * hooks/use-comments.ts. Each page is one request in the reader's address limit (100 a minute with
+ * every other request of the page), and neither read had a bound before: a thread of thousands could
+ * spend the limit — and the address's other requests with it — on one reply or one focus of the
+ * window (ADR-0074 7-28). Past it: a new 대댓글 not reached within it stands at the end of the 대댓글
+ * held, and a thread read again holds its first 50 and the 250 after them — '답글 더 보기' brings
+ * the rest, and the new 대댓글 into its place, as after a read that failed.
+ */
+export const REPLY_READ_ON_PAGES = 5;
+
+/**
  * The thread `fresh`, read again, with the reply pages after it still to read so it holds as many
  * 대댓글 as the screen did (`held`, the same thread before the read) — so a read of the comment
- * pages (the window's focus, 30 seconds, a reconnection, a write's read) never takes away what
- * '답글 더 보기' brought, nor a box open on it. Whether one more page is to be read.
+ * pages (the window's focus, 30 seconds, a reconnection, a write's read) does not take away what
+ * '답글 더 보기' brought, nor a box open on it — up to REPLY_READ_ON_PAGES pages read on
+ * (`pagesRead`, 오너 결정 2026-10-22 답 1): past them, what the screen held beyond goes back behind
+ * '답글 더 보기'. Whether one more page is to be read.
  */
-export function threadReadsOn(fresh: CommentThread, held: CommentThread | undefined): boolean {
+export function threadReadsOn(
+  fresh: CommentThread,
+  held: CommentThread | undefined,
+  pagesRead: number,
+): boolean {
   return (
     held !== undefined &&
     fresh.repliesNextCursor !== null &&
-    fresh.replies.length < held.replies.length
+    fresh.replies.length < held.replies.length &&
+    pagesRead < REPLY_READ_ON_PAGES
   );
 }
 
@@ -183,11 +203,12 @@ function mapThreads(
  * that 댓글, even when the reply was aimed at a 대댓글 — and a 대댓글 whose 댓글 is not among the
  * pages read changes nothing (its page brings it). A 대댓글 is the newest of its thread (#45-2
  * oldest first): while 대댓글 of the thread are still unread ('답글 더 보기'), the hooks read them
- * instead (`readOnReplies`, use-comments.ts) and come here only once they are all read or that
- * read fails — before 대댓글 still unread, then, until their page brings it to its place. A 댓글
- * goes last of the pages read: the hooks read its page instead (`readOnToTheEnd`) and come here
- * only when that read fails — before 댓글 still unread, and out of the pages at the next read of as
- * many pages, until 더 보기 brings it. Nothing is added twice.
+ * instead (`readOnReplies`, use-comments.ts) and come here only once they are read up to it (then
+ * held: nothing to add) or that read fails or stops short of it — before 대댓글 still unread, then,
+ * until their page brings it to its place. A 댓글 goes last of the pages read: the hooks read its
+ * page instead (`readOnToTheEnd`) and come here only when that read fails — before 댓글 still
+ * unread, and out of the pages at the next read of as many pages, until 더 보기 brings it. Nothing
+ * is added twice.
  */
 export function withNewComment(
   pages: CommentPages | undefined,
@@ -384,6 +405,17 @@ export function isStaleThreadRefusal(error: unknown): boolean {
 }
 
 /**
+ * A page cursor the server no longer opens (ADR-0074 7-29): the 400 VALIDATION_ERROR naming
+ * `cursor`. The screen sends only cursors the server gave it, so this one was sealed under a key
+ * changed since (`BETTER_AUTH_SECRET` rotated while the page was open): sent again it is refused
+ * again, and only the pages read again from the first carry cursors that open
+ * (hooks/use-comments.ts, `readMoreReplies`·`readMoreComments`).
+ */
+export function isCursorRefusal(error: unknown): boolean {
+  return isApiError(error, 'VALIDATION_ERROR') && validationField(error) === 'cursor';
+}
+
+/**
  * What a post page shows in place of the comment box when the post takes no new comment (#45-5):
  * a hidden post and a deleted one whose comments are still in view.
  */
@@ -427,6 +459,11 @@ export interface HeldText {
    * after a step — no box held it on this page.
    */
   focus: boolean;
+  /**
+   * Drawn already (lib/held-comment-texts.ts): a later mount — its place moved — neither reads its
+   * reason out as an alert again nor takes the focus (ADR-0074 7-25).
+   */
+  shown: boolean;
 }
 
 /**
@@ -529,10 +566,14 @@ export type CommentsPostState = Post['state'] | 'gone';
  * view ('없거나 삭제된 글입니다.', for every box — its comments are gone with it), the post hidden
  * or deleted (a new 댓글, a 대댓글; an edit is still its author's, 7-6), the 댓글 to answer a
  * placeholder or out of the view, the comment edited hidden or out of it. A box gone from a thread
- * on screen went with that thread's pages read, so one not among them is gone. What a held text
- * says for a box with no write that went because its place changed (오너 결정 2026-10-21 답 2), and
- * when the refusal its box heard was about something else — a network failure, say — and the box
- * went later because its thread changed (`heldTextsOf`).
+ * on screen went with that thread's pages read, so one not among them is gone — save an edit of a
+ * 대댓글 whose thread now holds fewer than the screen did, 대댓글 still unread after them: a read of
+ * the pages reads a thread on five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정 2026-10-22 답
+ * 1), so the 대댓글 may be past them as well as deleted, and the words say only that it is not
+ * among those read (ADR-0074 7-30). What a held text says for a box with no write that went because
+ * its place changed (오너 결정 2026-10-21 답 2), and when the refusal its box heard was about
+ * something else — a network failure, say — and the box went later because its thread changed
+ * (`heldTextsOf`).
  */
 export function goneBoxReason(
   place: HeldTextPlace,
@@ -556,7 +597,13 @@ export function goneBoxReason(
       const found = threads
         .flatMap((thread) => [thread.comment, ...thread.replies])
         .find((held) => held.id === place.commentId);
-      return found === undefined ? copy.errCommentGone : editRefusalOf(found.state);
+      if (found !== undefined) return editRefusalOf(found.state);
+      const home = threads.find((held) => held.comment.id === place.threadId);
+      return place.commentId !== place.threadId &&
+        home !== undefined &&
+        home.repliesNextCursor !== null
+        ? copy.errCommentEditNotRead
+        : copy.errCommentGone;
     }
   }
 }
@@ -588,6 +635,36 @@ export interface ResolvedCommentDrafts {
    * comment of an edit draft: read on through them.
    */
   waitingThreads: readonly string[];
+  /**
+   * The edit drafts waiting on those threads, each with its place in its thread: shown apart, with
+   * why, should the read on through its thread fail (오너 결정 2026-10-22 답 2,
+   * `draftsHeldOnReadFailure`).
+   */
+  waitingEdits: readonly WaitingEditDraft[];
+}
+
+/** An edit draft waiting on its thread's 대댓글 still unread (`ResolvedCommentDrafts`). */
+export interface WaitingEditDraft {
+  key: CommentDraftKey;
+  text: string;
+  place: Extract<HeldTextPlace, { kind: 'comment' }>;
+}
+
+/**
+ * The edit drafts that waited on the thread `threadId`'s 대댓글 still unread, once the read on
+ * through them failed (오너 결정 2026-10-22 답 2): shown apart like a held text — the text, why
+ * (`reason`, the read's failure in the words '답글 더 보기' says it in) — until the writer closes it,
+ * rather than waiting unseen behind a button. Nothing for a draft no longer waiting: one its box
+ * took meanwhile, or one shown apart already.
+ */
+export function draftsHeldOnReadFailure(
+  waiting: readonly WaitingEditDraft[],
+  threadId: string,
+  reason: string,
+): UnplacedCommentDraft[] {
+  return waiting
+    .filter(({ place }) => place.threadId === threadId)
+    .map(({ key, text, place }) => ({ key, text, reason, place }));
 }
 
 /**
@@ -599,8 +676,10 @@ export interface ResolvedCommentDrafts {
  * among the pages read waits for them (`waiting`: the page reads on) and is gone once every page
  * is read (`allRead`); an edit of a 대댓글 whose thread is read but not all its 대댓글 waits for
  * them (`waitingThreads`: the page reads on through that thread, 오너 결정 2026-10-21 '답글 더
- * 보기') and is gone once they are all read. A post out of every view (`gone`) takes none: each is
- * shown apart with '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
+ * 보기') and is gone once they are all read — or shown apart with the read's failure, should that
+ * read fail (`waitingEdits`, `draftsHeldOnReadFailure`, 오너 결정 2026-10-22 답 2). A post out of
+ * every view (`gone`) takes none: each is shown apart with '없거나 삭제된 글입니다.' (오너 결정
+ * 2026-10-21 답 1).
  */
 export function resolveCommentDrafts(
   drafts: CommentDrafts,
@@ -617,6 +696,7 @@ export function resolveCommentDrafts(
   const edits = new Map<string, string>();
   const unplaced: UnplacedCommentDraft[] = [];
   const waitingThreads: string[] = [];
+  const waitingEdits: WaitingEditDraft[] = [];
   let comment: string | undefined;
   let waiting = false;
 
@@ -647,7 +727,7 @@ export function resolveCommentDrafts(
         place: { kind: 'comment', commentId, threadId },
       });
     }
-    return { comment, replies, edits, unplaced, waiting, waitingThreads };
+    return { comment, replies, edits, unplaced, waiting, waitingThreads, waitingEdits };
   }
 
   if (drafts.comment !== undefined) {
@@ -687,7 +767,7 @@ export function resolveCommentDrafts(
     );
     const threadId = thread?.comment.id ?? keptIn;
     const key: CommentDraftKey = { kind: 'edit', postId, commentId, threadId };
-    const place: HeldTextPlace = { kind: 'comment', commentId, threadId };
+    const place = { kind: 'comment', commentId, threadId } as const;
     const found =
       thread === undefined
         ? undefined
@@ -696,6 +776,7 @@ export function resolveCommentDrafts(
     if (found === undefined && home !== undefined && home.repliesNextCursor !== null) {
       // Among its thread's 대댓글 still unread, perhaps: read on through them.
       waitingThreads.push(keptIn);
+      waitingEdits.push({ key, text, place });
     } else if (found === undefined) {
       if (allRead || home !== undefined) {
         unplaced.push({ key, text, reason: copy.errCommentGone, place });
@@ -714,5 +795,5 @@ export function resolveCommentDrafts(
     }
   }
 
-  return { comment, replies, edits, unplaced, waiting, waitingThreads };
+  return { comment, replies, edits, unplaced, waiting, waitingThreads, waitingEdits };
 }

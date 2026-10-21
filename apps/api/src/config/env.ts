@@ -127,7 +127,12 @@ export const envSchema = z
     // --- better-auth (PLAN 10) ---
     /**
      * Signs session cookies and tokens. Required outside NODE_ENV=test (tests use a fixed
-     * value); at least 32 characters in production (`openssl rand -base64 32`).
+     * value); at least 32 characters in production (`openssl rand -base64 32`). Also the root of
+     * two keys derived by a fixed label: the verification codes' hash (`deriveCodeKey`) and the
+     * seal of the comment lists' cursors (`deriveCommentCursorKeys`, ADR-0074) — rotating it signs
+     * everyone in again and retires every comment cursor a screen holds (its next 더 보기 is
+     * refused, 400; the screen then reads its pages again from the first for new ones and asks
+     * again — apps/web/src/hooks/use-comments.ts).
      */
     BETTER_AUTH_SECRET: optionalString,
     /**

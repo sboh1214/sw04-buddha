@@ -3,8 +3,6 @@ import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
   COMMENT_REPLIES_PAGE_SIZE,
-  decodeKeyset,
-  encodeKeyset,
   type CommentDeletion,
   type CommentNotAllowedDetails,
   type CommentNotAllowedReason,
@@ -24,6 +22,7 @@ import { DB } from '../infra/db/db.provider.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { postAuthorOf, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
+import { CommentCursors } from './comment-cursor.js';
 import { commentHasReplies, commentHasRepliesSql, postHasComments } from './comment-queries.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -71,17 +70,28 @@ function publishedOf(row: CommentRow): PublishedComment {
 }
 
 /**
- * A page of 대댓글 from rows read oldest first with one row past COMMENT_REPLIES_PAGE_SIZE: the
- * first that many as the public sees them (`publicCommentOf` — a deleted 대댓글 was never read), and
- * the cursor after the last of them when the extra row says more follow.
+ * A page of the 대댓글 of the 댓글 `threadId` from rows read oldest first with one row past
+ * COMMENT_REPLIES_PAGE_SIZE: the first that many as the public sees them (`publicCommentOf` — a
+ * deleted 대댓글 was never read), and the cursor after the last of them, sealed for that thread's
+ * list (`CommentCursors`, 오너 결정 2026-10-22 답 3), when the extra row says more follow.
  */
-function replyPageOf(rows: readonly CommentRow[]): Page<PostComment> {
+function replyPageOf(
+  cursors: CommentCursors,
+  threadId: string,
+  rows: readonly CommentRow[],
+): Page<PostComment> {
   const hasMore = rows.length > COMMENT_REPLIES_PAGE_SIZE;
   const kept = hasMore ? rows.slice(0, COMMENT_REPLIES_PAGE_SIZE) : rows;
   const last = kept.at(-1);
   return {
     items: kept.flatMap((row) => publicCommentOf(row, false) ?? []),
-    nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
+    nextCursor:
+      hasMore && last
+        ? cursors.seal(
+            { list: 'replies', commentId: threadId },
+            { createdAt: last.createdAt, id: last.id },
+          )
+        : null,
   };
 }
 
@@ -99,7 +109,10 @@ function replyPageOf(rows: readonly CommentRow[]): Page<PostComment> {
  */
 @Injectable()
 export class CommentsService {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  constructor(
+    @Inject(DB) private readonly db: Db,
+    private readonly cursors: CommentCursors,
+  ) {}
 
   /** What the public reads select: the comment and its author's public face, never the id. */
   private readonly columns = {
@@ -125,7 +138,10 @@ export class CommentsService {
    * left every view (deleted, nothing under it), so a page is full while more follow. The comments
    * of a post in any state are read: a hidden post's and a deleted post's placeholder keep their
    * comments in view (N04 §6: the replies keep their context). A post that is gone — deleted with
-   * nothing under it, or never there — is NOT_FOUND, as on its page.
+   * nothing under it, or never there — is NOT_FOUND, as on its page. The cursors, the page's and
+   * each thread's, are sealed for their list (`CommentCursors`, 오너 결정 2026-10-22 답 3): a page
+   * may end on a placeholder, and no cursor tells its time; one that does not open is a
+   * VALIDATION_ERROR.
    *
    * Bounded whatever a thread holds (Codex review on PR #220): one query for the page's 댓글, one
    * for their 대댓글 — a LATERAL read of at most COMMENT_REPLIES_PAGE_SIZE + 1 per 댓글 down
@@ -141,7 +157,8 @@ export class CommentsService {
     if (!post || publicStateOf(post, await postHasComments(this.db, postId)) === 'gone') {
       throw postNotFound();
     }
-    const cursor = decodeKeyset(query.cursor, 'uuid');
+    const scope = { list: 'comments', postId } as const;
+    const cursor = this.cursors.open(scope, query.cursor);
     const rows = await this.db
       .select({ ...this.columns, hasReplies: commentHasRepliesSql(postComments.id) })
       .from(postComments)
@@ -172,10 +189,13 @@ export class CommentsService {
       items: kept.flatMap((row) => {
         const comment = publicCommentOf(row, row.hasReplies);
         if (comment === undefined) return [];
-        const { items, nextCursor } = replyPageOf(byParent.get(row.id) ?? []);
+        const { items, nextCursor } = replyPageOf(this.cursors, row.id, byParent.get(row.id) ?? []);
         return [{ comment, replies: items, repliesNextCursor: nextCursor }];
       }),
-      nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
+      nextCursor:
+        hasMore && last
+          ? this.cursors.seal(scope, { createdAt: last.createdAt, id: last.id })
+          : null,
     };
   }
 
@@ -186,7 +206,9 @@ export class CommentsService {
    * is its placeholder. NOT_FOUND for what is no thread in view: an unknown comment, a 대댓글 (it
    * has no replies of its own, #45-2), a deleted 댓글 with nothing under it — and so for every
    * comment of a post that left every view: a 댓글 still in view means an undeleted comment on its
-   * post, itself or a 대댓글 under it, which keeps the post in view too.
+   * post, itself or a 대댓글 under it, which keeps the post in view too. The cursor is sealed for
+   * this 댓글's list: another thread's, the comment page's, or one tampered with is a
+   * VALIDATION_ERROR (`CommentCursors`).
    */
   async replies(commentId: string, query: CommentRepliesQuery): Promise<Page<PostComment>> {
     const { postComments, profiles } = schema;
@@ -205,7 +227,7 @@ export class CommentsService {
     ) {
       throw commentNotFound();
     }
-    const cursor = decodeKeyset(query.cursor, 'uuid');
+    const cursor = this.cursors.open({ list: 'replies', commentId }, query.cursor);
     const rows = await this.db
       .select(this.columns)
       .from(postComments)
@@ -221,7 +243,7 @@ export class CommentsService {
       )
       .orderBy(asc(postComments.createdAt), asc(postComments.id))
       .limit(COMMENT_REPLIES_PAGE_SIZE + 1);
-    return replyPageOf(rows);
+    return replyPageOf(this.cursors, commentId, rows);
   }
 
   /**

@@ -41,7 +41,7 @@ export function useHeldCommentTexts(
   held: readonly HeldText[];
   pageMayGo: boolean;
   going: CommentBoxGoing;
-  hold: (accountId: string, texts: readonly Omit<HeldText, 'focus'>[]) => void;
+  hold: (accountId: string, texts: readonly Omit<HeldText, 'focus' | 'shown'>[]) => void;
   dismiss: (id: string) => void;
 } {
   const [state, dispatch] = useReducer(heldTextsAfter, accountId, initialHeldTexts);
@@ -84,13 +84,21 @@ export function useHeldCommentTexts(
     };
     return {
       going,
-      hold: (writer: string, texts: readonly Omit<HeldText, 'focus'>[]) =>
+      hold: (writer: string, texts: readonly Omit<HeldText, 'focus' | 'shown'>[]) =>
         dispatch({ type: 'hold', accountId: writer, texts }),
       dismiss: (id: string) => dispatch({ type: 'dismiss', id }),
     };
   }, []);
 
   const held = useMemo(() => heldTextsOf(state), [state]);
+  // Every text this commit drew for the first time is drawn now: a later mount of it — its place
+  // moved, under its comment or at its thread's end — is not new (`HeldCommentText`). From an
+  // effect of the section, which React runs after the commit that mounted them all (each held text
+  // is drawn somewhere: `placeHeldTexts` leaves none out).
+  useEffect(() => {
+    const fresh = held.filter((text) => !text.shown).map((text) => text.id);
+    if (fresh.length > 0) dispatch({ type: 'shown', ids: fresh });
+  }, [held]);
   return { held, pageMayGo: pageMayGo(state), ...actions };
 }
 
@@ -107,14 +115,19 @@ export function useHeldCommentTexts(
  * page with it — labelled by the reason, which is read out — and not if the reader has put the
  * focus elsewhere since. Otherwise — a draft taken back after a step, a box the reader had left —
  * the focus stays where it is and the reason is an alert, read out as it appears, as the refusal
- * under a box's button is.
+ * under a box's button is. Both only the first time the text is drawn: moved — under its comment
+ * once '답글 더 보기' reads it, back to its thread's end once a read again leaves it out
+ * (`placeHeldTexts`) — it is drawn anew in its new place, and then (`held.shown`) its reason is
+ * neither read out again nor does it take the focus: nothing new happened to it.
  */
 export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const reasonId = useId();
   // Decided as it first appears — on the client only: a held text is never in the server's HTML.
+  const [firstShowing] = useState(() => !held.shown);
   const [takesFocus] = useState(
     () =>
+      firstShowing &&
       held.focus &&
       typeof document !== 'undefined' &&
       (document.activeElement === null || document.activeElement === document.body),
@@ -137,7 +150,7 @@ export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: ()
       bg="surface.card"
       data-testid="comment-held"
     >
-      <Alert.Root status="error" role={takesFocus ? undefined : 'alert'}>
+      <Alert.Root status="error" role={takesFocus || !firstShowing ? undefined : 'alert'}>
         <Alert.Indicator />
         <Alert.Content>
           <Alert.Description id={reasonId} data-testid="comment-held-reason">

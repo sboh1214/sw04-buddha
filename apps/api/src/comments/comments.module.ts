@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module.js';
 import { DbModule } from '../infra/db/db.module.js';
+import { CommentCursors } from './comment-cursor.js';
 import { CommentsController, PostCommentsController } from './comments.controller.js';
 import { CommentsService } from './comments.service.js';
 
@@ -13,6 +14,6 @@ import { CommentsService } from './comments.service.js';
   // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard).
   imports: [DbModule, AuthModule],
   controllers: [PostCommentsController, CommentsController],
-  providers: [CommentsService],
+  providers: [CommentsService, CommentCursors],
 })
 export class CommentsModule {}

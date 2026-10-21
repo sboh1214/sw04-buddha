@@ -25,6 +25,7 @@ import {
   commentBodyTooLongMessage,
   commentDeletionSchema,
   commentThreadSchema,
+  encodeKeyset,
   postCommentSchema,
   postSchema,
   publishedCommentSchema,
@@ -37,6 +38,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
+import { CommentCursors } from './comment-cursor.js';
 import { CommentsService } from './comments.service.js';
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
@@ -252,11 +254,101 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     const third = await page(`limit=2&cursor=${second.meta.nextCursor!}`);
     expect(third.data.map(({ comment }) => comment.id)).toEqual([e.id]);
     expect(third.meta.nextCursor).toBeNull();
-    // A cursor that does not decode serves the first page.
-    expect((await page('limit=2&cursor=garbage')).data.map(({ comment }) => comment.id)).toEqual([
-      a.id,
-      b!.id,
-    ]);
+    // The cursors are sealed for this post's list (오너 결정 2026-10-22 답 3): one that does not
+    // open — not a cursor, the plain keyset these lists gave before, another post's (a thread's:
+    // the next test, which has one) — is a VALIDATION_ERROR naming `cursor`, not the first page the
+    // web would draw twice.
+    const elsewhere = await createPost(t.db, { marketId: market.id, authorId: author.id });
+    await createComment(t.db, { postId: elsewhere.id, authorId: author.id, createdAt: at(1) });
+    await createComment(t.db, { postId: elsewhere.id, authorId: author.id, createdAt: at(2) });
+    const foreign = await page('limit=1', elsewhere.id);
+    for (const cursor of [
+      'garbage',
+      encodeKeyset({ createdAt: b!.createdAt, id: b!.id }),
+      foreign.meta.nextCursor!,
+    ]) {
+      const res = await listing(`limit=2&cursor=${encodeURIComponent(cursor)}`);
+      expect(res.statusCode, cursor).toBe(400);
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path: ['cursor'] }],
+      });
+    }
+  });
+
+  it('seals the cursors so a page ending on a placeholder does not tell its time (오너 결정 2026-10-22 답 3)', async () => {
+    // A deleted 댓글 kept as its placeholder (대댓글 hang under it) ends the first page; a hidden
+    // 대댓글 ends its thread's first 50. Their answers carry their ids alone, and so do the cursors
+    // after them: no time of writing in any spelling, and the next page still follows on.
+    const base = Date.now() - 600_000;
+    const at = (seconds: number) => new Date(base + seconds * 1_000 + 123);
+    const deleted = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(1),
+      deletedAt: new Date(),
+    });
+    // The 50th 대댓글 by time, hidden; one more after it.
+    const hiddenAt = at(2 + COMMENT_REPLIES_PAGE_SIZE - 1);
+    for (let index = 0; index < COMMENT_REPLIES_PAGE_SIZE + 1; index += 1) {
+      await createComment(t.db, {
+        postId: post.id,
+        authorId: other.id,
+        parentId: deleted.id,
+        createdAt: at(2 + index),
+        ...(index === COMMENT_REPLIES_PAGE_SIZE - 1 ? { hiddenAt: new Date() } : {}),
+      });
+    }
+    const later = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(100),
+    });
+    const res = await listing('limit=1');
+    expect(res.statusCode, res.body).toBe(200);
+    const first = res.json<ThreadPage>();
+    expect(first.data[0]?.comment).toEqual({ state: 'deleted', id: deleted.id });
+    expect(first.data[0]?.replies.at(-1)).toMatchObject({ state: 'hidden' });
+    const cursors = [first.meta.nextCursor!, first.data[0]!.repliesNextCursor!];
+    for (const time of [deleted.createdAt, hiddenAt]) {
+      const millis = time.getTime();
+      for (const spelling of [String(millis), time.toISOString(), millis.toString(16)]) {
+        expect(res.body).not.toContain(spelling);
+      }
+      for (const cursor of cursors) {
+        expect(Buffer.from(cursor, 'base64url').toString('latin1')).not.toContain(String(millis));
+      }
+    }
+    expect((await page(`limit=1&cursor=${first.meta.nextCursor!}`)).data[0]?.comment.id).toBe(
+      later.id,
+    );
+    // Sealed for its list: the thread's cursor reads on in that thread only.
+    const replies = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/comments/${deleted.id}/replies?cursor=${cursors[1]!}`,
+    });
+    expect(replies.statusCode, replies.body).toBe(200);
+    expect(replies.json<{ data: unknown[] }>().data).toHaveLength(1);
+    // Not in another thread, nor in either other list: the 댓글 list of the same post takes no
+    // thread's cursor, and the thread takes no cursor of the 댓글 list.
+    const misplaced = [
+      await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/comments/${later.id}/replies?cursor=${cursors[1]!}`,
+      }),
+      await listing(`limit=1&cursor=${encodeURIComponent(cursors[1]!)}`),
+      await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/comments/${deleted.id}/replies?cursor=${cursors[0]!}`,
+      }),
+    ];
+    for (const refused of misplaced) {
+      expect(refused.statusCode, refused.body).toBe(400);
+      expect(errorOf(refused)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path: ['cursor'] }],
+      });
+    }
   });
 
   it('carries the first 50 대댓글 of each 댓글 and reads the rest 50 at a time (오너 결정 2026-10-21)', async () => {
@@ -326,8 +418,37 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     const third = await replyPage(thread.id, second.nextCursor!);
     expect(third.items.map((reply) => reply.id)).toEqual(shown.slice(100));
     expect(third.nextCursor).toBeNull();
-    // Anyone reads them, the same answer; a cursor that does not decode serves the first page.
-    expect((await replyPage(thread.id, 'garbage')).items).toEqual(first.items);
+    // Anyone reads them, the same answer. A cursor that does not open for this thread — not a
+    // cursor, the plain keyset, the comment page's, another thread's — is a VALIDATION_ERROR naming
+    // `cursor` (오너 결정 2026-10-22 답 3).
+    const otherThread = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      parentId: null,
+    });
+    for (let index = 0; index < COMMENT_REPLIES_PAGE_SIZE + 1; index += 1) {
+      await createComment(t.db, { postId: post.id, authorId: other.id, parentId: otherThread.id });
+    }
+    const otherCursor = (await page()).data.find(
+      ({ comment }) => comment.id === otherThread.id,
+    )!.repliesNextCursor!;
+    const twoPages = await page('limit=1');
+    for (const cursor of [
+      'garbage',
+      encodeKeyset({ createdAt: at(10 + 49), id: replies[49]! }),
+      twoPages.meta.nextCursor!,
+      otherCursor,
+    ]) {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/comments/${thread.id}/replies?cursor=${encodeURIComponent(cursor)}`,
+      });
+      expect(res.statusCode, cursor).toBe(400);
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path: ['cursor'] }],
+      });
+    }
     const read = (cookie?: string) =>
       t.app.inject({
         method: 'GET',
@@ -445,7 +566,10 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
       await tx.execute(sql`SET LOCAL enable_hashjoin = off`);
       await tx.execute(sql`SET LOCAL enable_mergejoin = off`);
-      const sorted = new CommentsService(tx as unknown as Db) as unknown as {
+      const sorted = new CommentsService(
+        tx as unknown as Db,
+        t.app.get(CommentCursors),
+      ) as unknown as {
         firstReplies(threadIds: string[]): Promise<{ id: string }[]>;
         replies(
           commentId: string,

@@ -493,7 +493,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The 대댓글 of a 댓글 after the cursor, oldest first, 50 a page — the first page is the one its post’s comment page carries. A deleted 대댓글 is left out and a hidden one is its placeholder. NOT_FOUND for an unknown comment, a 대댓글 and a 댓글 that is gone */
+        /** The 대댓글 of a 댓글 after the cursor, oldest first, 50 a page — the first page is the one its post’s comment page carries. A deleted 대댓글 is left out and a hidden one is its placeholder. The cursor is opaque, sealed for this 댓글’s list: another list’s, or one that does not open, is VALIDATION_ERROR. NOT_FOUND for an unknown comment, a 대댓글 and a 댓글 that is gone */
         get: operations["listCommentReplies"];
         put?: never;
         post?: never;
@@ -1042,7 +1042,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A post’s comments: its 댓글 oldest first, at most 20 a page, each with its first 50 대댓글 oldest first and the cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. A post that is gone is NOT_FOUND */
+        /** A post’s comments: its 댓글 oldest first, at most 20 a page, each with its first 50 대댓글 oldest first and the cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. The cursors are opaque, sealed for their list: one that does not open is VALIDATION_ERROR. A post that is gone is NOT_FOUND */
         get: operations["listComments"];
         put?: never;
         /** A comment of plain text (at most 1000 characters, line breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED) */
@@ -1303,7 +1303,7 @@ export type components = {
         CommentThread: {
             comment: components["schemas"]["PostComment"];
             replies: components["schemas"]["PostComment"][];
-            /** @description The cursor of GET /comments/:commentId/replies for the 대댓글 after these; null when every one is here */
+            /** @description The cursor of GET /comments/:commentId/replies for the 대댓글 after these (opaque, sealed for this 댓글’s list); null when every one is here */
             repliesNextCursor: string | null;
         };
         ConfirmPhoneVerificationBody: {

@@ -229,6 +229,7 @@ describe('what the comment section keeps as it goes', () => {
     reason: '까닭',
     text,
     focus: false,
+    shown: true,
   });
   const section = {
     postId: POST.toUpperCase(),

@@ -24,6 +24,11 @@ import { type HeldText, type HeldTextPlace } from './comments';
  * runs after that render's boxes have gone and told theirs — so `pageMayGo` speaks for every text
  * of that moment: the post page holds off its 404 until it says so.
  *
+ * A text is new once: the section tells which texts it has drawn (`shown`, after the commit that
+ * drew them), so a later mount of one — its place moved between its comment and its thread's end as
+ * the threads read again hold that comment or not (`placeHeldTexts`) — neither reads its reason out
+ * again nor takes the focus (ADR-0074 7-25). A text closed and held again later is new again.
+ *
  * Each text is its writer's: the section is told who is on screen (`account`), and another account
  * — a sign-out or a sign-in in another tab of this browser, seen by SessionCacheGuard — starts it
  * afresh, as the drafts kept in the tab are only ever their writer's (lib/comment-drafts.ts). A box
@@ -55,6 +60,11 @@ interface Heard {
   write?: GoingBoxWrite;
   /** The focus was in the box as it went. */
   focus?: boolean;
+  /**
+   * Drawn already (`shown`): a later mount of it — its place moved between its comment and its
+   * thread's end, as the threads read again hold that comment or not — is not a new text.
+   */
+  shown?: boolean;
 }
 
 export interface HeldTextsState {
@@ -90,6 +100,7 @@ export type HeldTextsEvent =
       texts: readonly { id: string; place: HeldTextPlace; reason: string; text: string }[];
     }
   | { type: 'dismiss'; id: string }
+  | { type: 'shown'; ids: readonly string[] }
   | { type: 'post-gone' };
 
 export function initialHeldTexts(accountId: string | undefined): HeldTextsState {
@@ -163,6 +174,16 @@ export function heldTextsAfter(state: HeldTextsState, event: HeldTextsEvent): He
     }
     case 'dismiss':
       return forget(state, event.id);
+    case 'shown': {
+      let heard: Map<string, Heard> | undefined;
+      for (const id of event.ids) {
+        const one = (heard ?? state.heard).get(id);
+        if (one === undefined || one.shown === true) continue;
+        heard ??= new Map(state.heard);
+        heard.set(id, { ...one, shown: true });
+      }
+      return heard === undefined ? state : { ...state, heard };
+    }
     case 'post-gone':
       return state.postGone ? state : { ...state, postGone: true };
   }
@@ -191,7 +212,7 @@ export function heldTextsOf(state: HeldTextsState): HeldText[] {
           ? refusal.reason
           : (goneReason ?? refusal.reason);
     if (reason === undefined) return [];
-    return [{ id, place, reason, text, focus: heard.focus === true }];
+    return [{ id, place, reason, text, focus: heard.focus === true, shown: heard.shown === true }];
   });
 }
 

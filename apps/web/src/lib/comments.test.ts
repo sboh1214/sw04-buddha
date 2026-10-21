@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type CommentThread, type PostAuthor, type PublishedComment } from './api';
 import {
+  REPLY_READ_ON_PAGES,
   type CommentPages,
   type ReplyPage,
   commentCountText,
@@ -18,7 +19,9 @@ import {
   commentTextChanged,
   commentWriteErrorMessage,
   commentsClosedMessage,
+  draftsHeldOnReadFailure,
   goneBoxReason,
+  isCursorRefusal,
   isStaleThreadRefusal,
   placeHeldTexts,
   postCommentsKey,
@@ -176,13 +179,24 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
   it('are read on when a page read again holds fewer than the screen did', () => {
     const fresh = threadWithMore('a-50', comment('a'), comment('a1', 'a'));
     const held = thread(comment('a'), comment('a1', 'a'), comment('a2', 'a'));
-    expect(threadReadsOn(fresh, held)).toBe(true);
-    expect(threadReadsOn(fresh, undefined)).toBe(false);
-    expect(threadReadsOn(fresh, thread(comment('a'), comment('a1', 'a')))).toBe(false);
-    expect(threadReadsOn(thread(comment('a'), comment('a1', 'a')), held)).toBe(false);
+    expect(threadReadsOn(fresh, held, 0)).toBe(true);
+    expect(threadReadsOn(fresh, undefined, 0)).toBe(false);
+    expect(threadReadsOn(fresh, thread(comment('a'), comment('a1', 'a')), 0)).toBe(false);
+    expect(threadReadsOn(thread(comment('a'), comment('a1', 'a')), held, 0)).toBe(false);
     const read = threadWithReplies(fresh, page(null, comment('a2', 'a')));
     expect(read).toEqual(held);
-    expect(threadReadsOn(read, held)).toBe(false);
+    expect(threadReadsOn(read, held, 1)).toBe(false);
+  });
+
+  it('are read on five reply pages at most (오너 결정 2026-10-22 답 1)', () => {
+    expect(REPLY_READ_ON_PAGES).toBe(5);
+    const fresh = threadWithMore('a-50', comment('a'), comment('a1', 'a'));
+    const held = thread(comment('a'), comment('a1', 'a'), comment('a2', 'a'));
+    for (let pagesRead = 0; pagesRead < REPLY_READ_ON_PAGES; pagesRead += 1) {
+      expect(threadReadsOn(fresh, held, pagesRead)).toBe(true);
+    }
+    // Past them, what the screen held beyond goes back behind '답글 더 보기'.
+    expect(threadReadsOn(fresh, held, REPLY_READ_ON_PAGES)).toBe(false);
   });
 });
 
@@ -421,6 +435,17 @@ describe('a refused write', () => {
     expect(isStaleThreadRefusal(refusal(403, 'ONBOARDING_REQUIRED'))).toBe(false);
     expect(isStaleThreadRefusal(new TypeError('Failed to fetch'))).toBe(false);
   });
+
+  it('tells a cursor that no longer opens (ADR-0074 7-29) from every other refusal', () => {
+    const cursor = [{ path: ['cursor'], message: 'Not a cursor of this list' }];
+    expect(isCursorRefusal(refusal(400, 'VALIDATION_ERROR', cursor))).toBe(true);
+    expect(
+      isCursorRefusal(refusal(400, 'VALIDATION_ERROR', [{ path: ['limit'], message: 'x' }])),
+    ).toBe(false);
+    expect(isCursorRefusal(refusal(400, 'VALIDATION_ERROR'))).toBe(false);
+    expect(isCursorRefusal(refusal(404, 'NOT_FOUND', cursor))).toBe(false);
+    expect(isCursorRefusal(new TypeError('Failed to fetch'))).toBe(false);
+  });
 });
 
 describe('a box’s text', () => {
@@ -442,6 +467,7 @@ describe('text held apart from a box', () => {
     reason: '까닭',
     text: id,
     focus: false,
+    shown: false,
   });
   const threads = [thread(comment('t1'), comment('r1', 't1')), thread(comment('t2'))];
 
@@ -501,6 +527,29 @@ describe('why a box’s place takes its text no more', () => {
       copy.errCommentGone,
     );
     expect(goneBoxReason({ kind: 'comment', commentId: 'x', threadId: 'x' }, view())).toBe(
+      copy.errCommentGone,
+    );
+  });
+
+  it('says a 대댓글 edited is not among those read when its thread has 대댓글 still unread (오너 결정 2026-10-22 답 1, 7-30)', () => {
+    // A read of the pages reads a thread on five reply pages at most: a 대댓글 opened past them is
+    // out of the thread read again — or deleted; the words hold for both.
+    const capped = {
+      postState: 'published' as const,
+      threads: [threadWithMore('t1-300', comment('t1'), comment('r1', 't1'))],
+    };
+    expect(goneBoxReason({ kind: 'comment', commentId: 'r400', threadId: 't1' }, capped)).toBe(
+      copy.errCommentEditNotRead,
+    );
+    // Every 대댓글 of the thread read, or the 댓글 itself: gone.
+    expect(goneBoxReason({ kind: 'comment', commentId: 'r400', threadId: 't1' }, view())).toBe(
+      copy.errCommentGone,
+    );
+    expect(goneBoxReason({ kind: 'comment', commentId: 't9', threadId: 't9' }, capped)).toBe(
+      copy.errCommentGone,
+    );
+    // Its thread out of view: gone with it.
+    expect(goneBoxReason({ kind: 'comment', commentId: 'r400', threadId: 't2' }, capped)).toBe(
       copy.errCommentGone,
     );
   });
@@ -700,6 +749,13 @@ describe('drafts taken back after an onboarding step', () => {
       view([threadWithMore('t1-50', mine('t1'), mine('r1', 't1'))]),
     );
     expect(waiting.waitingThreads).toEqual(['t1']);
+    expect(waiting.waitingEdits).toEqual([
+      {
+        key: { kind: 'edit', postId: post, commentId: 'r9', threadId: 't1' },
+        text: '고친 답글',
+        place: { kind: 'comment', commentId: 'r9', threadId: 't1' },
+      },
+    ]);
     expect(waiting.waiting).toBe(false);
     expect(waiting.unplaced).toEqual([]);
     expect(waiting.edits.size).toBe(0);
@@ -710,6 +766,7 @@ describe('drafts taken back after an onboarding step', () => {
     );
     expect([...found.edits]).toEqual([['r9', '고친 답글']]);
     expect(found.waitingThreads).toEqual([]);
+    expect(found.waitingEdits).toEqual([]);
     // Every 대댓글 read and it is not among them: gone, shown apart where its thread stands.
     const gone = resolveCommentDrafts(
       drafts({ edits, editThreads }),
@@ -737,5 +794,37 @@ describe('drafts taken back after an onboarding step', () => {
     );
     expect([...own.edits]).toEqual([['t1', '고친 댓글']]);
     expect(own.waitingThreads).toEqual([]);
+  });
+
+  it('show an edit waiting on its thread apart with the read’s failure when that read fails (오너 결정 2026-10-22 답 2)', () => {
+    const resolved = resolveCommentDrafts(
+      drafts({
+        edits: new Map([
+          ['r9', '고친 답글'],
+          ['s9', '다른 스레드의 고친 답글'],
+        ]),
+        editThreads: new Map([
+          ['r9', 't1'],
+          ['s9', 't2'],
+        ]),
+      }),
+      view([
+        threadWithMore('t1-50', mine('t1'), mine('r1', 't1')),
+        threadWithMore('t2-50', mine('t2'), mine('s1', 't2')),
+      ]),
+    );
+    expect(resolved.waitingThreads).toEqual(['t1', 't2']);
+    // Only the drafts waiting on the thread whose read failed, with the read's words as why.
+    expect(draftsHeldOnReadFailure(resolved.waitingEdits, 't1', copy.errNetwork)).toEqual([
+      {
+        key: { kind: 'edit', postId: post, commentId: 'r9', threadId: 't1' },
+        text: '고친 답글',
+        reason: copy.errNetwork,
+        place: { kind: 'comment', commentId: 'r9', threadId: 't1' },
+      },
+    ]);
+    // Nothing waits there any more (its box took it, or it is shown apart already): nothing.
+    expect(draftsHeldOnReadFailure([], 't1', copy.errNetwork)).toEqual([]);
+    expect(draftsHeldOnReadFailure(resolved.waitingEdits, 't3', copy.errNetwork)).toEqual([]);
   });
 });

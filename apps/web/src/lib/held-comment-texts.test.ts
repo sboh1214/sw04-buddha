@@ -310,6 +310,7 @@ describe('drafts taken back and held apart', () => {
         reason: copy.errCommentParentGone,
         text: '답글',
         focus: false,
+        shown: false,
       },
     ]);
   });
@@ -352,5 +353,54 @@ describe('the account on screen', () => {
         ]),
       ),
     ).toEqual([]);
+  });
+});
+
+describe('a text drawn once (ADR-0074 7-25)', () => {
+  const drawnOf = (state: HeldTextsState) =>
+    heldTextsOf(state).map(({ id, focus, shown: drawn }) => [id, focus, drawn]);
+  const takenBack = (id: string): HeldTextsEvent => ({
+    type: 'hold',
+    accountId: A,
+    texts: [{ id, place: THREAD, reason: copy.errNetwork, text: '수정' }],
+  });
+
+  it('is new until the section says it drew it: a later mount — its place moved — is not', () => {
+    const state = run([refused('box'), left('box'), takenBack('taken-back:x')]);
+    expect(drawnOf(state)).toEqual([
+      ['box', true, false],
+      ['taken-back:x', false, false],
+    ]);
+    const drawn = heldTextsAfter(state, { type: 'shown', ids: ['box', 'taken-back:x'] });
+    // Still the same text, its focus as it went: only no longer new.
+    expect(drawnOf(drawn)).toEqual([
+      ['box', true, true],
+      ['taken-back:x', false, true],
+    ]);
+    expect(shown(drawn)).toEqual(shown(state));
+    // Said again (React's development check runs an effect twice), or of a text not held: no change.
+    expect(heldTextsAfter(drawn, { type: 'shown', ids: ['box', 'gone'] })).toBe(drawn);
+    expect(heldTextsAfter(state, { type: 'shown', ids: [] })).toBe(state);
+  });
+
+  it('is new again once closed and held again, and for the next account', () => {
+    const drawn = run([takenBack('taken-back:x'), { type: 'shown', ids: ['taken-back:x'] }]);
+    const heldAgain = run(
+      [{ type: 'dismiss', id: 'taken-back:x' }, takenBack('taken-back:x')],
+      drawn,
+    );
+    expect(drawnOf(heldAgain)).toEqual([['taken-back:x', false, false]]);
+    const forB = run(
+      [
+        { type: 'account', accountId: B },
+        {
+          type: 'hold',
+          accountId: B,
+          texts: [{ id: 'taken-back:x', place: THREAD, reason: '까닭', text: '수정' }],
+        },
+      ],
+      drawn,
+    );
+    expect(drawnOf(forB)).toEqual([['taken-back:x', false, false]]);
   });
 });

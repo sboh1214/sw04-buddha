@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type CommentThread, type Post, type PublishedComment, api } from '@/lib/api';
 import { commentDraftLandedSince, commentDraftMoment } from '@/lib/comment-drafts';
 import {
+  REPLY_READ_ON_PAGES,
   type CommentPage,
   type CommentPages,
   type ReplyPage,
@@ -20,6 +21,7 @@ import {
   commentsInfiniteQueryOptions,
   createCommentOptions,
   deleteCommentOptions,
+  readMoreComments,
   readMoreReplies,
   updateCommentOptions,
 } from './use-comments';
@@ -42,6 +44,12 @@ const OTHER_POST = 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f';
 const OLDER = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d';
 /** A 댓글 the reader writes. */
 const MINE = 'f0e1d2c3-b4a5-4968-8776-655443322110';
+/** 대댓글 others wrote after MINE, while its thread was being read. */
+const LATER = [
+  'f1e1d2c3-b4a5-4968-8776-655443322111',
+  'f2e1d2c3-b4a5-4968-8776-655443322112',
+  'f3e1d2c3-b4a5-4968-8776-655443322113',
+];
 
 const published = (
   id: string,
@@ -157,6 +165,20 @@ const replyIds = (from: number, to: number) =>
     (_, index) => `00000000-0000-4000-8000-${String(from + index).padStart(12, '0')}`,
   );
 
+/**
+ * A fake reply route over `total` 대댓글 of the 댓글 above, two a page — the cursor `r<n>` reading
+ * from the n-th — and `last`, when given, after them (a 대댓글 just written), and `after` after it
+ * (others' answers written meanwhile).
+ */
+const fakeReplies =
+  (total: number, last?: string, after: readonly string[] = []) =>
+  ({ params }: RepliesRequest): ReplyPage => {
+    const all = [...replyIds(0, total), ...(last === undefined ? [] : [last]), ...after];
+    const from = Number(params.query.cursor.slice(1));
+    const to = Math.min(from + 2, all.length);
+    return replyPage(all.slice(from, to), to < all.length ? `r${String(to)}` : null);
+  };
+
 /** The client holding one 댓글 with `first` 대댓글 and the cursor `cursor` of the rest. */
 function seededThread(first: string[], cursor: string | null) {
   const queryClient = seeded();
@@ -190,6 +212,16 @@ const threadAnswered = (first: string[], cursor: string | null): CommentThread =
   replies: first.map((id) => published(id, commentId)),
   repliesNextCursor: cursor,
 });
+
+/** The refusal of a cursor sealed under a key changed since (ADR-0074 7-29). */
+const cursorRefused = () =>
+  Promise.reject(
+    new ApiError(400, {
+      code: 'VALIDATION_ERROR',
+      message: 'Not a cursor of this list',
+      details: [{ path: ['cursor'], message: 'Not a cursor of this list' }],
+    } as never),
+  );
 
 /** A read the test lets answer when it says: a 더 보기 still on its way. */
 function onItsWay() {
@@ -225,6 +257,40 @@ describe('a post’s comments', () => {
     ]);
     expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
     expect(options.getNextPageParam({ items: [], nextCursor: 'c3' })).toBe('c3');
+  });
+
+  it('read again from the first when 더 보기’s cursor no longer opens (ADR-0074 7-29), and the next page then', async () => {
+    // The page held its cursor from before the server's key changed: refused on every press, the
+    // pages read again carry fresh ones, and 더 보기 reads on from there — once.
+    const queryClient = seeded('c2');
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    const asked = getComments(({ params }) => {
+      switch (params.query.cursor) {
+        case undefined:
+          return { items: [thread(published(commentId))], nextCursor: 'fresh2' };
+        case 'fresh2':
+          return { items: [thread(published(OLDER))], nextCursor: null };
+        default:
+          return cursorRefused();
+      }
+    });
+    await readMoreComments(comments);
+    expect(asked).toEqual([{ cursor: 'c2' }, {}, { cursor: 'fresh2' }]);
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER]);
+    expect(comments.getCurrentResult().hasNextPage).toBe(false);
+    // Any other failure is the query's to show: nothing read again.
+    const failing = seeded('c2');
+    const other = new InfiniteQueryObserver(failing, commentsInfiniteQueryOptions(POST));
+    const stop = other.subscribe(() => undefined);
+    const tried = getComments(() =>
+      Promise.reject(new ApiError(404, { code: 'NOT_FOUND', message: 'x' } as never)),
+    );
+    await readMoreComments(other);
+    expect(tried).toEqual([{ cursor: 'c2' }]);
+    expect(other.getCurrentResult().isFetchNextPageError).toBe(true);
+    stop();
+    unsubscribe();
   });
 });
 
@@ -529,6 +595,183 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     expect(asked).toEqual([`replies:${commentId}:r2`, `replies:${commentId}:r4`]);
     expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 5), MINE], null]);
     expect(commentCountOf(queryClient)).toBe(2);
+  });
+
+  it('are read on five reply pages at most when the pages are read again: a thread opened further comes back to that (오너 결정 2026-10-22 답 1)', async () => {
+    // A fake server of 40 대댓글 two a page (the page's size is the server's; the cap counts
+    // requests). The screen had opened 14 — the first two and six pages more.
+    const queryClient = seededThread(replyIds(0, 14), 'r14');
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    const asked = getThreads(
+      () => ({ items: [threadAnswered(replyIds(0, 2), 'r2')], nextCursor: null }),
+      fakeReplies(40),
+    );
+    await comments.refetch();
+    const replyRequests = asked.filter((one) => one.startsWith('replies:'));
+    expect(replyRequests).toHaveLength(REPLY_READ_ON_PAGES);
+    expect(replyRequests).toEqual(
+      [2, 4, 6, 8, 10].map((from) => `replies:${commentId}:r${String(from)}`),
+    );
+    // The first two and five pages: the two pages past the cap go back behind '답글 더 보기'.
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 12), 'r12']);
+    // Read again, the same five: the bound holds on every read.
+    asked.length = 0;
+    await comments.refetch();
+    expect(asked.filter((one) => one.startsWith('replies:'))).toHaveLength(REPLY_READ_ON_PAGES);
+    unsubscribe();
+  });
+
+  it('are read on five reply pages for each thread, not five for the read: two threads opened further each come back to their first and five pages (오너 결정 2026-10-22 답 1)', async () => {
+    // Two threads on one page of 댓글, each opened to 14 of its 40 대댓글 (two a page): every one
+    // gets its own five pages — the owner's cap is per thread.
+    const replies: Record<string, string[]> = {
+      [commentId]: replyIds(0, 40),
+      [OLDER]: replyIds(100, 140),
+    };
+    const threadOf = (id: string, count: number, cursor: string): CommentThread => ({
+      comment: published(id),
+      replies: replies[id]!.slice(0, count).map((reply) => published(reply, id)),
+      repliesNextCursor: cursor,
+    });
+    const queryClient = seeded();
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), {
+      pages: [
+        { items: [threadOf(commentId, 14, 'r14'), threadOf(OLDER, 14, 'r14')], nextCursor: null },
+      ],
+      pageParams: [undefined],
+    });
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    const asked = getThreads(
+      () => ({ items: [threadOf(commentId, 2, 'r2'), threadOf(OLDER, 2, 'r2')], nextCursor: null }),
+      ({ params }) => {
+        const all = replies[params.path.commentId]!;
+        const from = Number(params.query.cursor.slice(1));
+        const to = Math.min(from + 2, all.length);
+        return {
+          items: all.slice(from, to).map((reply) => published(reply, params.path.commentId)),
+          nextCursor: to < all.length ? `r${String(to)}` : null,
+        };
+      },
+    );
+    await comments.refetch();
+    const pagesOf = (id: string) =>
+      [2, 4, 6, 8, 10].map((from) => `replies:${id}:r${String(from)}`);
+    expect(asked.filter((one) => one.startsWith('replies:'))).toEqual([
+      ...pagesOf(commentId),
+      ...pagesOf(OLDER),
+    ]);
+    expect(
+      commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).map((thread) => [
+        thread.comment.id,
+        thread.replies.map((reply) => reply.id),
+        thread.repliesNextCursor,
+      ]),
+    ).toEqual([
+      [commentId, replies[commentId]!.slice(0, 12), 'r12'],
+      [OLDER, replies[OLDER]!.slice(0, 12), 'r12'],
+    ]);
+    unsubscribe();
+  });
+
+  it('read the pages again when the thread’s cursor no longer opens (ADR-0074 7-29), and the next page from the fresh cursor', async () => {
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    const asked = getThreads(
+      () => ({ items: [threadAnswered(replyIds(0, 2), 'fresh2')], nextCursor: null }),
+      ({ params }) =>
+        params.query.cursor === 'fresh2' ? replyPage(replyIds(2, 4), 'fresh4') : cursorRefused(),
+    );
+    // Pressed once, it reads its page: not a button refused on every press until a reload.
+    await readMoreReplies(queryClient, POST, commentId);
+    expect(asked).toEqual([`replies:${commentId}:r2`, 'comments:', `replies:${commentId}:fresh2`]);
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), 'fresh4']);
+    unsubscribe();
+  });
+
+  it('throw a cursor’s refusal when the read again brings no fresh cursor, once: the next press reads again', async () => {
+    // No one on the page reads the pages (no observer): the read again is only marked.
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), cursorRefused);
+    await expect(readMoreReplies(queryClient, POST, commentId)).rejects.toMatchObject({
+      code: 'VALIDATION_ERROR',
+    });
+    expect(asked).toEqual([`replies:${commentId}:r2`]);
+    expect(queryClient.getQueryState(postCommentsKey(post))?.isInvalidated).toBe(true);
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 2), 'r2']);
+  });
+
+  it('a new 대댓글 past five unread reply pages goes last of those held, and ‘답글 더 보기’ brings it into place (오너 결정 2026-10-22 답 1)', async () => {
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(20, MINE));
+    await new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+    // Five pages read, the end not reached: as a read that failed — the pages dropped, the answer
+    // last of the 대댓글 held, the thread's cursor where it was.
+    expect(asked).toEqual([2, 4, 6, 8, 10].map((from) => `replies:${commentId}:r${String(from)}`));
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+    expect(commentCountOf(queryClient)).toBe(2);
+    // '답글 더 보기' to the end puts it after every older one.
+    for (let page = 0; page < 10; page += 1) await readMoreReplies(queryClient, POST, commentId);
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 20), MINE], null]);
+  });
+
+  it('a new 대댓글 whose thread ends within five unread reply pages stands in its place', async () => {
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(11, MINE));
+    await new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+    // The fifth page is the last (r10: the eleventh and the new one).
+    expect(asked).toHaveLength(REPLY_READ_ON_PAGES);
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 11), MINE], null]);
+  });
+
+  it('a new 대댓글 on the fifth unread reply page stands in its place though others answered after it (오너 결정 2026-10-22 답 1)', async () => {
+    // Another answer came after MINE while the pages were read: the fifth page holds MINE and
+    // still has a page after it. MINE was within the five pages — not past the cap.
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+    const asked = getThreads(
+      () => ({ items: [], nextCursor: null }),
+      fakeReplies(11, MINE, LATER.slice(0, 1)),
+    );
+    await new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+    expect(asked).toEqual([2, 4, 6, 8, 10].map((from) => `replies:${commentId}:r${String(from)}`));
+    // The pages kept, MINE after every older one, the later answer behind the thread's cursor.
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 11), MINE], 'r12']);
+    await readMoreReplies(queryClient, POST, commentId);
+    expect(repliesHeld(queryClient)).toEqual([
+      [...replyIds(0, 11), MINE, ...LATER.slice(0, 1)],
+      null,
+    ]);
+  });
+
+  it('a new 대댓글 reached before five unread reply pages stops the reading there: what came after stays behind ‘답글 더 보기’', async () => {
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(7, MINE, LATER));
+    await new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+    // The third page (r6: the seventh and MINE) holds it: no fourth page is asked for.
+    expect(asked).toEqual([2, 4, 6].map((from) => `replies:${commentId}:r${String(from)}`));
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 7), MINE], 'r8']);
+    expect(commentCountOf(queryClient)).toBe(2);
+    await readMoreReplies(queryClient, POST, commentId);
+    await readMoreReplies(queryClient, POST, commentId);
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 7), MINE, ...LATER], null]);
   });
 
   it('a new 대댓글 whose thread’s unread 대댓글 cannot be read goes last of those held: it is written', async () => {

@@ -67,7 +67,8 @@ export class PostCommentsController {
       `each with its first ${String(COMMENT_REPLIES_PAGE_SIZE)} 대댓글 oldest first and the ` +
       'cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted ' +
       '댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are ' +
-      'left out. A post that is gone is NOT_FOUND',
+      'left out. The cursors are opaque, sealed for their list: one that does not open is ' +
+      'VALIDATION_ERROR. A post that is gone is NOT_FOUND',
   })
   @ApiPageOf(commentThreadSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
@@ -132,8 +133,9 @@ export class CommentsController {
     summary:
       `The 대댓글 of a 댓글 after the cursor, oldest first, ${String(COMMENT_REPLIES_PAGE_SIZE)} ` +
       'a page — the first page is the one its post’s comment page carries. A deleted 대댓글 is ' +
-      'left out and a hidden one is its placeholder. NOT_FOUND for an unknown comment, a 대댓글 ' +
-      'and a 댓글 that is gone',
+      'left out and a hidden one is its placeholder. The cursor is opaque, sealed for this 댓글’s ' +
+      'list: another list’s, or one that does not open, is VALIDATION_ERROR. NOT_FOUND for an ' +
+      'unknown comment, a 대댓글 and a 댓글 that is gone',
   })
   @ApiPageOf(postCommentSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

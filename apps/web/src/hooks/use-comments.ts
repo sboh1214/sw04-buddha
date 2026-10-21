@@ -19,11 +19,13 @@ import {
 } from '@/lib/api';
 import { commentDraftLanded } from '@/lib/comment-drafts';
 import {
+  REPLY_READ_ON_PAGES,
   type CommentPage,
   type CommentPages,
   type ReplyPage,
   commentPageQuery,
   commentThreadsOf,
+  isCursorRefusal,
   isStaleThreadRefusal,
   postCommentsKey,
   threadReadsOn,
@@ -46,8 +48,9 @@ import { afterRefusal } from './use-posts';
  *
  * A page carries each 댓글 with its first 50 대댓글; '답글 더 보기' reads 50 more at a time into the
  * thread held (`readMoreReplies`, 오너 결정 2026-10-21), and every later read of the pages reads a
- * thread on as far as the screen had it (`threadsReadOn`) — so a refresh never takes away 대댓글
- * on screen, nor a box open on one.
+ * thread on as far as the screen had it (`threadsReadOn`) — so a refresh does not take away 대댓글
+ * on screen, nor a box open on one — five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정
+ * 2026-10-22 답 1).
  *
  * A write's answer goes into the pages held: an edit in place (`withEditedComment`), a deletion
  * as its placeholder or out (`withoutComment`), a 대댓글 at the end of its 댓글 (`withNewComment`).
@@ -55,7 +58,8 @@ import { afterRefusal } from './use-posts';
  * (`readOnToTheEnd`): put at the end of the pages held, it would stand before older 댓글 still
  * unread, and a later read of as many pages as were held would leave it out. A new 대댓글 is the
  * newest of its thread: while 대댓글 of the thread are unread, they are read to the end first
- * (`readOnReplies`), for the same reason.
+ * (`readOnReplies`), for the same reason — five reply pages at most; past them it stands at the end
+ * of the 대댓글 held until '답글 더 보기' brings it into place.
  *
  * Before an answer is written — a write's, or the page of 대댓글 '답글 더 보기' read — a read of the
  * pages still on its way is cancelled (`writePages`, A-M5-18, the disputes' seed): it left before,
@@ -74,7 +78,9 @@ import { afterRefusal } from './use-posts';
  * which the post page answers by drawing its 404 once no text is held apart (post-screen.tsx,
  * 오너 결정 2026-10-21 답 1). A refusal that says the
  * thread on screen is out of date reads the post and its comments again, and so does a '답글 더
- * 보기' answered NOT_FOUND (`readThreadsAgain`).
+ * 보기' answered NOT_FOUND (`readThreadsAgain`). A 더 보기 whose cursor no longer opens (the key it
+ * was sealed with changed, ADR-0074 7-29) reads the pages again from the first for fresh cursors,
+ * and its page then (`readMoreReplies`, `readMoreComments`).
  */
 
 /**
@@ -131,11 +137,12 @@ export async function fetchReplyPage(
 /**
  * A page of the post's comments as read, each thread read on through its 대댓글 until it holds as
  * many as the pages held now do (`threadReadsOn`): what '답글 더 보기' brought stays on screen — and
- * an edit or a reply box open on it, which would otherwise go as its comment left the pages. A
- * reply page that fails fails the page, so the read keeps what is held; a read cancelled (`signal`)
- * asks for no reply page after. Costs, per thread read on, the reply pages the reader had opened —
- * all of a thread once a new 대댓글 read it to the end (`readOnReplies`), one request per 50 대댓글
- * on every later read of the pages (ADR-0074 7-28).
+ * an edit or a reply box open on it, which would otherwise go as its comment left the pages — up
+ * to REPLY_READ_ON_PAGES reply pages a thread (오너 결정 2026-10-22 답 1): a thread opened further
+ * than its first 50 and 250 more comes back to that, the rest behind '답글 더 보기' again. A reply
+ * page that fails fails the page, so the read keeps what is held; a read cancelled (`signal`) asks
+ * for no reply page after. Costs, per thread read on, the reply pages the reader had opened, five
+ * at most — one request per 50 대댓글 on every later read of the pages (ADR-0074 7-28).
  */
 async function threadsReadOn(
   client: QueryClient,
@@ -153,9 +160,11 @@ async function threadsReadOn(
   for (const fresh of page.items) {
     let thread = fresh;
     const before = held.get(thread.comment.id);
-    while (threadReadsOn(thread, before) && thread.repliesNextCursor !== null) {
+    for (let pagesRead = 0; threadReadsOn(thread, before, pagesRead); pagesRead += 1) {
+      const cursor = thread.repliesNextCursor;
+      if (cursor === null) break;
       signal?.throwIfAborted();
-      const more = await fetchReplyPage(thread.comment.id, thread.repliesNextCursor, signal);
+      const more = await fetchReplyPage(thread.comment.id, cursor, signal);
       if (more.items.length === 0) break;
       thread = threadWithReplies(thread, more);
     }
@@ -182,29 +191,74 @@ async function readThreadsAgain(queryClient: QueryClient, postId: string) {
  * NOT_FOUND says the 댓글 left every view (deleted with nothing under it any more, or its post
  * gone): the thread on screen is old, so the post and its comments are read again — the thread
  * goes, and a box or a draft on it with it, by the rules of a place gone — rather than a button
- * that can only be answered the same. Throws when the read fails otherwise, for the button to say
- * so and be pressed again.
+ * that can only be answered the same. A cursor the server no longer opens (`isCursorRefusal`: the
+ * key it was sealed with changed, ADR-0074 7-29) would be refused on every press too: the pages are
+ * read again from the first — fresh cursors, the thread read on as far as it was — and the next
+ * page then read once from the thread's fresh cursor; should that read again not bring one, the
+ * refusal is thrown, and the next press reads again. Throws when the read fails otherwise, for the
+ * button to say so and be pressed again.
  */
 export async function readMoreReplies(
   queryClient: QueryClient,
   postId: string,
   threadId: string,
 ): Promise<void> {
-  const id = postId.toLowerCase();
-  const thread = commentThreadsOf(queryClient.getQueryData<CommentPages>(postCommentsKey(id))).find(
-    (held) => held.comment.id === threadId,
-  );
-  const from = thread?.repliesNextCursor ?? null;
+  return readMoreRepliesOnce(queryClient, postId.toLowerCase(), threadId, false);
+}
+
+/** The cursor of the thread `threadId` as the pages of `postId` hold it; null: nothing more. */
+function heldRepliesCursor(queryClient: QueryClient, postId: string, threadId: string) {
+  const thread = commentThreadsOf(
+    queryClient.getQueryData<CommentPages>(postCommentsKey(postId)),
+  ).find((held) => held.comment.id === threadId);
+  return thread?.repliesNextCursor ?? null;
+}
+
+async function readMoreRepliesOnce(
+  queryClient: QueryClient,
+  postId: string,
+  threadId: string,
+  readAgain: boolean,
+): Promise<void> {
+  const from = heldRepliesCursor(queryClient, postId, threadId);
   if (from === null) return;
   let page: ReplyPage;
   try {
     page = await fetchReplyPage(threadId, from);
   } catch (error) {
-    if (!isApiError(error, 'NOT_FOUND')) throw error;
-    await readThreadsAgain(queryClient, id);
-    return;
+    if (isApiError(error, 'NOT_FOUND')) {
+      await readThreadsAgain(queryClient, postId);
+      return;
+    }
+    if (!isCursorRefusal(error) || readAgain) throw error;
+    await queryClient.invalidateQueries({ queryKey: postCommentsKey(postId), exact: true });
+    // The read again failed (the thread holds the same cursor): the refusal says so.
+    if (heldRepliesCursor(queryClient, postId, threadId) === from) throw error;
+    return readMoreRepliesOnce(queryClient, postId, threadId, true);
   }
-  await writePages(queryClient, id, (held) => withMoreReplies(held, threadId, from, page));
+  await writePages(queryClient, postId, (held) => withMoreReplies(held, threadId, from, page));
+}
+
+/**
+ * The two reads of the comment list's 더 보기 (`useInfiniteQuery`'s, or its observer's): the next
+ * page, and every page read again from the first.
+ */
+export interface CommentListReads {
+  fetchNextPage: () => Promise<{ isFetchNextPageError: boolean; error: unknown }>;
+  refetch: () => Promise<{ isError: boolean }>;
+}
+
+/**
+ * The comment list's 더 보기: the next page of 댓글 from the cursor the last page held. A cursor the
+ * server no longer opens (`isCursorRefusal`, ADR-0074 7-29) would be refused on every press: the
+ * pages are read again from the first, with fresh cursors, and the next page then once. Any other
+ * failure is the query's to show (#47 brings the list its notice).
+ */
+export async function readMoreComments(comments: CommentListReads): Promise<void> {
+  const read = await comments.fetchNextPage();
+  if (!read.isFetchNextPageError || !isCursorRefusal(read.error)) return;
+  // Read again, the pages end where they end: with no page after them, 더 보기 asks for nothing.
+  if (!(await comments.refetch()).isError) await comments.fetchNextPage();
 }
 
 /** '답글 더 보기' of one thread: pressed, pending and failed as a mutation. */
@@ -215,16 +269,18 @@ export function useMoreReplies(postId: string, threadId: string) {
 
 /**
  * A new 대댓글 where 작성 순 puts it (#45-2): the last of its thread. While the thread has 대댓글
- * still unread, they are read to the end first and the answer is then in place among them (the last
- * page holds it) — otherwise it would stand before older 대댓글 the reader had not opened. Costs the
- * reads '답글 더 보기' would have made, one after another — one per 50 대댓글 unread, with no cap,
- * in the reader's address limit (100 a minute) with every other request of the page; and every
- * later read of the pages reads the whole thread again (`threadsReadOn`). ADR-0074 7-28 has the
- * numbers and the owner's open question. A read that fails — the limit's 429 among them — or a
- * thread read again meanwhile, puts the answer at the end of the replies held instead
- * (`withNewComment`) — it is written, and saying otherwise would invite a second. The pages read
- * before the failure are dropped, not kept: held, each later read of the pages would ask for them
- * all again.
+ * still unread, they are read up to the page that holds the answer first and the answer is then in
+ * place among them — otherwise it would stand before older 대댓글 the reader had not opened. That
+ * page is usually the last; when others answered meanwhile it is not, and the reading stops there all
+ * the same: what came after the answer stays behind the thread's cursor ('답글 더 보기'). Costs the
+ * reads '답글 더 보기' would have made, one after another — one per 50 대댓글 unread, at most
+ * REPLY_READ_ON_PAGES (오너 결정 2026-10-22 답 1), in the reader's address limit (100 a minute) with
+ * every other request of the page. A thread whose answer is not within that many pages, a read that
+ * fails — the limit's 429 among them — or a thread read again meanwhile, puts the answer at the end
+ * of the replies held instead (`withNewComment`) — it is written, and saying otherwise would invite
+ * a second — and '답글 더 보기' brings it into its place with the page that holds it. The pages read
+ * are dropped then, not kept: the screen stays as the reader left it, with the new 대댓글 under what
+ * they were reading, and a later read of the pages has less to read on (`threadsReadOn`).
  */
 async function readOnReplies(queryClient: QueryClient, postId: string, reply: PublishedComment) {
   const threadId = reply.parentId;
@@ -236,11 +292,16 @@ async function readOnReplies(queryClient: QueryClient, postId: string, reply: Pu
   const pages: ReplyPage[] = [];
   if (from !== null) {
     try {
-      for (let cursor: string | null = from; cursor !== null;) {
-        const page = await fetchReplyPage(threadId, cursor);
+      let cursor: string | null = from;
+      while (cursor !== null && pages.length < REPLY_READ_ON_PAGES) {
+        const page: ReplyPage = await fetchReplyPage(threadId, cursor);
         pages.push(page);
-        cursor = page.items.length === 0 ? null : page.nextCursor;
+        // Reached: the answer is in its place, and what came after it stays behind the cursor.
+        const reached = page.items.some((item) => item.id === reply.id);
+        cursor = page.items.length === 0 || reached ? null : page.nextCursor;
       }
+      // Five pages read and the answer not among them: as a read that failed.
+      if (cursor !== null) pages.length = 0;
     } catch {
       pages.length = 0;
     }

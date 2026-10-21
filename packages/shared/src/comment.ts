@@ -283,7 +283,13 @@ export const COMMENT_PAGE_LIMIT = 20;
  */
 export const COMMENT_REPLIES_PAGE_SIZE = 50;
 
-/** The keyset cursor of a comment page or a reply page, as `cursorQuerySchema`'s. */
+/**
+ * The cursor of a comment page or a reply page, bounded as `cursorQuerySchema`'s. Opaque, and more
+ * than the other lists' (오너 결정 2026-10-22, ADR-0074): the API seals the keyset of the page's
+ * last row for its list — the post's 댓글, or one 댓글's 대댓글 — so a page ending on a placeholder
+ * does not tell its time; one the API did not seal for that list is a VALIDATION_ERROR naming
+ * `cursor` (apps/api comment-cursor.ts).
+ */
 const commentCursorSchema = z.string().min(1).max(200).optional();
 
 /**
@@ -292,7 +298,9 @@ const commentCursorSchema = z.string().min(1).max(200).optional();
  * document spells both parameters out.
  */
 export const commentsQuerySchema = z.object({
-  cursor: commentCursorSchema.describe('Opaque; `meta.nextCursor` of the previous page.'),
+  cursor: commentCursorSchema.describe(
+    'Opaque, sealed for this post’s list; `meta.nextCursor` of the previous page.',
+  ),
   limit: z.coerce.number().int().min(1).max(COMMENT_PAGE_LIMIT).default(COMMENT_PAGE_LIMIT),
 });
 export type CommentsQuery = z.infer<typeof commentsQuerySchema>;
@@ -303,7 +311,8 @@ export type CommentsQuery = z.infer<typeof commentsQuerySchema>;
  */
 export const commentRepliesQuerySchema = z.object({
   cursor: commentCursorSchema.describe(
-    'Opaque; the thread’s `repliesNextCursor`, or `meta.nextCursor` of the previous page.',
+    'Opaque, sealed for this 댓글’s list; the thread’s `repliesNextCursor`, or `meta.nextCursor` ' +
+      'of the previous page.',
   ),
 });
 export type CommentRepliesQuery = z.infer<typeof commentRepliesQuerySchema>;
@@ -322,8 +331,8 @@ export const commentThreadSchema = z
       .string()
       .nullable()
       .describe(
-        'The cursor of GET /comments/:commentId/replies for the 대댓글 after these; null when ' +
-          'every one is here',
+        'The cursor of GET /comments/:commentId/replies for the 대댓글 after these (opaque, ' +
+          'sealed for this 댓글’s list); null when every one is here',
       ),
   })
   .meta({ id: 'CommentThread' });
