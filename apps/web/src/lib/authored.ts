@@ -1,3 +1,4 @@
+import { POST_EXCERPT_MAX_LENGTH, codePointLength } from '@buddha/shared';
 import { copy } from '@/copy';
 import type { CommentedPost, HiddenNotice, ReportReason } from './api';
 import { postFirstLine } from './posts';
@@ -170,21 +171,67 @@ export function hiddenNoticeView(hidden: HiddenNotice): {
 export type HiddenItem =
   { tab: 'posts'; title: string | null; excerpt: string } | { tab: 'comments'; body: string };
 
+/** What ends a hidden item's name that was cut (owner decision 2026-10-22, 4th). */
+const NAME_CUT = '…';
+
+/** The first non-empty line of a text, trimmed, whole — `postFirstLine` before its cut. */
+function firstLineOf(text: string): string {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed !== '') return trimmed;
+  }
+  return '';
+}
+
+/**
+ * The longest start of `text` of at most `max` code points that ends between two characters as
+ * they are seen (grapheme clusters, `Intl.Segmenter`): a cut never leaves part of an emoji's ZWJ
+ * sequence, a flag's pair of letters or a letter's combining mark. Where `Intl.Segmenter` is
+ * missing (browsers before it), the first `max` code points — never half of a surrogate pair.
+ */
+function cutAtCharacter(text: string, max: number): string {
+  if (typeof Intl.Segmenter !== 'function') return Array.from(text).slice(0, max).join('');
+  let out = '';
+  let count = 0;
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(
+    text,
+  )) {
+    count += codePointLength(segment);
+    if (count > max) break;
+    out += segment;
+  }
+  return out;
+}
+
 /**
  * What names a hidden item where MY's 삭제 has to say which it deletes — its confirm dialog and the
  * button's accessible name (owner decision 2026-10-22, 3rd: «MY 내 글의 숨긴 항목 삭제 확인창 →
  * 항목을 말함(글 제목/첫 줄·댓글 첫 줄, 단추 이름에도)»). A post as its card's heading names it —
  * its title, or the first line of its text when it has none (post-card.tsx) — and a 댓글 or 대댓글
  * by the first line of its own text: its post's would name every hidden comment under one post
- * alike. Either is at most POST_EXCERPT_MAX_LENGTH (300) characters, as a card's preview is:
- * `postFirstLine` takes the first line of `postExcerpt`, which cuts the text there (a post's
- * `excerpt` comes so cut from the server), so a longer first line — a comment's can be 1,000
- * characters on one line — is named by its first 300 code points, cut where they end.
+ * alike. A first line is at most POST_EXCERPT_MAX_LENGTH (300) code points, as a card's preview is,
+ * and one cut there ends in '…' to say so (owner decision 2026-10-22, 4th); a line within the cap
+ * is whole and has none. A comment's line comes whole (one line can be 1,000 characters) and is
+ * cut here, between two characters as they are seen (`cutAtCharacter`), the spaces before the cut
+ * dropped. An untitled post's `excerpt` comes from the server already cut at the cap in code
+ * points (`postExcerpt`, the card's), and the web cannot see past it: an excerpt with no line
+ * break that reaches the cap is a first line cut there, and ends in '…' — as does a first line of
+ * exactly 300 code points, which the excerpt cannot tell apart — and it ends where the server cut
+ * it (never inside a surrogate pair, but maybe inside an emoji's ZWJ sequence). A title is never
+ * cut: it is at most 100 characters (POST_TITLE_MAX_LENGTH).
  */
 export function hiddenItemName(item: HiddenItem): string {
-  return item.tab === 'posts'
-    ? (item.title ?? postFirstLine(item.excerpt))
-    : postFirstLine(item.body);
+  if (item.tab === 'posts') {
+    if (item.title !== null) return item.title;
+    const line = postFirstLine(item.excerpt);
+    const cut =
+      !item.excerpt.includes('\n') && codePointLength(item.excerpt) >= POST_EXCERPT_MAX_LENGTH;
+    return cut ? `${line}${NAME_CUT}` : line;
+  }
+  const line = firstLineOf(item.body);
+  return codePointLength(line) > POST_EXCERPT_MAX_LENGTH
+    ? `${cutAtCharacter(line, POST_EXCERPT_MAX_LENGTH).trimEnd()}${NAME_CUT}`
+    : line;
 }
 
 /**

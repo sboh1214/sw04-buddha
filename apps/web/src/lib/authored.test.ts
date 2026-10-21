@@ -195,25 +195,80 @@ describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
     );
   });
 
-  it('names an item whose first line is longer by its first 300 characters, as a card’s preview is cut (ADR-0080 7-19)', () => {
+  it('names an item whose first line is longer by its first 300 characters and an ellipsis (owner decision 2026-10-22, 4th; ADR-0080 7-19)', () => {
     // The cap the dialog's line and the button's name keep to, and what the ADR says it is.
     expect(POST_EXCERPT_MAX_LENGTH).toBe(300);
-    // A comment can be 1,000 characters on one line (#45-3): its first 300, cut where they end,
-    // without the rest of the line or the lines after it.
+    // A comment can be 1,000 characters on one line (#45-3): its first 300, cut where they end and
+    // marked as cut, without the rest of the line or the lines after it.
     const line = `${'가'.repeat(150)}${'a'.repeat(850)}`;
-    expect(hiddenItemName({ tab: 'comments', body: `${line}\n둘째 줄` })).toBe(line.slice(0, 300));
+    expect(hiddenItemName({ tab: 'comments', body: `${line}\n둘째 줄` })).toBe(
+      `${line.slice(0, 300)}…`,
+    );
     expect(hiddenDeleteName({ tab: 'comments', body: line })).toBe(
-      `${line.slice(0, 300)} ${copy.commentDelete}`,
+      `${line.slice(0, 300)}… ${copy.commentDelete}`,
     );
     // Counted in code points, as a comment's length is: an emoji is one.
-    expect([...hiddenItemName({ tab: 'comments', body: '😀'.repeat(400) })]).toHaveLength(300);
-    // A first line within the cap is whole, however long the lines after it.
+    expect(hiddenItemName({ tab: 'comments', body: '😀'.repeat(400) })).toBe(
+      `${'😀'.repeat(300)}…`,
+    );
+    // The mark only where a cut is: a first line of 300 or fewer is whole and bare, however long
+    // the lines after it.
+    expect(
+      hiddenItemName({ tab: 'comments', body: `${'a'.repeat(300)}\n${'b'.repeat(900)}` }),
+    ).toBe('a'.repeat(300));
     expect(hiddenItemName({ tab: 'comments', body: `짧은 줄\n${'b'.repeat(900)}` })).toBe(
       '짧은 줄',
     );
-    // An untitled post's excerpt comes cut to the same 300 from the server; the web cuts no shorter.
+    // A cut just after a space ends at the word before it, the mark beside it.
+    expect(hiddenItemName({ tab: 'comments', body: `${'a'.repeat(299)} ${'b'.repeat(9)}` })).toBe(
+      `${'a'.repeat(299)}…`,
+    );
+    // An untitled post's excerpt comes cut to the same 300 from the server, the web cuts no shorter:
+    // one that reaches the cap on one line was cut there, one with a line break or shorter was not.
     expect(hiddenItemName({ tab: 'posts', title: null, excerpt: 'a'.repeat(300) })).toBe(
-      'a'.repeat(300),
+      `${'a'.repeat(300)}…`,
+    );
+    expect(hiddenDeleteName({ tab: 'posts', title: null, excerpt: 'a'.repeat(300) })).toBe(
+      `${'a'.repeat(300)}… ${copy.postDelete}`,
+    );
+    expect(
+      hiddenItemName({
+        tab: 'posts',
+        title: null,
+        excerpt: `${'a'.repeat(200)}\n${'b'.repeat(99)}`,
+      }),
+    ).toBe('a'.repeat(200));
+    expect(hiddenItemName({ tab: 'posts', title: null, excerpt: 'a'.repeat(299) })).toBe(
+      'a'.repeat(299),
+    );
+    // A title is never cut (at most 100 characters), however long the text under it.
+    expect(hiddenItemName({ tab: 'posts', title: '금리 전망', excerpt: 'a'.repeat(300) })).toBe(
+      '금리 전망',
+    );
+  });
+
+  it('cuts a long first line between two characters as they are seen, never inside an emoji (owner decision 2026-10-22, 4th)', () => {
+    // Four people joined by three ZWJs: seven code points, one character on screen.
+    const family = '👨‍👩‍👧‍👦';
+    expect([...family]).toHaveLength(7);
+    // 298 + 7 is past 300: the family is left out whole, not cut after its first person or two.
+    expect(
+      hiddenItemName({ tab: 'comments', body: `${'a'.repeat(298)}${family}${'b'.repeat(10)}` }),
+    ).toBe(`${'a'.repeat(298)}…`);
+    // 293 + 7 is 300: the family ends within the cap and stays whole.
+    expect(
+      hiddenItemName({ tab: 'comments', body: `${'a'.repeat(293)}${family}${'b'.repeat(10)}` }),
+    ).toBe(`${'a'.repeat(293)}${family}…`);
+    // A flag's pair of regional indicators, and a letter with its combining mark, likewise.
+    expect(hiddenItemName({ tab: 'comments', body: `${'a'.repeat(299)}🇰🇷b` })).toBe(
+      `${'a'.repeat(299)}…`,
+    );
+    expect(hiddenItemName({ tab: 'comments', body: `${'a'.repeat(299)}e\u0301b` })).toBe(
+      `${'a'.repeat(299)}…`,
+    );
+    // An emoji outside the basic plane is one code point in two UTF-16 units, never split.
+    expect(hiddenItemName({ tab: 'comments', body: `${'a'.repeat(299)}😀😀` })).toBe(
+      `${'a'.repeat(299)}😀…`,
     );
   });
 

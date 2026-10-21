@@ -52,10 +52,11 @@ const WORDS = {
  * warning alone as its description (`Dialog.Description`, which Ark points `aria-describedby` at,
  * as the other two dialogs do) — a member's line seldom ends in a stop, and read as one
  * description with the warning it would run on into '삭제한 …' (ADR-0080 7-19). The item is at
- * most the first 300 characters of its text (`hiddenItemName`: `postFirstLine`, `postExcerpt`'s
- * cut), so a longer first line — a comment's can be 1,000 characters — is named by its first 300;
- * on screen it keeps to the three lines a comment's card shows, a cut of the look only, so a
- * screen reader hears all of those 300 and nothing past them.
+ * most the first 300 characters of its first line, as a card's preview is (`hiddenItemName`,
+ * POST_EXCERPT_MAX_LENGTH), so a longer one — a comment's can be 1,000 characters — is named by
+ * its first 300 and a '…' that says it was cut (owner decision 2026-10-22, 4th), in the dialog and
+ * in the button's name alike; on screen it keeps to the three lines a comment's card shows, a cut
+ * of the look only, so a screen reader hears all of those 300 and the '…', and nothing past them.
  *
  * The account the screen shows rides along (`expectedAccountId`, A-PG-24): the button waits for
  * `GET /me` to say which (disabled until then). The outcome is said from the write's promise, not

@@ -505,17 +505,18 @@ test.describe('작성자별 글·댓글', () => {
     // Each 삭제 says which item it deletes, in its dialog and in its accessible name (owner decision
     // 2026-10-22, 3rd; ADR-0080 7-19): a post by its title — or its first line, having none — and
     // a comment by its own first line, at most its first 300 characters (a card's preview's cut,
-    // POST_EXCERPT_MAX_LENGTH; all of these are one UTF-16 unit each).
+    // POST_EXCERPT_MAX_LENGTH; all of these are one UTF-16 unit and one character each), and a
+    // '…' after a line so cut (owner decision 2026-10-22, 4th) — the long comment's alone.
     const itemName = new Map<string, string>([
       [newestPost, `글 3 ${tag}`],
       [middlePost, `글 2 ${tag}`],
-      [middleComment, longLine.slice(0, 300)],
+      [middleComment, `${longLine.slice(0, 300)}…`],
       [newestComment, `댓글 3 ${tag}`],
     ]);
     const deleteName = new Map<string, string>([
       [newestPost, `글 3 ${tag} ${copy.postDelete}`],
       [middlePost, `글 2 ${tag} ${copy.postDelete}`],
-      [middleComment, `${longLine.slice(0, 300)} ${copy.commentDelete}`],
+      [middleComment, `${longLine.slice(0, 300)}… ${copy.commentDelete}`],
       [newestComment, `댓글 3 ${tag} ${copy.commentDelete}`],
     ]);
     const isMyListRead = (url: URL) =>
@@ -783,7 +784,7 @@ test.describe('작성자별 글·댓글', () => {
     await itemOf(myComments, commentCard(middleComment))
       .getByTestId('authored-hidden-delete')
       .click();
-    await expectItemSaid(middleComment, copy.commentDeleteTitle, copy.commentDeleteBody); // its first line's first 300
+    await expectItemSaid(middleComment, copy.commentDeleteTitle, copy.commentDeleteBody); // its first line's first 300 and '…'
     const refusedComment = refusal(`/api/v1/comments/${middleComment}/delete`);
     await page.getByTestId('authored-hidden-delete-confirm').click();
     expect((await refusedComment).status()).toBe(404);
