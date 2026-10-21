@@ -136,15 +136,18 @@ export function withMoreReplies(
 }
 
 /**
- * The reply pages one read on reads at most for one thread (오너 결정 2026-10-22 답 1: 5 pages, 250
- * 대댓글): a new 대댓글's read of its thread's unread 대댓글 (`readOnReplies`) and a read of the
+ * The reply pages one read on reads at most for one thread (오너 결정 2026-10-21 (2차) 답 1: 5 pages,
+ * 250 대댓글): a new 대댓글's read of its thread's unread 대댓글 (`readOnReplies`) and a read of the
  * comment pages reading a thread on as far as the screen had it (`threadsReadOn`), both in
- * hooks/use-comments.ts. Each page is one request in the reader's address limit (100 a minute with
- * every other request of the page), and neither read had a bound before: a thread of thousands could
- * spend the limit — and the address's other requests with it — on one reply or one focus of the
- * window (ADR-0074 7-28). Past it: a new 대댓글 not reached within it stands at the end of the 대댓글
- * held, and a thread read again holds its first 50 and the 250 after them — '답글 더 보기' brings
- * the rest, and the new 대댓글 into its place, as after a read that failed.
+ * hooks/use-comments.ts — and the post page's read on through a thread for an edit draft taken back
+ * after an onboarding step (`editDraftsReadOn`, 오너 결정 2026-10-22 답 5). Each page is one request
+ * in the reader's address limit (100 a minute with every other request of the page), and none of
+ * these reads had a bound before: a thread of thousands could spend the limit — and the address's
+ * other requests with it — on one reply, one focus of the window or one draft (ADR-0074 7-28).
+ * Past it: a new 대댓글 not reached within it stands at the end of the 대댓글 held, and a thread
+ * read again holds its first 50 and the 250 after them — '답글 더 보기' brings the rest, and the new
+ * 대댓글 into its place, as after a read that failed; an edit draft not found within it is shown
+ * apart, with why (`copy.errCommentEditNotRead`).
  */
 export const REPLY_READ_ON_PAGES = 5;
 
@@ -153,8 +156,8 @@ export const REPLY_READ_ON_PAGES = 5;
  * 대댓글 as the screen did (`held`, the same thread before the read) — so a read of the comment
  * pages (the window's focus, 30 seconds, a reconnection, a write's read) does not take away what
  * '답글 더 보기' brought, nor a box open on it — up to REPLY_READ_ON_PAGES pages read on
- * (`pagesRead`, 오너 결정 2026-10-22 답 1): past them, what the screen held beyond goes back behind
- * '답글 더 보기'. Whether one more page is to be read.
+ * (`pagesRead`, 오너 결정 2026-10-21 (2차) 답 1): past them, what the screen held beyond goes back
+ * behind '답글 더 보기'. Whether one more page is to be read.
  */
 export function threadReadsOn(
   fresh: CommentThread,
@@ -568,12 +571,12 @@ export type CommentsPostState = Post['state'] | 'gone';
  * placeholder or out of the view, the comment edited hidden or out of it. A box gone from a thread
  * on screen went with that thread's pages read, so one not among them is gone — save an edit of a
  * 대댓글 whose thread now holds fewer than the screen did, 대댓글 still unread after them: a read of
- * the pages reads a thread on five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정 2026-10-22 답
- * 1), so the 대댓글 may be past them as well as deleted, and the words say only that it is not
- * among those read (ADR-0074 7-30). What a held text says for a box with no write that went because
- * its place changed (오너 결정 2026-10-21 답 2), and when the refusal its box heard was about
- * something else — a network failure, say — and the box went later because its thread changed
- * (`heldTextsOf`).
+ * the pages reads a thread on five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정 2026-10-21
+ * (2차) 답 1), so the 대댓글 may be past them as well as deleted, and the words — the owner's
+ * (오너 결정 2026-10-22 답 3) — say it may be either (ADR-0074 7-30). What a held text says for a
+ * box with no write that went because its place changed (오너 결정 2026-10-21 답 2), and when the
+ * refusal its box heard was about something else — a network failure, say — and the box went later
+ * because its thread changed (`heldTextsOf`).
  */
 export function goneBoxReason(
   place: HeldTextPlace,
@@ -637,8 +640,9 @@ export interface ResolvedCommentDrafts {
   waitingThreads: readonly string[];
   /**
    * The edit drafts waiting on those threads, each with its place in its thread: shown apart, with
-   * why, should the read on through its thread fail (오너 결정 2026-10-22 답 2,
-   * `draftsHeldOnReadFailure`).
+   * why, should the read on through its thread fail (오너 결정 2026-10-21 (2차) 답 2,
+   * `draftsHeldOnReadFailure`) or not find its comment within REPLY_READ_ON_PAGES pages (오너 결정
+   * 2026-10-22 답 5, `editDraftsReadOn`).
    */
   waitingEdits: readonly WaitingEditDraft[];
 }
@@ -652,10 +656,12 @@ export interface WaitingEditDraft {
 
 /**
  * The edit drafts that waited on the thread `threadId`'s 대댓글 still unread, once the read on
- * through them failed (오너 결정 2026-10-22 답 2): shown apart like a held text — the text, why
- * (`reason`, the read's failure in the words '답글 더 보기' says it in) — until the writer closes it,
- * rather than waiting unseen behind a button. Nothing for a draft no longer waiting: one its box
- * took meanwhile, or one shown apart already.
+ * through them failed (오너 결정 2026-10-21 (2차) 답 2): shown apart like a held text — the text,
+ * why (`reason`, the read's failure in the words '답글 더 보기' says it in — 오너 결정 2026-10-22
+ * 답 4) — until the writer closes it, rather than waiting unseen behind a button; and, alike, once
+ * it read REPLY_READ_ON_PAGES pages without finding them (`editDraftsReadOn`, 오너 결정 2026-10-22
+ * 답 5). Nothing for a draft no longer waiting: one its box took meanwhile, or one shown apart
+ * already.
  */
 export function draftsHeldOnReadFailure(
   waiting: readonly WaitingEditDraft[],
@@ -668,6 +674,72 @@ export function draftsHeldOnReadFailure(
 }
 
 /**
+ * Where a thread stands for the read on below: the 댓글 and the cursor it would read from — what a
+ * read that failed is kept by (`editDraftsReadOn`'s `failed`).
+ */
+export function editDraftReadOnMark(thread: CommentThread): string {
+  return `${thread.comment.id}:${String(thread.repliesNextCursor)}`;
+}
+
+/** The next step of the read on for edit drafts taken back (`editDraftsReadOn`). */
+export interface EditDraftsReadOn {
+  /** The thread to read one more reply page of ('답글 더 보기' pressed for the writer), if any. */
+  read: CommentThread | undefined;
+  /**
+   * The drafts shown apart, with why: those of a thread whose read from where it stands failed
+   * (the read's failure), and those its thread did not show within REPLY_READ_ON_PAGES pages.
+   */
+  past: UnplacedCommentDraft[];
+}
+
+/**
+ * The post page's read on through a thread for the edit drafts taken back after an onboarding step
+ * that wait on its 대댓글 still unread (`waitingThreads`, `waitingEdits` — 오너 결정 2026-10-21
+ * '답글 더 보기'), one step: the next thread to read a reply page of — one with a cursor and under
+ * REPLY_READ_ON_PAGES pages read for these drafts (`pagesRead`) — and the drafts to show apart until
+ * the writer closes them. Those of a thread whose read failed from the cursor it still holds
+ * (`failed`, by `editDraftReadOnMark`) go with that failure as why (오너 결정 2026-10-21 (2차) 답 2
+ * and 2026-10-22 답 4 — the caller shows them as the read fails; this is for the drafts it could not
+ * see then, the comment pages being read again, say), and that cursor is not read again; those of a
+ * thread that has read that many pages and still has 대댓글 unread go with
+ * '고치던 답글을 목록에서 찾지 못했습니다. 지워졌거나 아직 불러오지 않은 답글입니다.' (오너 결정
+ * 2026-10-22 답 5 and 답 3: the read stops there as a new 대댓글's does — five reply pages at
+ * most, 250 대댓글 — rather than read as far as the 대댓글 is). Any other thread waiting is read on,
+ * from a cursor read before too (a read whose page the thread did not take — read again meanwhile —
+ * or one of an earlier set of drafts taken back): the pages bound it, and nothing waits unseen. A
+ * draft whose thread is read to its end is no longer waiting (`resolveCommentDrafts` says it is
+ * gone), nor is one its box took. The caller reads one thread at a time and asks again after each: a
+ * draft found on the page just read waits no more by then, so the fifth page's comment opens its box
+ * rather than being shown apart.
+ */
+export function editDraftsReadOn(
+  threads: readonly CommentThread[],
+  waiting: Pick<ResolvedCommentDrafts, 'waitingThreads' | 'waitingEdits'>,
+  done: {
+    pagesRead: (threadId: string) => number;
+    failed: (mark: string) => string | undefined;
+  },
+): EditDraftsReadOn {
+  let read: CommentThread | undefined;
+  const past: UnplacedCommentDraft[] = [];
+  for (const thread of threads) {
+    const threadId = thread.comment.id;
+    if (!waiting.waitingThreads.includes(threadId) || thread.repliesNextCursor === null) continue;
+    const failure = done.failed(editDraftReadOnMark(thread));
+    if (failure !== undefined) {
+      past.push(...draftsHeldOnReadFailure(waiting.waitingEdits, threadId, failure));
+    } else if (done.pagesRead(threadId) >= REPLY_READ_ON_PAGES) {
+      past.push(
+        ...draftsHeldOnReadFailure(waiting.waitingEdits, threadId, copy.errCommentEditNotRead),
+      );
+    } else if (read === undefined) {
+      read = thread;
+    }
+  }
+  return { read, past };
+}
+
+/**
  * Where each draft the post page took back after an onboarding step goes (오너 결정 2026-10-20 답 2):
  * into its box — the new 댓글's while the post takes comments, a thread's reply box while its 댓글
  * takes 대댓글, an edit while the comment is the viewer's and published — or, where that box can no
@@ -677,9 +749,10 @@ export function draftsHeldOnReadFailure(
  * is read (`allRead`); an edit of a 대댓글 whose thread is read but not all its 대댓글 waits for
  * them (`waitingThreads`: the page reads on through that thread, 오너 결정 2026-10-21 '답글 더
  * 보기') and is gone once they are all read — or shown apart with the read's failure, should that
- * read fail (`waitingEdits`, `draftsHeldOnReadFailure`, 오너 결정 2026-10-22 답 2). A post out of
- * every view (`gone`) takes none: each is shown apart with '없거나 삭제된 글입니다.' (오너 결정
- * 2026-10-21 답 1).
+ * read fail (`waitingEdits`, `draftsHeldOnReadFailure`, 오너 결정 2026-10-21 (2차) 답 2), or with
+ * `copy.errCommentEditNotRead` once that read has read REPLY_READ_ON_PAGES pages without finding it
+ * (`editDraftsReadOn`, 오너 결정 2026-10-22 답 5). A post out of every view (`gone`) takes none:
+ * each is shown apart with '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
  */
 export function resolveCommentDrafts(
   drafts: CommentDrafts,

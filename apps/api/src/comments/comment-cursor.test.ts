@@ -1,5 +1,5 @@
 /**
- * The comment lists' sealed cursors (#48, ADR-0074, 오너 결정 2026-10-22 답 3) without Postgres: a
+ * The comment lists' sealed cursors (#48, ADR-0074, 오너 결정 2026-10-21 (2차) 답 3) without Postgres: a
  * cursor opens to the keyset it was sealed with, for its own list only, and says nothing of the
  * time it holds; one changed anywhere, of another list, of another secret (the session secret
  * rotated) or of another shape does not open — and the service's `open` turns that into a
@@ -32,7 +32,7 @@ const keyset = {
   id: 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f',
 };
 
-describe('a comment list’s cursor (오너 결정 2026-10-22 답 3)', () => {
+describe('a comment list’s cursor (오너 결정 2026-10-21 (2차) 답 3)', () => {
   it('opens to the keyset it was sealed with, for its own list', () => {
     for (const scope of [comments, replies]) {
       const cursor = sealCommentCursor(keys, scope, keyset);

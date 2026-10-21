@@ -6,7 +6,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { type Env } from '../config/env.js';
 
 /**
- * The page cursors of the comment lists (#48, ADR-0074, 오너 결정 2026-10-22 답 3): opaque — the
+ * The page cursors of the comment lists (#48, ADR-0074, 오너 결정 2026-10-21 (2차) 답 3): opaque — the
  * keyset `(created_at, id)` of a page's last row sealed with AES-256-GCM — so no comment's time of
  * writing can be read from one. A page can end on a placeholder (a deleted 댓글 that 대댓글 hang
  * under, a hidden 대댓글 once #50 hides them), whose answer carries its id alone (#45-5); before

@@ -254,7 +254,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     const third = await page(`limit=2&cursor=${second.meta.nextCursor!}`);
     expect(third.data.map(({ comment }) => comment.id)).toEqual([e.id]);
     expect(third.meta.nextCursor).toBeNull();
-    // The cursors are sealed for this post's list (오너 결정 2026-10-22 답 3): one that does not
+    // The cursors are sealed for this post's list (오너 결정 2026-10-21 (2차) 답 3): one that does not
     // open — not a cursor, the plain keyset these lists gave before, another post's (a thread's:
     // the next test, which has one) — is a VALIDATION_ERROR naming `cursor`, not the first page the
     // web would draw twice.
@@ -276,7 +276,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     }
   });
 
-  it('seals the cursors so a page ending on a placeholder does not tell its time (오너 결정 2026-10-22 답 3)', async () => {
+  it('seals the cursors so a page ending on a placeholder does not tell its time (오너 결정 2026-10-21 (2차) 답 3)', async () => {
     // A deleted 댓글 kept as its placeholder (대댓글 hang under it) ends the first page; a hidden
     // 대댓글 ends its thread's first 50. Their answers carry their ids alone, and so do the cursors
     // after them: no time of writing in any spelling, and the next page still follows on.
@@ -420,7 +420,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     expect(third.nextCursor).toBeNull();
     // Anyone reads them, the same answer. A cursor that does not open for this thread — not a
     // cursor, the plain keyset, the comment page's, another thread's — is a VALIDATION_ERROR naming
-    // `cursor` (오너 결정 2026-10-22 답 3).
+    // `cursor` (오너 결정 2026-10-21 (2차) 답 3).
     const otherThread = await createComment(t.db, {
       postId: post.id,
       authorId: author.id,

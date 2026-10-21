@@ -285,10 +285,10 @@ export const COMMENT_REPLIES_PAGE_SIZE = 50;
 
 /**
  * The cursor of a comment page or a reply page, bounded as `cursorQuerySchema`'s. Opaque, and more
- * than the other lists' (오너 결정 2026-10-22, ADR-0074): the API seals the keyset of the page's
- * last row for its list — the post's 댓글, or one 댓글's 대댓글 — so a page ending on a placeholder
- * does not tell its time; one the API did not seal for that list is a VALIDATION_ERROR naming
- * `cursor` (apps/api comment-cursor.ts).
+ * than the other lists' (오너 결정 2026-10-21 (2차), ADR-0074): the API seals the keyset of the
+ * page's last row for its list — the post's 댓글, or one 댓글's 대댓글 — so a page ending on a
+ * placeholder does not tell its time; one the API did not seal for that list is a VALIDATION_ERROR
+ * naming `cursor` (apps/api comment-cursor.ts).
  */
 const commentCursorSchema = z.string().min(1).max(200).optional();
 

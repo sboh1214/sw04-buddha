@@ -73,7 +73,7 @@ function publishedOf(row: CommentRow): PublishedComment {
  * A page of the 대댓글 of the 댓글 `threadId` from rows read oldest first with one row past
  * COMMENT_REPLIES_PAGE_SIZE: the first that many as the public sees them (`publicCommentOf` — a
  * deleted 대댓글 was never read), and the cursor after the last of them, sealed for that thread's
- * list (`CommentCursors`, 오너 결정 2026-10-22 답 3), when the extra row says more follow.
+ * list (`CommentCursors`, 오너 결정 2026-10-21 (2차) 답 3), when the extra row says more follow.
  */
 function replyPageOf(
   cursors: CommentCursors,
@@ -139,7 +139,7 @@ export class CommentsService {
    * of a post in any state are read: a hidden post's and a deleted post's placeholder keep their
    * comments in view (N04 §6: the replies keep their context). A post that is gone — deleted with
    * nothing under it, or never there — is NOT_FOUND, as on its page. The cursors, the page's and
-   * each thread's, are sealed for their list (`CommentCursors`, 오너 결정 2026-10-22 답 3): a page
+   * each thread's, are sealed for their list (`CommentCursors`, 오너 결정 2026-10-21 (2차) 답 3): a page
    * may end on a placeholder, and no cursor tells its time; one that does not open is a
    * VALIDATION_ERROR.
    *

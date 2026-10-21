@@ -69,6 +69,8 @@ import {
   commentWriteErrorMessage,
   commentsClosedMessage,
   draftsHeldOnReadFailure,
+  editDraftReadOnMark,
+  editDraftsReadOn,
   placeHeldTexts,
   postCommentsKey,
   resolveCommentDrafts,
@@ -257,18 +259,27 @@ export function CommentsSection({
     if (waiting && hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [waiting, hasNextPage, isFetchingNextPage, fetchNextPage]);
   // An edit draft of a 대댓글 not read yet reads on through its thread's 대댓글, a page at a time
-  // ('답글 더 보기', 오너 결정 2026-10-21) — one thread at a time, and never twice from one cursor;
-  // as far as the 대댓글 is, not REPLY_READ_ON_PAGES (ADR-0074 7-28: the owner capped the new
-  // 대댓글's read on and the read again's; whether this one stops there too is 결과 4's question 4).
-  // A read that fails shows each draft waiting on that thread apart, with the read's failure as
-  // why, until the writer closes it (오너 결정 2026-10-22 답 2, `draftsHeldOnReadFailure`): the toast
-  // said the text was restored, and it would otherwise wait unseen behind the thread's button. Only
-  // what still waits as the read fails — a draft its box took meanwhile is not shown twice — and
-  // for the account on screen then. A thread that left every view (NOT_FOUND) is read again by
+  // ('답글 더 보기', 오너 결정 2026-10-21) — one thread at a time, and REPLY_READ_ON_PAGES pages at
+  // most for one thread (오너 결정 2026-10-22 답 5, `editDraftsReadOn`): a draft its thread did not
+  // show within them is shown apart, with
+  // '고치던 답글을 목록에서 찾지 못했습니다. 지워졌거나 아직 불러오지 않은 답글입니다.', until the
+  // writer closes it. The pages are the ones this read reads, from where the thread stands when it
+  // begins (ADR-0074 7-28), counted afresh for each read that took drafts back (`reads` — a step
+  // done in another tab while this page stayed open brings its own). A read that fails shows each
+  // draft waiting on that thread apart, with the read's failure as why, until the writer closes it
+  // (오너 결정 2026-10-21 (2차) 답 2, `draftsHeldOnReadFailure`): the toast said the text was
+  // restored, and it would otherwise wait unseen behind the thread's button. Both only for what
+  // still waits then — a draft its box took meanwhile is not shown twice — and for the account on
+  // screen then: the pages read are judged once the read is over, by the render it brought, and a
+  // failure by the drafts of the last render. That render may list none — the comment pages being
+  // read again, or a read again of a new set of drafts on its way — so the failure is kept, with
+  // the cursor it read from, for the drafts of that set (`failedReadsOn`): those that wait on the
+  // thread still at that cursor once the page lists them again are shown apart with it, and that
+  // cursor is not read again for them. A thread that left every view (NOT_FOUND) is read again by
   // `readMoreReplies`: it goes, and the draft is shown apart with why once the pages are read.
-  const { waitingThreads } = takenBack;
   const readingOn = useRef(false);
-  const triedReadsOn = useRef(new Set<string>());
+  const pagesReadOn = useRef(new Map<string, number>());
+  const failedReadsOn = useRef(new Map<string, string>());
   const [readOnRound, setReadOnRound] = useState(0);
   const waitingNow = useRef({ waitingEdits: takenBack.waitingEdits, accountId: viewerAccountId });
   useEffect(() => {
@@ -276,26 +287,40 @@ export function CommentsSection({
   });
   useEffect(() => {
     if (readingOn.current) return;
-    const markOf = (thread: CommentThread) =>
-      `${thread.comment.id}:${String(thread.repliesNextCursor)}`;
-    const next = threads.find(
-      (thread) =>
-        waitingThreads.includes(thread.comment.id) &&
-        thread.repliesNextCursor !== null &&
-        !triedReadsOn.current.has(markOf(thread)),
-    );
+    // A thread, or one of its cursors (`editDraftReadOnMark`), within this set of drafts.
+    const roundOf = (mark: string) => `${String(reads)}:${mark}`;
+    const pagesRead = (threadId: string) => pagesReadOn.current.get(roundOf(threadId)) ?? 0;
+    const { read: next, past } = editDraftsReadOn(threads, takenBack, {
+      pagesRead,
+      failed: (mark) => failedReadsOn.current.get(roundOf(mark)),
+    });
+    if (past.length > 0 && viewerAccountId !== undefined) {
+      hold(
+        viewerAccountId,
+        past.map(({ key, text, reason, place }) => ({
+          id: `taken-back:${commentDraftStorageKey(key)}`,
+          text,
+          reason,
+          place,
+        })),
+      );
+      take(past.map(({ key }) => key));
+    }
     if (next === undefined) return;
     readingOn.current = true;
-    triedReadsOn.current.add(markOf(next));
     const threadId = next.comment.id;
+    const readFrom = roundOf(editDraftReadOnMark(next));
+    pagesReadOn.current.set(roundOf(threadId), pagesRead(threadId) + 1);
     void readMoreReplies(queryClient, post.id, threadId)
       .catch((error: unknown) => {
+        const reason = postReadErrorMessage(error);
+        failedReadsOn.current.set(readFrom, reason);
         const { waitingEdits, accountId } = waitingNow.current;
-        const failed = draftsHeldOnReadFailure(waitingEdits, threadId, postReadErrorMessage(error));
+        const failed = draftsHeldOnReadFailure(waitingEdits, threadId, reason);
         if (failed.length === 0 || accountId === undefined) return;
         hold(
           accountId,
-          failed.map(({ key, text, reason, place }) => ({
+          failed.map(({ key, text, place }) => ({
             id: `taken-back:${commentDraftStorageKey(key)}`,
             text,
             reason,
@@ -308,7 +333,7 @@ export function CommentsSection({
         readingOn.current = false;
         setReadOnRound((round) => round + 1);
       });
-  }, [waitingThreads, threads, queryClient, post.id, readOnRound, hold, take]);
+  }, [takenBack, threads, reads, viewerAccountId, queryClient, post.id, readOnRound, hold, take]);
   useLeaveGuard(heldTexts.held.length > 0 || hasCommentDrafts(drafts), copy.postLeaveConfirm);
   // The same texts, as this render has them, go to a step left as the boxes' texts do (오너 결정
   // 2026-10-20 답 2·4): kept in this tab when the page goes and `['me']` names a step left of this
@@ -649,8 +674,8 @@ function Thread({
           {/* The 대댓글 after the first 50, 50 at a time (오너 결정 2026-10-21); a read pressed that
               failed says why above the button that reads again (the owner's answer of 2026-10-20
               for every 더 보기, which #47 brings to the comment list's own; ADR-0074 7-28). The
-              section's own read for a draft taken back shows the draft apart instead (2026-10-22
-              답 2). */}
+              section's own read for a draft taken back shows the draft apart instead, when it
+              fails (2026-10-21 (2차) 답 2) or has read five pages without it (2026-10-22 답 5). */}
           {moreToRead && (
             <Stack gap="2" align="flex-start">
               {more.isError && (

@@ -50,7 +50,7 @@ import { afterRefusal } from './use-posts';
  * thread held (`readMoreReplies`, 오너 결정 2026-10-21), and every later read of the pages reads a
  * thread on as far as the screen had it (`threadsReadOn`) — so a refresh does not take away 대댓글
  * on screen, nor a box open on one — five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정
- * 2026-10-22 답 1).
+ * 2026-10-21 (2차) 답 1).
  *
  * A write's answer goes into the pages held: an edit in place (`withEditedComment`), a deletion
  * as its placeholder or out (`withoutComment`), a 대댓글 at the end of its 댓글 (`withNewComment`).
@@ -138,7 +138,7 @@ export async function fetchReplyPage(
  * A page of the post's comments as read, each thread read on through its 대댓글 until it holds as
  * many as the pages held now do (`threadReadsOn`): what '답글 더 보기' brought stays on screen — and
  * an edit or a reply box open on it, which would otherwise go as its comment left the pages — up
- * to REPLY_READ_ON_PAGES reply pages a thread (오너 결정 2026-10-22 답 1): a thread opened further
+ * to REPLY_READ_ON_PAGES reply pages a thread (오너 결정 2026-10-21 (2차) 답 1): a thread opened further
  * than its first 50 and 250 more comes back to that, the rest behind '답글 더 보기' again. A reply
  * page that fails fails the page, so the read keeps what is held; a read cancelled (`signal`) asks
  * for no reply page after. Costs, per thread read on, the reply pages the reader had opened, five
@@ -274,7 +274,7 @@ export function useMoreReplies(postId: string, threadId: string) {
  * page is usually the last; when others answered meanwhile it is not, and the reading stops there all
  * the same: what came after the answer stays behind the thread's cursor ('답글 더 보기'). Costs the
  * reads '답글 더 보기' would have made, one after another — one per 50 대댓글 unread, at most
- * REPLY_READ_ON_PAGES (오너 결정 2026-10-22 답 1), in the reader's address limit (100 a minute) with
+ * REPLY_READ_ON_PAGES (오너 결정 2026-10-21 (2차) 답 1), in the reader's address limit (100 a minute) with
  * every other request of the page. A thread whose answer is not within that many pages, a read that
  * fails — the limit's 429 among them — or a thread read again meanwhile, puts the answer at the end
  * of the replies held instead (`withNewComment`) — it is written, and saying otherwise would invite

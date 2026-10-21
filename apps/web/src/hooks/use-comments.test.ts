@@ -5,17 +5,30 @@ import {
   QueryObserver,
 } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { copy } from '@/copy';
 import { ApiError, type CommentThread, type Post, type PublishedComment, api } from '@/lib/api';
-import { commentDraftLandedSince, commentDraftMoment } from '@/lib/comment-drafts';
+import {
+  NO_COMMENT_DRAFTS,
+  type CommentDrafts,
+  commentDraftLandedSince,
+  commentDraftMoment,
+  withoutCommentDrafts,
+} from '@/lib/comment-drafts';
 import {
   REPLY_READ_ON_PAGES,
   type CommentPage,
   type CommentPages,
   type ReplyPage,
+  type UnplacedCommentDraft,
   commentThreadsOf,
+  draftsHeldOnReadFailure,
+  editDraftReadOnMark,
+  editDraftsReadOn,
+  goneBoxReason,
   postCommentsKey,
+  resolveCommentDrafts,
 } from '@/lib/comments';
-import { communityPostsKey, postKey } from '@/lib/posts';
+import { communityPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
   commentsInfiniteQueryOptions,
@@ -597,7 +610,7 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     expect(commentCountOf(queryClient)).toBe(2);
   });
 
-  it('are read on five reply pages at most when the pages are read again: a thread opened further comes back to that (오너 결정 2026-10-22 답 1)', async () => {
+  it('are read on five reply pages at most when the pages are read again: a thread opened further comes back to that (오너 결정 2026-10-21 (2차) 답 1)', async () => {
     // A fake server of 40 대댓글 two a page (the page's size is the server's; the cap counts
     // requests). The screen had opened 14 — the first two and six pages more.
     const queryClient = seededThread(replyIds(0, 14), 'r14');
@@ -622,7 +635,7 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     unsubscribe();
   });
 
-  it('are read on five reply pages for each thread, not five for the read: two threads opened further each come back to their first and five pages (오너 결정 2026-10-22 답 1)', async () => {
+  it('are read on five reply pages for each thread, not five for the read: two threads opened further each come back to their first and five pages (오너 결정 2026-10-21 (2차) 답 1)', async () => {
     // Two threads on one page of 댓글, each opened to 14 of its 40 대댓글 (two a page): every one
     // gets its own five pages — the owner's cap is per thread.
     const replies: Record<string, string[]> = {
@@ -703,7 +716,7 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     expect(repliesHeld(queryClient)).toEqual([replyIds(0, 2), 'r2']);
   });
 
-  it('a new 대댓글 past five unread reply pages goes last of those held, and ‘답글 더 보기’ brings it into place (오너 결정 2026-10-22 답 1)', async () => {
+  it('a new 대댓글 past five unread reply pages goes last of those held, and ‘답글 더 보기’ brings it into place (오너 결정 2026-10-21 (2차) 답 1)', async () => {
     const queryClient = seededThread(replyIds(0, 2), 'r2');
     vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
     const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(20, MINE));
@@ -734,7 +747,7 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 11), MINE], null]);
   });
 
-  it('a new 대댓글 on the fifth unread reply page stands in its place though others answered after it (오너 결정 2026-10-22 답 1)', async () => {
+  it('a new 대댓글 on the fifth unread reply page stands in its place though others answered after it (오너 결정 2026-10-21 (2차) 답 1)', async () => {
     // Another answer came after MINE while the pages were read: the fifth page holds MINE and
     // still has a page after it. MINE was within the five pages — not past the cap.
     const queryClient = seededThread(replyIds(0, 2), 'r2');
@@ -793,6 +806,196 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     );
     await readMoreReplies(queryClient, POST, commentId);
     expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 3), MINE], null]);
+  });
+});
+
+describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결정 2026-10-22 답 5)', () => {
+  /**
+   * The post page's read on for edit drafts taken back after an onboarding step, as its effect
+   * takes it (comments-section.tsx): the drafts placed against the threads held
+   * (`resolveCommentDrafts`), the next step asked of `editDraftsReadOn` — what it says is past shown
+   * apart and dropped, one reply page read ('답글 더 보기') of the thread it names — until it names
+   * none. A read that fails is kept by where it read from, and the drafts then waiting on that thread
+   * are shown apart with its failure — unless `unlistedAtFailure`: the page listed none as it failed
+   * (the comment pages being read again), so they are left for the next step. The edits whose boxes
+   * open, what is shown apart and what is gone.
+   */
+  async function readOnForEdits(
+    queryClient: QueryClient,
+    edits: readonly string[],
+    { unlistedAtFailure = false }: { unlistedAtFailure?: boolean } = {},
+  ) {
+    let drafts: CommentDrafts = {
+      ...NO_COMMENT_DRAFTS,
+      edits: new Map(edits.map((id) => [id, `고친 ${id}`])),
+      editThreads: new Map(edits.map((id) => [id, commentId])),
+    };
+    const pagesRead = new Map<string, number>();
+    const failures = new Map<string, string>();
+    const apart: UnplacedCommentDraft[] = [];
+    const placed = () =>
+      resolveCommentDrafts(drafts, {
+        postId: post,
+        postState: 'published',
+        threads: commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))),
+        allRead: true,
+        viewerPublicId: 'k7m2p9qx4z',
+      });
+    const showApart = (shown: readonly UnplacedCommentDraft[]) => {
+      apart.push(...shown);
+      drafts = withoutCommentDrafts(
+        drafts,
+        shown.map(({ key }) => key),
+      );
+    };
+    for (let steps = 0; steps < 50; steps += 1) {
+      const threads = commentThreadsOf(queryClient.getQueryData(postCommentsKey(post)));
+      const { read, past } = editDraftsReadOn(threads, placed(), {
+        pagesRead: (threadId) => pagesRead.get(threadId) ?? 0,
+        failed: (mark) => failures.get(mark),
+      });
+      showApart(past);
+      if (read === undefined) {
+        const { edits: opened, unplaced: gone } = placed();
+        return { opened: [...opened.keys()], apart, gone };
+      }
+      const threadId = read.comment.id;
+      const readFrom = editDraftReadOnMark(read);
+      pagesRead.set(threadId, (pagesRead.get(threadId) ?? 0) + 1);
+      try {
+        await readMoreReplies(queryClient, POST, threadId);
+      } catch (error) {
+        const reason = postReadErrorMessage(error);
+        failures.set(readFrom, reason);
+        if (!unlistedAtFailure) {
+          showApart(draftsHeldOnReadFailure(placed().waitingEdits, threadId, reason));
+        }
+      }
+    }
+    throw new Error('the read on did not end');
+  }
+
+  /** The reply pages the fake server was asked for, from the n-th 대댓글 each. */
+  const pagesFrom = (...froms: number[]) =>
+    froms.map((from) => `replies:${commentId}:r${String(from)}`);
+
+  /** The id of the n-th 대댓글 of `replyIds`. */
+  const replyId = (index: number) => replyIds(index, index + 1).join('');
+
+  it('reads the thread on until the 대댓글 is read: on the first or the fifth unread page, its box opens', async () => {
+    for (const [index, pages] of [
+      [3, pagesFrom(2)],
+      [11, pagesFrom(2, 4, 6, 8, 10)],
+    ] as const) {
+      const queryClient = seededThread(replyIds(0, 2), 'r2');
+      const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(30));
+      const draft = replyId(index);
+      expect(await readOnForEdits(queryClient, [draft])).toEqual({
+        opened: [draft],
+        apart: [],
+        gone: [],
+      });
+      expect(asked).toEqual(pages);
+    }
+  });
+
+  it('stops at five unread reply pages: a 대댓글 past them is shown apart with the owner’s words, and no sixth page is asked for', async () => {
+    for (const index of [12, 390]) {
+      const queryClient = seededThread(replyIds(0, 2), 'r2');
+      const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(400));
+      const draft = replyId(index);
+      const { opened, apart, gone } = await readOnForEdits(queryClient, [draft]);
+      expect(asked).toEqual(pagesFrom(2, 4, 6, 8, 10));
+      expect(asked).toHaveLength(REPLY_READ_ON_PAGES);
+      expect([opened, gone]).toEqual([[], []]);
+      expect(apart).toEqual([
+        {
+          key: { kind: 'edit', postId: post, commentId: draft, threadId: commentId },
+          text: `고친 ${draft}`,
+          reason: copy.errCommentEditNotRead,
+          place: { kind: 'comment', commentId: draft, threadId: commentId },
+        },
+      ]);
+      // The pages read stay, as '답글 더 보기' leaves them: the next press reads on from there.
+      expect(repliesHeld(queryClient)).toEqual([replyIds(0, 12), 'r12']);
+    }
+  });
+
+  it('a thread that ends within five pages without the 대댓글: gone, in the words it was before', async () => {
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(7));
+    const { opened, apart, gone } = await readOnForEdits(queryClient, [MINE]);
+    expect(asked).toEqual(pagesFrom(2, 4, 6));
+    expect([opened, apart]).toEqual([[], []]);
+    expect(gone.map(({ text, reason }) => [text, reason])).toEqual([
+      [`고친 ${MINE}`, copy.errCommentGone],
+    ]);
+  });
+
+  /** The fake reply route over 30 대댓글, its read from `failing` refused as a network failure. */
+  const failingFrom =
+    (failing: string) =>
+    (request: RepliesRequest): ReplyPage | Promise<ReplyPage> =>
+      request.params.query.cursor === failing
+        ? Promise.reject(new TypeError('Failed to fetch'))
+        : fakeReplies(30)(request);
+
+  it('a read that fails shows the drafts waiting on its thread apart with its failure, and asks no more (오너 결정 2026-10-21 (2차) 답 2)', async () => {
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), failingFrom('r6'));
+    const draft = replyId(11);
+    const { opened, apart, gone } = await readOnForEdits(queryClient, [draft]);
+    expect(asked).toEqual(pagesFrom(2, 4, 6));
+    expect([opened, gone]).toEqual([[], []]);
+    expect(apart.map(({ text, reason }) => [text, reason])).toEqual([
+      [`고친 ${draft}`, copy.errNetwork],
+    ]);
+  });
+
+  it('a read that fails while the page lists no draft — the comment pages read again — shows them apart with its failure once listed, its cursor not read again', async () => {
+    // As the page has it: the drafts were not on screen as the read failed, so nothing was shown
+    // then; the thread stands where it failed when they are listed again.
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), failingFrom('r6'));
+    const draft = replyId(11);
+    const { opened, apart, gone } = await readOnForEdits(queryClient, [draft], {
+      unlistedAtFailure: true,
+    });
+    expect(asked).toEqual(pagesFrom(2, 4, 6));
+    expect([opened, gone]).toEqual([[], []]);
+    expect(apart.map(({ text, reason }) => [text, reason])).toEqual([
+      [`고친 ${draft}`, copy.errNetwork],
+    ]);
+  });
+
+  it('counts its five pages from where the thread stands: a thread held at its first and five pages (the comments kept across a step in this tab) opens a 대댓글 past them, and the next read of the pages takes it out again (ADR-0074 7-28·7-30)', async () => {
+    // Two a page: 12 held is the first two and the five pages a read again keeps (300 of 대댓글).
+    const queryClient = seededThread(replyIds(0, 12), 'r12');
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    const asked = getThreads(
+      () => ({ items: [threadAnswered(replyIds(0, 2), 'r2')], nextCursor: null }),
+      fakeReplies(40),
+    );
+    const draft = replyId(15);
+    expect(await readOnForEdits(queryClient, [draft])).toEqual({
+      opened: [draft],
+      apart: [],
+      gone: [],
+    });
+    expect(asked).toEqual(pagesFrom(12, 14));
+    // A read of the pages (a focus after 30 seconds) brings the thread back to its first and five
+    // pages: the 대댓글 is out of it, and its box's text is held with the owner's words.
+    await comments.refetch();
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 12), 'r12']);
+    const threads = commentThreadsOf(queryClient.getQueryData(postCommentsKey(post)));
+    expect(
+      goneBoxReason(
+        { kind: 'comment', commentId: draft, threadId: commentId },
+        { postState: 'published', threads },
+      ),
+    ).toBe(copy.errCommentEditNotRead);
+    unsubscribe();
   });
 });
 
