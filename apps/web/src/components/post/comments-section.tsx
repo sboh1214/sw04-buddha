@@ -31,9 +31,11 @@ import {
   useCommentDraftsTakenBack,
 } from '@/hooks/use-comment-draft';
 import {
+  readMoreReplies,
   useComments,
   useCreateComment,
   useDeleteComment,
+  useMoreReplies,
   useUpdateComment,
 } from '@/hooks/use-comments';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
@@ -85,12 +87,19 @@ interface Viewer {
 /** Placeholders at a comment's height while the first page loads. */
 const SKELETON_ROWS = [0, 1];
 
+/** A read on through a thread's 대댓글 that failed: the cursor it read from, and why. */
+interface ReadOnFailure {
+  cursor: string | null;
+  error: unknown;
+}
+
 const NOTHING_TAKEN_BACK: ResolvedCommentDrafts = {
   comment: undefined,
   replies: new Map(),
   edits: new Map(),
   unplaced: [],
   waiting: false,
+  waitingThreads: [],
 };
 
 /** What every thread is handed alike. */
@@ -106,6 +115,11 @@ interface ThreadContext {
   stepPath: string | undefined;
   /** Drafts taken back after a step, for the boxes to open with (`resolveCommentDrafts`). */
   takenBack: ResolvedCommentDrafts;
+  /**
+   * The section's own reads on through a thread's 대댓글 for a draft taken back that failed, by the
+   * thread's 댓글: said above that thread's '답글 더 보기' while its cursor is still the one read.
+   */
+  readOnFailures: ReadonlyMap<string, ReadOnFailure>;
   /** A box took its draft. */
   onTaken: (key: CommentDraftKey) => void;
   onCloseHeld: (id: string) => void;
@@ -117,8 +131,10 @@ interface ThreadContext {
  * A post's comments (#48, ADR-0074), under the post — or under its placeholder: the comments of a
  * hidden post and of a deleted one stay readable (N04 §6: the replies keep their context). The
  * heading counts what the public reads ('댓글 N', the post's `commentCount`). Each 댓글 comes with
- * every 대댓글 under it, both oldest first (#45-2), 20 댓글 a page with 더 보기; then the box for a
- * new 댓글.
+ * its first 50 대댓글 and '답글 더 보기' for 50 more at a time, both oldest first (#45-2, 오너 결정
+ * 2026-10-21), 20 댓글 a page with 더 보기; then the box for a new 댓글. The comments are read in
+ * the browser only (오너 결정 2026-10-21): the server's HTML holds the heading and, until they
+ * come, placeholders at a comment's height with '불러오는 중' for a screen reader (`aria-busy`).
  *
  * The box is for an account that `GET /me` names — a visitor reads and is asked to sign in, coming
  * back to this post (N05 §2 «비로그인 열람, 로그인 작성»); a later read of `GET /me` that fails
@@ -128,8 +144,8 @@ interface ThreadContext {
  * alone, for which this page is exempt (`ONBOARDING_EXEMPT_PAGES`, ADR-0073) so it can delete its
  * own comments with a session alone: its comment writes go to that step first and come back here
  * (`stepPath`, 오너 결정 2026-10-20 답 3). A hidden or deleted post takes no comment (#45-5): its
- * box is a sentence saying so. Nothing personal is in the HTML: the first page is public and
- * seeded by the server, whose own and whose 답글 are decided here once `GET /me` has answered.
+ * box is a sentence saying so. Nothing personal is decided on the server: whose own and whose 답글
+ * are decided here once `GET /me` has answered.
  *
  * What a box holds is kept on the ways the owner decided (오너 결정 2026-10-20 답 1·2·4,
  * 2026-10-21 답 1·2·3): leaving the page with text in a box asks first (`useCommentBoxDraft`), and
@@ -182,9 +198,10 @@ export function CommentsSection({
   const viewerPublicId = viewer?.publicId;
   const viewerAccountId = viewer?.accountId;
   // Drafts taken back go where the post and its threads as read after they came back say: what the
-  // cache kept from before the step can be older than the step — the server's fresh seed of this
-  // page lands in an effect, after the first render — and a box opened by it for a 댓글 deleted
-  // meanwhile would go with the next read, and its draft with it, rather than be shown apart.
+  // cache kept from before the step can be older than the step — the server's fresh seed of the
+  // post lands in an effect, after the first render, and the comments held in this tab are as old
+  // as the step — and a box opened by it for a 댓글 deleted meanwhile would go with the next read,
+  // and its draft with it, rather than be shown apart.
   const queryClient = useQueryClient();
   const [readAgainFor, setReadAgainFor] = useState(0);
   useEffect(() => {
@@ -247,6 +264,44 @@ export function CommentsSection({
   useEffect(() => {
     if (waiting && hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [waiting, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  // An edit draft of a 대댓글 not read yet reads on through its thread's 대댓글, a page at a time
+  // ('답글 더 보기', 오너 결정 2026-10-21) — one thread at a time, and never twice from one cursor.
+  // A read that fails is said where the thread's own '답글 더 보기' says its failures, above that
+  // button (`readOnFailures`): the toast said the text was restored, and without it the draft would
+  // wait unseen. Pressed, the button moves the cursor on and the read goes on from there. A thread
+  // that left every view (NOT_FOUND) is read again by `readMoreReplies`: it goes, and the draft is
+  // shown apart with why once the pages are read.
+  const { waitingThreads } = takenBack;
+  const readingOn = useRef(false);
+  const triedReadsOn = useRef(new Set<string>());
+  const [readOnFailures, setReadOnFailures] = useState<ReadonlyMap<string, ReadOnFailure>>(
+    () => new Map(),
+  );
+  const [readOnRound, setReadOnRound] = useState(0);
+  useEffect(() => {
+    if (readingOn.current) return;
+    const markOf = (thread: CommentThread) =>
+      `${thread.comment.id}:${String(thread.repliesNextCursor)}`;
+    const next = threads.find(
+      (thread) =>
+        waitingThreads.includes(thread.comment.id) &&
+        thread.repliesNextCursor !== null &&
+        !triedReadsOn.current.has(markOf(thread)),
+    );
+    if (next === undefined) return;
+    readingOn.current = true;
+    triedReadsOn.current.add(markOf(next));
+    const threadId = next.comment.id;
+    const cursor = next.repliesNextCursor;
+    void readMoreReplies(queryClient, post.id, threadId)
+      .catch((error: unknown) => {
+        setReadOnFailures((failures) => new Map(failures).set(threadId, { cursor, error }));
+      })
+      .finally(() => {
+        readingOn.current = false;
+        setReadOnRound((round) => round + 1);
+      });
+  }, [waitingThreads, threads, queryClient, post.id, readOnRound]);
   useLeaveGuard(heldTexts.held.length > 0 || hasCommentDrafts(drafts), copy.postLeaveConfirm);
   // The same texts, as this render has them, go to a step left as the boxes' texts do (오너 결정
   // 2026-10-20 답 2·4): kept in this tab when the page goes and `['me']` names a step left of this
@@ -294,6 +349,7 @@ export function CommentsSection({
     open,
     stepPath,
     takenBack,
+    readOnFailures,
     onTaken,
     onCloseHeld,
     focusHeading,
@@ -333,7 +389,15 @@ export function CommentsSection({
           </Alert.Root>
         )}
         {gone ? null : comments.isPending ? (
-          SKELETON_ROWS.map((row) => <Skeleton key={row} height="72px" borderRadius="card" />)
+          // Every visit starts here — the server's HTML too, the comments being the browser's to
+          // read — so the wait is named for a screen reader as well as drawn: '불러오는 중' under
+          // '댓글 N', busy until the comments come (the 토론 section's way, #47).
+          <Stack gap="4" aria-busy="true" data-testid="comments-loading">
+            <Text srOnly>{copy.loading}</Text>
+            {SKELETON_ROWS.map((row) => (
+              <Skeleton key={row} height="72px" borderRadius="card" />
+            ))}
+          </Stack>
         ) : comments.isLoadingError ? (
           <Stack gap="3" align="flex-start" data-testid="comments-error">
             <Alert.Root status="error" role="alert">
@@ -470,7 +534,8 @@ function useTakenBack(
 }
 
 /**
- * One 댓글 and its 대댓글 (#45-2). 답글 — on the 댓글 and on each of its 대댓글 alike — opens one box
+ * One 댓글 and its 대댓글 (#45-2): the first 50 and '답글 더 보기' for 50 more at a time while more
+ * follow (오너 결정 2026-10-21). 답글 — on the 댓글 and on each of its 대댓글 alike — opens one box
  * at the end of the thread: a reply to a 대댓글 is another 대댓글 of the same 댓글, so every reply of
  * the thread is written there and sent under the 댓글. Offered to a signed-in reader while the post
  * and the 댓글 are open: a hidden 댓글 or 대댓글 takes none (#45-5), nor does a deleted 댓글 kept as
@@ -533,6 +598,15 @@ function Thread({
   };
   const replyTo = (comment: PostComment) =>
     replyable && comment.state === 'published' ? startReply : undefined;
+  const more = useMoreReplies(postId, threadId);
+  const moreToRead = thread.repliesNextCursor !== null;
+  // The button's own failure, else the section's read on for a draft taken back, from this cursor.
+  const readOnFailure = context.readOnFailures.get(threadId);
+  const failure: unknown = more.isError
+    ? more.error
+    : readOnFailure !== undefined && readOnFailure.cursor === thread.repliesNextCursor
+      ? readOnFailure.error
+      : undefined;
 
   return (
     <Stack as="li" gap="3" data-testid={`comment-thread-${threadId}`}>
@@ -544,7 +618,7 @@ function Thread({
         replyButton={threadReply}
         held={heldByComment.get(thread.comment.id) ?? []}
       />
-      {(thread.replies.length > 0 || (replying && replyable)) && (
+      {(thread.replies.length > 0 || moreToRead || (replying && replyable)) && (
         <Stack
           gap="3"
           ps={{ base: '3', md: '5' }}
@@ -571,6 +645,33 @@ function Thread({
                   />
                 </li>
               ))}
+            </Stack>
+          )}
+          {/* The 대댓글 after the first 50, 50 at a time (오너 결정 2026-10-21); a read that failed —
+              pressed, or the section's own for a draft taken back — says why above the button
+              that reads again (the owner's answer of 2026-10-20 for every 더 보기, which #47 brings
+              to the comment list's own; ADR-0074 7-28). */}
+          {moreToRead && (
+            <Stack gap="2" align="flex-start">
+              {failure !== undefined && (
+                <Alert.Root status="error" role="alert" data-testid="comment-replies-more-failed">
+                  <Alert.Indicator />
+                  <Alert.Content>
+                    <Alert.Description>{postReadErrorMessage(failure)}</Alert.Description>
+                  </Alert.Content>
+                </Alert.Root>
+              )}
+              <Button
+                size="xs"
+                variant="outline"
+                borderRadius="pill"
+                borderColor="border.emphasized"
+                loading={more.isPending}
+                onClick={() => more.mutate()}
+                data-testid="comment-replies-more"
+              >
+                {copy.commentRepliesMore}
+              </Button>
             </Stack>
           )}
           {replying && replyable && viewer !== undefined && (
@@ -662,7 +763,7 @@ function PublishedCommentItem({
   const own = viewer !== undefined && isOwnPost(comment.author, viewer.publicId);
   useTakenBack(
     takenBack.edits.get(comment.id),
-    { kind: 'edit', postId, commentId: comment.id },
+    { kind: 'edit', postId, commentId: comment.id, threadId },
     onTaken,
     (text) => {
       setEditStart(text);
@@ -882,7 +983,7 @@ function CommentEditForm({
   const { refetch: refetchSession } = useSession();
   const update = useUpdateComment(postId, () => void refetchSession());
   const box = useCommentBoxDraft({
-    key: { kind: 'edit', postId: postId.toLowerCase(), commentId: comment.id },
+    key: { kind: 'edit', postId: postId.toLowerCase(), commentId: comment.id, threadId },
     accountId,
     text,
     initial: comment.body,

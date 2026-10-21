@@ -117,6 +117,26 @@ describe('keeping and taking back', () => {
     ]);
   });
 
+  it('keeps an edit’s thread with its text, for the page to read on through it (답글 더 보기)', () => {
+    const storage = new MemoryStorage();
+    keepCommentDraft(storage, { ...edit, threadId: PARENT }, ACCOUNT, '고친 답글', NOW);
+    // The same box as an edit kept without one: the storage key is the comment's alone.
+    expect([...storage.items.keys()]).toEqual([commentDraftStorageKey(edit)]);
+    const drafts = readCommentDrafts(storage, POST, ACCOUNT, NOW + 1);
+    expect([...drafts.edits]).toEqual([[EDITED, '고친 답글']]);
+    expect([...drafts.editThreads]).toEqual([[EDITED, parent]]);
+    // An edit kept without one (a 댓글's) has none; a thread that is no id is not read.
+    keepCommentDraft(storage, edit, ACCOUNT, '고친 댓글', NOW + 2);
+    expect(readCommentDrafts(storage, POST, ACCOUNT, NOW + 3).editThreads.size).toBe(0);
+    storage.setItem(
+      commentDraftStorageKey(edit),
+      JSON.stringify({ version: 1, accountId: ACCOUNT, savedAt: NOW, text: 'x', threadId: 'nope' }),
+    );
+    const odd = readCommentDrafts(storage, POST, ACCOUNT, NOW + 4);
+    expect([...odd.edits]).toEqual([[EDITED, 'x']]);
+    expect(odd.editThreads.size).toBe(0);
+  });
+
   it('replaces what was kept for the same box', () => {
     const storage = new MemoryStorage();
     keepCommentDraft(storage, reply, ACCOUNT, '처음', NOW);
@@ -174,6 +194,7 @@ describe('the drafts the page holds', () => {
     comment: '새 댓글',
     replies: new Map([[parent, '답글']]),
     edits: new Map([[EDITED, '고친 댓글']]),
+    editThreads: new Map([[EDITED, parent]]),
   };
 
   it('lose the boxes that took theirs, and stay themselves when none did', () => {
@@ -183,6 +204,7 @@ describe('the drafts the page holds', () => {
     expect(left.comment).toBeUndefined();
     expect(left.replies.size).toBe(0);
     expect([...left.edits]).toEqual([[EDITED, '고친 댓글']]);
+    expect([...left.editThreads]).toEqual([[EDITED, parent]]);
     expect(withoutCommentDrafts(left, [reply])).toBe(left);
     expect(withoutCommentDrafts(left, [edit])).toBe(NO_COMMENT_DRAFTS);
   });
@@ -191,11 +213,15 @@ describe('the drafts the page holds', () => {
     const later = {
       comment: undefined,
       replies: new Map([[parent, '다시 쓴 답글']]),
-      edits: new Map<string, string>(),
+      edits: new Map([[EDITED, '다시 고친 댓글']]),
+      editThreads: new Map<string, string>(),
     };
     const merged = mergeCommentDrafts(drafts, later);
     expect(merged.comment).toBe('새 댓글');
     expect([...merged.replies]).toEqual([[parent, '다시 쓴 답글']]);
+    // The edit kept again without its thread keeps the one it had.
+    expect([...merged.edits]).toEqual([[EDITED, '다시 고친 댓글']]);
+    expect([...merged.editThreads]).toEqual([[EDITED, parent]]);
     expect(mergeCommentDrafts(drafts, NO_COMMENT_DRAFTS)).toBe(drafts);
   });
 });

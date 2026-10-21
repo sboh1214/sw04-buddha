@@ -2,19 +2,22 @@ import { randomUUID } from 'node:crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  COMMENT_REPLIES_PAGE_SIZE,
   decodeKeyset,
   encodeKeyset,
   type CommentDeletion,
   type CommentNotAllowedDetails,
   type CommentNotAllowedReason,
   type CommentNotEditableDetails,
+  type CommentRepliesQuery,
+  type CommentsQuery,
   type CommentThread,
-  type CursorQuery,
   type PostComment,
   type PublishedComment,
   type Role,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -68,6 +71,21 @@ function publishedOf(row: CommentRow): PublishedComment {
 }
 
 /**
+ * A page of 대댓글 from rows read oldest first with one row past COMMENT_REPLIES_PAGE_SIZE: the
+ * first that many as the public sees them (`publicCommentOf` — a deleted 대댓글 was never read), and
+ * the cursor after the last of them when the extra row says more follow.
+ */
+function replyPageOf(rows: readonly CommentRow[]): Page<PostComment> {
+  const hasMore = rows.length > COMMENT_REPLIES_PAGE_SIZE;
+  const kept = hasMore ? rows.slice(0, COMMENT_REPLIES_PAGE_SIZE) : rows;
+  const last = kept.at(-1);
+  return {
+    items: kept.flatMap((row) => publicCommentOf(row, false) ?? []),
+    nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
+  };
+}
+
+/**
  * 댓글·대댓글 (#48, ADR-0074): a post's comments, and their authors' writes. Two layers under a post
  * (#45-2), both oldest first; plain text (#45-3); edits keep the operators' history (#45-4);
  * deletion and hiding as #45-5 says. Writing and trading are independent (N05 §2): no write reads
@@ -101,14 +119,20 @@ export class CommentsService {
 
   /**
    * `GET /posts/:postId/comments`: the post's 댓글 oldest first (#45-2: 작성 순), a page of them at
-   * a time, each with every 대댓글 under it, oldest first too. A page counts 댓글 only — a thread is
-   * never split across pages — and holds no 댓글 that left every view (deleted, nothing under it),
-   * so a page is full while more follow. The comments of a post in any state are read: a hidden
-   * post's and a deleted post's placeholder keep their comments in view (N04 §6: the replies keep
-   * their context). A post that is gone — deleted with nothing under it, or never there — is
-   * NOT_FOUND, as on its page.
+   * a time (`limit`, at most COMMENT_PAGE_LIMIT), each with its first COMMENT_REPLIES_PAGE_SIZE
+   * 대댓글, oldest first too, and the cursor of the rest (`repliesNextCursor`, read by `replies` —
+   * 오너 결정 2026-10-21: '답글 더 보기'로 50개씩). A page counts 댓글 only and holds no 댓글 that
+   * left every view (deleted, nothing under it), so a page is full while more follow. The comments
+   * of a post in any state are read: a hidden post's and a deleted post's placeholder keep their
+   * comments in view (N04 §6: the replies keep their context). A post that is gone — deleted with
+   * nothing under it, or never there — is NOT_FOUND, as on its page.
+   *
+   * Bounded whatever a thread holds (Codex review on PR #220): one query for the page's 댓글, one
+   * for their 대댓글 — a LATERAL read of at most COMMENT_REPLIES_PAGE_SIZE + 1 per 댓글 down
+   * `post_comments_parent_id_created_at_id_idx` — and one pass that appends each 대댓글 to its
+   * 댓글's list.
    */
-  async list(postId: string, query: CursorQuery): Promise<Page<CommentThread>> {
+  async list(postId: string, query: CommentsQuery): Promise<Page<CommentThread>> {
     const { posts, postComments, profiles } = schema;
     const [post] = await this.db
       .select({ deletedAt: posts.deletedAt, hiddenAt: posts.hiddenAt })
@@ -136,37 +160,113 @@ export class CommentsService {
       .limit(query.limit + 1);
     const hasMore = rows.length > query.limit;
     const kept = hasMore ? rows.slice(0, query.limit) : rows;
-    const replies =
-      kept.length === 0
-        ? []
-        : await this.db
-            .select(this.columns)
-            .from(postComments)
-            .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
-            .where(
-              and(
-                inArray(
-                  postComments.parentId,
-                  kept.map((row) => row.id),
-                ),
-                isNull(postComments.deletedAt),
-              ),
-            )
-            .orderBy(asc(postComments.createdAt), asc(postComments.id));
-    const byParent = new Map<string, PostComment[]>();
-    for (const reply of replies) {
-      const shown = publicCommentOf(reply, false);
-      if (shown === undefined || reply.parentId === null) continue;
-      byParent.set(reply.parentId, [...(byParent.get(reply.parentId) ?? []), shown]);
+    const byParent = new Map<string, CommentRow[]>();
+    for (const reply of await this.firstReplies(kept.map((row) => row.id))) {
+      if (reply.parentId === null) continue;
+      const held = byParent.get(reply.parentId);
+      if (held === undefined) byParent.set(reply.parentId, [reply]);
+      else held.push(reply);
     }
     const last = kept.at(-1);
     return {
       items: kept.flatMap((row) => {
         const comment = publicCommentOf(row, row.hasReplies);
-        return comment === undefined ? [] : [{ comment, replies: byParent.get(row.id) ?? [] }];
+        if (comment === undefined) return [];
+        const { items, nextCursor } = replyPageOf(byParent.get(row.id) ?? []);
+        return [{ comment, replies: items, repliesNextCursor: nextCursor }];
       }),
       nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
     };
+  }
+
+  /**
+   * `GET /comments/:commentId/replies`: the 대댓글 of one 댓글 after `cursor`, oldest first,
+   * COMMENT_REPLIES_PAGE_SIZE a page — '답글 더 보기' (오너 결정 2026-10-21). The first page (no
+   * cursor) is the one its post's comment page carries. A deleted 대댓글 is in no page, a hidden one
+   * is its placeholder. NOT_FOUND for what is no thread in view: an unknown comment, a 대댓글 (it
+   * has no replies of its own, #45-2), a deleted 댓글 with nothing under it — and so for every
+   * comment of a post that left every view: a 댓글 still in view means an undeleted comment on its
+   * post, itself or a 대댓글 under it, which keeps the post in view too.
+   */
+  async replies(commentId: string, query: CommentRepliesQuery): Promise<Page<PostComment>> {
+    const { postComments, profiles } = schema;
+    const [thread] = await this.db
+      .select({
+        parentId: postComments.parentId,
+        deletedAt: postComments.deletedAt,
+        hiddenAt: postComments.hiddenAt,
+      })
+      .from(postComments)
+      .where(eq(postComments.id, commentId));
+    if (
+      !thread ||
+      thread.parentId !== null ||
+      publicStateOf(thread, await commentHasReplies(this.db, commentId)) === 'gone'
+    ) {
+      throw commentNotFound();
+    }
+    const cursor = decodeKeyset(query.cursor, 'uuid');
+    const rows = await this.db
+      .select(this.columns)
+      .from(postComments)
+      .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
+      .where(
+        and(
+          eq(postComments.parentId, commentId),
+          isNull(postComments.deletedAt),
+          cursor === undefined
+            ? undefined
+            : keysetPredicate(postComments.createdAt, postComments.id, cursor, 'uuid', 'after'),
+        ),
+      )
+      .orderBy(asc(postComments.createdAt), asc(postComments.id))
+      .limit(COMMENT_REPLIES_PAGE_SIZE + 1);
+    return replyPageOf(rows);
+  }
+
+  /**
+   * The first COMMENT_REPLIES_PAGE_SIZE + 1 undeleted 대댓글 of each 댓글 `threadIds` names, oldest
+   * first within each: a LATERAL subquery per 댓글 that walks its replies' index and stops at the
+   * limit, so a thread of any size costs its first page and one row more (whether more follow).
+   */
+  private async firstReplies(threadIds: string[]): Promise<CommentRow[]> {
+    if (threadIds.length === 0) return [];
+    const { postComments, profiles } = schema;
+    const thread = alias(postComments, 'thread');
+    const reply = this.db
+      .select({
+        id: postComments.id,
+        parentId: postComments.parentId,
+        body: postComments.body,
+        createdAt: postComments.createdAt,
+        editedAt: postComments.editedAt,
+        deletedAt: postComments.deletedAt,
+        hiddenAt: postComments.hiddenAt,
+        publicId: profiles.publicId,
+        nickname: profiles.nickname,
+        role: profiles.role,
+      })
+      .from(postComments)
+      .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
+      .where(and(eq(postComments.parentId, thread.id), isNull(postComments.deletedAt)))
+      .orderBy(asc(postComments.createdAt), asc(postComments.id))
+      .limit(COMMENT_REPLIES_PAGE_SIZE + 1)
+      .as('reply');
+    return this.db
+      .select({
+        id: reply.id,
+        parentId: reply.parentId,
+        body: reply.body,
+        createdAt: reply.createdAt,
+        editedAt: reply.editedAt,
+        deletedAt: reply.deletedAt,
+        hiddenAt: reply.hiddenAt,
+        author: { publicId: reply.publicId, nickname: reply.nickname, role: reply.role },
+      })
+      .from(thread)
+      .crossJoinLateral(reply)
+      .where(inArray(thread.id, threadIds))
+      .orderBy(asc(reply.createdAt), asc(reply.id));
   }
 
   /**

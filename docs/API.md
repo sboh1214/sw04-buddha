@@ -107,7 +107,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `COMMENT_NOT_EDITABLE` | 409 | 그 댓글은 지금 작성자가 고칠 수 없다(#48). `details.reason` 이 까닭을 말한다 — `hidden`(운영 정책에 따라 숨긴 댓글이다. 숨긴 댓글은 지울 수는 있다). |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (74개)
+## 오퍼레이션 (75개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -235,8 +235,9 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/posts/{postId}/comments` | A post’s comments: its 댓글 oldest first, a page at a time, each with every 대댓글 under it oldest first; a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. A post that is gone is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/posts/{postId}/comments` | A post’s comments: its 댓글 oldest first, at most 20 a page, each with its first 50 대댓글 oldest first and the cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. A post that is gone is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | POST | `/api/v1/posts/{postId}/comments` | A comment of plain text (at most 1000 characters, line breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `COMMENT_NOT_ALLOWED`, `RATE_LIMITED` |
+| GET | `/api/v1/comments/{commentId}/replies` | The 대댓글 of a 댓글 after the cursor, oldest first, 50 a page — the first page is the one its post’s comment page carries. A deleted 대댓글 is left out and a hidden one is its placeholder. NOT_FOUND for an unknown comment, a 대댓글 and a 댓글 that is gone | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | PUT | `/api/v1/comments/{commentId}` | The author replaces the body; the comment shows as edited and the earlier version is kept for operators. The same text changes nothing. A hidden comment cannot be edited (COMMENT_NOT_EDITABLE) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `COMMENT_NOT_EDITABLE`, `RATE_LIMITED` |
 | POST | `/api/v1/comments/{commentId}/delete` | The author deletes the comment (a hidden one too): a 댓글 stays as the placeholder 삭제된 글입니다 while 대댓글 hang under it, and anything else is gone from every view. Never restored | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 

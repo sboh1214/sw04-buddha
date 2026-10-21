@@ -3,13 +3,17 @@ import {
   COMMENT_BODY_EMPTY_MESSAGE,
   COMMENT_BODY_MAX_LENGTH,
   COMMENT_NOT_ALLOWED_REASONS,
+  COMMENT_PAGE_LIMIT,
+  COMMENT_REPLIES_PAGE_SIZE,
   commentBodyInputSchema,
   commentBodyRefusalOf,
   commentBodyTooLongMessage,
   commentDeletionSchema,
   commentNotAllowedDetailsSchema,
   commentNotEditableDetailsSchema,
+  commentRepliesQuerySchema,
   commentSegments,
+  commentsQuerySchema,
   commentThreadSchema,
   createCommentBodySchema,
   deleteCommentBodySchema,
@@ -239,9 +243,40 @@ describe('a comment’s answers and requests', () => {
       expect(postCommentSchema.parse({ state, id: ID })).toEqual({ state, id: ID });
     }
     const reply = { ...published, id: OTHER, parentId: ID, editedAt: createdAt };
+    const thread = {
+      comment: { state: 'deleted', id: ID },
+      replies: [reply],
+      repliesNextCursor: null,
+    } as const;
+    expect(commentThreadSchema.parse(thread)).toEqual(thread);
+    // At most 50 대댓글 ride with their 댓글; the rest are read by the cursor (오너 결정 2026-10-21).
+    expect(COMMENT_REPLIES_PAGE_SIZE).toBe(50);
+    const full = Array.from({ length: COMMENT_REPLIES_PAGE_SIZE }, () => reply);
     expect(
-      commentThreadSchema.parse({ comment: { state: 'deleted', id: ID }, replies: [reply] }),
-    ).toEqual({ comment: { state: 'deleted', id: ID }, replies: [reply] });
+      commentThreadSchema.parse({ ...thread, replies: full, repliesNextCursor: '1_x' })
+        .repliesNextCursor,
+    ).toBe('1_x');
+    expect(commentThreadSchema.safeParse({ ...thread, replies: [...full, reply] }).success).toBe(
+      false,
+    );
+    expect(commentThreadSchema.safeParse({ comment: thread.comment, replies: [] }).success).toBe(
+      false,
+    );
+  });
+
+  it('pages 댓글 20 at most and 대댓글 by their cursor alone', () => {
+    expect(commentsQuerySchema.parse({})).toEqual({ limit: COMMENT_PAGE_LIMIT });
+    expect(COMMENT_PAGE_LIMIT).toBe(20);
+    expect(commentsQuerySchema.parse({ cursor: 'c', limit: '2' })).toEqual({
+      cursor: 'c',
+      limit: 2,
+    });
+    expect(commentsQuerySchema.safeParse({ limit: '21' }).success).toBe(false);
+    expect(commentsQuerySchema.safeParse({ limit: '0' }).success).toBe(false);
+    expect(commentRepliesQuerySchema.parse({})).toEqual({});
+    expect(commentRepliesQuerySchema.parse({ cursor: 'c' })).toEqual({ cursor: 'c' });
+    expect(commentRepliesQuerySchema.safeParse({ cursor: '' }).success).toBe(false);
+    expect(commentRepliesQuerySchema.safeParse({ cursor: 'x'.repeat(201) }).success).toBe(false);
   });
 
   it('writes a 댓글 or, with a parent, a 대댓글, naming the account', () => {

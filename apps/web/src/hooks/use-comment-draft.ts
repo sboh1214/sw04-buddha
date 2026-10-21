@@ -207,7 +207,9 @@ export function keepSectionTextsForStep(
   };
   if (drafts.comment !== undefined) keep({ kind: 'comment', postId }, drafts.comment);
   for (const [parentId, text] of drafts.replies) keep({ kind: 'reply', postId, parentId }, text);
-  for (const [commentId, text] of drafts.edits) keep({ kind: 'edit', postId, commentId }, text);
+  for (const [commentId, text] of drafts.edits) {
+    keep({ kind: 'edit', postId, commentId, threadId: drafts.editThreads.get(commentId) }, text);
+  }
   for (const text of held) keep(commentDraftKeyOfPlace(postId, text.place), text.text);
   return kept;
 }

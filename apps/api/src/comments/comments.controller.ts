@@ -9,21 +9,27 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
   COMMENT_BODY_MAX_LENGTH,
+  COMMENT_PAGE_LIMIT,
+  COMMENT_REPLIES_PAGE_SIZE,
   commentDeletionSchema,
+  commentRepliesQuerySchema,
   commentThreadSchema,
+  commentsQuerySchema,
   createCommentBodySchema,
-  cursorQuerySchema,
   deleteCommentBodySchema,
+  postCommentSchema,
   publishedCommentSchema,
   updateCommentBodySchema,
   uuidParamSchema,
   type CommentDeletion,
+  type CommentRepliesQuery,
+  type CommentsQuery,
   type CommentThread,
-  type CursorQuery,
   type DeleteCommentBody,
+  type PostComment,
   type PublishedComment,
 } from '@buddha/shared';
 import { type SessionUser } from '../auth/auth.js';
@@ -31,7 +37,6 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
-import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
@@ -58,17 +63,17 @@ export class PostCommentsController {
   @ApiOperation({
     operationId: 'listComments',
     summary:
-      'A post’s comments: its 댓글 oldest first, a page at a time, each with every 대댓글 under it ' +
-      'oldest first; a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, ' +
-      'other deleted ones are left out. A post that is gone is NOT_FOUND',
+      `A post’s comments: its 댓글 oldest first, at most ${String(COMMENT_PAGE_LIMIT)} a page, ` +
+      `each with its first ${String(COMMENT_REPLIES_PAGE_SIZE)} 대댓글 oldest first and the ` +
+      'cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted ' +
+      '댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are ' +
+      'left out. A post that is gone is NOT_FOUND',
   })
-  @ApiQuery(CURSOR_QUERY_PARAMS[0])
-  @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(commentThreadSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
   async list(
     @Param('postId', { schema: uuidParamSchema }) postId: string,
-    @Query({ schema: cursorQuerySchema }) query: CursorQuery,
+    @Query({ schema: commentsQuerySchema }) query: CommentsQuery,
   ): Promise<ApiPage<CommentThread>> {
     const { items, nextCursor } = await this.comments.list(postId, query);
     return new ApiPage(items, { nextCursor });
@@ -106,15 +111,39 @@ export class PostCommentsController {
 }
 
 /**
- * `/api/v1/comments/:commentId` (#48, ADR-0074): the author's edit and deletion of a comment, by
- * the comment's id alone (a comment knows its post). Editing is open to accounts that finished the
- * onboarding, as writing is; deleting one's own needs a session only (as a post's: deleting stays
- * open whatever the account's state). Both name the account the screen shows.
+ * `/api/v1/comments/:commentId` (#48, ADR-0074): a 댓글's 대댓글 past the first page, public; and
+ * the author's edit and deletion of a comment, by the comment's id alone (a comment knows its
+ * post). Editing is open to accounts that finished the onboarding, as writing is; deleting one's
+ * own needs a session only (as a post's: deleting stays open whatever the account's state). Both
+ * name the account the screen shows.
  */
 @ApiTags('comments')
 @Controller('comments')
 export class CommentsController {
   constructor(private readonly comments: CommentsService) {}
+
+  /**
+   * Public, as the comment list is (N05 §2): anyone reads, naming each author by public face only
+   * (registry.ts `showsPerson`). '답글 더 보기' (오너 결정 2026-10-21, ADR-0074).
+   */
+  @Get(':commentId/replies')
+  @ApiOperation({
+    operationId: 'listCommentReplies',
+    summary:
+      `The 대댓글 of a 댓글 after the cursor, oldest first, ${String(COMMENT_REPLIES_PAGE_SIZE)} ` +
+      'a page — the first page is the one its post’s comment page carries. A deleted 대댓글 is ' +
+      'left out and a hidden one is its placeholder. NOT_FOUND for an unknown comment, a 대댓글 ' +
+      'and a 댓글 that is gone',
+  })
+  @ApiPageOf(postCommentSchema)
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
+  async replies(
+    @Param('commentId', { schema: uuidParamSchema }) commentId: string,
+    @Query({ schema: commentRepliesQuerySchema }) query: CommentRepliesQuery,
+  ): Promise<ApiPage<PostComment>> {
+    const { items, nextCursor } = await this.comments.replies(commentId, query);
+    return new ApiPage(items, { nextCursor });
+  }
 
   @Put(':commentId')
   @UseGuards(SessionGuard, OnboardedGuard)

@@ -222,6 +222,7 @@ describe('what a comment box going away leaves the section', () => {
 
 describe('what the comment section keeps as it goes', () => {
   const EDITED = 'a3bb189e-8bf9-3888-9912-ace4e6543002';
+  const REPLY = 'c4cc289f-9c0a-4999-8a23-bdf5f7654113';
   const held = (place: HeldText['place'], text: string): HeldText => ({
     id: `held-${text}`,
     place,
@@ -240,7 +241,11 @@ describe('what the comment section keeps as it goes', () => {
     drafts: {
       comment: undefined,
       replies: new Map(),
-      edits: new Map([[PARENT, '아직 상자에 들지 않은 수정']]),
+      edits: new Map([
+        [PARENT, '아직 상자에 들지 않은 수정'],
+        [REPLY, '아직 상자에 들지 않은 답글 수정'],
+      ]),
+      editThreads: new Map([[REPLY, PARENT]]),
     },
   };
 
@@ -252,7 +257,15 @@ describe('what the comment section keeps as it goes', () => {
     expect(new Map(kept.edits)).toEqual(
       new Map([
         [PARENT, '아직 상자에 들지 않은 수정'],
+        [REPLY, '아직 상자에 들지 않은 답글 수정'],
         [EDITED, '보내지 못한 수정'],
+      ]),
+    );
+    // Each edit with its thread, for the page to read on through it after the step (답글 더 보기).
+    expect(new Map(kept.editThreads)).toEqual(
+      new Map([
+        [REPLY, PARENT],
+        [EDITED, PARENT],
       ]),
     );
   });

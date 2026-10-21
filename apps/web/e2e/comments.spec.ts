@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } from './helpers';
@@ -13,8 +13,12 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * 대댓글 removes it; deleting the post leaves its placeholder with every comment still readable and
  * no box to write in (N04 §6), and once its last comment is deleted the open page is its 404. An
  * admin's comment carries '운영자' and offers the member 답글 only. A visitor reads the comments,
- * which the server put in the HTML, a long address wrapping inside a phone's width, and is asked
- * to sign in, coming back to the post. Leaving a new 댓글, a 답글 or an edit with text asks first
+ * which the browser reads (the server's HTML holds none), a long address wrapping inside a phone's
+ * width, and is asked to sign in, coming back to the post. A 댓글 with more than 50 대댓글 shows
+ * the first 50 and '답글 더 보기', and a 답글 written there reads the rest first and stands last;
+ * an edit of a 답글 past the first 50 kept through a re-consent step comes back into its box, the
+ * page reading on through that thread alone, and a read on that fails says so above the thread's
+ * '답글 더 보기' (오너 결정 2026-10-21). Leaving a new 댓글, a 답글 or an edit with text asks first
  * (staying keeps it, an empty box asks nothing); an account facing a re-consent still deletes its
  * own comment on the post page, while 답글, 수정 and 올리기 take it to the step — every box's text
  * kept in the tab and put back into its box once the step is done, an open box's 올리기·저장
@@ -105,6 +109,17 @@ function commentDraftsInTab(page: Page): Promise<Record<string, string>> {
   );
 }
 
+/** One comment draft as this tab keeps it (`key`): its text and, for an edit, its thread. */
+function commentDraftInTab(
+  page: Page,
+  key: string,
+): Promise<{ text?: string; threadId?: string } | null> {
+  return page.evaluate((storageKey) => {
+    const stored = sessionStorage.getItem(storageKey);
+    return stored === null ? null : (JSON.parse(stored) as { text?: string; threadId?: string });
+  }, key);
+}
+
 /** Records each dialog the page opens and answers it with the next of `answers` (no: dismissed). */
 function dialogs(page: Page): { asked: string[]; answers: boolean[] } {
   const asked: string[] = [];
@@ -114,6 +129,27 @@ function dialogs(page: Page): { asked: string[]; answers: boolean[] } {
     void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
   });
   return { asked, answers };
+}
+
+/**
+ * Dismisses an open dialog the way `dismiss` does (Escape, a click outside it), as a person would —
+ * sent again while the dialog is still open and not yet on its way out. Ark UI's dismissable layer
+ * starts listening only a moment after the dialog shows (zag-js defers it: `whenNode`, then a frame
+ * and a task in `trackInteractOutside`), so a press sent as soon as the dialog is visible can land
+ * before it listens and leave the dialog open for good — measured on the 답글 box's dialog opened
+ * again after an Escape: missed 12 times in 20 sent at once, none in 20 sent a second later. Not a
+ * fault of the page (a person's press that early hits the backdrop, and the next one closes it).
+ * Once the dialog is going (`data-state="closed"`) or gone nothing more is sent, so no stray click
+ * moves the focus the test checks next.
+ */
+async function dismissDialog(dialog: Locator, dismiss: () => Promise<void>): Promise<void> {
+  await expect(async () => {
+    const state = await dialog.evaluateAll(
+      (found) => found[0]?.getAttribute('data-state') ?? 'gone',
+    );
+    if (state === 'open') await dismiss();
+    await expect(dialog).toHaveCount(0, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
 }
 
 /** A post straight at the API with the context's cookie: this spec's subject is its comments. */
@@ -320,7 +356,7 @@ test.describe('댓글·대댓글', () => {
     await expect(page.getByTestId('comment-reply')).toHaveCount(0);
   });
 
-  test('로그인하지 않은 방문자는 댓글과 대댓글을 읽고(서버가 그린 HTML에도 있다), 쓰기 대신 이 글로 돌아오는 로그인 안내를 받는다', async ({
+  test('로그인하지 않은 방문자는 브라우저가 불러온 댓글과 대댓글을 읽고(서버가 그린 HTML에는 없다), 쓰기 대신 이 글로 돌아오는 로그인 안내를 받는다', async ({
     admin,
     page,
     request,
@@ -334,14 +370,23 @@ test.describe('댓글·대댓글', () => {
     const longAddress = `https://example.com/${'a'.repeat(400)}`;
     const long = await commentThroughApi(admin, postId, null, `긴 주소 ${longAddress}`);
 
-    // The first page is the server's: the HTML holds the comments before any script runs.
+    // The comments are the browser's to read (오너 결정 2026-10-21): the server's HTML holds the
+    // post and the count, and no word of a comment — not in the markup, not in the seeded state.
     const html = await (await request.get(`/community/posts/${postId}`)).text();
-    expect(html).toContain(`읽는 댓글 ${tag}`);
-    expect(html).toContain(`읽는 답글 ${tag}`);
+    expect(html).toContain(`방문자가 읽는 글 ${tag}`);
+    expect(html).toContain('data-testid="comments-heading"');
+    // Under it, the wait — named for a screen reader too (busy, '불러오는 중' it reads).
+    const loading = /<div[^>]*data-testid="comments-loading"[^>]*>/.exec(html)?.[0];
+    expect(loading).toContain('aria-busy="true"');
+    expect(html).toContain(copy.loading);
+    expect(html).not.toContain(`읽는 댓글 ${tag}`);
+    expect(html).not.toContain(`읽는 답글 ${tag}`);
+    expect(html).not.toContain(longAddress);
 
     await page.goto(`/community/posts/${postId}`);
     await expect(page.getByTestId('comments-heading')).toHaveText(`${copy.commentsHeading} 3`);
     await expect(commentOf(page, top).getByTestId('comment-body')).toHaveText(`읽는 댓글 ${tag}`);
+    await expect(page.getByTestId('comments-loading')).toHaveCount(0);
     // The long address wraps (`overflow-wrap: anywhere`): it stays inside the comment's own box
     // (a phone zooms out to fit what runs off, so the box is measured, not only the page).
     const longBody = commentOf(page, long).getByTestId('comment-body');
@@ -367,6 +412,56 @@ test.describe('댓글·대댓글', () => {
     await expect(page.getByTestId('comment-reply')).toHaveCount(0);
     await expect(page.getByTestId('comment-edit')).toHaveCount(0);
     await expect(page.getByTestId('comment-delete')).toHaveCount(0);
+  });
+
+  test('답글이 50개를 넘는 댓글은 처음 50개와 답글 더 보기를 보이고, 새 답글은 남은 답글을 읽은 뒤 맨 끝에 온다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-21 (ADR-0074): each 댓글 shows its first 50 대댓글, oldest first, and
+    // '답글 더 보기' reads 50 more at a time.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `답글 많은 글 ${tag}`, tag);
+    const top = await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`);
+    for (let index = 1; index <= 52; index += 1) {
+      await commentThroughApi(admin, postId, top, `답글 ${String(index)} ${tag}`);
+    }
+    const bodies = (count: number) =>
+      Array.from({ length: count }, (_, index) => `답글 ${String(index + 1)} ${tag}`);
+
+    await page.goto(`/community/posts/${postId}`);
+    const heading = page.getByTestId('comments-heading');
+    await expect(heading).toHaveText(`${copy.commentsHeading} 53`);
+    const thread = page.getByTestId(`comment-thread-${top}`);
+    const shown = thread
+      .getByTestId('comment-replies')
+      .locator('article')
+      .getByTestId('comment-body');
+    const more = thread.getByTestId('comment-replies-more');
+    await expect(shown).toHaveText(bodies(50));
+    await expect(more).toHaveText(copy.commentRepliesMore);
+    await more.click();
+    await expect(shown).toHaveText(bodies(52));
+    await expect(more).toHaveCount(0);
+
+    // Read again: 50 and the button. A 답글 written now, with two still unread, reads them first
+    // and stands last, oldest first as the server keeps them.
+    await page.reload();
+    await expect(shown).toHaveText(bodies(50));
+    await commentOf(page, top).getByTestId('comment-reply').click();
+    const replyBox = thread.getByTestId('reply-composer');
+    await replyBox.getByTestId('comment-input').fill(`새 답글 ${tag}`);
+    await replyBox.getByTestId('comment-submit').click();
+    await expect(replyBox).toHaveCount(0);
+    await expect(shown).toHaveText([...bodies(52), `새 답글 ${tag}`]);
+    await expect(more).toHaveCount(0);
+    await expect(heading).toHaveText(`${copy.commentsHeading} 54`);
+    await page.reload();
+    await expect(shown).toHaveText(bodies(50));
+    await more.click();
+    await expect(shown).toHaveText([...bodies(52), `새 답글 ${tag}`]);
   });
 
   test('지운 글 아래의 마지막 댓글을 지우면 열려 있던 글 화면은 그 글의 404가 된다', async ({
@@ -457,8 +552,7 @@ test.describe('댓글·대댓글', () => {
     ] as const) {
       await cancel.click();
       await expect(discardDialog).toBeVisible();
-      await dismiss();
-      await expect(discardDialog).toHaveCount(0);
+      await dismissDialog(discardDialog, dismiss);
       await expect(cancel).toBeFocused();
       await expect(replyBox.getByTestId('comment-input')).toHaveValue(`쓰던 답글 ${tag}`);
     }
@@ -732,6 +826,103 @@ test.describe('댓글·대댓글', () => {
     expect(writes).toEqual([]);
     expect(asked).toEqual([]);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('재동의 단계를 지나 돌아오면 처음 50개 밖의 답글에 쓰던 수정은 그 스레드의 남은 답글을 읽어 그 상자에 되살아나고, 그 읽기가 실패하면 그 스레드의 답글 더 보기 위에 까닭이 보인다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-21 (ADR-0074 다섯째 표 답 1): a draft on a reply page not read yet still
+    // comes back. The edit's draft is kept with its thread, and the page read afresh after the
+    // step — the 51st 답글 not among the first 50 — reads on through that thread alone to find it.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `먼 답글의 글 ${tag}`, tag);
+    const top = await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`);
+    for (let index = 1; index <= 50; index += 1) {
+      await commentThroughApi(admin, postId, top, `답글 ${String(index)} ${tag}`);
+    }
+    const mine = await commentThroughApi(page.request, postId, top, `내 답글 ${tag}`);
+    const postPage = `/community/posts/${postId}`;
+    const viaStep = `/onboarding?next=${encodeURIComponent(postPage)}`;
+    const reconsent = await asReconsent(page);
+    const { asked } = dialogs(page);
+    const thread = page.getByTestId(`comment-thread-${top}`);
+    const more = thread.getByTestId('comment-replies-more');
+    const moreFailed = thread.getByTestId('comment-replies-more-failed');
+    const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+    const held = page.getByTestId('comment-held');
+    const editPath = `/api/v1/comments/${mine}`;
+    const refuseEdit = async (route: Route) => {
+      if (route.request().method() !== 'PUT') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    };
+
+    /**
+     * The 51st 답글 (the reader's) opened by 답글 더 보기 and edited, its 저장 refused for a consent
+     * asked again and then going to that step; at the step, the tab starts afresh (a reload —
+     * nothing of the thread held when it comes back, as after any visit elsewhere).
+     */
+    const editThroughStep = async (text: string) => {
+      await page.goto(postPage);
+      await more.click();
+      await commentOf(page, mine).getByTestId('comment-edit').click();
+      await editForm.getByTestId('comment-input').fill(text);
+      await page.route(`**${editPath}`, refuseEdit);
+      await editForm.getByTestId('comment-submit').click();
+      await expect(editForm.getByTestId('comment-error')).toHaveText(copy.errPostOnboarding);
+      await editForm.getByTestId('comment-submit').click();
+      await expect(page).toHaveURL(viaStep);
+      await expect(page.getByTestId('consent-step')).toBeVisible();
+      // Kept with the thread it is in: the 댓글's, not its own.
+      await expect
+        .poll(() => commentDraftInTab(page, `buddha.commentDraft:${postId}:edit:${mine}`))
+        .toMatchObject({ text, threadId: top });
+      await page.reload();
+      await expect(page.getByTestId('consent-step')).toBeVisible();
+      await page.unroute(`**${editPath}`, refuseEdit);
+    };
+
+    // --- back from the step: the page holds the first 50, reads the thread on, and opens the edit.
+    await editThroughStep(`고친 먼 답글 ${tag}`);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(`고친 먼 답글 ${tag}`);
+    await expect(editForm.getByTestId('comment-draft-restored')).toHaveText(
+      copy.commentDraftRestored,
+    );
+    await expect(held).toHaveCount(0);
+    await expect(more).toHaveCount(0);
+    expect(await commentDraftsInTab(page)).toEqual({});
+    await editForm.getByTestId('comment-submit').click();
+    await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(
+      `고친 먼 답글 ${tag}`,
+    );
+
+    // --- the read on fails: said above that thread's 답글 더 보기, which reads on from there.
+    await editThroughStep(`또 고친 먼 답글 ${tag}`);
+    const replies = (url: URL) => url.pathname === `/api/v1/comments/${top}/replies`;
+    await page.route(replies, (route) => route.abort('failed'));
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    // Why, read out: the toast said the text was restored, and its box is not on screen yet.
+    await expect(moreFailed).toHaveRole('alert');
+    await expect(moreFailed).toHaveText(copy.errNetwork);
+    await expect(editForm).toHaveCount(0);
+    await expect(held).toHaveCount(0);
+    await page.unroute(replies);
+    await more.click();
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(`또 고친 먼 답글 ${tag}`);
+    await expect(editForm.getByTestId('comment-draft-restored')).toBeVisible();
+    await expect(moreFailed).toHaveCount(0);
+    await expect(more).toHaveCount(0);
+    await editForm.getByTestId('comment-submit').click();
+    await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(
+      `또 고친 먼 답글 ${tag}`,
+    );
+    expect(asked).toEqual([]);
   });
 
   test('쓰는 사이 그 댓글이 지워져 답글과 수정이 거절되면 상자가 사라져도 거절의 까닭과 쓰던 글자가 닫을 때까지 남는다', async ({

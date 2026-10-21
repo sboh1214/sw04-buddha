@@ -3,13 +3,15 @@
  * post's comments and their authors' writes, and what the comments change of the post (its
  * placeholder and its count). Pinned: anyone reads and only an account that finished the
  * onboarding writes or edits, while deleting one's own needs a session alone; two layers, a reply
- * to a 대댓글 joining its 댓글; oldest first, a page of 댓글 at a time with all their 대댓글; plain
+ * to a 대댓글 joining its 댓글; oldest first, a page of 댓글 at a time (20 at most) with their first 50
+ * 대댓글 and the rest 50 a page on the reply route, however large a thread (오너 결정 2026-10-21); plain
  * text, trimmed, line breaks kept, 1,000 characters; the author by public face only; edits keep
  * the operators' history; deletion and hiding as #45-5 says, for comments and now for posts; a
  * hidden or deleted post or 댓글 takes no new comment; writing never touches a balance, an order or
  * a position. Skips when TEST_* are unset.
  */
-import { schema } from '@buddha/db';
+import { randomUUID } from 'node:crypto';
+import { schema, type Db } from '@buddha/db';
 import {
   completeOnboarding,
   createComment,
@@ -19,16 +21,18 @@ import {
 } from '@buddha/db/test';
 import {
   COMMENT_BODY_EMPTY_MESSAGE,
+  COMMENT_REPLIES_PAGE_SIZE,
   commentBodyTooLongMessage,
   commentDeletionSchema,
   commentThreadSchema,
+  postCommentSchema,
   postSchema,
   publishedCommentSchema,
   type CommentThread,
   type Post,
   type PostSummary,
 } from '@buddha/shared';
-import { asc, eq } from 'drizzle-orm';
+import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -219,7 +223,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     ]);
   });
 
-  it('pages 댓글 oldest first with every 대댓글 under each, ties by id, no deleted one taking a place', async () => {
+  it('pages 댓글 oldest first with the 대댓글 under each, ties by id, no deleted one taking a place', async () => {
     const base = Date.now() - 60_000;
     const at = (seconds: number) => new Date(base + seconds * 1_000);
     const make = (seconds: number, extra: Partial<Parameters<typeof createComment>[1]> = {}) =>
@@ -253,6 +257,263 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       a.id,
       b!.id,
     ]);
+  });
+
+  it('carries the first 50 대댓글 of each 댓글 and reads the rest 50 at a time (오너 결정 2026-10-21)', async () => {
+    const base = Date.now() - 3_600_000;
+    const at = (seconds: number) => new Date(base + seconds * 1_000);
+    const thread = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(0),
+    });
+    const small = await createComment(t.db, {
+      postId: post.id,
+      authorId: other.id,
+      createdAt: at(1),
+    });
+    // 120 대댓글 a second apart, written in reverse so the order is the time's, not the insert's;
+    // a deleted one takes no place, a hidden one is its placeholder.
+    const replies: string[] = [];
+    for (let index = 119; index >= 0; index -= 1) {
+      const row = await createComment(t.db, {
+        postId: post.id,
+        authorId: index % 2 === 0 ? author.id : other.id,
+        parentId: thread.id,
+        createdAt: at(10 + index),
+        ...(index === 7 ? { deletedAt: new Date() } : {}),
+        ...(index === 60 ? { hiddenAt: new Date() } : {}),
+      });
+      replies[index] = row.id;
+    }
+    const shown = replies.filter((_, index) => index !== 7);
+    const smallReply = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      parentId: small.id,
+      createdAt: at(500),
+    });
+
+    const listed = await page();
+    expect(listed.data.map(({ comment }) => comment.id)).toEqual([thread.id, small.id]);
+    const [big, little] = listed.data;
+    expect(big!.replies.map((reply) => reply.id)).toEqual(shown.slice(0, 50));
+    expect(big!.repliesNextCursor).not.toBeNull();
+    expect(little).toMatchObject({ replies: [{ id: smallReply.id }], repliesNextCursor: null });
+
+    const replyPage = async (commentId: string, cursor?: string) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/comments/${commentId}/replies${cursor === undefined ? '' : `?cursor=${cursor}`}`,
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json<{ data: unknown[]; meta: { nextCursor: string | null } }>();
+      return {
+        items: body.data.map((item) => postCommentSchema.parse(item)),
+        nextCursor: body.meta.nextCursor,
+      };
+    };
+    // Without a cursor: the page the comment list carries.
+    const first = await replyPage(thread.id);
+    expect(first.items).toEqual(big!.replies);
+    expect(first.nextCursor).toBe(big!.repliesNextCursor);
+    const second = await replyPage(thread.id, big!.repliesNextCursor!);
+    expect(second.items.map((reply) => reply.id)).toEqual(shown.slice(50, 100));
+    expect(second.items.find((reply) => reply.id === replies[60])).toEqual({
+      state: 'hidden',
+      id: replies[60],
+    });
+    const third = await replyPage(thread.id, second.nextCursor!);
+    expect(third.items.map((reply) => reply.id)).toEqual(shown.slice(100));
+    expect(third.nextCursor).toBeNull();
+    // Anyone reads them, the same answer; a cursor that does not decode serves the first page.
+    expect((await replyPage(thread.id, 'garbage')).items).toEqual(first.items);
+    const read = (cookie?: string) =>
+      t.app.inject({
+        method: 'GET',
+        url: `/api/v1/comments/${thread.id}/replies`,
+        headers: cookie === undefined ? {} : { cookie },
+      });
+    const anonymous = (await read()).body;
+    expect((await read(other.cookie)).body).toBe(anonymous);
+    expect((await read(author.cookie)).body).toBe(anonymous);
+    expect(anonymous).not.toContain(author.id);
+    expect(anonymous).not.toContain(other.id);
+    // Exactly 50 under a 댓글: all of them here, no cursor.
+    await t.db
+      .update(schema.postComments)
+      .set({ deletedAt: new Date() })
+      .where(inArray(schema.postComments.id, shown.slice(50)));
+    const fifty = (await page()).data[0]!;
+    expect(fifty.replies).toHaveLength(50);
+    expect(fifty.repliesNextCursor).toBeNull();
+    expect((await replyPage(thread.id)).nextCursor).toBeNull();
+  });
+
+  it('answers NOT_FOUND for the replies of what is no thread in view', async () => {
+    const thread = await written();
+    const answer = await reply(thread.id);
+    const replies = (commentId: string) =>
+      t.app.inject({ method: 'GET', url: `/api/v1/comments/${commentId}/replies` });
+    // A 대댓글 has no replies of its own (#45-2); an unknown id is no comment.
+    expect((await replies(answer.id)).statusCode).toBe(404);
+    expect((await replies('0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60')).statusCode).toBe(404);
+    expect((await replies('nope')).statusCode).toBe(400);
+    expect(
+      (
+        await t.app.inject({
+          method: 'GET',
+          url: `/api/v1/comments/${thread.id}/replies?cursor=`,
+        })
+      ).statusCode,
+    ).toBe(400);
+    // A hidden 댓글 and a deleted one kept as its placeholder still show what hangs under them.
+    await hide('postComments', thread.id);
+    expect((await replies(thread.id)).json<{ data: { id: string }[] }>().data).toEqual([
+      expect.objectContaining({ id: answer.id }),
+    ]);
+    expect((await remove(thread.id)).statusCode).toBe(200);
+    expect((await replies(thread.id)).statusCode).toBe(200);
+    // Nothing under it any more: the 댓글 is gone from every view, its thread too.
+    expect((await remove(answer.id)).statusCode).toBe(200);
+    expect((await replies(thread.id)).statusCode).toBe(404);
+  });
+
+  it('breaks a tie of 대댓글 written at one moment by id, across the 50th and the cursor', async () => {
+    const base = Date.now() - 3_600_000;
+    const at = (seconds: number) => new Date(base + seconds * 1_000);
+    const thread = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(0),
+    });
+    const before: string[] = [];
+    for (let index = 0; index < 49; index += 1) {
+      const row = await createComment(t.db, {
+        postId: post.id,
+        authorId: other.id,
+        parentId: thread.id,
+        createdAt: at(1 + index),
+      });
+      before.push(row.id);
+    }
+    // The 50th to the 52nd written at one moment, inserted in the reverse of their ids' order: the
+    // time alone, or the table's own order, would put them wrong — and the page ends among them.
+    const tied = [randomUUID(), randomUUID(), randomUUID()].sort();
+    for (const id of [...tied].reverse()) {
+      await t.db.insert(schema.postComments).values({
+        id,
+        postId: post.id,
+        authorId: other.id,
+        parentId: thread.id,
+        body: `같은 때 ${id}`,
+        createdAt: at(100),
+      });
+    }
+    const after = await createComment(t.db, {
+      postId: post.id,
+      authorId: other.id,
+      parentId: thread.id,
+      createdAt: at(200),
+    });
+    const order = [...before, ...tied, after.id];
+
+    const replyPage = async (cursor?: string) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1/comments/${thread.id}/replies${cursor === undefined ? '' : `?cursor=${cursor}`}`,
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res.json<{ data: { id: string }[]; meta: { nextCursor: string | null } }>();
+    };
+    const [listed] = (await page()).data;
+    expect(listed!.replies.map((reply) => reply.id)).toEqual(order.slice(0, 50));
+    // The reply route's own first page is the same, and its cursor reads on with no gap and no
+    // repeat: the other two of the tie, then the later one.
+    const first = await replyPage();
+    expect(first.data.map((reply) => reply.id)).toEqual(order.slice(0, 50));
+    expect(first.meta.nextCursor).toBe(listed!.repliesNextCursor);
+    const rest = await replyPage(listed!.repliesNextCursor!);
+    expect(rest.data.map((reply) => reply.id)).toEqual(order.slice(50));
+    expect(rest.meta.nextCursor).toBeNull();
+    // The same reads with the 대댓글 index out of play — the rows sorted as the table holds them
+    // (the tie in the reverse of the ids' order), not walked in the index's (created_at, id) order,
+    // nor reordered by a hash join — so the id that breaks the tie is the queries' own ORDER BY's.
+    await t.db.transaction(async (tx) => {
+      await tx.execute(sql`SET LOCAL enable_indexscan = off`);
+      await tx.execute(sql`SET LOCAL enable_indexonlyscan = off`);
+      await tx.execute(sql`SET LOCAL enable_bitmapscan = off`);
+      await tx.execute(sql`SET LOCAL enable_hashjoin = off`);
+      await tx.execute(sql`SET LOCAL enable_mergejoin = off`);
+      const sorted = new CommentsService(tx as unknown as Db) as unknown as {
+        firstReplies(threadIds: string[]): Promise<{ id: string }[]>;
+        replies(
+          commentId: string,
+          query: { cursor?: string },
+        ): Promise<{ items: { id: string }[] }>;
+      };
+      expect((await sorted.firstReplies([thread.id])).map((row) => row.id)).toEqual(
+        order.slice(0, 51),
+      );
+      const second = await sorted.replies(thread.id, { cursor: listed!.repliesNextCursor! });
+      expect(second.items.map((reply) => reply.id)).toEqual(order.slice(50));
+    });
+  });
+
+  it('reads a page of 20 댓글 at most, each with at most 50 대댓글, however large the thread', async () => {
+    expect((await listing('limit=21')).statusCode).toBe(400);
+    expect((await listing('limit=20')).statusCode).toBe(200);
+    // A 댓글 with 5,000 대댓글 (written in one statement), beside 19 more with 60 each: the page
+    // carries 50 of each, its query reads no more than one past that a 댓글, and the reply page
+    // reads on from there.
+    const big = await createComment(t.db, { postId: post.id, authorId: author.id });
+    const rest = [];
+    for (let index = 0; index < 19; index += 1) {
+      rest.push(await createComment(t.db, { postId: post.id, authorId: other.id }));
+    }
+    const fill = (parentId: string, count: number) =>
+      t.db.execute(sql`
+        INSERT INTO post_comments (post_id, parent_id, author_id, body, created_at)
+        SELECT ${post.id}::uuid, ${parentId}::uuid, ${other.id}::text, '대댓글 ' || n,
+               now() - make_interval(secs => (${count}::int - n)::double precision)
+        FROM generate_series(1, ${count}) AS n`);
+    await fill(big.id, 5_000);
+    for (const thread of rest) await fill(thread.id, 60);
+    const listed = await page();
+    expect(listed.data).toHaveLength(20);
+    for (const thread of listed.data) {
+      expect(thread.replies).toHaveLength(50);
+      expect(thread.repliesNextCursor).not.toBeNull();
+    }
+    // By its id: the 댓글 were written a moment apart by the database clock, and two in one
+    // millisecond (`timestamp(3)`) are ordered by their random ids — the big one is not always
+    // first, and the others' 대댓글 bear the same words.
+    const bigThread = listed.data.find(({ comment }) => comment.id === big.id)!;
+    expect(bigThread.replies.map((one) => (one.state === 'published' ? one.body : ''))).toEqual(
+      Array.from({ length: 50 }, (_, index) => `대댓글 ${String(index + 1)}`),
+    );
+    // The bound is the query's, not the trim after it (Codex review on PR #220): the page's read of
+    // the 대댓글 stops at COMMENT_REPLIES_PAGE_SIZE + 1 for each 댓글 — the one more says whether more
+    // follow — so the 5,000 are never read. The answer above would be the same without it.
+    // Its private read, reached through Nest's `get` (the result's type is the caller's to say).
+    const service: {
+      firstReplies(threadIds: string[]): Promise<{ parentId: string | null }[]>;
+    } = t.app.get(CommentsService);
+    const read = await service.firstReplies(listed.data.map(({ comment }) => comment.id));
+    const perThread = new Map<string | null, number>();
+    for (const row of read) perThread.set(row.parentId, (perThread.get(row.parentId) ?? 0) + 1);
+    expect(perThread.size).toBe(20);
+    expect(new Set(perThread.values())).toEqual(new Set([COMMENT_REPLIES_PAGE_SIZE + 1]));
+    expect(read).toHaveLength(20 * (COMMENT_REPLIES_PAGE_SIZE + 1));
+    const res = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/comments/${big.id}/replies?cursor=${bigThread.repliesNextCursor!}`,
+    });
+    const next = res.json<{ data: { body?: string }[]; meta: { nextCursor: string | null } }>();
+    expect(next.data.map((one) => one.body)).toEqual(
+      Array.from({ length: 50 }, (_, index) => `대댓글 ${String(index + 51)}`),
+    );
+    expect(next.meta.nextCursor).not.toBeNull();
   });
 
   it('keeps text as written: markup and addresses are text, the length is 1,000 code points', async () => {
@@ -303,7 +564,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     // The placeholder is its id and nothing else, read off the raw answer (the schema's parse
     // would drop a key the answer should not have): no author, no time, no word.
     expect((await page()).data).toEqual([
-      { comment: { state: 'deleted', id: comment.id }, replies: [answer] },
+      { comment: { state: 'deleted', id: comment.id }, replies: [answer], repliesNextCursor: null },
     ]);
     const body = (await listing()).body;
     expect(body).not.toContain('지울 댓글');

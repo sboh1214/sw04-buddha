@@ -268,6 +268,8 @@ const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
   idOrSlug: (fixture) => fixture.market.slug,
   postId: (fixture) => fixture.post.id,
   mediaId: (fixture) => fixture.post.mediaId,
+  // A's 댓글, whose 대댓글 the reply page reads (#48, '답글 더 보기').
+  commentId: (fixture) => fixture.comment.id,
 };
 
 /**
@@ -1213,7 +1215,12 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // the post it was called with, to everyone — the list and the post page (#46) and the post's
     // comments (#48).
     expect(persons.map(({ route }) => route)).toEqual(
-      expect.arrayContaining(['GET /posts', 'GET /posts/:postId', 'GET /posts/:postId/comments']),
+      expect.arrayContaining([
+        'GET /posts',
+        'GET /posts/:postId',
+        'GET /posts/:postId/comments',
+        'GET /comments/:commentId/replies',
+      ]),
     );
     expect(persons).toEqual(
       persons.map(({ route, caller }) => ({ route, caller, shown: PERSON_LABELS })),
@@ -1227,19 +1234,38 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(bodies.get('GET /media/:mediaId')).toContain('PNG');
     // The comment route answered A's 댓글 with its 대댓글 and the placeholder of the deleted one.
     const threads = parse(bodies.get('GET /posts/:postId/comments')!) as {
-      data: { comment: { state: string; id: string }; replies: { state: string }[] }[];
+      data: {
+        comment: { state: string; id: string };
+        replies: { state: string }[];
+        repliesNextCursor: string | null;
+      }[];
     };
     expect(
-      threads.data.map(({ comment, replies }) => ({
+      threads.data.map(({ comment, replies, repliesNextCursor }) => ({
         state: comment.state,
         id: comment.id,
         replies: replies.map((reply) => reply.state),
+        repliesNextCursor,
       })),
     ).toEqual([
-      { state: 'published', id: f.comment.id, replies: ['published'] },
-      { state: 'deleted', id: expect.any(String) as unknown, replies: ['published'] },
+      { state: 'published', id: f.comment.id, replies: ['published'], repliesNextCursor: null },
+      {
+        state: 'deleted',
+        id: expect.any(String) as unknown,
+        replies: ['published'],
+        repliesNextCursor: null,
+      },
     ]);
-    // The placeholder is its id alone, read off the raw answer: no author or time rides on it.
+    // The reply page answered A's 대댓글 under A's 댓글, A named as its author (above).
+    const replyPage = parse(bodies.get('GET /comments/:commentId/replies')!) as {
+      data: { state: string; parentId: string }[];
+    };
+    expect(replyPage.data).toEqual([
+      expect.objectContaining({ state: 'published', parentId: f.comment.id }),
+    ]);
+    // The placeholder object is its id alone, read off the raw answer: no author or time rides on
+    // it. (A page cursor is the (time, id) of the page's last row, a placeholder's too when one
+    // ends a page — ADR-0074 7-10; here none does.)
     expect(threads.data[1]?.comment).toEqual({
       state: 'deleted',
       id: expect.any(String) as unknown,

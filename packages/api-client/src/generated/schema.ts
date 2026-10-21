@@ -486,6 +486,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/comments/{commentId}/replies": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The 대댓글 of a 댓글 after the cursor, oldest first, 50 a page — the first page is the one its post’s comment page carries. A deleted 대댓글 is left out and a hidden one is its placeholder. NOT_FOUND for an unknown comment, a 대댓글 and a 댓글 that is gone */
+        get: operations["listCommentReplies"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/coupons/redeem": {
         parameters: {
             query?: never;
@@ -1025,7 +1042,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A post’s comments: its 댓글 oldest first, a page at a time, each with every 대댓글 under it oldest first; a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. A post that is gone is NOT_FOUND */
+        /** A post’s comments: its 댓글 oldest first, at most 20 a page, each with its first 50 대댓글 oldest first and the cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. A post that is gone is NOT_FOUND */
         get: operations["listComments"];
         put?: never;
         /** A comment of plain text (at most 1000 characters, line breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED) */
@@ -1286,6 +1303,8 @@ export type components = {
         CommentThread: {
             comment: components["schemas"]["PostComment"];
             replies: components["schemas"]["PostComment"][];
+            /** @description The cursor of GET /comments/:commentId/replies for the 대댓글 after these; null when every one is here */
+            repliesNextCursor: string | null;
         };
         ConfirmPhoneVerificationBody: {
             code: string;
@@ -4571,6 +4590,59 @@ export interface operations {
             };
         };
     };
+    listCommentReplies: {
+        parameters: {
+            query?: {
+                cursor?: string;
+            };
+            header?: never;
+            path: {
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PostComment"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     redeemCoupon: {
         parameters: {
             query?: never;
@@ -6820,7 +6892,6 @@ export interface operations {
     listComments: {
         parameters: {
             query?: {
-                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
             };

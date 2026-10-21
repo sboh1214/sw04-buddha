@@ -27,8 +27,7 @@ import { POSTS_KEY, isOwnPost } from './posts';
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
  * comment threads, what the author's own writes do to the pages held, how a draft is counted and
  * what a refusal says. Pure functions of the API's answers, apart from the components and the hooks
- * so the node test runner reaches them, and free of `'use client'`, so the server page seeds the
- * key the browser's hook reads.
+ * so the node test runner reaches them.
  *
  * Owner decisions (ADR-0069 decision 2, #45): under a post hang 댓글 and under a 댓글 hang 대댓글 —
  * no third layer, a reply to a 대댓글 is another 대댓글 of the same 댓글 (#45-2) — both oldest first
@@ -43,16 +42,29 @@ import { POSTS_KEY, isOwnPost } from './posts';
 // ---- cache key and request ------------------------------------------------------------------
 
 /**
- * A post's comment threads, under the posts' root: public like the post (N05 §2), so the post page
- * reads the first page on the server and dehydrates it (`posts` is not a private root). Apart from
- * `postKey` (`['posts', 'post', id]`) so neither invalidates the other by prefix.
+ * A post's comment threads, under the posts' root: public like the post (N05 §2), but read in the
+ * browser only — the post page does not read them on the server (오너 결정 2026-10-21, ADR-0074:
+ * the web's own requests are not held to the per-address limit, so a page drawn for anyone must
+ * not read what a thread holds). Apart from `postKey` (`['posts', 'post', id]`) so neither
+ * invalidates the other by prefix.
  */
 export const postCommentsKey = (postId: string) =>
   [...POSTS_KEY, 'comments', postId.toLowerCase()] as const;
 
-/** One page of `GET /posts/:postId/comments`: up to 20 댓글, each with every 대댓글 under it. */
+/**
+ * One page of `GET /posts/:postId/comments`: up to 20 댓글, each with its first 50 대댓글 and the
+ * cursor of the rest (`repliesNextCursor`). A thread the page holds may carry more 대댓글 than its
+ * answer did: those '답글 더 보기' read (`withMoreReplies`), kept by every later read of the page
+ * (`threadsReadOn`, hooks/use-comments.ts).
+ */
 export interface CommentPage {
   items: CommentThread[];
+  nextCursor: string | null;
+}
+
+/** One page of `GET /comments/:commentId/replies`: up to 50 대댓글 of one 댓글, oldest first. */
+export interface ReplyPage {
+  items: PostComment[];
   nextCursor: string | null;
 }
 
@@ -60,9 +72,9 @@ export interface CommentPage {
 export type CommentPages = InfiniteData<CommentPage>;
 
 /**
- * The query of one page, as the server page and the browser's `queryFn` both send it: the cursor
- * when there is one, nothing else (the page size is the API's default), so the two produce
- * interchangeable pages under one key.
+ * The query of one page, as the browser's `queryFn` sends it (and through it `readOnToTheEnd`):
+ * the cursor when there is one, nothing else — the page size is the API's default and bound,
+ * COMMENT_PAGE_LIMIT (20).
  */
 export function commentPageQuery(cursor?: string): { cursor?: string } {
   return cursor === undefined ? {} : { cursor };
@@ -76,10 +88,74 @@ export function commentPageQuery(cursor?: string): { cursor?: string } {
  * before it.
  */
 export function commentThreadsOf(pages: CommentPages | undefined): CommentThread[] {
-  const threads = pages?.pages.flatMap((page) => page.items) ?? [];
+  return lastOfEach(
+    pages?.pages.flatMap((page) => page.items) ?? [],
+    (thread) => thread.comment.id,
+  );
+}
+
+/** `items` with each id where it last appears, in order. */
+function lastOfEach<T>(items: readonly T[], idOf: (item: T) => string): T[] {
   const last = new Map<string, number>();
-  threads.forEach((thread, index) => last.set(thread.comment.id, index));
-  return threads.filter((thread, index) => last.get(thread.comment.id) === index);
+  items.forEach((item, index) => last.set(idOf(item), index));
+  return items.filter((item, index) => last.get(idOf(item)) === index);
+}
+
+/**
+ * The 대댓글 of a thread with a page read after them, each where it last appears: the page goes
+ * after what is held, and a 대댓글 the writer just wrote — put at the end of the replies held when
+ * the pages before it could not be read (`withNewComment`) — stays where its page puts it, after
+ * the 대댓글 written before it, as `commentThreadsOf` keeps a 댓글.
+ */
+function repliesWith(held: readonly PostComment[], more: readonly PostComment[]): PostComment[] {
+  return lastOfEach([...held, ...more], (reply) => reply.id);
+}
+
+/**
+ * The 대댓글 page read from the cursor `from` put in the thread `threadId` (오너 결정 2026-10-21:
+ * '답글 더 보기'로 50개씩): after the replies held, the thread's cursor moved on to the page's —
+ * as long as the thread is still where the page was read from (its `repliesNextCursor` is `from`).
+ * A thread read again meanwhile, or gone, takes nothing: the page could overlap or skip what it now
+ * holds, and its own cursor is there to read on from.
+ */
+export function withMoreReplies(
+  pages: CommentPages | undefined,
+  threadId: string,
+  from: string,
+  page: ReplyPage,
+): CommentPages | undefined {
+  return mapThreads(pages, (thread) =>
+    thread.comment.id !== threadId || thread.repliesNextCursor !== from
+      ? thread
+      : {
+          ...thread,
+          replies: repliesWith(thread.replies, page.items),
+          repliesNextCursor: page.nextCursor,
+        },
+  );
+}
+
+/**
+ * The thread `fresh`, read again, with the reply pages after it still to read so it holds as many
+ * 대댓글 as the screen did (`held`, the same thread before the read) — so a read of the comment
+ * pages (the window's focus, 30 seconds, a reconnection, a write's read) never takes away what
+ * '답글 더 보기' brought, nor a box open on it. Whether one more page is to be read.
+ */
+export function threadReadsOn(fresh: CommentThread, held: CommentThread | undefined): boolean {
+  return (
+    held !== undefined &&
+    fresh.repliesNextCursor !== null &&
+    fresh.replies.length < held.replies.length
+  );
+}
+
+/** `thread` with the reply page after it (`threadReadsOn`, read from its `repliesNextCursor`). */
+export function threadWithReplies(thread: CommentThread, page: ReplyPage): CommentThread {
+  return {
+    ...thread,
+    replies: repliesWith(thread.replies, page.items),
+    repliesNextCursor: page.nextCursor,
+  };
 }
 
 // ---- what the author's own writes do to the pages held -------------------------------------
@@ -103,10 +179,13 @@ function mapThreads(
 
 /**
  * A comment `POST /posts/:postId/comments` answered, put where the thread shows it, so the writer
- * sees it at once: a 대댓글 last of its 댓글's replies — `parentId` in the answer is always that
- * 댓글, even when the reply was aimed at a 대댓글 — and a 대댓글 whose 댓글 is not among the pages
- * read changes nothing (its page brings it). A 댓글 goes last of the pages read (the newest, #45-2
- * oldest first): the hooks read its page instead (`readOnToTheEnd`, use-comments.ts) and come here
+ * sees it at once: a 대댓글 last of its 댓글's replies held — `parentId` in the answer is always
+ * that 댓글, even when the reply was aimed at a 대댓글 — and a 대댓글 whose 댓글 is not among the
+ * pages read changes nothing (its page brings it). A 대댓글 is the newest of its thread (#45-2
+ * oldest first): while 대댓글 of the thread are still unread ('답글 더 보기'), the hooks read them
+ * instead (`readOnReplies`, use-comments.ts) and come here only once they are all read or that
+ * read fails — before 대댓글 still unread, then, until their page brings it to its place. A 댓글
+ * goes last of the pages read: the hooks read its page instead (`readOnToTheEnd`) and come here
  * only when that read fails — before 댓글 still unread, and out of the pages at the next read of as
  * many pages, until 더 보기 brings it. Nothing is added twice.
  */
@@ -120,10 +199,11 @@ export function withNewComment(
     if (commentThreadsOf(pages).some((thread) => thread.comment.id === comment.id)) return pages;
     const lastIndex = pages.pages.length - 1;
     if (lastIndex < 0) return pages;
+    const thread: CommentThread = { comment, replies: [], repliesNextCursor: null };
     return {
       ...pages,
       pages: pages.pages.map((page, index) =>
-        index === lastIndex ? { ...page, items: [...page.items, { comment, replies: [] }] } : page,
+        index === lastIndex ? { ...page, items: [...page.items, thread] } : page,
       ),
     };
   }
@@ -141,6 +221,7 @@ export function withEditedComment(
 ): CommentPages | undefined {
   const swap = (held: PostComment): PostComment => (held.id === comment.id ? comment : held);
   return mapThreads(pages, (thread) => ({
+    ...thread,
     comment: swap(thread.comment),
     replies: thread.replies.map(swap),
   }));
@@ -150,7 +231,8 @@ export function withEditedComment(
  * A deletion's answer (`POST /comments/:commentId/delete`) applied as the next read would show it
  * (#45-5): a 댓글 that keeps its placeholder becomes '삭제된 글입니다' with its 대댓글 under it;
  * any other comment leaves the view. A 대댓글 that was the last under a deleted 댓글 takes that
- * placeholder with it — a deleted 댓글 with nothing under it is in no answer.
+ * placeholder with it — a deleted 댓글 with nothing under it is in no answer — the last, that is,
+ * with none still unread after it ('답글 더 보기').
  */
 export function withoutComment(
   pages: CommentPages | undefined,
@@ -159,12 +241,14 @@ export function withoutComment(
   return mapThreads(pages, (thread) => {
     if (thread.comment.id === deletion.id) {
       return deletion.placeholder
-        ? { comment: { state: 'deleted', id: deletion.id }, replies: thread.replies }
+        ? { ...thread, comment: { state: 'deleted', id: deletion.id } }
         : undefined;
     }
     if (!thread.replies.some((reply) => reply.id === deletion.id)) return thread;
     const replies = thread.replies.filter((reply) => reply.id !== deletion.id);
-    return thread.comment.state === 'deleted' && replies.length === 0
+    return thread.comment.state === 'deleted' &&
+      replies.length === 0 &&
+      thread.repliesNextCursor === null
       ? undefined
       : { ...thread, replies };
   });
@@ -357,7 +441,7 @@ export function commentDraftKeyOfPlace(postId: string, place: HeldTextPlace): Co
     case 'thread':
       return { kind: 'reply', postId, parentId: place.threadId };
     case 'comment':
-      return { kind: 'edit', postId, commentId: place.commentId };
+      return { kind: 'edit', postId, commentId: place.commentId, threadId: place.threadId };
   }
 }
 
@@ -499,6 +583,11 @@ export interface ResolvedCommentDrafts {
   unplaced: readonly UnplacedCommentDraft[];
   /** A draft's comment is not among the pages read, and pages are left to read. */
   waiting: boolean;
+  /**
+   * The threads, by their 댓글's id, whose 대댓글 still unread ('답글 더 보기') may hold the
+   * comment of an edit draft: read on through them.
+   */
+  waitingThreads: readonly string[];
 }
 
 /**
@@ -508,8 +597,10 @@ export interface ResolvedCommentDrafts {
  * longer open, apart, with the words the server would refuse it in (`unplaced`): the post hidden
  * or deleted meanwhile, the 댓글 a placeholder or gone, the comment hidden or gone. A comment not
  * among the pages read waits for them (`waiting`: the page reads on) and is gone once every page
- * is read (`allRead`). A post out of every view (`gone`) takes none: each is shown apart with
- * '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
+ * is read (`allRead`); an edit of a 대댓글 whose thread is read but not all its 대댓글 waits for
+ * them (`waitingThreads`: the page reads on through that thread, 오너 결정 2026-10-21 '답글 더
+ * 보기') and is gone once they are all read. A post out of every view (`gone`) takes none: each is
+ * shown apart with '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
  */
 export function resolveCommentDrafts(
   drafts: CommentDrafts,
@@ -525,6 +616,7 @@ export function resolveCommentDrafts(
   const replies = new Map<string, string>();
   const edits = new Map<string, string>();
   const unplaced: UnplacedCommentDraft[] = [];
+  const waitingThreads: string[] = [];
   let comment: string | undefined;
   let waiting = false;
 
@@ -547,14 +639,15 @@ export function resolveCommentDrafts(
       });
     }
     for (const [commentId, text] of drafts.edits) {
+      const threadId = drafts.editThreads.get(commentId) ?? commentId;
       unplaced.push({
-        key: { kind: 'edit', postId, commentId },
+        key: { kind: 'edit', postId, commentId, threadId },
         text,
         reason,
-        place: { kind: 'comment', commentId, threadId: commentId },
+        place: { kind: 'comment', commentId, threadId },
       });
     }
-    return { comment, replies, edits, unplaced, waiting };
+    return { comment, replies, edits, unplaced, waiting, waitingThreads };
   }
 
   if (drafts.comment !== undefined) {
@@ -586,23 +679,27 @@ export function resolveCommentDrafts(
   }
 
   for (const [commentId, text] of drafts.edits) {
-    const key: CommentDraftKey = { kind: 'edit', postId, commentId };
+    // The thread it was kept with — itself for a 댓글, and for a draft kept without one.
+    const keptIn = drafts.editThreads.get(commentId) ?? commentId;
     const thread = threads.find(
       (held) =>
         held.comment.id === commentId || held.replies.some((reply) => reply.id === commentId),
     );
-    const place: HeldTextPlace = {
-      kind: 'comment',
-      commentId,
-      threadId: thread?.comment.id ?? commentId,
-    };
+    const threadId = thread?.comment.id ?? keptIn;
+    const key: CommentDraftKey = { kind: 'edit', postId, commentId, threadId };
+    const place: HeldTextPlace = { kind: 'comment', commentId, threadId };
     const found =
       thread === undefined
         ? undefined
         : [thread.comment, ...thread.replies].find((held) => held.id === commentId);
-    if (found === undefined) {
-      if (allRead) unplaced.push({ key, text, reason: copy.errCommentGone, place });
-      else waiting = true;
+    const home = threads.find((held) => held.comment.id === keptIn);
+    if (found === undefined && home !== undefined && home.repliesNextCursor !== null) {
+      // Among its thread's 대댓글 still unread, perhaps: read on through them.
+      waitingThreads.push(keptIn);
+    } else if (found === undefined) {
+      if (allRead || home !== undefined) {
+        unplaced.push({ key, text, reason: copy.errCommentGone, place });
+      } else waiting = true;
     } else if (found.state !== 'published') {
       unplaced.push({
         key,
@@ -617,5 +714,5 @@ export function resolveCommentDrafts(
     }
   }
 
-  return { comment, replies, edits, unplaced, waiting };
+  return { comment, replies, edits, unplaced, waiting, waitingThreads };
 }

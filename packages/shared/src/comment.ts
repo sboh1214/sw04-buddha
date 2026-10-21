@@ -143,8 +143,9 @@ const BRACKETS = new Set([...Object.keys(CLOSERS), ...Object.values(CLOSERS)]);
  * How many of each bracket `text` holds, counted in one pass. The trimming below lowers a count as
  * it drops a bracket rather than counting the address again per dropped character: counting afresh
  * made a long run of closers quadratic, and a 1,000-character comment of rejected candidates that
- * all run into one such run cost about 75 ms of CPU to draw — on the server that renders the post
- * page and in every reader's browser (ADR-0074).
+ * all run into one such run cost about 75 ms of CPU to draw — in every reader's browser, and then
+ * on the server that rendered the post page too, before the comments became the browser's alone
+ * to read (ADR-0074, 오너 결정 2026-10-21).
  */
 function bracketCounts(text: string): Map<string, number> {
   const counts = new Map<string, number>();
@@ -267,12 +268,64 @@ export const postCommentSchema = z
   .meta({ id: 'PostComment' });
 export type PostComment = z.infer<typeof postCommentSchema>;
 
+// ---- pages --------------------------------------------------------------------------------------
+
 /**
- * One 댓글 of `GET /posts/:postId/comments` with every 대댓글 under it, both oldest first (#45-2:
- * 작성 순). A deleted 대댓글 is not among `replies`; a hidden one is, as its placeholder.
+ * 댓글 a page of `GET /posts/:postId/comments` holds at most — and by default (ADR-0074 7-1: 20개씩,
+ * 오너가 2026-10-20 그대로 두었다). Below PLAN 7's 100 for this list alone: each 댓글 brings up to
+ * COMMENT_REPLIES_PAGE_SIZE 대댓글, so one answer is bounded by both (Codex review on PR #220).
+ */
+export const COMMENT_PAGE_LIMIT = 20;
+
+/**
+ * 대댓글 a 댓글 carries in a page of its post's comments, and a page of `GET /comments/:commentId/
+ * replies` holds (오너 결정 2026-10-21, ADR-0074: «댓글마다 처음 50개, '답글 더 보기'로 50개씩»).
+ */
+export const COMMENT_REPLIES_PAGE_SIZE = 50;
+
+/** The keyset cursor of a comment page or a reply page, as `cursorQuerySchema`'s. */
+const commentCursorSchema = z.string().min(1).max(200).optional();
+
+/**
+ * `GET /posts/:postId/comments`: the cursor of `meta.nextCursor`, and up to COMMENT_PAGE_LIMIT 댓글
+ * a page (PLAN 7's query, its bound lowered for this list). No component id, so the OpenAPI
+ * document spells both parameters out.
+ */
+export const commentsQuerySchema = z.object({
+  cursor: commentCursorSchema.describe('Opaque; `meta.nextCursor` of the previous page.'),
+  limit: z.coerce.number().int().min(1).max(COMMENT_PAGE_LIMIT).default(COMMENT_PAGE_LIMIT),
+});
+export type CommentsQuery = z.infer<typeof commentsQuerySchema>;
+
+/**
+ * `GET /comments/:commentId/replies`: the cursor of the thread's `repliesNextCursor`, or of the
+ * previous reply page's `meta.nextCursor`. The page is always COMMENT_REPLIES_PAGE_SIZE.
+ */
+export const commentRepliesQuerySchema = z.object({
+  cursor: commentCursorSchema.describe(
+    'Opaque; the thread’s `repliesNextCursor`, or `meta.nextCursor` of the previous page.',
+  ),
+});
+export type CommentRepliesQuery = z.infer<typeof commentRepliesQuerySchema>;
+
+/**
+ * One 댓글 of `GET /posts/:postId/comments` with its first COMMENT_REPLIES_PAGE_SIZE 대댓글, both
+ * oldest first (#45-2: 작성 순). A deleted 대댓글 is not among `replies`; a hidden one is, as its
+ * placeholder. `repliesNextCursor` reads the 대댓글 after these (`GET /comments/:commentId/replies`,
+ * '답글 더 보기'), null once every one is here (오너 결정 2026-10-21, ADR-0074).
  */
 export const commentThreadSchema = z
-  .object({ comment: postCommentSchema, replies: z.array(postCommentSchema) })
+  .object({
+    comment: postCommentSchema,
+    replies: z.array(postCommentSchema).max(COMMENT_REPLIES_PAGE_SIZE),
+    repliesNextCursor: z
+      .string()
+      .nullable()
+      .describe(
+        'The cursor of GET /comments/:commentId/replies for the 대댓글 after these; null when ' +
+          'every one is here',
+      ),
+  })
   .meta({ id: 'CommentThread' });
 export type CommentThread = z.infer<typeof commentThreadSchema>;
 

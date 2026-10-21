@@ -30,11 +30,16 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  * at the end — none of it throws: a storage the browser refuses keeps nothing and restores nothing.
  */
 
-/** Which box's draft: a post's new 댓글, a 대댓글 under the 댓글 `parentId`, an edit of `commentId`. */
+/**
+ * Which box's draft: a post's new 댓글, a 대댓글 under the 댓글 `parentId`, an edit of `commentId`.
+ * An edit names its box by the comment alone; `threadId` — the 댓글 whose thread holds it, itself
+ * for a 댓글 — rides with the text kept, so the page coming back can read on through that thread's
+ * 대댓글 for one not yet read ('답글 더 보기', 오너 결정 2026-10-21, ADR-0074).
+ */
 export type CommentDraftKey =
   | { kind: 'comment'; postId: string }
   | { kind: 'reply'; postId: string; parentId: string }
-  | { kind: 'edit'; postId: string; commentId: string };
+  | { kind: 'edit'; postId: string; commentId: string; threadId?: string };
 
 /** The drafts of one post kept for one account, by box (ids lower-cased, as the API spells them). */
 export interface CommentDrafts {
@@ -44,12 +49,18 @@ export interface CommentDrafts {
   readonly replies: ReadonlyMap<string, string>;
   /** The edit box of each comment, by its id. */
   readonly edits: ReadonlyMap<string, string>;
+  /**
+   * The thread each edit's comment is in (its 댓글's id), by the comment's id, where it was kept
+   * with one (`CommentDraftKey`'s `threadId`).
+   */
+  readonly editThreads: ReadonlyMap<string, string>;
 }
 
 export const NO_COMMENT_DRAFTS: CommentDrafts = {
   comment: undefined,
   replies: new Map(),
   edits: new Map(),
+  editThreads: new Map(),
 };
 
 /**
@@ -109,12 +120,13 @@ export function shouldKeepCommentDraft(state: {
   return state.hasDraft && !state.saved && hasOnboardingStepLeft(state.onboarding);
 }
 
-/** A kept draft as it is stored. */
+/** A kept draft as it is stored; an edit's with the thread of its comment, when known. */
 interface StoredCommentDraft {
   version: 1;
   accountId: string;
   savedAt: number;
   text: string;
+  threadId?: string;
 }
 
 function parseStored(raw: string): StoredCommentDraft | null {
@@ -125,10 +137,12 @@ function parseStored(raw: string): StoredCommentDraft | null {
     return null;
   }
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
-  const { version, accountId, savedAt, text } = value as Record<string, unknown>;
+  const { version, accountId, savedAt, text, threadId } = value as Record<string, unknown>;
   if (version !== 1 || typeof accountId !== 'string' || typeof savedAt !== 'number') return null;
   if (typeof text !== 'string') return null;
-  return { version: 1, accountId, savedAt, text };
+  return typeof threadId === 'string' && ID.test(threadId)
+    ? { version: 1, accountId, savedAt, text, threadId }
+    : { version: 1, accountId, savedAt, text };
 }
 
 function isExpired(stored: StoredCommentDraft, now: number): boolean {
@@ -184,10 +198,17 @@ export function keepCommentDraft(
   now: number,
 ): boolean {
   sweepCommentDrafts(storage, now);
+  const threadId = key.kind === 'edit' ? key.threadId?.toLowerCase() : undefined;
   try {
     storage.setItem(
       commentDraftStorageKey(key),
-      JSON.stringify({ version: 1, accountId, savedAt: now, text } satisfies StoredCommentDraft),
+      JSON.stringify({
+        version: 1,
+        accountId,
+        savedAt: now,
+        text,
+        ...(threadId === undefined ? {} : { threadId }),
+      } satisfies StoredCommentDraft),
     );
     return true;
   } catch {
@@ -210,6 +231,7 @@ export function readCommentDrafts(
   let comment: string | undefined;
   const replies = new Map<string, string>();
   const edits = new Map<string, string>();
+  const editThreads = new Map<string, string>();
   const id = postId.toLowerCase();
   for (const storageKey of keysUnder(storage, postPrefix(id))) {
     const box = boxOf(id, storageKey);
@@ -225,11 +247,14 @@ export function readCommentDrafts(
     }
     if (box.kind === 'comment') comment = stored.text;
     else if (box.kind === 'reply') replies.set(box.parentId, stored.text);
-    else edits.set(box.commentId, stored.text);
+    else {
+      edits.set(box.commentId, stored.text);
+      if (stored.threadId !== undefined) editThreads.set(box.commentId, stored.threadId);
+    }
   }
   return comment === undefined && replies.size === 0 && edits.size === 0
     ? NO_COMMENT_DRAFTS
-    : { comment, replies, edits };
+    : { comment, replies, edits, editThreads };
 }
 
 /** Whether `drafts` holds any draft. */
@@ -252,23 +277,34 @@ export function withoutCommentDrafts(
   let comment = drafts.comment;
   const replies = new Map(drafts.replies);
   const edits = new Map(drafts.edits);
+  const editThreads = new Map(drafts.editThreads);
   for (const key of keys) {
     if (key.kind === 'comment') comment = undefined;
     else if (key.kind === 'reply') replies.delete(key.parentId.toLowerCase());
-    else edits.delete(key.commentId.toLowerCase());
+    else {
+      edits.delete(key.commentId.toLowerCase());
+      editThreads.delete(key.commentId.toLowerCase());
+    }
   }
   return comment === undefined && replies.size === 0 && edits.size === 0
     ? NO_COMMENT_DRAFTS
-    : { comment, replies, edits };
+    : { comment, replies, edits, editThreads };
 }
 
 /** `extra` laid over `drafts`: what was kept since replaces what was held for the same box. */
 export function mergeCommentDrafts(drafts: CommentDrafts, extra: CommentDrafts): CommentDrafts {
   if (!hasCommentDrafts(extra)) return drafts;
+  // An edit kept again without its thread keeps the one it was kept with before.
+  const editThreads = new Map(drafts.editThreads);
+  for (const commentId of extra.edits.keys()) {
+    const threadId = extra.editThreads.get(commentId);
+    if (threadId !== undefined) editThreads.set(commentId, threadId);
+  }
   return {
     comment: extra.comment ?? drafts.comment,
     replies: new Map([...drafts.replies, ...extra.replies]),
     edits: new Map([...drafts.edits, ...extra.edits]),
+    editThreads,
   };
 }
 

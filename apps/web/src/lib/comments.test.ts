@@ -8,6 +8,7 @@ import { copy } from '@/copy';
 import { ApiError, type CommentThread, type PostAuthor, type PublishedComment } from './api';
 import {
   type CommentPages,
+  type ReplyPage,
   commentCountText,
   commentDraft,
   commentLengthText,
@@ -22,8 +23,11 @@ import {
   placeHeldTexts,
   postCommentsKey,
   resolveCommentDrafts,
+  threadReadsOn,
+  threadWithReplies,
   type HeldText,
   withEditedComment,
+  withMoreReplies,
   withNewComment,
   withoutComment,
 } from './comments';
@@ -58,10 +62,17 @@ const comment = (id: string, parentId: string | null = null, body = id): Publish
   editedAt: null,
 });
 
-const thread = (top: CommentThread['comment'], ...replies: CommentThread['replies']) => ({
-  comment: top,
-  replies,
-});
+const thread = (
+  top: CommentThread['comment'],
+  ...replies: CommentThread['replies']
+): CommentThread => ({ comment: top, replies, repliesNextCursor: null });
+
+/** A thread with 대댓글 still unread after `replies`, from `cursor` ('답글 더 보기'). */
+const threadWithMore = (
+  cursor: string,
+  top: CommentThread['comment'],
+  ...replies: CommentThread['replies']
+): CommentThread => ({ comment: top, replies, repliesNextCursor: cursor });
 
 /** Pages of threads as `useInfiniteQuery` holds them, the last with `nextCursor`. */
 const pagesOf = (pages: CommentThread[][], nextCursor: string | null = null): CommentPages => ({
@@ -113,6 +124,68 @@ describe('the threads held', () => {
   });
 });
 
+describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더 보기)', () => {
+  const page = (nextCursor: string | null, ...items: ReplyPage['items']): ReplyPage => ({
+    items,
+    nextCursor,
+  });
+
+  it('go after the replies held, the thread’s cursor moving on to the page’s', () => {
+    const held = pagesOf([
+      [threadWithMore('a-50', comment('a'), comment('a1', 'a')), thread(comment('b'))],
+    ]);
+    const next = withMoreReplies(held, 'a', 'a-50', page('a-100', comment('a2', 'a')));
+    expect(shape(next)).toEqual([
+      ['a', ['a1', 'a2']],
+      ['b', []],
+    ]);
+    expect(commentThreadsOf(next)[0]?.repliesNextCursor).toBe('a-100');
+    const last = withMoreReplies(next, 'a', 'a-100', page(null, { state: 'hidden', id: 'a3' }));
+    expect(shape(last)[0]).toEqual(['a', ['a1', 'a2', 'hidden:a3']]);
+    expect(commentThreadsOf(last)[0]?.repliesNextCursor).toBeNull();
+  });
+
+  it('go nowhere once the thread was read again from elsewhere, or is gone', () => {
+    const held = pagesOf([[threadWithMore('a-50', comment('a'), comment('a1', 'a'))]]);
+    // Read from a cursor the thread no longer holds: it could overlap or skip what it holds now.
+    expect(shape(withMoreReplies(held, 'a', 'stale', page(null, comment('a2', 'a'))))).toEqual(
+      shape(held),
+    );
+    expect(shape(withMoreReplies(held, 'z', 'a-50', page(null, comment('z1', 'z'))))).toEqual(
+      shape(held),
+    );
+    expect(withMoreReplies(undefined, 'a', 'a-50', page(null))).toBeUndefined();
+  });
+
+  it('put a 대댓글 the writer added at the end where its page brings it, after older ones', () => {
+    // Written while a1's later siblings were unread and their read failed: last of what was held.
+    const held = withNewComment(
+      pagesOf([[threadWithMore('a-50', comment('a'), comment('a1', 'a'))]]),
+      comment('mine', 'a'),
+    );
+    expect(shape(held)[0]).toEqual(['a', ['a1', 'mine']]);
+    const next = withMoreReplies(
+      held,
+      'a',
+      'a-50',
+      page(null, comment('a2', 'a'), comment('mine', 'a')),
+    );
+    expect(shape(next)[0]).toEqual(['a', ['a1', 'a2', 'mine']]);
+  });
+
+  it('are read on when a page read again holds fewer than the screen did', () => {
+    const fresh = threadWithMore('a-50', comment('a'), comment('a1', 'a'));
+    const held = thread(comment('a'), comment('a1', 'a'), comment('a2', 'a'));
+    expect(threadReadsOn(fresh, held)).toBe(true);
+    expect(threadReadsOn(fresh, undefined)).toBe(false);
+    expect(threadReadsOn(fresh, thread(comment('a'), comment('a1', 'a')))).toBe(false);
+    expect(threadReadsOn(thread(comment('a'), comment('a1', 'a')), held)).toBe(false);
+    const read = threadWithReplies(fresh, page(null, comment('a2', 'a')));
+    expect(read).toEqual(held);
+    expect(threadReadsOn(read, held)).toBe(false);
+  });
+});
+
 describe('a new comment', () => {
   it('goes last of the pages read when it is a 댓글, once', () => {
     const held = pagesOf([[thread(comment('a'))], [thread(comment('b'))]], 'more');
@@ -154,6 +227,9 @@ describe('an edit', () => {
       editedAt: '2026-10-19T01:00:00.000Z',
     });
     expect(only?.replies[0]).toMatchObject({ id: 'a1', body: '고친 답글' });
+    // The thread's place in its 대댓글 stays.
+    const more = pagesOf([[threadWithMore('a-50', comment('a'), comment('a1', 'a'))]]);
+    expect(commentThreadsOf(withEditedComment(more, edited))[0]?.repliesNextCursor).toBe('a-50');
   });
 });
 
@@ -181,6 +257,26 @@ describe('a deletion', () => {
       ['hidden:h', ['h1']],
     ]);
     expect(shape(withoutComment(held, { id: 'a1', placeholder: false }))[0]).toEqual(['a', ['a2']]);
+  });
+
+  it('keeps a deleted 댓글’s placeholder while 대댓글 are still unread under it', () => {
+    const more = pagesOf([
+      [threadWithMore('d-50', { state: 'deleted', id: 'd' }, comment('d1', 'd'))],
+    ]);
+    expect(shape(withoutComment(more, { id: 'd1', placeholder: false }))).toEqual([
+      ['deleted:d', []],
+    ]);
+    expect(
+      commentThreadsOf(withoutComment(more, { id: 'd1', placeholder: false }))[0]
+        ?.repliesNextCursor,
+    ).toBe('d-50');
+    // A 댓글 deleted to its placeholder keeps its cursor too.
+    const top = pagesOf([[threadWithMore('a-50', comment('a'), comment('a1', 'a'))]]);
+    expect(commentThreadsOf(withoutComment(top, { id: 'a', placeholder: true }))[0]).toEqual({
+      comment: { state: 'deleted', id: 'a' },
+      replies: [comment('a1', 'a')],
+      repliesNextCursor: 'a-50',
+    });
   });
 
   it('takes a deleted 댓글’s placeholder with its last 대댓글, never a hidden one’s', () => {
@@ -524,9 +620,9 @@ describe('drafts taken back after an onboarding step', () => {
       { kind: 'reply', postId: post, parentId: 'deleted' },
       { kind: 'reply', postId: post, parentId: 'hidden' },
       { kind: 'reply', postId: post, parentId: 'gone' },
-      { kind: 'edit', postId: post, commentId: 'hidden-own' },
-      { kind: 'edit', postId: post, commentId: 'gone-own' },
-      { kind: 'edit', postId: post, commentId: 'their' },
+      { kind: 'edit', postId: post, commentId: 'hidden-own', threadId: 't1' },
+      { kind: 'edit', postId: post, commentId: 'gone-own', threadId: 'gone-own' },
+      { kind: 'edit', postId: post, commentId: 'their', threadId: 'their' },
     ]);
   });
 
@@ -576,7 +672,7 @@ describe('drafts taken back after an onboarding step', () => {
         place: { kind: 'thread', threadId: 't1' },
       },
       {
-        key: { kind: 'edit', postId: post, commentId: 't1' },
+        key: { kind: 'edit', postId: post, commentId: 't1', threadId: 't1' },
         text: '고친 댓글',
         reason: copy.errPostGone,
         place: { kind: 'comment', commentId: 't1', threadId: 't1' },
@@ -590,7 +686,56 @@ describe('drafts taken back after an onboarding step', () => {
       view([thread(mine('t1'))], { allRead: false }),
     );
     expect(resolved.waiting).toBe(true);
+    expect(resolved.waitingThreads).toEqual([]);
     expect(resolved.unplaced).toEqual([]);
     expect(resolved.replies.size + resolved.edits.size).toBe(0);
+  });
+
+  it('read on through a thread’s unread 대댓글 for the edit of one kept with that thread (답글 더 보기)', () => {
+    const edits = new Map([['r9', '고친 답글']]);
+    const editThreads = new Map([['r9', 't1']]);
+    // The thread is read, its 대댓글 past the first page not yet: read on through them.
+    const waiting = resolveCommentDrafts(
+      drafts({ edits, editThreads }),
+      view([threadWithMore('t1-50', mine('t1'), mine('r1', 't1'))]),
+    );
+    expect(waiting.waitingThreads).toEqual(['t1']);
+    expect(waiting.waiting).toBe(false);
+    expect(waiting.unplaced).toEqual([]);
+    expect(waiting.edits.size).toBe(0);
+    // Read on to it: its edit opens.
+    const found = resolveCommentDrafts(
+      drafts({ edits, editThreads }),
+      view([thread(mine('t1'), mine('r1', 't1'), mine('r9', 't1'))]),
+    );
+    expect([...found.edits]).toEqual([['r9', '고친 답글']]);
+    expect(found.waitingThreads).toEqual([]);
+    // Every 대댓글 read and it is not among them: gone, shown apart where its thread stands.
+    const gone = resolveCommentDrafts(
+      drafts({ edits, editThreads }),
+      view([thread(mine('t1'), mine('r1', 't1'))], { allRead: false }),
+    );
+    expect(gone.waiting).toBe(false);
+    expect(gone.unplaced).toEqual([
+      {
+        key: { kind: 'edit', postId: post, commentId: 'r9', threadId: 't1' },
+        text: '고친 답글',
+        reason: copy.errCommentGone,
+        place: { kind: 'comment', commentId: 'r9', threadId: 't1' },
+      },
+    ]);
+    // Its thread not read yet: the 댓글 pages first.
+    const later = resolveCommentDrafts(
+      drafts({ edits, editThreads }),
+      view([thread(mine('t2'))], { allRead: false }),
+    );
+    expect([later.waiting, later.waitingThreads]).toEqual([true, []]);
+    // Kept without a thread (an edit of a 댓글): its own thread, no 대댓글 to read through.
+    const own = resolveCommentDrafts(
+      drafts({ edits: new Map([['t1', '고친 댓글']]) }),
+      view([threadWithMore('t1-50', mine('t1'), mine('r1', 't1'))]),
+    );
+    expect([...own.edits]).toEqual([['t1', '고친 댓글']]);
+    expect(own.waitingThreads).toEqual([]);
   });
 });

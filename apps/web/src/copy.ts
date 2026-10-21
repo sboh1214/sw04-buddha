@@ -937,6 +937,10 @@ export const copy = {
   commentsHeading: '댓글',
   commentsEmpty: '아직 댓글이 없습니다.',
   commentsRepliesLabel: '답글 목록',
+  // 댓글마다 답글은 처음 50개만 보이고 이 단추가 50개씩 더 읽는다(오너 결정 2026-10-21, ADR-0074). 읽기가
+  // 실패하면(누른 것이든 되살린 수정을 찾는 읽기든) 단추 위에 댓글 목록의 읽기 실패 문구가 보이고 이 단추로
+  // 다시 읽는다. 이 브랜치에서는 이 단추만 그렇다 — 댓글 목록의 '더 보기'는 #47이 같은 안내를 붙인다.
+  commentRepliesMore: '답글 더 보기',
   commentWriteLabel: '댓글 쓰기',
   commentWritePlaceholder: '댓글을 입력해 주세요. http·https 주소는 링크로 보입니다.',
   commentReplyLabel: '답글 쓰기',

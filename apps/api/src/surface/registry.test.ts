@@ -558,6 +558,7 @@ describe('the public API document (static)', () => {
       .filter(([, entry]) => entry.showsPerson !== undefined)
       .map(([key]) => key);
     expect(showing.sort()).toEqual([
+      'GET /comments/:commentId/replies',
       'GET /posts',
       'GET /posts/:postId',
       'GET /posts/:postId/comments',

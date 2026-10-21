@@ -2,8 +2,7 @@ import { Container } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
-import { fetchCommentsPageServer, fetchPostServer } from '@/lib/api.server';
-import { postCommentsKey } from '@/lib/comments';
+import { fetchPostServer } from '@/lib/api.server';
 import { dehydratePublic } from '@/lib/market-keys';
 import { postKey, postPageMetadata } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
@@ -30,29 +29,18 @@ export async function generateMetadata({
  * NOT_FOUND, as for an address that never was a post). Public (N05 §2).
  *
  * The post is read here, once, and seeded under its key, so the HTML carries the post and the
- * client component follows the cache from there (an edit writes the new post into it); so is the
- * first page of its comments (#48, ADR-0074). Nothing personal is read: whether the viewer wrote it
- * or a comment — and so 수정 and 삭제 — is decided in the browser once `GET /me` has answered.
+ * client component follows the cache from there (an edit writes the new post into it). Its
+ * comments are not (오너 결정 2026-10-21, ADR-0074): the browser reads them, held to the per-address
+ * limit as every reader's request is — the web's own requests to the API are not, and a page any
+ * visitor can have drawn must not read what a thread holds. Nothing personal is read: whether the
+ * viewer wrote it or a comment — and so 수정 and 삭제 — is decided in the browser once `GET /me` has
+ * answered.
  */
 export default async function PostPage({ params }: { params: Promise<{ postId: string }> }) {
   const { postId } = await params;
-  const queryClient = getQueryClient();
-  // The comments' first page alongside the post (#48): under the canonical id the client reads.
-  // A failed read — a segment that is no post among them — is not dehydrated, and the browser
-  // reads the comments itself.
-  const id = postId.toLowerCase();
-  const [post] = await Promise.all([
-    fetchPostServer(postId),
-    queryClient.prefetchInfiniteQuery({
-      queryKey: postCommentsKey(id),
-      queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
-        fetchCommentsPageServer(id, pageParam),
-      // The param the client's own options declare (hooks/use-comments.ts), so the seeded page is
-      // picked up rather than fetched again.
-      initialPageParam: undefined as string | undefined,
-    }),
-  ]);
+  const post = await fetchPostServer(postId);
   if (post === null) notFound();
+  const queryClient = getQueryClient();
   queryClient.setQueryData(postKey(post.id), post);
 
   return (
