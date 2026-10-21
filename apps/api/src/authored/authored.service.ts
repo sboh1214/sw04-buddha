@@ -153,9 +153,11 @@ function commentOf(row: CommentRow): AuthoredComment {
 }
 
 /**
- * What MY '내 글' says of a hidden item (#45-5): that it is hidden, and the reason. The reason is
- * #50's to record — its moderation records carry the hiding, its reason and its reversal, and it
- * reads the reason here — and nothing records one before them, so it is null today.
+ * What MY '내 글' says of a hidden item (#45-5): that it is hidden, and the reason — one of the
+ * report reasons and the operator's explanation, if any (`{ code, note }`, owner decision
+ * 2026-10-22, ADR-0080). The reason is #50's to record — its moderation records carry the hiding,
+ * its reason and its reversal, and it reads the latest hiding's reason here — and nothing records
+ * one before them, so it is null today.
  */
 function hiddenNoticeOf(row: { hiddenAt: Date | null }): HiddenNotice | null {
   return row.hiddenAt === null ? null : { reason: null };

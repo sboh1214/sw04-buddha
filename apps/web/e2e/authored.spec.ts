@@ -25,10 +25,12 @@ import {
  * there and on to its market (#51's acceptance criteria).
  *
  * What no screen can make yet is drawn from the API's own answers changed in the browser
- * (`page.route`, as start-grant.spec.ts does): a hidden item, which MY marks '숨김' (the hiding
- * comes with #50), and a list longer than a page, which takes a smaller `limit` on the browser's
- * requests. The exclusions on the profile against MY are the API's (authored.controller.test.ts,
- * private-data.test.ts). Restricted members and withdrawn accounts are tested nowhere yet: neither
+ * (`page.route`, as start-grant.spec.ts does): a hidden item, which MY marks '숨김' with its reason
+ * and offers to delete (the hiding comes with #50 — the row itself stays published, so the 삭제
+ * goes through the real delete route and the lists after it are the server's; deleting a row that
+ * is really hidden is the API's test), and a list longer than a page, which takes a smaller `limit`
+ * on the browser's requests. The exclusions on the profile against MY are the API's
+ * (authored.controller.test.ts, private-data.test.ts). Restricted members and withdrawn accounts are tested nowhere yet: neither
  * state exists and the lists read neither, so #185/#139 add the test that a restricted member's
  * items stay listed and #140 the withdrawn account's 404 (ADR-0080 결과 5).
  */
@@ -243,6 +245,8 @@ test.describe('작성자별 글·댓글', () => {
     await profilePosts.getByTestId(`post-card-${newer}`).getByTestId('post-card-link').click();
     await expect(page).toHaveURL(`/community/posts/${newer}`);
     await page.getByTestId('post-delete').click();
+    // The warning that it is never undone is the dialog's description, read with its title.
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(copy.postDeleteBody);
     await page.getByTestId('post-delete-confirm').click();
     await expect(page).toHaveURL('/community');
     await page.goBack();
@@ -261,6 +265,7 @@ test.describe('작성자별 글·댓글', () => {
       .click();
     await expect(page).toHaveURL(`/community/posts/${older}`);
     await page.getByTestId(`comment-${ownComment}`).getByTestId('comment-delete').click();
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(copy.commentDeleteBody);
     await page.getByTestId('comment-delete-confirm').click();
     await expect(page.getByText(copy.commentDeletedToast)).toBeVisible();
     await expect(page.getByTestId(`comment-${ownComment}`)).toHaveCount(0);
@@ -455,7 +460,7 @@ test.describe('작성자별 글·댓글', () => {
     await page.unroute(isAuthoredListRead);
   });
 
-  test('운영자가 숨긴 글·댓글은 MY 내 글과 그 요약에서 카드 위에 숨김을, 사유가 있으면 그 사유도 보이고, 숨기지 않은 것에는 아무것도 없다', async ({
+  test('운영자가 숨긴 글·댓글은 MY 내 글과 그 요약에서 카드 위에 숨김을, 사유가 있으면 그 신고 사유와 운영자 설명도 보이며, 그 줄 옆의 삭제는 확인한 뒤 지워 목록과 수에서 뺀다', async ({
     admin,
     page,
   }) => {
@@ -474,14 +479,23 @@ test.describe('작성자별 글·댓글', () => {
     ];
 
     // Nothing hides an item before #50, so MY's own answers are changed in the browser: of each
-    // list, one item hidden with a reason, one hidden without (as every hiding is until #50 records
-    // one), one not hidden.
-    const reason = '스팸';
+    // list, one item hidden with a reason — a report reason and, for the post, the operator's
+    // explanation (owner decision 2026-10-22) — one hidden without (as every hiding is until #50
+    // records one), one not hidden. The rows stay published in the database, so the 삭제 below
+    // goes through the real delete routes and the lists read after it are the server's.
+    const note = '같은 링크를 반복해 올렸습니다.';
     const hiding = new Map<string, HiddenNotice>([
-      [newestPost, { reason }],
+      [newestPost, { reason: { code: 'spam', note } }],
       [middlePost, { reason: null }],
-      [middleComment, { reason }],
+      [middleComment, { reason: { code: 'off_topic', note: null } }],
       [newestComment, { reason: null }],
+    ]);
+    // Each 삭제 is named by its item (ADR-0080 7-19): a post by its title, a comment by its text.
+    const deleteName = new Map<string, string>([
+      [newestPost, `글 3 ${tag} ${copy.postDelete}`],
+      [middlePost, `글 2 ${tag} ${copy.postDelete}`],
+      [middleComment, `댓글 2 ${tag} ${copy.commentDelete}`],
+      [newestComment, `댓글 3 ${tag} ${copy.commentDelete}`],
     ]);
     const isMyListRead = (url: URL) =>
       url.pathname === '/api/v1/me/posts' || url.pathname === '/api/v1/me/comments';
@@ -494,48 +508,239 @@ test.describe('작성자별 글·댓글', () => {
       await route.fulfill({ response, json: body });
     });
 
-    /** The marks one list draws: '숨김' over the two hidden cards, the reason over one of them. */
+    /**
+     * The marks one list draws: '숨김' over the two hidden cards with 삭제 beside it, the reason
+     * (and the note, when there is one) over one of them; nothing over the third. The two 삭제
+     * read '삭제' and are named apart, each by its item.
+     */
     const expectMarks = async (
       list: Locator,
       card: (id: string) => string,
-      withReason: string,
+      withReason: { id: string; reason: string; note: string | null },
       withoutReason: string,
       shown: string,
+      deleteWord: string,
     ) => {
-      const marked = itemOf(list, card(withReason));
+      const marked = itemOf(list, card(withReason.id));
       await expect(marked.getByTestId('authored-hidden')).toContainText(copy.authoredHidden);
       await expect(marked.getByTestId('authored-hidden-reason')).toHaveText(
-        `${copy.authoredHiddenReason}: ${reason}`,
+        `${copy.authoredHiddenReason}: ${withReason.reason}`,
       );
-      // Above the card, so it is read before the card's link.
-      await expect(marked.locator('[data-testid="authored-hidden"] + article')).toHaveCount(1);
+      if (withReason.note === null) {
+        await expect(marked.getByTestId('authored-hidden-note')).toHaveCount(0);
+      } else {
+        await expect(marked.getByTestId('authored-hidden-note')).toHaveText(
+          `${copy.authoredHiddenNote}: ${withReason.note}`,
+        );
+      }
+      // Above the card, so it is read before the card's link; 삭제 beside the mark, not in it.
+      await expect(marked.locator('[data-testid="authored-hidden-line"] + article')).toHaveCount(1);
+      await expect(
+        marked.locator('[data-testid="authored-hidden"] + [data-testid="authored-hidden-delete"]'),
+      ).toHaveText(deleteWord);
+      await expect(marked.getByTestId('authored-hidden-delete')).toHaveAccessibleName(
+        deleteName.get(withReason.id) ?? '',
+      );
       const bare = itemOf(list, card(withoutReason));
       await expect(bare.getByTestId('authored-hidden')).toHaveText(copy.authoredHidden);
       await expect(bare.getByTestId('authored-hidden-reason')).toHaveCount(0);
-      await expect(itemOf(list, card(shown)).getByTestId('authored-hidden')).toHaveCount(0);
+      await expect(bare.getByTestId('authored-hidden-note')).toHaveCount(0);
+      await expect(bare.getByTestId('authored-hidden-delete')).toHaveText(deleteWord);
+      await expect(bare.getByTestId('authored-hidden-delete')).toHaveAccessibleName(
+        deleteName.get(withoutReason) ?? '',
+      );
+      const plain = itemOf(list, card(shown));
+      await expect(plain.getByTestId('authored-hidden-line')).toHaveCount(0);
+      await expect(plain.getByTestId('authored-hidden-delete')).toHaveCount(0);
       await expect(list.getByTestId('authored-hidden')).toHaveCount(2);
+      await expect(list.getByTestId('authored-hidden-delete')).toHaveCount(2);
       await expect(list.getByTestId('authored-hidden-reason')).toHaveCount(1);
     };
     const postCard = (id: string) => `post-card-${id}`;
     const commentCard = (id: string) => `authored-comment-${id}`;
+    const spam = { id: newestPost, reason: copy.reportReasonSpam, note };
+    const offTopic = { id: middleComment, reason: copy.reportReasonOffTopic, note: null };
 
+    // 삭제 sends the account the screen shows, so it waits for `GET /me` (ADR-0080 7-22): with
+    // that answer held back, the list and its 삭제 are drawn, and 삭제 cannot be pressed yet.
+    let answerMe = () => {};
+    const meHeld = new Promise<void>((resolve) => {
+      answerMe = resolve;
+    });
+    const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+    await page.route(isMeRead, async (route) => {
+      await meHeld;
+      await route.continue();
+    });
     await page.goto('/my/posts');
     const myPosts = page.getByTestId('my-posts-list');
     await expectPosts(myPosts, [newestPost, middlePost, olderPost]);
-    await expectMarks(myPosts, postCard, newestPost, middlePost, olderPost);
+    const hiddenDeletes = myPosts.getByTestId('authored-hidden-delete');
+    await expect(hiddenDeletes).toHaveCount(2);
+    for (const button of await hiddenDeletes.all()) await expect(button).toBeDisabled();
+    answerMe();
+    for (const button of await hiddenDeletes.all()) await expect(button).toBeEnabled();
+    await page.unroute(isMeRead);
+    await expectMarks(myPosts, postCard, spam, middlePost, olderPost, copy.postDelete);
     await page.getByTestId('my-authored-tab-comments').click();
     const myComments = page.getByTestId('my-comments-list');
     await expectComments(myComments, [newestComment, middleComment, olderComment]);
-    await expectMarks(myComments, commentCard, middleComment, newestComment, olderComment);
+    await expectMarks(
+      myComments,
+      commentCard,
+      offTopic,
+      newestComment,
+      olderComment,
+      copy.commentDelete,
+    );
 
-    // The summary's preview draws the same rows with the same marks.
+    // The summary's preview draws the same rows with the same marks and the same 삭제.
     await page.goto('/my');
     const previewPosts = page.getByTestId('my-preview-posts-list');
     await expectPosts(previewPosts, [newestPost, middlePost, olderPost]);
-    await expectMarks(previewPosts, postCard, newestPost, middlePost, olderPost);
+    await expectMarks(previewPosts, postCard, spam, middlePost, olderPost, copy.postDelete);
     const previewComments = page.getByTestId('my-preview-comments-list');
     await expectComments(previewComments, [newestComment, middleComment, olderComment]);
-    await expectMarks(previewComments, commentCard, middleComment, newestComment, olderComment);
+    await expectMarks(
+      previewComments,
+      commentCard,
+      offTopic,
+      newestComment,
+      olderComment,
+      copy.commentDelete,
+    );
+
+    // 삭제 on a hidden post (owner decision 2026-10-22): the post page's own confirm dialog and
+    // words. Cancelled, nothing is sent and the post stays.
+    await page.goto('/my/posts');
+    await expectPosts(myPosts, [newestPost, middlePost, olderPost]);
+    const deletes: string[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && request.url().includes('/delete')) {
+        deletes.push(new URL(request.url()).pathname);
+      }
+    });
+    const hiddenPostItem = itemOf(myPosts, postCard(middlePost));
+    await hiddenPostItem.getByTestId('authored-hidden-delete').click();
+    const dialog = page.getByTestId('authored-hidden-delete-dialog');
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole('alertdialog')).toBeVisible();
+    await expect(dialog).toContainText(copy.postDeleteTitle);
+    await expect(dialog).toContainText(copy.postDeleteBody);
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(copy.postDeleteBody);
+    await page.getByTestId('authored-hidden-delete-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expectPosts(myPosts, [newestPost, middlePost, olderPost]);
+    expect(deletes).toEqual([]);
+
+    // Confirmed: the author's own delete route, a toast, and the post leaves the list.
+    await hiddenPostItem.getByTestId('authored-hidden-delete').click();
+    const deletedPost = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === `/api/v1/posts/${middlePost}/delete`,
+    );
+    await page.getByTestId('authored-hidden-delete-confirm').click();
+    expect((await deletedPost).status()).toBe(200);
+    await expect(page.getByText(copy.postDeletedToast)).toBeVisible();
+    await expectPosts(myPosts, [newestPost, olderPost]);
+    await expect(dialog).toHaveCount(0);
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+
+    // The same on the 댓글 tab, with the comment area's words. The comment's post is opened from
+    // its card first and left with Back, so the browser holds that post's thread: the deletion
+    // marks it stale (the post the comment sits under, not the comment's own id), or Forward —
+    // which brings the page back as it was drawn, without asking the server — would show the
+    // deleted comment still.
+    await page.getByTestId('my-authored-tab-comments').click();
+    await expectComments(myComments, [newestComment, middleComment, olderComment]);
+    await itemOf(myComments, commentCard(newestComment))
+      .getByTestId('authored-comment-link')
+      .click();
+    await expect(page).toHaveURL(`/community/posts/${olderPost}`);
+    const thread = page.getByTestId('post-comments');
+    await expect(thread.getByTestId(`comment-${newestComment}`)).toContainText(`댓글 3 ${tag}`);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/my\/posts\?tab=comments$/);
+    await expectComments(myComments, [newestComment, middleComment, olderComment]);
+    await itemOf(myComments, commentCard(newestComment))
+      .getByTestId('authored-hidden-delete')
+      .click();
+    await expect(dialog).toContainText(copy.commentDeleteTitle);
+    await expect(dialog).toContainText(copy.commentDeleteBody);
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(copy.commentDeleteBody);
+    const deletedComment = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === `/api/v1/comments/${newestComment}/delete`,
+    );
+    await page.getByTestId('authored-hidden-delete-confirm').click();
+    expect((await deletedComment).status()).toBe(200);
+    await expect(page.getByText(copy.commentDeletedToast)).toBeVisible();
+    await expectComments(myComments, [middleComment, olderComment]);
+    expect(deletes).toEqual([
+      `/api/v1/posts/${middlePost}/delete`,
+      `/api/v1/comments/${newestComment}/delete`,
+    ]);
+    await page.goForward();
+    await expect(page).toHaveURL(`/community/posts/${olderPost}`);
+    await expect(thread.getByTestId(`comment-${middleComment}`)).toContainText(`댓글 2 ${tag}`);
+    await expect(thread).not.toContainText(`댓글 3 ${tag}`);
+    await page.goBack();
+    await expect(page).toHaveURL(/\/my\/posts\?tab=comments$/);
+
+    // Deleted meanwhile — from another tab, say — the server refuses (404): the toast is the
+    // comment area's sentence for a comment that is gone, not the post page's, and MY's lists,
+    // read again, drop the item. A post the same, with the post page's sentence.
+    const me = await meOf(page.request);
+    const elsewhere = async (path: string) => {
+      const res = await page.request.post(path, { data: { expectedAccountId: me.id } });
+      expect(res.status(), await res.text()).toBe(200);
+    };
+    const refusal = (path: string) =>
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === path,
+      );
+    await expectComments(myComments, [middleComment, olderComment]);
+    await elsewhere(`/api/v1/comments/${middleComment}/delete`);
+    await itemOf(myComments, commentCard(middleComment))
+      .getByTestId('authored-hidden-delete')
+      .click();
+    const refusedComment = refusal(`/api/v1/comments/${middleComment}/delete`);
+    await page.getByTestId('authored-hidden-delete-confirm').click();
+    expect((await refusedComment).status()).toBe(404);
+    await expect(page.getByText(copy.errCommentGone)).toBeVisible();
+    await expect(page.getByText(copy.errPostGone)).toHaveCount(0);
+    await expect(dialog).toHaveCount(0);
+    await expectComments(myComments, [olderComment]);
+
+    await page.getByTestId('my-authored-tab-posts').click();
+    await expectPosts(myPosts, [newestPost, olderPost]);
+    await elsewhere(`/api/v1/posts/${newestPost}/delete`);
+    await itemOf(myPosts, postCard(newestPost)).getByTestId('authored-hidden-delete').click();
+    const refusedPost = refusal(`/api/v1/posts/${newestPost}/delete`);
+    await page.getByTestId('authored-hidden-delete-confirm').click();
+    expect((await refusedPost).status()).toBe(404);
+    await expect(page.getByText(copy.errPostGone)).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    await expectPosts(myPosts, [olderPost]);
+    expect(deletes).toEqual([
+      `/api/v1/posts/${middlePost}/delete`,
+      `/api/v1/comments/${newestComment}/delete`,
+      `/api/v1/comments/${middleComment}/delete`,
+      `/api/v1/posts/${newestPost}/delete`,
+    ]);
+
+    // Gone from the summary's preview, and from the counts and tabs of the member's profile.
+    await page.goto('/my');
+    await expectPosts(previewPosts, [olderPost]);
+    await expectComments(previewComments, [olderComment]);
     await page.unroute(isMyListRead);
+    await page.getByTestId('my-view-profile').click();
+    await expectCounts(page, 1, 1);
+    await expectPosts(page.getByTestId('profile-posts-list'), [olderPost]);
   });
 });

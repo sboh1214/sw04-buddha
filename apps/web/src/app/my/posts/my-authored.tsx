@@ -10,13 +10,17 @@ import { PostCard } from '@/components/post/post-card';
 import { copy } from '@/copy';
 import { useMyComments, useMyPosts } from '@/hooks/use-authored';
 import { type MyComment, type MyPost } from '@/lib/api';
+import { hiddenDeleteName } from '@/lib/authored';
 import { Section, SessionEnded, useSessionEnded } from '../portfolio';
+import { DeleteHiddenItem } from './delete-hidden';
 
 /**
  * `/my/posts`: MY '내 글' (#51, ADR-0080; ADR-0069 decision 4 #51 and decision 2 #45-5) — the
  * member's posts and their 댓글 and 대댓글 on two tabs, newest first, nothing to filter. What the
- * member deleted is not here; what an operator hid is, under its '숨김' line with the reason
- * (`HiddenNoticeLine`) — for the member alone. Each item opens its post and its market.
+ * member deleted is not here; what an operator hid is, its content and counts as they are, under
+ * its '숨김' line with the reason (`HiddenNoticeLine`) — for the member alone — and 삭제 beside that
+ * line (`DeleteHiddenItem`, owner decision 2026-10-22), after which it leaves the list. Each item
+ * opens its post and its market.
  *
  * Personal and client-only like every MY list: read with the member's cookie after hydration,
  * under the private `['my-authored']` root, so nothing of it is in the HTML; and nobody else's —
@@ -88,22 +92,49 @@ export function MyCommentsBody({
 
 /**
  * A post as every list draws it (`PostCard`: the community card, `h4` under MY's `h3`), under its
- * '숨김' line when an operator hid it. A hidden post's card has no thumbnail (`GET /media` serves
+ * '숨김' line and that line's 삭제 when an operator hid it — nothing else of the card changes (owner
+ * decision 2026-10-22: «내용·수 그대로»). A hidden post's card has no thumbnail (`GET /media` serves
  * no image of a hidden post) and opens the post page, which shows its placeholder to everybody.
+ * The summary's preview draws the same row, 삭제 included (one body, ADR-0054).
  */
 function MyPostItem({ post }: { post: MyPost }) {
   return (
     <Stack gap="1.5" minW="0">
-      {post.hidden !== null && <HiddenNoticeLine hidden={post.hidden} />}
+      {post.hidden !== null && (
+        <HiddenNoticeLine
+          hidden={post.hidden}
+          action={
+            <DeleteHiddenItem
+              tab="posts"
+              id={post.id}
+              postId={post.id}
+              name={hiddenDeleteName({ tab: 'posts', title: post.title, excerpt: post.excerpt })}
+            />
+          }
+        />
+      )}
       <PostCard post={post} titleAs="h4" />
     </Stack>
   );
 }
 
+/** A comment's card under its '숨김' line and 삭제 when an operator hid it, as a post's. */
 function MyCommentItem({ comment }: { comment: MyComment }) {
   return (
     <Stack gap="1.5" minW="0">
-      {comment.hidden !== null && <HiddenNoticeLine hidden={comment.hidden} />}
+      {comment.hidden !== null && (
+        <HiddenNoticeLine
+          hidden={comment.hidden}
+          action={
+            <DeleteHiddenItem
+              tab="comments"
+              id={comment.id}
+              postId={comment.post.id}
+              name={hiddenDeleteName({ tab: 'comments', body: comment.body })}
+            />
+          }
+        />
+      )}
       <AuthoredCommentCard comment={comment} />
     </Stack>
   );

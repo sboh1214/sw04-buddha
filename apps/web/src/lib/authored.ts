@@ -1,5 +1,5 @@
 import { copy } from '@/copy';
-import type { CommentedPost, HiddenNotice } from './api';
+import type { CommentedPost, HiddenNotice, ReportReason } from './api';
 import { postFirstLine } from './posts';
 
 /**
@@ -9,7 +9,8 @@ import { postFirstLine } from './posts';
  * - two tabs, 글 (근거 글) and 댓글 (댓글 and 대댓글 together), newest first, nothing else to pick
  *   (decision 3 #37-14 for the profile, decision 4 #51 for MY: «필터 없음, 글·댓글 탭과 최신순만»);
  * - the profile leaves out what was deleted or hidden; MY leaves out what was deleted and keeps
- *   what was hidden, marked '숨김' with its reason, for the member alone (decision 2 #45-5);
+ *   what was hidden, marked '숨김' with its reason, for the member alone (decision 2 #45-5), who
+ *   deletes it from beside that line (owner decision 2026-10-22);
  * - each item leads to its post page and its market, an ended market too (N04 §2, N05 §3).
  *
  * Pure functions and keys, in a module with no directive so the node test runner reaches them
@@ -125,17 +126,80 @@ export function commentedPostText(post: CommentedPost): string {
   }
 }
 
+/** The words of each report reason (#45-10), in the owner's order — a hiding's reason is one. */
+const REPORT_REASON_LABELS: Readonly<Record<ReportReason, string>> = {
+  spam: copy.reportReasonSpam,
+  harassment: copy.reportReasonHarassment,
+  personal_info: copy.reportReasonPersonalInfo,
+  impersonation: copy.reportReasonImpersonation,
+  collusion_manipulation: copy.reportReasonCollusionManipulation,
+  off_topic: copy.reportReasonOffTopic,
+  rights_infringement: copy.reportReasonRightsInfringement,
+  other: copy.reportReasonOther,
+};
+
+/** A report reason as the screen names it ('스팸', '시장과 무관', …). */
+export function reportReasonLabel(code: ReportReason): string {
+  return REPORT_REASON_LABELS[code];
+}
+
 /**
  * What MY '내 글' says beside an item an operator hid (#45-5: '숨김' and the reason, to the member
- * alone): the mark always, and the reason's line once the hiding carries one. The reason comes with
- * #50's moderation records; until then no hiding records one (`reason: null`), and the mark stands
- * alone rather than a line that says nothing.
+ * alone): the mark always; once the hiding carries a reason, its line — the report reason the
+ * operator picked (owner decision 2026-10-22: «사유 목록 중 하나 + 운영자 설명») — and the
+ * operator's explanation on a line of its own when they wrote one. The reason comes with #50's
+ * moderation records; until then no hiding records one (`reason: null`), and the mark stands alone
+ * rather than a line that says nothing.
  */
-export function hiddenNoticeView(hidden: HiddenNotice): { mark: string; reason: string | null } {
-  const reason = hidden.reason?.trim() ?? '';
+export function hiddenNoticeView(hidden: HiddenNotice): {
+  mark: string;
+  reason: string | null;
+  note: string | null;
+} {
+  const mark = copy.authoredHidden;
+  if (hidden.reason === null) return { mark, reason: null, note: null };
+  const note = hidden.reason.note?.trim() ?? '';
   return {
-    mark: copy.authoredHidden,
-    reason: reason === '' ? null : `${copy.authoredHiddenReason}: ${reason}`,
+    mark,
+    reason: `${copy.authoredHiddenReason}: ${reportReasonLabel(hidden.reason.code)}`,
+    note: note === '' ? null : `${copy.authoredHiddenNote}: ${note}`,
+  };
+}
+
+/**
+ * The accessible name of MY's 삭제 beside a hidden item's '숨김' line (ADR-0080 7-19): the item it
+ * deletes, then the button's own word, as every repeated per-item button here is named
+ * (market-search.tsx's 삭제, market-picker.tsx's 고르기). A list can hold several hidden items, and
+ * the button stands before its card, so '삭제' alone would read alike for each and before the
+ * item it acts on. A post is named as its card's heading names it — its title, or the first line
+ * of its text when it has none (post-card.tsx) — and a 댓글 or 대댓글 by the first line of its own
+ * text: its post's would name every hidden comment under one post alike. The words on screen stay
+ * '삭제' (the post page's and the comment area's), which the name ends with.
+ */
+export function hiddenDeleteName(
+  item: { tab: 'posts'; title: string | null; excerpt: string } | { tab: 'comments'; body: string },
+): string {
+  return item.tab === 'posts'
+    ? `${item.title ?? postFirstLine(item.excerpt)} ${copy.postDelete}`
+    : `${postFirstLine(item.body)} ${copy.commentDelete}`;
+}
+
+/**
+ * MY's pages of a list once the member deleted one of its items (`id`) from beside its '숨김' line
+ * (owner decision 2026-10-22): the item out of whichever page held it, every other row and every
+ * cursor as they were — the read that follows confirms it. Nothing held, nothing to change.
+ */
+export function withoutAuthoredItem<Page extends { items: readonly { id: string }[] }>(
+  data: { pages: Page[]; pageParams: unknown[] } | undefined,
+  id: string,
+): { pages: Page[]; pageParams: unknown[] } | undefined {
+  if (data === undefined) return undefined;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.filter((item) => item.id !== id),
+    })),
   };
 }
 

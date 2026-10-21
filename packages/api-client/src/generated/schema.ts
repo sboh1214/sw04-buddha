@@ -1934,7 +1934,7 @@ export type components = {
             state: "hidden";
         };
         HiddenNotice: {
-            reason: string | null;
+            reason: components["schemas"]["HiddenReason"] | null;
         };
         HiddenPost: {
             commentCount: number;
@@ -1943,6 +1943,10 @@ export type components = {
             market: components["schemas"]["PostMarket"];
             /** @enum {string} */
             state: "hidden";
+        };
+        HiddenReason: {
+            code: components["schemas"]["ReportReason"];
+            note: string | null;
         };
         LedgerEntry: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -2557,6 +2561,8 @@ export type components = {
         };
         /** @enum {string} */
         ReleaseSettingStatus: "undecided" | "proposal" | "test" | "approved";
+        /** @enum {string} */
+        ReportReason: "spam" | "harassment" | "personal_info" | "impersonation" | "collusion_manipulation" | "off_topic" | "rights_infringement" | "other";
         RequestPhoneVerificationCodeBody: {
             expectedAccountId: string;
             phone: string;

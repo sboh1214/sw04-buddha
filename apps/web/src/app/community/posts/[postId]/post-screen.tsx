@@ -237,6 +237,8 @@ function BackLink() {
  * (#48) — and, for an author facing a re-consent, the gate there takes it on to that step
  * (오너 결정 2026-10-20 3차 답 4). 수정 is the edit screen, or that step first (`entryPath`). The
  * server checks the author on every write; these only hide what would be refused.
+ * The dialog's warning is its description (`Dialog.Description`, `aria-describedby`), so a screen
+ * reader says it with the title (ADR-0080 7-19).
  */
 function AuthorActions({ post }: { post: Extract<Post, { state: 'published' }> }) {
   const router = useRouter();
@@ -284,7 +286,7 @@ function AuthorActions({ post }: { post: Extract<Post, { state: 'published' }> }
                 <Dialog.Title>{copy.postDeleteTitle}</Dialog.Title>
               </Dialog.Header>
               <Dialog.Body>
-                <Text>{copy.postDeleteBody}</Text>
+                <Dialog.Description color="fg">{copy.postDeleteBody}</Dialog.Description>
               </Dialog.Body>
               <Dialog.Footer>
                 <Button

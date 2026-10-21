@@ -9,7 +9,8 @@
  * member by the public face alone; an unknown or malformed public id is NOT_FOUND as the profile
  * is; a comment names its post by id alone when the post is a placeholder; MY lists the member's
  * own, the hidden ones marked (reason null until #50) and the deleted ones never, and only to the
- * member; N04 §7: a post or comment deleted leaves both lists and the counts, and a public item
+ * member, who deletes a hidden one through the delete routes (MY's 삭제, owner decision
+ * 2026-10-22); N04 §7: a post or comment deleted leaves both lists and the counts, and a public item
  * cleared leaves the profile. Nothing of the member's trading rides on an item. Skips when TEST_*
  * are unset.
  *
@@ -504,6 +505,114 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
     expect((await myPosts(other)).data.map((item) => item.id)).toEqual([othersPost.id]);
     expect(ids(await myComments(other))).toEqual([expect.any(String) as unknown]);
     expect(JSON.stringify(await myComments(other))).not.toContain('숨긴 내 댓글');
+  });
+
+  it('lets the member delete a hidden post and a hidden comment from MY through the delete routes (owner decision 2026-10-22)', async () => {
+    // MY's '삭제' beside the '숨김' line sends the author's own delete routes, which take a hidden
+    // item: after it, the item leaves MY, and what hung under it keeps its place.
+    const hiddenPost = await createPost(t.db, {
+      marketId: market.id,
+      authorId: member.id,
+      title: '숨긴 내 글',
+      createdAt: at(1),
+      hiddenAt: at(30),
+    });
+    // Answered by another member: deleted, the post stays as '삭제된 글입니다' over that answer.
+    await createComment(t.db, { postId: hiddenPost.id, authorId: other.id, createdAt: at(2) });
+    // The member's own visible comment under it: MY's 댓글 tab names the post by its state.
+    const underIt = await createComment(t.db, {
+      postId: hiddenPost.id,
+      authorId: member.id,
+      createdAt: at(3),
+    });
+    const othersPost = await createPost(t.db, {
+      marketId: market.id,
+      authorId: other.id,
+      createdAt: at(4),
+    });
+    const hiddenComment = await createComment(t.db, {
+      postId: othersPost.id,
+      authorId: member.id,
+      body: '숨긴 내 댓글',
+      createdAt: at(5),
+      hiddenAt: at(30),
+    });
+    await createComment(t.db, {
+      postId: othersPost.id,
+      authorId: other.id,
+      parentId: hiddenComment.id,
+      createdAt: at(6),
+    });
+
+    expect(ids(await myPosts())).toEqual([hiddenPost.id]);
+    expect((await myPosts()).data[0]?.hidden).toEqual({ reason: null });
+    expect(ids(await myComments())).toEqual([hiddenComment.id, underIt.id]);
+    expect((await myComments()).data[1]?.post).toEqual({ state: 'hidden', id: hiddenPost.id });
+    // Hidden, neither is on the profile or in its counts; the comment under the post is.
+    expect(await profile()).toMatchObject({ postCount: 0, commentCount: 1 });
+
+    const post = await send(
+      `/posts/${hiddenPost.id}/delete`,
+      { expectedAccountId: member.id },
+      member,
+    );
+    expect(post.statusCode, post.body).toBe(200);
+    expect(post.json<{ data: unknown }>().data).toEqual({ id: hiddenPost.id, placeholder: true });
+    const comment = await send(
+      `/comments/${hiddenComment.id}/delete`,
+      { expectedAccountId: member.id },
+      member,
+    );
+    expect(comment.statusCode, comment.body).toBe(200);
+    expect(comment.json<{ data: unknown }>().data).toEqual({
+      id: hiddenComment.id,
+      placeholder: true,
+    });
+
+    // Gone from MY; the comment under the post now names it as the deleted placeholder (the
+    // author's deletion comes first, `publicStateOf`).
+    expect((await myPosts()).data).toEqual([]);
+    expect(ids(await myComments())).toEqual([underIt.id]);
+    expect((await myComments()).data[0]?.post).toEqual({ state: 'deleted', id: hiddenPost.id });
+    // The profile's counts and lists agree, as before: neither deleted item was in them.
+    expect(await profile()).toMatchObject({ postCount: 0, commentCount: 1 });
+    expect((await profilePosts()).data).toEqual([]);
+    expect(ids(await profileComments())).toEqual([underIt.id]);
+    // The public pages: the post is its deleted placeholder, the 댓글 too, over what hangs under.
+    const page = await get(`/posts/${hiddenPost.id}`);
+    expect(page.json<{ data: { state: string } }>().data.state).toBe('deleted');
+    const threads = await pageOf<{ comment: { state: string; id: string }; replies: unknown[] }>(
+      `/posts/${othersPost.id}/comments`,
+    );
+    expect(threads.data.map((thread) => thread.comment)).toEqual([
+      { state: 'deleted', id: hiddenComment.id },
+    ]);
+    expect(threads.data[0]?.replies).toHaveLength(1);
+    expect(JSON.stringify(threads)).not.toContain('숨긴 내 댓글');
+    // A second press finds nothing (NOT_FOUND), as for any deleted item.
+    const again = await send(
+      `/posts/${hiddenPost.id}/delete`,
+      { expectedAccountId: member.id },
+      member,
+    );
+    expect(again.statusCode).toBe(404);
+  });
+
+  it('lets an account the onboarding has not finished delete its hidden comment: signed in is enough', async () => {
+    // The comment route asks a session only (ADR-0074). The post route does too once this branch
+    // sits on #46's answers (owner decision 2026-10-19 답 2, ADR-0073 9-16 there); on this base it
+    // still asks the onboarding, so the post case joins this test with the restack (ADR-0080 결과 5).
+    const fresh = await signUpTestUser(t);
+    const othersPost = await createPost(t.db, { marketId: market.id, authorId: other.id });
+    const hidden = await createComment(t.db, {
+      postId: othersPost.id,
+      authorId: fresh.id,
+      hiddenAt: new Date(),
+    });
+    expect(ids(await myComments(fresh))).toEqual([hidden.id]);
+    const res = await send(`/comments/${hidden.id}/delete`, { expectedAccountId: fresh.id }, fresh);
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await myComments(fresh)).data).toEqual([]);
   });
 
   it('answers MY to its own session alone: signed out is UNAUTHENTICATED', async () => {

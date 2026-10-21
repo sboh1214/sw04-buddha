@@ -1,3 +1,4 @@
+import { REPORT_REASONS } from '@buddha/shared';
 import { hashKey, partialMatchKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -11,10 +12,13 @@ import {
   authoredTabSearch,
   commentKindLabel,
   commentedPostText,
+  hiddenDeleteName,
   hiddenNoticeView,
   myAuthoredKey,
   profileAuthoredKey,
+  reportReasonLabel,
   returnsToDrawnPage,
+  withoutAuthoredItem,
 } from './authored';
 import { isPrivateQueryKey } from './market-keys';
 
@@ -118,16 +122,81 @@ describe('a listed comment', () => {
 });
 
 describe('MY’s 숨김 line (#45-5)', () => {
-  it('marks a hidden item and says the reason the hiding carries', () => {
-    expect(hiddenNoticeView({ reason: '스팸' })).toEqual({
+  it('marks a hidden item and says the report reason the hiding carries (owner decision 2026-10-22)', () => {
+    expect(hiddenNoticeView({ reason: { code: 'spam', note: null } })).toEqual({
       mark: '숨김',
       reason: `${copy.authoredHiddenReason}: 스팸`,
+      note: null,
     });
   });
 
+  it('adds the operator’s explanation on its own line when there is one', () => {
+    expect(
+      hiddenNoticeView({
+        reason: { code: 'off_topic', note: '  이 시장과 상관없는 광고입니다.\n' },
+      }),
+    ).toEqual({
+      mark: '숨김',
+      reason: `${copy.authoredHiddenReason}: 시장과 무관`,
+      note: `${copy.authoredHiddenNote}: 이 시장과 상관없는 광고입니다.`,
+    });
+    // A blank note says nothing.
+    expect(hiddenNoticeView({ reason: { code: 'other', note: '   ' } }).note).toBeNull();
+  });
+
   it('is the mark alone until a hiding records a reason (#50)', () => {
-    expect(hiddenNoticeView({ reason: null })).toEqual({ mark: '숨김', reason: null });
-    expect(hiddenNoticeView({ reason: '   ' })).toEqual({ mark: '숨김', reason: null });
+    expect(hiddenNoticeView({ reason: null })).toEqual({ mark: '숨김', reason: null, note: null });
+  });
+
+  it('names every report reason by the owner’s words, each its own (#45-10)', () => {
+    expect(REPORT_REASONS.map(reportReasonLabel)).toEqual([
+      '스팸',
+      '괴롭힘',
+      '개인정보 노출',
+      '사칭',
+      '공모·조작 유도',
+      '시장과 무관',
+      '권리 침해',
+      '기타',
+    ]);
+  });
+});
+
+describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
+  it('takes the item out of whichever page held it, every other row and cursor kept', () => {
+    const data = {
+      pages: [
+        { items: [{ id: 'a' }, { id: 'b' }], nextCursor: 'c1' },
+        { items: [{ id: 'c' }], nextCursor: null },
+      ],
+      pageParams: [undefined, 'c1'],
+    };
+    expect(withoutAuthoredItem(data, 'b')).toEqual({
+      pages: [
+        { items: [{ id: 'a' }], nextCursor: 'c1' },
+        { items: [{ id: 'c' }], nextCursor: null },
+      ],
+      pageParams: [undefined, 'c1'],
+    });
+    expect(withoutAuthoredItem(data, 'z')).toEqual(data);
+    expect(withoutAuthoredItem(undefined, 'a')).toBeUndefined();
+  });
+
+  it('names each 삭제 by its item, ending with the word on screen (ADR-0080 7-19)', () => {
+    // A post as its card's heading names it: the title, or the first line of its text.
+    expect(hiddenDeleteName({ tab: 'posts', title: '금리 전망', excerpt: '본문' })).toBe(
+      `금리 전망 ${copy.postDelete}`,
+    );
+    expect(hiddenDeleteName({ tab: 'posts', title: null, excerpt: '첫 줄\n둘째 줄' })).toBe(
+      `첫 줄 ${copy.postDelete}`,
+    );
+    // A comment by its own first line, never its post's: two under one post read apart.
+    expect(hiddenDeleteName({ tab: 'comments', body: '\n  첫 댓글  \n더' })).toBe(
+      `첫 댓글 ${copy.commentDelete}`,
+    );
+    expect(hiddenDeleteName({ tab: 'comments', body: '둘째 댓글' })).not.toBe(
+      hiddenDeleteName({ tab: 'comments', body: '첫 댓글' }),
+    );
   });
 });
 

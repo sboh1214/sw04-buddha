@@ -1,6 +1,11 @@
 'use client';
 
-import { useInfiniteQuery } from '@tanstack/react-query';
+import {
+  type QueryClient,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import {
@@ -9,15 +14,23 @@ import {
   type MyPost,
   type PostSummary,
   api,
+  isApiError,
   unwrap,
 } from '@/lib/api';
 import {
+  AUTHORED_KEY,
   type AuthoredPage,
+  type AuthoredTab,
+  MY_AUTHORED_KEY,
   myAuthoredKey,
   profileAuthoredKey,
   returnsToDrawnPage,
+  withoutAuthoredItem,
 } from '@/lib/authored';
+import { postCommentsKey } from '@/lib/comments';
+import { POST_LIST_KEY, postKey } from '@/lib/posts';
 import { useSession } from '@/lib/use-session';
+import { afterRefusal } from './use-posts';
 
 /**
  * 작성자별 글·댓글 (#51, ADR-0080): a profile's 글 and 댓글 tabs and MY '내 글''s, each a cursor list
@@ -136,6 +149,92 @@ export function useMyComments() {
   const { data: session, isPending: sessionPending } = useSession();
   const query = useInfiniteQuery(myCommentsInfiniteQueryOptions(session));
   return { ...query, isPending: sessionPending || (session != null && query.isPending) };
+}
+
+// ---- MY's 삭제 on a hidden item ----------------------------------------------------------------
+
+/**
+ * What MY's 삭제 beside a '숨김' line sends (owner decision 2026-10-22, ADR-0080): the item — a post
+ * on the 글 tab, a 댓글 or 대댓글 on the 댓글 tab — the post it is or sits under, and the account the
+ * screen shows (`expectedAccountId`, A-PG-24, as every owner write).
+ */
+export interface DeleteMyItemVariables {
+  tab: AuthoredTab;
+  id: string;
+  postId: string;
+  expectedAccountId: string;
+}
+
+/**
+ * Everything a deletion from MY changes, marked stale once the answer is in: both of MY's tabs (a
+ * post deleted turns the post its comments name from hidden to the deleted placeholder), the
+ * profile's lists (the same), the community list's cards and the post's own page and comment
+ * threads (its placeholder and count). The ones on screen — MY's — are read at once; the others
+ * when next shown.
+ */
+async function afterMyDeletion(queryClient: QueryClient, postId: string) {
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: MY_AUTHORED_KEY }),
+    queryClient.invalidateQueries({ queryKey: AUTHORED_KEY }),
+    queryClient.invalidateQueries({ queryKey: POST_LIST_KEY }),
+    queryClient.invalidateQueries({ queryKey: postKey(postId), exact: true }),
+    queryClient.invalidateQueries({ queryKey: postCommentsKey(postId), exact: true }),
+  ]);
+}
+
+/**
+ * MY's 삭제 on an item an operator hid (owner decision 2026-10-22: «MY 내 글 항목('숨김' 줄 옆,
+ * 확인 후)»), through the author's own delete routes — `POST /posts/:postId/delete` for the 글 tab,
+ * `POST /comments/:commentId/delete` for the 댓글 tab — which take a hidden item and no writing
+ * restriction (#45-12), as on the post page. Once the server answers, the item leaves
+ * the pages held at once (`withoutAuthoredItem`, after any read of them still on its way is
+ * cancelled, so it cannot land with the item back) — the tab and the summary's preview share the
+ * entry — and everything it touched is read again (`afterMyDeletion`).
+ *
+ * A refusal: as another account, the session is asked for again (`afterRefusal`); NOT_FOUND — the
+ * item was deleted meanwhile, on another tab — reads MY's lists again, so it leaves them too.
+ */
+export function deleteMyItemOptions(queryClient: QueryClient, onSessionChanged: () => void) {
+  return {
+    mutationFn: async ({ tab, id, expectedAccountId }: DeleteMyItemVariables): Promise<void> => {
+      const body = { expectedAccountId };
+      if (tab === 'posts') {
+        unwrap(
+          await api.POST('/api/v1/posts/{postId}/delete', {
+            params: { path: { postId: id.toLowerCase() } },
+            body,
+          }),
+        );
+      } else {
+        unwrap(
+          await api.POST('/api/v1/comments/{commentId}/delete', {
+            params: { path: { commentId: id.toLowerCase() } },
+            body,
+          }),
+        );
+      }
+    },
+    onSuccess: async (_answer: void, { tab, id, postId }: DeleteMyItemVariables) => {
+      const key = myAuthoredKey(tab);
+      await queryClient.cancelQueries({ queryKey: key, exact: true });
+      queryClient.setQueryData<{ pages: AuthoredPage<{ id: string }>[]; pageParams: unknown[] }>(
+        key,
+        (data) => withoutAuthoredItem(data, id.toLowerCase()),
+      );
+      await afterMyDeletion(queryClient, postId);
+    },
+    onError: async (error: Error) => {
+      await afterRefusal(queryClient, error, onSessionChanged);
+      if (isApiError(error, 'NOT_FOUND')) {
+        await queryClient.invalidateQueries({ queryKey: MY_AUTHORED_KEY });
+      }
+    },
+  };
+}
+
+export function useDeleteMyItem(onSessionChanged: () => void) {
+  const queryClient = useQueryClient();
+  return useMutation(deleteMyItemOptions(queryClient, onSessionChanged));
 }
 
 /** The profile pages (`useRouter().bfcacheId`) drawn in this document so far. */

@@ -1,9 +1,19 @@
-import { InfiniteQueryObserver } from '@tanstack/react-query';
+import { InfiniteQueryObserver, MutationObserver } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { type AuthoredComment, type MyPost, type PostSummary, api } from '@/lib/api';
+import {
+  ApiError,
+  type AuthoredComment,
+  type MyComment,
+  type MyPost,
+  type PostSummary,
+  api,
+} from '@/lib/api';
 import { myAuthoredKey, profileAuthoredKey } from '@/lib/authored';
+import { postCommentsKey } from '@/lib/comments';
+import { communityPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
+  deleteMyItemOptions,
   myCommentsInfiniteQueryOptions,
   myPostsInfiniteQueryOptions,
   profileCommentsInfiniteQueryOptions,
@@ -61,6 +71,11 @@ const comment: AuthoredComment = {
 };
 
 const hiddenPost: MyPost = { ...summary, hidden: { reason: null } };
+const shownPost: MyPost = { ...summary, id: 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f', hidden: null };
+const hiddenComment: MyComment = {
+  ...comment,
+  hidden: { reason: { code: 'harassment', note: '상대를 깎아내리는 말' } },
+};
 
 /** openapi-fetch's `{ data, response }`, the shape `unwrap` reads. */
 const answer = (data: unknown, meta?: unknown) =>
@@ -175,5 +190,137 @@ describe('every list here', () => {
     });
     unsubscribeSecond();
     queryClient.clear();
+  });
+});
+
+describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
+  /** MY's two lists and the other entries a deletion touches, as a screen would hold them. */
+  function held() {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(myAuthoredKey('posts'), {
+      pages: [{ items: [hiddenPost, shownPost], nextCursor: null }],
+      pageParams: [undefined],
+    });
+    queryClient.setQueryData(myAuthoredKey('comments'), {
+      pages: [{ items: [hiddenComment], nextCursor: null }],
+      pageParams: [undefined],
+    });
+    queryClient.setQueryData(profileAuthoredKey('k7m2p9qx4z', 'comments'), {
+      pages: [],
+      pageParams: [],
+    });
+    queryClient.setQueryData(communityPostsKey({ q: 'a' }), { pages: [], pageParams: [] });
+    queryClient.setQueryData(postKey(POST), {});
+    queryClient.setQueryData(postCommentsKey(POST), { pages: [], pageParams: [] });
+    return queryClient;
+  }
+  const stale = (queryClient: ReturnType<typeof getQueryClient>, key: readonly unknown[]) =>
+    queryClient.getQueryState(key)?.isInvalidated;
+
+  it('deletes a post through the author’s own route, takes it off the list and reads again what it touched', async () => {
+    const queryClient = held();
+    const send = vi.spyOn(api, 'POST').mockResolvedValue(answer({ id: POST, placeholder: false }));
+    const remove = new MutationObserver(
+      queryClient,
+      deleteMyItemOptions(queryClient, () => undefined),
+    );
+    await remove.mutate({
+      tab: 'posts',
+      id: POST.toUpperCase(),
+      postId: POST,
+      expectedAccountId: 'user-1',
+    });
+    expect(send).toHaveBeenCalledWith('/api/v1/posts/{postId}/delete', {
+      params: { path: { postId: POST } },
+      body: { expectedAccountId: 'user-1' },
+    });
+    // Off the list at once — the tab and the summary's preview share the entry — the rest kept.
+    const posts = queryClient.getQueryData<{ pages: { items: MyPost[] }[] }>(
+      myAuthoredKey('posts'),
+    );
+    expect(posts?.pages[0]?.items).toEqual([shownPost]);
+    // And read again: both of MY's tabs, the profile's lists, the community list, the post.
+    for (const key of [
+      myAuthoredKey('posts'),
+      myAuthoredKey('comments'),
+      profileAuthoredKey('k7m2p9qx4z', 'comments'),
+      communityPostsKey({ q: 'a' }),
+      postKey(POST),
+      postCommentsKey(POST),
+    ]) {
+      expect(stale(queryClient, key), JSON.stringify(key)).toBe(true);
+    }
+  });
+
+  it('deletes a 댓글 or 대댓글 through the comment route, off the 댓글 tab', async () => {
+    const queryClient = held();
+    const send = vi
+      .spyOn(api, 'POST')
+      .mockResolvedValue(answer({ id: COMMENT, placeholder: true }));
+    const remove = new MutationObserver(
+      queryClient,
+      deleteMyItemOptions(queryClient, () => undefined),
+    );
+    await remove.mutate({
+      tab: 'comments',
+      id: COMMENT,
+      postId: POST,
+      expectedAccountId: 'user-1',
+    });
+    expect(send).toHaveBeenCalledWith('/api/v1/comments/{commentId}/delete', {
+      params: { path: { commentId: COMMENT } },
+      body: { expectedAccountId: 'user-1' },
+    });
+    const comments = queryClient.getQueryData<{ pages: { items: MyComment[] }[] }>(
+      myAuthoredKey('comments'),
+    );
+    expect(comments?.pages[0]?.items).toEqual([]);
+    // The 글 tab is untouched but read again with the rest of MY (one prefix, a cheap read): no
+    // count moves, since a hidden comment was never counted (ADR-0080 7-21).
+    const posts = queryClient.getQueryData<{ pages: { items: MyPost[] }[] }>(
+      myAuthoredKey('posts'),
+    );
+    expect(posts?.pages[0]?.items).toEqual([hiddenPost, shownPost]);
+    expect(stale(queryClient, myAuthoredKey('posts'))).toBe(true);
+    expect(stale(queryClient, postCommentsKey(POST))).toBe(true);
+  });
+
+  it('a refusal keeps the item; NOT_FOUND (deleted meanwhile) reads MY again, another account asks for the session', async () => {
+    const queryClient = held();
+    const sessionChanged = vi.fn();
+    const send = vi.spyOn(api, 'POST');
+    const remove = new MutationObserver(
+      queryClient,
+      deleteMyItemOptions(queryClient, sessionChanged),
+    );
+    const variables = {
+      tab: 'posts',
+      id: POST,
+      postId: POST,
+      expectedAccountId: 'user-1',
+    } as const;
+
+    send.mockRejectedValueOnce(new ApiError(404, { code: 'NOT_FOUND', message: 'x' } as never));
+    await expect(remove.mutate(variables)).rejects.toBeInstanceOf(ApiError);
+    const posts = queryClient.getQueryData<{ pages: { items: MyPost[] }[] }>(
+      myAuthoredKey('posts'),
+    );
+    expect(posts?.pages[0]?.items).toEqual([hiddenPost, shownPost]);
+    expect(stale(queryClient, myAuthoredKey('posts'))).toBe(true);
+    expect(stale(queryClient, myAuthoredKey('comments'))).toBe(true);
+    expect(sessionChanged).not.toHaveBeenCalled();
+
+    const again = held();
+    const other = new MutationObserver(again, deleteMyItemOptions(again, sessionChanged));
+    send.mockRejectedValueOnce(
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'x',
+        details: [{ path: ['expectedAccountId'], message: 'other account' }],
+      }),
+    );
+    await expect(other.mutate(variables)).rejects.toBeInstanceOf(ApiError);
+    expect(sessionChanged).toHaveBeenCalledTimes(1);
+    expect(stale(again, myAuthoredKey('posts'))).toBeFalsy();
   });
 });

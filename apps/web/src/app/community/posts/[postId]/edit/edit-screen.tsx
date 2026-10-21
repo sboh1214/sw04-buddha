@@ -28,13 +28,12 @@ import { useSession } from '@/lib/use-session';
 /**
  * Editing a post (#45-4): its title and body in the write screen's form, its market shown and not
  * changeable. Only its author edits it, and not while it is hidden (#45-5: a hidden post cannot be
- * edited). Its author may delete a hidden post, but only through the API until they get the
- * control — where it goes and which issue builds it are the owner's to answer (ADR-0080 7-17; #50
- * until then); its page has none (the public answer for it names no author) — so the message
- * here promises no deletion, and every signed-in viewer of a hidden post's address reads the same
- * one. Saving the same content changes nothing on the server (no '수정됨'); saving a change marks
- * it edited and keeps the earlier version for operators. Either way the screen goes back to the
- * post.
+ * edited). Its author deletes a hidden post on MY '내 글', from 삭제 beside its '숨김' line (owner
+ * decision 2026-10-22, ADR-0080); its page has none (the public answer for it names no author). The
+ * message here does not point there: every signed-in viewer of a hidden post's address reads the
+ * same one, and the owner kept it so (owner decision 2026-10-22 2nd answer 1, ADR-0080 7-17).
+ * Saving the same content changes nothing on the server (no '수정됨'); saving a change marks it
+ * edited and keeps the earlier version for operators. Either way the screen goes back to the post.
  *
  * A post deleted while its edit screen is open — in another tab — is gone once a read of it
  * answers NOT_FOUND (`postGoneAfter`, ADR-0073 9-50, Codex review of #219, round 5): the read after

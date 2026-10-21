@@ -83,7 +83,9 @@ export class ProfileAuthoredController {
  * first with no filter (ADR-0069 decision 4 #51). Owner-only: the session decides whose items are
  * read, and nothing here takes another account. Signed in is enough — reading one's own writing
  * asks no onboarding, as a deletion asks none. The hidden items are there, marked with the reason
- * (#45-5); the deleted ones are not.
+ * (#45-5; a report reason and the operator's note, owner decision 2026-10-22); the deleted ones are
+ * not. MY's 삭제 on a hidden item uses the author's own delete routes (`POST /posts/:postId/delete`,
+ * `POST /comments/:commentId/delete`), which take a hidden one (ADR-0080).
  */
 @ApiTags('me')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)

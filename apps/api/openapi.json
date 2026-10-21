@@ -15427,13 +15427,47 @@
         "properties": {
           "reason": {
             "nullable": true,
-            "type": "string"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HiddenReason"
+              }
+            ]
           }
         },
         "required": [
           "reason"
         ],
         "additionalProperties": false
+      },
+      "HiddenReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ReportReason"
+          },
+          "note": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "ReportReason": {
+        "type": "string",
+        "enum": [
+          "spam",
+          "harassment",
+          "personal_info",
+          "impersonation",
+          "collusion_manipulation",
+          "off_topic",
+          "rights_infringement",
+          "other"
+        ]
       },
       "MyComment": {
         "type": "object",

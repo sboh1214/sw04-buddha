@@ -1586,7 +1586,9 @@ function useFocusOn(
 /**
  * 삭제 for the author: asked first (never undone, #45-5), then the comment becomes '삭제된
  * 글입니다' while 대댓글 hang under it, or leaves the thread. Deleting one's own needs a session only
- * (owner decision 2026-10-19, as a post's): no onboarding refusal reaches here.
+ * (owner decision 2026-10-19, as a post's): no onboarding refusal reaches here. The dialog's
+ * warning is its description (`Dialog.Description`, `aria-describedby`), so a screen reader says
+ * it with the title (ADR-0080 7-19).
  *
  * The outcome is said from the write's promise, not from per-call callbacks: the answer takes the
  * comment out of the thread (or makes it its placeholder) before the mutation settles, which
@@ -1635,7 +1637,7 @@ function DeleteComment({
                 <Dialog.Title>{copy.commentDeleteTitle}</Dialog.Title>
               </Dialog.Header>
               <Dialog.Body>
-                <Text>{copy.commentDeleteBody}</Text>
+                <Dialog.Description color="fg">{copy.commentDeleteBody}</Dialog.Description>
               </Dialog.Body>
               <Dialog.Footer>
                 <Button

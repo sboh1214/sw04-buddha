@@ -3,9 +3,11 @@ import {
   authoredCommentSchema,
   commentedPostSchema,
   hiddenNoticeSchema,
+  hiddenReasonSchema,
   myCommentSchema,
   myPostSchema,
 } from './authored.js';
+import { REPORT_REASONS } from './enums.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { findPrivateField } from './guards/private-data.js';
 import { postSummarySchema } from './post.js';
@@ -90,9 +92,8 @@ describe('MY 내 글 (#45-5, #51)', () => {
     expect(myPostSchema.parse({ ...CARD, hidden: { reason: null } }).hidden).toEqual({
       reason: null,
     });
-    expect(myCommentSchema.parse({ ...COMMENT, hidden: { reason: '스팸' } }).hidden).toEqual({
-      reason: '스팸',
-    });
+    const reason = { code: 'spam', note: '같은 링크를 반복해 올렸습니다.' } as const;
+    expect(myCommentSchema.parse({ ...COMMENT, hidden: { reason } }).hidden).toEqual({ reason });
     // `hidden` is required: an item says whether it is hidden.
     expect(myPostSchema.safeParse(CARD).success).toBe(false);
     expect(myCommentSchema.safeParse(COMMENT).success).toBe(false);
@@ -103,6 +104,23 @@ describe('MY 내 글 (#45-5, #51)', () => {
     ]);
     // Nothing of the operator or a report rides on the notice (#45-13).
     expect(Object.keys(hiddenNoticeSchema.shape)).toEqual(['reason']);
+  });
+
+  it('gives a hiding’s reason as a report reason and the operator’s note (owner decision 2026-10-22)', () => {
+    // «사유 목록 중 하나 + 운영자 설명»: one of #45-10's eight, and the explanation if any.
+    expect(Object.keys(hiddenReasonSchema.shape)).toEqual(['code', 'note']);
+    for (const code of REPORT_REASONS) {
+      expect(hiddenReasonSchema.parse({ code, note: null })).toEqual({ code, note: null });
+    }
+    expect(hiddenReasonSchema.parse({ code: 'other', note: '설명' }).note).toBe('설명');
+    // A reason outside the list, a bare string (the first commit's shape), or no note key: refused.
+    expect(hiddenReasonSchema.safeParse({ code: 'rude', note: null }).success).toBe(false);
+    expect(hiddenNoticeSchema.safeParse({ reason: '스팸' }).success).toBe(false);
+    expect(hiddenReasonSchema.safeParse({ code: 'spam' }).success).toBe(false);
+    // Nothing of the operator or the report rides on it either (#45-13): extra keys are stripped.
+    expect(
+      hiddenReasonSchema.parse({ code: 'spam', note: null, moderatorId: 'x', reportId: 'y' }),
+    ).toEqual({ code: 'spam', note: null });
   });
 
   it('keeps the hiding to the member: PRIVATE_DATA names it, the public items do not (ADR-0080)', () => {
@@ -127,6 +145,9 @@ describe('MY 내 글 (#45-5, #51)', () => {
       'MyPost',
       'MyComment',
       'HiddenNotice',
+      'HiddenReason',
+      'ReportReason',
+      ...Object.keys(hiddenReasonSchema.shape),
     ]) {
       expect(findExcludedIdentifier(name, 'api'), name).toEqual([]);
     }

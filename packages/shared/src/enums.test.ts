@@ -11,6 +11,23 @@ describe('enums', () => {
     expect(() => enums.outcomeSchema.parse('MAYBE')).toThrow();
   });
 
+  it('names the eight report reasons in the owner’s order (#45-10), the reason a hiding carries too', () => {
+    // 스팸·괴롭힘·개인정보 노출·사칭·공모·조작 유도·시장과 무관·권리 침해·기타 (ADR-0069 decision 2
+    // #45-10; owner decision 2026-10-22 for a hiding's reason, ADR-0080).
+    expect(enums.REPORT_REASONS).toEqual([
+      'spam',
+      'harassment',
+      'personal_info',
+      'impersonation',
+      'collusion_manipulation',
+      'off_topic',
+      'rights_infringement',
+      'other',
+    ]);
+    expect(enums.reportReasonSchema.options).toEqual([...enums.REPORT_REASONS]);
+    expect(enums.reportReasonSchema.safeParse('wrong_forecast').success).toBe(false);
+  });
+
   it('never contains sports or election categories (PLAN 0.2)', () => {
     for (const slug of enums.ALL_CATEGORY_SLUGS) {
       expect(slug).not.toMatch(/sport|election|politic/i);
