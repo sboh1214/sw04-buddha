@@ -524,6 +524,11 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     names: ['smsAsOf'],
     reason: 'the admin SMS send status (ADR-0070): 기준 시각, when the counts were read',
   },
+  'lib/moderation.ts': {
+    names: ['operatorLineText'],
+    reason:
+      'the admin moderation pages (#50, ADR-0081): who processed, acted or cancelled, and when',
+  },
 };
 
 /**

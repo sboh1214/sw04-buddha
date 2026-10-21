@@ -5,11 +5,12 @@
  * reports, and never its own; one reason, '기타' with a description; a placeholder (deleted,
  * hidden) takes none and a gone item is NOT_FOUND; the same person — the account, or the number of
  * an account that withdrew — has one pending report per target and may report again once it was
- * processed — a live account's whatever number an operator gives it; at most 20 a person in the
- * last 24 hours, none for an operator, the person's reports counted one after the other; a report
- * waits for a hiding or a deletion in flight and never lands on it; no count of reports hides
- * anything; the answer and the list carry the target as the public sees it and the result, never
- * the member reported's account nor anyone's report but the caller's. Skips when TEST_* are unset.
+ * processed, and an operator's change of the number takes the pending and recent reports with it
+ * (owner decision 2026-10-21); at most 20 a person in the last 24 hours, none for an operator, the
+ * person's reports counted one after the other; a report waits for a hiding or a deletion in
+ * flight and never lands on it; no count of reports hides anything; the answer and the list carry
+ * the target as the public sees it and the result, never the member reported's account nor
+ * anyone's report but the caller's. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -419,7 +420,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 reports (integration)', () => {
     reported(await report(`/comments/${comment.id}`, admin));
   });
 
-  it('keeps a live account’s reports its own when an operator changes its number (#57-3)', async () => {
+  it('takes the person’s reports to the new number when an operator changes it, so a later account there is the same person (owner decision 2026-10-21)', async () => {
     reported(await report(`/posts/${post.id}`));
     const oldHash = await hashOf(reporter.id);
     const [record] = await t.db
@@ -441,23 +442,41 @@ describe.skipIf(!hasTestInfra)('/api/v1 reports (integration)', () => {
       });
     }
     const newPhone = '01077778888';
+    const newHash = t.app.get(PhoneHasher).hash(newPhone);
+    // The doc's SQL as the operator runs it (docs/OPERATIONS.md): the hash moves, nothing else.
+    const before = await rows();
     await changePhoneAsOperator(t.db, {
       userId: reporter.id,
       phone: newPhone,
       hash: (digits) => t.app.get(PhoneHasher).hash(digits),
     });
-    // Another account verifies the old number: the live account's pending report and count are
-    // not theirs — that account is another person.
+    expect(await rows()).toEqual(
+      expect.arrayContaining(before.map((row) => ({ ...row, reporterPhoneHash: newHash }))),
+    );
+    // The account keeps both rules, whatever number it holds now.
+    const again = await report(`/posts/${post.id}`);
+    expect(errorOf(again)).toMatchObject({ details: { reason: 'duplicate' } });
+    expect((await report(`/comments/${reply.id}`)).statusCode).toBe(429);
+    // Another account verifies the old number: none of it is theirs — that account is another
+    // person.
     const next = await signUpTestUser(t);
     await createPhoneVerification(t.db, { userId: next.id, phone: record!.phone });
     await completeOnboarding(t.db, { userId: next.id });
     expect(await hashOf(next.id)).toBe(oldHash);
     reported(await report(`/posts/${post.id}`, next));
     reported(await report(`/comments/${comment.id}`, next));
-    // The account keeps both, whatever number it holds now.
-    const again = await report(`/posts/${post.id}`);
-    expect(errorOf(again)).toMatchObject({ details: { reason: 'duplicate' } });
-    const limited = await report(`/comments/${reply.id}`);
+    // The account withdraws (#140 deletes the 본인확인 record and keeps the reports) and comes back
+    // on the new number: the same person — its pending report and its count follow it there.
+    await t.db
+      .delete(schema.phoneVerifications)
+      .where(eq(schema.phoneVerifications.userId, reporter.id));
+    const back = await signUpTestUser(t);
+    await createPhoneVerification(t.db, { userId: back.id, phone: newPhone });
+    await completeOnboarding(t.db, { userId: back.id });
+    const duplicate = await report(`/posts/${post.id}`, back);
+    expect(duplicate.statusCode).toBe(409);
+    expect(errorOf(duplicate)).toMatchObject({ details: { reason: 'duplicate' } });
+    const limited = await report(`/comments/${reply.id}`, back);
     expect(limited.statusCode).toBe(429);
     expect(errorOf(limited).code).toBe('REPORT_LIMITED');
   });

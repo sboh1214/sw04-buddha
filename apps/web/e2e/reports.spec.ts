@@ -29,7 +29,20 @@ import {
  *   reason and the appeal on 조치·신고 내역 — never who reported nor who acted; the reporter sees
  *   조치함 and 기각;
  * - a profile reported, its 소개 emptied by the operator from the member's page (kept for operators,
- *   not restored by a cancellation), and an operator's own post offering no action.
+ *   not restored by a cancellation), and an operator's own post offering no action — its report
+ *   read without the reporter and the description, and the hiding another operator gives it read
+ *   without who gave it (owner decision 2026-10-21);
+ * - 신고 on the cards of the community list and of a profile's 글·댓글 tabs, named by its item, which
+ *   reports without opening the post and sits outside the card's link, none on one's own (the list
+ *   and both tabs) and a visitor's press back to the list; the operator's '운영' links on the post,
+ *   its comment and the profile, shown to no one else; a warning given from the profile's link
+ *   shows its banner on the member's MY summary — not the write page — until it is cancelled
+ *   (owner decisions 2026-10-21).
+ *
+ * Every report a test files is processed before it ends, so a persistent database's queue does not
+ * grow run after run; the queue is walked page by page all the same (`showInQueue`). A check that
+ * something is absent is made once what decides it has been read: GET /me for 신고, the member's
+ * actions for the banners (`gotoWithActionsRead`).
  *
  * The rules' every branch (the daily limit, the same person by number, the onboarding, the
  * concurrency, the audit rows) is the API's tests' (reports.controller.test.ts,
@@ -72,17 +85,58 @@ async function commentThroughApi(
 
 /**
  * The queue's entry, shown: the pending half lists the target waiting longest first, and an
- * earlier run's reports may still wait in a persistent database, so 더 보기 until it is there.
+ * earlier run's reports — or another test's, filed at the same time — may wait before it, so 더 보기
+ * until it is there. The entry and 더 보기 are on screen together whenever a page after this one
+ * exists (`.first()` of the two), and each 더 보기 is waited out — its page read and drawn — before
+ * the entry is looked for again.
  */
 async function showInQueue(page: Page, entry: Locator): Promise<void> {
+  const more = page.getByTestId('admin-reports-more');
   for (let pages = 0; pages < 50; pages += 1) {
+    await expect(more.or(entry).first()).toBeVisible();
     if (await entry.isVisible()) return;
-    const more = page.getByTestId('admin-reports-more');
-    await expect(more.or(entry)).toBeVisible();
-    if (await entry.isVisible()) return;
+    const next = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' &&
+        new URL(response.url()).pathname === '/api/v1/admin/reports',
+    );
     await more.click();
+    await next;
+    await expect(page.locator('[data-testid="admin-reports-more"][data-loading]')).toHaveCount(0);
   }
   await expect(entry).toBeVisible();
+}
+
+/**
+ * Opens `path` and waits until the member's own actions (`GET /me/moderation/actions`, read in the
+ * browser once the session is known) have answered and been drawn: the banners — the warning's on
+ * the MY summary, the sanction's there and on the write page — are drawn from it and draw nothing
+ * while it is read, so a check that one is absent proves nothing before it. Two frames after the
+ * answer: React Query hands it over and React draws it.
+ */
+async function gotoWithActionsRead(page: Page, path: string): Promise<void> {
+  const read = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/v1/me/moderation/actions',
+  );
+  await page.goto(path);
+  const response = await read;
+  expect(response.status(), await response.text()).toBe(200);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+}
+
+/** The areas' links a reader at this width has: the tab bar below md, header row 1 from md up. */
+function shownNav(page: Page): Locator {
+  const width = page.viewportSize()?.width ?? 0;
+  return width < 768
+    ? page.getByTestId('bottom-tabs')
+    : page.getByRole('navigation', { name: copy.navPrimary });
 }
 
 /** Sends the open report dialog and waits for its answer, returning the report's id. */
@@ -319,11 +373,12 @@ test.describe('신고와 운영 처리', () => {
       expect(authorView).not.toContain(reporterMe.profile.nickname);
       expect(authorView).not.toContain(operator.profile.nickname);
       expect(authorView).not.toContain(description);
-      // A hiding is no sanction (#45-12): no banner on MY or the write page.
-      await page.goto('/my');
+      // A hiding is no sanction (#45-12): no banner on MY or the write page, once the actions they
+      // are drawn from have been read.
+      await gotoWithActionsRead(page, '/my');
       await expect(page.getByTestId('my-preview-wallet')).toBeVisible();
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
-      await page.goto(`/community/write?market=${market.id}`);
+      await gotoWithActionsRead(page, `/community/write?market=${market.id}`);
       await expect(page.getByTestId('post-write-market')).toBeVisible();
       await expect(page.getByTestId('post-write-sanction-banner')).toHaveCount(0);
       expect(
@@ -354,8 +409,9 @@ test.describe('신고와 운영 처리', () => {
     }
   });
 
-  test('회원의 프로필을 신고하면 운영자가 회원 화면에서 소개를 비우고 그 소개는 운영자만 보며, 조치를 취소해도 되살리지 않고, 운영자 자신의 글에는 처리 단추 없이 다른 운영자가 처리한다고 보인다', async ({
+  test('회원의 프로필을 신고하면 운영자가 회원 화면에서 소개를 비우고 그 소개는 운영자만 보며, 조치를 취소해도 되살리지 않고, 운영자 자신의 글에는 처리 단추 없이 다른 운영자가 처리한다고 보이며, 다른 운영자가 처리하면 그 조치를 누가 했는지 없이 본다', async ({
     admin,
+    secondAdmin,
     page,
     browser,
   }) => {
@@ -461,13 +517,244 @@ test.describe('신고와 운영 처리', () => {
         `운영자의 글 ${tag}`,
         `운영자 본문 ${tag}`,
       );
+      // A member reports it: the operator reads that report without who sent it, nor what they
+      // wrote (owner decision 2026-10-21) — the reason and the time stay.
+      const reporterMe = await meOf(reporter.request);
+      const onOwn = await reporter.request.post(`/api/v1/posts/${ownPost}/reports`, {
+        data: {
+          reason: 'other',
+          description: `운영자 글 신고 ${tag}`,
+          expectedAccountId: reporterMe.id,
+        },
+      });
+      expect(onOwn.status(), await onOwn.text()).toBe(201);
       await adminPage.goto(`/admin/moderation/posts/${ownPost}`);
       await expect(adminPage.getByTestId('moderation-own')).toHaveText(
         copy.adminModerationOwnNotice,
       );
       await expect(adminPage.getByTestId('moderation-action-bar')).toHaveCount(0);
+      const ownReports = adminPage.getByTestId('moderation-reports-block');
+      await expect(ownReports.getByTestId('moderation-report-withheld')).toHaveText(
+        copy.adminModerationWithheldReport,
+      );
+      await expect(ownReports).toContainText(copy.reportReasonOther);
+      await expect(ownReports).not.toContainText(reporterMe.profile.nickname);
+      await expect(ownReports).not.toContainText(`운영자 글 신고 ${tag}`);
+
+      // Another operator processes it — hides the post, which closes that report (and leaves no
+      // report waiting in a persistent database). The operator reads the action on their own post
+      // with its reason and time and without who took it (owner decision 2026-10-21): the line
+      // that says so, and no operator's name — not even '삭제된 계정'.
+      const second = await meOf(secondAdmin);
+      const secondNote = `다른 운영자의 숨김 ${tag}`;
+      const hidden = await secondAdmin.post(`/api/v1/admin/moderation/posts/${ownPost}/hide`, {
+        data: { reason: 'other', note: secondNote, expectedAccountId: second.id },
+      });
+      expect(hidden.status(), await hidden.text()).toBe(200);
+      await adminPage.reload();
+      const ownActions = adminPage.getByTestId('moderation-item-actions');
+      await expect(ownActions.getByTestId('moderation-action-type')).toHaveText(
+        copy.moderationActionHide,
+      );
+      await expect(ownActions.getByTestId('moderation-action-withheld')).toHaveText(
+        copy.adminModerationWithheldAction,
+      );
+      await expect(ownActions).toContainText(secondNote);
+      await expect(ownActions).toContainText(copy.moderationTakenAt);
+      await expect(ownActions).not.toContainText(copy.adminModerationCreatedBy);
+      await expect(ownActions).not.toContainText(copy.adminAccountsTargetGone);
+      await expect(adminPage.getByTestId('admin-post-moderation')).not.toContainText(
+        second.profile.nickname,
+      );
+      await expect(ownReports.getByTestId('moderation-report-status')).toHaveText(
+        copy.reportStatusActioned,
+      );
     } finally {
       await reporterContext.close();
+      await adminContext.close();
+    }
+  });
+
+  test('카드의 신고는 글을 열지 않고 신고하며, 운영자에게만 공개 화면의 운영 링크가 보이고, 그 링크로 준 경고는 취소될 때까지 MY 요약에 안내 띠로 보인다', async ({
+    admin,
+    page,
+    browser,
+  }) => {
+    const tag = freshTag();
+    const market = await createOpenMarket(admin);
+    // The author, with a post and a comment under it.
+    await signUp(page, freshEmail());
+    const author = await meOf(page.request);
+    const postTitle = `카드에서 신고될 글 ${tag}`;
+    const postId = await postThroughApi(page.request, market.id, postTitle, `본문 ${tag}`);
+    const commentId = await commentThroughApi(page.request, postId, `카드에서 신고될 댓글 ${tag}`);
+    const listPath = `/community?market=${market.id}`;
+    const profileUrl = `/u/${author.profile.publicId}`;
+
+    const reporterContext = await browser.newContext();
+    const visitorContext = await browser.newContext();
+    const adminContext = await browser.newContext();
+    try {
+      // The author's own card offers no 신고, on the list and on their profile — checked once
+      // GET /me has answered: the button waits for it, and the card is in the server's HTML before
+      // (the 잔고 chip leaves its skeleton in the same draw).
+      await page.goto(listPath);
+      const ownCard = page.getByTestId(`post-card-${postId}`);
+      await expect(page.getByTestId('balance-chip')).toBeVisible();
+      await expect(ownCard.getByTestId('post-card-likes')).toBeVisible();
+      await expect(ownCard.getByTestId('report-open')).toHaveCount(0);
+      await page.goto(profileUrl);
+      await expect(page.getByTestId('profile-edit')).toBeVisible();
+      const ownPostCard = page.getByTestId('profile-posts-list').getByTestId(`post-card-${postId}`);
+      await expect(ownPostCard).toBeVisible();
+      await expect(ownPostCard.getByTestId('report-open')).toHaveCount(0);
+      await page.getByTestId('profile-authored-tab-comments').click();
+      const ownCommentCard = page.getByTestId(`authored-comment-${commentId}`);
+      await expect(ownCommentCard).toBeVisible();
+      await expect(ownCommentCard.getByTestId('report-open')).toHaveCount(0);
+      // Nor 운영 for a member, anywhere.
+      await page.goto(`/community/posts/${postId}`);
+      await expect(page.getByTestId('post-edit')).toBeVisible();
+      await expect(page.getByTestId('post-operator-link')).toHaveCount(0);
+      await expect(page.getByTestId('comment-operator-link')).toHaveCount(0);
+
+      // A visitor's press on a card goes to the login page, back to the list as it was filtered.
+      const visitor = await visitorContext.newPage();
+      await visitor.goto(listPath);
+      await visitor.getByTestId(`post-card-${postId}`).getByTestId('report-open').click();
+      await expect(visitor).toHaveURL(`/login?next=${encodeURIComponent(listPath)}`);
+
+      // Another member reports the post from its card: the dialog opens over the list — the
+      // press opens no post — and the button is no part of the card's link.
+      const reporter = await reporterContext.newPage();
+      await signUp(reporter, freshEmail());
+      await reporter.goto(listPath);
+      const card = reporter.getByTestId(`post-card-${postId}`);
+      const cardReport = card.getByTestId('report-open');
+      await expect(cardReport).toBeVisible();
+      await expect(card.getByTestId('post-card-link').getByTestId('report-open')).toHaveCount(0);
+      // Named by its post, as every repeated per-item button (ADR-0080 7-19); the words stay 신고.
+      await expect(cardReport).toHaveText(copy.reportAction);
+      await expect(cardReport).toHaveAccessibleName(`${postTitle} ${copy.reportAction}`);
+      await cardReport.click();
+      await expect(reporter.getByTestId('report-dialog')).toContainText(copy.reportPostTitle);
+      await expect(reporter).toHaveURL(listPath);
+      await reporter.getByTestId('report-reason-spam').click();
+      const postReportId = await sendReport(reporter, `/api/v1/posts/${postId}/reports`);
+      await expect(reporter).toHaveURL(listPath);
+
+      // And the comment from the 댓글 tab of the author's profile; the 글 tab's card has it too.
+      await reporter.goto(profileUrl);
+      await expect(
+        reporter
+          .getByTestId('profile-posts-list')
+          .getByTestId(`post-card-${postId}`)
+          .getByTestId('report-open'),
+      ).toBeVisible();
+      await reporter.getByTestId('profile-authored-tab-comments').click();
+      const commentCard = reporter.getByTestId(`authored-comment-${commentId}`);
+      const commentReport = commentCard.getByTestId('report-open');
+      await expect(commentReport).toBeVisible();
+      await expect(
+        commentCard.getByTestId('authored-comment-link').getByTestId('report-open'),
+      ).toHaveCount(0);
+      await expect(commentReport).toHaveAccessibleName(
+        `카드에서 신고될 댓글 ${tag} ${copy.reportAction}`,
+      );
+      await commentReport.click();
+      await expect(reporter.getByTestId('report-dialog')).toContainText(copy.reportCommentTitle);
+      await reporter.getByTestId('report-reason-off_topic').click();
+      const commentReportId = await sendReport(reporter, `/api/v1/comments/${commentId}/reports`);
+      await expect(reporter).toHaveURL(new RegExp(`/u/${author.profile.publicId}\\?tab=comments$`));
+      await expect(reporter.getByTestId('profile-operator-link')).toHaveCount(0);
+
+      // The operator: '운영' on the post, on its comment and on the profile, each to its page.
+      const adminPage = await adminContext.newPage();
+      await signIn(adminPage, adminAccount.email, adminAccount.password);
+      await adminPage.goto(`/community/posts/${postId}`);
+      const postLink = adminPage.getByTestId('post-operator-link');
+      await expect(postLink).toHaveText(copy.operatorModerationLink);
+      await expect(postLink).toHaveAccessibleName(copy.operatorModerationPostLabel);
+      await expect(postLink).toHaveAttribute('href', `/admin/moderation/posts/${postId}`);
+      const commentLink = adminPage
+        .getByTestId(`comment-${commentId}`)
+        .getByTestId('comment-operator-link');
+      await expect(commentLink).toHaveAttribute('href', `/admin/moderation/comments/${commentId}`);
+      await commentLink.click();
+      await expect(adminPage).toHaveURL(`/admin/moderation/comments/${commentId}`);
+      await expect(adminPage.getByTestId('moderation-reports-block')).toContainText(
+        copy.reportReasonOffTopic,
+      );
+      await adminPage.goto(profileUrl);
+      await adminPage.getByTestId('profile-operator-link').click();
+      await expect(adminPage).toHaveURL(`/admin/moderation/profiles/${author.profile.publicId}`);
+      await expect(adminPage.getByTestId('moderation-user-nickname')).toContainText(
+        author.profile.nickname,
+      );
+      // The two reports dismissed, so none is left waiting in a persistent database's queue.
+      const operator = await meOf(admin);
+      const dismissed = await admin.post('/api/v1/admin/reports/dismiss', {
+        data: {
+          reportIds: [postReportId, commentReportId],
+          reason: `카드 신고 시험의 정리 ${tag}`,
+          expectedAccountId: operator.id,
+        },
+      });
+      expect(dismissed.status(), await dismissed.text()).toBe(200);
+
+      // A warning from there, about nothing in particular.
+      await adminPage.getByTestId('moderation-warn').click();
+      await adminPage.getByTestId('moderation-reason').selectOption('harassment');
+      await adminPage.getByTestId('moderation-submit').click();
+      await expect(adminPage.getByText(copy.adminModerationWarned)).toBeVisible();
+      const warning = adminPage
+        .getByTestId('moderation-author-actions')
+        .getByTestId('moderation-action-type')
+        .filter({ hasText: copy.moderationActionWarning });
+      await expect(warning).toHaveCount(1);
+
+      // The member: its banner on the MY summary, leading to 조치·신고 내역 — not on the write page,
+      // which keeps its banner for restrictions: once the actions are read there, nothing on it
+      // says a warning was received.
+      await page.goto('/my');
+      const banner = page.getByTestId('my-warning-banner');
+      await expect(banner).toContainText(copy.moderationWarningReceived);
+      await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
+      await gotoWithActionsRead(page, `/community/write?market=${market.id}`);
+      await expect(page.getByTestId('post-write-market')).toBeVisible();
+      await expect(page.getByText(copy.moderationWarningReceived)).toHaveCount(0);
+      await expect(page.getByTestId('post-write-sanction-banner')).toHaveCount(0);
+      await page.goto('/my');
+      await page.getByTestId('my-warning-banner').getByRole('link').click();
+      await expect(page).toHaveURL('/my/moderation');
+      await expect(page.getByTestId('my-actions-list').getByTestId('my-action-type')).toHaveText(
+        copy.moderationActionWarning,
+      );
+
+      // Cancelled, the banner is gone.
+      await adminPage
+        .getByTestId('moderation-author-actions')
+        .getByTestId('moderation-action-cancel')
+        .click();
+      await adminPage.getByTestId('moderation-record').fill(`이의를 받아들임 ${tag}`);
+      await adminPage.getByTestId('moderation-submit').click();
+      await expect(adminPage.getByText(copy.adminModerationCancelDone)).toBeVisible();
+      // 조치·신고 내역 reads the warning as cancelled; the summary, reached from there by the MY
+      // link, draws from those very actions at once — so its banner would be there with the page.
+      await page.goto('/my/moderation');
+      await expect(
+        page.getByTestId('my-actions-list').getByTestId('my-action-cancelled'),
+      ).toHaveText(copy.moderationCancelled);
+      await shownNav(page).getByRole('link', { name: copy.navMy, exact: true }).click();
+      await expect(page).toHaveURL('/my');
+      await expect(page.getByTestId('my-preview-wallet')).toBeVisible();
+      await expect(page.getByTestId('my-warning-banner')).toHaveCount(0);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+    } finally {
+      await reporterContext.close();
+      await visitorContext.close();
       await adminContext.close();
     }
   });

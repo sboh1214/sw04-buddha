@@ -6,6 +6,8 @@ import { AuthoredTabs } from '@/components/authored/authored-tabs';
 import { PostCard } from '@/components/post/post-card';
 import { copy } from '@/copy';
 import { useProfileComments, useProfilePosts, useRedrawOnReturn } from '@/hooks/use-authored';
+import { authoredTabSearch } from '@/lib/authored';
+import { profilePath } from '@/lib/profile';
 
 /**
  * A profile's 글·댓글 (#51, ADR-0080; ADR-0069 decision 3 #37-14): the member's posts and their 댓글
@@ -13,7 +15,8 @@ import { useProfileComments, useProfilePosts, useRedrawOnReturn } from '@/hooks/
  * ended or voided market kept, all of it while the member is under a restriction too (the owner's
  * «제재 중인 사람의 글») — the items the counts above count (ADR-0078), so a tab never holds more
  * or fewer than its number. Every reader gets the same lists, signed in or not (#37-1). Each item
- * opens its post and, by the market line, its market, an ended one too.
+ * opens its post and, by the market line, its market, an ended one too, and carries 신고 for every
+ * reader but its author (owner decision 2026-10-21) — a visitor's press comes back to this tab.
  *
  * Read in the browser, after the page the server drew (`useProfilePosts`), so the per-address
  * bucket applies to whoever reads them — as the owner decided for a post's comments (2026-10-21,
@@ -45,7 +48,9 @@ function ProfilePosts({ publicId }: { publicId: string }) {
       list={list}
       tab="posts"
       testId="profile-posts-list"
-      renderRow={(post) => <PostCard post={post} titleAs="h4" />}
+      renderRow={(post) => (
+        <PostCard post={post} titleAs="h4" report={{ backPath: profilePath(publicId) }} />
+      )}
     />
   );
 }
@@ -57,7 +62,14 @@ function ProfileComments({ publicId }: { publicId: string }) {
       list={list}
       tab="comments"
       testId="profile-comments-list"
-      renderRow={(comment) => <AuthoredCommentCard comment={comment} />}
+      renderRow={(comment) => (
+        <AuthoredCommentCard
+          comment={comment}
+          report={{
+            backPath: `${profilePath(publicId)}${authoredTabSearch('', 'comments')}`,
+          }}
+        />
+      )}
     />
   );
 }

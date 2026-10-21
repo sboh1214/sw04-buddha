@@ -16,7 +16,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useState } from 'react';
 import { copy } from '@/copy';
-import { useAdminUserModeration } from '@/hooks/use-admin-moderation';
+import { useAdminProfileModeration, useAdminUserModeration } from '@/hooks/use-admin-moderation';
 import { type AdminUserModeration, isApiError } from '@/lib/api';
 import {
   ADMIN_REPORTS_PATH,
@@ -52,7 +52,18 @@ import {
  * operator's own account (decision 4 #50).
  */
 export function UserModeration({ userId }: { userId: string }) {
-  const query = useAdminUserModeration(userId);
+  return <MemberModeration query={useAdminUserModeration(userId)} />;
+}
+
+/**
+ * The same page reached from a public profile's '운영' link, which knows the profile's public id
+ * only (owner decision 2026-10-21): read by it, then the same view and actions.
+ */
+export function ProfileModeration({ publicId }: { publicId: string }) {
+  return <MemberModeration query={useAdminProfileModeration(publicId)} />;
+}
+
+function MemberModeration({ query }: { query: ReturnType<typeof useAdminUserModeration> }) {
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   return (
     <Stack gap="5" data-testid="admin-user-moderation">
@@ -91,7 +102,10 @@ function profileItemDialog(
   return {
     kind: 'action',
     title,
-    body: copy.adminModerationProfileItemBody,
+    body:
+      kind === 'nickname-reset'
+        ? `${copy.adminModerationProfileItemBody} ${copy.adminModerationNicknameResetNote}`
+        : copy.adminModerationProfileItemBody,
     success,
     testId: `moderation-${kind}-dialog`,
     build: ({ reason, note, expectedAccountId }) => ({

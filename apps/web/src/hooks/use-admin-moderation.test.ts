@@ -5,6 +5,7 @@ import {
   ADMIN_MODERATION_KEY,
   adminCommentModerationKey,
   adminPostModerationKey,
+  adminProfileModerationKey,
   adminReportQueueKey,
   adminUserModerationKey,
 } from '@/lib/moderation';
@@ -13,6 +14,7 @@ import {
   adminActionsInfiniteQueryOptions,
   adminCommentModerationQueryOptions,
   adminPostModerationQueryOptions,
+  adminProfileModerationQueryOptions,
   adminReportQueueInfiniteQueryOptions,
   adminUserModerationQueryOptions,
   moderationOptions,
@@ -80,7 +82,16 @@ describe('the operators’ reads', () => {
     expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/users/{userId}', {
       params: { path: { userId: USER } },
     });
-    for (const options of [post, comment, user]) expect(options.refetchOnMount).toBe('always');
+    // A public profile's 운영 link names the public id (owner decision 2026-10-21): lower-cased.
+    const profile = adminProfileModerationQueryOptions('K7M2P9QX4Z');
+    expect(profile.queryKey).toEqual(adminProfileModerationKey('k7m2p9qx4z'));
+    await profile.queryFn();
+    expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/profiles/{publicId}', {
+      params: { path: { publicId: 'k7m2p9qx4z' } },
+    });
+    for (const options of [post, comment, user, profile]) {
+      expect(options.refetchOnMount).toBe('always');
+    }
   });
 });
 

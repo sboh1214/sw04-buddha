@@ -39,9 +39,11 @@ import { publicIdSchema } from './public-id.js';
  *   it has one and how to appeal (by email, once per action within APPEAL_WINDOW_DAYS, #45-14 —
  *   #186 words it); never who reported nor which operator acted. The reporter sees the receipt and
  *   the result: 조치함 or 기각 (#45-13). Notifications are M13's.
- * - Every admin reads the reports and the actions (ADR-0056 decision 1-2); nothing of them is ever
- *   public (PRIVATE_DATA `reports`, `moderation`, `risk-flag`), and nothing turns them into a score,
- *   a standing or an order (N04 §4).
+ * - Every admin reads the reports and the actions (ADR-0056 decision 1-2) — but an admin reading a
+ *   record about themselves, a report on their item or profile or an action on them, reads no
+ *   reporter, no report description and no operator's name in it (owner decision 2026-10-21,
+ *   `aboutViewer`); nothing of them is ever public (PRIVATE_DATA `reports`, `moderation`,
+ *   `risk-flag`), and nothing turns them into a score, a standing or an order (N04 §4).
  */
 
 /** Reports a person files in REPORT_WINDOW_HOURS at most (#45-15 «신고 하루 20건», fixed). */
@@ -324,22 +326,43 @@ export const moderationItemStateSchema = z
   .meta({ id: 'ModerationItemState' });
 export type ModerationItemState = z.infer<typeof moderationItemStateSchema>;
 
-/** One report, for operators (ADR-0056 1-2: every admin reads them), the reporter included. */
+/**
+ * Whether a record is about the admin reading it — a report on their post, comment or profile, an
+ * action on them. Then who reported, what the reporter wrote and which operators processed, acted
+ * and cancelled are withheld from them, on the admin screens too (null); they read the reasons, the
+ * times and what was done (owner decision 2026-10-21, ADR-0081: #45-10 and #45-13 «신고자와 처리한
+ * 운영자는 대상자에게 보이지 않는다» over ADR-0056 1-2 for a record about oneself).
+ */
+const aboutViewerSchema = z
+  .boolean()
+  .describe(
+    'True when the record is about the admin reading it: the reporter, the description and the ' +
+      'operators are withheld (null)',
+  );
+
+/**
+ * One report, for operators (ADR-0056 1-2: every admin reads them), the reporter included — but
+ * for the admin it is about (`aboutViewer`).
+ */
 export const adminReportSchema = z
   .object({
     id: z.uuid(),
     target: moderationTargetSchema,
-    reporter: moderationUserSchema,
+    /** Null for the admin the report is about (`aboutViewer`). */
+    reporter: moderationUserSchema.nullable(),
     reason: reportReasonSchema,
+    /** The reporter's text; null when none was sent, and for the admin it is about. */
     description: z.string().nullable(),
     createdAt: z.iso.datetime(),
     status: reportStatusSchema,
     resolvedAt: z.iso.datetime().nullable(),
+    /** Who processed it; null while it is pending, and for the admin it is about. */
     resolvedBy: adminAccountActorSchema.nullable(),
     /** The action that resolved it (`actioned`), or null. */
     actionId: z.uuid().nullable(),
     /** The operator's reason for dismissing it (`dismissed`), or null. */
     dismissalReason: z.string().nullable(),
+    aboutViewer: aboutViewerSchema,
   })
   .meta({ id: 'AdminReport' });
 export type AdminReport = z.infer<typeof adminReportSchema>;
@@ -358,7 +381,10 @@ export const removedProfileItemSchema = z
   .meta({ id: 'RemovedProfileItem' });
 export type RemovedProfileItem = z.infer<typeof removedProfileItemSchema>;
 
-/** One moderation action, for operators: everything recorded with it. */
+/**
+ * One moderation action, for operators: everything recorded with it — but the operators, for the
+ * admin it was taken on (`aboutViewer`).
+ */
 export const adminModerationActionSchema = z
   .object({
     id: z.uuid(),
@@ -367,15 +393,18 @@ export const adminModerationActionSchema = z
     /** The item it was about (a hiding's, a warning's when given), or null. */
     subject: moderationTargetSchema.nullable(),
     reason: hiddenReasonSchema,
-    createdBy: adminAccountActorSchema,
+    /** The operator who took it; null for the admin it was taken on (`aboutViewer`). */
+    createdBy: adminAccountActorSchema.nullable(),
     createdAt: z.iso.datetime(),
     endsAt: z.iso.datetime().nullable(),
     cancelledAt: z.iso.datetime().nullable(),
+    /** Who cancelled it; null while it stands, and for the admin it was taken on. */
     cancelledBy: adminAccountActorSchema.nullable(),
     cancelReason: z.string().nullable(),
     removed: removedProfileItemSchema.nullable(),
     /** How many reports it resolved. */
     reportCount: z.number().int().min(0),
+    aboutViewer: aboutViewerSchema,
   })
   .meta({ id: 'AdminModerationAction' });
 export type AdminModerationAction = z.infer<typeof adminModerationActionSchema>;

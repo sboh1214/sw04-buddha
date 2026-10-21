@@ -31,6 +31,7 @@ import {
   DISMISS_REPORTS_MAX,
   MODERATION_REASON_MAX_LENGTH,
   NICKNAME_CHANGE_INTERVAL_DAYS,
+  NICKNAME_HOLD_DAYS,
   adminCommentModerationSchema,
   adminModerationActionSchema,
   adminPostModerationSchema,
@@ -879,7 +880,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
   });
 
   describe('profile items (#37-10)', () => {
-    it('gives the nickname back to an auto nickname, held from the others and kept for operators', async () => {
+    it('gives the nickname back to an auto nickname, held from everybody — the member too — and kept for operators', async () => {
       await t.db
         .update(schema.profiles)
         .set({ nickname: '사칭닉네임' })
@@ -907,14 +908,16 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, author.id));
       expect(profile?.nickname).toMatch(AUTO_NICKNAME_PATTERN);
-      // Not the member's change: their 30-day interval is untouched.
+      // No change of the member's to count an interval from (owner decision 2026-10-21).
       expect(profile?.nicknameChangedAt).toBeNull();
-      // The nickname given up is held from other accounts (#57-6).
+      // The nickname taken away is held from every account, the member's own included (owner
+      // decision 2026-10-21: the hold the others get) — a hold naming no account.
       const [hold] = await t.db
         .select()
         .from(schema.nicknameHolds)
         .where(eq(schema.nicknameHolds.nickname, '사칭닉네임'));
-      expect(hold?.userId).toBe(author.id);
+      expect(hold).toBeDefined();
+      expect(hold?.userId).toBeNull();
       const taken = await t.app.inject({
         method: 'PATCH',
         url: '/api/v1/me',
@@ -942,17 +945,27 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         ),
       ).toBe('nothing_to_remove');
       expect(await audits('moderation_nickname_reset')).toHaveLength(1);
-      // Never changed since the onboarding, the member picks a nickname at once — the old one
-      // too: it is held from the others only.
+      // The member cannot take the old one back for the 30 days of the hold.
+      const back = await changeNickname(author, '사칭닉네임');
+      expect(back.statusCode, back.body).toBe(409);
+      expect(back.json<{ error: unknown }>().error).toMatchObject({
+        code: 'NICKNAME_NOT_ALLOWED',
+        details: { reason: 'taken' },
+      });
+      // Past the hold, it is theirs to pick again, as anybody's.
+      await t.db
+        .update(schema.nicknameHolds)
+        .set({ releasedAt: new Date(Date.now() - (NICKNAME_HOLD_DAYS + 1) * DAY_MS) })
+        .where(eq(schema.nicknameHolds.nickname, '사칭닉네임'));
       expect((await changeNickname(author, '사칭닉네임')).statusCode).toBe(200);
     });
 
-    it('leaves the member’s own 30-day interval running: a recent change is waited out (7-12)', async () => {
-      // The member changed to the nickname reported a day ago.
-      const changedAt = new Date(Date.now() - DAY_MS);
+    it('waives the member’s 30-day interval: a new nickname at once, and the 30 days from that pick (owner decision 2026-10-21)', async () => {
+      // The member changed to the nickname reported a day ago: without the reset they would wait
+      // 29 days more.
       await t.db
         .update(schema.profiles)
-        .set({ nickname: '사칭닉네임', nicknameChangedAt: changedAt })
+        .set({ nickname: '사칭닉네임', nicknameChangedAt: new Date(Date.now() - DAY_MS) })
         .where(eq(schema.profiles.userId, author.id));
       actionOf(
         await send(
@@ -961,15 +974,29 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
           admin,
         ),
       );
-      expect((await profileRow(author.id)).nicknameChangedAt).toEqual(changedAt);
-      const res = await changeNickname(author, '새닉네임');
-      expect(res.statusCode, res.body).toBe(409);
-      expect(res.json<{ error: unknown }>().error).toMatchObject({
+      expect((await profileRow(author.id)).nicknameChangedAt).toBeNull();
+      // MY 설정 reads no wait.
+      const me = await t.app.inject({
+        method: 'GET',
+        url: '/api/v1/me',
+        headers: { cookie: author.cookie },
+      });
+      expect(me.json<{ data: { profile: unknown } }>().data.profile).toMatchObject({
+        nicknameChangeAvailableAt: null,
+      });
+      const picked = await changeNickname(author, '새닉네임');
+      expect(picked.statusCode, picked.body).toBe(200);
+      const pickedAt = (await profileRow(author.id)).nicknameChangedAt;
+      expect(pickedAt).not.toBeNull();
+      // That pick is a change: the next one waits its 30 days.
+      const next = await changeNickname(author, '또다른닉네임');
+      expect(next.statusCode, next.body).toBe(409);
+      expect(next.json<{ error: unknown }>().error).toMatchObject({
         code: 'NICKNAME_NOT_ALLOWED',
         details: {
           reason: 'change_interval',
           nextChangeAt: new Date(
-            changedAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
+            pickedAt!.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
           ).toISOString(),
         },
       });
@@ -1303,6 +1330,39 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
 
       const all = dataOf<AdminModerationAction[]>(await read('/admin/moderation/actions', other));
       expect(all.map((action) => action.id)).toEqual([hidden.id, warned.id]);
+    });
+
+    it('finds a member’s page by the public id of their profile’s address, as a public profile’s 운영 link does (owner decision 2026-10-21)', async () => {
+      const publicId = await publicIdOf(author.id);
+      await report(`/profiles/${publicId}`, reporter, 'impersonation');
+      actionOf(await send(`/admin/moderation/users/${author.id}/warn`, { reason: 'spam' }, admin));
+      const byAccount = dataOf<unknown>(await read(`/admin/moderation/users/${author.id}`, admin));
+      const byProfile = adminUserModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/profiles/${publicId}`, admin)),
+      );
+      // The same page, whichever way it was found.
+      expect(byProfile).toEqual(byAccount);
+      expect(byProfile.user).toMatchObject({ id: author.id, publicId });
+      expect(byProfile.reports).toHaveLength(1);
+      expect(byProfile.actions).toHaveLength(1);
+      // Any case of the id, as the public profile reads it.
+      expect(
+        dataOf<{ user: { id: string } }>(
+          await read(`/admin/moderation/profiles/${publicId.toUpperCase()}`, admin),
+        ).user.id,
+      ).toBe(author.id);
+      // Another member's page by theirs; a public id nobody has, one not of the shape and an
+      // account id are each 404 — the account id finds nothing here.
+      expect(
+        dataOf<{ user: { id: string } }>(
+          await read(`/admin/moderation/profiles/${await publicIdOf(reporter.id)}`, admin),
+        ).user.id,
+      ).toBe(reporter.id);
+      const unknownPublicId = publicId === 'zzzzzzzzzz' ? 'yyyyyyyyyy' : 'zzzzzzzzzz';
+      for (const id of [unknownPublicId, 'not-an-id!', author.id]) {
+        const res = await read(`/admin/moderation/profiles/${encodeURIComponent(id)}`, admin);
+        expect({ id, status: res.statusCode }).toEqual({ id, status: 404 });
+      }
     });
 
     it('never tells the member reported who reported, and keeps every count off the public answers', async () => {

@@ -4,7 +4,7 @@ import { Link as ChakraLink, HStack, Heading, Skeleton, Stack, Text } from '@cha
 import { parseCoinAmount } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { SanctionBanner } from '@/components/moderation/sanction-banner';
+import { SanctionBanner, WarningBanner } from '@/components/moderation/sanction-banner';
 import { CoinText } from '@/components/ui/coin-text';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
@@ -50,7 +50,9 @@ function tab(key: MyTabKey) {
  *
  * Above them, the way to the member's own public profile (`ViewOwnProfileLink`, owner decision
  * 2026-10-21 answer 7), as from MY 설정's 프로필 card — and above that, while a sanction is in force,
- * its banner (`SanctionBanner`, ADR-0069 decision 4 #50; #50 has no sanction, ADR-0081 7-8).
+ * its banner (`SanctionBanner`, ADR-0069 decision 4 #50; #50 has no sanction, ADR-0081 7-8), and for
+ * the appeal window of a warning received, its banner (`WarningBanner`, owner decision 2026-10-21 —
+ * the summary only).
  */
 export function MySummary() {
   const ended = useSessionEnded();
@@ -65,6 +67,7 @@ export function MySummary() {
   return (
     <Stack gap="6">
       <SanctionBanner testId="my-sanction-banner" />
+      <WarningBanner testId="my-warning-banner" />
       <ViewOwnProfileLink />
       <BalanceSummary holdings={holdings} settled={settled} />
       <Section title={positions.label} testId="my-preview-positions" href={positions.href}>

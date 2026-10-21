@@ -80,8 +80,11 @@ const HOUR_MS = 60 * 60 * 1_000;
  * The same person is the account, or the number for the reports of an account that has no
  * 본인확인 record any more — it withdrew (#140): a new account on the same number keeps that
  * account's pending reports and count (decision 7), as a like is matched (`likedBy`, ADR-0076). An
- * operator's change of a live account's number (#57-3) leaves its reports where they are: they
- * are the account's whatever number they carry, so nothing moves.
+ * operator's change of a live account's number (#57-3) takes the hash of its pending reports and
+ * those of the last 24 hours to the new number (docs/OPERATIONS.md, owner decision 2026-10-21,
+ * ADR-0081): they stay the account's by its id whatever they carry, and once it withdraws they are
+ * the new number's next account's, as its likes are. Nothing here writes that hash after a report
+ * is sent (the keep-record trigger refuses it outside the operator's change).
  */
 @Injectable()
 export class ReportsService {

@@ -28,7 +28,7 @@ import {
   reportLengthText,
   reportReasonOf,
 } from '@/lib/moderation';
-import { loginPathBackTo } from '@/lib/next-path';
+import { loginPathBackTo, loginPathBackToPage } from '@/lib/next-path';
 import { postPath } from '@/lib/posts';
 import { profilePath } from '@/lib/profile';
 import { useSession } from '@/lib/use-session';
@@ -40,7 +40,9 @@ function backPathOf(subject: ReportSubject): string {
 
 /**
  * 신고 (#50, ADR-0081; ADR-0069 decision 2 #45-10, decision 3 #37-10): the button beside a
- * published post, a published 댓글 or 대댓글 and on a profile, and the dialog it opens.
+ * published post, a published 댓글 or 대댓글 and on a profile — and on every post card and comment card
+ * of the community list and a profile's tabs (owner decision 2026-10-21, `CardReportButton`) — and
+ * the dialog it opens.
  *
  * Who sees it is decided in the browser, once `GET /me` has answered (the server's HTML names
  * nobody): nothing on the reader's own post, comment or profile — they cannot report it (#45-10);
@@ -56,21 +58,40 @@ function backPathOf(subject: ReportSubject): string {
  * 안내한다»), which is the dialog's description, so a screen reader says it with the title. Sent, it
  * closes with the receipt (#45-13: «접수 확인»), which says where the result will be. A refusal is
  * said under the description (its rules) or in the dialog, which keeps what was typed; one that
- * finds the item a placeholder now closes it, with a toast, as the page reads the item again
- * (`isStaleReportRefusal`). The outcome is said from the write's promise, not from per-call
- * callbacks: that read can take this button away with its observer (ADR-0074's lesson).
+ * finds the item a placeholder now closes it, with a toast, as the page reads the item again — the
+ * post page, and the lists whose cards carry the button (`reportOptions`, `isStaleReportRefusal`).
+ * The outcome is said from the write's promise, not from per-call callbacks: that read can take
+ * this button away with its observer (ADR-0074's lesson).
  */
 export function ReportButton({
   subject,
   authorPublicId,
+  backPath,
+  name,
+  raised = false,
 }: {
   subject: ReportSubject;
   /** The public id of whoever wrote it or owns the profile; null for a withdrawn member's. */
   authorPublicId: string | null;
+  /**
+   * Where a visitor's login comes back to: the page the button is on. By default the reported
+   * post's or profile's page; a card passes its list's, query and all (the community list's
+   * filters, a profile's tab — built by the screen from what it parsed, `loginPathBackToPage`).
+   */
+  backPath?: string;
+  /**
+   * The accessible name, where one page repeats the button per item: a card's names the item and
+   * ends with '신고' (`reportButtonName`). By default the words on screen.
+   */
+  name?: string;
+  /** Above a card's link overlay (`CardReportButton`). */
+  raised?: boolean;
 }) {
   const router = useRouter();
   const writer = usePostWriter();
   const [open, setOpen] = useState(false);
+  // A card's overlay link covers the card; the button sits above it, so a press reports.
+  const lift = raised ? ({ position: 'relative', zIndex: '1' } as const) : {};
 
   if (writer.pending || writer.failed) return null;
   if (!writer.signedIn) {
@@ -79,7 +100,15 @@ export function ReportButton({
         size="xs"
         variant="ghost"
         color="fg.muted"
-        onClick={() => router.push(loginPathBackTo(backPathOf(subject)) as Route)}
+        {...lift}
+        aria-label={name}
+        onClick={() =>
+          router.push(
+            (backPath === undefined
+              ? loginPathBackTo(backPathOf(subject))
+              : loginPathBackToPage(backPath)) as Route,
+          )
+        }
         data-testid="report-open"
       >
         {copy.reportAction}
@@ -96,6 +125,8 @@ export function ReportButton({
         size="xs"
         variant="ghost"
         color="fg.muted"
+        {...lift}
+        aria-label={name}
         onClick={() => setOpen(true)}
         data-testid="report-open"
       >
@@ -299,4 +330,22 @@ function ReportDialog({
       </Portal>
     </Dialog.Root>
   );
+}
+
+/**
+ * 신고 on a card (owner decision 2026-10-21: «'신고' 자리 → 모든 글 카드에도(커뮤니티 목록·시장 토론·프로필
+ * 글·댓글 탭; 내 것과 자리표시는 뺌)»): the same button, decided the same way (none on the reader's
+ * own, none for a reader `GET /me` has not answered; a visitor's press goes to the login page and
+ * back to the list), in a card that opens its post as a whole. The card's link covers it
+ * (`LinkBox`/`LinkOverlay`) and raises only links above itself, so this lifts the button the same way
+ * — a press reports, it never opens the post — and the button is the overlay link's sibling, never
+ * inside it (an interactive element nested in a link is announced and focused as part of it). Its
+ * accessible name is the item's, then '신고' (`reportButtonName`, ADR-0080 7-19's way): a list
+ * repeats it on every card. The cards that hold it list published items only; a placeholder is
+ * never one of them.
+ */
+export function CardReportButton(
+  props: Omit<Parameters<typeof ReportButton>[0], 'raised' | 'name'> & { name: string },
+) {
+  return <ReportButton {...props} raised />;
 }

@@ -12,10 +12,27 @@
  *
  * Two halves: a static walk of the guard metadata (no Postgres, no Redis: runs everywhere), and
  * the same surface requested for real as a member (403), with no session (401) and as an admin
- * that has not finished the onboarding (409).
+ * that has not finished the onboarding (409). And what an admin reads of the records about
+ * themselves (#50): every admin reads the reports and the actions (ADR-0056 1-2), but not who
+ * reported them, what the reporter wrote nor which operator acted (owner decision 2026-10-21).
  */
 import { schema } from '@buddha/db';
-import { completeOnboarding } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createComment,
+  createMarket,
+  createModerationAction,
+  createPost,
+  createReport,
+} from '@buddha/db/test';
+import {
+  adminCommentModerationSchema,
+  adminModerationActionSchema,
+  adminPostModerationSchema,
+  adminUserModerationSchema,
+  type AdminModerationAction,
+  type AdminReport,
+} from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -176,3 +193,210 @@ describe.skipIf(!hasTestInfra)('admin access (integration)', () => {
     }
   });
 });
+
+describe.skipIf(!hasTestInfra)(
+  'admin access to the records about oneself (#50, integration)',
+  () => {
+    let t: TestApp;
+
+    beforeAll(async () => {
+      t = await createTestApp();
+    });
+    afterAll(async () => {
+      await t?.close(); // undefined when beforeAll timed out waiting for the file lock
+    });
+    beforeEach(async () => {
+      await t.reset();
+    });
+
+    /** An onboarded account; an admin when `admin`. */
+    async function account(
+      admin: boolean,
+    ): Promise<TestUser & { nickname: string; publicId: string }> {
+      const user = await signUpTestUser(t);
+      await completeOnboarding(t.db, { userId: user.id });
+      if (admin) {
+        await t.db
+          .update(schema.profiles)
+          .set({ role: 'admin' })
+          .where(eq(schema.profiles.userId, user.id));
+        await t.app.get(AdminGuard).invalidate(user.id);
+      }
+      const [profile] = await t.db
+        .select()
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, user.id));
+      return { ...user, nickname: profile!.nickname, publicId: profile!.publicId };
+    }
+
+    const read = async (url: string, who: TestUser) => {
+      const res = await t.app.inject({
+        method: 'GET',
+        url: `/api/v1${url}`,
+        headers: { cookie: who.cookie },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      return res;
+    };
+
+    it('reads the reports on oneself and the actions on oneself without the reporters, their texts and the operators (owner decision 2026-10-21)', async () => {
+      // A is an admin reported and acted on; O is the other operator; R reported A; M is a member O
+      // acted on too, for the record A reads in full.
+      const a = await account(true);
+      const o = await account(true);
+      const r = await account(false);
+      const m = await account(false);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: a.id });
+      const comment = await createComment(t.db, { postId: post.id, authorId: a.id });
+      const description = `report-text-${a.id}`;
+      const hiding = await createModerationAction(t.db, {
+        userId: a.id,
+        createdBy: o.id,
+        postId: post.id,
+        reason: 'spam',
+        note: '회원이 읽는 설명',
+      });
+      await createReport(t.db, {
+        reporterId: r.id,
+        reportedUserId: a.id,
+        postId: post.id,
+        reason: 'other',
+        description,
+        status: 'actioned',
+        resolvedBy: o.id,
+        actionId: hiding.id,
+      });
+      await createReport(t.db, {
+        reporterId: r.id,
+        reportedUserId: a.id,
+        commentId: comment.id,
+        reason: 'other',
+        description,
+        status: 'dismissed',
+        resolvedBy: o.id,
+        dismissalReason: '위반 아님',
+      });
+      await createReport(t.db, {
+        reporterId: r.id,
+        reportedUserId: a.id,
+        reason: 'other',
+        description,
+      });
+      await createModerationAction(t.db, {
+        userId: a.id,
+        createdBy: o.id,
+        reason: 'harassment',
+        cancelled: { at: new Date(), by: o.id, reason: '이의를 받아들임' },
+      });
+      const onM = await createModerationAction(t.db, {
+        userId: m.id,
+        createdBy: o.id,
+        reason: 'spam',
+      });
+
+      const pages = [
+        `/admin/moderation/posts/${post.id}`,
+        `/admin/moderation/comments/${comment.id}`,
+        `/admin/moderation/users/${a.id}`,
+        `/admin/moderation/profiles/${a.publicId}`,
+        '/admin/moderation/actions',
+        '/admin/reports?status=resolved',
+        '/admin/reports',
+      ];
+      for (const url of pages) {
+        const body = (await read(url, a)).body;
+        for (const hidden of [r.id, r.nickname, description, o.id, o.nickname]) {
+          // M's action names its operator: only the records about A withhold them.
+          if (url === '/admin/moderation/actions' && (hidden === o.id || hidden === o.nickname)) {
+            continue;
+          }
+          expect({ url, hidden, shown: body.includes(hidden) }).toEqual({
+            url,
+            hidden,
+            shown: false,
+          });
+        }
+      }
+      // What stays: the reasons, the times, what was done — and the count of reporters.
+      const postPage = adminPostModerationSchema.parse(
+        (await read(`/admin/moderation/posts/${post.id}`, a)).json<{ data: unknown }>().data,
+      );
+      expect(postPage.reporterCount).toBe(1);
+      expect(postPage.reports).toEqual([
+        expect.objectContaining<Partial<AdminReport>>({
+          reporter: null,
+          description: null,
+          resolvedBy: null,
+          reason: 'other',
+          status: 'actioned',
+          actionId: hiding.id,
+          aboutViewer: true,
+        }),
+      ]);
+      expect(postPage.actions).toEqual([
+        expect.objectContaining<Partial<AdminModerationAction>>({
+          id: hiding.id,
+          createdBy: null,
+          reason: { code: 'spam', note: '회원이 읽는 설명' },
+          aboutViewer: true,
+        }),
+      ]);
+      const commentPage = adminCommentModerationSchema.parse(
+        (await read(`/admin/moderation/comments/${comment.id}`, a)).json<{ data: unknown }>().data,
+      );
+      expect(commentPage.reports[0]).toMatchObject({
+        reporter: null,
+        resolvedBy: null,
+        dismissalReason: '위반 아님',
+        aboutViewer: true,
+      });
+      for (const url of [
+        `/admin/moderation/users/${a.id}`,
+        `/admin/moderation/profiles/${a.publicId}`,
+      ]) {
+        const page = adminUserModerationSchema.parse(
+          (await read(url, a)).json<{ data: unknown }>().data,
+        );
+        expect(page.user.id).toBe(a.id);
+        expect(page.reporterCount).toBe(1);
+        expect(page.reports.map((report) => [report.reporter, report.aboutViewer])).toEqual([
+          [null, true],
+        ]);
+        const cancelled = page.actions.find((action) => action.cancelledAt !== null)!;
+        expect(cancelled).toMatchObject({
+          createdBy: null,
+          cancelledBy: null,
+          cancelReason: '이의를 받아들임',
+          aboutViewer: true,
+        });
+      }
+      const log = (await read('/admin/moderation/actions', a))
+        .json<{ data: unknown[] }>()
+        .data.map((item) => adminModerationActionSchema.parse(item));
+      expect(log.find((action) => action.id === onM.id)).toMatchObject({
+        createdBy: { id: o.id, nickname: o.nickname },
+        aboutViewer: false,
+      });
+      expect(
+        log.filter((action) => action.user.id === a.id).map((action) => action.createdBy),
+      ).toEqual([null, null]);
+
+      // Another operator reads the same records whole (ADR-0056 1-2).
+      const full = (await read(`/admin/moderation/posts/${post.id}`, o)).body;
+      for (const shown of [r.id, r.nickname, description, o.nickname]) {
+        expect(full).toContain(shown);
+      }
+      const asOther = adminPostModerationSchema.parse(
+        (await read(`/admin/moderation/posts/${post.id}`, o)).json<{ data: unknown }>().data,
+      );
+      expect(asOther.reports[0]).toMatchObject({
+        reporter: { id: r.id },
+        description,
+        resolvedBy: { id: o.id },
+        aboutViewer: false,
+      });
+      expect(asOther.actions[0]).toMatchObject({ createdBy: { id: o.id }, aboutViewer: false });
+    });
+  },
+);

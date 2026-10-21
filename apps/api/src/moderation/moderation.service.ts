@@ -117,7 +117,7 @@ export class ModerationService {
         { postId },
       );
     });
-    return this.answer(id);
+    return this.answer(id, adminId);
   }
 
   /** `POST /admin/moderation/comments/:commentId/hide`: the same for a 댓글 or a 대댓글. */
@@ -153,7 +153,7 @@ export class ModerationService {
         { commentId },
       );
     });
-    return this.answer(id);
+    return this.answer(id, adminId);
   }
 
   /**
@@ -206,7 +206,7 @@ export class ModerationService {
         { subject },
       );
     });
-    return this.answer(id);
+    return this.answer(id, adminId);
   }
 
   /**
@@ -214,14 +214,11 @@ export class ModerationService {
    * nickname, drawn as the sign-up trigger draws one (`user_` and four of AUTO_NICKNAME_ALPHABET)
    * under the same rules (#57-6) — never one another account has, ignoring case, nor one held from
    * the member (`nickname_held()`), each candidate under its nickname lock. The nickname taken away
-   * is held from other accounts for NICKNAME_HOLD_DAYS like any nickname given up (`nickname_holds`,
-   * the member's own id: the hold of #57-6, which the member is not held from), and kept for
-   * operators (`profile_item_removals`). It is not the member's change and leaves
-   * `nickname_changed_at` as it is: the 30-day interval from the member's own last change still
-   * runs (a member who changed less than 30 days ago waits out the rest of it; one who never
-   * changed after the onboarding, or longer ago, picks a new nickname at once — the old one
-   * too, held from the others only). Whether a reset should waive or restart that interval is the
-   * owner's question (ADR-0081 결과 4). An auto nickname already is `nothing_to_remove`.
+   * is held for NICKNAME_HOLD_DAYS from everybody, the member included (owner decision 2026-10-21:
+   * the hold other accounts get — a `nickname_holds` row naming no account, ADR-0081), and kept for
+   * operators (`profile_item_removals`). The member's 30-day change interval is waived (the same
+   * decision): `nickname_changed_at` is cleared, so they pick a new nickname at once, and that pick
+   * starts the 30 days again (NicknameService). An auto nickname already is `nothing_to_remove`.
    */
   async resetNickname(
     adminId: string,
@@ -235,8 +232,12 @@ export class ModerationService {
       const now = await clockTimestamp(tx);
       await this.giveAutoNickname(tx, userId, profile.nickname);
       await tx
+        .update(schema.profiles)
+        .set({ nicknameChangedAt: null })
+        .where(eq(schema.profiles.userId, userId));
+      await tx
         .insert(schema.nicknameHolds)
-        .values({ nickname: profile.nickname, userId, releasedAt: now });
+        .values({ nickname: profile.nickname, userId: null, releasedAt: now });
       return this.record(
         tx,
         adminId,
@@ -248,7 +249,7 @@ export class ModerationService {
         { nickname: profile.nickname },
       );
     });
-    return this.answer(id);
+    return this.answer(id, adminId);
   }
 
   /** `POST /admin/moderation/users/:userId/bio-clear` (#37-10): the 소개 emptied, kept for operators. */
@@ -273,7 +274,7 @@ export class ModerationService {
         { bio: profile.bio },
       );
     });
-    return this.answer(id);
+    return this.answer(id, adminId);
   }
 
   /**
@@ -306,7 +307,7 @@ export class ModerationService {
         { imageId: profile.imageId },
       );
     });
-    return this.answer(id);
+    return this.answer(id, adminId);
   }
 
   /**
@@ -352,7 +353,7 @@ export class ModerationService {
         reason,
       });
     });
-    return this.answer(actionId);
+    return this.answer(actionId, adminId);
   }
 
   /**
@@ -391,7 +392,7 @@ export class ModerationService {
         .where(inArray(reports.id, ids));
       await this.audit(tx, adminId, 'report_dismiss', null, null, { reportIds: ids, reason });
     });
-    return this.reads.reports(this.db, inArray(schema.reports.id, ids));
+    return this.reads.reports(this.db, inArray(schema.reports.id, ids), adminId);
   }
 
   /**
@@ -565,8 +566,12 @@ export class ModerationService {
   }
 
   /** The action as operators read it, after its commit. */
-  private async answer(actionId: string): Promise<AdminModerationAction> {
-    const [action] = await this.reads.actions(this.db, eq(schema.moderationActions.id, actionId));
+  private async answer(actionId: string, adminId: string): Promise<AdminModerationAction> {
+    const [action] = await this.reads.actions(
+      this.db,
+      eq(schema.moderationActions.id, actionId),
+      adminId,
+    );
     if (!action) throw notFound('Action');
     return action;
   }

@@ -18,6 +18,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useId, useRef, useState } from 'react';
+import { OperatorLink } from '@/components/moderation/operator-link';
 import { ReportButton } from '@/components/moderation/report-button';
 import { CommentsSection } from '@/components/post/comments-section';
 import { LikeButton, LikesUnreadableNotice } from '@/components/post/like-button';
@@ -29,7 +30,7 @@ import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
 import { type Post, type PostMarket } from '@/lib/api';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { authorPublicIdOf } from '@/lib/moderation';
+import { adminPostModerationPath, authorPublicIdOf } from '@/lib/moderation';
 import {
   COMMUNITY_PATH,
   communityPath,
@@ -52,7 +53,8 @@ import { useSession } from '@/lib/use-session';
  * (author, time, 수정됨), the body, its 좋아요 (#49, ADR-0076: the public count, and the reader's
  * own toggle once the browser knows who reads — with a line beside it when the reader's likes could
  * not be read, owner decision 2026-10-20, answer 10), 신고 for a reader who did not write it (#50,
- * ADR-0081 — `ReportButton`, decided in the browser) and the market it belongs to — a link to its
+ * ADR-0081 — `ReportButton`, decided in the browser), '운영' for an operator (owner decision
+ * 2026-10-21, `OperatorLink` — on a placeholder too) and the market it belongs to — a link to its
  * detail, which opens in every status, and to the community list of that market. Its author also
  * gets 수정 and 삭제 (`isOwnPost`, by the public id of `GET /me`, so nothing of it is in the HTML). A
  * hidden or deleted post is its placeholder and its market only (#45-5) — no count, no 좋아요 and
@@ -124,12 +126,15 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
           </Alert.Content>
         </Alert.Root>
       ) : post.state !== 'published' ? (
-        <Alert.Root status="info" data-testid={`post-${post.state}`}>
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Description>{postPlaceholderMessage(post.state)}</Alert.Description>
-          </Alert.Content>
-        </Alert.Root>
+        <Stack gap="2">
+          <Alert.Root status="info" data-testid={`post-${post.state}`}>
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{postPlaceholderMessage(post.state)}</Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+          <PostOperatorLink postId={post.id} />
+        </Stack>
       ) : (
         <>
           <Stack gap="3">
@@ -164,6 +169,7 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
               subject={{ type: 'post', postId: post.id }}
               authorPublicId={authorPublicIdOf(post.author)}
             />
+            <PostOperatorLink postId={post.id} />
           </HStack>
         </>
       )}
@@ -171,6 +177,21 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
       <CommentsSection post={post} gone={gone} onNothingHeld={toNotFound} focusGone={focusGone} />
       <BackLink />
     </Stack>
+  );
+}
+
+/**
+ * '운영', for operators only (owner decision 2026-10-21, `OperatorLink`): the post's moderation
+ * page — beside its reactions, or under its placeholder, which the page acts on as well (a hiding
+ * cancelled, the deleted original read).
+ */
+function PostOperatorLink({ postId }: { postId: string }) {
+  return (
+    <OperatorLink
+      href={adminPostModerationPath(postId)}
+      label={copy.operatorModerationPostLabel}
+      testId="post-operator-link"
+    />
   );
 }
 

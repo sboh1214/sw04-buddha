@@ -83,7 +83,25 @@
  *    the COMMIT and is made under the new hash; the old number cannot be verified by another
  *    account before the COMMIT either (its UNIQUE entry is the uncommitted UPDATE's). Run again —
  *    the old number read again is the new one — it moves nothing.
- * 5. What now holds the new number: one row or none (the account has no grant yet). `this_account`
+ * 5. The account's reports (#50, owner decision 2026-10-21, ADR-0081): «the same person» of a
+ *    report — one pending report per target, REPORTS_PER_DAY in the last 24 hours — counts per
+ *    verified number too (ADR-0069 decision 7), so the reports those rules read go over to the new
+ *    number's hash: the account's pending ones and those of the last 24 hours, processed or not.
+ *    The rest keep the hash they were sent with; no rule reads it again. Only the hash changes —
+ *    what was reported and how it was processed stay as they are — and the reports' keep-record
+ *    trigger takes that change from this transaction alone: to the hash its SET LOCAL names, for a
+ *    report of the account it names (`reports_keep_record`, migration 0038). With the old number's
+ *    hash in the transaction too (`phone_change.old_hash`, which #49's final procedure sets beside
+ *    its check of the old number, ADR-0076) the reports the account inherited from a withdrawn
+ *    account on that number go with them; without it — this procedure sets none — that clause
+ *    matches nothing (`current_setting(…, true)` is NULL, or '' after an earlier run in the
+ *    session) and they stay under the old hash. The rows are locked in id order first, the order an
+ *    operator's action and a dismissal take reports in (ModerationService), so the two never wait
+ *    on each other crosswise. A third DO block with the same SET LOCAL values; it answers `DO` and
+ *    nothing to read. After step 1 as the likes are: a report of the account's in flight holds its
+ *    본인확인 row FOR KEY SHARE (ReportsService), commits first and is moved, and a later one waits
+ *    for the COMMIT and is sent under the new hash. Run again, it moves nothing.
+ * 6. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
  *    grant. It has none (`has_grant` f): it then gets no start Coin on this number while that row
@@ -175,6 +193,21 @@ DO $$BEGIN
     INSERT INTO comment_likes (comment_id, user_id, phone_hash, created_at)
       SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
       ON CONFLICT DO NOTHING;
+END$$;
+DO $$BEGIN
+  PERFORM 1 FROM reports r
+    WHERE r.reporter_phone_hash <> current_setting('phone_change.new_hash')
+      AND (r.status = 'pending' OR r.created_at > now() - interval '24 hours')
+      AND (r.reporter_id = current_setting('phone_change.user_id')
+        OR (r.reporter_phone_hash = current_setting('phone_change.old_hash', true)
+          AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = r.reporter_id)))
+    ORDER BY r.id FOR UPDATE;
+  UPDATE reports r SET reporter_phone_hash = current_setting('phone_change.new_hash')
+    WHERE r.reporter_phone_hash <> current_setting('phone_change.new_hash')
+      AND (r.status = 'pending' OR r.created_at > now() - interval '24 hours')
+      AND (r.reporter_id = current_setting('phone_change.user_id')
+        OR (r.reporter_phone_hash = current_setting('phone_change.old_hash', true)
+          AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = r.reporter_id)));
 END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,
     EXISTS (SELECT 1 FROM start_grants o

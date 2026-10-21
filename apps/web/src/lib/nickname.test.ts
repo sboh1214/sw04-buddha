@@ -176,6 +176,9 @@ describe('settingsNicknameFailure', () => {
 describe('the nickname copy', () => {
   it('names the numbers and the words of the rules', () => {
     expect(copy.errNicknameTaken).toContain(`${String(NICKNAME_HOLD_DAYS)}일`);
+    // Whose it was is never said (#37-3) — and the member an operator's reset took it from is
+    // refused it too for those days (#50, ADR-0081 7-27), so it never says it was someone else's.
+    expect(copy.errNicknameTaken).not.toMatch(/다른 (회원|계정|사람)/);
     expect(copy.errNicknameChangeInterval).toContain(`${String(NICKNAME_CHANGE_INTERVAL_DAYS)}일`);
     expect(copy.nicknameChangeRule).toContain(`${String(NICKNAME_CHANGE_INTERVAL_DAYS)}일`);
     expect(copy.errNicknameReservedWord).toContain(`(${NICKNAME_RESERVED_WORDS.join('·')})`);

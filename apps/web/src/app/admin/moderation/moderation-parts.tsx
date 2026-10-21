@@ -53,6 +53,7 @@ import {
   isCancellable,
   moderationActionLabel,
   moderationFailure,
+  operatorLineText,
   recordReasonDraft,
   removedItemLabel,
   reportReasonOf,
@@ -226,9 +227,11 @@ export function LoadFailedNotice({
 
 /**
  * The reports on one target, newest first as the API gives them: the reporter (every admin reads
- * who reported, ADR-0056 1-2 — an admin who is the member reported too, for now: whether #45-10
- * keeps the reporter from them is the owner's question, ADR-0081 결과 4), the reason and
- * description, when, and how it was processed — by whom and when, and the dismissal's reason.
+ * who reported, ADR-0056 1-2), the reason and description, when, and how it was processed — by
+ * whom and when, and the dismissal's reason. On a report about the admin reading it
+ * (`aboutViewer`) the reporter, the description and the operator who processed it are withheld —
+ * the API sends none — and a line says so (owner decision 2026-10-21); the reason, the times and
+ * the result stay.
  */
 export function ReportRows({ reports }: { reports: readonly AdminReport[] }) {
   if (reports.length === 0) {
@@ -266,15 +269,25 @@ export function ReportRows({ reports }: { reports: readonly AdminReport[] }) {
               {formatKst(report.createdAt)}
             </Text>
           </HStack>
-          <Line label={copy.adminModerationReporter}>
-            <UserName user={report.reporter} />
-          </Line>
+          {report.aboutViewer ? (
+            <Text fontSize="sm" color="fg.muted" data-testid="moderation-report-withheld">
+              {copy.adminModerationWithheldReport}
+            </Text>
+          ) : (
+            report.reporter !== null && (
+              <Line label={copy.adminModerationReporter}>
+                <UserName user={report.reporter} />
+              </Line>
+            )
+          )}
           {report.description !== null && (
             <Line label={copy.adminModerationReportDescription}>{report.description}</Line>
           )}
           {report.resolvedAt !== null && (
-            <Line label={copy.adminModerationResolvedBy}>
-              {`${report.resolvedBy?.nickname ?? copy.adminAccountsTargetGone} · ${formatKst(report.resolvedAt)}`}
+            <Line
+              label={report.aboutViewer ? copy.reportResolvedAt : copy.adminModerationResolvedBy}
+            >
+              {operatorLineText(report.resolvedBy, report.resolvedAt, report.aboutViewer)}
             </Line>
           )}
           {report.dismissalReason !== null && (
@@ -291,6 +304,8 @@ export function ReportRows({ reports }: { reports: readonly AdminReport[] }) {
  * page), the reason the member reads, the operator and the time, what a profile action took away
  * (kept for operators, #37-10), how many reports it resolved, and its cancellation. 조치 취소 on one
  * that stands, unless it is about the operator (decision 4 #50) — the server refuses it either way.
+ * On an action taken on the admin reading it (`aboutViewer`) the operators who took and cancelled
+ * it are withheld — the times alone, and a line that says so (owner decision 2026-10-21).
  */
 export function ActionRows({
   actions,
@@ -366,8 +381,15 @@ export function ActionRows({
             </HStack>
             <Line label={copy.moderationReason}>{reason.reason}</Line>
             {reason.note !== null && <Line label={copy.authoredHiddenNote}>{reason.note}</Line>}
-            <Line label={copy.adminModerationCreatedBy}>
-              {`${action.createdBy.nickname} · ${formatKst(action.createdAt)}`}
+            {action.aboutViewer && (
+              <Text fontSize="sm" color="fg.muted" data-testid="moderation-action-withheld">
+                {copy.adminModerationWithheldAction}
+              </Text>
+            )}
+            <Line
+              label={action.aboutViewer ? copy.moderationTakenAt : copy.adminModerationCreatedBy}
+            >
+              {operatorLineText(action.createdBy, action.createdAt, action.aboutViewer)}
             </Line>
             {action.endsAt !== null && (
               <Line label={copy.moderationEndsAt}>{formatKst(action.endsAt)}</Line>
@@ -397,8 +419,14 @@ export function ActionRows({
             )}
             {action.cancelledAt !== null && (
               <>
-                <Line label={copy.adminModerationCancelledBy}>
-                  {`${action.cancelledBy?.nickname ?? copy.adminAccountsTargetGone} · ${formatKst(action.cancelledAt)}`}
+                <Line
+                  label={
+                    action.aboutViewer
+                      ? copy.moderationCancelledAt
+                      : copy.adminModerationCancelledBy
+                  }
+                >
+                  {operatorLineText(action.cancelledBy, action.cancelledAt, action.aboutViewer)}
                 </Line>
                 {action.cancelReason !== null && (
                   <Line label={copy.adminModerationCancelReason}>{action.cancelReason}</Line>
@@ -706,8 +734,11 @@ export function dismissDialog(reports: readonly AdminReport[]): DialogSpec {
         <Stack as="ul" gap="1" fontSize="sm" ps="5" listStyleType="disc">
           {batch.reports.map((report) => (
             <li key={report.id}>
-              {reportReasonLabel(report.reason)} · {report.reporter.nickname} ·{' '}
-              {formatKst(report.createdAt)}
+              {[
+                reportReasonLabel(report.reason),
+                ...(report.reporter === null ? [] : [report.reporter.nickname]),
+                formatKst(report.createdAt),
+              ].join(' · ')}
             </li>
           ))}
         </Stack>

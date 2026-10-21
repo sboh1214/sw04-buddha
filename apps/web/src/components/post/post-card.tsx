@@ -11,11 +11,13 @@ import {
 } from '@chakra-ui/react';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { CardReportButton } from '@/components/moderation/report-button';
 import { copy } from '@/copy';
 import { type PostSummary } from '@/lib/api';
 import { commentCountText } from '@/lib/comments';
 import { likeCountText } from '@/lib/likes';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { authorPublicIdOf, reportButtonName } from '@/lib/moderation';
 import { postFirstLine, postPath } from '@/lib/posts';
 import { PostByline } from './post-author';
 import { RetriedImage } from './retried-image';
@@ -28,7 +30,10 @@ import { RetriedImage } from './retried-image';
  * 수정됨), '댓글 N' (#48, ADR-0074: the 댓글 and 대댓글 the public reads) and '좋아요 N' (#49,
  * ADR-0076). Both counts are the public ones, the same for every reader and drawn by the server;
  * the card says nothing of whether the reader liked the post (that is the post page's toggle —
- * owner decision 2026-10-20, ADR-0076), and it is not a button: the whole card opens the post.
+ * owner decision 2026-10-20, ADR-0076), and it is not a button: the whole card opens the post. On
+ * the community list and a profile's 글 tab it carries 신고 for every reader but its author (owner
+ * decision 2026-10-21, `CardReportButton`), above the card's link and beside it — a press reports,
+ * it never opens the post.
  *
  * `showMarket={false}` leaves the market line out — the market's title and its status badge — for a
  * list that is one market's already: the market detail's 토론 (#47, owner decision 2026-10-20 6), where
@@ -43,12 +48,18 @@ export function PostCard({
   post,
   titleAs = 'h3',
   showMarket = true,
+  report,
 }: {
   post: PostSummary;
   /** One below the heading of the list it sits in. */
   titleAs?: 'h2' | 'h3' | 'h4';
   /** The market line above the title; off in a list of one market's posts (토론). */
   showMarket?: boolean;
+  /**
+   * 신고 on the card (owner decision 2026-10-21) — the community list's and a profile's 글 tab's,
+   * not MY's (the member's own) — with the list's page for a visitor's login to come back to.
+   */
+  report?: { backPath: string };
 }) {
   const href = postPath(post.id) as Route;
   const firstLine = postFirstLine(post.excerpt);
@@ -154,6 +165,14 @@ export function PostCard({
             >
               {likeCountText(post.likeCount)}
             </Text>
+            {report !== undefined && (
+              <CardReportButton
+                subject={{ type: 'post', postId: post.id }}
+                authorPublicId={authorPublicIdOf(post.author)}
+                backPath={report.backPath}
+                name={reportButtonName({ type: 'post', title: post.title, excerpt: post.excerpt })}
+              />
+            )}
           </HStack>
         </Stack>
         {post.thumbnailUrl !== null && (

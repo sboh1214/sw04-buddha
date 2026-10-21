@@ -3,6 +3,7 @@ import {
   DISMISS_REPORTS_MAX,
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
+  NICKNAME_HOLD_DAYS,
   OTHER_NEEDS_TEXT_MESSAGE,
   REPORTS_PER_DAY,
   REPORT_DESCRIPTION_MAX_LENGTH,
@@ -37,6 +38,8 @@ import {
   adminCommentModerationPath,
   adminPostModerationKey,
   adminPostModerationPath,
+  adminProfileModerationKey,
+  adminProfileModerationPath,
   adminReportQueueKey,
   adminReportQueueOf,
   adminReportQueuePath,
@@ -50,15 +53,18 @@ import {
   dismissBatch,
   dismissBatchText,
   isCancellable,
+  isOperator,
   moderationActionLabel,
   moderationFailure,
   moderationItemStateLabel,
   moderationRows,
+  operatorLineText,
   pendingReportIds,
   queueEntryText,
   reasonCountsText,
   recordReasonDraft,
   removedItemLabel,
+  reportButtonName,
   reportDialogTitle,
   reportDraft,
   reportFailure,
@@ -68,7 +74,9 @@ import {
   reportTargetTypeLabel,
   reportTargetView,
   sanctionInForce,
+  warningInWindow,
 } from './moderation';
+import { formatKst } from './datetime';
 import { formatWait } from './phone-verification';
 
 /**
@@ -117,6 +125,16 @@ describe('addresses', () => {
     );
     expect(adminTargetPath({ type: 'profile', userId: USER })).toBe(adminUserModerationPath(USER));
   });
+
+  it('leads a public profile’s 운영 to its member’s page by the public id, lower-cased (owner decision 2026-10-21)', () => {
+    expect(adminProfileModerationPath('K7M2P9QX4Z')).toBe('/admin/moderation/profiles/k7m2p9qx4z');
+  });
+
+  it('shows 운영 to an operator alone, by the role GET /me answers', () => {
+    expect(isOperator('admin')).toBe(true);
+    expect(isOperator('user')).toBe(false);
+    expect(isOperator(undefined)).toBe(false);
+  });
 });
 
 describe('cache keys', () => {
@@ -131,11 +149,15 @@ describe('cache keys', () => {
       adminPostModerationKey(POST),
       adminCommentModerationKey(COMMENT),
       adminUserModerationKey(USER),
+      adminProfileModerationKey('k7m2p9qx4z'),
     ]) {
       expect(isPrivateQueryKey(key)).toBe(true);
       expect(key.slice(0, 2)).toEqual([...ADMIN_MODERATION_KEY]);
     }
     expect(adminPostModerationKey(POST.toUpperCase())).toEqual(adminPostModerationKey(POST));
+    expect(adminProfileModerationKey('K7M2P9QX4Z')).toEqual(
+      adminProfileModerationKey('k7m2p9qx4z'),
+    );
     expect(adminReportQueueKey('pending')).not.toEqual(adminReportQueueKey('resolved'));
   });
 });
@@ -177,6 +199,29 @@ describe('names', () => {
     expect(reportDialogTitle('post')).toBe(copy.reportPostTitle);
     expect(reportDialogTitle('comment')).toBe(copy.reportCommentTitle);
     expect(reportDialogTitle('profile')).toBe(copy.reportProfileTitle);
+  });
+
+  it('names a card’s 신고 by the item it reports, ending with the word on screen', () => {
+    // A post by its card's heading: the title, or the first line of its text without one.
+    expect(reportButtonName({ type: 'post', title: '금리 전망', excerpt: '본문' })).toBe(
+      `금리 전망 ${copy.reportAction}`,
+    );
+    expect(reportButtonName({ type: 'post', title: null, excerpt: '\n  첫 줄 \n둘째 줄' })).toBe(
+      `첫 줄 ${copy.reportAction}`,
+    );
+    // A comment by the first line of its own text, so two under one post differ.
+    expect(reportButtonName({ type: 'comment', body: '첫 댓글\n더' })).toBe(
+      `첫 댓글 ${copy.reportAction}`,
+    );
+    expect(reportButtonName({ type: 'comment', body: '둘째 댓글' })).not.toBe(
+      reportButtonName({ type: 'comment', body: '첫 댓글' }),
+    );
+    for (const name of [
+      reportButtonName({ type: 'post', title: '제목', excerpt: '본문' }),
+      reportButtonName({ type: 'comment', body: '댓글' }),
+    ]) {
+      expect(name.endsWith(copy.reportAction)).toBe(true);
+    }
   });
 
   it('writes a reason and the operator’s explanation, a blank one as none', () => {
@@ -500,6 +545,59 @@ describe('the sanction banner', () => {
   });
 });
 
+describe('the warning banner (owner decision 2026-10-21)', () => {
+  const NOW = Date.parse('2026-10-21T12:00:00.000Z');
+  const DAY_MS = 24 * 60 * 60 * 1_000;
+  const action = (overrides: Partial<MyModerationAction>): MyModerationAction => ({
+    id: '11111111-1111-4111-8111-111111111111',
+    type: 'warning',
+    reason: { code: 'spam', note: null },
+    subject: null,
+    createdAt: new Date(NOW - DAY_MS).toISOString(),
+    endsAt: null,
+    cancelledAt: null,
+    ...overrides,
+  });
+
+  it('shows a warning for its appeal window — APPEAL_WINDOW_DAYS from it — and no longer', () => {
+    const warning = action({});
+    expect(warningInWindow([warning], NOW)).toBe(warning);
+    const lastInstant = action({
+      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS + 1).toISOString(),
+    });
+    expect(warningInWindow([lastInstant], NOW)).toBe(lastInstant);
+    const over = action({ createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS).toISOString() });
+    expect(warningInWindow([over], NOW)).toBeNull();
+  });
+
+  it('shows no cancelled warning and no other action, and the newest warning of several', () => {
+    expect(
+      warningInWindow([action({ cancelledAt: new Date(NOW - 1_000).toISOString() })], NOW),
+    ).toBeNull();
+    expect(
+      warningInWindow(
+        [
+          action({ type: 'hide' }),
+          action({ type: 'nickname_reset' }),
+          action({ type: 'bio_clear' }),
+          action({ type: 'image_remove' }),
+        ],
+        NOW,
+      ),
+    ).toBeNull();
+    const older = action({ id: 'a', createdAt: new Date(NOW - 3 * DAY_MS).toISOString() });
+    const newer = action({ id: 'b', createdAt: new Date(NOW - 2 * DAY_MS).toISOString() });
+    expect(warningInWindow([older, newer], NOW)).toBe(newer);
+    expect(warningInWindow([newer, older], NOW)).toBe(newer);
+    expect(warningInWindow([], NOW)).toBeNull();
+  });
+
+  it('is no sanction: the write page’s banner stays for restrictions', () => {
+    expect(sanctionInForce([action({})], NOW)).toBeNull();
+    expect(copy.moderationWarningReceived).toBe('경고를 받았습니다.');
+  });
+});
+
 describe('operators', () => {
   const report = (id: string, status: AdminReport['status']): AdminReport => ({
     id,
@@ -513,6 +611,7 @@ describe('operators', () => {
     resolvedBy: null,
     actionId: null,
     dismissalReason: null,
+    aboutViewer: false,
   });
 
   it('knows whether a page is about the operator, once the session says who they are', () => {
@@ -564,6 +663,24 @@ describe('operators', () => {
     ).toBe(`${reportReasonLabel('spam')} 3 · ${reportReasonLabel('other')} 1`);
     expect(queueEntryText({ title: '제목', excerpt: '본문' })).toBe('제목');
     expect(queueEntryText({ title: null, excerpt: '\n첫 줄\n둘째' })).toBe('첫 줄');
+  });
+
+  it('names who processed or acted and when, the time alone on a record about the reader (owner decision 2026-10-21)', () => {
+    const at = '2026-10-21T01:00:00.000Z';
+    expect(operatorLineText({ nickname: '운영자둘' }, at, false)).toBe(
+      `운영자둘 · ${formatKst(at)}`,
+    );
+    expect(operatorLineText(null, at, false)).toBe(
+      `${copy.adminAccountsTargetGone} · ${formatKst(at)}`,
+    );
+    expect(operatorLineText(null, at, true)).toBe(formatKst(at));
+    expect(copy.adminModerationWithheldReport).toContain('신고자');
+    expect(copy.adminModerationWithheldAction).toContain('운영자');
+  });
+
+  it('tells the operator what a nickname reset holds and waives, in the rule’s days (owner decision 2026-10-21)', () => {
+    expect(copy.adminModerationNicknameResetNote).toContain(`${String(NICKNAME_HOLD_DAYS)}일`);
+    expect(copy.adminModerationNicknameResetNote).toContain('이 회원을 포함해');
   });
 
   it('names what a profile action took away and which actions can still be cancelled', () => {

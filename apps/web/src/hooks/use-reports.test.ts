@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type MyModerationAction, type MyReport, api } from '@/lib/api';
+import { myAuthoredKey, profileAuthoredKey } from '@/lib/authored';
 import { postCommentsKey } from '@/lib/comments';
 import { MY_ACTIONS_KEY, MY_REPORTS_KEY } from '@/lib/moderation';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
@@ -128,24 +129,62 @@ describe('a report', () => {
     queryClient.clear();
   });
 
-  it('reads the post and its comments again when the item became a placeholder or left', async () => {
-    const queryClient = getQueryClient();
-    for (const key of [postKey(POST), postCommentsKey(POST), POST_LIST_KEY]) {
-      queryClient.setQueryData(key, {});
+  it('reads the post, its comments and every list with a card of it again when the item became a placeholder or left', async () => {
+    // The lists whose cards carry 신고 (owner decision 2026-10-21): the community list and a
+    // profile's 글·댓글 tabs — upper-case public id or not, the same member's.
+    const stale = [
+      postKey(POST),
+      postCommentsKey(POST),
+      POST_LIST_KEY,
+      profileAuthoredKey('K7M2P9QX4Z', 'posts'),
+      profileAuthoredKey('k7m2p9qx4z', 'comments'),
+    ];
+    const subjects = [
+      { type: 'post', postId: POST },
+      { type: 'comment', commentId: COMMENT, postId: POST },
+    ] as const;
+    const refusals = [
+      new ApiError(409, {
+        code: 'REPORT_NOT_ALLOWED',
+        message: 'hidden',
+        details: { reason: 'hidden' },
+      }),
+      new ApiError(409, {
+        code: 'REPORT_NOT_ALLOWED',
+        message: 'deleted',
+        details: { reason: 'deleted' },
+      }),
+      new ApiError(404, { code: 'NOT_FOUND', message: 'gone' }),
+    ];
+    for (const subject of subjects) {
+      for (const refusal of refusals) {
+        const queryClient = getQueryClient();
+        for (const key of [...stale, myAuthoredKey('posts')]) queryClient.setQueryData(key, {});
+        await reportOptions(queryClient, () => undefined).onError(refusal, { subject, ...body });
+        for (const key of stale) {
+          expect(queryClient.getQueryState(key)?.isInvalidated, JSON.stringify(key)).toBe(true);
+        }
+        // MY 내 글 is the member's own: no 신고 there, nothing to read again.
+        expect(queryClient.getQueryState(myAuthoredKey('posts'))?.isInvalidated).toBe(false);
+        queryClient.clear();
+      }
     }
-    const options = reportOptions(queryClient, () => undefined);
-    const hidden = new ApiError(409, {
+  });
+
+  it('reads nothing again for any other refusal', async () => {
+    const queryClient = getQueryClient();
+    const keys = [postKey(POST), POST_LIST_KEY, profileAuthoredKey('k7m2p9qx4z', 'posts')];
+    for (const key of keys) queryClient.setQueryData(key, {});
+    const duplicate = new ApiError(409, {
       code: 'REPORT_NOT_ALLOWED',
-      message: 'hidden',
-      details: { reason: 'hidden' },
+      message: 'duplicate',
+      details: { reason: 'duplicate' },
     });
-    await options.onError(hidden, {
-      subject: { type: 'comment', commentId: COMMENT, postId: POST },
+    await reportOptions(queryClient, () => undefined).onError(duplicate, {
+      subject: { type: 'post', postId: POST },
       ...body,
     });
-    for (const key of [postKey(POST), postCommentsKey(POST), POST_LIST_KEY]) {
-      expect(queryClient.getQueryState(key)?.isInvalidated).toBe(true);
-    }
+    for (const key of keys) expect(queryClient.getQueryState(key)?.isInvalidated).toBe(false);
     queryClient.clear();
   });
 

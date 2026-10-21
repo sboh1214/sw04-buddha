@@ -54,7 +54,10 @@ function refused(details: NicknameNotAllowedDetails): AppError {
  *   withdrawn one — gave up less than NICKNAME_HOLD_DAYS ago (`nickname_held()`).
  * - The nickname given up is held from other accounts from then on (`nickname_holds`).
  * - After the onboarding a change waits NICKNAME_CHANGE_INTERVAL_DAYS after the last change; the
- *   onboarding's choice is not a change.
+ *   onboarding's choice is not a change, and an operator's reset to an auto nickname clears the
+ *   last change (ModerationService, owner decision 2026-10-21, ADR-0081): the member picks a new
+ *   one at once, and that pick is the change the next interval counts from. The nickname the reset
+ *   took away is held from the member too (a hold naming no account).
  *
  * Every write takes the account's profile row FOR UPDATE first (one nickname write of an account at
  * a time), then the nickname locks (`lockNicknames`: the nickname given up and the one taken, in

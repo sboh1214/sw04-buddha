@@ -14,6 +14,7 @@ import {
   isApiError,
   unwrap,
 } from '@/lib/api';
+import { AUTHORED_KEY } from '@/lib/authored';
 import { postCommentsKey } from '@/lib/comments';
 import { MY_ACTIONS_KEY, MY_REPORTS_KEY, type ModerationPage } from '@/lib/moderation';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
@@ -139,11 +140,12 @@ async function postReport({ subject, ...body }: ReportVariables): Promise<MyRepo
 /**
  * `POST …/reports` as mutation options. A report taken marks the member's 내가 한 신고 stale (the
  * new one is its newest). A refusal that the target became a placeholder or left every view
- * (`deleted`, `hidden`, NOT_FOUND) reads the post and its comments again — and the community
- * list, which no longer holds a hidden or deleted post — so the page shows what it is now; the
- * dialog says why. A refusal for the onboarding or of another account's cookie does what every
- * refused write does (`afterRefusal`). Nothing here is optimistic: a report changes nothing on
- * the page.
+ * (`deleted`, `hidden`, NOT_FOUND) reads the post and its comments again — and the lists whose
+ * cards carry 신고 (owner decision 2026-10-21), none of which holds a hidden or deleted item: the
+ * community list and a profile's 글·댓글 tabs (`AUTHORED_KEY`, whichever profile is on screen) — so
+ * the page shows what it is now and the card leaves its list; the dialog says why. A refusal for
+ * the onboarding or of another account's cookie does what every refused write does
+ * (`afterRefusal`). Nothing here is optimistic: a report changes nothing on the page.
  */
 export function reportOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
@@ -158,6 +160,7 @@ export function reportOptions(queryClient: QueryClient, onSessionChanged: () => 
         queryClient.invalidateQueries({ queryKey: postKey(subject.postId) }),
         queryClient.invalidateQueries({ queryKey: postCommentsKey(subject.postId) }),
         queryClient.invalidateQueries({ queryKey: POST_LIST_KEY }),
+        queryClient.invalidateQueries({ queryKey: AUTHORED_KEY }),
       ]);
     },
   };

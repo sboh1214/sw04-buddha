@@ -1928,6 +1928,116 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await t.db.select().from(reports)).toEqual([]);
     });
 
+    it('takes a change of the hash alone, and only from the operator’s number change (owner decision 2026-10-21)', async () => {
+      // docs/OPERATIONS.md moves the person's pending and recent reports onto the new number's hash
+      // (ADR-0081): the keep-record trigger takes that change from the transaction that names the
+      // account and the new hash (its SET LOCAL lines), and nothing else of the row with it.
+      const { author, reporter, admin, post, comment } = await moderationFixture();
+      await createPhoneVerification(t.db, { userId: reporter.id });
+      const oldHash = randomPhoneHash();
+      const newHash = randomPhoneHash();
+      const pending = await createReport(t.db, {
+        reporterId: reporter.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      const dismissed = await createReport(t.db, {
+        reporterId: reporter.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+        commentId: comment.id,
+        status: 'dismissed',
+        resolvedBy: admin.id,
+        dismissalReason: '위반 아님',
+      });
+      const { user: someoneElse } = await createUser(t.db);
+      await createPhoneVerification(t.db, { userId: someoneElse.id });
+      const others = await createReport(t.db, {
+        reporterId: someoneElse.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      const keeps = 'keeps the number it was sent with';
+      const moveTo = (id: string, hash: string) =>
+        sql`UPDATE reports SET reporter_phone_hash = ${hash} WHERE id = ${id}`;
+      /** A transaction as the number change's: its SET LOCAL lines, then `body`. */
+      const asNumberChange = (
+        body: (tx: Parameters<Parameters<typeof t.db.transaction>[0]>[0]) => Promise<unknown>,
+        settings: Record<string, string> = {
+          'phone_change.user_id': reporter.id,
+          'phone_change.new_hash': newHash,
+        },
+      ) =>
+        t.db.transaction(async (tx) => {
+          for (const [name, value] of Object.entries(settings)) {
+            await tx.execute(sql`SELECT set_config(${name}, ${value}, true)`);
+          }
+          await body(tx);
+        });
+      // Any write of the app's: no setting names it.
+      await expect(t.db.execute(moveTo(pending.id, newHash))).rejects.toSatisfy((e) =>
+        errorMessage(e).includes(keeps),
+      );
+      // In the change: another hash, another account's report, or more than the hash — refused.
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(pending.id, randomPhoneHash()))),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(others.id, newHash))),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      for (const more of [
+        sql`reason = 'harassment'`,
+        sql`description = '바꾼 설명'`,
+        sql`status = 'dismissed', resolved_at = now(), resolved_by = ${admin.id}, dismissal_reason = '없음'`,
+      ]) {
+        await expect(
+          asNumberChange((tx) =>
+            tx.execute(
+              sql`UPDATE reports SET reporter_phone_hash = ${newHash}, ${more} WHERE id = ${pending.id}`,
+            ),
+          ),
+        ).rejects.toSatisfy((e) => errorMessage(e).includes("changes its number's hash alone"));
+      }
+      // The hash alone, of the account's reports — a processed one too.
+      await asNumberChange(async (tx) => {
+        await tx.execute(moveTo(pending.id, newHash));
+        await tx.execute(moveTo(dismissed.id, newHash));
+      });
+      const after = await t.db.select().from(reports);
+      const byId = new Map(after.map((row) => [row.id, row]));
+      expect(byId.get(pending.id)).toEqual({ ...pending, reporterPhoneHash: newHash });
+      expect(byId.get(dismissed.id)).toEqual({ ...dismissed, reporterPhoneHash: newHash });
+      expect(byId.get(others.id)).toEqual(others);
+      // Once the change names the old number's hash (#49's final procedure), a withdrawn account's
+      // report on that number is the account's too; a live account's never is.
+      const { user: withdrawn } = await createUser(t.db);
+      const inherited = await createReport(t.db, {
+        reporterId: withdrawn.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+      });
+      const withOld = {
+        'phone_change.user_id': reporter.id,
+        'phone_change.new_hash': newHash,
+        'phone_change.old_hash': oldHash,
+      };
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(inherited.id, newHash))),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(others.id, newHash)), withOld),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      await asNumberChange((tx) => tx.execute(moveTo(inherited.id, newHash)), withOld);
+      const [moved] = await t.db.select().from(reports).where(eq(reports.id, inherited.id));
+      expect(moved).toEqual({ ...inherited, reporterPhoneHash: newHash });
+      // The processing's rules hold as before around it: a processed report keeps its result.
+      await expect(
+        t.db.update(reports).set({ reason: 'harassment' }).where(eq(reports.id, dismissed.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('was processed'));
+    });
+
     it('holds an action to its types, its subject’s shape, its reason and another operator', async () => {
       const { author, admin, post, comment } = await moderationFixture();
       const base = { userId: author.id, createdBy: admin.id, reason: 'spam' as const };

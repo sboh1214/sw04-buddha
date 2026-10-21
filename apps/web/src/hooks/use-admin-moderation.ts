@@ -30,6 +30,7 @@ import {
   type ModerationPage,
   adminCommentModerationKey,
   adminPostModerationKey,
+  adminProfileModerationKey,
   adminReportQueueKey,
   adminUserModerationKey,
 } from '@/lib/moderation';
@@ -155,6 +156,28 @@ export function adminUserModerationQueryOptions(userId: string) {
 
 export function useAdminUserModeration(userId: string) {
   return useQuery(adminUserModerationQueryOptions(userId));
+}
+
+/**
+ * `GET /admin/moderation/profiles/:publicId`: the same page found by a profile's public id — where
+ * a public profile's '운영' link lands (owner decision 2026-10-21).
+ */
+export function adminProfileModerationQueryOptions(publicId: string) {
+  const id = publicId.toLowerCase();
+  return {
+    queryKey: adminProfileModerationKey(id),
+    queryFn: async (): Promise<AdminUserModeration> =>
+      unwrap(
+        await api.GET('/api/v1/admin/moderation/profiles/{publicId}', {
+          params: { path: { publicId: id } },
+        }),
+      ).data,
+    refetchOnMount: 'always' as const,
+  };
+}
+
+export function useAdminProfileModeration(publicId: string) {
+  return useQuery(adminProfileModerationQueryOptions(publicId));
 }
 
 /**

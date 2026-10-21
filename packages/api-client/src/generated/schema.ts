@@ -289,7 +289,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Every moderation action, newest first, with its reason, operator, time and cancellation */
+        /** Every moderation action, newest first, with its reason, operator, time and cancellation — no operator on an action taken on the admin reading it (`aboutViewer`) */
         get: operations["adminListModerationActions"];
         put?: never;
         post?: never;
@@ -357,7 +357,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** A post whatever its state (the deleted original too), its earlier versions, the reports on it with their reporters, its actions and its author’s record of actions */
+        /** A post whatever its state (the deleted original too), its earlier versions, the reports on it with their reporters, its actions and its author’s record of actions. On a record about the admin reading it, no reporter, report description or operator (`aboutViewer`) */
         get: operations["adminGetPostModeration"];
         put?: never;
         post?: never;
@@ -378,6 +378,23 @@ export type paths = {
         put?: never;
         /** Hide a post with a reason: out of every list, its placeholder on its page, no new comment, no edit by its author. Resolves the pending reports on it (조치함). A deleted post is `deleted`, a hidden one `hidden`, the acting admin’s own `own` */
         post: operations["adminHidePost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/profiles/{publicId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The same page as `GET /admin/moderation/users/{userId}`, found by the public id of the profile’s address — the way from a public profile’s operator link */
+        get: operations["adminGetProfileModeration"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -444,7 +461,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from other accounts for 30 days. An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
+        /** Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from every account, the member’s included, for 30 days, and the member’s 30-day change interval is waived (they pick a new one at once). An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
         post: operations["adminResetNickname"];
         delete?: never;
         options?: never;
@@ -1894,13 +1911,15 @@ export type components = {
             volumeCoin: components["schemas"]["CoinAmount"];
         };
         AdminModerationAction: {
+            /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
+            aboutViewer: boolean;
             /** Format: date-time */
             cancelledAt: string | null;
             cancelledBy: components["schemas"]["AdminAccountActor"] | null;
             cancelReason: string | null;
             /** Format: date-time */
             createdAt: string;
-            createdBy: components["schemas"]["AdminAccountActor"];
+            createdBy: components["schemas"]["AdminAccountActor"] | null;
             /** Format: date-time */
             endsAt: string | null;
             /** Format: uuid */
@@ -2070,6 +2089,8 @@ export type components = {
             volumeCoin: components["schemas"]["CoinAmount"];
         };
         AdminReport: {
+            /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
+            aboutViewer: boolean;
             /** Format: uuid */
             actionId: string | null;
             /** Format: date-time */
@@ -2079,7 +2100,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             reason: components["schemas"]["ReportReason"];
-            reporter: components["schemas"]["ModerationUser"];
+            reporter: components["schemas"]["ModerationUser"] | null;
             /** Format: date-time */
             resolvedAt: string | null;
             resolvedBy: components["schemas"]["AdminAccountActor"] | null;
@@ -5547,6 +5568,83 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetProfileModeration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminUserModeration"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;

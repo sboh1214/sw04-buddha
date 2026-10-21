@@ -31,6 +31,7 @@ import {
   dismissReportsBodySchema,
   dismissedReportsSchema,
   moderationActionBodySchema,
+  publicIdParamSchema,
   uuidParamSchema,
   warningBodySchema,
   type AdminCommentModeration,
@@ -132,7 +133,10 @@ export class AdminReportsController {
  * the reports, the actions), every action, and the actions themselves: hiding a post or a comment,
  * a warning, the three profile items (#37-10) and a cancellation — each with its reason (a report
  * reason and the explanation the member reads), operator and time recorded, taken from the queue or
- * without a report (decision 4 #50). An operator never acts on themselves (`own`).
+ * without a report (decision 4 #50). An operator never acts on themselves (`own`), and reads the
+ * records about themselves without the reporters, the report descriptions and the operators' names
+ * (owner decision 2026-10-21, `aboutViewer`). A member's page is found by the account id or, from a
+ * public profile's '운영' link, by the public id.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -148,16 +152,18 @@ export class AdminModerationController {
   @ApiOperation({
     operationId: 'adminListModerationActions',
     summary:
-      'Every moderation action, newest first, with its reason, operator, time and cancellation',
+      'Every moderation action, newest first, with its reason, operator, time and cancellation — ' +
+      'no operator on an action taken on the admin reading it (`aboutViewer`)',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminModerationActionSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listActions(
+    @CurrentUser() admin: SessionUser,
     @Query({ schema: cursorQuerySchema }) query: CursorQuery,
   ): Promise<ApiPage<AdminModerationAction>> {
-    const { items, nextCursor } = await this.reads.allActions(query);
+    const { items, nextCursor } = await this.reads.allActions(query, admin.id);
     return new ApiPage(items, { nextCursor });
   }
 
@@ -185,14 +191,16 @@ export class AdminModerationController {
     operationId: 'adminGetPostModeration',
     summary:
       'A post whatever its state (the deleted original too), its earlier versions, the reports on ' +
-      'it with their reporters, its actions and its author’s record of actions',
+      'it with their reporters, its actions and its author’s record of actions. On a record about ' +
+      'the admin reading it, no reporter, report description or operator (`aboutViewer`)',
   })
   @ApiData(adminPostModerationSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   postPage(
+    @CurrentUser() admin: SessionUser,
     @Param('postId', { schema: uuidParamSchema }) postId: string,
   ): Promise<AdminPostModeration> {
-    return this.reads.postPage(postId);
+    return this.reads.postPage(postId, admin.id);
   }
 
   @Post('posts/:postId/hide')
@@ -225,9 +233,10 @@ export class AdminModerationController {
   @ApiData(adminCommentModerationSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   commentPage(
+    @CurrentUser() admin: SessionUser,
     @Param('commentId', { schema: uuidParamSchema }) commentId: string,
   ): Promise<AdminCommentModeration> {
-    return this.reads.commentPage(commentId);
+    return this.reads.commentPage(commentId, admin.id);
   }
 
   @Post('comments/:commentId/hide')
@@ -258,9 +267,26 @@ export class AdminModerationController {
   @ApiData(adminUserModerationSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   userPage(
+    @CurrentUser() admin: SessionUser,
     @Param('userId', { schema: adminAccountIdSchema }) userId: string,
   ): Promise<AdminUserModeration> {
-    return this.reads.userPage(userId);
+    return this.reads.userPage(userId, admin.id);
+  }
+
+  @Get('profiles/:publicId')
+  @ApiOperation({
+    operationId: 'adminGetProfileModeration',
+    summary:
+      'The same page as `GET /admin/moderation/users/{userId}`, found by the public id of the ' +
+      'profile’s address — the way from a public profile’s operator link',
+  })
+  @ApiData(adminUserModerationSchema)
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
+  profilePage(
+    @CurrentUser() admin: SessionUser,
+    @Param('publicId', { schema: publicIdParamSchema }) publicId: string,
+  ): Promise<AdminUserModeration> {
+    return this.reads.profilePage(publicId, admin.id);
   }
 
   @Post('users/:userId/warn')
@@ -289,8 +315,9 @@ export class AdminModerationController {
     operationId: 'adminResetNickname',
     summary:
       'Give a member’s nickname back to an auto nickname with a reason; the nickname taken away ' +
-      'is kept for operators and held from other accounts for 30 days. An auto nickname already ' +
-      'is `nothing_to_remove`. Resolves the pending reports on the profile (조치함)',
+      'is kept for operators and held from every account, the member’s included, for 30 days, ' +
+      'and the member’s 30-day change interval is waived (they pick a new one at once). An auto ' +
+      'nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함)',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)

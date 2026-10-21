@@ -11182,7 +11182,7 @@
             "session": []
           }
         ],
-        "summary": "Every moderation action, newest first, with its reason, operator, time and cancellation",
+        "summary": "Every moderation action, newest first, with its reason, operator, time and cancellation — no operator on an action taken on the admin reading it (`aboutViewer`)",
         "tags": [
           "admin"
         ]
@@ -11406,7 +11406,7 @@
             "session": []
           }
         ],
-        "summary": "A post whatever its state (the deleted original too), its earlier versions, the reports on it with their reporters, its actions and its author’s record of actions",
+        "summary": "A post whatever its state (the deleted original too), its earlier versions, the reports on it with their reporters, its actions and its author’s record of actions. On a record about the admin reading it, no reporter, report description or operator (`aboutViewer`)",
         "tags": [
           "admin"
         ]
@@ -11860,6 +11860,112 @@
         ]
       }
     },
+    "/api/v1/admin/moderation/profiles/{publicId}": {
+      "get": {
+        "operationId": "adminGetProfileModeration",
+        "parameters": [
+          {
+            "name": "publicId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "description": "A member’s public id (10 lower-case letters and digits, never the account id), matched ignoring case; anything else is NOT_FOUND"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminUserModeration"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The same page as `GET /admin/moderation/users/{userId}`, found by the public id of the profile’s address — the way from a public profile’s operator link",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/moderation/users/{userId}/warn": {
       "post": {
         "operationId": "adminWarnUser",
@@ -12088,7 +12194,7 @@
             "session": []
           }
         ],
-        "summary": "Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from other accounts for 30 days. An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함)",
+        "summary": "Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from every account, the member’s included, for 30 days, and the member’s 30-day change interval is waived (they pick a new one at once). An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함)",
         "tags": [
           "admin"
         ]
@@ -18408,7 +18514,12 @@
             "$ref": "#/components/schemas/ModerationTarget"
           },
           "reporter": {
-            "$ref": "#/components/schemas/ModerationUser"
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ModerationUser"
+              }
+            ]
           },
           "reason": {
             "$ref": "#/components/schemas/ReportReason"
@@ -18448,6 +18559,10 @@
           "dismissalReason": {
             "nullable": true,
             "type": "string"
+          },
+          "aboutViewer": {
+            "type": "boolean",
+            "description": "True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null)"
           }
         },
         "required": [
@@ -18461,7 +18576,8 @@
           "resolvedAt",
           "resolvedBy",
           "actionId",
-          "dismissalReason"
+          "dismissalReason",
+          "aboutViewer"
         ],
         "additionalProperties": false
       },
@@ -18491,7 +18607,12 @@
             "$ref": "#/components/schemas/HiddenReason"
           },
           "createdBy": {
-            "$ref": "#/components/schemas/AdminAccountActor"
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
           },
           "createdAt": {
             "type": "string",
@@ -18534,6 +18655,10 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 9007199254740991
+          },
+          "aboutViewer": {
+            "type": "boolean",
+            "description": "True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null)"
           }
         },
         "required": [
@@ -18549,7 +18674,8 @@
           "cancelledBy",
           "cancelReason",
           "removed",
-          "reportCount"
+          "reportCount",
+          "aboutViewer"
         ],
         "additionalProperties": false
       },

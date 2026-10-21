@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  PUBLIC_ID_PATTERN,
   adminMediaPath,
   decodeKeyset,
   encodeKeyset,
@@ -75,10 +76,11 @@ const GROUP_KEY = sql<string>`${schema.reports.targetType}::text || ':' || ${sch
  * the member's own actions on MY (#45-13: the type, the reason, the end and the appeal — never the
  * operator, a report or its reporter). Nothing here is read by a public route.
  *
- * An admin who is the member reported or acted on reads those reports' reporters and the operators
- * of those actions like any admin: ADR-0056 1-2 (every admin) and #45-10/#45-13 (never to the member
- * reported) meet there, and which one rules is the owner's question (ADR-0081 결과 4). Only the
- * processing is kept from them (`own`, decision 4 #50).
+ * An admin who is the member reported or acted on (`viewerId`) reads those records without who
+ * reported, what the reporter wrote and which operators processed, acted and cancelled (owner
+ * decision 2026-10-21: #45-10 and #45-13 over ADR-0056 1-2 for a record about oneself) — the
+ * reasons, the times and what was done stay (`aboutViewer`, `withheldFor`). The processing is kept
+ * from them as well (`own`, decision 4 #50).
  */
 @Injectable()
 export class ModerationReadsService {
@@ -372,7 +374,7 @@ export class ModerationReadsService {
    * (#45-5) — with its earlier versions (#45-4), every comment under it (`postComments`), its
    * reports, its actions and its author's record.
    */
-  async postPage(postId: string): Promise<AdminPostModeration> {
+  async postPage(postId: string, viewerId: string): Promise<AdminPostModeration> {
     const { posts, markets, postRevisions } = schema;
     const [row] = await this.db
       .select({
@@ -398,7 +400,10 @@ export class ModerationReadsService {
       .from(postRevisions)
       .where(eq(postRevisions.postId, postId))
       .orderBy(asc(postRevisions.id));
-    const reports = await this.reports(this.db, eq(schema.reports.postId, postId));
+    const { reports, reporterCount } = await this.reportsAndReporters(
+      eq(schema.reports.postId, postId),
+      viewerId,
+    );
     return {
       id: row.id,
       state: itemStateOf(row, row.hasComments),
@@ -419,11 +424,12 @@ export class ModerationReadsService {
       })),
       comments: await this.postComments(postId),
       reports,
-      reporterCount: reporterCountOf(reports),
-      actions: await this.actions(this.db, eq(schema.moderationActions.postId, postId)),
+      reporterCount,
+      actions: await this.actions(this.db, eq(schema.moderationActions.postId, postId), viewerId),
       authorActions: await this.actions(
         this.db,
         eq(schema.moderationActions.userId, row.author.id),
+        viewerId,
       ),
     };
   }
@@ -469,7 +475,7 @@ export class ModerationReadsService {
   }
 
   /** `GET /admin/moderation/comments/:commentId`: the same for a 댓글 or a 대댓글. */
-  async commentPage(commentId: string): Promise<AdminCommentModeration> {
+  async commentPage(commentId: string, viewerId: string): Promise<AdminCommentModeration> {
     const { postComments, posts, postCommentRevisions } = schema;
     const [row] = await this.db
       .select({
@@ -501,7 +507,10 @@ export class ModerationReadsService {
       .from(postCommentRevisions)
       .where(eq(postCommentRevisions.commentId, commentId))
       .orderBy(asc(postCommentRevisions.id));
-    const reports = await this.reports(this.db, eq(schema.reports.commentId, commentId));
+    const { reports, reporterCount } = await this.reportsAndReporters(
+      eq(schema.reports.commentId, commentId),
+      viewerId,
+    );
     return {
       id: row.id,
       state: itemStateOf(row, row.parentId === null && row.hasReplies),
@@ -524,11 +533,16 @@ export class ModerationReadsService {
         replacedAt: revision.replacedAt.toISOString(),
       })),
       reports,
-      reporterCount: reporterCountOf(reports),
-      actions: await this.actions(this.db, eq(schema.moderationActions.commentId, commentId)),
+      reporterCount,
+      actions: await this.actions(
+        this.db,
+        eq(schema.moderationActions.commentId, commentId),
+        viewerId,
+      ),
       authorActions: await this.actions(
         this.db,
         eq(schema.moderationActions.userId, row.author.id),
+        viewerId,
       ),
     };
   }
@@ -537,30 +551,46 @@ export class ModerationReadsService {
    * `GET /admin/moderation/users/:userId`: the member's public profile now, the reports on it and
    * every action on the member — what the profile actions took away among them (#37-10).
    */
-  async userPage(userId: string): Promise<AdminUserModeration> {
+  async userPage(userId: string, viewerId: string): Promise<AdminUserModeration> {
+    return this.memberPage(eq(member.userId, userId), viewerId);
+  }
+
+  /**
+   * `GET /admin/moderation/profiles/:publicId`: the same page, found by the public id a profile's
+   * address carries — the way from a public profile's '운영' link (owner decision 2026-10-21,
+   * ADR-0081), which names no account id. Lower-cased as the public profile reads it; one that is
+   * not of the shape is NOT_FOUND, as there.
+   */
+  async profilePage(publicId: string, viewerId: string): Promise<AdminUserModeration> {
+    const id = publicId.toLowerCase();
+    if (!PUBLIC_ID_PATTERN.test(id)) throw notFound('User');
+    return this.memberPage(eq(member.publicId, id), viewerId);
+  }
+
+  private async memberPage(where: SQL, viewerId: string): Promise<AdminUserModeration> {
     const [row] = await this.db
       .select({ ...memberColumns, bio: member.bio, imageId: member.imageId })
       .from(member)
-      .where(eq(member.userId, userId))
+      .where(where)
       .limit(1);
     if (!row) throw notFound('User');
     const { reports } = schema;
-    const profileReports = await this.reports(
-      this.db,
-      and(eq(reports.targetType, 'profile'), eq(reports.reportedUserId, userId)),
+    const profileReports = await this.reportsAndReporters(
+      and(eq(reports.targetType, 'profile'), eq(reports.reportedUserId, row.id)),
+      viewerId,
     );
     return {
       user: { id: row.id, publicId: row.publicId, nickname: row.nickname, role: row.role },
       bio: row.bio,
       imageUrl: row.imageId === null ? null : adminMediaPath(row.imageId),
-      reports: profileReports,
-      reporterCount: reporterCountOf(profileReports),
-      actions: await this.actions(this.db, eq(schema.moderationActions.userId, userId)),
+      reports: profileReports.reports,
+      reporterCount: profileReports.reporterCount,
+      actions: await this.actions(this.db, eq(schema.moderationActions.userId, row.id), viewerId),
     };
   }
 
   /** `GET /admin/moderation/actions`: every action, newest first, a page at a time. */
-  async allActions(query: CursorQuery): Promise<Page<AdminModerationAction>> {
+  async allActions(query: CursorQuery, viewerId: string): Promise<Page<AdminModerationAction>> {
     const { moderationActions } = schema;
     const cursor = decodeKeyset(query.cursor, 'uuid');
     const rows = await this.actions(
@@ -568,6 +598,7 @@ export class ModerationReadsService {
       cursor === undefined
         ? undefined
         : keysetPredicate(moderationActions.createdAt, moderationActions.id, cursor, 'uuid'),
+      viewerId,
       query.limit + 1,
     );
     const hasMore = rows.length > query.limit;
@@ -582,10 +613,37 @@ export class ModerationReadsService {
 
   // ---- shared reads, for the writes' answers too -------------------------------------------------
 
-  /** Reports matching `where`, newest first, with the reporter and the processing operator. */
-  async reports(executor: Executor, where: SQL | undefined): Promise<AdminReport[]> {
+  /**
+   * Reports matching `where`, newest first, with the reporter and the processing operator — both
+   * withheld, with the description, from `viewerId` where the report is about them (`withheldFor`).
+   */
+  async reports(
+    executor: Executor,
+    where: SQL | undefined,
+    viewerId: string,
+  ): Promise<AdminReport[]> {
+    const rows = await this.reportRows(executor, where);
+    return rows.map((row) => adminReportOf(row, viewerId));
+  }
+
+  /**
+   * A page's reports (`reports`) and how many accounts filed them — counted before anything is
+   * withheld: the number of reporters is no reporter's identity (owner decision 2026-10-21).
+   */
+  private async reportsAndReporters(
+    where: SQL | undefined,
+    viewerId: string,
+  ): Promise<{ reports: AdminReport[]; reporterCount: number }> {
+    const rows = await this.reportRows(this.db, where);
+    return {
+      reports: rows.map((row) => adminReportOf(row, viewerId)),
+      reporterCount: new Set(rows.map((row) => row.reporter.id)).size,
+    };
+  }
+
+  private reportRows(executor: Executor, where: SQL | undefined) {
     const { reports } = schema;
-    const rows = await executor
+    return executor
       .select({
         id: reports.id,
         targetType: reports.targetType,
@@ -610,28 +668,16 @@ export class ModerationReadsService {
       .leftJoin(schema.postComments, eq(schema.postComments.id, reports.commentId))
       .where(where)
       .orderBy(desc(reports.createdAt), desc(reports.id));
-    return rows.map((row) => ({
-      id: row.id,
-      target: targetOf(row),
-      reporter: row.reporter,
-      reason: row.reason,
-      description: row.description,
-      createdAt: row.createdAt.toISOString(),
-      status: row.status,
-      resolvedAt: row.resolvedAt?.toISOString() ?? null,
-      resolvedBy:
-        row.resolvedById === null
-          ? null
-          : { id: row.resolvedById, nickname: row.resolvedByNickname ?? '' },
-      actionId: row.actionId,
-      dismissalReason: row.dismissalReason,
-    }));
   }
 
-  /** Actions matching `where`, newest first, with everything recorded with them. */
+  /**
+   * Actions matching `where`, newest first, with everything recorded with them — the operators
+   * withheld from `viewerId` where the action is on them (`withheldFor`).
+   */
   async actions(
     executor: Executor,
     where: SQL | undefined,
+    viewerId: string,
     limit?: number,
   ): Promise<AdminModerationAction[]> {
     const { moderationActions, profileItemRemovals, postComments, reports } = schema;
@@ -667,30 +713,68 @@ export class ModerationReadsService {
       .where(where)
       .orderBy(desc(moderationActions.createdAt), desc(moderationActions.id));
     const rows = await (limit === undefined ? query : query.limit(limit));
-    return rows.map((row) => ({
-      id: row.id,
-      type: row.type as ModerationActionType,
-      user: row.user,
-      subject:
-        row.postId !== null
-          ? { type: 'post', postId: row.postId }
-          : row.commentId !== null
-            ? { type: 'comment', commentId: row.commentId, postId: row.commentPostId! }
-            : null,
-      reason: { code: row.reason, note: row.note },
-      createdBy: { id: row.createdById, nickname: row.createdByNickname },
-      createdAt: row.createdAt.toISOString(),
-      endsAt: row.endsAt?.toISOString() ?? null,
-      cancelledAt: row.cancelledAt?.toISOString() ?? null,
-      cancelledBy:
-        row.cancelledById === null
-          ? null
-          : { id: row.cancelledById, nickname: row.cancelledByNickname ?? '' },
-      cancelReason: row.cancelReason,
-      removed: removedOf(row),
-      reportCount: row.reportCount,
-    }));
+    return rows.map((row) => {
+      const withheld = withheldFor(viewerId, row.user.id);
+      return {
+        id: row.id,
+        type: row.type as ModerationActionType,
+        user: row.user,
+        subject:
+          row.postId !== null
+            ? { type: 'post', postId: row.postId }
+            : row.commentId !== null
+              ? { type: 'comment', commentId: row.commentId, postId: row.commentPostId! }
+              : null,
+        reason: { code: row.reason, note: row.note },
+        createdBy: withheld ? null : { id: row.createdById, nickname: row.createdByNickname },
+        createdAt: row.createdAt.toISOString(),
+        endsAt: row.endsAt?.toISOString() ?? null,
+        cancelledAt: row.cancelledAt?.toISOString() ?? null,
+        cancelledBy:
+          withheld || row.cancelledById === null
+            ? null
+            : { id: row.cancelledById, nickname: row.cancelledByNickname ?? '' },
+        cancelReason: row.cancelReason,
+        removed: removedOf(row),
+        reportCount: row.reportCount,
+        aboutViewer: withheld,
+      };
+    });
   }
+}
+
+/**
+ * Whether a record about `memberId` — a report on their item or profile, an action on them — is
+ * read by that member as an admin: then who reported, what the reporter wrote and which operators
+ * processed, acted and cancelled are withheld (owner decision 2026-10-21, ADR-0081).
+ */
+export function withheldFor(viewerId: string, memberId: string): boolean {
+  return viewerId === memberId;
+}
+
+/** A report as `viewerId` reads it on the admin screens. */
+function adminReportOf(
+  row: Awaited<ReturnType<ModerationReadsService['reportRows']>>[number],
+  viewerId: string,
+): AdminReport {
+  const withheld = withheldFor(viewerId, row.reportedUserId);
+  return {
+    id: row.id,
+    target: targetOf(row),
+    reporter: withheld ? null : row.reporter,
+    reason: row.reason,
+    description: withheld ? null : row.description,
+    createdAt: row.createdAt.toISOString(),
+    status: row.status,
+    resolvedAt: row.resolvedAt?.toISOString() ?? null,
+    resolvedBy:
+      withheld || row.resolvedById === null
+        ? null
+        : { id: row.resolvedById, nickname: row.resolvedByNickname ?? '' },
+    actionId: row.actionId,
+    dismissalReason: row.dismissalReason,
+    aboutViewer: withheld,
+  };
 }
 
 /** A report's target, for operators. */
@@ -723,10 +807,6 @@ function removedOf(row: {
     return { item: 'image', imageUrl: adminMediaPath(row.removedImageId) };
   }
   return null;
-}
-
-function reporterCountOf(reports: readonly AdminReport[]): number {
-  return new Set(reports.map((report) => report.reporter.id)).size;
 }
 
 /** The queue's cursor: the sort time and the group key (`<millis>_<type>:<key>`). */

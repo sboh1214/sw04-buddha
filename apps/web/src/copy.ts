@@ -61,9 +61,11 @@ export const copy = {
   errNicknameFormat: '닉네임은 2~20자의 한글·영문·숫자·밑줄(_)만 쓸 수 있습니다.',
   // 닉네임 규칙(#58, ADR-0069 결정 1 #57-6). 대소문자를 구분하지 않고 겹치는 닉네임과, 다른 계정이 바꾸거나
   // 탈퇴로 비운 지 30일이 안 된 닉네임은 같은 답이다 — 어느 쪽인지 말하면 누가 최근에 닉네임을 바꿨는지
-  // 알려 주게 된다(#37-3). 30은 NICKNAME_HOLD_DAYS, 간격의 30은 NICKNAME_CHANGE_INTERVAL_DAYS, 예약어 목록은
+  // 알려 주게 된다(#37-3). 운영자가 강제로 바꾼 옛 닉네임은 그 회원 자신에게서도 30일 보류되므로(#50, 오너 결정
+  // 2026-10-21 답 4(나), ADR-0081 7-27) 그 회원도 이 답을 받는다 — 그래서 누가 쓰던 것인지 말하지 않는다.
+  // 30은 NICKNAME_HOLD_DAYS, 간격의 30은 NICKNAME_CHANGE_INTERVAL_DAYS, 예약어 목록은
   // NICKNAME_RESERVED_WORDS와 같아야 한다(lib/nickname.test.ts가 확인한다).
-  errNicknameTaken: '이미 사용 중이거나, 다른 회원이 쓰다가 30일이 지나지 않은 닉네임입니다.',
+  errNicknameTaken: '이미 사용 중이거나 최근 30일 안에 쓰인 닉네임이라 지금은 쓸 수 없습니다.',
   // 온보딩의 닉네임 단계와 MY 설정이 같이 보인다. MY 설정에는 그대로 쓸 자동 닉네임이 남아 있지 않을 수 있어
   // 규칙만 말한다(자동 닉네임을 그대로 써도 된다는 것은 닉네임 단계의 안내 nicknameStepIntro가 말한다).
   errNicknameAutoPrefix:
@@ -1290,6 +1292,15 @@ export const copy = {
   // 진행 중인 제재의 안내 띠(결정 4 #50): MY 요약과 글쓰기 화면. 제재(작성 제한 #185·계정 제한 #139)가
   // 생기면 보인다 — #50의 조치(숨김·경고·프로필 항목)는 제재가 아니다(#45-11 경고는 기록과 본인 안내만).
   sanctionInForce: '진행 중인 제재가 있습니다.',
+  // 경고의 안내 띠(오너 결정 2026-10-21): 경고한 때부터 이의 기한 14일 동안 MY 요약에만 보이고(글쓰기
+  // 화면은 제한만), 조치·신고 내역으로 잇는다. 취소된 경고에는 없다.
+  moderationWarningReceived: '경고를 받았습니다.',
+  // 운영자에게만 보이는 공개 화면의 링크(오너 결정 2026-10-21): 글·댓글·대댓글·프로필에서 그 대상의
+  // 관리자 운영 화면으로 간다(신고 없는 조치의 입구). 링크 글자는 '운영', 화면 낭독기는 무엇의 화면인지 듣는다.
+  operatorModerationLink: '운영',
+  operatorModerationPostLabel: '이 글의 운영 화면',
+  operatorModerationCommentLabel: '이 댓글의 운영 화면',
+  operatorModerationProfileLabel: '이 회원의 운영 화면',
 
   // --- admin: 신고·조치 (#50, ADR-0081) ---
   // 신고 목록(대상마다 묶음)과 처리, 신고 없이 하는 조치와 취소(결정 4 #50). 운영자는 위반 정도에 맞춰
@@ -1355,6 +1366,11 @@ export const copy = {
   adminModerationNone: '없음',
   adminModerationOwnNotice:
     '내 글·댓글이나 내 프로필입니다. 이 대상의 신고 처리와 조치는 다른 운영자가 합니다.',
+  // 운영자 자신에 관한 기록(오너 결정 2026-10-21): 신고자·신고 설명·처리하거나 조치·취소한 운영자는 그
+  // 운영자에게도 보이지 않는다. 사유·시각·조치 내용은 보인다.
+  adminModerationWithheldReport:
+    '내게 들어온 신고라 신고자와 설명, 처리한 운영자는 보이지 않습니다.',
+  adminModerationWithheldAction: '내가 받은 조치라 조치하거나 취소한 운영자는 보이지 않습니다.',
   adminModerationOpenPublic: '공개 화면에서 보기',
   adminModerationOpenMember: '회원의 신고·조치 보기',
   adminModerationHidePost: '글 숨기기',
@@ -1381,6 +1397,10 @@ export const copy = {
   adminModerationImageRemoveTitle: '프로필 이미지를 삭제합니다',
   adminModerationProfileItemBody:
     '지운 값은 보존기간 동안 운영자만 보게 남고 되살리지 않습니다. 이 프로필에 처리를 기다리는 신고는 모두 조치함으로 닫힙니다.',
+  // 닉네임 강제 변경(오너 결정 2026-10-21): 옛 닉네임은 그 회원에게도 30일 보류(NICKNAME_HOLD_DAYS), 회원의
+  // 30일 변경 간격은 없어져 곧바로 새 닉네임을 고르고 그때부터 다시 30일이다.
+  adminModerationNicknameResetNote:
+    '바꾸기 전 닉네임은 30일 동안 이 회원을 포함해 아무도 쓸 수 없습니다. 회원은 기다리지 않고 새 닉네임을 고를 수 있습니다.',
   adminModerationDismissTitle: '신고를 기각합니다',
   adminModerationDismissBody:
     '아래 신고를 조치 없이 닫습니다. 신고한 회원에게는 기각으로 보입니다. 그 사이에 들어온 신고는 그대로 남습니다.',

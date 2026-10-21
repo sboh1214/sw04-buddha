@@ -130,7 +130,10 @@ export const moderationActions = pgTable(
  * - `reporter_id`, `reporter_phone_hash`: who reported — the account and the keyed hash of its
  *   verified number (ADR-0071) when it reported: the same person is the same number (decision 7),
  *   so a member who withdrew and came back on the number keeps their pending reports and their
- *   count of the day. Never the member reported (the CHECK), and never shown to them (#45-13).
+ *   count of the day. An operator's change of the member's number moves the hash of their pending
+ *   reports and those of the last 24 hours to the new number (docs/OPERATIONS.md, owner decision
+ *   2026-10-21, ADR-0081), so the same person follows the number. Never the member reported (the
+ *   CHECK), and never shown to them (#45-13).
  * - `reason`, `description`: one of the eight reasons (#50 «하나»), and the member's text —
  *   required with '기타' (#45-10).
  * - `status`, `resolved_at`, `resolved_by`: pending until an operator processes it, once —
@@ -140,7 +143,9 @@ export const moderationActions = pgTable(
  *
  * One pending report per account and target (the unique index; ADR-0069 decision 7: «처리 중일 때만
  * 막는다»), and the API refuses the same of a withdrawn account on the same number. Only the
- * processing ever changes a row, once (trigger `reports_keep_record`, migration 0038). DELETE
+ * processing ever changes a row, once, and the number change's hash alone (trigger
+ * `reports_keep_record`, migration 0038: only to the hash and for the reports that change's
+ * transaction names, so no write of the API moves it). DELETE
  * stays for #184 (#57-18: kept for the retention period; a pending one until it is processed,
  * decision 7). Nothing public ever reads this table (PRIVATE_DATA `reports`).
  */

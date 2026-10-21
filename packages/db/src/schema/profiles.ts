@@ -57,7 +57,9 @@ export const profiles = pgTable(
     nicknameConfirmedAt: timestampTz(),
     /**
      * The last change of the nickname after the onboarding (`PATCH /me`), or null: the next one
-     * waits NICKNAME_CHANGE_INTERVAL_DAYS after it (#57-6).
+     * waits NICKNAME_CHANGE_INTERVAL_DAYS after it (#57-6). An operator's reset to an auto
+     * nickname clears it (#50, owner decision 2026-10-21, ADR-0081): the member then picks a new
+     * one at once, and that pick is the change the next interval counts from.
      */
     nicknameChangedAt: timestampTz(),
     /**

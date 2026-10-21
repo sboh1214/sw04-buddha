@@ -4,7 +4,9 @@
  * what it does when run as buddha_app the way the doc runs it — psql, BEGIN, the statements, then
  * the COMMIT or ROLLBACK the doc's result table gives for what they returned, with psql's variables
  * written in — and what it carries along: the account's likes, its own and those it inherited on
- * its old number, onto the new number (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076).
+ * its old number, onto the new number (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076),
+ * and the hash of its pending reports and those of the last 24 hours (#50, owner decision
+ * 2026-10-21, ADR-0081).
  * The account lookup and the pre-check of the new number that come before any confirmation SMS
  * (step 1), and the read of the old number (step 3), are run the same way. The keyed hashes of
  * the new and the old number and the confirmation code come from the API's phone-hash CLI there
@@ -12,6 +14,7 @@
  * for a hash (this package has no key). Skips the database part when TEST_* are unset.
  */
 import { readFileSync } from 'node:fs';
+import { REPORT_WINDOW_HOURS } from '@buddha/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { Client, type DatabaseError, type QueryResult } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -21,15 +24,23 @@ import {
   OPERATOR_NUMBER_PRECHECK_SQL,
   OPERATOR_PHONE_CHANGE_SQL,
 } from './phone-change.js';
-import { commentLikes, phoneVerifications, postLikes, startGrantNumbers } from './schema/index.js';
+import {
+  commentLikes,
+  phoneVerifications,
+  postLikes,
+  reports,
+  startGrantNumbers,
+} from './schema/index.js';
 import { cancelStartGrant, payStartGrant, recordStartGrant } from './start-grants.js';
 import {
   createComment,
   createCommentLike,
   createMarket,
+  createModerationAction,
   createPhoneVerification,
   createPost,
   createPostLike,
+  createReport,
   createStartGrant,
   createUser,
   randomPhone,
@@ -86,9 +97,9 @@ const statementsIn = (text: string): string[] => splitPsqlStatements(text);
 /**
  * The DO blocks' bodies, what psql writes no variable into: the refusal of a waiting grant's number
  * (owner decision 2026-10-19 3차, answer 4), then the move of the account's likes (2026-10-20 and
- * 2026-10-21, ADR-0076).
+ * 2026-10-21, ADR-0076), then the move of its reports' hash (2026-10-21, ADR-0081).
  */
-const [DO_BODY = '', LIKES_BODY = ''] = [
+const [DO_BODY = '', LIKES_BODY = '', REPORTS_BODY = ''] = [
   ...OPERATOR_PHONE_CHANGE_SQL.matchAll(/\$\$([\s\S]*?)\$\$/g),
 ].map((m) => m[1]!);
 
@@ -112,7 +123,7 @@ interface Held {
 }
 
 /** The change's statements in order: the three SET LOCAL lines hand the DO blocks their values. */
-const STATEMENTS = ['update', 'insert', 'set', 'set', 'set', 'do', 'do', 'select'] as const;
+const STATEMENTS = ['update', 'insert', 'set', 'set', 'set', 'do', 'do', 'do', 'select'] as const;
 
 /**
  * Which statement failed first and how: the constraint for the UPDATE and the INSERT, the message
@@ -292,6 +303,30 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(
       new Set([...LIKES_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])),
     ).toEqual(new Set(['phone_change.new_hash', 'phone_change.old_hash', 'phone_change.user_id']));
+    // The reports' block (owner decision 2026-10-21, ADR-0081) raises nothing either, and reads the
+    // two values — and the old number's hash only where it may be missing (`, true`: NULL when no
+    // SET LOCAL named it, which this procedure does not; #49's final one does, ADR-0076).
+    expect(REPORTS_BODY).toContain('UPDATE reports r SET reporter_phone_hash');
+    expect(REPORTS_BODY).toContain('ORDER BY r.id FOR UPDATE');
+    // The window is the one the API's daily limit counts in (REPORT_WINDOW_HOURS, ReportsService),
+    // in both the lock and the update: the reports a rule reads again are the ones that move.
+    expect(
+      REPORTS_BODY.split(`r.created_at > now() - interval '${String(REPORT_WINDOW_HOURS)} hours'`),
+    ).toHaveLength(3);
+    expect([...REPORTS_BODY.matchAll(/interval '/g)]).toHaveLength(2);
+    expect(REPORTS_BODY).not.toContain('RAISE');
+    expect(variablesOf(REPORTS_BODY)).toEqual([]);
+    expect(
+      new Set(
+        [...REPORTS_BODY.matchAll(/current_setting\('([\w.]+)'(, true)?\)/g)].map((m) => m[0]),
+      ),
+    ).toEqual(
+      new Set([
+        "current_setting('phone_change.new_hash')",
+        "current_setting('phone_change.user_id')",
+        "current_setting('phone_change.old_hash', true)",
+      ]),
+    );
     const statements = statementsIn(OPERATOR_PHONE_CHANGE_SQL);
     expect(statements.map((s) => /^\w+/.exec(s)![0].toLowerCase())).toEqual([...STATEMENTS]);
     expect(statements.slice(2, 5)).toEqual([
@@ -732,12 +767,30 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(OPERATIONS).not.toContain('`UPDATE`가 `old_phone`으로 막는다');
   });
 
+  it('says the change carries the account’s pending and recent reports to the new number, and the table reads the same', () => {
+    // Owner decision 2026-10-21 (ADR-0081): «the same person» of a report follows the number, so
+    // the reports its rules read — the pending ones and those of the last 24 hours — take the new
+    // number's hash, and nothing else of them changes.
+    const changes = sectionOf('**바뀌는 것.**', '**1. 요청 확인.**');
+    expect(changes).toContain(
+      '그 계정의 신고(`reports`, #50) 가운데 처리를 기다리는 것과 지난 24시간에 낸 것이 새 번호의 해시로 옮겨진다(오너 결정 2026-10-21, ADR-0081)',
+    );
+    expect(changes).toContain('옮기는 것은 번호의 해시뿐이다');
+    expect(changes).toContain('5단계의 셋째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
+    expect(changes).toContain('앱의 어떤 쓰기도 신고의 해시를 바꾸지 못한다');
+    // What the first commit said — the reports stay where they are, and it is asked — is gone.
+    expect(OPERATIONS).not.toContain('그 계정의 신고(`reports`, #50)는 옮기지 않는다');
+    expect(OPERATIONS).not.toContain('신고도 그래야 하는지는 오너에게 묻는 중이다');
+    expect(OPERATIONS).toContain('셋째 `DO`는 그 계정의 처리 전 신고와 지난 24시간의 신고를');
+    expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain('신고를 옮기는 셋째 `DO`를 빼면');
+  });
+
   it('is recorded on the status line of ADR-0071, which owns it, as eight statements now', () => {
     // ADR-0071 says step 5 is six statements (7-20, decision 8). ADR-0076 added the likes' DO
     // block, the old number's SET LOCAL line, the UPDATE's check of the old number and the first DO
-    // block's refusal of an `UPDATE 0`, and records
-    // so on ADR-0071's status line rather than rewriting it (ADR-0047 결과 1), so that a reader of
-    // ADR-0071 learns of the move of the likes and of the old number's two lines.
+    // block's refusal of an `UPDATE 0`, and ADR-0081 the reports' one, and each records so on
+    // ADR-0071's status line rather than rewriting it (ADR-0047 결과 1), so that a reader of
+    // ADR-0071 learns of the move of the likes and of the reports, and of the old number's two lines.
     const start = DECISIONS.indexOf('\n## ADR-0071 ');
     const adr = DECISIONS.slice(start, DECISIONS.indexOf('\n## ADR-0072 ', start));
     const status = /^- 상태: (.+)$/m.exec(adr)?.[1] ?? '';
@@ -752,6 +805,9 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(status).toContain(
       "표를 읽는 법에 '첫 줄이 `UPDATE 0`이면 뒤에 무엇이 찍히든 그 줄'이 더해졌다",
     );
+    expect(status).toContain('일부 대체됨(ADR-0081: 결정 7-20의 5단계 한 트랜잭션');
+    expect(status).toContain('셋째 `DO`');
+    expect(status).toContain("'일곱 문장'은 여덟 문장이다");
   });
 
   it('turns psql’s ON_ERROR_ROLLBACK off just before it, so a refusal aborts it all', () => {
@@ -1929,5 +1985,242 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     expect((await likeRows()).map((row) => [row.userId, row.phoneHash])).toEqual([
       [a.user.id, newHash],
     ]);
+  });
+
+  // ---- the reports (#50, owner decision 2026-10-21, ADR-0081) ----------------------------------
+
+  /** Every report as stored, by id, so a test sees that only the hash moved. */
+  async function reportRows() {
+    const rows = await t.db.select().from(reports);
+    return rows.sort((x, y) => x.id.localeCompare(y.id));
+  }
+
+  /**
+   * What a group of reports needs: an author whose post the reports are about, and an operator to
+   * have processed some of them.
+   */
+  async function reportFixture() {
+    const { user: author } = await createUser(t.db);
+    const { user: admin } = await createUser(t.db);
+    const market = await createMarket(t.db);
+    const post = async () => createPost(t.db, { marketId: market.id, authorId: author.id });
+    return { author, admin, post };
+  }
+
+  it('moves the hash of the account’s pending reports and those of the last 24 hours to the new number, and nothing else of them', async () => {
+    const { author, admin, post } = await reportFixture();
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const hour = 60 * 60 * 1_000;
+    const daysAgo = (days: number) => new Date(Date.now() - days * 24 * hour);
+    // Pending three days already: the duplicate rule reads it.
+    const waiting = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+      createdAt: daysAgo(3),
+    });
+    // Dismissed, sent two hours ago: the 24-hour count reads it.
+    const recent = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+      createdAt: new Date(Date.now() - 2 * hour),
+      status: 'dismissed',
+      resolvedBy: admin.id,
+      dismissalReason: '위반 아님',
+    });
+    // Actioned, sent three days ago: no rule reads it again, so it keeps the hash it was sent with.
+    const target = await post();
+    const action = await createModerationAction(t.db, {
+      userId: author.id,
+      createdBy: admin.id,
+      postId: target.id,
+    });
+    const settled = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: target.id,
+      createdAt: daysAgo(3),
+      status: 'actioned',
+      resolvedBy: admin.id,
+      actionId: action.id,
+    });
+    // Processed, either side of the 24 hours: sent 23 hours ago it is moved (the count reads it),
+    // sent 26 hours ago it keeps its hash — a wider window would move it against the owner's
+    // «처리 전 신고와 지난 24시간 신고».
+    const inside = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+      createdAt: new Date(Date.now() - 23 * hour),
+      status: 'dismissed',
+      resolvedBy: admin.id,
+      dismissalReason: '위반 아님',
+    });
+    const outside = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+      createdAt: new Date(Date.now() - 26 * hour),
+      status: 'dismissed',
+      resolvedBy: admin.id,
+      dismissalReason: '위반 아님',
+    });
+    // The account's, under a number it held before (an older change): still the account's.
+    const older = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: randomPhoneHash(),
+      reportedUserId: author.id,
+      createdAt: daysAgo(1.5),
+    });
+    // Others': a live account's, and a withdrawn account's under the old number — inherited by A,
+    // and kept there: this procedure names no old number (ADR-0081 결과 5).
+    const other = await liker(randomPhoneHash());
+    const othersReport = await createReport(t.db, {
+      reporterId: other.user.id,
+      reporterPhoneHash: other.phoneHash,
+      reportedUserId: author.id,
+    });
+    const { user: withdrawn } = await createUser(t.db);
+    const inherited = await createReport(t.db, {
+      reporterId: withdrawn.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+    });
+    const before = await reportRows();
+
+    const vars = { user_id: a.user.id, new_phone: randomPhone(), new_hash: newHash };
+    // The reports give the result table nothing to read: the same row, the same COMMIT.
+    expect(await change(vars)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    const moved = new Set([waiting.id, recent.id, inside.id, older.id]);
+    const expected = before.map((row) =>
+      moved.has(row.id) ? { ...row, reporterPhoneHash: newHash } : row,
+    );
+    // The settled reports, the other account's and the inherited one are among those left as they
+    // were.
+    expect(
+      expected
+        .filter((row) => !moved.has(row.id))
+        .map((row) => row.id)
+        .sort(),
+    ).toEqual([settled.id, outside.id, othersReport.id, inherited.id].sort());
+    expect(await reportRows()).toEqual(expected);
+    // Run again (a retried session): nothing more moves.
+    expect(await change(vars)).toMatchObject({ updated: 1, next: 'COMMIT' });
+    expect(await reportRows()).toEqual(expected);
+  });
+
+  it('moves no report when the change is refused', async () => {
+    const { author, post } = await reportFixture();
+    const oldHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+    });
+    const before = await reportRows();
+    const { user: other } = await createUser(t.db);
+    const { phone: taken } = await createPhoneVerification(t.db, { userId: other.id });
+    expect(
+      await change({ user_id: a.user.id, new_phone: taken, new_hash: randomPhoneHash() }),
+    ).toEqual(REFUSED_VERIFIED);
+    const { n, phone } = await waitingHolder();
+    expect(await change({ user_id: a.user.id, new_phone: phone, new_hash: n })).toEqual(
+      REFUSED_NO_GRANT,
+    );
+    expect(await reportRows()).toEqual(before);
+  });
+
+  it('moves a report the account committed while the change waited on its record', async () => {
+    // ReportsService holds the reporter's 본인확인 row FOR KEY SHARE and writes the report under
+    // the hash of the number it read: the change's UPDATE waits for it, and the reports' block, a
+    // later statement, sees the report and moves it.
+    const { author, post } = await reportFixture();
+    const target = await post();
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const holder = await t.db.$client.connect();
+    let changed;
+    let committed = false;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM phone_verifications WHERE user_id = $1 FOR KEY SHARE', [
+        a.user.id,
+      ]);
+      await holder.query(
+        `INSERT INTO reports (target_type, post_id, reported_user_id, reporter_id,
+           reporter_phone_hash, reason) VALUES ('post', $1, $2, $3, $4, 'spam')`,
+        [target.id, author.id, a.user.id, oldHash],
+      );
+      changed = change({ user_id: a.user.id, new_phone: randomPhone(), new_hash: newHash });
+      expect(await psqlWaits()).toBe(true);
+      await holder.query('COMMIT');
+      committed = true;
+    } finally {
+      if (!committed) await holder.query('ROLLBACK');
+      holder.release();
+    }
+    expect(await changed).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    expect((await reportRows()).map((row) => [row.reporterId, row.reporterPhoneHash])).toEqual([
+      [a.user.id, newHash],
+    ]);
+  });
+
+  it('moves the reports inherited on the old number too once the transaction names that number’s hash', async () => {
+    // #49's final procedure names the old number's hash (`phone_change.old_hash`, beside its check
+    // that the account holds that number, ADR-0076); the reports' block and the keep-record trigger
+    // then take the reports of a withdrawn account on it as the account's, as the likes are taken
+    // (ADR-0081 결과 5). Here the line is written in after the two SET LOCAL lines.
+    const { author, post } = await reportFixture();
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const { user: withdrawn } = await createUser(t.db);
+    const inherited = await createReport(t.db, {
+      reporterId: withdrawn.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+    });
+    // A live account's report under the old number (it held that number before an operator moved
+    // it): that account's, never A's.
+    const live = await liker(randomPhoneHash());
+    const livesReport = await createReport(t.db, {
+      reporterId: live.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+    });
+    const statements = statementsIn(
+      withVariables(OPERATOR_PHONE_CHANGE_SQL, {
+        user_id: a.user.id,
+        new_phone: randomPhone(),
+        new_hash: newHash,
+      }),
+    );
+    statements.splice(4, 0, `SET LOCAL phone_change.old_hash = '${oldHash}'`);
+    const client = new Client({ connectionString: testDbUrls()!.appUrl });
+    await client.connect();
+    try {
+      await client.query('BEGIN');
+      for (const statement of statements) await client.query(statement);
+      await client.query('COMMIT');
+    } finally {
+      await client.end();
+    }
+    const hashes = new Map((await reportRows()).map((row) => [row.id, row.reporterPhoneHash]));
+    expect(hashes.get(inherited.id)).toBe(newHash);
+    expect(hashes.get(livesReport.id)).toBe(oldHash);
   });
 });

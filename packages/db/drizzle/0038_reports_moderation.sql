@@ -99,18 +99,50 @@ CREATE INDEX "reports_action_id_idx" ON "reports" USING btree ("action_id") WHER
 -- sent — the target, the reporter, the reason, the description, the intake time — never changes,
 -- and the processing is written once, pending to actioned or dismissed: the processing time stays
 -- the one #95 counts from. DELETE stays for #184 (the retention period, #57-18).
+--
+-- One change is taken besides, and only from the operator's change of a member's number
+-- (docs/OPERATIONS.md, OPERATOR_PHONE_CHANGE_SQL — owner decision 2026-10-21, ADR-0081): the
+-- person's reports go over to the new number's keyed hash, so «the same person» of decision 7
+-- follows the number as their likes do (ADR-0076). Then `reporter_phone_hash` alone changes —
+-- nothing else of the row, a processed one included — to the hash the change's transaction names
+-- (`phone_change.new_hash`, its SET LOCAL), and only for a report of the account it changes
+-- (`phone_change.user_id`) or, once that transaction names the old number's hash too
+-- (`phone_change.old_hash`, #49's old-number check), of a withdrawn account on that number, which
+-- the account inherited. The API sets none of those, so every write of the app leaves the hash as it
+-- was sent; `IS NOT TRUE` reads a setting not there (NULL) as no.
 CREATE FUNCTION reports_keep_record() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
+  IF NEW.reporter_phone_hash IS DISTINCT FROM OLD.reporter_phone_hash THEN
+    IF (NEW.reporter_phone_hash = current_setting('phone_change.new_hash', true)
+        AND (OLD.reporter_id = current_setting('phone_change.user_id', true)
+          OR (OLD.reporter_phone_hash = current_setting('phone_change.old_hash', true)
+            AND NOT EXISTS (SELECT 1 FROM phone_verifications pv
+              WHERE pv.user_id = OLD.reporter_id)))) IS NOT TRUE THEN
+      RAISE EXCEPTION 'report % keeps the number it was sent with, but for the operator''s number change', OLD.id
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    IF (NEW.id, NEW.target_type, NEW.post_id, NEW.comment_id, NEW.reported_user_id,
+        NEW.reporter_id, NEW.reason, NEW.description, NEW.created_at, NEW.status,
+        NEW.resolved_at, NEW.resolved_by, NEW.action_id, NEW.dismissal_reason)
+       IS DISTINCT FROM
+       (OLD.id, OLD.target_type, OLD.post_id, OLD.comment_id, OLD.reported_user_id,
+        OLD.reporter_id, OLD.reason, OLD.description, OLD.created_at, OLD.status,
+        OLD.resolved_at, OLD.resolved_by, OLD.action_id, OLD.dismissal_reason) THEN
+      RAISE EXCEPTION 'report % changes its number''s hash alone', OLD.id
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
   IF OLD.status <> 'pending' THEN
     RAISE EXCEPTION 'report % was processed (%) and cannot change', OLD.id, OLD.status
       USING ERRCODE = 'integrity_constraint_violation';
   END IF;
   IF (NEW.id, NEW.target_type, NEW.post_id, NEW.comment_id, NEW.reported_user_id, NEW.reporter_id,
-      NEW.reporter_phone_hash, NEW.reason, NEW.description, NEW.created_at)
+      NEW.reason, NEW.description, NEW.created_at)
      IS DISTINCT FROM
      (OLD.id, OLD.target_type, OLD.post_id, OLD.comment_id, OLD.reported_user_id, OLD.reporter_id,
-      OLD.reporter_phone_hash, OLD.reason, OLD.description, OLD.created_at) THEN
+      OLD.reason, OLD.description, OLD.created_at) THEN
     RAISE EXCEPTION 'report % cannot change what was reported', OLD.id
       USING ERRCODE = 'integrity_constraint_violation';
   END IF;

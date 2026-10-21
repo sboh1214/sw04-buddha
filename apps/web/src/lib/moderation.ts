@@ -39,6 +39,7 @@ import {
   validationMessage,
 } from './api';
 import { reportReasonLabel } from './authored';
+import { formatKst } from './datetime';
 import { formatWait } from './phone-verification';
 import { postFirstLine, postPath } from './posts';
 import { profilePath } from './profile';
@@ -101,6 +102,14 @@ export function adminUserModerationPath(userId: string): string {
   return `/admin/moderation/users/${encodeURIComponent(userId)}`;
 }
 
+/**
+ * A member's moderation page found by the public id of their profile's address — where a public
+ * profile's '운영' link goes (owner decision 2026-10-21): the public screens name no account id.
+ */
+export function adminProfileModerationPath(publicId: string): string {
+  return `/admin/moderation/profiles/${encodeURIComponent(publicId.toLowerCase())}`;
+}
+
 /** The moderation page of what a report or an action is about. */
 export function adminTargetPath(target: ModerationTarget): string {
   switch (target.type) {
@@ -139,6 +148,8 @@ export const adminCommentModerationKey = (commentId: string) =>
   [...ADMIN_MODERATION_KEY, 'comment', commentId.toLowerCase()] as const;
 export const adminUserModerationKey = (userId: string) =>
   [...ADMIN_MODERATION_KEY, 'user', userId] as const;
+export const adminProfileModerationKey = (publicId: string) =>
+  [...ADMIN_MODERATION_KEY, 'profile', publicId.toLowerCase()] as const;
 
 /** One page of a cursor list as `useInfiniteQuery` holds it. */
 export interface ModerationPage<Row> {
@@ -278,6 +289,24 @@ export function reportDialogTitle(type: ReportTargetType): string {
     case 'profile':
       return copy.reportProfileTitle;
   }
+}
+
+/**
+ * The accessible name of a card's 신고 (`CardReportButton`): the item it reports, then the
+ * button's own word — as every repeated per-item button here is named (ADR-0080 7-19's
+ * `hiddenDeleteName`, market-search.tsx's 삭제, market-picker.tsx's 고르기). A list holds up to
+ * twenty cards, each with its 신고, and '신고' alone would read alike for each in a screen reader's
+ * list of buttons and give a spoken command nothing to tell them apart. A post is named as its
+ * card's heading names it — its title, or the first line of its text when it has none
+ * (post-card.tsx) — and a 댓글 or 대댓글 by the first line of its own text: its post's would name
+ * every comment under one post alike. The words on screen stay '신고', which the name ends with.
+ */
+export function reportButtonName(
+  item: { type: 'post'; title: string | null; excerpt: string } | { type: 'comment'; body: string },
+): string {
+  return item.type === 'post'
+    ? `${item.title ?? postFirstLine(item.excerpt)} ${copy.reportAction}`
+    : `${postFirstLine(item.body)} ${copy.reportAction}`;
 }
 
 /**
@@ -472,6 +501,31 @@ export function sanctionInForce<A extends Pick<MyModerationAction, 'endsAt' | 'c
   return found;
 }
 
+/**
+ * The warning the MY summary's banner speaks of (owner decision 2026-10-21: «경고 → 이의 기한 14일
+ * 동안 MY 요약에만 안내 띠»), or null: the newest warning not cancelled whose appeal window —
+ * APPEAL_WINDOW_DAYS from it (`appealDeadlineOf`) — is still open at `now`. A cancelled one is
+ * nothing to tell any more. Only the summary shows it: a warning restricts nothing (#45-11), so the
+ * write page's banner stays for restrictions (`sanctionInForce`).
+ */
+export function warningInWindow<
+  A extends Pick<MyModerationAction, 'type' | 'createdAt' | 'cancelledAt'>,
+>(
+  actions: readonly A[],
+  // Read in render through this default, as `sanctionInForce`'s is: never on the server.
+  now: number = Date.now(),
+): A | null {
+  let found: A | null = null;
+  for (const action of actions) {
+    if (action.type !== 'warning' || action.cancelledAt !== null) continue;
+    if (!(appealDeadlineOf(action.createdAt).getTime() > now)) continue;
+    if (found === null || Date.parse(action.createdAt) > Date.parse(found.createdAt)) {
+      found = action;
+    }
+  }
+  return found;
+}
+
 /** Every row of the pages held, in order. */
 export function moderationRows<Row>(
   pages: readonly { items: readonly Row[] }[] | undefined,
@@ -492,6 +546,28 @@ export function concernsOperator(
   operatorId: string | undefined,
 ): boolean | undefined {
   return operatorId === undefined ? undefined : userId === operatorId;
+}
+
+/**
+ * Who did something and when, as an operator's page says it: '닉네임 · 시각' — the time alone on a
+ * record about the admin reading it (`aboutViewer`), whose operators are withheld from them (owner
+ * decision 2026-10-21), and '삭제된 계정' for an operator's account that is gone.
+ */
+export function operatorLineText(
+  actor: { nickname: string } | null,
+  at: string,
+  aboutViewer: boolean,
+): string {
+  if (aboutViewer) return formatKst(at);
+  return `${actor?.nickname ?? copy.adminAccountsTargetGone} · ${formatKst(at)}`;
+}
+
+/**
+ * Whether the reader is an operator, by the role `GET /me` answers: the public screens' '운영'
+ * links show to them alone (owner decision 2026-10-21). Unknown (undefined) is no.
+ */
+export function isOperator(role: string | undefined): boolean {
+  return role === 'admin';
 }
 
 /** The pending reports among `reports`: what the page offers 신고 기각 for. */

@@ -13,6 +13,8 @@ import { timestampTz } from './columns.js';
  * `user_id` names the account that gave it up, which may take it back: it is not another account.
  * A withdrawal cuts that link (#57-18: «계정과의 연결을 끊은 채 재사용을 막는 기록으로만 30일
  * 남는다», `ON DELETE SET NULL` and #140's own UPDATE), and a row with none holds it from everybody.
+ * An operator's reset of a nickname to an auto nickname writes one with none from the start (#50,
+ * owner decision 2026-10-21, ADR-0081): the nickname taken away is held from the member too.
  * Former nicknames are never shown (#37-3, PRIVATE_DATA `former-nickname`). A row past the hold
  * no longer counts; removing it is #184's retention work.
  */
