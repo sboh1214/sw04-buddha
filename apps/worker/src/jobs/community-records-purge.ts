@@ -28,7 +28,8 @@ export interface CommunityRecordsPurgeOutcome {
  * COMMUNITY_RECORDS_PURGE_MARGIN_SECONDS past it. A window counts the records newer than
  * `now - window`, so a record past it never counts again, and the margin keeps every record a
  * count running meanwhile may still include. They are kept no longer than that. The review list
- * (`link_flags`) is not touched (ADR-0083 7-20: kept with no period, a question for the owner).
+ * (`link_flags`) is not this job's: it is #57-18 retention data, which #184 deletes once its period
+ * ends (owner decision 2026-10-22 answer 6, ADR-0083 7-20).
  * Hourly (JOB_SCHEDULES), two short statements: an hour's worth of records at a time once it runs.
  */
 export async function purgeCommunityRecords(db: Db): Promise<CommunityRecordsPurgeOutcome> {

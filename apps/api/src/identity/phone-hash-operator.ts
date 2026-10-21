@@ -13,7 +13,8 @@ import { phoneHash } from './phone-hash.js';
  * the operator texts to the new number before changing it (`--code`, ADR-0071 7-29), and hashes
  * the account's old number for the same change (`--psql-old`): the likes the account inherited
  * from a withdrawn account on that number go with it to the new one (#49, owner decision
- * 2026-10-21, ADR-0076).
+ * 2026-10-21, ADR-0076), and so do the write-limit and link records of the last 24 hours under
+ * that number (#187, owner decision 2026-10-22, ADR-0083).
  */
 
 export const PHONE_HASH_CLI_USAGE =
@@ -27,8 +28,8 @@ export const PHONE_HASH_CLI_USAGE =
  *   and the number recorded cannot differ;
  * - `psql-old`: the same for the account's number before the change — `\set old_phone` and
  *   `\set old_hash` from the one typed number, so the number the change's UPDATE checks the
- *   account still holds and the hash the likes it inherited carry cannot differ (owner decision
- *   2026-10-21, ADR-0076).
+ *   account still holds and the hash the likes it inherited and the records it moves carry cannot
+ *   differ (owner decisions 2026-10-21, ADR-0076, and 2026-10-22, ADR-0083).
  */
 export type PhoneHashCliFormat = 'hash' | 'psql' | 'psql-old';
 

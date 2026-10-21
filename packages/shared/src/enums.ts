@@ -342,6 +342,13 @@ export const ADMIN_ACTION_TYPES = [
    * payload as a shortening, `endsAt` being the lift's own time.
    */
   'moderation_restriction_lift',
+  /**
+   * An operator marked a group of the repeated-link review list '확인함' (#187, owner decision
+   * 2026-10-22, ADR-0083): target `link` / the normalised url, payload `LinkFlagReviewPayload`
+   * (rule, outcome, note, how many entries, `through`). Written in the transaction that sets those
+   * entries' `link_flags.review_action_id` to this row, and only when it set at least one.
+   */
+  'link_flag_review',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);

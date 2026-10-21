@@ -1,8 +1,9 @@
 /**
  * The operator's psql procedures (docs/OPERATIONS.md), run the way the doc has them run, for the
  * tests that need what they do: phone-change.test.ts runs and reads them statement by statement,
- * and the API's like tests (#49, ADR-0076) change a member's number with the real procedure to see
- * the likes go with it (`changePhoneAsOperator`).
+ * and the API's like tests (#49, ADR-0076) and write-limit tests (#187, ADR-0083) change a member's
+ * number with the real procedure to see the likes and the last day's records go with it
+ * (`changePhoneAsOperator`).
  */
 import type { Db } from '../client.js';
 import { OPERATOR_CURRENT_NUMBER_SQL, OPERATOR_PHONE_CHANGE_SQL } from '../phone-change.js';
@@ -45,7 +46,8 @@ export interface OperatorPhoneChangeInput {
   phone: string;
   /**
    * The keyed hash of a number, as the hash CLI prints it (the API's `PhoneHasher`): of the new
-   * number, and of the old one the account holds (owner decision 2026-10-21, ADR-0076).
+   * number, and of the old one the account holds (owner decisions 2026-10-21, ADR-0076, and
+   * 2026-10-22, ADR-0083).
    */
   hash: (phone: string) => string;
 }

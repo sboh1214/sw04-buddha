@@ -7,10 +7,11 @@
  * `new_phone` (its digits) and `new_hash` (the keyed hash of those digits, from the API's
  * phone-hash CLI, apps/api/src/identity/phone-hash-cli.ts — SQL cannot compute it without the
  * key), and `old_phone` and `old_hash`, the same for the number the account holds now, read with
- * OPERATOR_CURRENT_NUMBER_SQL and hashed by the same CLI (`--psql-old`, owner decision 2026-10-21,
- * ADR-0076 — step 4 below). The doc runs it only for a request that came from the account's
- * current email and passed sender authentication (the operator's own mail provider's verdict, the
- * topmost Authentication-Results line: SPF and DKIM both passing for the sender's domain, or DMARC
+ * OPERATOR_CURRENT_NUMBER_SQL and hashed by the same CLI (`--psql-old`, owner decisions 2026-10-21,
+ * ADR-0076 — step 4 below — and 2026-10-22, ADR-0083 — step 6). The doc runs it only for a
+ * request that came from the account's current email and passed sender authentication (the
+ * operator's own mail provider's verdict, the topmost Authentication-Results line: SPF and DKIM
+ * both passing for the sender's domain, or DMARC
  * passing), whose new number passed the pre-check before any SMS (OPERATOR_NUMBER_PRECHECK_SQL),
  * and whose member confirmed the number by sending back, from that email within 30 minutes, the
  * last code the operator texted to it — at most three codes per request (owner decisions
@@ -27,7 +28,8 @@
  *    the change committed: the old number is read and hashed again, ADR-0076 7-24). `UPDATE 0`
  *    only says so: the transaction goes on, and the statements after it run. Step 3's DO block
  *    refuses it before any of them is kept (below), so neither the INSERT nor a hash of another
- *    number moving likes in step 4 outlives it, a COMMIT typed after it included.
+ *    number moving likes in step 4 or records in step 6 outlives it, a COMMIT typed after it
+ *    included.
  *    `phone_verifications.phone` stays UNIQUE and digits only (its constraints — another
  *    account's verified number is a 23505 here), and `verified_at` keeps the member's own
  *    confirmation.
@@ -51,12 +53,12 @@
  *    column keeps it (`timestamptz(3)`), which another transaction's write would have to hit — the
  *    block raises (`refused: the account does not hold old_phone`). The transaction is aborted and
  *    a COMMIT answers ROLLBACK, as for every other refusal: nothing of the INSERT or of steps 4
- *    and 5 is kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for
+ *    to 6 is kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for
  *    an account with no grant, which step 2 has no row to refuse with (owner decision 2026-10-19
  *    3차, answer 4): it raises when the account has a 본인확인 record and a waiting grant of another
  *    account holds the new number. psql writes no variable into a dollar-quoted body, so the SET
- *    LOCAL lines hand it `user_id` and `new_hash` (and the likes' and the reports' blocks
- *    `old_hash` too) for this transaction only. It reads what is committed: a cancellation or
+ *    LOCAL lines hand it `user_id` and `new_hash` (and the likes', the reports' and the records'
+ *    blocks `old_hash` too) for this transaction only. It reads what is committed: a cancellation or
  *    payment of that grant still in flight is not waited for, and the change is refused until asked
  *    again (ADR-0071 7-26).
  * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한 번»
@@ -105,7 +107,24 @@
  *    flight holds its 본인확인 row FOR KEY SHARE (ReportsService), commits first and is moved, and a
  *    later one waits for the COMMIT and is sent under the new hash. Run again — the old number read
  *    again is the new one — it moves nothing.
- * 6. What now holds the new number: one row or none (the account has no grant yet). `this_account`
+ * 6. The last 24 hours of the number's write-limit and link records (#187, owner decision
+ *    2026-10-22, ADR-0083): the owner's limits and the repetition rules count per verified number
+ *    (ADR-0069 decision 7), so the `write_limit_events` and `link_uses` rows under `old_hash`
+ *    younger than the longest window (24 hours — WRITE_LIMITS' day, LINK_REPEAT_WINDOW_SECONDS)
+ *    go over to the new number's hash: the account's writes go on counting where they were, and
+ *    the old number's next holder starts with none. Every row under the old hash, whoever wrote
+ *    it — the records carry no account, and the ones a withdrawn account on the old number left
+ *    are the account's as well (the person the account inherited them from, as step 4 moves the
+ *    likes it inherited). Older rows stay to the worker's purge (they count for no one). Deleted
+ *    and inserted again with their kind, link, item and time (buddha_app has no UPDATE on them,
+ *    migration 0038). A fourth DO block with the SET LOCAL values; it answers `DO`. After step 1
+ *    as step 4 is: a counted write of the account in flight holds the 본인확인 row FOR KEY SHARE
+ *    (WriteLimitsService.lockWriter) and has committed by then, and a later one waits for the
+ *    COMMIT and counts under the new hash. Run again — the old number read again is the new one —
+ *    it moves nothing. Nothing goes on the review list here: where the moved uses and the ones the
+ *    new number held already make three items of a link, the account's next write of it puts them
+ *    all on (LinkReviewService.record, ADR-0083 7-10).
+ * 7. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
  *    grant. It has none (`has_grant` f): it then gets no start Coin on this number while that row
@@ -213,6 +232,22 @@ DO $$BEGIN
         OR (r.reporter_phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = r.reporter_id)));
 END$$;
+DO $$BEGIN
+  WITH moved AS (DELETE FROM write_limit_events
+      WHERE phone_hash = current_setting('phone_change.old_hash')
+        AND phone_hash <> current_setting('phone_change.new_hash')
+        AND created_at > now() - interval '24 hours'
+      RETURNING action, created_at)
+    INSERT INTO write_limit_events (phone_hash, action, created_at)
+      SELECT current_setting('phone_change.new_hash'), action, created_at FROM moved;
+  WITH moved AS (DELETE FROM link_uses
+      WHERE phone_hash = current_setting('phone_change.old_hash')
+        AND phone_hash <> current_setting('phone_change.new_hash')
+        AND used_at > now() - interval '24 hours'
+      RETURNING url, post_id, comment_id, used_at)
+    INSERT INTO link_uses (url, phone_hash, post_id, comment_id, used_at)
+      SELECT url, current_setting('phone_change.new_hash'), post_id, comment_id, used_at FROM moved;
+END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,
     EXISTS (SELECT 1 FROM start_grants o
       WHERE o.user_id = :'user_id' AND o.cancelled_at IS NULL) AS has_grant
@@ -235,10 +270,11 @@ export const OPERATOR_ACCOUNT_LOOKUP_SQL = `SELECT u.id, pv.user_id IS NOT NULL 
   WHERE u.email = lower(:'sender');`;
 
 /**
- * Step 3, after the member's reply and before step 5 (owner decision 2026-10-21, ADR-0076): the
- * number the account holds now — the old number — which the operator types into the hash CLI's
- * `--psql-old` for step 5's `old_phone` and `old_hash`. The change moves the likes the account
- * inherited from a withdrawn account on that number, and SQL cannot hash it without the key. Read
+ * Step 3, after the member's reply and before step 5 (owner decisions 2026-10-21, ADR-0076, and
+ * 2026-10-22, ADR-0083): the number the account holds now — the old number — which the operator
+ * types into the hash CLI's `--psql-old` for step 5's `old_phone` and `old_hash`. The change moves
+ * the likes the account inherited from a withdrawn account on that number and the last day's
+ * write-limit and link records under it, and SQL cannot hash it without the key. Read
  * only; `user_id` from the lookup. No row: no 본인확인 record (the lookup said `verified` f, or the
  * account withdrew since) — nothing to change. Read again for every run of step 5: after the
  * change it is the new number.

@@ -150,10 +150,44 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The repeated-link review list, newest first: each post or comment a rule caught (the same person put the link in 3 or more posts and comments within 24 hours, or 3 or more people did), the link, the rule and when, with the item as it is now */
+        /** The repeated-link review list grouped by link and rule (the same person put the link in 3 or more posts and comments within 24 hours, or 3 or more people did): `open`, the entries no operator has marked, newest group first; `reviewed`, one row per mark, newest first */
         get: operations["adminListLinkFlags"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/link-flags/items": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A review-list group's entries, newest first: those of the link and rule no operator has marked, or with `reviewId` those that mark covered — each with the item as it is now */
+        get: operations["adminListLinkFlagItems"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/link-flags/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark a review-list group '확인함' with what came of it (no_issue or actioned) and an optional note, recorded: its unmarked entries put on the list at or before `through` leave the default list */
+        post: operations["adminReviewLinkFlags"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1985,6 +2019,38 @@ export type components = {
                 /** Format: uuid */
                 postId: string;
             };
+            url: string;
+        };
+        AdminLinkFlagGroup: {
+            itemCount: number;
+            /** Format: date-time */
+            latestFlaggedAt: string;
+            /** @enum {string} */
+            reason: "same_account" | "many_accounts";
+            review: components["schemas"]["AdminLinkFlagReview"] | null;
+            url: string;
+        };
+        AdminLinkFlagReview: {
+            admin: {
+                nickname: string;
+                userId: string;
+            };
+            /** Format: uuid */
+            id: string;
+            note: string | null;
+            /** @enum {string} */
+            outcome: "no_issue" | "actioned";
+            /** Format: date-time */
+            reviewedAt: string;
+        };
+        AdminLinkFlagReviewBody: {
+            note?: string;
+            /** @enum {string} */
+            outcome: "no_issue" | "actioned";
+            /** @enum {string} */
+            reason: "same_account" | "many_accounts";
+            /** Format: date-time */
+            through: string;
             url: string;
         };
         AdminMarket: {
@@ -4405,9 +4471,82 @@ export interface operations {
     adminListLinkFlags: {
         parameters: {
             query?: {
-                /** @description Opaque; `meta.nextCursor` of the previous page. */
                 cursor?: string;
                 limit?: number;
+                status?: "open" | "reviewed";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminLinkFlagGroup"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListLinkFlagItems: {
+        parameters: {
+            query: {
+                cursor?: string;
+                limit?: number;
+                reason: "same_account" | "many_accounts";
+                reviewId?: string;
+                url: string;
             };
             header?: never;
             path?: never;
@@ -4446,6 +4585,85 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminReviewLinkFlags: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminLinkFlagReviewBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminLinkFlagGroup"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

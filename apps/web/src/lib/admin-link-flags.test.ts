@@ -1,22 +1,34 @@
 import {
+  LINK_CHECK_MAX,
   LINK_FLAG_REASONS,
+  LINK_FLAG_REVIEW_OUTCOMES,
   LINK_REPEAT_THRESHOLD,
   LINK_REPEAT_WINDOW_SECONDS,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
+  LINK_FLAG_NOTE_MAX_LENGTH,
   linkFlagFlaggedAt,
+  linkFlagGroupActionLabel,
+  linkFlagGroupCount,
+  linkFlagGroupKey,
+  linkFlagGroupLatest,
   linkFlagItemPath,
   linkFlagKindLabel,
+  linkFlagOutcomeLabel,
   linkFlagReasonLabel,
+  linkFlagReviewErrorMessage,
+  linkFlagReviewKeepsDialog,
+  linkFlagReviewedBy,
   linkFlagStates,
   linkFlagWrittenAt,
+  toLinkFlagReviewBody,
 } from './admin-link-flags';
-import { type AdminLinkFlag } from './api';
+import { type AdminLinkFlag, type AdminLinkFlagGroup, ApiError } from './api';
 import { postPath } from './posts';
 
-/** 반복 링크 검토 목록 (#187, ADR-0083) as the admin screen words it. */
+/** 반복 링크 검토 목록 (#187, ADR-0083; owner decision 2026-10-22) as the admin screen words it. */
 
 const POST = '0b7c9a1d-6f34-4e58-9b0a-2d1e5f8c7a46';
 const COMMENT = '6a1e2d3c-4b5a-4f69-8e7d-0c1b2a394857';
@@ -50,8 +62,21 @@ describe('the review list’s words', () => {
     for (const reason of LINK_FLAG_REASONS) {
       expect(linkFlagReasonLabel(reason)).toContain(String(LINK_REPEAT_THRESHOLD));
     }
-    // The screen's own explanation says both rules, the window, and what is not counted.
-    for (const words of ['24시간', '3개 이상', '3명 이상', '공식 출처', '운영자의 글', '그대로']) {
+    // The screen's own explanation says both rules, the window, and what is not counted — and
+    // (owner decision 2026-10-22) the grouping, the first 20 links, and the mark '확인함'.
+    expect(LINK_CHECK_MAX).toBe(20);
+    for (const words of [
+      '24시간',
+      '3개 이상',
+      '3명 이상',
+      '공식 출처',
+      '운영자의 글',
+      '그대로',
+      '같은 주소·규칙의 항목은 한 줄로 묶어',
+      `앞의 링크 ${String(LINK_CHECK_MAX)}개까지`,
+      '문제 없음·조치함',
+      '확인함',
+    ]) {
       expect(copy.adminLinkFlagsIntro).toContain(words);
     }
   });
@@ -88,5 +113,91 @@ describe('the review list’s words', () => {
     expect(linkFlagStates(flag({ hiddenAt: '2026-10-21T06:30:00.000Z' }).target)).toEqual([
       `${copy.adminLinkFlagHidden} 2026. 10. 21. 오후 3:30`,
     ]);
+  });
+});
+
+const group = (over: Partial<AdminLinkFlagGroup> = {}): AdminLinkFlagGroup => ({
+  url: 'https://example.com/a',
+  reason: 'many_accounts',
+  itemCount: 4,
+  latestFlaggedAt: '2026-10-21T06:00:00.000Z',
+  review: null,
+  ...over,
+});
+const REVIEW = {
+  id: '5d4c3b2a-1f0e-4d9c-8b7a-6f5e4d3c2b1a',
+  outcome: 'actioned' as const,
+  note: '숨김 처리',
+  reviewedAt: '2026-10-21T07:30:00.000Z',
+  admin: { userId: 'a1', nickname: '운영팀장' },
+};
+
+describe('the review list’s groups and marks (owner decision 2026-10-22)', () => {
+  it('counts a group’s entries and writes its latest time in Korean time', () => {
+    expect(linkFlagGroupCount(group())).toBe('항목 4개');
+    expect(linkFlagGroupLatest(group())).toBe('최근 탐지 2026. 10. 21. 오후 3:00');
+  });
+
+  it('keys a default-list row by its link and rule, a reviewed row by its mark', () => {
+    expect(linkFlagGroupKey(group())).toBe('many_accounts https://example.com/a');
+    expect(linkFlagGroupKey(group({ reason: 'same_account' }))).not.toBe(linkFlagGroupKey(group()));
+    expect(linkFlagGroupKey(group({ review: REVIEW }))).toBe(REVIEW.id);
+  });
+
+  it('names the two outcomes as the owner did, and who marked a group and when', () => {
+    expect(LINK_FLAG_REVIEW_OUTCOMES.map(linkFlagOutcomeLabel)).toEqual(['문제 없음', '조치함']);
+    expect(linkFlagReviewedBy(REVIEW)).toBe('확인 2026. 10. 21. 오후 4:30 · 운영자 운영팀장');
+  });
+
+  it('sends the row’s link, rule and latest time with the outcome, and the note only when written', () => {
+    expect(toLinkFlagReviewBody(group(), 'no_issue', '   ')).toEqual({
+      url: 'https://example.com/a',
+      reason: 'many_accounts',
+      outcome: 'no_issue',
+      through: '2026-10-21T06:00:00.000Z',
+    });
+    expect(toLinkFlagReviewBody(group(), 'actioned', '  숨김 처리 \n')).toMatchObject({
+      outcome: 'actioned',
+      note: '숨김 처리',
+    });
+    expect(LINK_FLAG_NOTE_MAX_LENGTH).toBe(500);
+  });
+
+  it('says a mark found nothing left to mark, and any other refusal as the common error', () => {
+    const gone = new ApiError(404, { code: 'NOT_FOUND', message: 'gone' });
+    expect(linkFlagReviewErrorMessage(gone)).toBe(copy.adminLinkFlagReviewGone);
+    expect(
+      linkFlagReviewErrorMessage(new ApiError(400, { code: 'VALIDATION_ERROR', message: 'x' })),
+    ).toBe(copy.errUnknown);
+    expect(linkFlagReviewErrorMessage(new Error('network'))).toBe(copy.errUnknown);
+  });
+
+  it('keeps the dialog, outcome and note, only when the request never came back', () => {
+    // Nothing was decided: the operator sends it again.
+    expect(linkFlagReviewKeepsDialog(new TypeError('Failed to fetch'))).toBe(true);
+    expect(linkFlagReviewKeepsDialog(new Error('network'))).toBe(true);
+    // An answer from the API closes it, and the lists are read again.
+    for (const answer of [
+      new ApiError(404, { code: 'NOT_FOUND', message: 'gone' }),
+      new ApiError(400, { code: 'VALIDATION_ERROR', message: 'x' }),
+      new ApiError(429, { code: 'RATE_LIMITED', message: 'slow down' }),
+      new ApiError(500, { code: 'INTERNAL', message: 'boom' }),
+      new ApiError(500, undefined),
+    ]) {
+      expect(linkFlagReviewKeepsDialog(answer)).toBe(false);
+    }
+  });
+
+  it('names a row’s buttons after its rule and link, then what they say', () => {
+    expect(linkFlagGroupActionLabel(group(), copy.adminLinkFlagShowItems)).toBe(
+      `${copy.adminLinkFlagManyAccounts} https://example.com/a ${copy.adminLinkFlagShowItems}`,
+    );
+    expect(
+      linkFlagGroupActionLabel(group({ reason: 'same_account' }), copy.adminLinkFlagReview),
+    ).toBe(`${copy.adminLinkFlagSameAccount} https://example.com/a ${copy.adminLinkFlagReview}`);
+    // Two rows of one link differ by their rule, two of one rule by their link.
+    expect(linkFlagGroupActionLabel(group({ url: 'https://example.com/b' }), 'x')).not.toBe(
+      linkFlagGroupActionLabel(group(), 'x'),
+    );
   });
 });

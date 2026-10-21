@@ -2,26 +2,42 @@
  * 반복 링크 탐지 (#187, ADR-0083; ADR-0069 decision 2 #45-15, decision 4 #187 rows, decision 7)
  * against the docker `test` profile, through the routes that write and the admin review list.
  * Pinned: the same person's link in a third post or comment within 24 hours, or a third person's,
- * puts the items on the review list — never refusing or hiding them; links compared normalised
- * (case of the host, trailing slash, tracking parameters); the window's edges, for both rules;
+ * puts the items on the review list — never refusing or hiding them, and every item the same
+ * person's rule counts even when an operator's change of the number brought it to three; links
+ * compared normalised (case of the host, trailing slash, tracking parameters); the window's edges,
+ * for both rules;
  * items deleted or hidden since counted as the uses they were; the market's official sources and
  * an operator's writes left out; an edit that puts a link in counted, one that keeps it not (a
- * post's or a comment's); a body with thousands of links taking a bounded number of locks, and a
- * write refused or changing nothing taking none; the list's entries with each item's own author,
- * newest first a page at a time, admins only. Earlier uses are recorded straight into `link_uses`
- * at the times a case needs. Skips when TEST_* are unset.
+ * post's or a comment's); the first 20 links of an item in body order looked at, and an edit that
+ * brings one into them counting it (owner decision 2026-10-22); a body with thousands of links
+ * taking no more locks than the links it records, and a write refused or changing nothing taking
+ * none; the review list grouped by link and rule, newest group first, a group's entries with each
+ * item's own author a page at a time, admins only; and the mark '확인함' (owner decision
+ * 2026-10-22) — its admin_actions record, a blank note none, the reviewed list, entries after
+ * `through` and a fourth use left on the default list, two operators at once marking once (the
+ * second waiting on the first's entries and finding none left). Earlier uses and entries are
+ * recorded straight into `link_uses` and `link_flags` at the times a case needs. Skips when
+ * TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
+  changePhoneAsOperator,
   completeOnboarding,
   createLinkFlag,
   createLinkUse,
   createMarket,
   createPost,
+  randomPhone,
   randomPhoneHash,
 } from '@buddha/db/test';
-import { adminLinkFlagSchema, type AdminLinkFlag } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import {
+  LINK_CHECK_MAX,
+  adminLinkFlagGroupSchema,
+  adminLinkFlagSchema,
+  type AdminLinkFlag,
+  type AdminLinkFlagGroup,
+} from '@buddha/shared';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
@@ -125,30 +141,71 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     return admin;
   };
 
-  type ListPage = { data: AdminLinkFlag[]; meta: { nextCursor: string | null } };
+  type Page<T> = { data: T[]; meta: { nextCursor: string | null } };
   const readList = (query: string, who: TestUser) =>
     t.app.inject({
       method: 'GET',
       url: `/api/v1/admin/link-flags${query}`,
       headers: { cookie: who.cookie },
     });
-  /** Every entry of the review list, a page of `limit` at a time, in the order the pages give. */
-  const readAll = async (who: TestUser, limit = 20) => {
+  /** Every group of one part of the review list, a page of `limit` at a time, in page order. */
+  const readGroups = async (
+    who: TestUser,
+    status: 'open' | 'reviewed' = 'open',
+    limit = 20,
+  ): Promise<AdminLinkFlagGroup[]> => {
+    const groups: AdminLinkFlagGroup[] = [];
+    let cursor: string | null = null;
+    do {
+      const after: string = cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`;
+      const res = await readList(`?status=${status}&limit=${limit}${after}`, who);
+      expect(res.statusCode, res.body).toBe(200);
+      const page = res.json<Page<unknown>>();
+      groups.push(...page.data.map((group) => adminLinkFlagGroupSchema.parse(group)));
+      cursor = page.meta.nextCursor;
+    } while (cursor !== null);
+    return groups;
+  };
+  const readItems = (url: string, reason: string, query: string, who: TestUser) =>
+    t.app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/link-flags/items?url=${encodeURIComponent(url)}&reason=${reason}${query}`,
+      headers: { cookie: who.cookie },
+    });
+  /** Every entry of one group, a page of `limit` at a time, in page order. */
+  const readAllItems = async (
+    who: TestUser,
+    url: string,
+    reason: string,
+    limit = 20,
+    reviewId?: string,
+  ): Promise<AdminLinkFlag[]> => {
     const entries: AdminLinkFlag[] = [];
     let cursor: string | null = null;
     do {
-      const query: string =
-        cursor === null
-          ? `?limit=${limit}`
-          : `?limit=${limit}&cursor=${encodeURIComponent(cursor)}`;
-      const res = await readList(query, who);
+      const review = reviewId === undefined ? '' : `&reviewId=${reviewId}`;
+      const after: string = cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`;
+      const res = await readItems(url, reason, `&limit=${limit}${review}${after}`, who);
       expect(res.statusCode, res.body).toBe(200);
-      const page = res.json<ListPage>();
+      const page = res.json<Page<unknown>>();
       entries.push(...page.data.map((entry) => adminLinkFlagSchema.parse(entry)));
       cursor = page.meta.nextCursor;
     } while (cursor !== null);
     return entries;
   };
+  /** An operator's mark '확인함' on `group`, as the screen sends it (`through` its latest time). */
+  const markGroup = (group: AdminLinkFlagGroup, body: Record<string, unknown>, who: TestUser) =>
+    t.app.inject({
+      method: 'POST',
+      url: '/api/v1/admin/link-flags/reviews',
+      headers: { origin: TRUSTED_ORIGIN, 'content-type': 'application/json', cookie: who.cookie },
+      payload: JSON.stringify({
+        url: group.url,
+        reason: group.reason,
+        through: group.latestFlaggedAt,
+        ...body,
+      }),
+    });
   const publicFace = async (who: TestUser) => {
     const [profile] = await t.db
       .select()
@@ -292,6 +349,37 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     expect(await flags()).toContain(`same_account ${LINK} ${third_.id}`);
   });
 
+  it('flags every item of the same person’s link once an operator’s change of the number has brought the count to three without a write (ADR-0083 7-10)', async () => {
+    const hasher = t.app.get(PhoneHasher);
+    // The new number holds a use already, left by an account that withdrew from it.
+    const newPhone = randomPhone();
+    const left = await createPost(t.db, { marketId: market.id, authorId: other.id });
+    await createLinkUse(t.db, { url: LINK, phoneHash: hasher.hash(newPhone), postId: left.id });
+    // Two of the author's under the old number: two items, two people — no rule.
+    const post = await writePost(linkedDoc(LINK));
+    const comment = await writeComment(post.id, `댓글 ${LINK}`);
+    expect(await flags()).toEqual([]);
+    // docs/OPERATIONS.md's change moves the old number's day onto the new one: three items there
+    // now, which no write counted.
+    await changePhoneAsOperator(t.db, {
+      userId: author.id,
+      phone: newPhone,
+      hash: (digits) => hasher.hash(digits),
+    });
+    expect(await flags()).toEqual([]);
+    // The author's next use of the link puts every item the rule counts on the list, not only its
+    // own (owner decision 2026-10-22 answer 1).
+    const next = await writeComment(post.id, `또 ${LINK}`);
+    expect(await flags()).toEqual(
+      flagsOf('same_account', LINK, [left.id, post.id, comment.id, next.id]),
+    );
+    // And the one after that adds itself; the four stay as they were put there.
+    const after = await writePost(plainDoc(`다시 ${LINK}`));
+    expect(await flags()).toEqual(
+      flagsOf('same_account', LINK, [left.id, post.id, comment.id, next.id, after.id]),
+    );
+  });
+
   it('counts items deleted or hidden since as the uses they were (ADR-0083 7-19)', async () => {
     const first = await writePost(linkedDoc(LINK));
     expect((await send('POST', `/posts/${first.id}/delete`, {}, author)).statusCode).toBe(200);
@@ -378,35 +466,111 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     expect(await uses()).toBe(1);
   });
 
-  // ---- many links ------------------------------------------------------------------------------------
+  // ---- many links (owner decision 2026-10-22: the first 20 in body order) --------------------------
 
-  it('takes a bounded number of locks for thousands of links, and none for a write that takes no link', async () => {
-    // A link on every character: 2,500 distinct links in a post (about 3,000 fit its 256 KiB).
-    const many = {
-      type: 'doc',
-      content: [
-        {
-          type: 'paragraph',
-          content: Array.from({ length: 2_500 }, (_, index) => ({
-            type: 'text',
-            text: 'a',
-            marks: [{ type: 'link', attrs: { href: `https://many.example/${index}` } }],
-          })),
-        },
-      ],
-    };
+  /** A post body with one link mark per character, `count` links in all, `many.example/0` first. */
+  const manyLinks = (count: number, host = 'many.example') => ({
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: Array.from({ length: count }, (_, index) => ({
+          type: 'text',
+          text: 'a',
+          marks: [{ type: 'link', attrs: { href: `https://${host}/${index}` } }],
+        })),
+      },
+    ],
+  });
+  /** The links recorded, sorted. */
+  const usedLinks = async () =>
+    (await t.db.select({ url: schema.linkUses.url }).from(schema.linkUses))
+      .map((row) => row.url)
+      .sort();
+  const firstOf = (count: number, host = 'many.example') =>
+    Array.from({ length: count }, (_, index) => `https://${host}/${index}`).sort();
+
+  it('looks at the first 20 links of a post or a comment in body order, and refuses neither for the rest', async () => {
+    expect(LINK_CHECK_MAX).toBe(20);
+    // 25 links in a post: the first 20 are recorded, the last 5 not — and the post is written.
+    const post = await writePost(manyLinks(25));
+    expect(await usedLinks()).toEqual(firstOf(20));
+    // In body order, a written address and a link mark alike: 20 others before this one.
+    const late = await writePost(
+      {
+        type: 'doc',
+        content: [
+          { type: 'paragraph', content: [{ type: 'text', text: '앞의 주소들' }] },
+          ...manyLinks(20, 'early.example').content,
+          { type: 'paragraph', content: [{ type: 'text', text: `늦은 ${LINK}` }] },
+        ],
+      },
+      other,
+    );
+    expect((await usedLinks()).filter((url) => url === LINK)).toEqual([]);
+    // A comment's 21st address is not looked at either.
+    const comment = await writeComment(
+      post.id,
+      Array.from({ length: 21 }, (_, index) => `https://c.example/${index}`).join(' '),
+    );
+    const commentUses = (await t.db.select().from(schema.linkUses)).filter(
+      (row) => row.commentId === comment.id,
+    );
+    expect(commentUses.map((row) => row.url).sort()).toEqual(firstOf(20, 'c.example'));
+    // The same link counted once among the 20: two of one address take one place.
+    const twice = await writePost(
+      plainDoc(
+        [
+          LINK,
+          LINK,
+          ...Array.from({ length: 20 }, (_, index) => `https://d.example/${index}`),
+        ].join(' '),
+      ),
+      third,
+    );
+    const twiceUses = (await t.db.select().from(schema.linkUses)).filter(
+      (row) => row.postId === twice.id,
+    );
+    expect(twiceUses.map((row) => row.url).sort()).toEqual(
+      [LINK, ...Array.from({ length: 19 }, (_, index) => `https://d.example/${index}`)].sort(),
+    );
+    expect(late.id).toBeDefined();
+  });
+
+  it('counts a link an edit brings into the first 20 as one it puts in', async () => {
+    // The 21st link is not looked at; an edit that drops the first brings it into the 20.
+    const post = await writePost(manyLinks(21));
+    expect(await usedLinks()).toEqual(firstOf(20));
+    const edited = manyLinks(21);
+    edited.content[0]!.content.shift();
+    expect((await send('PUT', `/posts/${post.id}`, { body: edited }, author)).statusCode).toBe(200);
+    expect((await usedLinks()).filter((url) => url === 'https://many.example/20')).toEqual([
+      'https://many.example/20',
+    ]);
+    // The links it kept among the first 20 are not counted again.
+    expect(await usedLinks()).toHaveLength(21);
+  });
+
+  it('takes no more locks than the links it records, and none for a write that takes no link', async () => {
+    // 2,500 distinct links in a post (about 3,000 fit its 256 KiB): 20 are recorded.
+    const many = manyLinks(2_500);
     const draft = await createMarket(t.db, { status: 'draft' });
     const others = await writePost(plainDoc('남의 글'), other);
+    /** The last bucket of the first 20 links, which a write takes last (key order). */
+    const { rows: last } = await t.db.execute<{ key: number }>(sql`
+      SELECT max(hashtext(link) & ${LINK_LOCK_BUCKETS - 1}::int)::int AS key
+      FROM unnest(${sql.param(firstOf(20))}::text[]) AS link`);
+    const lastKey = last[0]!.key;
     /**
-     * Another connection holding the links' last lock in an open transaction: a write of these
-     * links takes their locks in key order, so it waits there with the others taken.
+     * Another connection holding that lock in an open transaction: a write of these links takes
+     * their locks in key order, so it waits there with the others taken.
      */
     const holdLastLock = async () => {
       const holder = await t.db.$client.connect();
       let held = true;
       await holder.query('BEGIN');
       await holder.query(`SELECT pg_advisory_xact_lock(hashtext('buddha:link'), $1::int)`, [
-        LINK_LOCK_BUCKETS - 1,
+        lastKey,
       ]);
       const release = async () => {
         if (!held) return;
@@ -426,22 +590,22 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
       expect(
         (await send('POST', '/posts', { marketId: draft.id, body: many }, author)).statusCode,
       ).toBe(404);
-      // The post waits on the held lock, having taken the ones before it — fewer than the bound.
+      // The post waits on the held lock, having taken the ones before it — fewer than its 20.
       const write = send('POST', '/posts', { marketId: market.id, body: many }, author);
-      await waitForLockWaiter(lock.holder, 'the post with many links, on the links’ last lock');
+      await waitForLockWaiter(lock.holder, 'the post with many links, on its links’ last lock');
       const { rows } = await lock.holder.query<{ n: number }>(
         `SELECT count(*)::int AS n FROM pg_locks
           WHERE locktype = 'advisory' AND granted AND pid <> pg_backend_pid()
             AND classid = hashtext('buddha:link')::oid AND objsubid = 2`,
       );
       expect(rows[0]!.n).toBeGreaterThan(0);
-      expect(rows[0]!.n).toBeLessThan(LINK_LOCK_BUCKETS);
+      expect(rows[0]!.n).toBeLessThan(LINK_CHECK_MAX);
       await lock.release();
       created(await write);
     } finally {
       await lock.release();
     }
-    expect(await uses()).toBe(2_500);
+    expect(await usedLinks()).toEqual(firstOf(20));
     const [post] = await t.db
       .select({ id: schema.posts.id })
       .from(schema.posts)
@@ -465,12 +629,12 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     } finally {
       await lock.release();
     }
-    expect(await uses()).toBe(2_500);
+    expect(await usedLinks()).toEqual(firstOf(20));
   });
 
-  // ---- the review list ---------------------------------------------------------------------------------
+  // ---- the review list (owner decision 2026-10-22: grouped, marked '확인함') -------------------------
 
-  it('lists the flagged items for admins, with why and the item as it is now, a page at a time', async () => {
+  it('groups the entries by link and rule for admins, newest group first, each group’s entries a page at a time', async () => {
     const admin = await anAdmin();
     const post = await writePost(linkedDoc(LINK));
     const comment = await writeComment(post.id, `댓글 ${LINK}`);
@@ -480,18 +644,31 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
       .set({ hiddenAt: new Date() })
       .where(eq(schema.postComments.id, comment.id));
 
-    const read = readList;
-    expect((await read('', author)).statusCode).toBe(403);
+    expect((await readList('', author)).statusCode).toBe(403);
     expect(
       (await t.app.inject({ method: 'GET', url: '/api/v1/admin/link-flags' })).statusCode,
     ).toBe(401);
+    expect((await readItems(LINK, 'same_account', '', author)).statusCode).toBe(403);
 
-    const res = await read('', admin);
-    expect(res.statusCode, res.body).toBe(200);
-    const body = res.json<ListPage>();
-    const entries = body.data.map((entry) => adminLinkFlagSchema.parse(entry));
+    // One row for the link and rule: three entries, the latest time.
+    const groups = await readGroups(admin);
+    expect(groups).toEqual([
+      {
+        url: LINK,
+        reason: 'same_account',
+        itemCount: 3,
+        latestFlaggedAt: expect.any(String) as unknown,
+        review: null,
+      },
+    ]);
+    const flagged = await t.db.select().from(schema.linkFlags);
+    expect(groups[0]!.latestFlaggedAt).toBe(
+      new Date(Math.max(...flagged.map((row) => row.flaggedAt.getTime()))).toISOString(),
+    );
+
+    // Its entries, each with why and the item as it is now.
+    const entries = await readAllItems(admin, LINK, 'same_account');
     expect(entries).toHaveLength(3);
-    expect(body.meta.nextCursor).toBeNull();
     const byTarget = new Map(
       entries.map((entry) => [entry.target.commentId ?? entry.target.postId, entry]),
     );
@@ -519,19 +696,12 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
       },
     });
     expect(byTarget.get(last.id)?.target.kind).toBe('comment');
-
-    // A page at a time, in the same order.
-    const firstPage = await read('?limit=2', admin);
-    const one = firstPage.json<ListPage>();
-    expect(one.data).toHaveLength(2);
-    expect(one.meta.nextCursor).not.toBeNull();
-    const next = await read(`?limit=2&cursor=${encodeURIComponent(one.meta.nextCursor!)}`, admin);
-    const two = next.json<ListPage>();
-    expect(two.data).toHaveLength(1);
-    expect(two.meta.nextCursor).toBeNull();
-    expect([...one.data, ...two.data].map((entry) => entry.id)).toEqual(
+    // A page at a time, in the same order; another rule or link is another group.
+    expect((await readAllItems(admin, LINK, 'same_account', 1)).map((e) => e.id)).toEqual(
       entries.map((entry) => entry.id),
     );
+    expect(await readAllItems(admin, LINK, 'many_accounts')).toEqual([]);
+    expect(await readAllItems(admin, `${LINK}/x`, 'same_account')).toEqual([]);
   });
 
   it('names each flagged item’s own author: a comment under another member’s post is its writer’s', async () => {
@@ -539,12 +709,10 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     const post = await writePost(linkedDoc(LINK));
     const comment = await writeComment(post.id, LINK, other);
     const elsewhere = await writePost(linkedDoc(LINK), third);
-    const entries = await readAll(admin);
-    expect(entries.map((entry) => entry.reason)).toEqual([
-      'many_accounts',
-      'many_accounts',
-      'many_accounts',
+    expect((await readGroups(admin)).map((group) => [group.reason, group.itemCount])).toEqual([
+      ['many_accounts', 3],
     ]);
+    const entries = await readAllItems(admin, LINK, 'many_accounts');
     const authorOf = (id: string) =>
       entries.find((entry) => (entry.target.commentId ?? entry.target.postId) === id)?.target
         .author;
@@ -553,36 +721,39 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     expect(authorOf(elsewhere.id)).toEqual(await publicFace(third));
   });
 
-  it('lists newest first by when the item went on the list, and pages through it in that order', async () => {
+  it('orders the groups by their latest entry and a group’s entries newest first, paging through both', async () => {
     const admin = await anAdmin();
     const items = [];
     for (let index = 0; index < 4; index += 1) {
       items.push(await createPost(t.db, { marketId: market.id, authorId: author.id }));
     }
     const hoursAgo = (hours: number) => new Date(Date.now() - hours * HOUR_MS);
-    // Written out of order; the last two at one instant, which the id orders.
+    const other1 = 'https://b.example/1';
+    const other2 = 'https://c.example/2';
+    // Three groups: LINK·same_account (latest 1h ago), other1·same_account (2h), and LINK's
+    // many_accounts with two entries at one instant (3h), which the id orders.
     const written = [
       await createLinkFlag(t.db, {
         url: LINK,
         reason: 'same_account',
         postId: items[0]!.id,
-        flaggedAt: hoursAgo(2),
+        flaggedAt: hoursAgo(5),
       }),
       await createLinkFlag(t.db, {
         url: LINK,
         reason: 'same_account',
         postId: items[1]!.id,
-        flaggedAt: hoursAgo(3),
-      }),
-      await createLinkFlag(t.db, {
-        url: LINK,
-        reason: 'same_account',
-        postId: items[2]!.id,
         flaggedAt: hoursAgo(1),
       }),
+      await createLinkFlag(t.db, {
+        url: other1,
+        reason: 'same_account',
+        postId: items[2]!.id,
+        flaggedAt: hoursAgo(2),
+      }),
     ];
-    const tied = hoursAgo(1);
-    written.push(
+    const tied = hoursAgo(3);
+    const tiedRows = [
       await createLinkFlag(t.db, {
         url: LINK,
         reason: 'many_accounts',
@@ -595,18 +766,264 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
         postId: items[3]!.id,
         flaggedAt: tied,
       }),
+    ];
+    // A fourth group whose latest is as old as the tied ones: the group's newest entry's id
+    // orders the two.
+    const sameTime = await createLinkFlag(t.db, {
+      url: other2,
+      reason: 'many_accounts',
+      postId: items[0]!.id,
+      flaggedAt: tied,
+    });
+    const headOfTied = [...tiedRows].sort((a, b) => (a.id < b.id ? 1 : -1))[0]!;
+    const tiedGroups = [
+      { key: `${LINK} many_accounts`, id: headOfTied.id },
+      { key: `${other2} many_accounts`, id: sameTime.id },
+    ]
+      .sort((a, b) => (a.id < b.id ? 1 : -1))
+      .map((group) => group.key);
+    const expected = [`${LINK} same_account`, `${other1} same_account`, ...tiedGroups];
+    const keyOf = (group: AdminLinkFlagGroup) => `${group.url} ${group.reason}`;
+    expect((await readGroups(admin)).map(keyOf)).toEqual(expected);
+    expect((await readGroups(admin, 'open', 1)).map(keyOf)).toEqual(expected);
+    expect((await readGroups(admin)).map((group) => group.itemCount)).toEqual(
+      expected.map((key) =>
+        key === `${LINK} same_account` || key.startsWith(`${LINK} m`) ? 2 : 1,
+      ),
     );
-    const newestFirst = [...written]
-      .sort(
-        (a, b) =>
-          b.flaggedAt.getTime() - a.flaggedAt.getTime() || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0),
-      )
-      .map((row) => row.id);
-    expect(newestFirst[newestFirst.length - 1]).toBe(written[1]!.id);
-    // The first page holds the newest; a page of one at a time gives each entry once, in order.
-    const first = (await readList('?limit=1', admin)).json<ListPage>();
-    expect(first.data.map((entry) => entry.id)).toEqual([newestFirst[0]]);
-    expect((await readAll(admin, 1)).map((entry) => entry.id)).toEqual(newestFirst);
-    expect((await readAll(admin)).map((entry) => entry.id)).toEqual(newestFirst);
+    // A group's entries, newest first a page of one at a time.
+    expect((await readAllItems(admin, LINK, 'same_account', 1)).map((e) => e.id)).toEqual([
+      written[1]!.id,
+      written[0]!.id,
+    ]);
+    expect((await readAllItems(admin, LINK, 'many_accounts', 1)).map((e) => e.id)).toEqual(
+      [...tiedRows].sort((a, b) => (a.id < b.id ? 1 : -1)).map((row) => row.id),
+    );
+  });
+
+  it('marks a group ‘확인함’ with what came of it, recorded, and moves it to the reviewed list', async () => {
+    const admin = await anAdmin();
+    const post = await writePost(linkedDoc(LINK));
+    await writeComment(post.id, LINK);
+    await writeComment(post.id, LINK);
+    const [group] = await readGroups(admin);
+    // Members cannot mark; nor can an empty or unknown outcome, or too long a note, be sent.
+    expect((await markGroup(group!, { outcome: 'no_issue' }, author)).statusCode).toBe(403);
+    for (const bad of [
+      { outcome: 'resolved' },
+      { outcome: 'no_issue', note: 'x'.repeat(501) },
+      { outcome: 'no_issue', through: 'yesterday' },
+    ]) {
+      expect((await markGroup(group!, bad, admin)).statusCode).toBe(400);
+    }
+    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+
+    const res = await markGroup(group!, { outcome: 'actioned', note: '  숨김 처리함  ' }, admin);
+    expect(res.statusCode, res.body).toBe(201);
+    const marked = adminLinkFlagGroupSchema.parse(res.json<{ data: unknown }>().data);
+    const adminFace = await publicFace(admin);
+    expect(marked).toEqual({
+      url: LINK,
+      reason: 'same_account',
+      itemCount: 3,
+      latestFlaggedAt: group!.latestFlaggedAt,
+      review: {
+        id: expect.any(String) as unknown,
+        outcome: 'actioned',
+        note: '숨김 처리함',
+        reviewedAt: expect.any(String) as unknown,
+        admin: { userId: admin.id, nickname: adminFace.nickname },
+      },
+    });
+    // The record: who, when, the link, the rule, what came of it, the note, how many.
+    const [action] = await t.db.select().from(schema.adminActions);
+    expect(action).toMatchObject({
+      id: marked.review!.id,
+      adminId: admin.id,
+      type: 'link_flag_review',
+      targetType: 'link',
+      targetId: LINK,
+      payload: {
+        reason: 'same_account',
+        outcome: 'actioned',
+        note: '숨김 처리함',
+        itemCount: 3,
+        through: group!.latestFlaggedAt,
+      },
+    });
+    expect(action!.createdAt.toISOString()).toBe(marked.review!.reviewedAt);
+    expect((await t.db.select().from(schema.linkFlags)).map((row) => row.reviewActionId)).toEqual([
+      action!.id,
+      action!.id,
+      action!.id,
+    ]);
+    // Out of the default list, in the reviewed one with its entries; the post is as it was.
+    expect(await readGroups(admin)).toEqual([]);
+    expect(await readAllItems(admin, LINK, 'same_account')).toEqual([]);
+    expect(await readGroups(admin, 'reviewed')).toEqual([marked]);
+    expect(await readAllItems(admin, LINK, 'same_account', 20, marked.review!.id)).toHaveLength(3);
+    const page = await t.app.inject({ method: 'GET', url: `/api/v1/posts/${post.id}` });
+    expect(page.json<{ data: { state: string } }>().data.state).toBe('published');
+    // Marked again: nothing left to mark, nothing written.
+    expect((await markGroup(group!, { outcome: 'no_issue' }, admin)).statusCode).toBe(404);
+    expect(await t.db.select().from(schema.adminActions)).toHaveLength(1);
+
+    // A fourth use joins the link and rule as a new, unmarked entry: back on the default list, by
+    // itself; the mark keeps its three.
+    const fourth = await writePost(plainDoc(`또 ${LINK}`));
+    const [again] = await readGroups(admin);
+    expect(again).toMatchObject({ url: LINK, reason: 'same_account', itemCount: 1, review: null });
+    expect((await readAllItems(admin, LINK, 'same_account')).map((e) => e.target.postId)).toEqual([
+      fourth.id,
+    ]);
+    const second = await markGroup(again!, { outcome: 'no_issue' }, admin);
+    expect(second.statusCode, second.body).toBe(201);
+    expect(
+      adminLinkFlagGroupSchema.parse(second.json<{ data: unknown }>().data).review,
+    ).toMatchObject({
+      outcome: 'no_issue',
+      note: null,
+    });
+    // The reviewed list: one row per mark, the newest first.
+    expect(
+      (await readGroups(admin, 'reviewed')).map((row) => [row.review!.outcome, row.itemCount]),
+    ).toEqual([
+      ['no_issue', 1],
+      ['actioned', 3],
+    ]);
+    expect((await readGroups(admin, 'reviewed', 1)).map((row) => row.itemCount)).toEqual([1, 3]);
+  });
+
+  it('marks only the entries the operator saw: one put on the list after `through` stays on the default list', async () => {
+    const admin = await anAdmin();
+    const posts = [];
+    for (let index = 0; index < 3; index += 1) {
+      posts.push(await createPost(t.db, { marketId: market.id, authorId: author.id }));
+    }
+    const at = (minutesAgo: number) => new Date(Date.now() - minutesAgo * MINUTE_MS);
+    await createLinkFlag(t.db, {
+      url: LINK,
+      reason: 'same_account',
+      postId: posts[0]!.id,
+      flaggedAt: at(10),
+    });
+    await createLinkFlag(t.db, {
+      url: LINK,
+      reason: 'same_account',
+      postId: posts[1]!.id,
+      flaggedAt: at(5),
+    });
+    const [seen] = await readGroups(admin);
+    expect(seen!.itemCount).toBe(2);
+    // Another entry arrives while the operator reads.
+    const late = await createLinkFlag(t.db, {
+      url: LINK,
+      reason: 'same_account',
+      postId: posts[2]!.id,
+      flaggedAt: at(1),
+    });
+    const res = await markGroup(seen!, { outcome: 'no_issue' }, admin);
+    expect(res.statusCode, res.body).toBe(201);
+    expect(adminLinkFlagGroupSchema.parse(res.json<{ data: unknown }>().data).itemCount).toBe(2);
+    expect(await readGroups(admin)).toEqual([
+      {
+        url: LINK,
+        reason: 'same_account',
+        itemCount: 1,
+        latestFlaggedAt: late.flaggedAt.toISOString(),
+        review: null,
+      },
+    ]);
+  });
+
+  it('takes a blank note as none: neither the answer, the record nor the reviewed list carries one', async () => {
+    const admin = await anAdmin();
+    const post = await writePost(linkedDoc(LINK));
+    await writeComment(post.id, LINK);
+    await writeComment(post.id, LINK);
+    const [group] = await readGroups(admin);
+    const res = await markGroup(group!, { outcome: 'no_issue', note: ' \n  ' }, admin);
+    expect(res.statusCode, res.body).toBe(201);
+    expect(adminLinkFlagGroupSchema.parse(res.json<{ data: unknown }>().data).review?.note).toBe(
+      null,
+    );
+    const [action] = await t.db.select().from(schema.adminActions);
+    expect(action!.payload).toMatchObject({ outcome: 'no_issue', note: null });
+    expect((await readGroups(admin, 'reviewed')).map((row) => row.review?.note)).toEqual([null]);
+  });
+
+  it('marks a group once when two operators mark it at once: the second waits for the first and finds nothing left', async () => {
+    const admin = await anAdmin();
+    const second = await anAdmin();
+    const post = await writePost(linkedDoc(LINK));
+    await writeComment(post.id, LINK);
+    await writeComment(post.id, LINK);
+    const [group] = await readGroups(admin);
+    // The first operator's mark, held open on another connection: its record written and the
+    // group's entries naming it, not yet committed — so it holds their row locks.
+    const holder = await t.db.$client.connect();
+    let answer: ReturnType<typeof markGroup> | undefined;
+    let first: string;
+    try {
+      await holder.query('BEGIN');
+      const { rows } = await holder.query<{ id: string }>(
+        `INSERT INTO admin_actions (admin_id, type, target_type, target_id, payload)
+           VALUES ($1, 'link_flag_review', 'link', $2, $3::jsonb) RETURNING id`,
+        [
+          admin.id,
+          LINK,
+          JSON.stringify({
+            reason: 'same_account',
+            outcome: 'no_issue',
+            note: null,
+            itemCount: 3,
+            through: group!.latestFlaggedAt,
+          }),
+        ],
+      );
+      first = rows[0]!.id;
+      await holder.query(
+        `UPDATE link_flags SET review_action_id = $1
+           WHERE url = $2 AND reason = 'same_account' AND review_action_id IS NULL`,
+        [first, LINK],
+      );
+      // The second mark waits for them in its FOR UPDATE, then reads the entries again: none is
+      // left unmarked. (Without FOR UPDATE it would wait in its UPDATE instead and meet the
+      // entries' mark-once trigger: a 500.)
+      answer = markGroup(group!, { outcome: 'actioned' }, second);
+      await waitForLockWaiter(holder, 'the second mark, on the group’s entries');
+      await holder.query('COMMIT');
+    } catch (error) {
+      await holder.query('ROLLBACK');
+      throw error;
+    } finally {
+      holder.release();
+    }
+    const res = await answer;
+    expect(res.statusCode, res.body).toBe(404);
+    expect((await t.db.select().from(schema.adminActions)).map((row) => row.id)).toEqual([first]);
+    expect((await t.db.select().from(schema.linkFlags)).map((row) => row.reviewActionId)).toEqual([
+      first,
+      first,
+      first,
+    ]);
+  });
+
+  it('marks a group once when two operators send their marks together', async () => {
+    const admin = await anAdmin();
+    const second = await anAdmin();
+    const post = await writePost(linkedDoc(LINK));
+    await writeComment(post.id, LINK);
+    await writeComment(post.id, LINK);
+    const [group] = await readGroups(admin);
+    const answers = await Promise.all([
+      markGroup(group!, { outcome: 'no_issue' }, admin),
+      markGroup(group!, { outcome: 'actioned' }, second),
+    ]);
+    expect(answers.map((res) => res.statusCode).sort()).toEqual([201, 404]);
+    expect(await t.db.select().from(schema.adminActions)).toHaveLength(1);
+    expect(
+      new Set((await t.db.select().from(schema.linkFlags)).map((row) => row.reviewActionId)).size,
+    ).toBe(1);
   });
 });

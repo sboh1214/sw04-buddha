@@ -364,8 +364,9 @@ export class PostsService {
    * the author's own upload, taken by no other post (`claimImages`). An author under a writing
    * restriction is refused before anything is read (RESTRICTED, `checkWriter`, #185). Then the post
    * counts against the person's limits (#187: 3 in 10 minutes, 20 a day — WRITE_LIMITED, nothing
-   * written) and its links go to the repetition rules (#187: a flag on the operators' review list at
-   * most, never a refusal). Nothing about the author's trading is read or attached (N05 §2).
+   * written) and its links — the first 20 in body order (owner decision 2026-10-22) — go to the
+   * repetition rules (#187: a flag on the operators' review list at most, never a refusal). Nothing
+   * about the author's trading is read or attached (N05 §2).
    */
   async create(authorId: string, marketId: string, content: PostContent): Promise<PublishedPost> {
     const id = randomUUID();
@@ -411,7 +412,8 @@ export class PostsService {
    * body's). An edit that changes something counts against the person's edit limits (#187: posts'
    * and comments' edits together, 10 in 10 minutes and 50 a day — WRITE_LIMITED, nothing written),
    * and the links it puts in that the post did not have go to the repetition rules (#187 «수정으로
-   * 넣거나 바꾼 링크도 본다»).
+   * 넣거나 바꾼 링크도 본다») — of the body's first 20 in body order, those not among the previous
+   * body's first 20 (owner decision 2026-10-22).
    */
   async update(authorId: string, postId: string, content: PostContent): Promise<PublishedPost> {
     const links = postDocumentLinks(content.body.document);

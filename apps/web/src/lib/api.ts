@@ -236,10 +236,17 @@ export type AdminGrantBody = components['schemas']['AdminGrantBody'];
  */
 export type AdminSmsStatus = components['schemas']['AdminSmsStatus'];
 /**
- * One entry of `GET /admin/link-flags` (#187, ADR-0083): a post or a comment a repeated-link rule
- * caught — the link as compared, the rule, when, and the item as it is now.
+ * One entry of `GET /admin/link-flags/items` (#187, ADR-0083): a post or a comment a repeated-link
+ * rule caught — the link as compared, the rule, when, and the item as it is now.
  */
 export type AdminLinkFlag = components['schemas']['AdminLinkFlag'];
+/**
+ * One row of `GET /admin/link-flags` (owner decision 2026-10-22): the entries of one link and
+ * rule — how many, the latest time, and in the reviewed list the operator's mark '확인함'.
+ */
+export type AdminLinkFlagGroup = components['schemas']['AdminLinkFlagGroup'];
+/** `POST /admin/link-flags/reviews`: the mark '확인함' on a group, with what came of it. */
+export type AdminLinkFlagReviewBody = components['schemas']['AdminLinkFlagReviewBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

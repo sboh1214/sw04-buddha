@@ -6,17 +6,20 @@
  * write a window takes passes, the next is refused and nothing is written), the windows' edges, a
  * deleted post counted, the person counted by the verified number's hash rather than the account,
  * an operator's account exempt but recorded (its uploads before their conversion too), an edit
- * that changes nothing not counted (a post's or a comment's), and the wait answered in whole
- * minutes. Earlier writes are recorded straight into `write_limit_events` at the times a case
- * needs. Skips when TEST_* are unset.
+ * that changes nothing not counted (a post's or a comment's), the wait answered in whole
+ * minutes, and an operator's change of the number carrying the last day's count to the new one
+ * (owner decision 2026-10-22). Earlier writes are recorded straight into `write_limit_events` at
+ * the times a case needs. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
+  changePhoneAsOperator,
   completeOnboarding,
   createComment,
   createMarket,
   createPost,
   createWriteLimitEvent,
+  randomPhone,
 } from '@buddha/db/test';
 import {
   WRITE_LIMIT_DAY_SECONDS,
@@ -224,6 +227,32 @@ describe.skipIf(!hasTestInfra)('write limits (integration, #187)', () => {
     expect(refusal(await writePost()).reason).toBe('posts_10m');
     // A new account is not treated differently (#45-15): the other account writes as usual.
     created(await writePost(other));
+  });
+
+  it('carries the count over an operator’s change of the number, and leaves the old number with none (owner decision 2026-10-22)', async () => {
+    for (let index = 0; index < 3; index += 1) created(await writePost());
+    const [verified] = await t.db
+      .select({ phone: schema.phoneVerifications.phone })
+      .from(schema.phoneVerifications)
+      .where(eq(schema.phoneVerifications.userId, author.id));
+    const oldPhone = verified!.phone;
+    const oldHash = await hashOf(author);
+    // docs/OPERATIONS.md's procedure, its SQL as buddha_app, with the API's own hashes.
+    await changePhoneAsOperator(t.db, {
+      userId: author.id,
+      phone: randomPhone(),
+      hash: (digits) => t.app.get(PhoneHasher).hash(digits),
+    });
+    expect(await hashOf(author)).not.toBe(oldHash);
+    // The three posts count under the new number: the fourth is still refused.
+    expect(refusal(await writePost()).reason).toBe('posts_10m');
+    expect(await events(author, 'post')).toBe(3);
+    // The old number holds none: the next account to verify it starts afresh.
+    const next = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: next.id, phone: oldPhone });
+    expect(await hashOf(next)).toBe(oldHash);
+    created(await writePost(next));
+    expect(await events(next, 'post')).toBe(1);
   });
 
   it('exempts an operator’s account and still records its writes', async () => {

@@ -6,7 +6,8 @@
  * written in — and what it carries along: the account's likes, its own and those it inherited on
  * its old number, onto the new number (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076),
  * and the hash of its pending reports and those of the last 24 hours, its own and those it
- * inherited on its old number (#50, owner decision 2026-10-21, ADR-0081).
+ * inherited on its old number (#50, owner decision 2026-10-21, ADR-0081), and the last 24 hours of
+ * the old number's write-limit and link records (#187, owner decision 2026-10-22, ADR-0083).
  * The account lookup and the pre-check of the new number that come before any confirmation SMS
  * (step 1), and the read of the old number (step 3), are run the same way. The keyed hashes of
  * the new and the old number and the confirmation code come from the API's phone-hash CLI there
@@ -26,15 +27,18 @@ import {
 } from './phone-change.js';
 import {
   commentLikes,
+  linkUses,
   phoneVerifications,
   postLikes,
   reports,
   startGrantNumbers,
+  writeLimitEvents,
 } from './schema/index.js';
 import { cancelStartGrant, payStartGrant, recordStartGrant } from './start-grants.js';
 import {
   createComment,
   createCommentLike,
+  createLinkUse,
   createMarket,
   createModerationAction,
   createPhoneVerification,
@@ -43,6 +47,7 @@ import {
   createReport,
   createStartGrant,
   createUser,
+  createWriteLimitEvent,
   randomPhone,
   randomPhoneHash,
 } from './test/factories.js';
@@ -97,9 +102,10 @@ const statementsIn = (text: string): string[] => splitPsqlStatements(text);
 /**
  * The DO blocks' bodies, what psql writes no variable into: the refusal of a waiting grant's number
  * (owner decision 2026-10-19 3차, answer 4), then the move of the account's likes (2026-10-20 and
- * 2026-10-21, ADR-0076), then the move of its reports' hash (2026-10-21, ADR-0081).
+ * 2026-10-21, ADR-0076), then the move of its reports' hash (2026-10-21, ADR-0081), then the move
+ * of the old number's last day of write-limit and link records (2026-10-22, ADR-0083).
  */
-const [DO_BODY = '', LIKES_BODY = '', REPORTS_BODY = ''] = [
+const [DO_BODY = '', LIKES_BODY = '', REPORTS_BODY = '', RECORDS_BODY = ''] = [
   ...OPERATOR_PHONE_CHANGE_SQL.matchAll(/\$\$([\s\S]*?)\$\$/g),
 ].map((m) => m[1]!);
 
@@ -123,7 +129,18 @@ interface Held {
 }
 
 /** The change's statements in order: the three SET LOCAL lines hand the DO blocks their values. */
-const STATEMENTS = ['update', 'insert', 'set', 'set', 'set', 'do', 'do', 'do', 'select'] as const;
+const STATEMENTS = [
+  'update',
+  'insert',
+  'set',
+  'set',
+  'set',
+  'do',
+  'do',
+  'do',
+  'do',
+  'select',
+] as const;
 
 /**
  * Which statement failed first and how: the constraint for the UPDATE and the INSERT, the message
@@ -332,6 +349,18 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     // a live one's least of all — is taken away (the likes' rule, ADR-0076 7-26).
     expect(REPORTS_BODY).not.toContain('DELETE');
     expect(REPORTS_BODY).not.toContain('INSERT');
+    // The records' block (owner decision 2026-10-22, ADR-0083) raises nothing either and gives no
+    // result to read; it reads the old number's hash and no account: the records carry none.
+    expect(RECORDS_BODY).toContain('write_limit_events');
+    expect(RECORDS_BODY).toContain('link_uses');
+    expect(RECORDS_BODY).not.toContain('RAISE');
+    expect(variablesOf(RECORDS_BODY)).toEqual([]);
+    expect(
+      new Set([...RECORDS_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])),
+    ).toEqual(new Set(['phone_change.new_hash', 'phone_change.old_hash']));
+    // The last day only — the longest window of the limits and of the repetition rules — kept as
+    // the windows keep it (a record exactly 24 hours old is out).
+    expect(RECORDS_BODY.match(/> now\(\) - interval '24 hours'/g)).toHaveLength(2);
     const statements = statementsIn(OPERATOR_PHONE_CHANGE_SQL);
     expect(statements.map((s) => /^\w+/.exec(s)![0].toLowerCase())).toEqual([...STATEMENTS]);
     expect(statements.slice(2, 5)).toEqual([
@@ -803,16 +832,33 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain('신고를 옮기는 셋째 `DO`를 빼면');
   });
 
-  it('is recorded on the status line of ADR-0071, which owns it, as nine statements now', () => {
+  it('says the change carries the old number’s last day of write-limit and link records to the new number', () => {
+    // Owner decision 2026-10-22 (ADR-0083): the limits and the repetition rules count per number,
+    // so the last 24 hours of the records under the old number go with the account — whoever on
+    // that number wrote them — and the old number's next holder starts with none.
+    const changes = sectionOf('**바뀌는 것.**', '**1. 요청 확인.**');
+    expect(changes).toContain(
+      '작성 빈도 제한(#187)이 센 쓰기(`write_limit_events`)와 반복 링크 탐지가 센 링크 사용(`link_uses`) 가운데 지난 24시간의 것이 옛 번호의 해시에서 새 번호의 해시로 옮겨진다(오너 결정 2026-10-22, ADR-0083)',
+    );
+    expect(changes).toContain('같은 번호의 탈퇴한 계정이 남긴 것도 함께 옮긴다');
+    expect(changes).toContain('5단계의 넷째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
+    expect(changes).toContain('운영자 검토 목록에 이미 오른 항목(`link_flags`)은');
+    expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain('기록을 옮기는 넷째 `DO`를 빼면');
+    // What the first commit said — the records stay under the old number — is gone.
+    expect(OPERATIONS).not.toContain('`link_uses`)은 옮기지 않는다');
+  });
+
+  it('is recorded on the status line of ADR-0071, which owns it, as ten statements now', () => {
     // ADR-0071 says step 5 is six statements (7-20, decision 8). ADR-0076 added the likes' DO
     // block, the old number's SET LOCAL line, the UPDATE's check of the old number and the first DO
-    // block's refusal of an `UPDATE 0`, and ADR-0081 the reports' one, and each records so on
-    // ADR-0071's status line rather than rewriting it (ADR-0047 결과 1), so that a reader of
-    // ADR-0071 learns of the move of the likes and of the reports, and of the old number's two lines.
+    // block's refusal of an `UPDATE 0`, ADR-0081 the reports' one and ADR-0083 the records' one,
+    // and each records so on ADR-0071's status line rather than rewriting it (ADR-0047 결과 1), so
+    // that a reader of ADR-0071 learns of the move of the likes, of the reports and of the records,
+    // and of the old number's two lines.
     const start = DECISIONS.indexOf('\n## ADR-0071 ');
     const adr = DECISIONS.slice(start, DECISIONS.indexOf('\n## ADR-0072 ', start));
     const status = /^- 상태: (.+)$/m.exec(adr)?.[1] ?? '';
-    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(9);
+    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(10);
     expect(status).toContain('일부 대체됨(ADR-0076: 결정 7-20의 5단계 한 트랜잭션');
     expect(status).toContain('둘째 `DO`');
     expect(status).toContain("'여섯 문장'은 여덟 문장이다");
@@ -827,6 +873,9 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(status).toContain('셋째 `DO`');
     expect(status).toContain("ADR-0076이 고친 '여덟 문장'은 아홉 문장이다");
     expect(status).not.toContain("'일곱 문장'은 여덟 문장이다");
+    expect(status).toContain('일부 대체됨(ADR-0083: 결정 7-20의 5단계 한 트랜잭션');
+    expect(status).toContain('넷째 `DO`');
+    expect(status).toContain("ADR-0081이 고친 '아홉 문장'은 열 문장이다");
   });
 
   it('turns psql’s ON_ERROR_ROLLBACK off just before it, so a refusal aborts it all', () => {
@@ -2297,5 +2346,222 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
       await client.end();
     }
     expect(await reportRows()).toEqual(after);
+  });
+
+  /** Every write-limit and link record, as (hash, what, time), ordered for comparing. */
+  async function recordRows() {
+    const writes = (await t.db.select().from(writeLimitEvents)).map((row) => ({
+      phoneHash: row.phoneHash,
+      what: row.action,
+      at: row.createdAt.getTime(),
+    }));
+    const uses = (await t.db.select().from(linkUses)).map((row) => ({
+      phoneHash: row.phoneHash,
+      what: `${row.url} ${row.postId ?? row.commentId!}`,
+      at: row.usedAt.getTime(),
+    }));
+    return [...writes, ...uses].sort((a, b) =>
+      `${a.phoneHash}${a.what}${String(a.at)}`.localeCompare(
+        `${b.phoneHash}${b.what}${String(b.at)}`,
+      ),
+    );
+  }
+
+  /** `hours` (and `minutes`) ago, by this machine's clock. */
+  const ago = (hours: number, minutes = 0) =>
+    new Date(Date.now() - hours * 3_600_000 - minutes * 60_000);
+
+  it('moves the old number’s last day of write-limit and link records to the new number, whoever on it wrote them', async () => {
+    // Owner decision 2026-10-22 (ADR-0083): the limits and the repetition rules count per verified
+    // number, so the account's records go with it, and the old number's next holder starts with
+    // none. The records carry no account: those a withdrawn account on the old number left are
+    // moved as well, as the account inherited them.
+    const { user } = await createUser(t.db);
+    const { phone } = await createPhoneVerification(t.db, { userId: user.id });
+    const market = await createMarket(t.db);
+    const post = await createPost(t.db, { marketId: market.id, authorId: user.id });
+    const comment = await createComment(t.db, { postId: post.id, authorId: user.id });
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const otherHash = randomPhoneHash();
+    // Within the day under the old number: a post, a comment (23h59m ago), an upload, two link
+    // uses. Out of it: an edit and a link use a minute past 24 hours.
+    const within = [
+      await createWriteLimitEvent(t.db, { phoneHash: oldHash, action: 'post', createdAt: ago(1) }),
+      await createWriteLimitEvent(t.db, {
+        phoneHash: oldHash,
+        action: 'comment',
+        createdAt: ago(23, 59),
+      }),
+      await createWriteLimitEvent(t.db, {
+        phoneHash: oldHash,
+        action: 'upload',
+        createdAt: ago(5),
+      }),
+    ];
+    await createWriteLimitEvent(t.db, {
+      phoneHash: oldHash,
+      action: 'edit',
+      createdAt: ago(24, 1),
+    });
+    await createLinkUse(t.db, {
+      url: 'https://example.com/a',
+      phoneHash: oldHash,
+      postId: post.id,
+      usedAt: ago(2),
+    });
+    await createLinkUse(t.db, {
+      url: 'https://example.com/a',
+      phoneHash: oldHash,
+      commentId: comment.id,
+      usedAt: ago(3),
+    });
+    await createLinkUse(t.db, {
+      url: 'https://example.com/b',
+      phoneHash: oldHash,
+      postId: post.id,
+      usedAt: ago(24, 1),
+    });
+    // Another number's, and the new number's own (a withdrawn account that held it): they stay.
+    await createWriteLimitEvent(t.db, { phoneHash: otherHash, action: 'post', createdAt: ago(1) });
+    await createWriteLimitEvent(t.db, { phoneHash: newHash, action: 'post', createdAt: ago(4) });
+    await createLinkUse(t.db, {
+      url: 'https://example.com/a',
+      phoneHash: otherHash,
+      postId: post.id,
+      usedAt: ago(1),
+    });
+    const before = await recordRows();
+    const vars = {
+      user_id: user.id,
+      new_phone: randomPhone(),
+      new_hash: newHash,
+      old_phone: phone,
+      old_hash: oldHash,
+    };
+    // The records give the result table nothing to read: the same row, the same COMMIT.
+    expect(await change(vars)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    const moved = (row: { phoneHash: string; at: number }) =>
+      row.phoneHash === oldHash && row.at > Date.now() - 86_400_000;
+    const expected = before
+      .map((row) => (moved(row) ? { ...row, phoneHash: newHash } : row))
+      .sort((a, b) =>
+        `${a.phoneHash}${a.what}${String(a.at)}`.localeCompare(
+          `${b.phoneHash}${b.what}${String(b.at)}`,
+        ),
+      );
+    expect(await recordRows()).toEqual(expected);
+    // Five moved, with their kind, link, item and time; the two out of the window stay.
+    expect(before.filter(moved)).toHaveLength(within.length + 2);
+    expect((await recordRows()).filter((row) => row.phoneHash === oldHash)).toHaveLength(2);
+    // The same lines again: the old number read again is the new one, whose hash is not `oldHash`
+    // — `UPDATE 0`, refused, and nothing moves back or on.
+    expect(await change(vars)).toEqual(REFUSED_OLD_NUMBER);
+    expect(await recordRows()).toEqual(expected);
+  });
+
+  it('keeps nothing of a change from an old number the account does not hold, its records’ move included (a COMMIT typed after it too)', async () => {
+    // A number typed wrong into the CLI's --psql-old, or the lines of a change that committed run
+    // again: the hash is another number's. The records' block would carry that number's write-limit
+    // and link records to the account, and the INSERT would record the new number beside the
+    // account's grant. `UPDATE 0` says so, and the DO block refuses it: even the COMMIT of an
+    // operator who did not read it answers ROLLBACK (ADR-0076 7-24, ADR-0083).
+    const { user } = await createUser(t.db);
+    const grant = await createStartGrant(t.db, { userId: user.id, amountCoin: 100n });
+    const phone = (await phoneOf(user.id))!;
+    const numbers = await numbersOf(grant.id);
+    const elsewhere = randomPhoneHash();
+    await createWriteLimitEvent(t.db, { phoneHash: elsewhere, action: 'post', createdAt: ago(1) });
+    const market = await createMarket(t.db);
+    const post = await createPost(t.db, { marketId: market.id, authorId: user.id });
+    await createLinkUse(t.db, {
+      url: 'https://example.com/a',
+      phoneHash: elsewhere,
+      postId: post.id,
+    });
+    const before = await recordRows();
+    const vars = {
+      user_id: user.id,
+      new_phone: randomPhone(),
+      new_hash: randomPhoneHash(),
+      old_phone: randomPhone(),
+      old_hash: elsewhere,
+    };
+    // As the doc has it: the `UPDATE 0` row, whose ROLLBACK a COMMIT would answer too.
+    expect(await change(vars)).toEqual(REFUSED_OLD_NUMBER);
+    // Typed through to a COMMIT, with nothing read: ROLLBACK, and nothing kept.
+    expect(await committedAnyway(vars)).toEqual({ updated: 0, commit: 'ROLLBACK' });
+    expect(await phoneOf(user.id)).toBe(phone);
+    expect(await numbersOf(grant.id)).toEqual(numbers);
+    expect(await recordRows()).toEqual(before);
+    // The number the account holds, read and hashed as step 3 does, goes through — and moves
+    // nothing of `elsewhere`'s.
+    expect(await change({ ...vars, old_phone: phone, old_hash: randomPhoneHash() })).toMatchObject({
+      updated: 1,
+      inserted: 1,
+      next: 'COMMIT',
+    });
+    expect(await recordRows()).toEqual(before);
+  });
+
+  it('moves no record when the change is refused', async () => {
+    const { user } = await createUser(t.db);
+    const { phone } = await createPhoneVerification(t.db, { userId: user.id });
+    const oldHash = randomPhoneHash();
+    await createWriteLimitEvent(t.db, { phoneHash: oldHash, action: 'comment', createdAt: ago(1) });
+    const before = await recordRows();
+    // On another account's verified number (the UPDATE) and on a waiting grant's (the DO block,
+    // which comes before the records' block).
+    const { user: other } = await createUser(t.db);
+    const { phone: taken } = await createPhoneVerification(t.db, { userId: other.id });
+    const old = { old_phone: phone, old_hash: oldHash };
+    expect(
+      await change({ user_id: user.id, new_phone: taken, new_hash: randomPhoneHash(), ...old }),
+    ).toEqual(REFUSED_VERIFIED);
+    const { n, phone: held } = await waitingHolder();
+    expect(await change({ user_id: user.id, new_phone: held, new_hash: n, ...old })).toEqual(
+      REFUSED_NO_GRANT,
+    );
+    expect(await recordRows()).toEqual(before);
+  });
+
+  it('moves a counted write the account committed while the change waited on its record', async () => {
+    // WriteLimitsService.lockWriter holds the writer's 본인확인 row FOR KEY SHARE and records the
+    // write under the hash of the number it read: the change's UPDATE waits for it, and the
+    // records' block, a later statement, sees the record and moves it.
+    const { user } = await createUser(t.db);
+    const { phone } = await createPhoneVerification(t.db, { userId: user.id });
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const holder = await t.db.$client.connect();
+    let changed;
+    let committed = false;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM phone_verifications WHERE user_id = $1 FOR KEY SHARE', [
+        user.id,
+      ]);
+      await holder.query(
+        `INSERT INTO write_limit_events (phone_hash, action) VALUES ($1, 'post')`,
+        [oldHash],
+      );
+      changed = change({
+        user_id: user.id,
+        new_phone: randomPhone(),
+        new_hash: newHash,
+        old_phone: phone,
+        old_hash: oldHash,
+      });
+      expect(await psqlWaits()).toBe(true);
+      await holder.query('COMMIT');
+      committed = true;
+    } finally {
+      if (!committed) await holder.query('ROLLBACK');
+      holder.release();
+    }
+    expect(await changed).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    expect((await recordRows()).map((row) => [row.phoneHash, row.what])).toEqual([
+      [newHash, 'post'],
+    ]);
   });
 });

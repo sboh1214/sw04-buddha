@@ -571,13 +571,22 @@ export const copy = {
   // --- admin: 반복 링크 검토 목록 (#187, ADR-0083) ---
   // 오너 결정(ADR-0069 결정 2 #45-15, 결정 4 #187): 같은 사람이 같은 주소를 24시간에 3개 이상의 글·댓글에
   // 쓰거나, 서로 다른 3명 이상이 24시간에 같은 주소를 쓰면 운영자 검토 목록에 올린다. 글은 그대로 보인다.
-  // '사람'은 본인확인한 번호다(결정 7). 시장의 공식 출처 주소와 운영자의 글은 세지 않는다. 숨김 같은
-  // 조치는 #50의 운영 처리이고 이 목록은 보기만 한다. 수는 시험이 LINK_REPEAT_THRESHOLD와 견준다.
+  // '사람'은 본인확인한 번호다(결정 7). 시장의 공식 출처 주소와 운영자의 글은 세지 않는다. 수는 시험이
+  // LINK_REPEAT_THRESHOLD·LINK_CHECK_MAX와 견준다. 오너 결정 2026-10-22: 같은 주소·규칙끼리 묶어 항목 수를
+  // 보이고, 운영자가 '확인함'(문제 없음·조치함)으로 표시하면 운영 기록에 남고 기본 목록에서 빠진다(필터로
+  // 본다). 글·댓글마다 본문 순서로 앞의 링크 20개까지 본다. 숨김 같은 조치는 #50의 운영 처리다.
   adminLinkFlags: '반복 링크',
   adminLinkFlagsIntro:
-    '같은 사람(본인확인한 번호)이 24시간 안에 같은 주소를 글·댓글 3개 이상에 쓰거나, 서로 다른 3명 이상이 24시간 안에 같은 주소를 쓰면 그 글·댓글이 여기에 올라옵니다. 글은 거절하거나 숨기지 않고 그대로 보입니다. 주소는 견준 모양(scheme·도메인은 소문자, 끝 슬래시·utm 같은 추적용 덧붙임·# 뒤를 뺀 것)으로 보이고, 단축 주소는 풀지 않습니다. 시장의 공식 출처 주소와 운영자의 글은 세지 않습니다. 시각은 한국 시간입니다.',
+    "같은 사람(본인확인한 번호)이 24시간 안에 같은 주소를 글·댓글 3개 이상에 쓰거나, 서로 다른 3명 이상이 24시간 안에 같은 주소를 쓰면 그 글·댓글이 여기에 올라옵니다. 같은 주소·규칙의 항목은 한 줄로 묶어 항목 수와 최근 탐지 시각을 보입니다. 글은 거절하거나 숨기지 않고 그대로 보입니다. 주소는 견준 모양(scheme·도메인은 소문자, 끝 슬래시·utm 같은 추적용 덧붙임·# 뒤를 뺀 것)으로 보이고, 단축 주소는 풀지 않습니다. 글·댓글마다 본문 순서로 앞의 링크 20개까지 봅니다. 시장의 공식 출처 주소와 운영자의 글은 세지 않습니다. 살펴본 줄을 결과(문제 없음·조치함)와 함께 확인함으로 표시하면 이 목록에서 빠지고 '확인함'에서 볼 수 있습니다. 시각은 한국 시간입니다.",
+  adminLinkFlagsOpen: '확인 전',
+  adminLinkFlagsReviewed: '확인함',
   adminLinkFlagSameAccount: '한 사람이 3번 이상',
   adminLinkFlagManyAccounts: '3명 이상이 사용',
+  adminLinkFlagItems: '항목',
+  adminLinkFlagItemsUnit: '개',
+  adminLinkFlagLatest: '최근 탐지',
+  adminLinkFlagShowItems: '항목 보기',
+  adminLinkFlagHideItems: '항목 접기',
   adminLinkFlagFlaggedAt: '탐지',
   adminLinkFlagPost: '근거 글',
   adminLinkFlagComment: '댓글',
@@ -588,6 +597,23 @@ export const copy = {
   adminLinkFlagDeleted: '작성자가 삭제',
   adminLinkFlagHidden: '숨김',
   adminNoLinkFlags: '검토할 반복 링크가 없습니다.',
+  adminNoReviewedLinkFlags: '확인함으로 표시한 반복 링크가 없습니다.',
+  // 펼친 줄에 항목이 없을 때 — 화면이 읽은 뒤 다른 운영자가 표시했거나 항목이 지워졌다(까닭은 가리지 못한다).
+  adminLinkFlagItemsGone: '이 줄에 남은 항목이 없습니다. 목록을 다시 불러왔습니다.',
+  // '확인함' 표시 (오너 결정 2026-10-22): 결과는 둘, 메모는 고르기. 조치 자체는 #50의 운영 처리에서 한다.
+  adminLinkFlagReview: '확인함으로 표시',
+  adminLinkFlagReviewTitle: '확인함으로 표시',
+  adminLinkFlagReviewBody:
+    "이 주소·규칙으로 지금 보이는 항목을 확인함으로 표시합니다. 표시한 항목은 이 목록에서 빠지고 '확인함'에서 볼 수 있습니다. 숨김·경고 같은 조치는 이 표시와 따로 합니다.",
+  adminLinkFlagOutcome: '결과',
+  adminLinkFlagNoIssue: '문제 없음',
+  adminLinkFlagActioned: '조치함',
+  adminLinkFlagNote: '메모 (선택)',
+  adminLinkFlagReviewDone: '확인함으로 표시했습니다.',
+  adminLinkFlagReviewGone:
+    '표시할 항목이 남아 있지 않습니다. 다른 운영자가 먼저 표시했을 수 있어 목록을 다시 불러왔습니다.',
+  adminLinkFlagReviewedAt: '확인',
+  adminLinkFlagReviewer: '운영자',
   adminSmsCountUnit: '건',
 
   // --- admin: 운영 공지 (#138, ADR-0077) ---

@@ -1211,6 +1211,8 @@ export interface CreateLinkFlagInput {
   commentId?: string;
   /** Default: the database clock. */
   flaggedAt?: Date;
+  /** The operator's mark that covered it (an admin_actions row); default none. */
+  reviewActionId?: string;
 }
 
 /** An entry of the repeated-link review list (#187), as the API's LinkReviewService writes one. */
@@ -1222,6 +1224,7 @@ export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
       reason: input.reason,
       postId: input.postId ?? null,
       commentId: input.commentId ?? null,
+      reviewActionId: input.reviewActionId ?? null,
       ...(input.flaggedAt === undefined ? {} : { flaggedAt: input.flaggedAt }),
     })
     .returning();

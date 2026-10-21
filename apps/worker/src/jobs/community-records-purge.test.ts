@@ -2,7 +2,8 @@
  * `community.records_purge` (#187, ADR-0083) on the docker `test` database: it deletes the write
  * limits' counted writes and the repetition rules' link uses once they are older than their
  * 24-hour windows and the margin past them, keeps everything a window still counts and what is
- * within the margin, and never touches the review list. Skips when TEST_* are unset.
+ * within the margin, and never touches the review list (#184 deletes that, ADR-0083 7-20). Skips
+ * when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {

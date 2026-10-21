@@ -318,9 +318,10 @@ export class CommentsService {
    * reason. Comments are taken on posts of markets in every public status (#45-6, the post's own
    * rule). An author under a writing restriction is refused before anything is read (RESTRICTED,
    * `checkWriter`, #185). Then the comment counts against the person's limits (#187: 댓글·대댓글
-   * together, 5 a minute and 200 a day — WRITE_LIMITED, nothing written) and its links go to the
-   * repetition rules (#187: a flag on the operators' review list at most). Nothing about the
-   * author's trading is read or attached (N05 §2).
+   * together, 5 a minute and 200 a day — WRITE_LIMITED, nothing written) and its links — the first
+   * 20 in its text (owner decision 2026-10-22) — go to the repetition rules (#187: a flag on the
+   * operators' review list at most). Nothing about the author's trading is read or attached (N05
+   * §2).
    */
   async create(
     authorId: string,
@@ -375,7 +376,8 @@ export class CommentsService {
    * refused there (오너 결정 2026-10-20, ADR-0074 7-6). An edit that changes something counts
    * against the person's edit limits (#187: posts' and comments' edits together, 10 in 10 minutes
    * and 50 a day — WRITE_LIMITED, nothing written), and the links it puts in that the comment did
-   * not have go to the repetition rules (#187 «수정으로 넣거나 바꾼 링크도 본다»).
+   * not have go to the repetition rules (#187 «수정으로 넣거나 바꾼 링크도 본다») — of the text's
+   * first 20, those not among the previous text's first 20 (owner decision 2026-10-22).
    */
   async update(authorId: string, commentId: string, body: string): Promise<PublishedComment> {
     const links = commentLinks(body);

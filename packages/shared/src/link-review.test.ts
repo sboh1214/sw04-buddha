@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  LINK_CHECK_MAX,
+  LINK_FLAG_REVIEW_NOTE_MAX_LENGTH,
+  adminLinkFlagGroupSchema,
+  adminLinkFlagItemsQuerySchema,
+  adminLinkFlagListQuerySchema,
+  adminLinkFlagReviewBodySchema,
   adminLinkFlagSchema,
   commentLinks,
   isOfficialSourceLink,
   isTrackingParameter,
+  linkFlagReviewPayloadSchema,
   normaliseLink,
   officialSourceLinks,
   postDocumentLinks,
@@ -174,6 +181,90 @@ describe('the links of a post and of a comment', () => {
   });
 });
 
+describe('the first 20 links in body order (owner decision 2026-10-22)', () => {
+  const linked = (text: string, href: string) => ({
+    type: 'text' as const,
+    text,
+    marks: [{ type: 'link' as const, attrs: { href } }],
+  });
+
+  it('reads a post’s marks and written addresses in the order they stand', () => {
+    const document: PostDocument = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            { type: 'text', text: '먼저 https://a.example/1 그리고 ' },
+            linked('표시', 'https://b.example/2'),
+            { type: 'text', text: ' 다음 https://c.example/3' },
+          ],
+        },
+        { type: 'codeBlock', content: [{ type: 'text', text: 'curl https://d.example/4' }] },
+        {
+          type: 'bulletList',
+          content: [
+            {
+              type: 'listItem',
+              content: [{ type: 'paragraph', content: [linked('목록', 'https://e.example/5')] }],
+            },
+          ],
+        },
+        {
+          type: 'paragraph',
+          content: [
+            // The editor's autolink: words that are their own address, marked — one link.
+            linked('https://f.example/6', 'https://f.example/6'),
+            { type: 'hardBreak' },
+            { type: 'text', text: 'https://g.example/7' },
+          ],
+        },
+      ],
+    };
+    expect(postDocumentLinks(document)).toEqual([
+      'https://a.example/1',
+      'https://b.example/2',
+      'https://c.example/3',
+      'https://d.example/4',
+      'https://e.example/5',
+      'https://f.example/6',
+      'https://g.example/7',
+    ]);
+  });
+
+  it('keeps the first 20 distinct links, each once, what is no link taking no place', () => {
+    expect(LINK_CHECK_MAX).toBe(20);
+    const hrefs = Array.from({ length: 25 }, (_, index) => `https://x.example/${String(index)}`);
+    const document: PostDocument = {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [
+            linked('아님', 'javascript:alert(1)'),
+            // The same link twice, spelled two ways: one place.
+            linked('처음', 'https://X.example/0/?utm_source=a'),
+            ...hrefs.map((href) => linked('x', href)),
+          ],
+        },
+      ],
+    };
+    expect(postDocumentLinks(document)).toEqual(hrefs.slice(0, LINK_CHECK_MAX));
+    const text = hrefs.join(' ');
+    expect(commentLinks(text)).toEqual(hrefs.slice(0, LINK_CHECK_MAX));
+    expect(commentLinks(`${hrefs[3]!} ${text}`)).toEqual([
+      hrefs[3],
+      ...hrefs.slice(0, 3),
+      ...hrefs.slice(4, LINK_CHECK_MAX),
+    ]);
+  });
+
+  it('does not cap a market’s official sources', () => {
+    const many = Array.from({ length: 25 }, (_, index) => `https://s.example/${String(index)}`);
+    expect(officialSourceLinks(many.join(' '))).toHaveLength(25);
+  });
+});
+
 describe('the official sources of a market (decision 4 #187: 예외)', () => {
   const sources = officialSourceLinks(
     '한국은행 보도자료(통화정책방향) https://www.bok.or.kr 및 https://ecos.bok.or.kr/api/?key=1',
@@ -228,5 +319,85 @@ describe('adminLinkFlagSchema', () => {
     };
     expect(adminLinkFlagSchema.parse(entry)).toEqual(entry);
     expect(() => adminLinkFlagSchema.parse({ ...entry, reason: 'body_repeat' })).toThrow();
+  });
+});
+
+describe('the review list’s groups and marks (owner decision 2026-10-22)', () => {
+  const at = new Date().toISOString();
+
+  it('takes a group, with a mark or none', () => {
+    const open = {
+      url: 'https://example.com/a',
+      reason: 'many_accounts',
+      itemCount: 3,
+      latestFlaggedAt: at,
+      review: null,
+    };
+    expect(adminLinkFlagGroupSchema.parse(open)).toEqual(open);
+    const reviewed = {
+      ...open,
+      review: {
+        id: '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f64',
+        outcome: 'no_issue',
+        note: null,
+        reviewedAt: at,
+        admin: { userId: 'u1', nickname: '운영자' },
+      },
+    };
+    expect(adminLinkFlagGroupSchema.parse(reviewed)).toEqual(reviewed);
+    expect(() => adminLinkFlagGroupSchema.parse({ ...open, itemCount: 0 })).toThrow();
+    expect(() =>
+      adminLinkFlagGroupSchema.parse({
+        ...reviewed,
+        review: { ...reviewed.review, outcome: 'reviewed' },
+      }),
+    ).toThrow();
+  });
+
+  it('lists the default part unless asked for the reviewed one', () => {
+    expect(adminLinkFlagListQuerySchema.parse({}).status).toBe('open');
+    expect(adminLinkFlagListQuerySchema.parse({ status: 'reviewed' }).status).toBe('reviewed');
+    expect(() => adminLinkFlagListQuerySchema.parse({ status: 'all' })).toThrow();
+    expect(
+      adminLinkFlagItemsQuerySchema.parse({ url: 'https://example.com/a', reason: 'same_account' }),
+    ).toMatchObject({ url: 'https://example.com/a', reason: 'same_account' });
+    expect(() =>
+      adminLinkFlagItemsQuerySchema.parse({ url: '', reason: 'same_account' }),
+    ).toThrow();
+    expect(() =>
+      adminLinkFlagItemsQuerySchema.parse({
+        url: 'https://example.com/a',
+        reason: 'same_account',
+        reviewId: 'x',
+      }),
+    ).toThrow();
+  });
+
+  it('takes a mark with one of the two outcomes and an optional note of 500 at most, trimmed', () => {
+    const mark = {
+      url: 'https://example.com/a',
+      reason: 'same_account',
+      outcome: 'actioned',
+      through: at,
+    };
+    expect(adminLinkFlagReviewBodySchema.parse(mark)).toEqual(mark);
+    expect(adminLinkFlagReviewBodySchema.parse({ ...mark, note: '  숨김  ' }).note).toBe('숨김');
+    expect(LINK_FLAG_REVIEW_NOTE_MAX_LENGTH).toBe(500);
+    for (const bad of [
+      { ...mark, outcome: 'reviewed' },
+      { ...mark, note: 'x'.repeat(501) },
+      { ...mark, through: 'now' },
+      { ...mark, url: '' },
+    ]) {
+      expect(() => adminLinkFlagReviewBodySchema.parse(bad)).toThrow();
+    }
+    const payload = {
+      reason: 'same_account',
+      outcome: 'no_issue',
+      note: null,
+      itemCount: 3,
+      through: at,
+    };
+    expect(linkFlagReviewPayloadSchema.parse(payload)).toEqual(payload);
   });
 });

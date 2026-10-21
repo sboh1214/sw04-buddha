@@ -1,5 +1,5 @@
 import { type APIRequestContext } from '@playwright/test';
-import type { AdminLinkFlag, WriteLimitedDetails } from '@buddha/shared';
+import type { AdminLinkFlag, AdminLinkFlagGroup, WriteLimitedDetails } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
@@ -29,9 +29,15 @@ import {
  * The repeated links: a member puts one address — written three ways, with the host in capitals,
  * a trailing slash, tracking parameters and a fragment — into a post and two comments within the
  * day. All three are on the operators' review list under the address as the rules compared it,
- * for the same-person rule, and the post stays as it is. A member cannot read the list; an
- * operator opens it from the admin menu and reads each item, its author and its market. The rules'
- * edges, the many-people rule and the exceptions are the API's tests (link-review.test.ts).
+ * for the same-person rule, in one row of that address and rule (owner decision 2026-10-22), and
+ * the post stays as it is. A member cannot read the list; an operator opens it from the admin
+ * menu, opens the row to read each item, its author and its market, and marks the row '확인함'
+ * with '조치함' and a note: it leaves the default list and shows under '확인함' with the mark. A
+ * mark whose request never came back keeps the dialog with what was chosen and written; a row's
+ * buttons are named after the row; once the marked row is gone the focus is on the list's pressed
+ * button. A row another operator marked after the screen read it says, opened, that nothing is
+ * left, and the list read again drops it. The rules' edges, the many-people rule, the exceptions,
+ * the first 20 links and the mark's record are the API's tests (link-review.test.ts).
  */
 
 /** A post straight at the API with the context's cookie: `href`, when given, is a link in it. */
@@ -79,21 +85,46 @@ function retryText(at: number, retryAfterSeconds: number): string {
   return formatKst(new Date(Math.ceil(instant / 60_000) * 60_000).toISOString());
 }
 
-/** Every entry of the review list for `url`, read page by page as an operator. */
+/** A group's entries for `url` and the same-person rule, read page by page as an operator. */
 async function flagsFor(admin: APIRequestContext, url: string): Promise<AdminLinkFlag[]> {
   const found: AdminLinkFlag[] = [];
   let cursor: string | null = null;
-  // The list is newest first: this test's entries are on the first pages, whatever other runs
-  // add meanwhile. Ten pages is far more than enough, and bounds the loop.
   for (let page = 0; page < 10; page += 1) {
-    const query: string = cursor === null ? '' : `?cursor=${encodeURIComponent(cursor)}`;
-    const res = await admin.get(`/api/v1/admin/link-flags${query}`);
+    const after: string = cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`;
+    const res = await admin.get(
+      `/api/v1/admin/link-flags/items?url=${encodeURIComponent(url)}&reason=same_account${after}`,
+    );
     expect(res.status(), await res.text()).toBe(200);
     const body = (await res.json()) as {
       data: AdminLinkFlag[];
       meta: { nextCursor: string | null };
     };
-    found.push(...body.data.filter((flag) => flag.url === url));
+    found.push(...body.data);
+    cursor = body.meta.nextCursor;
+    if (cursor === null) break;
+  }
+  return found;
+}
+
+/** The rows of one part of the review list for `url`, read page by page as an operator. */
+async function groupsFor(
+  admin: APIRequestContext,
+  url: string,
+  status: 'open' | 'reviewed',
+): Promise<AdminLinkFlagGroup[]> {
+  const found: AdminLinkFlagGroup[] = [];
+  let cursor: string | null = null;
+  // Newest first: this test's row is on the first pages, whatever other runs add meanwhile. Ten
+  // pages is far more than enough, and bounds the loop.
+  for (let page = 0; page < 10; page += 1) {
+    const after: string = cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`;
+    const res = await admin.get(`/api/v1/admin/link-flags?status=${status}${after}`);
+    expect(res.status(), await res.text()).toBe(200);
+    const body = (await res.json()) as {
+      data: AdminLinkFlagGroup[];
+      meta: { nextCursor: string | null };
+    };
+    found.push(...body.data.filter((group) => group.url === url));
     cursor = body.meta.nextCursor;
     if (cursor === null) break;
   }
@@ -176,7 +207,7 @@ test.describe('작성 빈도 제한 (#187)', () => {
 });
 
 test.describe('반복 링크 검토 목록 (#187)', () => {
-  test('한 회원이 같은 주소를 하루에 글 하나와 댓글 둘에 쓰면 셋 모두 견준 주소로 운영자 검토 목록에 오르고 글은 그대로이며, 회원은 목록을 볼 수 없고 운영자는 메뉴에서 열어 각 항목을 본다', async ({
+  test('한 회원이 같은 주소를 하루에 글 하나와 댓글 둘에 쓰면 셋 모두 견준 주소로 운영자 검토 목록의 한 줄에 오르고 글은 그대로이며, 회원은 목록을 볼 수 없고 운영자는 메뉴에서 열어 각 항목을 보고 조치함으로 확인하면 기본 목록에서 빠져 확인함에 보인다', async ({
     admin,
     page,
     request,
@@ -208,7 +239,12 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
       `다시 ${tag} https://EXAMPLE.com/e2e-links/${tag}/Report#top`,
     );
 
-    // The third use put all three on the list, for the same-person rule, once each.
+    // The third use put all three on the list, for the same-person rule, once each — one row of
+    // the address and the rule, with three entries (owner decision 2026-10-22).
+    const groups = await groupsFor(admin, url, 'open');
+    expect(groups.map((group) => [group.reason, group.itemCount, group.review])).toEqual([
+      ['same_account', 3, null],
+    ]);
     const flags = await flagsFor(admin, url);
     expect(flags).toHaveLength(3);
     for (const flag of flags) expect(flag.reason).toBe('same_account');
@@ -226,9 +262,20 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
     expect(read.status()).toBe(200);
     expect(((await read.json()) as { data: { state: string } }).data.state).toBe('published');
 
-    // A member cannot read the list.
-    const refused = await page.request.get('/api/v1/admin/link-flags');
-    expect(refused.status()).toBe(403);
+    // A member cannot read the list, nor mark it.
+    expect((await page.request.get('/api/v1/admin/link-flags')).status()).toBe(403);
+    expect(
+      (
+        await page.request.post('/api/v1/admin/link-flags/reviews', {
+          data: {
+            url,
+            reason: 'same_account',
+            outcome: 'no_issue',
+            through: groups[0]!.latestFlaggedAt,
+          },
+        })
+      ).status(),
+    ).toBe(403);
     await page.goto('/admin/link-flags');
     await expect(page).toHaveURL('/');
     await expect(page.getByTestId('admin-link-flags')).toHaveCount(0);
@@ -236,6 +283,7 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
     // An operator opens it from the admin menu.
     await logOut(page);
     await signIn(page, adminAccount.email, adminAccount.password);
+    const operator = await meOf(page.request);
     await page.goto('/admin/markets');
     await page
       .getByTestId('admin-nav')
@@ -244,18 +292,55 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
     await expect(page).toHaveURL('/admin/link-flags');
     const screen = page.getByTestId('admin-link-flags');
     await expect(screen).toContainText(copy.adminLinkFlagsIntro);
+    await expect(page.getByTestId('admin-link-flags-open')).toHaveAttribute('aria-pressed', 'true');
 
-    for (const flag of flags) {
-      const entry = page.getByTestId(`admin-link-flag-${flag.id}`);
-      // Newest first: other runs may have added entries since; 더 보기 until it is drawn.
-      for (let more = 0; more < 10 && (await entry.count()) === 0; more += 1) {
+    /**
+     * The row of this test's address in the part on screen, once that part has loaded (it holds
+     * this test's row at least), 더 보기 until it is drawn.
+     */
+    const rowOf = async () => {
+      const row = page.locator(`[data-testid="admin-link-flag-group"][data-url="${url}"]`);
+      await expect(page.getByTestId('admin-link-flag-group').first()).toBeVisible();
+      for (let more = 0; more < 10 && (await row.count()) === 0; more += 1) {
         await page.getByTestId('admin-link-flags-more').click();
       }
+      return row;
+    };
+    const row = await rowOf();
+    await expect(row).toBeVisible();
+    await expect(row.getByTestId('admin-link-flag-url')).toHaveText(url);
+    await expect(row.getByTestId('admin-link-flag-reason')).toHaveText(
+      copy.adminLinkFlagSameAccount,
+    );
+    await expect(row.getByTestId('admin-link-flag-count')).toHaveText(
+      `${copy.adminLinkFlagItems} 3${copy.adminLinkFlagItemsUnit}`,
+    );
+    await expect(row.getByTestId('admin-link-flag-latest')).toHaveText(
+      `${copy.adminLinkFlagLatest} ${formatKst(groups[0]!.latestFlaggedAt)}`,
+    );
+
+    // Its buttons are named after the row, as every row has the same two; the toggle points at the
+    // entries it opens.
+    const toggle = row.getByTestId('admin-link-flag-toggle');
+    await expect(toggle).toHaveAccessibleName(
+      `${copy.adminLinkFlagSameAccount} ${url} ${copy.adminLinkFlagShowItems}`,
+    );
+    await expect(row.getByTestId('admin-link-flag-review-open')).toHaveAccessibleName(
+      `${copy.adminLinkFlagSameAccount} ${url} ${copy.adminLinkFlagReview}`,
+    );
+    await expect(toggle).not.toHaveAttribute('aria-controls');
+
+    // The row opens to its entries.
+    await toggle.click();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(toggle).toHaveAccessibleName(
+      `${copy.adminLinkFlagSameAccount} ${url} ${copy.adminLinkFlagHideItems}`,
+    );
+    const region = row.getByTestId('admin-link-flag-items');
+    await expect(toggle).toHaveAttribute('aria-controls', (await region.getAttribute('id'))!);
+    for (const flag of flags) {
+      const entry = row.getByTestId(`admin-link-flag-${flag.id}`);
       await expect(entry).toBeVisible();
-      await expect(entry.getByTestId('admin-link-flag-url')).toHaveText(url);
-      await expect(entry.getByTestId('admin-link-flag-reason')).toHaveText(
-        copy.adminLinkFlagSameAccount,
-      );
       await expect(entry).toContainText(
         flag.target.kind === 'post' ? copy.adminLinkFlagPost : copy.adminLinkFlagComment,
       );
@@ -276,12 +361,74 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
       // Written as it is: nothing edited, deleted or hidden.
       await expect(entry.getByTestId('admin-link-flag-states')).toHaveCount(0);
     }
-    const postEntry = page.getByTestId(
+    const postEntry = row.getByTestId(
       `admin-link-flag-${flags.find((flag) => flag.target.kind === 'post')!.id}`,
     );
     await expect(postEntry.getByTestId('admin-link-flag-item')).toHaveText(title);
 
-    // The list is read-only and wraps inside a phone's width.
+    // The list wraps inside a phone's width.
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
+
+    // 확인함: what came of it is required; a note is optional.
+    await row.getByTestId('admin-link-flag-review-open').click();
+    const dialog = page.getByTestId('admin-link-flag-review-dialog');
+    await expect(dialog).toContainText(copy.adminLinkFlagReviewBody);
+    await expect(dialog).toContainText(url);
+    await expect(page.getByTestId('admin-link-flag-review-confirm')).toBeDisabled();
+    await page.getByTestId('admin-link-flag-outcome-actioned').click();
+    const note = `숨김 요청 ${tag}`;
+    await page.getByTestId('admin-link-flag-review-note').fill(note);
+    // A request that never comes back decided nothing: the dialog stays with what was chosen and
+    // written, to send again.
+    await page.route('**/api/v1/admin/link-flags/reviews', (route) => route.abort(), { times: 1 });
+    await page.getByTestId('admin-link-flag-review-confirm').click();
+    await expect(page.getByText(copy.errUnknown)).toBeVisible();
+    await expect(dialog).toBeVisible();
+    await expect(page.getByTestId('admin-link-flag-review-note')).toHaveValue(note);
+    await expect(page.getByTestId('admin-link-flag-review-confirm')).toBeEnabled();
+    expect(await groupsFor(admin, url, 'reviewed')).toEqual([]);
+    await page.getByTestId('admin-link-flag-review-confirm').click();
+    await expect(page.getByText(copy.adminLinkFlagReviewDone)).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+
+    // Out of the default list, recorded with the operator, and under '확인함'. The row and its
+    // button gone, the focus is on the list's pressed button, not lost to the page.
+    await expect(
+      page.locator(`[data-testid="admin-link-flag-group"][data-url="${url}"]`),
+    ).toHaveCount(0);
+    await expect(page.getByTestId('admin-link-flags-open')).toBeFocused();
+    expect(await groupsFor(admin, url, 'open')).toEqual([]);
+    const reviewed = await groupsFor(admin, url, 'reviewed');
+    expect(reviewed).toHaveLength(1);
+    expect(reviewed[0]).toMatchObject({
+      reason: 'same_account',
+      itemCount: 3,
+      review: { outcome: 'actioned', note, admin: { userId: operator.id } },
+    });
+    await page.getByTestId('admin-link-flags-reviewed').click();
+    await expect(page.getByTestId('admin-link-flags-reviewed')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    // The reviewed part, not the default one still on screen: its rows carry their mark.
+    await expect(page.getByTestId('admin-link-flag-outcome').first()).toBeVisible();
+    const done = await rowOf();
+    await expect(done.getByTestId('admin-link-flag-outcome')).toHaveText(
+      `${copy.adminLinkFlagsReviewed} · ${copy.adminLinkFlagActioned}`,
+    );
+    await expect(done.getByTestId('admin-link-flag-reviewed-by')).toContainText(
+      operator.profile.nickname,
+    );
+    await expect(done.getByTestId('admin-link-flag-note')).toHaveText(note);
+    await expect(done.getByTestId('admin-link-flag-review-open')).toHaveCount(0);
+    await done.getByTestId('admin-link-flag-toggle').click();
+    for (const flag of flags) {
+      await expect(done.getByTestId(`admin-link-flag-${flag.id}`)).toBeVisible();
+    }
     expect(
       await page.evaluate(
         () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -289,8 +436,60 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
     ).toBe(true);
 
     // From the list to the post, which reads as it was written.
-    await postEntry.getByTestId('admin-link-flag-item').click();
+    await done
+      .getByTestId(`admin-link-flag-${flags.find((flag) => flag.target.kind === 'post')!.id}`)
+      .getByTestId('admin-link-flag-item')
+      .click();
     await expect(page).toHaveURL(`/community/posts/${postId}`);
     await expect(page.getByTestId('post-title')).toHaveText(title);
+  });
+
+  test('운영자가 목록을 연 뒤 다른 운영자가 그 줄을 표시하면, 그 줄을 펼칠 때 남은 항목이 없다고 말하고 목록을 다시 읽어 그 줄이 빠진다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const url = `https://example.com/e2e-links/${tag}/gone`;
+    const postId = await postThroughApi(page.request, market.id, `줄 ${tag}`, tag, url);
+    await commentThroughApi(page.request, postId, `참고 ${url}`);
+    await commentThroughApi(page.request, postId, `다시 ${url}`);
+
+    await logOut(page);
+    await signIn(page, adminAccount.email, adminAccount.password);
+    await page.goto('/admin/link-flags');
+    const row = page.locator(`[data-testid="admin-link-flag-group"][data-url="${url}"]`);
+    await expect(page.getByTestId('admin-link-flag-group').first()).toBeVisible();
+    for (let more = 0; more < 10 && (await row.count()) === 0; more += 1) {
+      await page.getByTestId('admin-link-flags-more').click();
+    }
+    await expect(row).toBeVisible();
+
+    // Another operator marks the row while this screen shows it.
+    const [group] = await groupsFor(admin, url, 'open');
+    const marked = await secondAdmin.post('/api/v1/admin/link-flags/reviews', {
+      data: { url, reason: 'same_account', outcome: 'no_issue', through: group!.latestFlaggedAt },
+    });
+    expect(marked.status(), await marked.text()).toBe(201);
+
+    // Opened, the row has nothing left: it says so, and the list read again drops it. The list's
+    // answer is held until the words are read, so they cannot pass unseen.
+    let release = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(/\/api\/v1\/admin\/link-flags\?/, async (route) => {
+      await held;
+      await route.continue();
+    });
+    await row.getByTestId('admin-link-flag-toggle').click();
+    await expect(row.getByTestId('admin-link-flag-items-empty')).toHaveText(
+      copy.adminLinkFlagItemsGone,
+    );
+    release();
+    await expect(row).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

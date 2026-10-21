@@ -22,7 +22,8 @@ import * as z from 'zod';
  *
  * 'A day' is the last 24 hours, a rolling window like every other window here, and like the
  * 본인확인's and the proposals' daily limits (ADR-0070, ADR-0089) — never a calendar day, whose
- * midnight would let 40 posts through in an hour around it (ADR-0083's choice).
+ * midnight would let 40 posts through in an hour around it (ADR-0083 7-1, kept by the owner: owner
+ * decision 2026-10-22 answer 1).
  */
 
 /** What a limit counts: a new post, a new comment, an edit, a stored image. */

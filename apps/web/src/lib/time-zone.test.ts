@@ -534,7 +534,7 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     names: ['labelledTime'],
     reason:
       'the admin repeated-link review list (ADR-0083): when an item was caught, written, ' +
-      'edited, deleted and hidden',
+      'edited, deleted and hidden, a group’s latest entry, and when an operator marked it',
   },
 };
 
