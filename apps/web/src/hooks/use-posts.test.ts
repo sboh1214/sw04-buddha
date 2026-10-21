@@ -25,7 +25,12 @@ import {
 } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
-import { type HeldPostDraftAt, keepHeldPostDraft } from './use-post-draft';
+import {
+  type HeldPostDraft,
+  type HeldPostDraftAt,
+  heldPostDraftAt,
+  keepHeldPostDraft,
+} from './use-post-draft';
 import {
   communityPostsInfiniteQueryOptions,
   createPostOptions,
@@ -524,7 +529,7 @@ describe('the writes', () => {
     expect(readPostDraft(storage, editKey, 'user-1', now)).toBeNull();
   });
 
-  it('a form the gate takes away while a landed write is still being handled keeps nothing — the success has not reached it (오너 결정 2026-10-20)', async () => {
+  it('a form the gate takes away while a landed write is still being handled keeps nothing — the success has not reached it, though it renders the form again (오너 결정 2026-10-20)', async () => {
     const storage = tabStorage();
     vi.stubGlobal('window', { sessionStorage: storage });
     // `GET /me` as the gate finds it: the account has a step left (a re-consent just shipped).
@@ -568,23 +573,26 @@ describe('the writes', () => {
     ];
     for (const { key, send } of screens) {
       const queryClient = getQueryClient();
-      // The form's last render: sending (locked), not saved yet, with something to keep.
-      const last: HeldPostDraftAt = {
+      // The form's renders as the hook holds them (`heldPostDraftAt`): something typed, then
+      // locked to send it.
+      const typed: HeldPostDraft = {
         key,
         accountId: 'user-1',
         hasDraft: true,
-        saved: false,
         title: '쓰던 제목',
         body: { type: 'doc', content: [] },
         previews: new Map(),
-        moment: postDraftMoment(),
       };
+      let last: HeldPostDraftAt = heldPostDraftAt(undefined, typed, false);
       // Before anything landed, the gate taking it away keeps it (a 409 is being handled, say).
       expect(keepHeldPostDraft(last, me)).toBe(true);
       expect(readPostDraft(storage, key, 'user-1', Date.now())).not.toBeNull();
       clearPostDraft(storage, key);
+      last = heldPostDraftAt(last, typed, true);
 
-      // The write lands; its success is held in `onSuccess` (the lists being read again).
+      // The write lands; its success is held in `onSuccess` (the lists being read again). Before
+      // that, it puts the post in the cache, which renders the form again — the edit screen reads
+      // the post — still locked, and not shown saved.
       let release: (() => void) | undefined;
       vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(
         () =>
@@ -592,13 +600,22 @@ describe('the writes', () => {
             release = resolve;
           }),
       );
+      let renders = 0;
+      const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+        if (event.type !== 'updated' || event.action.type !== 'success') return;
+        renders += 1;
+        last = heldPostDraftAt(last, typed, true);
+      });
       const sent = send(queryClient);
       await vi.waitFor(() => {
         expect(release).toBeDefined();
       });
-      // TanStack has not marked the mutation succeeded: the form still holds `saved: false`.
+      unsubscribe();
+      expect(renders).toBeGreaterThan(0);
+      // TanStack has not marked the mutation succeeded: the form has not rendered it saved.
       expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('pending');
-      // The gate takes the form away now: nothing is kept.
+      // The gate takes the form away now: nothing is kept — the render kept the moment of the one
+      // that sent, which the landing came after.
       expect(keepHeldPostDraft(last, me)).toBe(false);
       expect(readPostDraft(storage, key, 'user-1', Date.now())).toBeNull();
       release?.();
@@ -607,7 +624,7 @@ describe('the writes', () => {
       expect(readPostDraft(storage, key, 'user-1', Date.now())).toBeNull();
 
       // A form of the same screen drawn afterwards keeps its own draft again.
-      expect(keepHeldPostDraft({ ...last, moment: postDraftMoment() }, me)).toBe(true);
+      expect(keepHeldPostDraft(heldPostDraftAt(undefined, typed, false), me)).toBe(true);
       clearPostDraft(storage, key);
     }
   });
@@ -688,7 +705,6 @@ describe('the writes', () => {
       key,
       accountId: 'user-1',
       hasDraft: true,
-      saved: false,
       title: '쓰던 제목',
       body: { type: 'doc', content: [] },
       previews: new Map(),

@@ -37,6 +37,7 @@ import {
   adminNoticeRevisionsKey,
   noticeEditConflict,
 } from '@/lib/notices';
+import { postDraftLanded } from '@/lib/post-drafts';
 
 /**
  * 운영 공지 (#138, ADR-0077): the community list's fixed area, and the admin screens' lists, notice
@@ -219,8 +220,8 @@ async function afterNoticeWrite(queryClient: QueryClient, notice: AdminNotice): 
 
 /**
  * A refused admin write's side effects: a refusal for the onboarding reads `['me']` again, so the
- * onboarding gate takes the admin to its step (a notice's form keeps no draft in the tab, so what
- * it held is lost on the way — ADR-0077 decision 8-20, a known limit put to the owner); a full
+ * onboarding gate takes the admin to its step (and a notice's form, going, keeps its draft in this
+ * tab — hooks/use-post-draft.ts, 오너 결정 2026-10-22, ADR-0077 decision 8-20); a full
  * fixed area (NOTICE_PIN_LIMIT_REACHED) reads the lists again, since another admin may have pinned
  * what this screen does not show yet; an edit another save overtook, whoever made it
  * (NOTICE_EDIT_CONFLICT, `noticeId` given), reads that notice, its records and versions and the
@@ -250,12 +251,20 @@ async function afterNoticeRefusal(
   }
 }
 
-/** `POST /admin/notices`: a new notice, not pinned (pinning is its own action and record). */
+/**
+ * `POST /admin/notices`: a new notice, not pinned (pinning is its own action and record). A draft
+ * of the write screen the onboarding gate kept in this tab is the notice now and is removed — here,
+ * not on the screen, and recorded first (`postDraftLanded`), as a post's write does (use-posts.ts):
+ * the gate may take the screen away while the write is in flight or its success is handled.
+ */
 export function createNoticeOptions(queryClient: QueryClient) {
   return {
     mutationFn: async (body: CreateNoticeBody): Promise<AdminNotice> =>
       unwrap(await api.POST('/api/v1/admin/notices', { body })).data,
-    onSuccess: (notice: AdminNotice) => afterNoticeWrite(queryClient, notice),
+    onSuccess: (notice: AdminNotice) => {
+      postDraftLanded({ kind: 'notice-new' });
+      return afterNoticeWrite(queryClient, notice);
+    },
     onError: (error: Error) => afterNoticeRefusal(queryClient, error),
   };
 }
@@ -274,7 +283,8 @@ export interface UpdateNoticeVariables extends UpdateNoticeBody {
  * (`changed`), and the screen's toast reads that. Only the notice goes into the cache. A save from
  * a version a save has replaced since — another admin's, or the same admin's from another tab — is
  * refused (NOTICE_EDIT_CONFLICT, owner decisions 2026-10-21) and nothing is written: the notice is
- * read again (`afterNoticeRefusal`).
+ * read again (`afterNoticeRefusal`). A save that lands removes a draft of that notice's edit screen
+ * the gate kept, as a new notice's write does.
  */
 export function updateNoticeOptions(queryClient: QueryClient) {
   return {
@@ -288,7 +298,10 @@ export function updateNoticeOptions(queryClient: QueryClient) {
           body,
         }),
       ).data,
-    onSuccess: (result: AdminNoticeUpdateResult) => afterNoticeWrite(queryClient, result.notice),
+    onSuccess: (result: AdminNoticeUpdateResult, { noticeId }: UpdateNoticeVariables) => {
+      postDraftLanded({ kind: 'notice-edit', noticeId });
+      return afterNoticeWrite(queryClient, result.notice);
+    },
     onError: (error: Error, variables: UpdateNoticeVariables) =>
       afterNoticeRefusal(queryClient, error, variables.noticeId),
   };

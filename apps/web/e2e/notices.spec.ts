@@ -1,4 +1,4 @@
-import type { APIRequestContext, APIResponse, Locator, Page } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Locator, Page, Route } from '@playwright/test';
 import { type Me, NOTICE_PIN_LIMIT } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test } from './helpers';
@@ -19,9 +19,12 @@ import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test 
  * neutral sentence, '그사이 공지가 고쳐졌습니다. 최신 내용을 불러와 주세요.' (the second answers) —
  * what was typed kept, the latest version a press away; and leaving the write or edit form with
  * something typed asks first, as a post's does — a refused save still has something to lose — while
- * a saved form asks nothing (no tab draft). The onboarding gate, which moves an admin as it moves
- * anyone, takes a notice's form away without asking and keeps nothing of it: today's behaviour, a
- * known limit put to the owner (ADR-0077 decision 8-20, 결과 4), pinned here until the answer.
+ * a saved form asks nothing, and a link's leave keeps nothing in the tab. The onboarding gate, which
+ * moves an admin as it moves anyone, takes a notice's form away without asking and keeps what was
+ * typed in this tab, as a post's draft: the screen opened again after the step takes it back, says
+ * so, and offers to discard it, asked first (오너 결정 2026-10-22, ADR-0077 decision 8-20) — an
+ * edit's draft is saved against the version it was typed on, so a save made meanwhile still
+ * refuses it.
  *
  * The pinned set is the service's, one for every spec: both projects share one database, and the
  * limit and the area's order are about every notice pinned there. So the pinning runs once, in the
@@ -74,8 +77,11 @@ const ONBOARDING_REFUSAL = {
 /**
  * `GET /me` in this page answering as the server would after a revision of the terms that changed
  * members' rights — the consent step is the account's next — while `on` (posts.spec.ts's
- * `asReconsent`, without its agreeing: nothing here agrees again, so the seed admin's consents are
- * untouched). No spec can bring about a re-consent for real: the consent versions are the build's.
+ * `asReconsent`). Agreeing on that step turns it off, and is answered in the browser with the
+ * account's own `GET /me` — what the server answers an agreement with (`recordMyConsents`), which
+ * now says nothing is left: nothing is sent, so the seed admins' consents and their rate limit (5 a
+ * minute per account, ADR-0072) are untouched, though both projects agree several times with one
+ * account. No spec can bring about a re-consent for real: the consent versions are the build's.
  */
 async function asReconsent(page: Page): Promise<{ on: boolean }> {
   const state = { on: false };
@@ -96,14 +102,37 @@ async function asReconsent(page: Page): Promise<{ on: boolean }> {
     };
     await route.fulfill({ response, json: body });
   });
+  await page.route('**/api/v1/me/consents', async (route) => {
+    if (route.request().method() !== 'POST') return route.fallback();
+    state.on = false;
+    await route.fulfill({ response: await page.request.get('/api/v1/me') });
+  });
   return state;
 }
 
-/** The storage keys of the post drafts kept in this tab (lib/post-drafts.ts's sessionStorage). */
+/** The consent step of a re-consent, agreed on screen (posts.spec.ts's): 전체 동의, then 계속하기. */
+async function agreeAgain(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-return-reason')).toHaveText(
+    copy.onboardingReconsentReason,
+  );
+  await page.getByTestId('consent-all').click();
+  await page.getByTestId('consent-submit').click();
+}
+
+/** The storage keys of the drafts kept in this tab (lib/post-drafts.ts's sessionStorage). */
 function draftsInTab(page: Page): Promise<string[]> {
   return page.evaluate(() =>
     Object.keys(sessionStorage).filter((key) => key.startsWith('buddha.postDraft:')),
   );
+}
+
+/** The draft kept in this tab under `key`, as lib/post-drafts.ts stores it, or null. */
+async function keptDraft(
+  page: Page,
+  key: string,
+): Promise<{ title: string; opened?: string | null } | null> {
+  const raw = await page.evaluate((storageKey) => sessionStorage.getItem(storageKey), key);
+  return raw === null ? null : (JSON.parse(raw) as { title: string; opened?: string | null });
 }
 
 /** The browser's reads of the fixed area (`GET /notices`), and no other notice read. */
@@ -847,8 +876,10 @@ test.describe('운영 공지 (#138)', () => {
     admin,
     page,
   }) => {
-    // Owner decision 2026-10-21 8: «공지 쓰기·수정 화면 → 떠날 때 묻기만(탭 보관 없음)» — the posts'
-    // question (#46, '쓰던 내용이 사라집니다. 나갈까요?'). Never pinned: the pinned set is not touched.
+    // Owner decision 2026-10-21 8: «공지 쓰기·수정 화면 → 떠날 때 묻기만» — the posts' question (#46,
+    // '쓰던 내용이 사라집니다. 나갈까요?'); a link's leave keeps nothing in the tab, as a post's does
+    // (only the onboarding gate's move keeps it — 2026-10-22, the next tests). Never pinned: the
+    // pinned set is not touched.
     const tag = freshTag();
     // Every dialog is recorded and answered from `answers` — dismissed when none was expected, which
     // keeps the page where it is and fails the address the step expects.
@@ -878,6 +909,7 @@ test.describe('운영 공지 (#138)', () => {
     answers.push(true);
     await home.click();
     await expect(page).toHaveURL('/');
+    expect(await draftsInTab(page)).toEqual([]);
     await page.goto('/admin/notices/new');
     await expect(editor).toBeVisible();
     await expect(titleInput).toHaveValue('');
@@ -962,81 +994,284 @@ test.describe('운영 공지 (#138)', () => {
     expect(asked).toEqual([question, question, question, question, question]);
   });
 
-  test('쓰던 공지에서 온보딩 게이트가 남은 단계로 보내면 묻지 않고 탭에도 남기지 않아, 쓰던 내용이 사라진다', async ({
-    admin,
+  test('쓰던 공지에서 온보딩 게이트가 남은 단계로 보내면 묻지 않고 이 탭에 두었다가, 단계를 마치고 돌아오면 되살리고, 되살린 내용 버리기는 먼저 묻는다', async ({
     page,
   }) => {
-    // ADR-0077 decision 8-20: /admin is gated like every screen (lib/onboarding.ts), and a notice's
-    // form keeps no draft in the tab (owner decision 2026-10-21 8). So a re-consent that turns up
-    // while an admin writes — here, a send refused with ONBOARDING_REQUIRED, which reads `['me']`
-    // again — takes the admin to the step without a question, and what was typed is gone. That is
-    // today's behaviour and a known limit (결과 5), put to the owner (결과 4): pinned until the
-    // answer. A notice form given a draft key would keep its draft here, and fail this. Never
-    // pinned; the re-consent is this browser's `GET /me` alone.
+    // 오너 결정 2026-10-22 (ADR-0077 decision 8-20): /admin is gated like every screen
+    // (lib/onboarding.ts), and the gate's move keeps a notice's draft in this tab for an hour, as a
+    // post's (posts.spec.ts): the screen opened again after the step takes it back, says so, and
+    // offers to discard it, asked first. A link's leave still only asks (the test before). Here
+    // the re-consent turns up as a send refused with ONBOARDING_REQUIRED, which reads `['me']`
+    // again; it is this browser's `GET /me` alone. Never pinned.
+    const tag = freshTag();
+    const asked: string[] = [];
+    const answers: boolean[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
+    });
+    const question = `confirm: ${copy.postLeaveConfirm}`;
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    await signIn(page, adminAccount.email, adminAccount.password);
+    const reconsent = await asReconsent(page);
+    const write = '/admin/notices/new';
+    const step = `/onboarding?next=${encodeURIComponent(write)}`;
+    const isCreate = (url: URL) => url.pathname === NOTICES;
+    const refuseCreate = async (route: Route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    };
+
+    // --- 공지 쓰기, a title and a formatted body typed: the send is refused for the onboarding.
+    await page.route(isCreate, refuseCreate);
+    await page.goto(write);
+    const title = `되살릴 공지 ${tag}`;
+    await titleInput.fill(title);
+    await editor.click();
+    await page.getByTestId('post-editor-bold').click();
+    await page.keyboard.type('굵은 안내');
+    await page.getByTestId('post-editor-bold').click();
+    await page.keyboard.type(' 이어 쓴 안내');
+    await page.getByTestId('post-submit').click();
+    // The gate takes the admin to the step and asks nothing: the draft is kept in this tab.
+    await expect(page).toHaveURL(step);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    expect(asked).toEqual([]);
+    expect(await draftsInTab(page)).toEqual(['buddha.postDraft:notice-new']);
+
+    // --- the step done: back on the write screen, the draft taken back and said so.
+    await agreeAgain(page);
+    await expect(page).toHaveURL(write);
+    await expect(restored).toContainText(copy.postDraftRestored);
+    await expect(restored).toBeFocused();
+    await expect(titleInput).toHaveValue(title);
+    await expect(editor.locator('strong')).toHaveText('굵은 안내');
+    await expect(editor).toContainText('이어 쓴 안내');
+    // Taken back, it is the form's again — gone from the storage, and guarded like any draft.
+    await expect.poll(() => draftsInTab(page)).toEqual([]);
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([question]);
+    await expect(page).toHaveURL(write);
+
+    // --- sent: the notice holds it, and nothing is kept.
+    await page.unroute(isCreate);
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL('/admin/notices');
+    await unpinnedList(page).getByRole('link', { name: title, exact: true }).click();
+    await expect(page).toHaveURL(/\/admin\/notices\/[0-9a-f-]{36}$/);
+    await expect(editor.locator('strong')).toHaveText('굵은 안내');
+    expect(await draftsInTab(page)).toEqual([]);
+    expect(asked).toEqual([question]);
+
+    // --- again, and the draft taken back discarded: the discard asks first, and dismissed keeps
+    // it; discarded, the screen is empty again, said in a toast, the focus on the title — nothing
+    // to lose, so leaving asks nothing.
+    await page.route(isCreate, refuseCreate);
+    await page.goto(write);
+    const dropped = `버릴 공지 ${tag}`;
+    await titleInput.fill(dropped);
+    await editor.click();
+    await page.keyboard.type('버릴 안내');
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(step);
+    expect(await draftsInTab(page)).toEqual(['buddha.postDraft:notice-new']);
+    // This time the step is done where it brings nobody back (the re-consent answered elsewhere),
+    // and the write screen is loaded afresh in this tab: `GET /me` is not in the page, and the form
+    // waits for it — made before it, it would skip the draft and leave it in the tab.
+    reconsent.on = false;
+    await page.goto(write);
+    await expect(restored).toBeVisible();
+    await expect(titleInput).toHaveValue(dropped);
+    await expect.poll(() => draftsInTab(page)).toEqual([]);
+    const discard = page.getByTestId('post-draft-discard');
+    const dialog = page.getByTestId('post-draft-discard-dialog');
+    await discard.click();
+    await expect(dialog).toBeVisible();
+    await expect(page.getByRole('alertdialog')).toHaveAccessibleDescription(
+      copy.postDraftDiscardQuestion,
+    );
+    await page.getByTestId('post-draft-discard-cancel').click();
+    await expect(dialog).toHaveCount(0);
+    await expect(restored).toBeVisible();
+    await expect(titleInput).toHaveValue(dropped);
+    await discard.click();
+    await page.getByTestId('post-draft-discard-confirm').click();
+    await expect(page.getByText(copy.postDraftDiscarded)).toBeVisible();
+    await expect(restored).toHaveCount(0);
+    await expect(titleInput).toHaveValue('');
+    await expect(titleInput).toBeFocused();
+    await expect(editor).not.toContainText('버릴 안내');
+    expect(await draftsInTab(page)).toEqual([]);
+    await home.click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toEqual([question]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('수정 화면의 쓰던 공지도 게이트를 지나 되살려 연 판으로 저장하고, 저장한 뒤 고친 것도 저장 없이 게이트가 옮길 때 다시 두며, 그사이 다른 운영자가 저장했으면 되살린 공지는 다시 둘 때도 그 판이고 그 저장은 막힌다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-22 (ADR-0077 decision 8-20) on the edit screen, which stays on the form after
+    // a save: a draft taken back is the form's until a save of it lands — then the restore notice
+    // goes and leaving asks nothing — and what is changed after a save is kept again, however the
+    // gate moves (an upload refused here, no save). An edit's draft keeps the version it was typed
+    // on — kept again before it is saved, too — and its save sends that version, not the one the
+    // screen opened on after the step: a save made meanwhile — another admin's here — refuses it,
+    // as owner decision 2026-10-21 7 refuses any save opened before another (decision 8-19). Never
+    // pinned; the re-consent is this browser's `GET /me` alone. Nothing here asks.
     const tag = freshTag();
     const asked: string[] = [];
     page.on('dialog', (dialog) => {
       asked.push(`${dialog.type()}: ${dialog.message()}`);
       void dialog.dismiss();
     });
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
     const titleInput = page.getByTestId('post-title-input');
     const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
     await signIn(page, adminAccount.email, adminAccount.password);
     const reconsent = await asReconsent(page);
+    const original = `게이트 앞의 공지 ${tag}`;
+    const id = await noticeThroughApi(admin, original);
+    const edit = `/admin/notices/${id}`;
+    const step = `/onboarding?next=${encodeURIComponent(edit)}`;
+    const key = `buddha.postDraft:notice-edit:${id}`;
+    const isUpdate = (url: URL) => url.pathname === `${NOTICES}/${id}`;
+    const refuseUpdate = async (route: Route) => {
+      if (route.request().method() !== 'PUT') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    };
 
-    // --- 공지 쓰기, a title and a body typed: the send is refused for the onboarding.
-    const write = '/admin/notices/new';
-    const isCreate = (url: URL) => url.pathname === NOTICES;
-    await page.route(isCreate, async (route) => {
+    // --- an edit under way, its save refused for the onboarding: kept with the version the screen
+    // was opened from (the notice never edited — null).
+    await page.route(isUpdate, refuseUpdate);
+    await page.goto(edit);
+    await expect(titleInput).toHaveValue(original);
+    const typed = `되살릴 제목 ${tag}`;
+    await titleInput.fill(typed);
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 되살릴 본문');
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(step);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    expect(asked).toEqual([]);
+    expect(await draftsInTab(page)).toEqual([key]);
+    expect(await keptDraft(page, key)).toMatchObject({ title: typed, opened: null });
+
+    // --- back once agreed: taken back and saved — the notice holds it, the restore notice goes, and
+    // the screen, which stays on the form, has nothing of its own to lose.
+    await page.unroute(isUpdate);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(edit);
+    await expect(restored).toBeVisible();
+    await expect(titleInput).toHaveValue(typed);
+    await expect(editor).toContainText('되살릴 본문');
+    await expect.poll(() => draftsInTab(page)).toEqual([]);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByText(copy.adminNoticeSaved)).toBeVisible();
+    await expect(restored).toHaveCount(0);
+    const saved = await dataOf<{ title: string; body: unknown; editedAt: string | null }>(
+      await admin.get(`${NOTICES}/${id}`),
+    );
+    expect(saved.title).toBe(typed);
+    expect(JSON.stringify(saved.body)).toContain('되살릴 본문');
+    expect(saved.editedAt).not.toBeNull();
+
+    // --- changed after that save, on the same form, and taken to the step again with no save of
+    // it — the form still shows the save landed: an image picked, its upload refused for the
+    // onboarding (the editor reads `GET /me` again, and the gate follows). Kept again, with the
+    // version the save moved the form to.
+    const again = `다시 고친 제목 ${tag}`;
+    await titleInput.fill(again);
+    const isUpload = '**/api/v1/media/images**';
+    await page.route(isUpload, async (route) => {
       if (route.request().method() !== 'POST') return route.fallback();
       reconsent.on = true;
       await route.fulfill(ONBOARDING_REFUSAL);
     });
-    await page.goto(write);
-    await titleInput.fill(`사라질 공지 ${tag}`);
-    await editor.click();
-    await page.keyboard.type('사라질 본문');
-    await page.getByTestId('post-submit').click();
-    // The gate takes the admin to the step, asking nothing, and nothing is kept in the tab.
-    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
-    await expect(page.getByTestId('consent-step')).toBeVisible();
+    await page
+      .getByTestId('post-editor-file')
+      .setInputFiles({ name: 'notice.png', mimeType: 'image/png', buffer: PNG });
+    await expect(page).toHaveURL(step);
     expect(asked).toEqual([]);
-    expect(await draftsInTab(page)).toEqual([]);
-    // With the step gone, the screen opens empty again: nothing to take back.
-    reconsent.on = false;
-    await page.unroute(isCreate);
-    await page.goto(write);
-    await expect(editor).toBeVisible();
-    await expect(titleInput).toHaveValue('');
-    await expect(editor).not.toContainText('사라질 본문');
-    await expect(page.getByTestId('post-draft-restored')).toHaveCount(0);
+    expect(await keptDraft(page, key)).toMatchObject({ title: again, opened: saved.editedAt });
+    await page.unroute(isUpload);
 
-    // --- a notice's edit screen, its title changed: the same.
-    const title = `게이트 앞의 공지 ${tag}`;
-    const id = await noticeThroughApi(admin, title);
-    const edit = `/admin/notices/${id}`;
-    const isUpdate = (url: URL) => url.pathname === `${NOTICES}/${id}`;
-    await page.route(isUpdate, async (route) => {
-      if (route.request().method() !== 'PUT') return route.fallback();
-      reconsent.on = true;
-      await route.fulfill(ONBOARDING_REFUSAL);
-    });
-    await page.goto(edit);
-    await expect(titleInput).toHaveValue(title);
-    await titleInput.fill(`사라질 제목 ${tag}`);
-    await page.getByTestId('post-submit').click();
-    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(edit)}`);
-    await expect(page.getByTestId('consent-step')).toBeVisible();
-    expect(asked).toEqual([]);
-    expect(await draftsInTab(page)).toEqual([]);
-    reconsent.on = false;
-    await page.unroute(isUpdate);
-    await page.goto(edit);
-    await expect(titleInput).toHaveValue(title);
-    await expect(page.getByTestId('post-draft-restored')).toHaveCount(0);
-    expect((await dataOf<{ title: string }>(await admin.get(`${NOTICES}/${id}`))).title).toBe(
-      title,
+    // --- meanwhile another admin saves the notice. Back once agreed, the screen opens on that
+    // version but the draft taken back is still on its own: taken to the step again before it is
+    // saved, it is kept with that version — not the other admin's — and saved against it once
+    // back: refused, whoever saved first, and what was typed stays; 최신 내용 불러오기 opens the
+    // other admin's version, and nothing taken back is left — in the form or the tab.
+    const theirs = `둘째 관리자의 제목 ${tag}`;
+    const theirSave = await dataOf<{ notice: { editedAt: string | null } }>(
+      await secondAdmin.put(`${NOTICES}/${id}`, {
+        data: {
+          title: theirs,
+          body: {
+            type: 'doc',
+            content: [
+              { type: 'paragraph', content: [{ type: 'text', text: '둘째 관리자의 본문' }] },
+            ],
+          },
+          expectedEditedAt: saved.editedAt,
+        },
+      }),
     );
+    expect(theirSave.notice.editedAt).not.toBe(saved.editedAt);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(edit);
+    await expect(restored).toBeVisible();
+    await expect(titleInput).toHaveValue(again);
+    await page.route(isUpdate, refuseUpdate);
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(step);
+    expect(asked).toEqual([]);
+    const keptAgain = await keptDraft(page, key);
+    expect(keptAgain).toMatchObject({ title: again, opened: saved.editedAt });
+    expect(keptAgain?.opened).not.toBe(theirSave.notice.editedAt);
+    await page.unroute(isUpdate);
+    // The step done where it brings nobody back this time, and the edit screen loaded afresh in
+    // this tab, its `GET /me` answering only after the notice's read: the form waits for the
+    // admin rather than being drawn without one — it would skip the draft — and takes it back.
+    reconsent.on = false;
+    const noticeRead = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === `${NOTICES}/${id}` &&
+        response.request().method() === 'GET',
+    );
+    const meAfterNotice = async (route: Route) => {
+      if (route.request().method() === 'GET') await noticeRead;
+      await route.fallback();
+    };
+    await page.route('**/api/v1/me', meAfterNotice);
+    await page.goto(edit);
+    await expect(restored).toBeVisible();
+    await expect(titleInput).toHaveValue(again);
+    await page.unroute('**/api/v1/me', meAfterNotice);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByTestId('post-form-error')).toContainText(copy.errNoticeEditConflict);
+    await expect(titleInput).toHaveValue(again);
+    await expect(restored).toBeVisible();
+    expect((await dataOf<{ title: string }>(await admin.get(`${NOTICES}/${id}`))).title).toBe(
+      theirs,
+    );
+    await page.getByTestId('admin-notice-reload').click();
+    await expect(titleInput).toHaveValue(theirs);
+    await expect(editor).toContainText('둘째 관리자의 본문');
+    await expect(restored).toHaveCount(0);
+    await expect(page.getByTestId('post-form-error')).toHaveCount(0);
+    expect(await draftsInTab(page)).toEqual([]);
+    await home.click();
+    await expect(page).toHaveURL('/');
     expect(asked).toEqual([]);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });

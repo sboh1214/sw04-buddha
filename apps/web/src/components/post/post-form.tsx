@@ -47,6 +47,7 @@ import {
   type PostDraftKey,
   clearSessionPostDraft,
   hasDraftToKeep,
+  heldDraftVersion,
   nextRestoredDraftState,
   readSessionPostDraft,
   restoredDraftState,
@@ -57,19 +58,29 @@ import { PostEditor } from './post-editor';
 export interface PostFormValues {
   title: string | null;
   body: unknown;
+  /**
+   * The version of the screen's subject what is sent was typed on (`heldDraftVersion`): a draft
+   * taken back's own, else the screen's `draftVersion`. Undefined for a post's form.
+   */
+  version: string | null | undefined;
 }
 
 export interface PostFormProps {
   initialTitle?: string | null;
   initialDocument?: PostDocument;
   /**
-   * Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts). Absent,
-   * the form keeps no draft: a notice's (#138, owner decision 2026-10-21 8 — no tab draft). The
-   * admin screens are gated like the rest (`OnboardingGate`), so the gate taking an admin to a step
-   * left from a notice's form neither asks nor keeps: what it held is lost (ADR-0077 decision
-   * 8-20, a known limit put to the owner).
+   * Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts): a post's
+   * write or edit screen, or a notice's (#138 — the admin screens are gated like the rest, and a
+   * notice's draft is kept the same way, 오너 결정 2026-10-22, ADR-0077).
    */
-  draftKey?: PostDraftKey;
+  draftKey: PostDraftKey;
+  /**
+   * The version of the screen's subject the form starts from, for a screen that saves against one
+   * (a notice's edit screen: the version it was opened from, moved by each save that lands). Kept
+   * with the draft when the gate takes it, and what a draft taken back is saved against
+   * (`PostFormValues['version']`). Absent for a post's form.
+   */
+  draftVersion?: string | null;
   accountId: string | undefined;
   submitLabel: string;
   /** Sending, or sent and on the way to the post: the form is locked. */
@@ -77,7 +88,8 @@ export interface PostFormProps {
   /**
    * The write succeeded: the draft is the server's and is not kept. Each time it turns true, what
    * the form holds becomes its start (`landedDraftStart`) — a screen that stays on the form after
-   * a save (a notice's edit screen, #138) has nothing to lose until the form changes again.
+   * a save (a notice's edit screen, #138) has nothing to lose, or to keep, until the form changes
+   * again.
    */
   saved: boolean;
   /** The last refusal, in Korean; undefined when there is none. */
@@ -161,10 +173,10 @@ export interface NoticeFormOptions {
  * a dialog that says so (오너 결정 2026-10-20 3차 답 3, `nextRestoredDraftState`), and a discard
  * says so in a toast like the app's other completions — on screen and, once, to screen readers
  * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
- * storage: the form holds it, and guards it like any draft. A form with no `draftKey` — a
- * notice's (#138, owner decision 2026-10-21 8: no tab draft) — keeps nothing, and the gate, which
- * moves an admin too, takes it away without asking: what it held is lost (ADR-0077 decision 8-20,
- * a known limit put to the owner).
+ * storage: the form holds it, and guards it like any draft. A notice's forms do the same (#138,
+ * 오너 결정 2026-10-22, ADR-0077 decision 8-20) — a notice edit's draft with the version it was typed
+ * on (`draftVersion`), which its save sends — and a write that lands ends what was taken back
+ * (`landed`): the notice's edit screen stays on the form, holding the server's content then.
  *
  * The post an edit form edits can be deleted while it is open — in another tab: a save refused as
  * NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`) or answers the
@@ -194,16 +206,20 @@ export function PostForm(props: PostFormProps) {
   // Read once, when the form is made (the editor takes its first document then).
   const [kept] = useState(() => ({
     key: draftKey,
-    draft:
-      accountId === undefined || draftKey === undefined
-        ? null
-        : readSessionPostDraft(draftKey, accountId),
+    draft: accountId === undefined ? null : readSessionPostDraft(draftKey, accountId),
   }));
   const [held, send] = useReducer(nextRestoredDraftState, kept.draft, restoredDraftState);
+  // Whether the screen's write had landed as of the last render: its turning true ends what was
+  // taken back (a notice's edit screen stays on the form after a save; a post's screen leaves).
+  const [landed, setLanded] = useState(props.saved);
+  if (landed !== props.saved) {
+    setLanded(props.saved);
+    if (props.saved) send('landed');
+  }
   // The title field of the fields on screen: where a discard leaves the focus.
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (kept.draft !== null && kept.key !== undefined) clearSessionPostDraft(kept.key);
+    if (kept.draft !== null) clearSessionPostDraft(kept.key);
   }, [kept]);
   return (
     <>
@@ -227,7 +243,7 @@ export function PostForm(props: PostFormProps) {
             // Once: a second click on 버리기 while the dialog closes discards nothing, and says
             // nothing either.
             if (!held.asking) return;
-            if (kept.key !== undefined) clearSessionPostDraft(kept.key);
+            clearSessionPostDraft(kept.key);
             send('discard');
             toaster.create(POST_DRAFT_DISCARDED_TOAST);
           }}
@@ -308,6 +324,7 @@ function PostFormFields({
   initialTitle = null,
   initialDocument,
   draftKey,
+  draftVersion,
   accountId,
   submitLabel,
   pending,
@@ -379,26 +396,30 @@ function PostFormFields({
     onHoldingChange?.(holding);
   }, [holding, onHoldingChange]);
   useEffect(() => () => onHoldingChange?.(false), [onHoldingChange]);
+  // What the kept draft can carry: not an upload in flight, which leaving still loses (above).
+  const hasDraft = hasDraftToKeep({
+    title,
+    initialTitle: start.title,
+    bodyChanged,
+    restored: restored !== null,
+  });
+  // The version what the form holds was typed on: a draft taken back's, else the screen's.
+  const version = heldDraftVersion(restored, draftVersion);
   useKeepPostDraftForOnboarding(
-    // A form with no draft key (a notice's, #138) keeps nothing.
-    draftKey === undefined
-      ? null
-      : {
-          key: draftKey,
-          accountId,
-          // What the kept draft can carry: not an upload in flight, which leaving still loses
-          // (above).
-          hasDraft: hasDraftToKeep({
-            title,
-            initialTitle: start.title,
-            bodyChanged,
-            restored: restored !== null,
-          }),
-          saved,
-          title,
-          body: body as PostDraft['body'],
-          previews,
-        },
+    {
+      key: draftKey,
+      accountId,
+      // Once a write lands, measured from what it sent (the start moved, and what was taken back
+      // ended): a change after it — on a notice's edit screen, which stays on the form — is a
+      // draft to keep again. Until the form shows it saved, the landing counts by its moment.
+      hasDraft,
+      title,
+      body: body as PostDraft['body'],
+      previews,
+      ...(version === undefined ? {} : { version }),
+    },
+    // Locked for a send: what the form holds is what it sent, whatever renders it again meanwhile.
+    pending,
   );
   const noticeRef = useRef<HTMLDivElement>(null);
   const noticeTextId = useId();
@@ -430,7 +451,7 @@ function PostFormFields({
         event.preventDefault();
         if (blocked) return;
         const trimmed = title.trim();
-        onSubmit({ title: trimmed === '' ? null : trimmed, body });
+        onSubmit({ title: trimmed === '' ? null : trimmed, body, version });
       }}
       data-testid="post-form"
     >

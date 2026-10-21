@@ -15,11 +15,11 @@ import {
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useState } from 'react';
+import { type ReactNode, useCallback, useState } from 'react';
 import { type NoticeFormOptions, PostForm } from '@/components/post/post-form';
+import { EmptyState } from '@/components/ui/empty-state';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useMe } from '@/hooks/use-me';
 import {
   useAdminNotice,
   useCreateNotice,
@@ -27,6 +27,7 @@ import {
   useUnpinNotice,
   useUpdateNotice,
 } from '@/hooks/use-notices';
+import { usePostWriter } from '@/hooks/use-posts';
 import { type AdminNotice } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
@@ -69,12 +70,28 @@ function BackLink() {
 }
 
 /**
- * The admin on screen, whose uploads the editor sends (`POST /media/images` names the account,
- * `expectedAccountId`): an image a notice takes is an upload of the admin who writes or edits it.
- * Undefined until `GET /me` answers; the form holds its send and the editor its uploads till then.
+ * A notice's form, drawn once the admin on screen is known: whose uploads the editor sends (`POST
+ * /media/images` names the account, `expectedAccountId` — an image a notice takes is an upload of
+ * the admin who writes or edits it), and whose draft the form takes back. The form reads the draft
+ * the onboarding gate kept for its screen once, when it is made, for that account (`PostForm`), so
+ * it waits for `GET /me` as the post screens' form does (`WriteGate`): a form made before it
+ * answered — on a load of the page, which `GET /me` is not in, while the onboarding gate draws the
+ * page as it reads it — would skip the draft and leave it in the tab, for a later visit within the
+ * hour to take back unasked (ADR-0077 decision 8-20). A placeholder till then; `GET /me` failing
+ * before it ever answered, the post screens' sentence. A session gone while the page is open is the
+ * API's 401s (app/admin/layout.tsx), not this.
  */
-function useAdminAccountId(): string | undefined {
-  return useMe().data?.id;
+function NoticeWriterGate({ children }: { children: (accountId: string) => ReactNode }) {
+  const writer = usePostWriter();
+  if (writer.failed) {
+    return <EmptyState message={copy.errProfileLoad} data-testid="admin-notice-writer-failed" />;
+  }
+  if (writer.accountId === undefined) {
+    return (
+      <Skeleton height="320px" borderRadius="card" data-testid="admin-notice-writer-pending" />
+    );
+  }
+  return children(writer.accountId);
 }
 
 /**
@@ -83,14 +100,14 @@ function useAdminAccountId(): string | undefined {
  * list, where the new notice heads the unpinned ones with its 고정. Unpinned, it is not public.
  *
  * Leaving with something typed asks first, as a post's form does ('쓰던 내용이 사라집니다.
- * 나갈까요?', owner decision 2026-10-21 8); nothing is kept in the tab (no `draftKey`). The form
- * stays locked from the send through the move to the list (`pending`), so that move asks nothing.
- * The onboarding gate taking the admin to a step left (a re-consent) asks nothing either, and
- * what was typed is lost (ADR-0077 decision 8-20, a known limit put to the owner).
+ * 나갈까요?', owner decision 2026-10-21 8), and a link's leave keeps nothing. The form stays locked
+ * from the send through the move to the list (`pending`), so that move asks nothing. The
+ * onboarding gate taking the admin to a step left (a re-consent) asks nothing, and keeps what was
+ * typed in this tab for an hour, as a post's draft: this screen opened again after the step takes
+ * it back (오너 결정 2026-10-22, ADR-0077 decision 8-20 — the key `notice-new`).
  */
 export function AdminNoticeNew() {
   const router = useRouter();
-  const accountId = useAdminAccountId();
   const create = useCreateNotice();
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const sent = create.isPending || create.isSuccess;
@@ -103,30 +120,35 @@ export function AdminNoticeNew() {
       <Text fontSize="sm" color="fg.muted">
         {copy.adminNoticesIntro}
       </Text>
-      <PostForm
-        notice={NOTICE_FORM}
-        // No draft key: leaving asks, but nothing is kept in the tab (ADR-0077 decision 8-20).
-        accountId={accountId}
-        submitLabel={copy.adminNoticeSubmit}
-        pending={sent}
-        saved={create.isSuccess}
-        errorMessage={refusal}
-        refusedImageIds={refusedImageIds(create.error)}
-        onSubmit={({ title, body }) => {
-          if (title === null) return; // the form sends nothing without a title
-          setRefusal(undefined);
-          create.mutate(
-            { title, body },
-            {
-              onSuccess: () => {
-                toaster.create({ type: 'success', title: copy.adminNoticeCreated });
-                router.push(ADMIN_NOTICES_PATH);
-              },
-              onError: (error) => setRefusal(noticeWriteErrorMessage(error)),
-            },
-          );
-        }}
-      />
+      <NoticeWriterGate>
+        {(accountId) => (
+          <PostForm
+            notice={NOTICE_FORM}
+            // Kept across the onboarding gate's move only (ADR-0077 decision 8-20).
+            draftKey={{ kind: 'notice-new' }}
+            accountId={accountId}
+            submitLabel={copy.adminNoticeSubmit}
+            pending={sent}
+            saved={create.isSuccess}
+            errorMessage={refusal}
+            refusedImageIds={refusedImageIds(create.error)}
+            onSubmit={({ title, body }) => {
+              if (title === null) return; // the form sends nothing without a title
+              setRefusal(undefined);
+              create.mutate(
+                { title, body },
+                {
+                  onSuccess: () => {
+                    toaster.create({ type: 'success', title: copy.adminNoticeCreated });
+                    router.push(ADMIN_NOTICES_PATH);
+                  },
+                  onError: (error) => setRefusal(noticeWriteErrorMessage(error)),
+                },
+              );
+            }}
+          />
+        )}
+      </NoticeWriterGate>
     </Stack>
   );
 }
@@ -200,24 +222,29 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
         </Alert.Root>
       )}
       <PinCard notice={notice.data} />
-      {/* Keyed by the notice and the opening: the form holds its draft, and the version it was
-          opened from, from the notice it was opened with. Opened again, it takes the focus the
-          press of 최신 내용 불러오기 left behind. */}
-      <EditForm
-        key={`${notice.data.id}:${String(generation)}`}
-        notice={notice.data}
-        autoFocusTitle={generation > 0}
-        onReload={async () => {
-          const latest = await notice.refetch();
-          if (latest.isError) {
-            // The answer to the press, which the form keeps through: not the refresh warning
-            // above (which says what is shown is the last read — the form shows the draft).
-            toaster.create({ type: 'error', title: copy.errUnknown });
-            return;
-          }
-          setGeneration((count) => count + 1);
-        }}
-      />
+      <NoticeWriterGate>
+        {(accountId) => (
+          // Keyed by the notice and the opening: the form holds its draft, and the version it was
+          // opened from, from the notice it was opened with. Opened again, it takes the focus the
+          // press of 최신 내용 불러오기 left behind.
+          <EditForm
+            key={`${notice.data.id}:${String(generation)}`}
+            notice={notice.data}
+            accountId={accountId}
+            autoFocusTitle={generation > 0}
+            onReload={async () => {
+              const latest = await notice.refetch();
+              if (latest.isError) {
+                // The answer to the press, which the form keeps through: not the refresh warning
+                // above (which says what is shown is the last read — the form shows the draft).
+                toaster.create({ type: 'error', title: copy.errUnknown });
+                return;
+              }
+              setGeneration((count) => count + 1);
+            }}
+          />
+        )}
+      </NoticeWriterGate>
       <NoticeHistory noticeId={notice.data.id} />
     </Stack>
   );
@@ -317,23 +344,33 @@ function PinCard({ notice }: { notice: AdminNotice }) {
  * the admin route, which serves them pinned or not.
  *
  * Leaving with something changed asks first ('쓰던 내용이 사라집니다. 나갈까요?', owner decision
- * 2026-10-21 8); nothing is kept in the tab (no `draftKey`). The screen stays on the form after a
- * save, and what a save sent is the form's start from then on (`saved`, `PostForm`): leaving after
- * it asks nothing until something changes again. A refused save keeps it changed. The onboarding
- * gate's move asks nothing, and loses what was typed (ADR-0077 decision 8-20, put to the owner).
+ * 2026-10-21 8), and a link's leave keeps nothing. The screen stays on the form after a save, and
+ * what a save sent is the form's start from then on (`saved`, `PostForm`): leaving after it asks
+ * nothing until something changes again. A refused save keeps it changed. The onboarding gate's
+ * move asks nothing and keeps what was typed in this tab for an hour, with the version it was
+ * typed on (오너 결정 2026-10-22, ADR-0077 decision 8-20 — the key `notice-edit` per notice): the
+ * screen opened again after the step takes it back, and its save sends that version
+ * (`PostFormValues['version']`) — not the one the screen opened on after the step — so a save made
+ * meanwhile still refuses it. A discard puts back the notice as this form opened on it (`base`),
+ * whose version `opened` still is: nothing taken back is left once a save lands.
  */
 function EditForm({
   notice,
+  accountId,
   autoFocusTitle,
   onReload,
 }: {
   notice: AdminNotice;
+  /** The admin on screen (`NoticeWriterGate`). */
+  accountId: string;
   autoFocusTitle: boolean;
   onReload: () => Promise<void>;
 }) {
-  const accountId = useAdminAccountId();
   const update = useUpdateNotice();
-  const [opened, setOpened] = useState(notice.editedAt);
+  // The notice as the form opened on it: what a discard of a draft taken back draws again (not a
+  // copy read since in the background, whose version the form does not hold).
+  const [base] = useState(notice);
+  const [opened, setOpened] = useState(base.editedAt);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const [conflict, setConflict] = useState(false);
   const [reloading, setReloading] = useState(false);
@@ -344,9 +381,11 @@ function EditForm({
   return (
     <PostForm
       notice={NOTICE_FORM}
-      // As the new notice's form: leaving asks, and no draft key keeps anything in the tab.
-      initialTitle={notice.title}
-      initialDocument={notice.body}
+      initialTitle={base.title}
+      initialDocument={base.body}
+      // As the new notice's form: kept across the onboarding gate's move only.
+      draftKey={{ kind: 'notice-edit', noticeId: base.id }}
+      draftVersion={opened}
       accountId={accountId}
       submitLabel={copy.adminNoticeSave}
       pending={update.isPending || reloading}
@@ -374,12 +413,19 @@ function EditForm({
           </Stack>
         ) : undefined
       }
-      onSubmit={({ title, body }) => {
+      onSubmit={({ title, body, version }) => {
         if (title === null) return; // the form sends nothing without a title
         setRefusal(undefined);
         setConflict(false);
         update.mutate(
-          { noticeId: notice.id, title, body, expectedEditedAt: opened },
+          // The version what is sent was typed on: a draft taken back's own, else `opened` (null
+          // is a version — never edited — so it is not replaced).
+          {
+            noticeId: notice.id,
+            title,
+            body,
+            expectedEditedAt: version === undefined ? opened : version,
+          },
           {
             onSuccess: (result) => {
               // This save's version is the one the form now holds.

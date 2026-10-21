@@ -1,6 +1,6 @@
 import { MutationObserver, QueryObserver } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, type AdminNotice, type AdminNoticeSummary, api } from '@/lib/api';
+import { ApiError, type AdminNotice, type AdminNoticeSummary, type Me, api } from '@/lib/api';
 import { PRIVATE_QUERY_ROOTS, dehydratePublic } from '@/lib/market-keys';
 import {
   ADMIN_NOTICES_KEY,
@@ -13,6 +13,14 @@ import {
   adminNoticeReadView,
   pinnedNoticesView,
 } from '@/lib/notices';
+import {
+  type DraftStorage,
+  type PostDraftKey,
+  clearPostDraft,
+  keepPostDraft,
+  postDraftMoment,
+  readPostDraft,
+} from '@/lib/post-drafts';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import {
@@ -26,6 +34,12 @@ import {
   pinnedNoticesQueryOptions,
   updateNoticeOptions,
 } from './use-notices';
+import {
+  type HeldPostDraft,
+  type HeldPostDraftAt,
+  heldPostDraftAt,
+  keepHeldPostDraft,
+} from './use-post-draft';
 
 /**
  * The notice hooks' wiring (#138, ADR-0077), driven through a real QueryClient with the API
@@ -61,7 +75,26 @@ const answer = (data: unknown, meta?: unknown) =>
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
+
+/** This tab's `sessionStorage` as the drafts read it, over a Map (use-posts.test.ts's). */
+function tabStorage(): DraftStorage {
+  const items = new Map<string, string>();
+  return {
+    get length() {
+      return items.size;
+    },
+    key: (index) => [...items.keys()][index] ?? null,
+    getItem: (key) => items.get(key) ?? null,
+    setItem: (key, value) => {
+      items.set(key, value);
+    },
+    removeItem: (key) => {
+      items.delete(key);
+    },
+  };
+}
 
 describe('the fixed area', () => {
   it('asks for the pinned notices under its public key, which the community page dehydrates', async () => {
@@ -500,6 +533,184 @@ describe('the writes', () => {
       expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(true);
     } finally {
       unsubscribe();
+    }
+  });
+});
+
+describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-22, ADR-0077 decision 8-20)', () => {
+  const newKey = { kind: 'notice-new' } as const;
+  const editKey = { kind: 'notice-edit', noticeId: notice } as const;
+  const draft = { title: '쓰던 공지', body: { type: 'doc', content: [] }, previews: {} };
+  const EDITED_AT = '2026-10-20T01:00:00.000Z';
+
+  it('a write or an edit that lands removes the draft the gate kept for its screen — a refusal keeps it', async () => {
+    const queryClient = getQueryClient();
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const now = Date.now();
+    keepPostDraft(storage, newKey, 'admin-1', draft, now);
+    keepPostDraft(storage, editKey, 'admin-1', { ...draft, version: null }, now);
+
+    // Refused for the onboarding: the draft stays for the screen to take back after the step.
+    const send = vi
+      .spyOn(api, 'POST')
+      .mockRejectedValueOnce(new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' }));
+    const write = new MutationObserver(queryClient, createNoticeOptions(queryClient));
+    const body = { title: '쓰던 공지', body: {} };
+    await expect(write.mutate(body)).rejects.toBeInstanceOf(ApiError);
+    expect(readPostDraft(storage, newKey, 'admin-1', now)).toEqual(draft);
+
+    // Landed — the screen may be gone by then: the notice holds it now; the edit's stays.
+    send.mockResolvedValueOnce(answer(adminNotice));
+    await write.mutate(body);
+    expect(readPostDraft(storage, newKey, 'admin-1', now)).toBeNull();
+    expect(readPostDraft(storage, editKey, 'admin-1', now)).toEqual({ ...draft, version: null });
+
+    // An edit refused because another save overtook it keeps the draft too; one that lands clears
+    // it — the id however it is spelled.
+    const put = vi.spyOn(api, 'PUT').mockRejectedValueOnce(
+      new ApiError(409, {
+        code: 'NOTICE_EDIT_CONFLICT',
+        message: 'x',
+        details: { editedAt: EDITED_AT },
+      }),
+    );
+    const edit = new MutationObserver(queryClient, updateNoticeOptions(queryClient));
+    const variables = { noticeId: NOTICE, title: '쓰던 공지', body: {}, expectedEditedAt: null };
+    await expect(edit.mutate(variables)).rejects.toBeInstanceOf(ApiError);
+    expect(readPostDraft(storage, editKey, 'admin-1', now)).not.toBeNull();
+    put.mockResolvedValueOnce(
+      answer({ notice: { ...adminNotice, editedAt: EDITED_AT }, changed: true }),
+    );
+    await edit.mutate(variables);
+    expect(readPostDraft(storage, editKey, 'admin-1', now)).toBeNull();
+  });
+
+  it('a form the gate takes away keeps its draft — an edit’s with the version it was typed on — but not while a landed write is being handled, though the success renders the form again', async () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    // `GET /me` as the gate finds it: the admin has a step left (a re-consent just shipped).
+    const me = { id: 'admin-1', onboarding: { nextStep: 'consent' } } as Me;
+    const SAVED_AT = '2026-10-20T02:00:00.000Z';
+    const screens: {
+      key: PostDraftKey;
+      version?: string | null;
+      /** The version the form holds once the save landed (the edit screen moves to its answer). */
+      savedVersion?: string | null;
+      /** The screen stays on the form after the write (the edit screen); else it leaves. */
+      stays: boolean;
+      send: (queryClient: ReturnType<typeof getQueryClient>) => Promise<unknown>;
+    }[] = [
+      {
+        key: newKey,
+        stays: false,
+        send: (queryClient) => {
+          vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(adminNotice));
+          return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+            title: '쓰던 공지',
+            body: {},
+          });
+        },
+      },
+      {
+        key: editKey,
+        version: EDITED_AT,
+        savedVersion: SAVED_AT,
+        stays: true,
+        send: (queryClient) => {
+          vi.spyOn(api, 'PUT').mockResolvedValueOnce(
+            answer({ notice: { ...adminNotice, editedAt: SAVED_AT }, changed: true }),
+          );
+          return new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+            noticeId: NOTICE,
+            title: '쓰던 공지',
+            body: {},
+            expectedEditedAt: EDITED_AT,
+          });
+        },
+      },
+    ];
+    for (const { key, version, savedVersion, stays, send } of screens) {
+      const queryClient = getQueryClient();
+      // The form's renders as the hook holds them (`heldPostDraftAt`): typed, then locked to send.
+      const typed: HeldPostDraft = {
+        key,
+        accountId: 'admin-1',
+        hasDraft: true,
+        title: '쓰던 공지',
+        body: { type: 'doc', content: [] },
+        previews: new Map(),
+        ...(version === undefined ? {} : { version }),
+      };
+      let last: HeldPostDraftAt = heldPostDraftAt(undefined, typed, false);
+      // Before anything landed, the gate taking it away keeps it — an edit's with its version.
+      expect(keepHeldPostDraft(last, me)).toBe(true);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toEqual(
+        version === undefined
+          ? { title: '쓰던 공지', body: typed.body, previews: {} }
+          : { title: '쓰던 공지', body: typed.body, previews: {}, version },
+      );
+      clearPostDraft(storage, key);
+      last = heldPostDraftAt(last, typed, true);
+
+      // The write lands; its success is held in `onSuccess` (the lists being read again — each
+      // read held until released). Before that, it puts the notice in the cache, which renders the
+      // form again — the edit screen reads the notice — still locked, and not shown saved.
+      const releases: (() => void)[] = [];
+      vi.spyOn(queryClient, 'invalidateQueries').mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            releases.push(resolve);
+          }),
+      );
+      let renders = 0;
+      const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+        if (event.type !== 'updated' || event.action.type !== 'success') return;
+        renders += 1;
+        last = heldPostDraftAt(last, typed, true);
+      });
+      const sent = send(queryClient);
+      await vi.waitFor(() => {
+        expect(releases.length).toBeGreaterThan(0);
+      });
+      unsubscribe();
+      expect(renders).toBeGreaterThan(0);
+      expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('pending');
+      // The gate takes the form away now: nothing is kept — that render kept the moment of the one
+      // that sent, which the landing came after.
+      expect(keepHeldPostDraft(last, me)).toBe(false);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toBeNull();
+      // A moment of its own would have come after the landing, and kept — with the version before
+      // the save — what was just saved.
+      expect(keepHeldPostDraft({ ...last, moment: postDraftMoment() }, me)).toBe(true);
+      clearPostDraft(storage, key);
+      for (const release of releases) release();
+      await sent;
+      expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('success');
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toBeNull();
+
+      if (stays) {
+        // The edit screen stays on the form after a save, shown saved and unlocked: what it holds
+        // is what was sent (the start moved to it), with the save's version — nothing to keep.
+        const shown = {
+          ...typed,
+          hasDraft: false,
+          ...(savedVersion === undefined ? {} : { version: savedVersion }),
+        };
+        last = heldPostDraftAt(last, shown, false);
+        expect(keepHeldPostDraft(last, me)).toBe(false);
+        // Changed after it, it is a draft again, kept with the version the save moved it to.
+        last = heldPostDraftAt(last, { ...shown, title: '다시 고친 공지', hasDraft: true }, false);
+        expect(keepHeldPostDraft(last, me)).toBe(true);
+        expect(readPostDraft(storage, key, 'admin-1', Date.now())).toMatchObject({
+          title: '다시 고친 공지',
+          version: SAVED_AT,
+        });
+      } else {
+        // The write screen leaves for the list; a form of it made afterwards keeps its own draft.
+        expect(keepHeldPostDraft(heldPostDraftAt(undefined, typed, false), me)).toBe(true);
+      }
+      clearPostDraft(storage, key);
     }
   });
 });
