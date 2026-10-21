@@ -32,11 +32,13 @@ import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
 import { useKeepPostDraftForOnboarding } from '@/hooks/use-post-draft';
 import {
+  type DraftStart,
   bodyChangedFrom,
   countEditorDocument,
   countWithUploads,
   createImageSlots,
   draftChanged,
+  landedDraftStart,
   titleTooLong,
 } from '@/lib/post-editor';
 import {
@@ -62,14 +64,21 @@ export interface PostFormProps {
   initialDocument?: PostDocument;
   /**
    * Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts). Absent,
-   * the form keeps no draft: a notice's (#138), whose admin screens have no onboarding move.
+   * the form keeps no draft: a notice's (#138, owner decision 2026-10-21 8 — no tab draft). The
+   * admin screens are gated like the rest (`OnboardingGate`), so the gate taking an admin to a step
+   * left from a notice's form neither asks nor keeps: what it held is lost (ADR-0077 decision
+   * 8-20, a known limit put to the owner).
    */
   draftKey?: PostDraftKey;
   accountId: string | undefined;
   submitLabel: string;
   /** Sending, or sent and on the way to the post: the form is locked. */
   pending: boolean;
-  /** The write succeeded: the draft is the server's and is not kept. */
+  /**
+   * The write succeeded: the draft is the server's and is not kept. Each time it turns true, what
+   * the form holds becomes its start (`landedDraftStart`) — a screen that stays on the form after
+   * a save (a notice's edit screen, #138) has nothing to lose until the form changes again.
+   */
   saved: boolean;
   /** The last refusal, in Korean; undefined when there is none. */
   errorMessage: string | undefined;
@@ -94,13 +103,9 @@ export interface PostFormProps {
   /** A notice's form (#138): a required title; absent, a post's, whose title is optional. */
   notice?: NoticeFormOptions;
   /**
-   * Whether leaving with a draft asks first (`useLeaveGuard`; the default). False on a notice's
-   * forms (#138), which do not ask yet: that comes with ADR-0077 decision 8-20.
-   */
-  leaveGuard?: boolean;
-  /**
-   * What the refusal offers beside its message, if anything: a notice's edit refused because
-   * another admin saved first offers its latest version (#138, owner decision 2026-10-21).
+   * What the refusal offers beside its message, if anything: a notice's edit refused because the
+   * notice was saved since — whoever saved it — offers its latest version (#138, owner decisions
+   * 2026-10-21).
    */
   errorAction?: ReactNode;
   /** Where the editor draws an image already in the document (`PostEditor`'s `imageSrc`). */
@@ -143,7 +148,9 @@ export interface NoticeFormOptions {
  * Leaving with a draft asks first (owner decision 2026-10-19, `useLeaveGuard`): while the title or
  * the body differs from what the form started with, or an image is uploading, and nothing is being
  * sent — once the screen sends (`pending`, which the screens hold through the move to the post) the
- * draft is the server's.
+ * draft is the server's. A notice's forms ask the same (#138, owner decision 2026-10-21 8); the
+ * notice's edit screen stays on the form after a save, and what the save sent is the form's start
+ * from then on (`saved`, `landedDraftStart`); a refused save moves nothing.
  *
  * The onboarding gate taking the account to a step left keeps the draft in this tab instead, and
  * asks nothing (오너 결정 2026-10-20, lib/post-drafts.ts) — a title or a body changed, or a draft
@@ -154,7 +161,10 @@ export interface NoticeFormOptions {
  * a dialog that says so (오너 결정 2026-10-20 3차 답 3, `nextRestoredDraftState`), and a discard
  * says so in a toast like the app's other completions — on screen and, once, to screen readers
  * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
- * storage: the form holds it, and guards it like any draft.
+ * storage: the form holds it, and guards it like any draft. A form with no `draftKey` — a
+ * notice's (#138, owner decision 2026-10-21 8: no tab draft) — keeps nothing, and the gate, which
+ * moves an admin too, takes it away without asking: what it held is lost (ADR-0077 decision 8-20,
+ * a known limit put to the owner).
  *
  * The post an edit form edits can be deleted while it is open — in another tab: a save refused as
  * NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`) or answers the
@@ -309,7 +319,6 @@ function PostFormFields({
   onClose,
   onHoldingChange,
   notice,
-  leaveGuard = true,
   errorAction,
   imageSrc,
   autoFocusTitle = false,
@@ -329,6 +338,12 @@ function PostFormFields({
   const [body, setBody] = useState<unknown>(
     restored?.body ?? initialDocument ?? { type: 'doc', content: [] },
   );
+  // What "changed" is measured from: the title the form started with and the editor's own first
+  // JSON (`baseline`, the null body) — and once a write of the form lands (`saved` turns true),
+  // what that write sent (`landedDraftStart`). Taken when the form is made, as the editor takes its
+  // document: a screen that reads its subject again in the background (a notice's edit screen) does
+  // not move it under what is typed.
+  const [start, setStart] = useState<DraftStart>({ title: initialTitle, body: null });
   const [uploading, setUploading] = useState(false);
   // The uploads on their way (`createImageSlots`), one set of slots for the form's life (a discard
   // draws a new form, and editor, with new ones): told of every change as it happens, from the
@@ -336,16 +351,27 @@ function PostFormFields({
   // land in one render.
   const [imagesUploading, setImagesUploading] = useState(0);
   const [imageSlots] = useState(() => createImageSlots(POST_IMAGES_MAX, setImagesUploading));
-  // The editor's own JSON when it was made (`onReady`), and whether the body differs from it now.
+  // The editor's own JSON when it was made (`onReady`), and whether the body differs now from the
+  // start (`start.body`, or this baseline while the start has no body of its own).
   const baseline = useRef<string | null>(null);
   const [bodyChanged, setBodyChanged] = useState(false);
+  // Whether the screen's write had landed as of the last render: its turning true moves the start.
+  const [landed, setLanded] = useState(saved);
+  if (landed !== saved) {
+    setLanded(saved);
+    if (saved) {
+      setStart(landedDraftStart(start, { title, body, bodyChanged }));
+      setBodyChanged(false);
+    }
+  }
   // The uploads' small previews, by media id, for a draft the gate keeps: the ones taken back with
   // it, and each new upload's once the editor has drawn it small.
   const [previews] = useState(() => new Map(Object.entries(restored?.previews ?? {})));
   // A draft taken back is something to lose until it is sent or discarded, as typed text is.
-  const dirty = restored !== null || draftChanged({ title, initialTitle, bodyChanged, uploading });
+  const dirty =
+    restored !== null || draftChanged({ title, initialTitle: start.title, bodyChanged, uploading });
   // Held once the post is gone (오너 결정 2026-10-24): leaving asks until the writer closes it.
-  useLeaveGuard(gone || (leaveGuard && !pending && dirty), copy.postLeaveConfirm);
+  useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);
   // What the edit screen keeps should the post go: what leaving would lose, while no write of it
   // has landed — and, once gone, the form is on screen only while it holds that.
   const holding = gone || (dirty && !saved);
@@ -364,7 +390,7 @@ function PostFormFields({
           // (above).
           hasDraft: hasDraftToKeep({
             title,
-            initialTitle,
+            initialTitle: start.title,
             bodyChanged,
             restored: restored !== null,
           }),
@@ -468,7 +494,7 @@ function PostFormFields({
           }}
           onChange={(json) => {
             setBody(json);
-            setBodyChanged(bodyChangedFrom(baseline.current, json));
+            setBodyChanged(bodyChangedFrom(start.body ?? baseline.current, json));
           }}
           onPreview={(mediaId, preview) => {
             previews.set(mediaId, preview);

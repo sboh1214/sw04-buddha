@@ -115,9 +115,9 @@ export const ERROR_CODES = [
    */
   'NOTICE_PIN_LIMIT_REACHED',
   /**
-   * An edit of a notice opened from a version that a save by another admin has replaced since:
-   * nothing was written. Details carry the version of the notice now,
-   * noticeEditConflictDetailsSchema.
+   * An edit of a notice opened from a version that a save has replaced since, whoever made it
+   * (another admin, or the same one from another tab): nothing was written. Details carry the
+   * version of the notice now, noticeEditConflictDetailsSchema.
    */
   'NOTICE_EDIT_CONFLICT',
   'INTERNAL',

@@ -25,8 +25,9 @@ import { postWriteErrorMessage } from './posts';
  * The owner's answers of 2026-10-21 (ADR-0077): only a pinned notice is public — its page and
  * images answer like a missing one's otherwise, while the admin screens show it (its images
  * through the admin route, `adminNoticeImagePath`); the admin's notice screen shows its operation
- * records and its earlier versions; and an edit opened before another admin's save is refused
- * ('다른 운영자가 먼저 고쳤습니다.'), the typed content kept on screen.
+ * records and its earlier versions; and an edit opened before a save of the notice is refused
+ * ('그사이 공지가 고쳐졌습니다. 최신 내용을 불러와 주세요.' — one neutral sentence whoever saved, the
+ * second answers), the typed content kept on screen.
  */
 
 // ---- addresses -----------------------------------------------------------------------------
@@ -189,12 +190,13 @@ export function adminNoticeMissing(error: unknown): boolean {
  *   never changes), never swapped for an error.
  *
  * `openedAt` is the edit screen's: when it opened (`Date.now()`, the clock `dataUpdatedAt` is on).
- * The form saves against the version it opens on (`expectedEditedAt`, owner decision 2026-10-21 7:
- * a save is refused when another admin saved «연 뒤» — after the screen opened), so it opens only
- * on a read that landed since: a copy the cache held from before — an earlier visit's, or a pin's
- * answer on the list, read before another admin's save perhaps — is `pending` until the read the
- * screen asks for on opening lands (`refetchOnMount: 'always'`, `adminNoticeQueryOptions`), and
- * should that read fail, `failed`, as a first read that failed is (ADR-0077 decision 8-19).
+ * The form saves against the version it opens on (`expectedEditedAt`, owner decisions 2026-10-21 7
+ * and 2차 1: a save is refused when the notice was saved «연 뒤» — after the screen opened —
+ * whoever saved it), so it opens only on a read that landed since: a copy the cache held from
+ * before — an earlier visit's, or a pin's answer on the list, read before a later save perhaps — is
+ * `pending` until the read the screen asks for on opening lands (`refetchOnMount: 'always'`,
+ * `adminNoticeQueryOptions`), and should that read fail, `failed`, as a first read that failed is
+ * (ADR-0077 decision 8-19).
  */
 export type AdminNoticeReadView = 'pending' | 'missing' | 'failed' | 'ready';
 
@@ -258,9 +260,9 @@ export function noticeActorName(actor: { nickname: string } | null): string {
 // ---- refusals ------------------------------------------------------------------------------
 
 /**
- * Whether a save was refused because another admin saved the notice since the edit screen opened
- * it (NOTICE_EDIT_CONFLICT, owner decision 2026-10-21): the screen then keeps what is typed and
- * offers the latest version.
+ * Whether a save was refused because the notice was saved since the edit screen opened it — by
+ * another admin, or by the same one in another tab (NOTICE_EDIT_CONFLICT, owner decisions
+ * 2026-10-21): the screen then keeps what is typed and offers the latest version.
  */
 export function noticeEditConflict(error: unknown): boolean {
   return isApiError(error, 'NOTICE_EDIT_CONFLICT');
@@ -271,8 +273,9 @@ export function noticeEditConflict(error: unknown): boolean {
  * admin. The server is the judge of every rule:
  * - NOTICE_PIN_LIMIT_REACHED: NOTICE_PIN_LIMIT notices are pinned already — one is unpinned first
  *   (#45-8: nothing unpins automatically);
- * - NOTICE_EDIT_CONFLICT: another admin saved the notice after this screen opened it — '다른
- *   운영자가 먼저 고쳤습니다.' (owner decision 2026-10-21);
+ * - NOTICE_EDIT_CONFLICT: the notice was saved after this screen opened it — '그사이 공지가
+ *   고쳐졌습니다. 최신 내용을 불러와 주세요.', whoever saved it (owner decision 2026-10-21, second
+ *   answers);
  * - VALIDATION_ERROR on `title`: blank, more than one line or too long (the form counts the same);
  * - VALIDATION_ERROR on `body`: told apart as a post's body is (`postWriteErrorMessage` — no text,
  *   too long, too many images, an image the admin cannot use);

@@ -292,7 +292,7 @@ export type paths = {
         };
         /** One notice, pinned or not, as the editor loads it */
         get: operations["adminGetNotice"];
-        /** Replace a notice’s title and body: it shows as edited and the earlier version is kept for operators. The same content changes nothing (`changed: false`). A pinned notice stays pinned. Refused when another admin saved since the version the edit was opened from (`expectedEditedAt`, NOTICE_EDIT_CONFLICT) */
+        /** Replace a notice’s title and body: it shows as edited and the earlier version is kept for operators. The same content changes nothing (`changed: false`). A pinned notice stays pinned. Refused when the notice was saved since the version the edit was opened from, whoever saved it (`expectedEditedAt`, NOTICE_EDIT_CONFLICT) */
         put: operations["adminUpdateNotice"];
         post?: never;
         delete?: never;

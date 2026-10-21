@@ -9,7 +9,8 @@
  * answers of 2026-10-21: only a pinned notice is public — another answers like a missing one, its
  * images too — while the admin screens read it; the latest pinned first; the admin's notice screen
  * reads its operation records and its earlier versions (and their images); an edit opened from a
- * version another admin replaced since is refused (NOTICE_EDIT_CONFLICT). And this PR's choices: a
+ * version a save replaced since is refused (NOTICE_EDIT_CONFLICT) — whoever saved, the same admin
+ * included (the second answers: one neutral sentence whoever it was). And this PR's choices: a
  * pin always after the ones in place; a notice's image belongs to it alone, never to a post; two
  * saves of one notice take turns, the second refused when both were opened from one version. Skips
  * when TEST_* are unset.
@@ -702,9 +703,10 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
   });
 
   it('refuses a save its own admin overtook as well: the check reads versions, not who saved', async () => {
-    // ADR-0077 decision 8-19 (a choice, not the owner's — 결과 4 asks): the same admin's other tab,
-    // or a retry of a save that committed but whose answer was lost, sends a version the notice
-    // has left, and is refused as another admin's save would be — the same content included.
+    // ADR-0077 decision 8-19, and the owner's second answers of 2026-10-21 (the refusal is the same
+    // whoever saved first): the same admin's other tab, or a retry of a save that committed but
+    // whose answer was lost, sends a version the notice has left, and is refused as another admin's
+    // save would be — the same content included. The answer never names who saved.
     const notice = await created('처음', doc('처음 본문'));
     const sent = { title: '내 수정', body: doc('내 본문') };
     const first = await edit(notice.id, sent, admin, null);
@@ -714,8 +716,10 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     for (const payload of [sent, { title: '다른 탭의 수정', body: doc('다른 탭') }]) {
       const res = await edit(notice.id, payload, admin, null);
       expect(res.statusCode, res.body).toBe(409);
-      expect(errorOf(res)).toMatchObject({
+      // The same answer as another admin's save gives: the version now, and nobody named.
+      expect(errorOf(res)).toEqual({
         code: 'NOTICE_EDIT_CONFLICT',
+        message: expect.any(String) as unknown,
         details: { editedAt: saved.notice.editedAt },
       });
     }

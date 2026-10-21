@@ -182,7 +182,7 @@ export function useAdminNoticeRevision(noticeId: string, revisionId: string) {
  * One notice as the admin's edit screen loads it (`GET /admin/notices/:noticeId`) — read again
  * every time the screen opens, however fresh the copy held: the edit form opens only on a read made
  * since the screen opened (`adminNoticeReadView`), since it saves against the version it opens on
- * and a copy from an earlier visit (or a pin's answer on the list) may predate another admin's save.
+ * and a copy from an earlier visit (or a pin's answer on the list) may predate a later save.
  */
 export function adminNoticeQueryOptions(noticeId: string) {
   const id = noticeId.toLowerCase();
@@ -219,11 +219,13 @@ async function afterNoticeWrite(queryClient: QueryClient, notice: AdminNotice): 
 
 /**
  * A refused admin write's side effects: a refusal for the onboarding reads `['me']` again, so the
- * onboarding gate takes the admin to its step; a full fixed area (NOTICE_PIN_LIMIT_REACHED) reads
- * the lists again, since another admin may have pinned what this screen does not show yet; an edit
- * another admin's save overtook (NOTICE_EDIT_CONFLICT, `noticeId` given) reads that notice, its
- * records and versions and the lists again, so the screen shows what was saved meanwhile — the
- * form keeps what is typed (it holds its own draft).
+ * onboarding gate takes the admin to its step (a notice's form keeps no draft in the tab, so what
+ * it held is lost on the way — ADR-0077 decision 8-20, a known limit put to the owner); a full
+ * fixed area (NOTICE_PIN_LIMIT_REACHED) reads the lists again, since another admin may have pinned
+ * what this screen does not show yet; an edit another save overtook, whoever made it
+ * (NOTICE_EDIT_CONFLICT, `noticeId` given), reads that notice, its records and versions and the
+ * lists again, so the screen shows what was saved meanwhile — the form keeps what is typed (it
+ * holds its own draft).
  */
 async function afterNoticeRefusal(
   queryClient: QueryClient,
@@ -270,8 +272,9 @@ export interface UpdateNoticeVariables extends UpdateNoticeBody {
  * `PUT /admin/notices/:noticeId`, by any admin (#45-8). A change marks the notice edited and keeps
  * the earlier version for operators; the same content changes nothing. The answer says which
  * (`changed`), and the screen's toast reads that. Only the notice goes into the cache. A save from
- * a version another admin has replaced since is refused (NOTICE_EDIT_CONFLICT, owner decision
- * 2026-10-21) and nothing is written: the notice is read again (`afterNoticeRefusal`).
+ * a version a save has replaced since — another admin's, or the same admin's from another tab — is
+ * refused (NOTICE_EDIT_CONFLICT, owner decisions 2026-10-21) and nothing is written: the notice is
+ * read again (`afterNoticeRefusal`).
  */
 export function updateNoticeOptions(queryClient: QueryClient) {
   return {

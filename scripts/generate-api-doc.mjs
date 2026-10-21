@@ -386,7 +386,7 @@ const ERROR_NOTES = {
   NOTICE_PIN_LIMIT_REACHED:
     '이미 공지 3개가 고정되어 있어 더 고정할 수 없다(#138). `details.limit` 이 동시에 고정할 수 있는 수다. 자동으로 풀리는 공지는 없으니 하나를 풀고(`POST /api/v1/admin/notices/{noticeId}/unpin`) 다시 고정한다.',
   NOTICE_EDIT_CONFLICT:
-    '공지 수정 화면을 연 뒤 다른 운영자가 그 공지를 먼저 고쳤다(#138, 오너 결정 2026-10-21). 아무것도 바꾸지 않았다. 요청의 `expectedEditedAt` 이 공지의 지금 `editedAt` 과 다르다 — `details.editedAt` 이 지금의 판이다(한 번도 고치지 않았으면 null). 최신 공지를 다시 읽고(`GET /api/v1/admin/notices/{noticeId}`) 그 `editedAt` 으로 다시 보낸다.',
+    '공지 수정 화면을 연 뒤 그 공지가 먼저 고쳐졌다 — 누가 고쳤든(다른 운영자든 같은 운영자의 다른 탭이든) 같다(#138, 오너 결정 2026-10-21). 아무것도 바꾸지 않았다. 요청의 `expectedEditedAt` 이 공지의 지금 `editedAt` 과 다르다 — `details.editedAt` 이 지금의 판이다(한 번도 고치지 않았으면 null). 최신 공지를 다시 읽고(`GET /api/v1/admin/notices/{noticeId}`) 그 `editedAt` 으로 다시 보낸다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

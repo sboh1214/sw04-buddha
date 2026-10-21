@@ -19,8 +19,10 @@ import { POST_TITLE_MAX_LENGTH } from './post.js';
  * or unpinned answers like a missing notice, its images too, and stays on the admin screens; the
  * fixed area is the latest pinned first; the earlier versions are kept with no retention period;
  * the admin's notice screen shows its operation records (who, when, which of the four) and its
- * earlier versions; and an edit names the version it was opened from, refused when another admin
- * saved since (NOTICE_EDIT_CONFLICT, '다른 운영자가 먼저 고쳤습니다.').
+ * earlier versions; and an edit names the version it was opened from, refused when the notice was
+ * saved since (NOTICE_EDIT_CONFLICT). The second answers of that day: whoever saved it — another
+ * admin, or the same one in another tab — the refusal is one neutral sentence, '그사이 공지가
+ * 고쳐졌습니다. 최신 내용을 불러와 주세요.'.
  *
  * Nothing public names who wrote a notice: the public answers carry no person at all (the web
  * writes '운영팀'). Who did what is the audit log's (`admin_actions`), which only the admin
@@ -128,8 +130,9 @@ export type CreateNoticeBody = z.input<typeof createNoticeBodySchema>;
 /**
  * `PUT /admin/notices/:noticeId`: the title and the body that replace the notice's, by any admin
  * (#45-8), and the version the edit screen was opened from — the notice's `editedAt` as the screen
- * read it, null for a notice never edited. Another admin's save since then refuses this one
- * (NOTICE_EDIT_CONFLICT, owner decision 2026-10-21: «연 뒤 다른 운영자가 고쳤으면 저장을 막고»), and
+ * read it, null for a notice never edited. A save of the notice since then — another admin's, or
+ * the same admin's from another tab — refuses this one (NOTICE_EDIT_CONFLICT, owner decisions
+ * 2026-10-21: «연 뒤 다른 운영자가 고쳤으면 저장을 막고», and the refusal the same whoever saved), and
  * nothing changes. Sending what the notice already says changes nothing, marks nothing edited and
  * records nothing. An image the notice already holds may stay whoever uploaded it.
  */
@@ -173,8 +176,8 @@ export const noticePinLimitDetailsSchema = z
 export type NoticePinLimitDetails = z.infer<typeof noticePinLimitDetailsSchema>;
 
 /**
- * NOTICE_EDIT_CONFLICT: the edit was opened from a version another admin's save has replaced since
- * (owner decision 2026-10-21) — nothing was written. `editedAt` is the notice's version now, which
+ * NOTICE_EDIT_CONFLICT: the edit was opened from a version a save has replaced since, whoever made
+ * it (owner decisions 2026-10-21) — nothing was written. `editedAt` is the notice's version now, which
  * the screen reads again before it offers the latest.
  */
 export const noticeEditConflictDetailsSchema = z

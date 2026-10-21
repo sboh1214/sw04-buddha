@@ -304,11 +304,17 @@ describe('a refused admin write', () => {
     ).toBe(copy.errPostInvalid);
   });
 
-  it('says another admin saved first in the owner’s words, and knows it from any other refusal', () => {
-    // Owner decision 2026-10-21: «다른 운영자가 먼저 고쳤습니다».
+  it('says the notice was saved meanwhile in one neutral sentence, and knows it from any other refusal', () => {
+    // Owner decisions 2026-10-21 (second answers): whoever saved first — another admin, or the same
+    // one in another tab — «그사이 공지가 고쳐졌습니다. 최신 내용을 불러와 주세요.», never who.
     const conflict = refusal(409, 'NOTICE_EDIT_CONFLICT', { editedAt: null });
-    expect(noticeWriteErrorMessage(conflict)).toBe('다른 운영자가 먼저 고쳤습니다.');
-    expect(copy.errNoticeEditConflict).toBe('다른 운영자가 먼저 고쳤습니다.');
+    const neutral = '그사이 공지가 고쳐졌습니다. 최신 내용을 불러와 주세요.';
+    expect(noticeWriteErrorMessage(conflict)).toBe(neutral);
+    expect(copy.errNoticeEditConflict).toBe(neutral);
+    expect(copy.errNoticeEditConflict).not.toContain('운영자');
+    // The hint and the button beside it stay as built (the second answers: «이대로»).
+    expect(copy.adminNoticeEditConflictHint).toBe('최신 내용을 불러오면 쓰던 내용은 사라집니다.');
+    expect(copy.adminNoticeReloadLatest).toBe('최신 내용 불러오기');
     expect(noticeEditConflict(conflict)).toBe(true);
     for (const other of [
       refusal(409, 'NOTICE_PIN_LIMIT_REACHED', { limit: NOTICE_PIN_LIMIT }),

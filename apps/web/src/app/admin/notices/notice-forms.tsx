@@ -81,6 +81,12 @@ function useAdminAccountId(): string | undefined {
  * 공지 쓰기: the title and the body, sent once. The notice starts unpinned — pinning is its own
  * action and record (the owner kept it so, 2026-10-21, ADR-0077) — so the screen goes back to the
  * list, where the new notice heads the unpinned ones with its 고정. Unpinned, it is not public.
+ *
+ * Leaving with something typed asks first, as a post's form does ('쓰던 내용이 사라집니다.
+ * 나갈까요?', owner decision 2026-10-21 8); nothing is kept in the tab (no `draftKey`). The form
+ * stays locked from the send through the move to the list (`pending`), so that move asks nothing.
+ * The onboarding gate taking the admin to a step left (a re-consent) asks nothing either, and
+ * what was typed is lost (ADR-0077 decision 8-20, a known limit put to the owner).
  */
 export function AdminNoticeNew() {
   const router = useRouter();
@@ -99,9 +105,7 @@ export function AdminNoticeNew() {
       </Text>
       <PostForm
         notice={NOTICE_FORM}
-        // No draft key: a notice's draft is not kept (ADR-0077 decision 8-20), nor is leaving
-        // asked about yet (`leaveGuard`).
-        leaveGuard={false}
+        // No draft key: leaving asks, but nothing is kept in the tab (ADR-0077 decision 8-20).
         accountId={accountId}
         submitLabel={copy.adminNoticeSubmit}
         pending={sent}
@@ -137,10 +141,12 @@ export function AdminNoticeNew() {
  * The screen opens on a read made after it opened, never on a copy the cache held from before
  * (`openedAt`, `adminNoticeReadView`): the form saves with the version it was opened from, and
  * the owner's rule is about saves made since the screen opened. The form keeps what is typed
- * through a refresh of the notice in the background, and when another admin saved since, the save
- * is refused ('다른 운영자가 먼저 고쳤습니다.', owner decision 2026-10-21), what is typed stays,
- * and 최신 내용 불러오기 opens the form again on the latest version (`generation`) — once that
- * version is read — with the focus on its title.
+ * through a refresh of the notice in the background, and when the notice was saved since — by
+ * another admin, or by this one in another tab — the save is refused ('그사이 공지가 고쳐졌습니다.
+ * 최신 내용을 불러와 주세요.', owner decisions 2026-10-21), what is typed stays, and 최신 내용
+ * 불러오기 opens the form again on the latest version (`generation`) — once that version is read —
+ * with the focus on its title. That is no leaving: it asks nothing (the hint before the button
+ * says what is typed goes), and the form it opens holds nothing to lose.
  */
 export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
   const notice = useAdminNotice(noticeId);
@@ -305,10 +311,16 @@ function PinCard({ notice }: { notice: AdminNotice }) {
 /**
  * The title and the body, filled with the notice's, saved over it with the version the form was
  * opened from (`opened`: the notice's `editedAt` then, moved to each save's answer — never by a
- * refresh in the background, which the draft does not follow). A save another admin's overtook is
- * refused: the refusal says so above the button with 최신 내용 불러오기 (`onReload`), and what is
- * typed stays until then. The editor draws the notice's images through the admin route, which
- * serves them pinned or not.
+ * refresh in the background, which the draft does not follow). A save another save overtook —
+ * whoever made it — is refused: the refusal says so above the button with 최신 내용 불러오기
+ * (`onReload`), and what is typed stays until then. The editor draws the notice's images through
+ * the admin route, which serves them pinned or not.
+ *
+ * Leaving with something changed asks first ('쓰던 내용이 사라집니다. 나갈까요?', owner decision
+ * 2026-10-21 8); nothing is kept in the tab (no `draftKey`). The screen stays on the form after a
+ * save, and what a save sent is the form's start from then on (`saved`, `PostForm`): leaving after
+ * it asks nothing until something changes again. A refused save keeps it changed. The onboarding
+ * gate's move asks nothing, and loses what was typed (ADR-0077 decision 8-20, put to the owner).
  */
 function EditForm({
   notice,
@@ -332,8 +344,7 @@ function EditForm({
   return (
     <PostForm
       notice={NOTICE_FORM}
-      // As the new notice's form: no draft key, and no leave confirm yet.
-      leaveGuard={false}
+      // As the new notice's form: leaving asks, and no draft key keeps anything in the tab.
       initialTitle={notice.title}
       initialDocument={notice.body}
       accountId={accountId}

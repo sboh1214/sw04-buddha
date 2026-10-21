@@ -268,8 +268,8 @@ export class AdminNoticesController {
     summary:
       'Replace a notice’s title and body: it shows as edited and the earlier version is kept ' +
       'for operators. The same content changes nothing (`changed: false`). A pinned notice ' +
-      'stays pinned. Refused when another admin saved since the version the edit was opened from ' +
-      '(`expectedEditedAt`, NOTICE_EDIT_CONFLICT)',
+      'stays pinned. Refused when the notice was saved since the version the edit was opened ' +
+      'from, whoever saved it (`expectedEditedAt`, NOTICE_EDIT_CONFLICT)',
   })
   @ApiData(adminNoticeUpdateResultSchema)
   @ApiErrors(

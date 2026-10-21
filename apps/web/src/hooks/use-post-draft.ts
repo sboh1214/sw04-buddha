@@ -74,7 +74,9 @@ export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): bo
  * refused with ONBOARDING_REQUIRED ends (use-posts.ts reads `['me']` again, and the gate follows).
  * `['me']` is read from the cache rather than through `useMe`: the form never renders again with
  * the answer that unmounts it. A null `draft` keeps nothing: a form with no draft key (a notice's,
- * #138 — the admin screens have no onboarding move).
+ * #138 — owner decision 2026-10-21 8, no tab draft). The gate moves an admin as it moves anyone
+ * (/admin is not exempt, lib/onboarding.ts), so a notice's draft is lost on that move, unasked
+ * (ADR-0077 decision 8-20, a known limit put to the owner).
  */
 export function useKeepPostDraftForOnboarding(draft: HeldPostDraft | null): void {
   const queryClient = useQueryClient();

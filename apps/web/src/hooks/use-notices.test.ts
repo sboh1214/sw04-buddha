@@ -277,10 +277,10 @@ describe('the admin screen', () => {
   });
 
   it('opens the edit form on a read made after the screen opened, never on a copy held from before', async () => {
-    // Owner decision 2026-10-21 7: a save is refused when another admin saved after the screen
-    // opened. The form saves against the version it opens on, so a copy the cache held from an
-    // earlier visit — fresh by the client's 30 s, and older than another admin's save since —
-    // must not be what it opens on (ADR-0077 decision 8-19).
+    // Owner decisions 2026-10-21 7 and 2차 1: a save is refused when the notice was saved after
+    // the screen opened, whoever saved it. The form saves against the version it opens on, so a
+    // copy the cache held from an earlier visit — fresh by the client's 30 s, and older than a save
+    // since — must not be what it opens on (ADR-0077 decision 8-19).
     const theirs: AdminNotice = {
       ...adminNotice,
       title: '다른 운영자가 고친 제목',

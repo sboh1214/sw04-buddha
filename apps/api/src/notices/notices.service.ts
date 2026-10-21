@@ -80,7 +80,8 @@ async function lockNoticePins(tx: Tx): Promise<void> {
  * other like a missing one, and MediaService.findShown its images); the admin screens read every
  * notice, its operation records (`adminActions`) and its earlier versions (`adminRevisions`,
  * `adminRevision`), which are kept with no retention period; and an edit names the version it was
- * opened from, refused when another admin saved since (`update`, NOTICE_EDIT_CONFLICT).
+ * opened from, refused when the notice was saved since — whoever saved it, the same admin from
+ * another tab too (`update`, NOTICE_EDIT_CONFLICT).
  */
 @Injectable()
 export class NoticesService {
@@ -407,9 +408,11 @@ export class NoticesService {
    * attached for the history (served to admins only, MediaService.findNoticeImage).
    *
    * The edit names the version its screen was opened from (`expectedEditedAt`, the notice's
-   * `editedAt` then): when another admin's save has replaced it since, nothing is written and the
-   * answer is NOTICE_EDIT_CONFLICT with the version now (owner decision 2026-10-21: «연 뒤 다른
-   * 운영자가 고쳤으면 저장을 막고 '다른 운영자가 먼저 고쳤습니다'»). The row lock makes the check and
+   * `editedAt` then): when a save has replaced it since, nothing is written and the answer is
+   * NOTICE_EDIT_CONFLICT with the version now (owner decision 2026-10-21: «연 뒤 다른 운영자가
+   * 고쳤으면 저장을 막고»). Who saved is not compared: the same admin's save from another tab refuses
+   * it too, and the screen's sentence is neutral whoever it was (the second answers of that day,
+   * '그사이 공지가 고쳐졌습니다. 최신 내용을 불러와 주세요.'). The row lock makes the check and
    * the write one step: of two saves opened from one version, the second reads the notice only
    * after the first committed and finds its version gone. An edit is stamped strictly after the
    * version it replaces (`strictlyAfter`), so a version's `editedAt` names it alone even should the
@@ -429,7 +432,7 @@ export class NoticesService {
           editedAt: current.editedAt?.toISOString() ?? null,
         };
         throw new AppError('NOTICE_EDIT_CONFLICT', {
-          message: 'Another admin edited the notice since this edit was opened',
+          message: 'The notice was edited since this edit was opened',
           details,
         });
       }
