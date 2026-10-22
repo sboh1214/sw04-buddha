@@ -14,10 +14,16 @@ import {
   type PublishedComment,
   api,
 } from '@/lib/api';
-import { type CommentPage, type CommentPages, postCommentsKey } from '@/lib/comments';
+import {
+  type CommentPage,
+  type CommentPages,
+  commentThreadsOf,
+  postCommentsKey,
+} from '@/lib/comments';
 import { commentLikeCount, myPostLikesKey, postLikeCount } from '@/lib/likes';
 import { communityPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
+import { readMoreReplies } from './use-comments';
 import { type LikeVariables, myPostLikesQueryOptions, updateLikeOptions } from './use-likes';
 import { ME_QUERY_KEY } from './use-me';
 
@@ -578,5 +584,106 @@ describe('a comment’s press while 더 보기 is on its way', () => {
     expect(commentCountOf(again, commentId)).toBe(2);
     other.unsubscribe();
     thread.unsubscribe();
+  });
+});
+
+describe('a 대댓글’s press while 답글 더 보기 is on its way', () => {
+  const EARLIER = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const BETWEEN = '2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e';
+
+  /**
+   * The thread as `withNewComment` leaves it when the reader's own 대댓글 (REPLY) could not be read
+   * into its place: last of the 대댓글 held, before the ones still unread behind 'r50'. Its '답글
+   * 더 보기' is sent, and its page — BETWEEN, then REPLY in its place at the count it had when the
+   * page was read — answers when the test says.
+   */
+  function repliesOnTheirWay(queryClient: QueryClient) {
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), {
+      pages: [
+        {
+          items: [
+            {
+              comment: published(commentId, 2),
+              replies: [published(EARLIER, 0, commentId), published(REPLY, 0, commentId)],
+              repliesNextCursor: 'r50',
+            },
+          ],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    });
+    const page = deferred<unknown>();
+    vi.spyOn(api, 'GET').mockReturnValue(page.promise as never);
+    const more = readMoreReplies(queryClient, POST, commentId);
+    const arrive = () =>
+      page.resolve({
+        data: {
+          data: [published(BETWEEN, 0, commentId), published(REPLY, 0, commentId)],
+          meta: { nextCursor: null },
+        },
+        response: new Response(null, { status: 200 }),
+      });
+    return { more, arrive };
+  }
+
+  /** The 대댓글 ids the thread holds, and its cursor. */
+  const repliesHeld = (queryClient: QueryClient) => {
+    const [thread] = commentThreadsOf(
+      queryClient.getQueryData<CommentPages>(postCommentsKey(post)),
+    );
+    return [thread?.replies.map((reply) => reply.id), thread?.repliesNextCursor];
+  };
+
+  it('keeps the count the answer wrote when the page lands after it', async () => {
+    const queryClient = seeded();
+    const replies = repliesOnTheirWay(queryClient);
+    const sent = deferred<LikeState>();
+    const done = toggle(queryClient, () => sent.promise).mutate(onComment(true, REPLY));
+    await settle();
+    expect(commentCountOf(queryClient, REPLY)).toBe(1);
+    sent.resolve({ liked: true, likeCount: 1 });
+    await done;
+    expect(commentCountOf(queryClient, REPLY)).toBe(1);
+    // The page brings BETWEEN and REPLY into its place — REPLY at the count from when the page was
+    // read, which must not take the like back off the screen.
+    replies.arrive();
+    await replies.more;
+    expect(repliesHeld(queryClient)).toEqual([[EARLIER, BETWEEN, REPLY], null]);
+    expect(commentCountOf(queryClient, REPLY)).toBe(1);
+    expect(commentCountOf(queryClient, BETWEEN)).toBe(0);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([REPLY]);
+  });
+
+  it('keeps the press’s count when the page lands before the answer, and when the press fails', async () => {
+    const queryClient = seeded();
+    const replies = repliesOnTheirWay(queryClient);
+    const sent = deferred<LikeState>();
+    const done = toggle(queryClient, () => sent.promise).mutate(onComment(true, REPLY));
+    await settle();
+    replies.arrive();
+    await replies.more;
+    // Landed first: REPLY in its place, still at the count the press moved.
+    expect(repliesHeld(queryClient)).toEqual([[EARLIER, BETWEEN, REPLY], null]);
+    expect(commentCountOf(queryClient, REPLY)).toBe(1);
+    sent.resolve({ liked: true, likeCount: 3 });
+    await done;
+    expect(commentCountOf(queryClient, REPLY)).toBe(3);
+
+    // A press that fails after the page landed puts back the count from before it.
+    const again = seeded();
+    const other = repliesOnTheirWay(again);
+    const failing = deferred<LikeState>();
+    const failed = toggle(again, () => failing.promise)
+      .mutate(onComment(true, REPLY))
+      .catch((error: unknown) => error);
+    await settle();
+    other.arrive();
+    await other.more;
+    expect(commentCountOf(again, REPLY)).toBe(1);
+    failing.reject(refusal(503, 'INTERNAL'));
+    expect(await failed).toBeInstanceOf(ApiError);
+    expect(commentCountOf(again, REPLY)).toBe(0);
+    expect(repliesHeld(again)).toEqual([[EARLIER, BETWEEN, REPLY], null]);
   });
 });

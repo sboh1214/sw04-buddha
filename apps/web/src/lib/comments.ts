@@ -122,9 +122,25 @@ function lastOfEach<T>(items: readonly T[], idOf: (item: T) => string): T[] {
  * after what is held, and a 대댓글 the writer just wrote — put at the end of the replies held when
  * the pages before it could not be read (`withNewComment`) — stays where its page puts it, after
  * the 대댓글 written before it, as `commentThreadsOf` keeps a 댓글.
+ *
+ * Such a 대댓글, held and on the page both, keeps the like count held (#49, ADR-0076 7-17): the
+ * page carries the count from when it was read, and while the 대댓글 is on screen its count is the
+ * like toggle's to write — a like pressed while the page was on its way ('답글 더 보기', a new
+ * 대댓글's read on) would otherwise go back to the count from before it, beside a pressed toggle,
+ * until the next read of the pages. The page brings the rest of it (its state, its text) and its
+ * place; a placeholder has no count to keep.
  */
 function repliesWith(held: readonly PostComment[], more: readonly PostComment[]): PostComment[] {
-  return lastOfEach([...held, ...more], (reply) => reply.id);
+  const counts = new Map<string, number>();
+  for (const reply of held) {
+    if (reply.state === 'published') counts.set(reply.id, reply.likeCount);
+  }
+  const brought = more.map((reply) => {
+    if (reply.state !== 'published') return reply;
+    const count = counts.get(reply.id);
+    return count === undefined ? reply : { ...reply, likeCount: count };
+  });
+  return lastOfEach([...held, ...brought], (reply) => reply.id);
 }
 
 /**

@@ -199,6 +199,42 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     expect(shape(next)[0]).toEqual(['a', ['a1', 'a2', 'mine']]);
   });
 
+  it('keep the like count held of a 대댓글 the page brings again (#49, ADR-0076 7-17)', () => {
+    // 'mine' was liked while its page was on its way: the page carries the count from before.
+    const held = pagesOf([
+      [
+        threadWithMore(
+          'a-50',
+          comment('a'),
+          { ...comment('a1', 'a'), likeCount: 2 },
+          { ...comment('mine', 'a'), likeCount: 1 },
+          { ...comment('gone', 'a'), likeCount: 4 },
+        ),
+      ],
+    ]);
+    const next = withMoreReplies(
+      held,
+      'a',
+      'a-50',
+      page(
+        null,
+        { ...comment('a2', 'a'), likeCount: 5 },
+        { ...comment('mine', 'a', 'edited'), likeCount: 0 },
+        { state: 'deleted', id: 'gone' },
+      ),
+    );
+    const [thread] = commentThreadsOf(next);
+    expect(thread?.replies).toEqual([
+      { ...comment('a1', 'a'), likeCount: 2 },
+      { ...comment('a2', 'a'), likeCount: 5 },
+      // In its place, with the page's text — and the count held.
+      { ...comment('mine', 'a', 'edited'), likeCount: 1 },
+      // A placeholder now: no count.
+      { state: 'deleted', id: 'gone' },
+    ]);
+    expect(thread?.repliesNextCursor).toBeNull();
+  });
+
   it('are read on when a page read again holds fewer than the screen did', () => {
     const fresh = threadWithMore('a-50', comment('a'), comment('a1', 'a'));
     const held = thread(comment('a'), comment('a1', 'a'), comment('a2', 'a'));
