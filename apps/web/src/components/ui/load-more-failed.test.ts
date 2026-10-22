@@ -78,10 +78,15 @@ function firstReadMessages(text: string): Set<string> {
   return messages;
 }
 
-/** The lists `text` pages: `list.fetchNextPage()`, or `fetchNextPage()` destructured from one. */
+/**
+ * The lists `text` pages: `list.fetchNextPage()`, `fetchNextPage()` destructured from one, or the
+ * comment list's `readMoreComments(list)` (hooks/use-comments.ts — its `fetchNextPage`, and the
+ * pages read again from the first when the server no longer opens the cursor, ADR-0074 7-29).
+ */
 function pagedLists(text: string): string[] {
   return [
     ...[...text.matchAll(/void (\w+)\.fetchNextPage\(\)/g)].map((match) => match[1] ?? ''),
+    ...[...text.matchAll(/void readMoreComments\((\w+)\)/g)].map((match) => match[1] ?? ''),
     ...(/void fetchNextPage\(\)/.test(text)
       ? [...text.matchAll(/\{[^}]*\bfetchNextPage\b[^}]*\}\s*=\s*(\w+);/g)].map(
           (match) => match[1] ?? '',
@@ -154,9 +159,13 @@ describe('the notice above a 더 보기 that failed', () => {
         expect(toButton, `${file}: ${list}`).not.toContain('<LoadMoreFailed');
         // Its own test id beside the button's.
         expect(toButton, file).toMatch(/data-testid=\{?[`"][^`"]*-more-failed[`"]\}?/);
-        // The button pages the same list: `list.fetchNextPage()`, or `fetchNextPage()`
-        // destructured from it (MY's 거래 내역 and 결제 내역).
-        const pages = new RegExp(`void ${list}\\.fetchNextPage\\(\\)`).test(toButton)
+        // The button pages the same list: `list.fetchNextPage()`, the comment list's
+        // `readMoreComments(list)` (#48's 더 보기, which reads the pages again for a cursor the
+        // server no longer opens), or `fetchNextPage()` destructured from it (MY's 거래 내역 and
+        // 결제 내역).
+        const pages = new RegExp(
+          `void (?:${list}\\.fetchNextPage\\(\\)|readMoreComments\\(${list}\\))`,
+        ).test(toButton)
           ? true
           : /void fetchNextPage\(\)/.test(toButton) &&
             new RegExp(`\\{[^}]*\\bfetchNextPage\\b[^}]*\\}\\s*=\\s*${list};`).test(text);
