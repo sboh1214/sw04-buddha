@@ -55,20 +55,20 @@ function backPathOf(subject: ReportSubject): string {
  * placeholder has no button at all (its caller draws none): a hidden or deleted item takes no
  * report.
  *
- * The dialog: under its title, which post or comment it reports (owner decision 2026-10-22 답 4:
- * «카드·글 화면·댓글에서 연 신고 창 → 그 글·댓글의 제목이나 첫 줄을 한 줄로 보임») — the post's title or
- * the first line of its text, the comment's first line (`reportItemName`, a cut one ending in '…'),
- * on one line that the width cuts with an ellipsis — wherever it was opened: a card, the post page,
- * a comment; a screen reader hears it with the title, as the dialog's name (`aria-labelledby`: the
- * title, then the line — #51's dialog's way, ADR-0080 7-19). A profile's report names none (its
- * title says it is the profile on screen). Then the eight reasons in the owner's order as one radio
- * group (one reason, #50 «하나»), the description — optional, needed with '기타', 500 characters
- * (#45-10) — and above them the note that disagreeing or a wrong forecast is not a reason (#45-10
- * «틀린 전망 … 신고 화면에서 안내한다»), which is the dialog's description, so a screen reader says it
- * with the title. Sent, it closes with the receipt (#45-13: «접수 확인»), which says where the
- * result will be. A refusal is said under the description (its rules) or in the dialog, which keeps
- * what was typed; one that finds the item a placeholder now closes it, with a toast, as the page
- * reads the item again — the post page, and the lists whose cards carry the button
+ * The dialog: under its title, what it reports (owner decision 2026-10-22 답 4: «카드·글 화면·댓글에서
+ * 연 신고 창 → 그 글·댓글의 제목이나 첫 줄을 한 줄로 보임»; (2차) 4: the profile's, the member's current
+ * nickname) — the post's title or the first line of its text, the comment's first line
+ * (`reportItemName`, a cut one ending in '…'), the nickname the profile shows — on one line that the
+ * width cuts with an ellipsis — wherever it was opened: a card, the post page, a comment, the
+ * profile; a screen reader hears it with the title, as the dialog's name (`aria-labelledby`: the
+ * title, then the line — #51's dialog's way, ADR-0080 7-19). Then the eight reasons in the owner's
+ * order as one radio group (one reason, #50 «하나»), the description — optional, needed with '기타',
+ * 500 characters (#45-10) — and above them the note that disagreeing or a wrong forecast is not a
+ * reason (#45-10 «틀린 전망 … 신고 화면에서 안내한다»), which is the dialog's description, so a screen
+ * reader says it with the title. Sent, it closes with the receipt (#45-13: «접수 확인»), which says
+ * where the result will be. A refusal is said under the description (its rules) or in the dialog,
+ * which keeps what was typed; one that finds the item a placeholder now closes it, with a toast, as
+ * the page reads the item again — the post page, and the lists whose cards carry the button
  * (`reportOptions`, `isStaleReportRefusal`).
  * The outcome is said from the write's promise, not from per-call callbacks: that read can take
  * this button away with its observer (ADR-0074's lesson).
@@ -84,9 +84,9 @@ export function ReportButton({
   subject: ReportSubject;
   /**
    * What the dialog names under its title (`reportItemName`): the post's title and the start of
-   * its text, the comment's text; null for a profile.
+   * its text, the comment's text, the profile's current nickname.
    */
-  item: ReportItem | null;
+  item: ReportItem;
   /** The public id of whoever wrote it or owns the profile; null for a withdrawn member's. */
   authorPublicId: string | null;
   /**
@@ -167,7 +167,7 @@ function ReportDialog({
   onClose,
 }: {
   subject: ReportSubject;
-  item: ReportItem | null;
+  item: ReportItem;
   accountId: string;
   onClose: () => void;
 }) {
@@ -237,10 +237,7 @@ function ReportDialog({
       <Portal>
         <Dialog.Backdrop />
         <Dialog.Positioner>
-          <Dialog.Content
-            aria-labelledby={item === null ? undefined : `${titleId} ${itemId}`}
-            data-testid="report-dialog"
-          >
+          <Dialog.Content aria-labelledby={`${titleId} ${itemId}`} data-testid="report-dialog">
             <form
               noValidate
               onSubmit={(event) => {
@@ -253,18 +250,16 @@ function ReportDialog({
               </Dialog.Header>
               <Dialog.Body>
                 <Stack gap="4">
-                  {item !== null && (
-                    <Text
-                      id={itemId}
-                      color="fg"
-                      fontWeight="medium"
-                      truncate
-                      minW="0"
-                      data-testid="report-dialog-item"
-                    >
-                      {reportItemName(item)}
-                    </Text>
-                  )}
+                  <Text
+                    id={itemId}
+                    color="fg"
+                    fontWeight="medium"
+                    truncate
+                    minW="0"
+                    data-testid="report-dialog-item"
+                  >
+                    {reportItemName(item)}
+                  </Text>
                   <Stack gap="1.5">
                     <Dialog.Description color="fg" data-testid="report-not-a-reason">
                       {copy.reportNotAReason}
@@ -386,9 +381,7 @@ function ReportDialog({
  * published items only; a placeholder is never one of them.
  */
 export function CardReportButton(
-  props: Omit<Parameters<typeof ReportButton>[0], 'raised' | 'name' | 'item'> & {
-    item: ReportItem;
-  },
+  props: Omit<Parameters<typeof ReportButton>[0], 'raised' | 'name'>,
 ) {
   return <ReportButton {...props} name={reportButtonName(props.item)} raised />;
 }

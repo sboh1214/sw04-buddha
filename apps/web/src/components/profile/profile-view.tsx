@@ -146,7 +146,9 @@ export function ProfileView({ profile }: { profile: PublicProfile }) {
           <OwnProfileLink publicId={member.publicId} />
           <ReportButton
             subject={{ type: 'profile', publicId: member.publicId }}
-            item={null}
+            // The dialog names the member by the nickname shown here (owner decision 2026-10-22
+            // (2차) 4).
+            item={{ type: 'profile', nickname: member.nickname }}
             authorPublicId={member.publicId}
           />
           <OperatorLink

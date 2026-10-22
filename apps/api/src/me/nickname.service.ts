@@ -9,13 +9,14 @@ import {
 } from '@buddha/db';
 import {
   NICKNAME_CHANGE_INTERVAL_DAYS,
+  NICKNAME_HOLD_DAYS,
   keptNicknameViolation,
   nicknameKey,
   nicknameRuleViolation,
   type NicknameNotAllowedDetails,
   type OnboardingRequiredDetails,
 } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, gt, isNotNull } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -59,9 +60,10 @@ function refused(details: NicknameNotAllowedDetails): AppError {
  *   one at once, and that pick is the change the next interval counts from. The nickname the reset
  *   took away is held from the member too (a hold naming no account) — until an operator cancels
  *   the reset, which hands that hold to the member (owner decision 2026-10-22): theirs to pick
- *   again, every other account's still held. The cancellation touches no interval: a member who
- *   has changed no nickname since the reset picks it at once, one who has waits out the interval
- *   that change started (ADR-0081 7-13; whether it should be waived is 결과 4's question).
+ *   again, every other account's still held. While that handed-back hold stands the member picks
+ *   that nickname — exactly as it was taken away (owner decision 2026-10-22 (3차) 1) — with no
+ *   interval, even after changing to another since the reset; any other nickname keeps the
+ *   interval (`handedBack`, owner decision 2026-10-22 (2차) 1, ADR-0081 7-13).
  *
  * Every write takes the account's profile row FOR UPDATE first (one nickname write of an account at
  * a time), then the nickname locks (`lockNicknames`: the nickname given up and the one taken, in
@@ -103,12 +105,51 @@ export class NicknameService {
         const next = new Date(
           profile.nicknameChangedAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
         );
-        if (next > now) {
+        if (next > now && !(await this.handedBack(tx, userId, profile.nickname, nickname, now))) {
           throw refused({ reason: 'change_interval', nextChangeAt: next.toISOString() });
         }
       }
       await this.replace(tx, userId, profile.nickname, nickname, now, { nicknameChangedAt: now });
     });
+  }
+
+  /**
+   * Whether `next` is the nickname a cancelled operator's reset handed back to the member and its
+   * hold still stands at `now` (owner decision 2026-10-22 (2차) 1: «넘겨받은 보류가 서 있는 동안 그
+   * 닉네임만 간격 없이 고른다»): the hold a reset wrote (`action_id`) naming the member — which only
+   * the reset's cancellation makes it (`ModerationService.cancel`; until then it names nobody, and
+   * the member's own holds name no action) — released less than NICKNAME_HOLD_DAYS ago, for that
+   * nickname exactly, as it was taken away (owner decision 2026-10-22 (3차) 1, ADR-0081 7-13). Only
+   * the interval is waived: the pick is a change like any other, held to the rules, and the next
+   * interval counts from it. A hold waives it for every pick while it stands: after two cancelled
+   * resets the member may switch between the two nicknames (whether each hold should waive it once
+   * is ADR-0081 결과 4's question 1). Read under the nickname locks the change takes
+   * (`lockNicknames`, re-taken by `replace` in the same order), the lock the cancellation hands the
+   * hold over under: a pick that comes while a cancellation runs waits for it and reads the hold as
+   * handed.
+   */
+  private async handedBack(
+    tx: Tx,
+    userId: string,
+    current: string,
+    next: string,
+    now: Date,
+  ): Promise<boolean> {
+    const { nicknameHolds } = schema;
+    await lockNicknames(tx, [current, next]);
+    const [hold] = await tx
+      .select({ id: nicknameHolds.id })
+      .from(nicknameHolds)
+      .where(
+        and(
+          eq(nicknameHolds.userId, userId),
+          isNotNull(nicknameHolds.actionId),
+          eq(nicknameHolds.nickname, next),
+          gt(nicknameHolds.releasedAt, new Date(now.getTime() - NICKNAME_HOLD_DAYS * DAY_MS)),
+        ),
+      )
+      .limit(1);
+    return hold !== undefined;
   }
 
   /**

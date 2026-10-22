@@ -17,11 +17,12 @@ import { moderationActions } from './moderation.js';
  * An operator's reset of a nickname to an auto nickname writes one with none from the start (#50,
  * owner decision 2026-10-21, ADR-0081): the nickname taken away is held from the member too. That
  * hold names the reset (`action_id`, one hold per action), so the reset's cancellation hands it to
- * the member — `user_id` set to them: the hold no longer keeps it from them (their change interval
- * still applies), every other account stays held for the rest of the 30 days (owner decision
- * 2026-10-22, ADR-0081 7-13). Every other hold names no action. Former nicknames are never shown
- * (#37-3, PRIVATE_DATA `former-nickname`). A row past the hold no longer counts; removing it is
- * #184's retention work.
+ * the member — `user_id` set to them: the hold no longer keeps it from them, and while it stands
+ * they pick it, exactly as it was taken away, with no change interval (owner decisions 2026-10-22
+ * (2차) 1 and (3차) 1 — NicknameService), every other account stays held for the rest of the 30
+ * days (owner decision 2026-10-22, ADR-0081 7-13). Every other hold names no action. Former
+ * nicknames are never shown (#37-3, PRIVATE_DATA `former-nickname`). A row past the hold no longer
+ * counts; removing it is #184's retention work.
  */
 export const nicknameHolds = pgTable(
   'nickname_holds',

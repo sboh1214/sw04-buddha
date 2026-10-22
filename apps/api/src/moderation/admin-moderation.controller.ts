@@ -175,9 +175,10 @@ export class AdminModerationController {
       'Cancel an action with a reason (recorded): a hidden item shows again; a profile item is ' +
       'not restored. A nickname reset’s cancellation restores no nickname but hands the hold of ' +
       'the nickname taken away to the member: other accounts stay held for the rest of the 30 ' +
-      'days from the reset, and the member may pick it under their own change interval (a ' +
-      'nickname picked since the reset started a new one). One cancelled already is ' +
-      '`cancelled`; one on the acting admin is `own`',
+      'days from the reset, and while that hold stands the member picks that nickname, exactly ' +
+      'as it was taken away, with no change interval, even after a pick since the reset (any ' +
+      'other nickname keeps the interval). One cancelled already is `cancelled`; one on the ' +
+      'acting admin is `own`',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)

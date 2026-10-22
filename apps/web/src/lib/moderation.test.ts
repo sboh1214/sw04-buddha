@@ -4,6 +4,7 @@ import {
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
   NICKNAME_HOLD_DAYS,
+  NICKNAME_MAX_LENGTH,
   OTHER_NEEDS_TEXT_MESSAGE,
   POST_EXCERPT_MAX_LENGTH,
   REPORTS_PER_DAY,
@@ -217,6 +218,18 @@ describe('names', () => {
     // Never its post's: two comments under one post are named apart.
     expect(reportItemName({ type: 'comment', body: '둘째 댓글' })).not.toBe(
       reportItemName({ type: 'comment', body: '첫 댓글' }),
+    );
+  });
+
+  it('names a reported profile by the member’s current nickname, whole (owner decision 2026-10-22 (2차) 4)', () => {
+    expect(reportItemName({ type: 'profile', nickname: '시장읽는사람' })).toBe('시장읽는사람');
+    expect(reportItemName({ type: 'profile', nickname: 'user_7KQ2' })).toBe('user_7KQ2');
+    // A nickname is at most 20 characters: never cut, never an ellipsis.
+    const longest = 'N'.repeat(NICKNAME_MAX_LENGTH);
+    expect(reportItemName({ type: 'profile', nickname: longest })).toBe(longest);
+    // Each profile its own: the line names the member, not the kind of item.
+    expect(reportItemName({ type: 'profile', nickname: '하나' })).not.toBe(
+      reportItemName({ type: 'profile', nickname: '둘' }),
     );
   });
 
@@ -867,7 +880,7 @@ describe('operators', () => {
     expect(isCancellable({ cancelledAt: '2026-10-21T00:00:00.000Z' })).toBe(false);
   });
 
-  it('says in a nickname reset’s cancellation that the nickname taken away is the member’s to pick again, while its hold runs (owner decision 2026-10-22 답 2)', () => {
+  it('says in a nickname reset’s cancellation that the nickname taken away is the member’s to pick again while its hold runs, and that the hold has ended after it (owner decisions 2026-10-22 답 2, (2차) 2·3)', () => {
     const NOW = Date.parse('2026-10-22T12:00:00.000Z');
     const DAY_MS = 24 * 60 * 60 * 1_000;
     const at = (ms: number) => new Date(ms).toISOString();
@@ -880,19 +893,31 @@ describe('operators', () => {
       copy.adminModerationCancelNicknameResetBody,
     );
     // From its end the cancellation hands nothing: the nickname is anybody's (`nickname_held()`:
-    // less than 30 days), so the dialog says what every other cancellation says.
+    // less than 30 days), and the dialog says the hold has ended (owner decision 2026-10-22 (2차) 3).
     for (const createdAt of [at(NOW - NICKNAME_HOLD_DAYS * DAY_MS), at(NOW - 40 * DAY_MS)]) {
-      expect(cancelDialogBody(reset(createdAt), NOW)).toBe(copy.adminModerationCancelBody);
-    }
-    // Every other type keeps the words for a hiding and the profile items, whenever it was.
-    for (const type of ['hide', 'warning', 'bio_clear', 'image_remove'] as const) {
-      expect(cancelDialogBody({ type, createdAt: at(NOW - DAY_MS) }, NOW)).toBe(
-        copy.adminModerationCancelBody,
+      expect(cancelDialogBody(reset(createdAt), NOW)).toBe(
+        copy.adminModerationCancelNicknameResetEndedBody,
       );
     }
+    // The owner's sentences, as given.
+    expect(copy.adminModerationCancelNicknameResetEndedBody).toBe(
+      '닉네임은 되살리지 않습니다. 이전 닉네임의 30일 보류는 끝났습니다.',
+    );
+    expect(copy.adminModerationCancelNicknameResetBody).toBe(
+      '닉네임은 되살리지 않습니다. 이전 닉네임은 이 회원만 다시 고를 수 있습니다. 다른 회원은 강제 변경한 때부터 30일 동안 쓸 수 없습니다.',
+    );
+    // The 30 the ended dialog names is the hold's.
+    expect(copy.adminModerationCancelNicknameResetEndedBody).toContain(
+      `${String(NICKNAME_HOLD_DAYS)}일 보류`,
+    );
+    // Every other type keeps the words for a hiding and the profile items, whenever it was.
+    for (const type of ['hide', 'warning', 'bio_clear', 'image_remove'] as const) {
+      for (const createdAt of [at(NOW - DAY_MS), at(NOW - 40 * DAY_MS)]) {
+        expect(cancelDialogBody({ type, createdAt }, NOW)).toBe(copy.adminModerationCancelBody);
+      }
+    }
     expect(copy.adminModerationCancelBody).not.toContain('이 회원만');
-    // What a cancellation past the hold falls back to is still true of a nickname reset.
-    expect(copy.adminModerationCancelBody).toContain('프로필 항목은 되살리지 않습니다.');
+    expect(copy.adminModerationCancelBody).not.toContain('보류');
   });
 
   it('needs a reason for an action, and the explanation with 기타 (owner decision 2026-10-22)', () => {

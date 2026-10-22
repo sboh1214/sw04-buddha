@@ -322,9 +322,11 @@ export class ModerationService {
    * 2026-10-22: «그 보류가 본인의 것이 됨 … 닉네임을 저절로 되살리지는 않음»): the hold the reset wrote
    * (`action_id`) names the member from then on, so they may pick that nickname again, and every
    * other account stays held for the rest of the 30 days from the reset — the hold a member's own
-   * change gives (`nickname_held()`). No interval is touched: a member who has changed no nickname
-   * since the reset (which cleared the interval) picks it at once, one who has waits out the
-   * interval that change started (ADR-0081 7-13; whether to waive it is 결과 4's question). Under
+   * change gives (`nickname_held()`). No interval is written: while that hold stands the member
+   * picks that nickname with no interval even after changing to another since the reset, and any
+   * other nickname keeps the interval (NicknameService's `handedBack`, owner decision 2026-10-22
+   * (2차) 1, ADR-0081 7-13). Past the hold (30 days from the reset) there is nothing left to hand:
+   * the nickname is anybody's, the member's interval applies to it as to any. Under
    * that nickname's lock (`lockNicknames`), the lock a pick of it takes: a pick in flight is
    * answered before the hold changes hands, and one that comes while this runs waits for it and
    * reads the hold as handed. The reports it resolved stay resolved (조치함 is what was done).

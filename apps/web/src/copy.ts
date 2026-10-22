@@ -1416,12 +1416,17 @@ export const copy = {
   adminModerationCancelBody:
     '숨김을 취소하면 그 글·댓글이 다시 보입니다. 프로필 항목은 되살리지 않습니다.',
   // 닉네임 강제 변경의 취소(오너 결정 2026-10-22 답 2): 닉네임은 저절로 되살리지 않고, 옛 닉네임의 보류는 그
-  // 회원의 것이 되어 다른 회원은 강제 변경한 때부터 30일(NICKNAME_HOLD_DAYS) 동안 못 고른다. 그 회원의 변경
-  // 간격은 그대로라 강제 변경 뒤 닉네임을 바꾼 회원은 그 간격이 지나야 고른다(ADR-0081 7-13, 결과 4에 물었다).
-  // 보류가 끝난 뒤의 취소에는 이 문장 대신 adminModerationCancelBody를 보인다(cancelDialogBody).
-  // 둘째 문장은 오너가 든 예 그대로다.
+  // 회원의 것이 되어 다른 회원은 강제 변경한 때부터 30일(NICKNAME_HOLD_DAYS) 동안 못 고른다. 그 보류가 서 있는
+  // 동안 그 회원은 강제 변경 뒤 닉네임을 바꿨어도 그 닉네임만은 30일 간격 없이 고른다(오너 결정 2026-10-22
+  // (2차) 1, ADR-0081 7-13). 세 문장은 오너가 승인했다(같은 결정 2 — 둘째 문장은 오너가 든 예 그대로다).
+  // 보류가 끝난 뒤의 취소에는 이 문장 대신 adminModerationCancelNicknameResetEndedBody를 보인다
+  // (cancelDialogBody).
   adminModerationCancelNicknameResetBody:
     '닉네임은 되살리지 않습니다. 이전 닉네임은 이 회원만 다시 고를 수 있습니다. 다른 회원은 강제 변경한 때부터 30일 동안 쓸 수 없습니다.',
+  // 강제 변경한 때부터 30일이 지난 닉네임 강제 변경의 취소(오너 결정 2026-10-22 (2차) 3): 보류가 이미 끝나
+  // 넘길 것이 없다. 오너가 정한 문장 그대로다.
+  adminModerationCancelNicknameResetEndedBody:
+    '닉네임은 되살리지 않습니다. 이전 닉네임의 30일 보류는 끝났습니다.',
   adminModerationReasonLabel: '사유',
   adminModerationReasonPlaceholder: '사유 고르기',
   adminModerationNoteLabel: '회원에게 보일 설명',

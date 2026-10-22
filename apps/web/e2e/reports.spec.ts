@@ -42,9 +42,12 @@ import {
  *   comment, a 대댓글 whose first line is cut with '…', and the cards (owner decision 2026-10-22 답 4);
  *   the reported operator still reads the count of reporters (답 1);
  * - a nickname reset: the member reads on 조치·신고 내역 that the former nickname cannot be used for
- *   30 days and is refused it, as another member is (the approved refusal); the cancellation's
- *   dialog says the hold becomes the member's, the line goes, and the member takes the nickname
- *   back at once while the other member is still refused (owner decisions 2026-10-22 답 2·3).
+ *   30 days and is refused it, as another member is (the approved refusal), and picks another; the
+ *   cancellation's dialog says the hold becomes the member's, the line goes, and the member — whose
+ *   pick started a new 30-day interval — takes that nickname back at once while any other waits
+ *   the interval and the other member is still refused it (owner decisions 2026-10-22 답 2·3,
+ *   (2차) 1); a reset cancelled 30 days on says its hold has ended ((2차) 3);
+ * - the profile's report dialog names the member by their current nickname ((2차) 4).
  *
  * Every report a test files is processed before it ends, so a persistent database's queue does not
  * grow run after run; the queue is walked page by page all the same (`showInQueue`). A check that
@@ -497,8 +500,10 @@ test.describe('신고와 운영 처리', () => {
       await reporter.goto(profileUrl);
       await reporter.getByTestId('profile-actions').getByTestId('report-open').click();
       await expect(reporter.getByTestId('report-dialog')).toContainText(copy.reportProfileTitle);
-      // A profile's dialog names no post or comment: its title says what is reported.
-      await expect(reporter.getByTestId('report-dialog-item')).toHaveCount(0);
+      // The dialog names the member by the nickname the profile shows, on one line (owner
+      // decision 2026-10-22 (2차) 4).
+      await expect(reporter.getByTestId('profile-nickname')).toHaveText(member.profile.nickname);
+      await expectReportItem(reporter, copy.reportProfileTitle, member.profile.nickname);
       await reporter.getByTestId('report-reason-personal_info').click();
       const reportId = await sendReport(
         reporter,
@@ -824,7 +829,7 @@ test.describe('신고와 운영 처리', () => {
     }
   });
 
-  test('닉네임 강제 변경을 받은 회원은 조치·신고 내역에서 이전 닉네임을 30일 동안 다시 쓸 수 없다는 줄을 보고 다른 회원처럼 그 닉네임을 거절당하며, 운영자가 취소하면 취소 창이 그 보류를 말하고 회원만 곧바로 다시 고른다', async ({
+  test('닉네임 강제 변경을 받은 회원은 조치·신고 내역에서 이전 닉네임을 30일 동안 다시 쓸 수 없다는 줄을 보고 다른 회원처럼 그 닉네임을 거절당하며, 운영자가 취소하면 취소 창이 그 보류를 말하고, 그 사이 다른 닉네임으로 바꾼 회원도 그 닉네임만은 곧바로 다시 고른다', async ({
     page,
     browser,
   }) => {
@@ -874,6 +879,11 @@ test.describe('신고와 운영 처리', () => {
       await signUp(other, freshEmail());
       await pick(other, nickname.toUpperCase());
       await expect(other.getByTestId('nickname-error')).toHaveText(copy.errNicknameTaken);
+      // The member picks another at once (the interval waived), which starts a new 30 days.
+      const meanwhile = freshNickname('Nm');
+      await pick(page, meanwhile);
+      await expect(page.getByText(copy.nicknameSaved)).toBeVisible();
+      expect((await meOf(page.request)).profile.nickname).toBe(meanwhile);
 
       // Cancelled: the dialog says the former nickname is the member's alone to pick again.
       await adminPage.reload();
@@ -893,12 +903,19 @@ test.describe('신고와 운영 처리', () => {
       await expect(action.getByTestId('my-action-cancelled')).toHaveText(copy.moderationCancelled);
       await expect(action.getByTestId('my-action-nickname-held')).toHaveCount(0);
       expect((await meOf(page.request)).profile.nickname).not.toBe(nickname);
-      // The other member is still refused it, in any case; the member, who has picked no
-      // nickname since the reset, takes it back at once.
+      // The other member is still refused it, in any case.
       for (const wanted of [nickname, nickname.toUpperCase()]) {
         await pick(other, wanted);
         await expect(other.getByTestId('nickname-error')).toHaveText(copy.errNicknameTaken);
       }
+      // The member's pick since the reset started an interval: any other nickname waits it…
+      await pick(page, freshNickname('Nx'));
+      await expect(page.getByTestId('nickname-error')).toContainText(
+        copy.errNicknameChangeInterval,
+      );
+      expect((await meOf(page.request)).profile.nickname).toBe(meanwhile);
+      // …and the one handed back is taken at once while its hold stands (owner decision
+      // 2026-10-22 (2차) 1).
       await pick(page, nickname);
       await expect(page.getByText(copy.nicknameSaved)).toBeVisible();
       await expect(page.getByTestId('nickname-input')).toHaveValue(nickname);
@@ -908,6 +925,45 @@ test.describe('신고와 운영 처리', () => {
       ).toBe(true);
     } finally {
       await otherContext.close();
+      await adminContext.close();
+    }
+  });
+
+  test('강제 변경한 때부터 30일이 지나 닉네임 강제 변경을 취소하면 취소 창은 이전 닉네임의 보류가 끝났다고 말한다', async ({
+    page,
+    browser,
+  }) => {
+    const nickname = freshNickname('Ne');
+    await signUp(page, freshEmail(), undefined, { nickname });
+    const member = await meOf(page.request);
+
+    const adminContext = await browser.newContext();
+    try {
+      const adminPage = await adminContext.newPage();
+      await signIn(adminPage, adminAccount.email, adminAccount.password);
+      await adminPage.goto(`/admin/moderation/users/${member.id}`);
+      await adminPage.getByTestId('moderation-nickname-reset').click();
+      await adminPage.getByTestId('moderation-reason').selectOption('impersonation');
+      await adminPage.getByTestId('moderation-submit').click();
+      await expect(adminPage.getByText(copy.adminModerationNicknameResetDone)).toBeVisible();
+
+      // The operator's browser 31 days on: past the 30-day hold (NICKNAME_HOLD_DAYS) the dialog
+      // decides from when it opens (owner decision 2026-10-22 (2차) 3).
+      await adminPage.clock.setFixedTime(Date.now() + 31 * 24 * 60 * 60 * 1_000);
+      await adminPage.reload();
+      const memberActions = adminPage.getByTestId('moderation-author-actions');
+      await memberActions.getByTestId('moderation-action-cancel').click();
+      const cancelDialog = adminPage.getByTestId('moderation-cancel-dialog');
+      await expect(cancelDialog).toContainText(copy.adminModerationCancelNicknameResetEndedBody);
+      await expect(cancelDialog).not.toContainText(copy.adminModerationCancelNicknameResetBody);
+      await expect(cancelDialog).not.toContainText(copy.adminModerationCancelBody);
+      await adminPage.getByTestId('moderation-record').fill('이의를 받아들임');
+      await adminPage.getByTestId('moderation-submit').click();
+      await expect(adminPage.getByText(copy.adminModerationCancelDone)).toBeVisible();
+      await expect(memberActions.getByTestId('moderation-action-cancelled')).toHaveText(
+        copy.moderationCancelled,
+      );
+    } finally {
       await adminContext.close();
     }
   });

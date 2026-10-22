@@ -297,13 +297,15 @@ export function reportDialogTitle(type: ReportTargetType): string {
 }
 
 /**
- * What a report of a post or a comment is about, as the report dialog and a card's 신고 name it: a
- * post's title and the start of its text (`postExcerpt` — a card's `excerpt`, or the post page's
- * own text cut the same way, so both name a post alike), a 댓글's or 대댓글's own text. A profile's
- * report has none.
+ * What a report is about, as the report dialog and a card's 신고 name it: a post's title and the
+ * start of its text (`postExcerpt` — a card's `excerpt`, or the post page's own text cut the same
+ * way, so both name a post alike), a 댓글's or 대댓글's own text, a profile's member by the nickname
+ * the profile shows now (owner decision 2026-10-22 (2차) 4).
  */
 export type ReportItem =
-  { type: 'post'; title: string | null; excerpt: string } | { type: 'comment'; body: string };
+  | { type: 'post'; title: string | null; excerpt: string }
+  | { type: 'comment'; body: string }
+  | { type: 'profile'; nickname: string };
 
 /**
  * The post page's item for its report dialog: the post's title and the start of its text cut as
@@ -352,12 +354,14 @@ function cutAtCharacter(text: string, max: number): string {
 }
 
 /**
- * Which post or comment is reported, on one line (owner decision 2026-10-22 답 4: «카드·글 화면·
- * 댓글에서 연 신고 창 → 그 글·댓글의 제목이나 첫 줄을 한 줄로 보임»): a post by its title, or the
- * first line of its text when it has none — as its card's heading and the post page's name it —
- * and a 댓글 or 대댓글 by the first line of its own text: its post's would name every comment under
- * one post alike. The rule of #51's dialog for a hidden item (ADR-0080, owner decisions 2026-10-22
- * 3rd and 4th — `hiddenItemName` on #51's branch, one rule at the restack): a first line is at most
+ * What is reported, on one line (owner decision 2026-10-22 답 4: «카드·글 화면·댓글에서 연 신고 창 →
+ * 그 글·댓글의 제목이나 첫 줄을 한 줄로 보임»; (2차) 4: the profile's dialog shows the member's current
+ * nickname on one line, as the post's and the comment's): a profile by the nickname it shows (at
+ * most NICKNAME_MAX_LENGTH, 20 — never cut), a post by its title, or the first line of its text
+ * when it has none — as its card's heading and the post page's name it — and a 댓글 or 대댓글 by
+ * the first line of its own text: its post's would name every comment under one post alike. The
+ * rule of #51's dialog for a hidden item (ADR-0080, owner decisions 2026-10-22 3rd and 4th —
+ * `hiddenItemName` on #51's branch, one rule at the restack): a first line is at most
  * POST_EXCERPT_MAX_LENGTH (300) code points, as a card's preview is, and one cut there ends in '…'
  * to say so; a line within the cap is whole and has none. A comment's line comes whole and is cut
  * here, between two characters as they are seen (`cutAtCharacter`), the spaces before the cut
@@ -368,6 +372,7 @@ function cutAtCharacter(text: string, max: number): string {
  * fit the width with an ellipsis of its own (CSS); a screen reader hears the whole of it.
  */
 export function reportItemName(item: ReportItem): string {
+  if (item.type === 'profile') return item.nickname;
   if (item.type === 'post') {
     if (item.title !== null) return item.title;
     const line = postFirstLine(item.excerpt);
@@ -754,19 +759,20 @@ export function isCancellable(action: Pick<AdminModerationAction, 'cancelledAt'>
  * `now`, that the nickname is not restored and the nickname taken away becomes the member's alone
  * to pick again, every other member still held for the rest of the 30 days (owner decision
  * 2026-10-22 답 2: «그 보류가 본인의 것이 됨 …, 취소 창에 그렇게 적음. 닉네임을 저절로 되살리지는
- * 않음»). Past the hold (`nicknameHoldEndOf`: 30 days from the reset, as `nicknameHoldShown`
- * counts them) the cancellation hands nothing — the nickname is anybody's, maybe another's already
- * — so it says what every other cancellation says, true of a nickname reset too ('프로필 항목은
- * 되살리지 않습니다.'); whether it should say more is the owner's (ADR-0081 결과 4).
+ * 않음» — its three sentences approved as built, (2차) 2). Past the hold (`nicknameHoldEndOf`: 30
+ * days from the reset, as `nicknameHoldShown` counts them) the cancellation hands nothing — the
+ * nickname is anybody's, maybe another's already — and it says so (owner decision 2026-10-22
+ * (2차) 3: «닉네임은 되살리지 않습니다. 이전 닉네임의 30일 보류는 끝났습니다.»).
  */
 export function cancelDialogBody(
   action: Pick<AdminModerationAction, 'type' | 'createdAt'>,
   // Read when the dialog opens (a click), never on the server.
   now: number = Date.now(),
 ): string {
-  return action.type === 'nickname_reset' && nicknameHoldEndOf(action.createdAt).getTime() > now
+  if (action.type !== 'nickname_reset') return copy.adminModerationCancelBody;
+  return nicknameHoldEndOf(action.createdAt).getTime() > now
     ? copy.adminModerationCancelNicknameResetBody
-    : copy.adminModerationCancelBody;
+    : copy.adminModerationCancelNicknameResetEndedBody;
 }
 
 /**

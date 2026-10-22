@@ -76,9 +76,12 @@ export const ERROR_CODES = [
   'ONBOARDING_REQUIRED',
   /**
    * A nickname the rules refuse: the auto nickname prefix or a reserved word in a typed one, one
-   * another account has or gave up less than 30 days ago, a change within 30 days of the last, or
-   * another nickname once the onboarding step is done. Details carry the reason and, for the
-   * interval, when the next change is allowed, nicknameNotAllowedDetailsSchema.
+   * another account has or gave up less than 30 days ago (or one an operator reset took from the
+   * member, held from them too until the reset is cancelled — ADR-0081), a change within 30 days of
+   * the last (but for the nickname handed back, exactly as it was taken away, when an operator
+   * cancels a reset, while its hold stands — ADR-0081), or another nickname once the onboarding
+   * step is done. Details carry the reason and, for the interval, when the next change is allowed,
+   * nicknameNotAllowedDetailsSchema.
    */
   'NICKNAME_NOT_ALLOWED',
   /**
