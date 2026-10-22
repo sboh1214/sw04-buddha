@@ -50,6 +50,7 @@ import {
   IMAGE_READ_BUSY_RETRY_SECONDS,
   imageReads,
 } from '../media/image-reads.js';
+import { memoryAdmission, memoryWaits } from '../media/memory-admission.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
@@ -57,6 +58,7 @@ import { waitForLockWaiter } from '../test/wait.js';
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const ORIGIN = 'http://localhost:3000';
 const UNKNOWN = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
+const MiB = 1024 * 1024;
 
 type ErrorBody = { error: { code: string; details?: unknown } };
 type AdminPage = { data: AdminNoticeSummary[]; meta: { nextCursor: string | null } };
@@ -1013,6 +1015,45 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     await vi.waitFor(() => {
       expect(imageReads.size).toBe(0);
     });
+  });
+
+  it('answers an admin’s HEAD from the row and holds an admin’s read back while the API’s memory has no room, as the public read does (ADR-0073 9-46)', async () => {
+    const kept = await upload();
+    const notice = await created('사진 공지', withImages(kept.id));
+    const url = `/api/v1/admin/notices/${notice.id}/images/${kept.id}`;
+    const get = vi.spyOn(t.storage, 'get');
+    const readMs = memoryWaits.readMs;
+    try {
+      // The headers a GET would carry, the length the row's, and no store read nor share.
+      const head = await t.app.inject({ method: 'HEAD', url, headers: { cookie: admin.cookie } });
+      expect(head.statusCode).toBe(200);
+      expect(head.rawPayload.length).toBe(0);
+      expect(head.headers).toMatchObject({
+        'content-type': 'image/png',
+        'content-length': String(kept.byteSize),
+        'cache-control': 'private, no-cache',
+        etag: `"${kept.id}"`,
+      });
+      // Admins only, as for a GET.
+      const anonymous = await t.app.inject({ method: 'HEAD', url });
+      expect(anonymous.statusCode).toBe(401);
+      // The API's memory full for the whole wait: refused unread with Retry-After, nothing held.
+      memoryAdmission.configure({ ceilingBytes: 416 * MiB, resident: () => 416 * MiB });
+      memoryWaits.readMs = 100;
+      const busy = await adminImage(notice.id, kept.id);
+      expect(busy.statusCode).toBe(429);
+      expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+      expect(busy.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+      expect(get).not.toHaveBeenCalled();
+      expect(imageReads.size).toBe(0);
+      expect(memoryAdmission.heldBytes).toBe(0);
+    } finally {
+      memoryAdmission.configure({ ceilingBytes: null });
+      memoryWaits.readMs = readMs;
+      get.mockRestore();
+    }
+    // With room, read as before.
+    expect((await adminImage(notice.id, kept.id)).statusCode).toBe(200);
   });
 
   it('takes the admin’s own uploads, serves them while the notice shows them, and keeps them through any admin’s edit', async () => {
