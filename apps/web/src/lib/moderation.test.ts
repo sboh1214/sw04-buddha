@@ -16,8 +16,14 @@ import {
   readPostDocument,
   type ErrorCode,
 } from '@buddha/shared';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
+import { BUSINESS_INFO } from '@/legal/business-info';
+import { templateKeys } from '@/legal/template';
+import { SRC } from '../test/screen-text';
 import {
   ApiError,
   type AdminModerationAction,
@@ -53,6 +59,9 @@ import {
   adminUserModerationKey,
   adminUserModerationPath,
   appealDeadline,
+  appealGuidanceDeadline,
+  appealGuidanceText,
+  appealWindowOpen,
   authorPublicIdOf,
   cancelDialogBody,
   concernsOperator,
@@ -414,8 +423,7 @@ describe('the copy’s numbers are the rules’', () => {
     expect(copy.errReportDescriptionTooLong).toContain(
       `${String(REPORT_DESCRIPTION_MAX_LENGTH)}자`,
     );
-    expect(copy.myModerationAppeal).toContain(`${String(APPEAL_WINDOW_DAYS)}일`);
-    expect(copy.myModerationAppeal).toContain('{{email}}');
+    expect(copy.appealGuidance).toContain(`${String(APPEAL_WINDOW_DAYS)}일`);
     expect(copy.adminModerationNoteHint).toContain(`${String(MODERATION_NOTE_MAX_LENGTH)}자`);
     expect(copy.errModerationNoteTooLong).toContain(`${String(MODERATION_NOTE_MAX_LENGTH)}자`);
     expect(copy.errModerationRecordRequired).toContain(`${String(MODERATION_REASON_MAX_LENGTH)}자`);
@@ -824,6 +832,164 @@ describe('a standing restriction (#185)', () => {
       expect(isRestriction(type)).toBe(false);
       expect(restrictionStanding(action({ type, endsAt: null }), NOW)).toBe(false);
     }
+  });
+});
+
+describe('the appeal guidance (#186, ADR-0084)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1_000;
+  const TAKEN = '2026-10-21T03:00:00.000Z';
+
+  it('says the four things of #45-14, with the window the shared rule counts', () => {
+    // By the customer centre's email, once per action, within APPEAL_WINDOW_DAYS of it; the action
+    // stands while reviewed and the answer comes by email (ADR-0069 decision 2 #45-14).
+    expect(copy.appealGuidance).toContain('고객센터 이메일({{email}})');
+    expect(copy.appealGuidance).toContain('조치마다 한 번');
+    expect(copy.appealGuidance).toContain(`조치한 때부터 ${String(APPEAL_WINDOW_DAYS)}일 안`);
+    expect(copy.appealGuidance).toContain('검토하는 동안 조치는 그대로');
+    expect(copy.appealGuidance).toContain('결과는 이메일로');
+    // The email is the one placeholder: the deadline is the line above it, not in the sentence.
+    expect(templateKeys(copy.appealGuidance)).toEqual(['email']);
+    expect(copy.moderationAppealDeadline).toBe('이의 기한');
+  });
+
+  it('fills in the business info’s email — 미정 until the owner supplies it', () => {
+    const text = appealGuidanceText();
+    expect(text).toContain(`고객센터 이메일(${BUSINESS_INFO.email})`);
+    expect(text).not.toContain('{{');
+  });
+
+  it('holds the window open until the deadline, 14 days on, and never for a cancelled action', () => {
+    const taken = Date.parse(TAKEN);
+    const standing = { createdAt: TAKEN, cancelledAt: null };
+    expect(appealWindowOpen(standing, taken)).toBe(true);
+    expect(appealWindowOpen(standing, taken + APPEAL_WINDOW_DAYS * DAY_MS - 1)).toBe(true);
+    // The deadline's own instant is past it, as `warningInWindow` has always counted.
+    expect(appealWindowOpen(standing, taken + APPEAL_WINDOW_DAYS * DAY_MS)).toBe(false);
+    expect(appealDeadline(standing)).toBe(
+      new Date(taken + APPEAL_WINDOW_DAYS * DAY_MS).toISOString(),
+    );
+    const cancelled = { createdAt: TAKEN, cancelledAt: '2026-10-21T04:00:00.000Z' };
+    expect(appealWindowOpen(cancelled, taken)).toBe(false);
+  });
+
+  it('keeps a passed deadline on the notice of an action that stands, and shows none once cancelled', () => {
+    // ADR-0084 6-3: an old hiding or a restriction longer than the window keeps its guidance with
+    // the deadline gone by — the window closing takes the notice nowhere. Whether it should is the
+    // owner's to answer (결과 4의 2); this is the one place to change if the answer differs.
+    const taken = Date.parse(TAKEN);
+    const deadline = new Date(taken + APPEAL_WINDOW_DAYS * DAY_MS).toISOString();
+    const later = taken + (APPEAL_WINDOW_DAYS + 30) * DAY_MS;
+    const standing = { createdAt: TAKEN, cancelledAt: null };
+    expect(appealWindowOpen(standing, later)).toBe(false);
+    expect(appealGuidanceDeadline(standing)).toBe(deadline);
+    // Nothing left to appeal once an operator cancelled it (ADR-0081 7-17), the window open or not.
+    const cancelled = { createdAt: TAKEN, cancelledAt: '2026-10-21T04:00:00.000Z' };
+    expect(appealGuidanceDeadline(cancelled)).toBeNull();
+  });
+
+  /**
+   * The function declaration `name` of `file`, read with the compiler rather than a pattern so a
+   * comment or a string naming what is looked for does not count.
+   */
+  function declaration(
+    file: string,
+    name: string,
+  ): { tree: ts.SourceFile; fn: ts.FunctionDeclaration } {
+    const source = readFileSync(path.join(SRC, file), 'utf8');
+    const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let fn: ts.FunctionDeclaration | undefined;
+    const find = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === name) fn = node;
+      else ts.forEachChild(node, find);
+    };
+    find(tree);
+    if (fn === undefined) throw new Error(`${file} declares no function ${name}`);
+    return { tree, fn };
+  }
+
+  /** Every node under `root` (itself included) that `pick` accepts. */
+  function nodesIn<N extends ts.Node>(root: ts.Node, pick: (node: ts.Node) => node is N): N[] {
+    const found: N[] = [];
+    const visit = (node: ts.Node): void => {
+      if (pick(node)) found.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(root);
+    return found;
+  }
+
+  const isJsxTag = (node: ts.Node): node is ts.JsxOpeningElement | ts.JsxSelfClosingElement =>
+    ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node);
+
+  /**
+   * The `return`s of `fn` that draw something — those whose value holds JSX, so `return null` is
+   * not one — and never those of a function nested in it, whose returns are its own.
+   */
+  function drawingReturns(fn: ts.FunctionDeclaration): ts.ReturnStatement[] {
+    const found: ts.ReturnStatement[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isFunctionLike(node)) return;
+      if (ts.isReturnStatement(node) && node.expression !== undefined) {
+        if (nodesIn(node.expression, isJsxTag).length > 0) found.push(node);
+      }
+      ts.forEachChild(node, visit);
+    };
+    if (fn.body !== undefined) ts.forEachChild(fn.body, visit);
+    return found;
+  }
+
+  /** The source of the `testId` an element is given — a string's text, an expression's code. */
+  function testIdOf(tree: ts.SourceFile, element: ts.JsxOpeningLikeElement): string | undefined {
+    for (const attribute of element.attributes.properties) {
+      if (!ts.isJsxAttribute(attribute) || attribute.name.getText(tree) !== 'testId') continue;
+      const value = attribute.initializer;
+      if (value === undefined) return undefined;
+      if (ts.isStringLiteral(value)) return value.text;
+      if (ts.isJsxExpression(value)) return value.expression?.getText(tree);
+      return value.getText(tree);
+    }
+    return undefined;
+  }
+
+  it('is drawn by the action card and both banners, on every path that draws them', () => {
+    // #45-14 «조치 안내에 이메일과 기한을 적는다» in the three places this PR puts it: the action's card
+    // on 조치·신고 내역, the MY summary's warning banner and the sanction banner (not yet MY '내 글''s
+    // '숨김' line, ADR-0084 결과 4의 3). No e2e reaches the sanction banner until #185 and #139 add a
+    // restriction, and #185 is to give it a path of its own for one without an end (결과 5) — so
+    // every `return` that draws one of these must draw the guidance, not merely one of them, and
+    // under the test id the e2e looks for (a banner's own id with '-appeal').
+    for (const [file, name, testId] of [
+      ['app/my/moderation/my-moderation.tsx', 'ActionItem', 'my-action-appeal'],
+      ['components/moderation/sanction-banner.tsx', 'WarningBanner', '`${testId}-appeal`'],
+    ] as const) {
+      const { tree, fn } = declaration(file, name);
+      const returns = drawingReturns(fn);
+      expect(returns.length, `${file} ${name} draws something`).toBeGreaterThan(0);
+      for (const drawn of returns) {
+        const where = `${file} ${name}, line ${String(tree.getLineAndCharacterOfPosition(drawn.getStart(tree)).line + 1)}`;
+        const guidance = nodesIn(drawn, isJsxTag).filter(
+          (element) => element.tagName.getText(tree) === 'AppealGuidance',
+        );
+        expect(guidance.length, where).toBeGreaterThan(0);
+        for (const element of guidance) expect(testIdOf(tree, element), where).toBe(testId);
+      }
+    }
+  });
+
+  it('decides what it shows by the deadline rule and the filled-in sentence alone', () => {
+    // `AppealGuidance` draws `appealGuidanceDeadline`'s answer and `appealGuidanceText` — so the
+    // email reaches the screen filled in, never as '{{email}}' — and reads no clock: whether a
+    // passed deadline stays is the rule's (6-3), and nothing it draws can differ between a server
+    // and a browser render (6-9).
+    const { tree, fn } = declaration('components/moderation/appeal-guidance.tsx', 'AppealGuidance');
+    const called = nodesIn(fn, ts.isCallExpression).map((call) => call.expression.getText(tree));
+    expect(called).toContain('appealGuidanceDeadline');
+    expect(called).toContain('appealGuidanceText');
+    for (const clock of ['appealWindowOpen', 'appealDeadline', 'Date.now']) {
+      expect(called).not.toContain(clock);
+    }
+    const read = nodesIn(fn, ts.isPropertyAccessExpression).map((access) => access.getText(tree));
+    expect(read).not.toContain('copy.appealGuidance');
   });
 });
 

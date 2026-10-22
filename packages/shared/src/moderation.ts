@@ -80,8 +80,14 @@ export const MODERATION_REASON_MAX_LENGTH = 500;
 
 /**
  * The days within which an action may be appealed, by email and once (#45-14 «조치마다 한 번, 조치 뒤
- * 14일 안»). The screens count them from the action's time (`appealDeadlineOf`); #186 words the
- * notice.
+ * 14일 안»). The screens count them from the action's time (`appealDeadlineOf`) and word the notice
+ * (#186, ADR-0084).
+ *
+ * Nothing on the server reads it: an appeal goes to the customer centre's email and the app neither
+ * takes nor records one (ADR-0069 decision 2 #45-14 «앱에는 이의를 받거나 기록하는 화면이 없고»). An
+ * operator who accepts one uses the action's own cancellation — and, once #185 and #139 add the
+ * restrictions, their lifting or shortening (감경) — which keeps its reason like any other. So the
+ * window lives in the member's notice alone, and no route enforces it.
  */
 export const APPEAL_WINDOW_DAYS = 14;
 

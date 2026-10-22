@@ -14,6 +14,7 @@ import {
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
+import { AppealGuidance } from '@/components/moderation/appeal-guidance';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
@@ -21,14 +22,12 @@ import { copy } from '@/copy';
 import { useMyModerationActions, useMyReports } from '@/hooks/use-reports';
 import { type MyModerationAction, type MyReport } from '@/lib/api';
 import { reportReasonLabel } from '@/lib/authored';
-import { fillBusinessInfo } from '@/legal/business-info';
 import {
   type ModerationPage,
   type NamedLink,
   REPORT_STATUS_PALETTE,
   actionReasonText,
   actionSubjectView,
-  appealDeadline,
   isRestriction,
   moderationActionLabel,
   moderationRows,
@@ -52,8 +51,9 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  * - 받은 조치: each action an operator took on the member, newest first — its type, what it was
  *   about (their post or comment, or that they deleted it since; their profile), the reason (the
  *   report reason the operator picked and their explanation), when, its end when it has one, and
- *   its cancellation — with how to appeal: by the customer centre's email, once per action within
- *   14 days (#45-14), and each standing action's last day for it. A nickname reset not cancelled
+ *   its cancellation — and on each one standing, how to appeal it (`AppealGuidance`, #186): its
+ *   deadline, 14 days on, and the customer centre's email, once per action, the action standing
+ *   while reviewed and the answer by email (#45-14). A nickname reset not cancelled
  *   says, for the 30 days of its hold, that the nickname taken away cannot be used again (owner
  *   decision 2026-10-22, `nicknameHoldShown`) — never which it was (#37-3). A writing restriction
  *   (#185, ADR-0082) says its end — '무기한' for none — as it stands now, and '진행 중' while it
@@ -193,20 +193,20 @@ function ListBody<Row extends { id: string }>({
   );
 }
 
+/**
+ * The actions received. How to appeal is on each standing action's card rather than once above
+ * them (#186, ADR-0084): it is that action's deadline, and a list of cancelled actions alone has
+ * nothing to appeal.
+ */
 function ActionsBody() {
   const list = useMyModerationActions();
   return (
-    <Stack gap="4">
-      <Text textStyle="bodySm" data-testid="my-moderation-appeal">
-        {fillBusinessInfo(copy.myModerationAppeal)}
-      </Text>
-      <ListBody
-        list={list}
-        empty={copy.myModerationActionsEmpty}
-        testId="my-actions-list"
-        renderRow={(action) => <ActionItem action={action} />}
-      />
-    </Stack>
+    <ListBody
+      list={list}
+      empty={copy.myModerationActionsEmpty}
+      testId="my-actions-list"
+      renderRow={(action) => <ActionItem action={action} />}
+    />
   );
 }
 
@@ -282,7 +282,6 @@ function ActionItem({ action }: { action: MyModerationAction }) {
   const format = useFormatDateTime();
   const subject = actionSubjectView(action.subject);
   const reason = actionReasonText(action.reason);
-  const deadline = appealDeadline(action);
   const restriction = isRestriction(action.type);
   const endChange = myEndChangeView(action);
   return (
@@ -321,7 +320,9 @@ function ActionItem({ action }: { action: MyModerationAction }) {
           {copy.moderationNicknameHeld}
         </Text>
       )}
-      <Line label={copy.moderationTakenAt}>{format(action.createdAt)}</Line>
+      <Line label={copy.moderationTakenAt} testId="my-action-taken">
+        {format(action.createdAt)}
+      </Line>
       {/* A cancelled restriction ended at its cancellation, which '취소한 때' says: its end as
           given (kept as given, ADR-0082) would read as an end still to come, or '무기한'. */}
       {(restriction || action.endsAt !== null) && action.cancelledAt === null && (
@@ -339,11 +340,7 @@ function ActionItem({ action }: { action: MyModerationAction }) {
       {action.cancelledAt !== null && (
         <Line label={copy.moderationCancelledAt}>{format(action.cancelledAt)}</Line>
       )}
-      {deadline !== null && (
-        <Line label={copy.moderationAppealDeadline} testId="my-action-appeal">
-          {format(deadline)}
-        </Line>
-      )}
+      <AppealGuidance action={action} testId="my-action-appeal" />
     </ItemCard>
   );
 }

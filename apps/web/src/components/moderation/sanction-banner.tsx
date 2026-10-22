@@ -2,6 +2,7 @@
 
 import { Alert, Link as ChakraLink, Stack, Text } from '@chakra-ui/react';
 import NextLink from 'next/link';
+import { AppealGuidance } from '@/components/moderation/appeal-guidance';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useMyModerationActions, useMyRestriction } from '@/hooks/use-reports';
@@ -54,11 +55,18 @@ export function SanctionBanner({ testId }: { testId: string }) {
 /**
  * The banner of a warning received (owner decision 2026-10-21: «경고 → 이의 기한 14일 동안 MY 요약에만
  * 안내 띠('경고를 받았습니다'와 내역 링크)»): that one was received, and the way to 조치·신고 내역, where
- * its reason and the appeal are. Shown from the warning for its appeal window (`warningInWindow`,
- * APPEAL_WINDOW_DAYS), and no more once an operator cancelled it. On the MY summary only — a
- * warning restricts nothing (#45-11), so the write page keeps its banner for restrictions
- * (`SanctionBanner`). It reads the first page of the member's actions (ADR-0081 7-8), drawn in the
- * browser alone; nothing while it is read, failed or holds no such warning.
+ * its reason is — and below the owner's sentence and link, how to appeal it: its deadline and the
+ * email (#45-14 «조치 안내에 이메일과 기한을 적는다», `AppealGuidance`, #186). Shown from the warning
+ * for its appeal window (`warningInWindow`, APPEAL_WINDOW_DAYS), and no more once an operator
+ * cancelled it. On the MY summary only — a warning restricts nothing (#45-11), so the write page
+ * keeps its banner for restrictions (`SanctionBanner`). It reads the first page of the member's
+ * actions (ADR-0081 7-8), drawn in the browser alone; nothing while it is read, failed or holds no
+ * such warning.
+ *
+ * Several warnings within their windows still make one banner, the newest's (ADR-0081 7-8), and
+ * so its guidance: the latest deadline, open. An earlier warning's own, earlier deadline is on its
+ * card on 조치·신고 내역 alone — 7-8 could pick any while the banner named no time; now that it
+ * gives one, which it gives is asked with the sanction banner's (ADR-0084 결과 4의 6).
  */
 export function WarningBanner({ testId }: { testId: string }) {
   const actions = useMyModerationActions();
@@ -74,6 +82,7 @@ export function WarningBanner({ testId }: { testId: string }) {
             <NextLink href={MY_MODERATION_PATH}>{copy.myModerationOpen}</NextLink>
           </ChakraLink>
         </Alert.Description>
+        <AppealGuidance action={warning} testId={`${testId}-appeal`} tone="banner" />
       </Alert.Content>
     </Alert.Root>
   );

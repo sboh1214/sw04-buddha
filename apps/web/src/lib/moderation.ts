@@ -25,6 +25,7 @@ import {
   type WritingRestrictionDays,
 } from '@buddha/shared';
 import { copy } from '@/copy';
+import { fillBusinessInfo } from '@/legal/business-info';
 import {
   type AdminModerationAction,
   type AdminReport,
@@ -54,10 +55,10 @@ import { profilePath } from './profile';
 
 /**
  * 신고와 운영 처리 (#50, ADR-0081) as the screens draw them: the report dialog's rules and
- * refusals, the member's 조치·신고 내역 (`/my/moderation`), the sanction banner, and the operators'
- * queue, pages and dialogs. Pure functions of the API's answers and of what was typed, apart from
- * the components and the hooks so the node test runner reaches them (the rule lib/likes.ts
- * follows).
+ * refusals, the member's 조치·신고 내역 (`/my/moderation`), the sanction banner, the appeal
+ * guidance an action's card and the two banners carry (#186, ADR-0084), and the operators' queue,
+ * pages and dialogs. Pure functions of the API's answers and of what was typed, apart from the
+ * components and the hooks so the node test runner reaches them (the rule lib/likes.ts follows).
  *
  * Owner decisions (ADR-0069 decision 2 #45-10…#45-15, decision 3 #37-10, decision 4 #50 rows,
  * decision 7): a 근거 글, a 댓글 or 대댓글 and a member's profile take reports, one reason each and a
@@ -544,6 +545,51 @@ export function appealDeadline(action: Pick<MyModerationAction, 'createdAt' | 'c
 }
 
 /**
+ * Whether the member may still appeal the action at `now` (#45-14: «조치마다 한 번, 조치 뒤 14일
+ * 안»): it stands, and its deadline (`appealDeadline`) is still ahead — the deadline's own instant
+ * is past it. The one place the window is judged on the web; nothing on the server reads it, as
+ * an appeal goes to the customer centre's email and the app takes none (#186, ADR-0084). Whether
+ * one was sent already the app cannot know, so «한 번» is the notice's to say and the operator's to
+ * check (docs/OPERATIONS.md).
+ */
+export function appealWindowOpen(
+  action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
+  // Read in render through this default, as `sanctionInForce`'s is: never on the server.
+  now: number = Date.now(),
+): boolean {
+  const deadline = appealDeadline(action);
+  return deadline !== null && Date.parse(deadline) > now;
+}
+
+/**
+ * The deadline the appeal guidance (`AppealGuidance`, #186) shows for the action, or null when it
+ * shows nothing: the action's deadline (`appealDeadline`) while it stands — whether that deadline
+ * is still ahead or has passed — and null once an operator cancelled it (nothing is left to
+ * appeal, ADR-0081 7-17). A passed deadline stays on the notice rather than taking the notice with
+ * it (ADR-0084 6-3): the member reads the 이의 방법 of every action (#45-13), and whether the notice
+ * should say the deadline passed, or go, is the owner's to answer (ADR-0084 결과 4의 2). So this
+ * reads no clock — `appealWindowOpen` is the window's judge, not the notice's — and a server
+ * render could not disagree with it (6-9). If the owner answers 4-2 otherwise, this is the one
+ * place to change.
+ */
+export function appealGuidanceDeadline(
+  action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
+): string | null {
+  return appealDeadline(action);
+}
+
+/**
+ * The appeal guidance's sentence with the customer centre's email filled in from the business
+ * info (ADR-0069 결과 3: the owner supplies it; until then it reads 미정, as every undecided business
+ * fact does, ADR-0044): where to send an appeal, once per action within the window, the action
+ * standing while it is reviewed, and the answer by email (#45-14, #186). The deadline itself is
+ * the line above it (`AppealGuidance`).
+ */
+export function appealGuidanceText(): string {
+  return fillBusinessInfo(copy.appealGuidance);
+}
+
+/**
  * The types that restrict the member until they end (#45-12: «제재(작성 제한·계정 제한)»): the
  * writing restriction (#185, ADR-0082). #139's account restriction joins this set. #50's actions
  * restrict nothing — a warning is a record and the member's notice only (#45-11), and a hiding or
@@ -596,11 +642,11 @@ export function myEndChangeView(
 
 /**
  * The warning the MY summary's banner speaks of (owner decision 2026-10-21: «경고 → 이의 기한 14일
- * 동안 MY 요약에만 안내 띠»), or null: the newest warning not cancelled whose appeal window —
- * APPEAL_WINDOW_DAYS from it (`appealDeadlineOf`) — is still open at `now`. A cancelled one is
- * nothing to tell any more. Only the summary shows it: a warning restricts nothing (#45-11), so the
- * write page's banner stays for restrictions (`SanctionBanner`, which reads the member's
- * restriction on its own — lib/restriction.ts `restrictionShown`).
+ * 동안 MY 요약에만 안내 띠»), or null: the newest warning whose appeal window — APPEAL_WINDOW_DAYS
+ * from it, `appealWindowOpen` — is still open at `now`. A cancelled one is nothing to tell any
+ * more. Only the summary shows it: a warning restricts nothing (#45-11), so the write page's banner
+ * stays for restrictions (`SanctionBanner`, which reads the member's restriction on its own —
+ * lib/restriction.ts `restrictionShown`).
  */
 export function warningInWindow<
   A extends Pick<MyModerationAction, 'type' | 'createdAt' | 'cancelledAt'>,
@@ -612,8 +658,7 @@ export function warningInWindow<
 ): A | null {
   let found: A | null = null;
   for (const action of actions) {
-    if (action.type !== 'warning' || action.cancelledAt !== null) continue;
-    if (!(appealDeadlineOf(action.createdAt).getTime() > now)) continue;
+    if (action.type !== 'warning' || !appealWindowOpen(action, now)) continue;
     if (found === null || Date.parse(action.createdAt) > Date.parse(found.createdAt)) {
       found = action;
     }
