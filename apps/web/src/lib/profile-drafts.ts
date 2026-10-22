@@ -5,40 +5,44 @@ import { bioToSend, interestsChanged } from './profile';
 /**
  * MY 설정's 소개 and interest categories kept in this tab across the onboarding step (오너 결정
  * 2026-10-22 답 3, ADR-0078: «새 소개·더한 카테고리로 단계에 갈 때 쓰던 소개·고른 카테고리를 탭에 1시간
- * 두었다가 되살림») — the public profile's counterpart of a post's and a comment's drafts
+ * 두었다가 되살림») — and the nickname typed, the same way (오너 결정 2026-10-22 (2차) 답 2: «닉네임도
+ * 되살림») — the public profile's counterpart of a post's and a comment's drafts
  * (lib/post-drafts.ts, lib/comment-drafts.ts), whose rules it follows.
  *
  * MY 설정 is exempt from the onboarding gate for an account facing a re-consent alone
  * (`ONBOARDING_EXEMPT_PAGES`): it clears its 소개 and drops categories there with a session alone,
  * and what the onboarding still keeps from it — a new 소개, a category added, a nickname change,
  * the marketing switch — sends it to its step instead of being sent (`useSettingsStep`), which comes
- * back to MY 설정. As the page goes there, each of the two cards holding what the account does not
- * have — a 소개 typed other than its own (`bioDraftToKeep`), categories picked other than its own
- * (`interestsDraftToKeep`) — keeps it here, whichever card's save sent the page; MY 설정, drawn again
- * for the same account with no step left (the step done, #57-9), puts it back into its card and
- * says so. Nothing of it goes to the server.
+ * back to MY 설정. As the page goes there, each of the three cards holding what the account does
+ * not have — a 소개 typed other than its own (`bioDraftToKeep`), categories picked other than its own
+ * (`interestsDraftToKeep`), a nickname typed other than its own (`nicknameDraftToKeep`) — keeps it
+ * here, whichever card's save sent the page; MY 설정, drawn again for the same account with no step
+ * left (the step done, #57-9), puts it back into its card and says so. Nothing of it goes to the
+ * server.
  *
  * - Where: `sessionStorage`, this tab's — as a post's draft, and for the same reasons.
  * - Keyed by the card (`profileDraftStorageKey`), and held for the account that wrote it: another
  *   account signed in on the tab never reads it.
  * - Gone: once taken back (the card holds it again, unsaved) — or found with nothing to put back:
  *   the account has the same now, or the card holds an edit of its own made since it was drawn,
- *   which is not written over (`bioToRestore`, `interestsToRestore`) — once a save of that card
- *   succeeds, when the account signs out in the tab, and PROFILE_DRAFT_TTL_MS after it was kept.
- *   A card holding nothing new as the page goes leaves what an earlier trip kept as it is.
+ *   which is not written over (`bioToRestore`, `interestsToRestore`, `nicknameToRestore`) — once a
+ *   save of that card succeeds, when the account signs out in the tab, and PROFILE_DRAFT_TTL_MS
+ *   after it was kept. A card holding nothing new as the page goes leaves what an earlier trip kept
+ *   as it is.
  * - Only what the card shows: the 소개 box's text as typed, the ids of the categories picked among
  *   those offered, compared with the account's among those offered (a category operators retired
- *   is in the account's picks, never on screen). The nickname's box is not kept (the owner named
- *   the 소개 and the categories, ADR-0078 7-25).
+ *   is in the account's picks, never on screen), the nickname box's text as typed (ADR-0078 7-25,
+ *   오너 결정 2026-10-22 (2차) 답 2 — it was not kept before that answer).
  *
  * Pure functions over a `DraftStorage`, plus the browser's binding to this tab's `sessionStorage`
  * at the end — none of it throws: a storage the browser refuses keeps nothing and restores nothing.
  */
 
-/** A card's draft: the 소개 box's text, or the interest categories picked. */
+/** A card's draft: the 소개 box's text, the interest categories picked, the nickname box's text. */
 export type ProfileDraft =
   | { readonly kind: 'bio'; readonly text: string }
-  | { readonly kind: 'interests'; readonly categoryIds: readonly number[] };
+  | { readonly kind: 'interests'; readonly categoryIds: readonly number[] }
+  | { readonly kind: 'nickname'; readonly text: string };
 
 /** Which card's draft. */
 export type ProfileDraftKind = ProfileDraft['kind'];
@@ -64,6 +68,19 @@ export function profileDraftStorageKey(kind: ProfileDraftKind): string {
  */
 export function bioDraftToKeep(text: string, held: string | null): string | null {
   return bioToSend(text) === held ? null : text;
+}
+
+/**
+ * What the nickname card keeps as the page goes to the step: the box's text as typed when it names
+ * a nickname other than the account's (`held` — `Me.profile.nickname`), read as the form reads it
+ * (`nicknameFormSchema`: trimmed, compared as is) — the change a 저장 would send; null when it
+ * holds the account's nickname or nothing (no nickname is cleared: an empty box is no change to
+ * keep). Kept whatever the nickname rules say of it, as the 소개 over its limit is — what was typed,
+ * which 저장 checks again on return.
+ */
+export function nicknameDraftToKeep(text: string, held: string): string | null {
+  const name = text.trim();
+  return name === '' || name === held ? null : text;
 }
 
 /** The ids in id order, each once. */
@@ -124,6 +141,23 @@ export function interestsToRestore(
   return interestsChanged(kept, held, offered) ? kept : null;
 }
 
+/**
+ * What the nickname card puts back from a kept draft: its text, when it still names a nickname
+ * other than the account's now (another tab may have changed it to the same meanwhile) and the box
+ * (`typed`, its text now) holds the account's nickname — anything else in it, emptied included, is
+ * the member's own since the card was drawn and is not written over (a step done in another tab,
+ * learned late: the newer typing wins, ADR-0078 7-25 (3), 오너 결정 2026-10-22 (2차) 답 2); null when
+ * there is nothing to put back.
+ */
+export function nicknameToRestore(
+  draft: ProfileDraftOf<'nickname'>,
+  held: string,
+  typed: string,
+): string | null {
+  if (typed.trim() !== held) return null;
+  return nicknameDraftToKeep(draft.text, held);
+}
+
 /** A kept draft as it is stored. */
 interface StoredProfileDraft {
   version: 1;
@@ -143,7 +177,7 @@ function parseStored(raw: string, kind: ProfileDraftKind): StoredProfileDraft | 
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
   const { version, accountId, savedAt, text, categoryIds } = value as Record<string, unknown>;
   if (version !== 1 || typeof accountId !== 'string' || typeof savedAt !== 'number') return null;
-  if (kind === 'bio')
+  if (kind === 'bio' || kind === 'nickname')
     return typeof text === 'string' ? { version, accountId, savedAt, text } : null;
   if (
     !Array.isArray(categoryIds) ||
@@ -166,7 +200,7 @@ function tryRemove(storage: DraftStorage, key: string): void {
   }
 }
 
-const KINDS: readonly ProfileDraftKind[] = ['bio', 'interests'];
+const KINDS: readonly ProfileDraftKind[] = ['bio', 'interests', 'nickname'];
 
 /** The storage keys under PROFILE_DRAFT_PREFIX. */
 function draftKeys(storage: DraftStorage): string[] {
@@ -206,9 +240,9 @@ export function keepProfileDraft(
 ): boolean {
   sweepProfileDrafts(storage, now);
   const stored: StoredProfileDraft =
-    draft.kind === 'bio'
-      ? { version: 1, accountId, savedAt: now, text: draft.text }
-      : { version: 1, accountId, savedAt: now, categoryIds: idsOf(draft.categoryIds) };
+    draft.kind === 'interests'
+      ? { version: 1, accountId, savedAt: now, categoryIds: idsOf(draft.categoryIds) }
+      : { version: 1, accountId, savedAt: now, text: draft.text };
   try {
     storage.setItem(profileDraftStorageKey(draft.kind), JSON.stringify(stored));
     return true;
@@ -241,10 +275,13 @@ export function readProfileDraft<K extends ProfileDraftKind>(
     tryRemove(storage, key);
     return null;
   }
+  const text = stored.text ?? '';
   const draft: ProfileDraft =
-    kind === 'bio'
-      ? { kind: 'bio', text: stored.text ?? '' }
-      : { kind: 'interests', categoryIds: stored.categoryIds ?? [] };
+    kind === 'interests'
+      ? { kind: 'interests', categoryIds: stored.categoryIds ?? [] }
+      : kind === 'bio'
+        ? { kind: 'bio', text }
+        : { kind: 'nickname', text };
   return draft as ProfileDraftOf<K>;
 }
 

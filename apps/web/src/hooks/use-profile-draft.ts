@@ -17,8 +17,9 @@ import {
 export const PROFILE_DRAFT_RESTORED_TOAST_ID = 'profile-draft-restored';
 
 /**
- * A MY 설정 card's draft that the page kept on its way to the onboarding step (owner decision
- * 2026-10-22 answer 3, lib/profile-drafts.ts), taken back once the card is drawn for the account
+ * A MY 설정 card's draft that the page kept on its way to the onboarding step (owner decisions
+ * 2026-10-22 answer 3 and 2026-10-22 (2nd) answer 2 — the 소개, the interest categories, the
+ * nickname; lib/profile-drafts.ts), taken back once the card is drawn for the account
  * that wrote it with no step left — read from the tab then (or later, a step done in another tab
  * while the page stayed open), removed from it, and handed to `take`, which puts it into the card
  * unsaved and answers whether there was anything to put back: not when another tab saved the same

@@ -27,8 +27,8 @@ import {
  * time zone, 2026-10-22 answer 1); a new 소개, a category added, a
  * nickname change and the marketing switch go to the step and come back (owner decisions 2026-10-21
  * answer 2 and 2026-10-22 answer 1, ADR-0078 7-24), with the 소개 typed and the categories picked
- * put back (2026-10-22 answer 3, 7-25); the step links to MY 설정 (answer 2, 7-26), and signing out
- * drops what was kept. The field allow-list, the
+ * put back (2026-10-22 answer 3, 7-25), and the nickname typed (2026-10-22 (2nd) answer 2); the
+ * step links to MY 설정 (answer 2, 7-26), and signing out drops what was kept. The field allow-list, the
  * counts' rules (deleted, hidden and voided content), the restriction hook and the refusals are the
  * API's tests (profiles.controller.test.ts, public-items*.test.ts, private-data.test.ts); this
  * walks the screens.
@@ -396,7 +396,7 @@ test.describe('공개 프로필', () => {
     await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute('content', /noindex/);
   });
 
-  test('재동의가 남은 회원은 MY 설정에서 로그인만으로 소개를 비우고 관심 카테고리를 빼며 계정 관리 카드(시간대)도 그대로 쓰고, 새 소개·카테고리 더하기·닉네임 바꾸기와 마케팅 정보 수신은 보내지 않고 남은 단계로 갔다가 마치면 MY 설정으로 돌아와 쓰던 소개와 고른 카테고리를 되살리고, 재동의 단계에는 MY 설정으로 가는 링크가 있으며, 로그아웃하면 둔 것이 사라진다', async ({
+  test('재동의가 남은 회원은 MY 설정에서 로그인만으로 소개를 비우고 관심 카테고리를 빼며 계정 관리 카드(시간대)도 그대로 쓰고, 새 소개·카테고리 더하기·닉네임 바꾸기와 마케팅 정보 수신은 보내지 않고 남은 단계로 갔다가 마치면 MY 설정으로 돌아와 쓰던 소개·고른 카테고리·쓰던 닉네임을 되살리고, 재동의 단계에는 MY 설정으로 가는 링크가 있으며, 로그아웃하면 둔 것이 사라진다', async ({
     page,
   }) => {
     const tag = freshTag();
@@ -503,32 +503,44 @@ test.describe('공개 프로필', () => {
     expect(profileWrites).toEqual([]);
 
     // --- so does a nickname change (answer 1: the server would refuse it), with the 소개 typed in
-    // its own card meanwhile kept too — whichever card sent the page — and the nickname not.
+    // its own card meanwhile kept too — whichever card sent the page — and the nickname typed kept
+    // and put back unsaved like them (owner decision 2026-10-22 (2nd) answer 2, ADR-0078 7-25).
     await reloadAsReconsent();
     await expect(subBox).not.toBeChecked();
+    const nicknameSave = profileCard.getByRole('button', { name: copy.save });
+    const typedNickname = `n${tag}`.slice(0, 20);
     await bioInput.fill(`${bio} 닉네임과 함께`);
-    await nicknameInput.fill(`n${tag}`.slice(0, 20));
-    await profileCard.getByRole('button', { name: copy.save }).click();
+    await nicknameInput.fill(typedNickname);
+    await nicknameSave.click();
     await expect(page).toHaveURL(viaStep);
-    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio', 'buddha.profileDraft:nickname']);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
-    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    await expect(nicknameInput).toHaveValue(typedNickname);
     await expect(bioInput).toHaveValue(`${bio} 닉네임과 함께`);
+    await expect(restored).toBeVisible();
+    await expect(nicknameSave).toBeEnabled();
+    expect(await keptDrafts()).toEqual([]);
     expect(profileWrites).toEqual([]);
     expect((await meOf(page.request)).profile.nickname).toBe(me.profile.nickname);
 
-    // --- the step's link leads to MY 설정 before agreeing: what was kept stays kept, and comes back
-    // only once the step is done — reached here by the marketing switch, which goes to the step
-    // too (a consent record comes with the consent step's items).
+    // --- the step's link leads to MY 설정 before agreeing: what was kept stays kept — the nickname
+    // typed too (2026-10-22 (2nd) answer 3) — and comes back only once the step is done — reached
+    // here by the marketing switch, which goes to the step too (a consent record comes with the
+    // consent step's items).
     await reloadAsReconsent();
+    // The reload dropped the nickname put back unsaved, as the 소개's.
+    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    const linkNickname = `l${tag}`.slice(0, 20);
+    await nicknameInput.fill(linkNickname);
     await bioInput.fill(`${bio} 링크`);
     await bioCard.getByTestId('bio-save').click();
     await expect(page).toHaveURL(viaStep);
     await settingsLink.getByRole('link', { name: copy.onboardingReconsentSettingsLink }).click();
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(bio);
-    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio', 'buddha.profileDraft:nickname']);
     const consentsBefore = consentWrites;
     await page.getByTestId('settings-marketing-switch').click();
     await expect(page).toHaveURL(viaStep);
@@ -536,6 +548,7 @@ test.describe('공개 프로필', () => {
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(`${bio} 링크`);
+    await expect(nicknameInput).toHaveValue(linkNickname);
     expect(profileWrites).toEqual([]);
 
     // --- clearing the 소개 and dropping the category: sent with a session alone, right here.
@@ -569,16 +582,17 @@ test.describe('공개 프로필', () => {
     await page.goto(settings);
     await expect(page).toHaveURL(settings);
     await bioInput.fill(`로그아웃 전에 쓴 소개 ${tag}`);
+    await nicknameInput.fill(`o${tag}`.slice(0, 20));
     await bioCard.getByTestId('bio-save').click();
     await expect(page).toHaveURL(viaStep);
-    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio', 'buddha.profileDraft:nickname']);
     await page.getByTestId('onboarding-logout').click();
     await expect(page).toHaveURL('/');
     expect(await keptDrafts()).toEqual([]);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('재동의를 늦게 안 MY 설정 — 단계를 말하기 전에 보낸 닉네임·소개가 온보딩으로 거절되면 알림 없이 단계로 가며 쓰던 것을 두고(갈 곳이 없으면 닉네임 카드도 소개와 같은 문장), 카테고리 목록이 읽히기 전에는 카테고리를 두지도 되살리지도 않으며, 다른 탭에서 마친 단계를 늦게 알아도 고치던 소개를 덮지 않는다', async ({
+  test('재동의를 늦게 안 MY 설정 — 단계를 말하기 전에 보낸 닉네임·소개가 온보딩으로 거절되면 알림 없이 단계로 가며 쓰던 것을 두고(갈 곳이 없으면 닉네임 카드도 소개와 같은 문장), 카테고리 목록이 읽히기 전에는 카테고리를 두지도 되살리지도 않으며, 다른 탭에서 마친 단계를 늦게 알아도 고치던 소개·닉네임을 덮지 않는다', async ({
     page,
   }) => {
     const tag = freshTag();
@@ -715,22 +729,25 @@ test.describe('공개 프로필', () => {
     await page.unroute('**/api/v1/me', nowhereToGo);
 
     // --- the same refusal with `GET /me` read again saying the re-consent: the card goes on to the
-    // step without a word, the 소개 typed in its own card kept (7-24, 7-25).
+    // step without a word, the 소개 typed in its own card kept (7-24, 7-25) and the nickname typed
+    // too, put back unsaved on return (owner decision 2026-10-22 (2nd) answer 2).
+    const refusedNickname = `r${tag}`.slice(0, 20);
     await refuseOnceForReconsent('PATCH', '/api/v1/me');
     await bioInput.fill(`${bio} 닉네임과 거절`);
-    await nicknameInput.fill(`r${tag}`.slice(0, 20));
+    await nicknameInput.fill(refusedNickname);
     await profileCard.getByRole('button', { name: copy.save }).click();
     await expect(page).toHaveURL(viaStep);
-    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio', 'buddha.profileDraft:nickname']);
     expect(profileWrites).toEqual(['PATCH /api/v1/me', 'PATCH /api/v1/me']);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(`${bio} 닉네임과 거절`);
     await expect(restored).toBeVisible();
-    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    await expect(nicknameInput).toHaveValue(refusedNickname);
     expect((await meOf(page.request)).profile.nickname).toBe(me.profile.nickname);
 
-    // --- the 소개's own save refused the same way (`PUT /me/bio`): to the step, both cards' kept.
+    // --- the 소개's own save refused the same way (`PUT /me/bio`): to the step, every card's kept
+    // (the nickname put back unsaved is the box's still).
     await interests.getByTestId(`interest-${sub.slug}`).click();
     await refuseOnceForReconsent('PUT', '/api/v1/me/bio');
     await bioCard.getByTestId('bio-save').click();
@@ -738,12 +755,14 @@ test.describe('공개 프로필', () => {
     expect(await keptDrafts()).toEqual([
       'buddha.profileDraft:bio',
       'buddha.profileDraft:interests',
+      'buddha.profileDraft:nickname',
     ]);
     expect(profileWrites).toEqual(['PATCH /api/v1/me', 'PATCH /api/v1/me', 'PUT /api/v1/me/bio']);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(`${bio} 닉네임과 거절`);
     await expect(subBox).toBeChecked();
+    await expect(nicknameInput).toHaveValue(refusedNickname);
     expect(await keptDrafts()).toEqual([]);
     expect((await meOf(page.request)).profile).toMatchObject({
       bio,
@@ -788,10 +807,13 @@ test.describe('공개 프로필', () => {
     expect(await keptDrafts()).toEqual([]);
 
     // --- the step done in another tab, learned late (a later `['me']`) while the member is typing
-    // a 소개 on MY 설정 reached by the step's link: what is typed is not written over, nothing is
-    // said, and what the trip kept is dropped (ADR-0078 7-25 (3)).
+    // a 소개 and a nickname on MY 설정 reached by the step's link: what is typed is not written over
+    // (the newer typing wins — owner decision 2026-10-22 (2nd) answer 4, and answer 2 for the
+    // nickname), nothing is said, and what the trip kept is dropped (ADR-0078 7-25 (3)).
     await reloadAsReconsent();
+    await expect(nicknameInput).toHaveValue(me.profile.nickname);
     await bioInput.fill(`${bio} 두었던 것`);
+    await nicknameInput.fill(`k${tag}`.slice(0, 20));
     await bioCard.getByTestId('bio-save').click();
     await expect(page).toHaveURL(viaStep);
     await page
@@ -800,8 +822,11 @@ test.describe('공개 프로필', () => {
       .click();
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(bio);
-    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio', 'buddha.profileDraft:nickname']);
     await bioInput.fill(`${bio} 지금 쓰는 것`);
+    const newerNickname = `w${tag}`.slice(0, 20);
+    await nicknameInput.fill(newerNickname);
     // Agreed elsewhere; this tab learns it from the answer to dropping the category here.
     reconsent.on = false;
     await interests.getByTestId(`interest-${top.slug}`).click();
@@ -809,9 +834,14 @@ test.describe('공개 프로필', () => {
     await expect(page.getByText(copy.interestsSaved)).toBeVisible();
     await expect.poll(keptDrafts).toEqual([]);
     await expect(bioInput).toHaveValue(`${bio} 지금 쓰는 것`);
+    await expect(nicknameInput).toHaveValue(newerNickname);
     await expect(restored).toHaveCount(0);
     await expect(bioCard.getByTestId('bio-save')).toBeEnabled();
-    expect((await meOf(page.request)).profile).toMatchObject({ bio, interestCategoryIds: [] });
+    expect((await meOf(page.request)).profile).toMatchObject({
+      bio,
+      nickname: me.profile.nickname,
+      interestCategoryIds: [],
+    });
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

@@ -109,10 +109,10 @@ export interface OnboardingExemptPage {
  * 소개 and drops its interest categories; a new 소개, a category added, a nickname change (owner
  * decision 2026-10-22 answer 1) and the marketing switch — a consent record, which the consent
  * step's items come with — go to the step (app/my/settings: `profileItemSaveGoesToStep`,
- * lib/profile.ts), the 소개 typed and the categories picked kept in the tab for the return
- * (lib/profile-drafts.ts, answer 3). Its account cards — email, password, linked sign-ins, real
- * name, time zone, theme — write what the server takes with a session alone (ADR-0078 7-24). The
- * re-consent step links to it (`settingsLinkOnStep`, answer 2).
+ * lib/profile.ts), the 소개 typed, the categories picked and the nickname typed kept in the tab for
+ * the return (lib/profile-drafts.ts, answer 3 and 2026-10-22 (2nd) answer 2). Its account cards —
+ * email, password, linked sign-ins, real name, time zone, theme — write what the server takes with
+ * a session alone (ADR-0078 7-24). The re-consent step links to it (`settingsLinkOnStep`, answer 2).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
  * onboarding prompt (#89 — the owner wrote the screen in).
  */

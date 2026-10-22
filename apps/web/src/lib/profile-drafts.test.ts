@@ -11,16 +11,18 @@ import {
   interestsDraftToKeep,
   interestsToRestore,
   keepProfileDraft,
+  nicknameDraftToKeep,
+  nicknameToRestore,
   profileDraftStorageKey,
   readProfileDraft,
   sweepProfileDrafts,
 } from './profile-drafts';
 
 /**
- * MY 설정's 소개 and interest categories kept in this tab across the onboarding step (오너 결정
- * 2026-10-22 답 3, ADR-0078 7-25): what each card keeps as the page goes there, kept and taken back
- * by card and account, gone after the posts' hour, cleared, and never thrown on by a storage the
- * browser refuses.
+ * MY 설정's 소개, interest categories and nickname kept in this tab across the onboarding step (오너
+ * 결정 2026-10-22 답 3·2026-10-22 (2차) 답 2, ADR-0078 7-25): what each card keeps as the page goes
+ * there, kept and taken back by card and account, gone after the posts' hour, cleared, and never
+ * thrown on by a storage the browser refuses.
  */
 
 class MemoryStorage implements DraftStorage {
@@ -152,6 +154,33 @@ describe('what a card keeps as MY 설정 goes to the step', () => {
     expect(interestsToRestore(kept, [1], offered, [1, 2])).toBeNull();
     expect(interestsToRestore(kept, [1], offered, [])).toBeNull();
   });
+
+  it('keeps the nickname typed when it names another than the account’s, as typed — not the account’s, nor an empty box', () => {
+    expect(nicknameDraftToKeep('새닉네임', '옛닉네임')).toBe('새닉네임');
+    // As typed: the spaces are the box's, the form trims them as it sends.
+    expect(nicknameDraftToKeep(' 새닉네임 ', '옛닉네임')).toBe(' 새닉네임 ');
+    // Case is a change: the form and the server compare the nickname as it is.
+    expect(nicknameDraftToKeep('Buddha_fan', 'buddha_fan')).toBe('Buddha_fan');
+    // What the rules would refuse is still what was typed: 저장 checks it again on return.
+    expect(nicknameDraftToKeep('user_ABCD', '옛닉네임')).toBe('user_ABCD');
+    expect(nicknameDraftToKeep('옛닉네임', '옛닉네임')).toBeNull();
+    expect(nicknameDraftToKeep(' 옛닉네임\t', '옛닉네임')).toBeNull();
+    // No nickname is cleared: an emptied box is no change to keep.
+    expect(nicknameDraftToKeep('', '옛닉네임')).toBeNull();
+    expect(nicknameDraftToKeep('   ', '옛닉네임')).toBeNull();
+  });
+
+  it('puts the nickname back only over the account’s own, and only while it still names another', () => {
+    const kept = { kind: 'nickname', text: '새닉네임' } as const;
+    expect(nicknameToRestore(kept, '옛닉네임', '옛닉네임')).toBe('새닉네임');
+    // Spaces at either end are no nickname of the box's own.
+    expect(nicknameToRestore(kept, '옛닉네임', ' 옛닉네임 ')).toBe('새닉네임');
+    // Another tab changed it to the same meanwhile: nothing to put back.
+    expect(nicknameToRestore(kept, '새닉네임', '새닉네임')).toBeNull();
+    // The newer typing wins (a step done in another tab, learned late) — emptied included.
+    expect(nicknameToRestore(kept, '옛닉네임', '지금쓰는닉')).toBeNull();
+    expect(nicknameToRestore(kept, '옛닉네임', '')).toBeNull();
+  });
 });
 
 describe('the profile drafts in the tab', () => {
@@ -160,6 +189,7 @@ describe('the profile drafts in the tab', () => {
     expect(PROFILE_DRAFT_TTL_MS).toBe(60 * 60 * 1000);
     expect(profileDraftStorageKey('bio')).toBe(`${PROFILE_DRAFT_PREFIX}bio`);
     expect(profileDraftStorageKey('interests')).toBe(`${PROFILE_DRAFT_PREFIX}interests`);
+    expect(profileDraftStorageKey('nickname')).toBe(`${PROFILE_DRAFT_PREFIX}nickname`);
     for (const prefix of [POST_DRAFT_PREFIX, COMMENT_DRAFT_PREFIX]) {
       expect(PROFILE_DRAFT_PREFIX.startsWith(prefix)).toBe(false);
       expect(prefix.startsWith(PROFILE_DRAFT_PREFIX)).toBe(false);
@@ -190,6 +220,16 @@ describe('the profile drafts in the tab', () => {
       kind: 'bio',
       text: '다시 쓴 소개',
     });
+    // The nickname's card keeps its own, beside the 소개's.
+    expect(keepProfileDraft(storage, A, { kind: 'nickname', text: ' 새닉네임' }, NOW)).toBe(true);
+    expect(readProfileDraft(storage, 'nickname', A, NOW + 1_000)).toEqual({
+      kind: 'nickname',
+      text: ' 새닉네임',
+    });
+    expect(readProfileDraft(storage, 'bio', A, NOW + 1_000)).toEqual({
+      kind: 'bio',
+      text: '다시 쓴 소개',
+    });
   });
 
   it('never shows one account’s draft to another, and removes it when asked for it', () => {
@@ -197,6 +237,9 @@ describe('the profile drafts in the tab', () => {
     keepProfileDraft(storage, A, { kind: 'bio', text: 'A의 소개' }, NOW);
     expect(readProfileDraft(storage, 'bio', B, NOW)).toBeNull();
     expect(readProfileDraft(storage, 'bio', A, NOW)).toBeNull();
+    keepProfileDraft(storage, A, { kind: 'nickname', text: 'A의닉네임' }, NOW);
+    expect(readProfileDraft(storage, 'nickname', B, NOW)).toBeNull();
+    expect(readProfileDraft(storage, 'nickname', A, NOW)).toBeNull();
   });
 
   it('is gone an hour after it was kept, and sweeps what is past it or no draft', () => {
@@ -207,24 +250,31 @@ describe('the profile drafts in the tab', () => {
     expect(storage.items.size).toBe(0);
 
     keepProfileDraft(storage, A, { kind: 'interests', categoryIds: [1] }, NOW);
+    keepProfileDraft(storage, A, { kind: 'nickname', text: '한시간' }, NOW);
     storage.setItem(`${PROFILE_DRAFT_PREFIX}bio`, '{"version":2}');
-    storage.setItem(`${PROFILE_DRAFT_PREFIX}nickname`, '{}');
+    storage.setItem(`${PROFILE_DRAFT_PREFIX}image`, '{}');
     storage.setItem('unrelated', 'kept');
     sweepProfileDrafts(storage, NOW + 1_000);
     expect([...storage.items.keys()].sort()).toEqual([
       `${PROFILE_DRAFT_PREFIX}interests`,
+      `${PROFILE_DRAFT_PREFIX}nickname`,
       'unrelated',
     ]);
+    expect(readProfileDraft(storage, 'nickname', A, NOW + PROFILE_DRAFT_TTL_MS)).not.toBeNull();
     sweepProfileDrafts(storage, NOW + PROFILE_DRAFT_TTL_MS + 1);
     expect([...storage.items.keys()]).toEqual(['unrelated']);
   });
 
   it('takes nothing that is not a draft of that card: a broken item, wrong ids, a bio without text', () => {
     const storage = new MemoryStorage();
-    const put = (kind: 'bio' | 'interests', value: unknown) =>
+    const put = (kind: 'bio' | 'interests' | 'nickname', value: unknown) =>
       storage.setItem(profileDraftStorageKey(kind), JSON.stringify(value));
     put('bio', { version: 1, accountId: A, savedAt: NOW, categoryIds: [1] });
     expect(readProfileDraft(storage, 'bio', A, NOW)).toBeNull();
+    for (const text of [undefined, 7, null, ['닉네임']]) {
+      put('nickname', { version: 1, accountId: A, savedAt: NOW, text });
+      expect(readProfileDraft(storage, 'nickname', A, NOW), JSON.stringify(text)).toBeNull();
+    }
     for (const categoryIds of [[0], [-1], [1.5], ['1'], 'x', null]) {
       put('interests', { version: 1, accountId: A, savedAt: NOW, categoryIds });
       expect(
@@ -241,18 +291,26 @@ describe('the profile drafts in the tab', () => {
     const storage = new MemoryStorage();
     keepProfileDraft(storage, A, { kind: 'bio', text: '소개' }, NOW);
     keepProfileDraft(storage, A, { kind: 'interests', categoryIds: [1] }, NOW);
+    keepProfileDraft(storage, A, { kind: 'nickname', text: '새닉네임' }, NOW);
     keepCommentDraft(storage, { kind: 'comment', postId: 'p' }, A, '댓글', NOW);
     clearProfileDraft(storage, 'bio');
     expect(readProfileDraft(storage, 'bio', A, NOW)).toBeNull();
     expect(readProfileDraft(storage, 'interests', A, NOW)).not.toBeNull();
+    clearProfileDraft(storage, 'nickname');
+    expect(readProfileDraft(storage, 'nickname', A, NOW)).toBeNull();
+    expect(readProfileDraft(storage, 'interests', A, NOW)).not.toBeNull();
+    keepProfileDraft(storage, A, { kind: 'nickname', text: '새닉네임' }, NOW);
     clearProfileDrafts(storage);
     expect(readProfileDraft(storage, 'interests', A, NOW)).toBeNull();
+    expect(readProfileDraft(storage, 'nickname', A, NOW)).toBeNull();
     expect(readCommentDrafts(storage, 'p', A, NOW).comment).toBe('댓글');
   });
 
   it('never throws on a storage the browser refuses: it keeps and restores nothing', () => {
     expect(keepProfileDraft(refusing, A, { kind: 'bio', text: '소개' }, NOW)).toBe(false);
     expect(readProfileDraft(refusing, 'bio', A, NOW)).toBeNull();
+    expect(keepProfileDraft(refusing, A, { kind: 'nickname', text: '닉네임' }, NOW)).toBe(false);
+    expect(readProfileDraft(refusing, 'nickname', A, NOW)).toBeNull();
     expect(() => {
       clearProfileDraft(refusing, 'bio');
       clearProfileDrafts(refusing);

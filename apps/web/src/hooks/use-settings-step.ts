@@ -18,8 +18,9 @@ const keepers = new Set<() => void>();
 
 /**
  * Every mounted card keeps what it holds that the account does not have — the 소개 typed, the
- * categories picked (lib/profile-drafts.ts, owner decision 2026-10-22 answer 3) — as MY 설정 goes to
- * the step, whichever card's save sent it.
+ * categories picked (lib/profile-drafts.ts, owner decision 2026-10-22 answer 3), the nickname typed
+ * (owner decision 2026-10-22 (2nd) answer 2) — as MY 설정 goes to the step, whichever card's save
+ * sent it.
  */
 export function keepSettingsDraftsForStep(): void {
   for (const keep of keepers) keep();

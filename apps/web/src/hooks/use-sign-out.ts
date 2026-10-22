@@ -77,9 +77,9 @@ export function useSignOut(beforeSignOut?: () => Promise<void>): () => Promise<v
         // identity changes.
         queryClient.clear();
         // So are the post, comment and MY 설정 drafts an onboarding step kept in this tab
-        // (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts — owner decision
-        // 2026-10-22 answer 3): each is its writer's only, and whoever signs in next here never
-        // sees one.
+        // (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts — owner decisions
+        // 2026-10-22 answer 3 and (2nd) answer 2, the nickname's too): each is its writer's only,
+        // and whoever signs in next here never sees one.
         clearSessionPostDrafts();
         clearAllSessionCommentDrafts();
         clearSessionProfileDrafts();
