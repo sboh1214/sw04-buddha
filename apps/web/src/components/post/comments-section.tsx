@@ -40,7 +40,6 @@ import {
   useCommentDraftsTakenBack,
 } from '@/hooks/use-comment-draft';
 import {
-  heldEditsAfterRead,
   readMoreComments,
   readMoreReplies,
   useComments,
@@ -69,6 +68,7 @@ import {
   type CommentsPostState,
   type HeldText,
   type HeldTextPlace,
+  type RepliesOnScreen,
   type ResolvedCommentDrafts,
   commentCountText,
   commentDraft,
@@ -81,9 +81,11 @@ import {
   draftsHeldOnReadFailure,
   editDraftReadOnMark,
   editDraftsReadOn,
+  heldEditsBrought,
   heldEditsReadToTheirEnd,
   placeHeldTexts,
   postCommentsKey,
+  repliesOnScreenOf,
   resolveCommentDrafts,
 } from '@/lib/comments';
 import { loginPathBackTo } from '@/lib/next-path';
@@ -112,14 +114,19 @@ const NOTHING_TAKEN_BACK: ResolvedCommentDrafts = {
   waitingEdits: [],
 };
 
-/** A held text on its way into its edit's box: the held text's id and its text. */
+/**
+ * A held text on its way into its edit's box: the held text's id and its text, and the render that
+ * brought its 대댓글 (counted, `heldEditsBrought`) — the toast is raised once for each such render
+ * whose texts a box took, and none for one whose boxes all kept their own (`useReopened`).
+ */
 interface Reopened {
   id: string;
   text: string;
+  brought: number;
 }
 
 /**
- * The held edit texts on their way into their edits' boxes (`heldEditsReadIn`), by the comment, for
+ * The held edit texts on their way into their edits' boxes (`heldEditsBrought`), by the comment, for
  * the account they were opened for.
  */
 interface Reopening {
@@ -145,18 +152,14 @@ interface ThreadContext {
   /** A box took its draft. */
   onTaken: (key: CommentDraftKey) => void;
   /**
-   * The held edit texts whose 대댓글 '답글 더 보기' just read, for their edits to open with, by the
-   * comment (오너 결정 2026-10-22 (2차) 답 2) — and the edit's box took the held text `id`, or
-   * left it apart (its edit open already, or opened by a draft taken back: `useReopened`).
+   * The held edit texts whose 대댓글 a read just brought within the 300 a read of the pages keeps,
+   * for their edits to open with, by the comment (오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1) — and
+   * the edit's box took the held text, or left it apart (its edit open already, or opened by a
+   * draft taken back: `useReopened`).
    */
   reopened: ReadonlyMap<string, Reopened>;
-  onReopened: (commentId: string, id: string) => void;
-  onReopenSkipped: (commentId: string, id: string) => void;
-  /**
-   * '답글 더 보기' of the thread `threadId` wrote its page, which brought the 대댓글 `brought`
-   * (`readMoreReplies`): the held edit texts of those open in their edits, or say why not.
-   */
-  onRepliesRead: (threadId: string, brought: ReadonlySet<string>) => void;
+  onReopened: (commentId: string, one: Reopened) => void;
+  onReopenSkipped: (commentId: string, one: Reopened) => void;
   onCloseHeld: (id: string) => void;
   /** The focus to the comments' heading: where it goes when nothing nearer is left. */
   focusHeading: () => void;
@@ -187,9 +190,9 @@ interface ThreadContext {
  * so does a 답글 or 수정 box's 취소 (`CommentBox`); going to an onboarding step keeps each box's
  * text in this tab, and this page takes it back into its box after the step
  * (`useCommentDraftsTakenBack`, reading on through the pages for a thread not read yet) — or, when
- * that box can no longer open, shows it apart with why; an edit's text shown apart because its
- * 대댓글 was not among those read opens in that edit once '답글 더 보기' reads it (오너 결정
- * 2026-10-22 (2차) 답 2, `heldEditsReadIn`); and a box the thread read again no longer
+ * that box can no longer open, shows it apart with why; an edit's text shown apart opens in that
+ * edit once any read brings its 대댓글 within the 300 a read of the pages keeps (오너 결정
+ * 2026-10-22 (2차) 답 2·(3차) 답 1, `heldEditsBrought`); and a box the thread read again no longer
  * holds — its write refused or in flight, or no write at all and its place gone under it (the
  * comment or the post deleted or hidden elsewhere, the writer's own 댓글 deleted under an open
  * 답글) — leaves its text and why it cannot be sent where the box stood until the writer closes
@@ -301,69 +304,78 @@ export function CommentsSection({
   useEffect(() => {
     if (waiting && hasNextPage && !isFetchingNextPage) void fetchNextPage();
   }, [waiting, hasNextPage, isFetchingNextPage, fetchNextPage]);
-  // An edit's text held apart because its 대댓글 was not among those read — past the 300 a read of
-  // the pages keeps, not found within them, or a read that failed — opens in that edit once '답글 더
-  // 보기' reads that 대댓글 (오너 결정 2026-10-22 (2차) 답 2, `heldEditsReadIn`): the 대댓글 published
-  // and the viewer's own, the held text the account on screen's. Its box opens as a draft taken back
-  // does — '쓰던 내용을 되살렸습니다.' under it and once in a toast, the focus left where it is (on
-  // the 답글 더 보기 pressed) — and the held text goes once the box has it (`onReopened`): until then
-  // it is not drawn while its 대댓글 is on screen, and stays drawn where it was should that 대댓글
-  // leave first. Otherwise it stays apart, with why that edit cannot open now that it is read
-  // (`heldTexts.reason`): hidden, or another account's. What the press brought is what its page's
-  // write added to the thread (`readMoreReplies`) — not what the thread did not hold as it was
-  // pressed: a 대댓글 another read put on screen meanwhile (a new 대댓글's read on, the read on for
-  // drafts) moved the cursor on, so the page went nowhere and brought nothing, and that 대댓글's
-  // edit may be open already with what the writer typed since. An edit open, or opened by a draft
-  // taken back in the same render, keeps what it has, and the held text stays apart (`useReopened`).
-  // The parts with no React in them are `heldEditsAfterRead` (use-comments.test.ts runs them); the
+  // An edit's text held apart — its 대댓글 not among those read (past the 300 a read of the pages
+  // keeps, or not found within them), a read that failed, a refusal whose box went with its 대댓글 —
+  // opens in that edit once any read brings that 대댓글 onto the screen within those 300 (오너 결정
+  // 2026-10-22 (3차) 답 1, `heldEditsBrought`): '답글 더 보기', a new 대댓글's read on through its
+  // thread, a read of the comment pages (the window's focus, a write's read), the read on for drafts
+  // taken back — the 대댓글 published and the viewer's own, the held text the account on screen's.
+  // Its box opens as a draft taken back does — '쓰던 내용을 되살렸습니다.' under it and once in a
+  // toast, the focus left where it is — and the held text goes once the box has it (`onReopened`):
+  // until then it is not drawn while its 대댓글 is on screen, and stays drawn where it was should that
+  // 대댓글 leave first. Otherwise it stays apart, under that 대댓글, with why that edit cannot open
+  // (`heldTexts.reason`): hidden, another account's, or past the 300 —
+  // '고치던 답글을 다시 열지 못했습니다. 쓰던 내용을 여기 남겨 둡니다.' (3차 답 3's words) — and opens
+  // should a later read bring it within them. For a re-consent account too: its 저장 goes to the step
+  // (3차 답 2, as a box opened before the step was, 7-23). What a read brought is told from the
+  // threads themselves, render to render — what each 대댓글 on screen stood at (`repliesOnScreenOf`)
+  // against where it stands now — so every read counts alike and each 대댓글 once, as the render it
+  // came in has it: not what a read asked for, nor what the thread did not hold as it was asked (a
+  // 대댓글 another read put on screen meanwhile was that read's to bring, and its edit may be open
+  // already with what the writer typed since). A 대댓글 on screen past the 300 that an earlier one's
+  // going moves within them counts as brought too, whatever moved it: a read of the pages after a
+  // deletion elsewhere, or no read at all — the reader's own 삭제 of an earlier 대댓글 of the thread
+  // (`withoutComment`; whether that should open the box is asked of the owner, ADR-0074 결과 4).
+  // Before the paint (a layout effect), so the held text is not seen under its 대댓글 for a frame
+  // before its box. An edit open, or opened by a draft taken back in the same render, keeps what it
+  // has, and the held text stays apart (`useReopened`) — and no toast says it was restored: the toast
+  // is raised once a box took a held text (`onReopened`), once for what one render brought. That
+  // edit can be open: the reader opened 수정 on such a 대댓글 past the 300, its text under it, before
+  // it moved within them. The parts with no React in them are `heldEditsBrought` and
+  // `repliesOnScreenOf` (comments.test.ts and use-comments.test.ts run them through each read); the
   // e2e runs the rest, but for two guards no test runs: the account check below
-  // (`reopening.accountId`) needs another account signed in within the moment a press is on its
-  // way, and the held text left out while it is on its way (`drawn`) is one commit long — a check
-  // that the held text is gone passes after that commit with or without it.
+  // (`reopening.accountId`) needs another account signed in between the render a read lands in and
+  // the next, and the held text left out while it is on its way (`drawn`) is one commit long — a
+  // check that the held text is gone passes after that commit with or without it.
   const [reopening, setReopening] = useState<Reopening>({
     accountId: undefined,
     edits: NOTHING_REOPENED,
   });
-  // The account and the texts as the last commit drew them, for a press that lands later.
-  const readerNow = useRef({
-    accountId: viewerAccountId,
-    publicId: viewerPublicId,
-    held: heldTexts.held,
-  });
-  useLayoutEffect(() => {
-    readerNow.current = {
-      accountId: viewerAccountId,
-      publicId: viewerPublicId,
-      held: heldTexts.held,
-    };
-  });
   const { reason: heldReason, dismiss: dismissHeld } = heldTexts;
-  const onRepliesRead = useCallback(
-    (threadId: string, brought: ReadonlySet<string>) => {
-      const { accountId, publicId, held } = readerNow.current;
-      if (accountId === undefined || brought.size === 0) return;
-      const { open: opening, reasons } = heldEditsAfterRead(
-        queryClient,
-        post.id,
-        threadId,
-        brought,
-        held,
-        publicId,
-      );
-      for (const { id, reason } of reasons) heldReason(id, reason);
-      if (opening.length === 0) return;
-      setReopening((current) => {
-        const edits = new Map(current.accountId === accountId ? current.edits : []);
-        for (const { id, commentId, text } of opening) edits.set(commentId, { id, text });
-        return { accountId, edits };
-      });
-      toaster.create({ type: 'info', title: copy.commentDraftRestored });
-    },
-    [queryClient, post.id, heldReason],
-  );
+  const heldNow = heldTexts.held;
+  // The threads as the last render had them, and where their 대댓글 stood then.
+  const threadsSeen = useRef<
+    { threads: readonly CommentThread[]; replies: RepliesOnScreen } | undefined
+  >(undefined);
+  // The renders that brought held texts' 대댓글, counted (`Reopened.brought`), and the last of them
+  // the toast told.
+  const broughtRenders = useRef(0);
+  const broughtTold = useRef(0);
+  useLayoutEffect(() => {
+    const seen = threadsSeen.current;
+    if (seen?.threads === threads) return;
+    threadsSeen.current = { threads, replies: repliesOnScreenOf(threads) };
+    // The first threads drawn bring nothing: no text is held before them.
+    if (seen === undefined || gone || viewerAccountId === undefined) return;
+    const { open: opening, reasons } = heldEditsBrought(
+      heldNow,
+      threads,
+      seen.replies,
+      viewerPublicId,
+    );
+    for (const { id, reason } of reasons) heldReason(id, reason);
+    if (opening.length === 0) return;
+    broughtRenders.current += 1;
+    const brought = broughtRenders.current;
+    setReopening((current) => {
+      const edits = new Map(current.accountId === viewerAccountId ? current.edits : []);
+      for (const { id, commentId, text } of opening) edits.set(commentId, { id, text, brought });
+      return { accountId: viewerAccountId, edits };
+    });
+  }, [threads, gone, viewerAccountId, viewerPublicId, heldNow, heldReason]);
   // Only for the account they were opened for, and only while their held text is: one closed
   // meanwhile, or gone with another account, opens nothing.
-  const heldIds = useMemo(() => new Set(heldTexts.held.map((text) => text.id)), [heldTexts.held]);
+  const heldIds = useMemo(() => new Set(heldNow.map((text) => text.id)), [heldNow]);
   const reopened = useMemo(() => {
     if (viewerAccountId === undefined || reopening.accountId !== viewerAccountId) {
       return NOTHING_REOPENED;
@@ -371,8 +383,8 @@ export function CommentsSection({
     const live = [...reopening.edits].filter(([, one]) => heldIds.has(one.id));
     return live.length === reopening.edits.size ? reopening.edits : new Map(live);
   }, [reopening, viewerAccountId, heldIds]);
-  // The box took the held text `id` — told from its effect — or left it apart: on its way no more.
-  const reopenedOnce = useCallback((commentId: string, id: string) => {
+  // The box took the held text — told from its effect — or left it apart: on its way no more.
+  const reopenedOnce = useCallback((commentId: string, { id }: Reopened) => {
     setReopening((current) => {
       if (current.edits.get(commentId)?.id !== id) return current;
       const edits = new Map(current.edits);
@@ -380,10 +392,15 @@ export function CommentsSection({
       return { ...current, edits };
     });
   }, []);
+  // Took it: the held text goes, and the toast says it — once for what one render brought, and
+  // only for a box that took one (a box that kept its own says nothing restored, ADR-0074 7-30).
   const onReopened = useCallback(
-    (commentId: string, id: string) => {
-      dismissHeld(id);
-      reopenedOnce(commentId, id);
+    (commentId: string, one: Reopened) => {
+      dismissHeld(one.id);
+      reopenedOnce(commentId, one);
+      if (one.brought <= broughtTold.current) return;
+      broughtTold.current = one.brought;
+      toaster.create({ type: 'info', title: copy.commentDraftRestored });
     },
     [dismissHeld, reopenedOnce],
   );
@@ -395,9 +412,9 @@ export function CommentsSection({
   // writer closes it — at once, nothing read, when the thread holds them already (the comments kept
   // in this tab across the step, read again on the way back as far as the screen had them; a step
   // done in another tab). The pages this read reads for a set of drafts (`reads`) are counted too,
-  // five at most a thread — they bind only pages the thread did not take (ADR-0074 7-28). Each page
-  // read is '답글 더 보기' pressed for the writer: a held edit text whose 대댓글 it brings opens in
-  // its edit as after the reader's own press (`onRepliesRead`). A read that fails shows each
+  // five at most a thread — they bind only pages the thread did not take (ADR-0074 7-28). A held
+  // edit text whose 대댓글 a page of it brings within the 300 opens in its edit, as after any read
+  // (`heldEditsBrought` above, 오너 결정 2026-10-22 (3차) 답 1). A read that fails shows each
   // draft waiting on that thread apart, with the read's failure as why, until the writer closes it
   // (오너 결정 2026-10-21 (2차) 답 2, `draftsHeldOnReadFailure`): the toast said the text was
   // restored, and it would otherwise wait unseen behind the thread's button. Both only for what
@@ -444,46 +461,32 @@ export function CommentsSection({
     const readFrom = roundOf(editDraftReadOnMark(next));
     pagesReadOn.current.set(roundOf(threadId), pagesRead(threadId) + 1);
     void readMoreReplies(queryClient, post.id, threadId)
-      .then(
-        (brought) => onRepliesRead(threadId, brought),
-        (error: unknown) => {
-          const reason = postReadErrorMessage(error);
-          failedReadsOn.current.set(readFrom, reason);
-          const { waitingEdits, accountId } = waitingNow.current;
-          const failed = draftsHeldOnReadFailure(waitingEdits, threadId, reason);
-          if (failed.length === 0 || accountId === undefined) return;
-          hold(
-            accountId,
-            failed.map(({ key, text, place }) => ({
-              id: `taken-back:${commentDraftStorageKey(key)}`,
-              text,
-              reason,
-              place,
-            })),
-          );
-          take(failed.map(({ key }) => key));
-        },
-      )
+      .catch((error: unknown) => {
+        const reason = postReadErrorMessage(error);
+        failedReadsOn.current.set(readFrom, reason);
+        const { waitingEdits, accountId } = waitingNow.current;
+        const failed = draftsHeldOnReadFailure(waitingEdits, threadId, reason);
+        if (failed.length === 0 || accountId === undefined) return;
+        hold(
+          accountId,
+          failed.map(({ key, text, place }) => ({
+            id: `taken-back:${commentDraftStorageKey(key)}`,
+            text,
+            reason,
+            place,
+          })),
+        );
+        take(failed.map(({ key }) => key));
+      })
       .finally(() => {
         readingOn.current = false;
         setReadOnRound((round) => round + 1);
       });
-  }, [
-    takenBack,
-    threads,
-    reads,
-    viewerAccountId,
-    queryClient,
-    post.id,
-    readOnRound,
-    hold,
-    take,
-    onRepliesRead,
-  ]);
+  }, [takenBack, threads, reads, viewerAccountId, queryClient, post.id, readOnRound, hold, take]);
   // A held edit text of a 대댓글 whose thread is now read to its end without it says it is gone —
   // '없거나 삭제된 댓글입니다.', read out as new — rather than '…아직 불러오지 않은 답글입니다.' or a
   // read's failure (`heldEditsReadToTheirEnd`): a deleted 대댓글 is in no page, so no read brings it
-  // for `onRepliesRead` to say so. Whatever read ended the thread: the reader's '답글 더 보기', or a
+  // for `heldEditsBrought` to say so. Whatever read ended the thread: the reader's '답글 더 보기', or a
   // read of the pages (a deletion meanwhile brought the thread within what it reads on). Not for a
   // post out of every view — its texts say the post is gone.
   const readToTheirEnd = useMemo(
@@ -555,7 +558,6 @@ export function CommentsSection({
     reopened,
     onReopened,
     onReopenSkipped: reopenedOnce,
-    onRepliesRead,
     onCloseHeld,
     focusHeading,
   };
@@ -739,20 +741,22 @@ function useTakenBack(
 }
 
 /**
- * A held edit text on its way into this comment's edit (`reopened`, 오너 결정 2026-10-22 (2차) 답 2),
+ * A held edit text on its way into this comment's edit (`reopened`, 오너 결정 2026-10-22 (2차) 답 2·
+ * (3차) 답 1),
  * as the comment takes it: once, while rendering, so the box is drawn with it — unless the edit is
  * open already or a draft taken back opens it in this very render (`busy`): that box keeps what it
  * has, and the held text stays apart where it is drawn, rather than going with nothing to show for
- * it (ADR-0074 7-30). Either way the section is told after the commit: the box took it
- * (`onReopened`, the held text closed) or left it (`onSkipped`, drawn again).
+ * it, and no toast says it was restored (ADR-0074 7-30). Either way the section is told after the
+ * commit: the box took it (`onReopened`, the held text closed and the toast raised) or left it
+ * (`onSkipped`, drawn again).
  */
 function useReopened(
   reopen: Reopened | undefined,
   busy: boolean,
   commentId: string,
   open: (text: string) => void,
-  onReopened: (commentId: string, id: string) => void,
-  onSkipped: (commentId: string, id: string) => void,
+  onReopened: (commentId: string, one: Reopened) => void,
+  onSkipped: (commentId: string, one: Reopened) => void,
 ): void {
   const [seen, setSeen] = useState<{ one: Reopened; opened: boolean } | undefined>(undefined);
   if (reopen !== undefined && reopen !== seen?.one) {
@@ -762,7 +766,7 @@ function useReopened(
   const decided = reopen !== undefined && seen?.one === reopen ? seen : undefined;
   useEffect(() => {
     if (decided === undefined) return;
-    (decided.opened ? onReopened : onSkipped)(commentId, decided.one.id);
+    (decided.opened ? onReopened : onSkipped)(commentId, decided.one);
   }, [decided, commentId, onReopened, onSkipped]);
 }
 
@@ -789,17 +793,7 @@ function Thread({
   heldAtEnd: readonly HeldText[];
   heldByComment: ReadonlyMap<string, readonly HeldText[]>;
 }) {
-  const {
-    postId,
-    viewer,
-    open,
-    stepPath,
-    takenBack,
-    onTaken,
-    onRepliesRead,
-    onCloseHeld,
-    focusHeading,
-  } = context;
+  const { postId, viewer, open, stepPath, takenBack, onTaken, onCloseHeld, focusHeading } = context;
   const router = useRouter();
   const [replying, setReplying] = useState(false);
   // The 댓글's own 답글: where the focus goes when no 답글 pressed opened the box.
@@ -888,8 +882,9 @@ function Thread({
               for every 더 보기, which #47 brings to the comment list's own; ADR-0074 7-28). The
               section's own read for a draft taken back shows the draft apart instead, when it
               fails (2026-10-21 (2차) 답 2) or the thread holds its 300 without it (2026-10-22 답 5,
-              (2차) 답 1). A held edit text whose 대댓글 a press brings opens in that edit (2026-10-22
-              (2차) 답 2, the section's `onRepliesRead`). */}
+              (2차) 답 1). A held edit text whose 대댓글 a press brings within the 300 opens in that
+              edit, as after any read (2026-10-22 (2차) 답 2·(3차) 답 1, the section's
+              `heldEditsBrought`). */}
           {moreToRead && (
             <Stack gap="2" align="flex-start">
               {more.isError && (
@@ -906,11 +901,7 @@ function Thread({
                 borderRadius="pill"
                 borderColor="border.emphasized"
                 loading={more.isPending}
-                onClick={() =>
-                  more.mutate(undefined, {
-                    onSuccess: (brought) => onRepliesRead(threadId, brought),
-                  })
-                }
+                onClick={() => more.mutate()}
                 data-testid="comment-replies-more"
               >
                 {copy.commentRepliesMore}
@@ -985,7 +976,8 @@ function CommentItem({
  * public id of `GET /me` (`isOwnPost`), never in the HTML; the server checks the author on every
  * write. When the edit closes — 취소, or saved — the focus goes back to 수정, as a reply's goes back
  * to 답글. An edit draft taken back after a step opens the edit with it, and so does an edit's text
- * held apart until '답글 더 보기' read this 대댓글 (`reopened`, 오너 결정 2026-10-22 (2차) 답 2).
+ * held apart until a read brought this 대댓글 within the 300 a read of the pages keeps (`reopened`,
+ * 오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1).
  */
 function PublishedCommentItem({
   context,

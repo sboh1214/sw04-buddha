@@ -20,7 +20,7 @@ import {
   REPLY_READ_ON_PAGES,
   type CommentPage,
   type CommentPages,
-  type HeldEditsReadIn,
+  type HeldEditsBrought,
   type HeldText,
   type ReplyPage,
   type UnplacedCommentDraft,
@@ -28,8 +28,9 @@ import {
   draftsHeldOnReadFailure,
   editDraftReadOnMark,
   editDraftsReadOn,
+  heldEditsBrought,
   postCommentsKey,
-  repliesBrought,
+  repliesOnScreenOf,
   resolveCommentDrafts,
 } from '@/lib/comments';
 import { communityPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
@@ -38,7 +39,6 @@ import {
   commentsInfiniteQueryOptions,
   createCommentOptions,
   deleteCommentOptions,
-  heldEditsAfterRead,
   readMoreComments,
   readMoreReplies,
   updateCommentOptions,
@@ -474,7 +474,7 @@ describe('the writes', () => {
 });
 
 describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더 보기)', () => {
-  it('are read 50 at a time from the thread’s cursor, after the ones held — each read saying what it brought', async () => {
+  it('are read 50 at a time from the thread’s cursor, after the ones held', async () => {
     const queryClient = seededThread(replyIds(0, 2), 'r2');
     const asked = getThreads(
       () => ({ items: [], nextCursor: null }),
@@ -483,12 +483,13 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
           ? replyPage(replyIds(2, 4), 'r4')
           : replyPage(replyIds(4, 5), null),
     );
-    expect([...(await readMoreReplies(queryClient, POST, commentId))]).toEqual(replyIds(2, 4));
+    await readMoreReplies(queryClient, POST, commentId);
     expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), 'r4']);
-    expect([...(await readMoreReplies(queryClient, POST, commentId))]).toEqual(replyIds(4, 5));
+    await readMoreReplies(queryClient, POST, commentId);
     expect(repliesHeld(queryClient)).toEqual([replyIds(0, 5), null]);
-    // Nothing more to read: nothing asked, nothing brought.
-    expect([...(await readMoreReplies(queryClient, POST, commentId))]).toEqual([]);
+    // Nothing more to read: nothing asked.
+    await readMoreReplies(queryClient, POST, commentId);
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 5), null]);
     expect(asked).toEqual([`replies:${commentId}:r2`, `replies:${commentId}:r4`]);
   });
 
@@ -594,7 +595,7 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     );
     // The thread on screen is old: a button that can only be answered the same is no use — the
     // pages and the post are read again, and the thread goes with them.
-    await expect(readMoreReplies(queryClient, POST, commentId)).resolves.toEqual(new Set());
+    await expect(readMoreReplies(queryClient, POST, commentId)).resolves.toBeUndefined();
     expect(queryClient.getQueryState(postCommentsKey(post))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(true);
     expect(repliesHeld(queryClient)).toEqual([replyIds(0, 2), 'r2']);
@@ -818,7 +819,30 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
   });
 });
 
-describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결정 2026-10-22 답 5, (2차) 답 1·2)', () => {
+describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결정 2026-10-22 답 5, (2차) 답 1·2, (3차) 답 1·3)', () => {
+  /** The account on screen: the author of every 대댓글 the fakes answer with. */
+  const VIEWER = 'k7m2p9qx4z';
+
+  /** The threads the pages hold now. */
+  const threadsNow = (queryClient: QueryClient) =>
+    commentThreadsOf(queryClient.getQueryData(postCommentsKey(post)));
+
+  /**
+   * What `read` does to the texts `held` apart, as the comment section tells it
+   * (comments-section.tsx): where the 대댓글 on screen stood before it against the threads it leaves
+   * (`heldEditsBrought`, 오너 결정 2026-10-22 (3차) 답 1 — any read).
+   */
+  async function broughtBy(
+    queryClient: QueryClient,
+    held: readonly HeldText[],
+    read: () => Promise<unknown>,
+    viewer: string = VIEWER,
+  ): Promise<HeldEditsBrought> {
+    const before = repliesOnScreenOf(threadsNow(queryClient));
+    await read();
+    return heldEditsBrought(held, threadsNow(queryClient), before, viewer);
+  }
+
   /**
    * The post page's read on for edit drafts taken back after an onboarding step, as its effect
    * takes it (comments-section.tsx): the drafts placed against the threads held
@@ -837,8 +861,8 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
       held = [],
     }: { unlistedAtFailure?: boolean; held?: readonly HeldText[] } = {},
   ) {
-    // What each page read opens of the texts `held` apart, as the section's `onRepliesRead` asks it.
-    const readIn: HeldEditsReadIn = { open: [], reasons: [] };
+    // What each page read opens of the texts `held` apart, as the section tells it (`broughtBy`).
+    const readIn: HeldEditsBrought = { open: [], reasons: [] };
     let drafts: CommentDrafts = {
       ...NO_COMMENT_DRAFTS,
       edits: new Map(edits.map((id) => [id, `고친 ${id}`])),
@@ -853,7 +877,7 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
         postState: 'published',
         threads: commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))),
         allRead: true,
-        viewerPublicId: 'k7m2p9qx4z',
+        viewerPublicId: VIEWER,
       });
     const showApart = (shown: readonly UnplacedCommentDraft[]) => {
       apart.push(...shown);
@@ -877,14 +901,8 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
       const readFrom = editDraftReadOnMark(read);
       pagesRead.set(threadId, (pagesRead.get(threadId) ?? 0) + 1);
       try {
-        const brought = await readMoreReplies(queryClient, POST, threadId);
-        const { open, reasons } = heldEditsAfterRead(
-          queryClient,
-          POST,
-          threadId,
-          brought,
-          held,
-          'k7m2p9qx4z',
+        const { open, reasons } = await broughtBy(queryClient, held, () =>
+          readMoreReplies(queryClient, POST, threadId),
         );
         readIn.open.push(...open);
         readIn.reasons.push(...reasons);
@@ -974,7 +992,7 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
     expect(repliesHeld(queryClient)).toEqual([replyIds(0, REPLIES_KEPT_ON_READ), 'r300']);
   });
 
-  it('opens no box past the 300 when the thread holds more — the read again on the way back did not land (cancelled, failed, offline): the draft is shown apart at once, nothing read (오너 결정 2026-10-22 (2차) 답 1)', async () => {
+  it('opens no box past the 300 when the thread holds more — the read again on the way back did not land (cancelled, failed, offline): the draft is shown apart at once under its 대댓글, with the owner’s words, nothing read (오너 결정 2026-10-22 (2차) 답 1, (3차) 답 3)', async () => {
     // As '답글 더 보기' left it before the step: 361 of 400, or all 361 of them.
     for (const cursor of ['r361', null]) {
       const queryClient = seededThread(replyIds(0, 361), cursor);
@@ -983,14 +1001,15 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
       const { opened, apart, gone } = await readOnForEdits(queryClient, [onScreenPast, within]);
       expect(asked).toEqual([]);
       // The 300th opens; the 330th, on screen in pages the next read that lands takes back to 300,
-      // does not — shown apart as one not found within them.
+      // does not — shown apart, under it: '고치던 답글을 다시 열지 못했습니다. 쓰던 내용을 여기 남겨
+      // 둡니다.'
       expect(opened).toEqual([within]);
       expect(apart).toEqual([]);
       expect(gone).toEqual([
         {
           key: { kind: 'edit', postId: post, commentId: onScreenPast, threadId: commentId },
           text: `고친 ${onScreenPast}`,
-          reason: copy.errCommentEditNotRead,
+          reason: copy.errCommentEditNotReopened,
           place: { kind: 'comment', commentId: onScreenPast, threadId: commentId },
         },
       ]);
@@ -1073,46 +1092,46 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
     ]);
   });
 
-  it('a draft shown apart opens in its edit once 답글 더 보기 brings its 대댓글 — past the 300 or after a read that failed (오너 결정 2026-10-22 (2차) 답 2)', async () => {
-    for (const [failing, index, presses] of [
-      [undefined, 315, 1],
-      ['r150', 220, 2],
-    ] as const) {
-      const queryClient = holding(failing === undefined ? REPLIES_KEPT_ON_READ : 50);
-      getThreads(
-        () => ({ items: [], nextCursor: null }),
-        failing === undefined ? fullPages(400) : failingFrom(failing),
-      );
-      const draft = replyId(index);
-      const { apart } = await readOnForEdits(queryClient, [draft]);
-      expect(apart).toHaveLength(1);
-      const held = apart.map(({ key, text, reason, place }) => ({
-        id: `taken-back:${key.kind}:${draft}`,
-        text,
-        reason,
-        place,
-        focus: false,
-        shown: true,
-      }));
-      // The reader's presses, the page answering now; the last brings the 대댓글.
-      getThreads(() => ({ items: [], nextCursor: null }), fullPages(400));
-      for (let press = 1; press <= presses; press += 1) {
-        const brought = await readMoreReplies(queryClient, POST, commentId);
-        const readIn = heldEditsAfterRead(
-          queryClient,
-          POST,
-          commentId,
-          brought,
-          held,
-          'k7m2p9qx4z',
-        );
-        expect(readIn).toEqual(
-          press < presses
-            ? { open: [], reasons: [] }
-            : { open: [{ id: held[0]!.id, commentId: draft, text: `고친 ${draft}` }], reasons: [] },
-        );
-      }
-    }
+  /** The drafts `readOnForEdits` showed apart, as the section holds them: drawn already. */
+  const heldOf = (apart: readonly UnplacedCommentDraft[]): HeldText[] =>
+    apart.map(({ key, text, reason, place }) => ({
+      id: `taken-back:${key.kind}:${place.kind === 'comment' ? place.commentId : ''}`,
+      text,
+      reason,
+      place,
+      focus: false,
+      shown: true,
+    }));
+
+  it('a draft shown apart opens in its edit once 답글 더 보기 brings its 대댓글 within the 300 — after a read that failed; one brought past them stays apart, under it, with the owner’s words (오너 결정 2026-10-22 (2차) 답 2, (3차) 답 1·3)', async () => {
+    // After a read that failed: the 221st, the thread at 50 — the second press brings it.
+    const failed = holding(50);
+    getThreads(() => ({ items: [], nextCursor: null }), failingFrom('r150'));
+    const draft = replyId(220);
+    const held = heldOf((await readOnForEdits(failed, [draft])).apart);
+    expect(held.map(({ reason }) => reason)).toEqual([copy.errNetwork]);
+    getThreads(() => ({ items: [], nextCursor: null }), fullPages(400));
+    const press = () => readMoreReplies(failed, POST, commentId);
+    expect(await broughtBy(failed, held, press)).toEqual({ open: [], reasons: [] });
+    expect(await broughtBy(failed, held, press)).toEqual({
+      open: [{ id: held[0]!.id, commentId: draft, text: `고친 ${draft}` }],
+      reasons: [],
+    });
+
+    // Past the 300: the 316th, the thread holding its 300 — shown apart at once, then brought by
+    // 답글 더 보기 past them: no box for the next read of the pages to take away; the text stays,
+    // under its 대댓글 now, with '고치던 답글을 다시 열지 못했습니다. 쓰던 내용을 여기 남겨 둡니다.'
+    // — said once: the next press, past it, says nothing more.
+    const past = holding(REPLIES_KEPT_ON_READ);
+    const far = replyId(315);
+    const apart = heldOf((await readOnForEdits(past, [far])).apart);
+    expect(apart.map(({ reason }) => reason)).toEqual([copy.errCommentEditNotRead]);
+    const pastPress = () => readMoreReplies(past, POST, commentId);
+    expect(await broughtBy(past, apart, pastPress)).toEqual({
+      open: [],
+      reasons: [{ id: apart[0]!.id, reason: copy.errCommentEditNotReopened }],
+    });
+    expect(await broughtBy(past, apart, pastPress)).toEqual({ open: [], reasons: [] });
   });
 
   /** A text held apart for the edit of the 대댓글 `id`, drawn already, saying `reason`. */
@@ -1125,14 +1144,120 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
     shown: true,
   });
 
-  it('a 대댓글 brought that takes no edit — hidden, or another account’s — keeps its text apart, with why in the server’s words (오너 결정 2026-10-22 (2차) 답 2)', async () => {
-    const queryClient = holding(REPLIES_KEPT_ON_READ);
-    const [hidden, theirs, mine, hiddenSaid] = [
-      replyId(310),
-      replyId(320),
-      replyId(330),
-      replyId(340),
-    ];
+  /** The fake reply route over `total` 대댓글, the reader's new 대댓글 MINE after them. */
+  const fullPagesThenMine = (total: number) => {
+    const server = fullPages(total);
+    return (request: RepliesRequest): ReplyPage => {
+      const page = server(request);
+      return page.nextCursor === null
+        ? { ...page, items: [...page.items, published(MINE, commentId)] }
+        : page;
+    };
+  };
+
+  /** The reader's new 대댓글 under the 댓글 above, through the hook's options. */
+  const writeReply = (queryClient: QueryClient) => {
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+    return () =>
+      new MutationObserver(
+        queryClient,
+        createCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+  };
+
+  it('a text held apart opens in its edit when a new 대댓글’s read on brings its 대댓글 within the 300; past them it stays apart with the owner’s words (오너 결정 2026-10-22 (3차) 답 1·3)', async () => {
+    // The thread at 50; the read on reads to the new 대댓글, three pages, the 121st on the way.
+    const within = holding(50);
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), fullPagesThenMine(200));
+    const target = replyId(120);
+    // On screen before the read: nothing to it.
+    const held = [heldFor(target, copy.errNetwork), heldFor(replyId(10))];
+    expect(await broughtBy(within, held, writeReply(within))).toEqual({
+      open: [{ id: held[0]!.id, commentId: target, text: held[0]!.text }],
+      reasons: [],
+    });
+    expect(asked).toEqual(pagesFrom(50, 100, 150));
+    expect(repliesHeld(within)).toEqual([[...replyIds(0, 200), MINE], null]);
+
+    // The thread at its 300 ('답글 더 보기' opened it so far): the read on reads past them, the 321st
+    // on the way — no box there; the text says it cannot be opened.
+    vi.restoreAllMocks();
+    const past = holding(REPLIES_KEPT_ON_READ);
+    getThreads(() => ({ items: [], nextCursor: null }), fullPagesThenMine(400));
+    const far = heldFor(replyId(320));
+    expect(await broughtBy(past, [far], writeReply(past))).toEqual({
+      open: [],
+      reasons: [{ id: far.id, reason: copy.errCommentEditNotReopened }],
+    });
+    expect(repliesHeld(past)).toEqual([[...replyIds(0, 400), MINE], null]);
+  });
+
+  it('a text held apart opens in its edit when a read of the pages brings its 대댓글 within the 300 — an earlier 대댓글 deleted meanwhile — whether it was not on screen or on screen past them (오너 결정 2026-10-22 (3차) 답 1)', async () => {
+    // The 301st: held apart while the thread held 300 (not among those read), or under it while the
+    // thread held 301 (a read again on the way back that did not land, the owner's words of 3차 답 3).
+    // The 11th deleted meanwhile: the read of the pages — its first 50 and five pages, 300 — now
+    // ends with it.
+    const all = replyIds(0, 400).filter((id) => id !== replyId(10));
+    const target = replyId(REPLIES_KEPT_ON_READ);
+    for (const [count, reason] of [
+      [REPLIES_KEPT_ON_READ, copy.errCommentEditNotRead],
+      [REPLIES_KEPT_ON_READ + 1, copy.errCommentEditNotReopened],
+    ] as const) {
+      const queryClient = seededThread(replyIds(0, count), `r${String(count)}`);
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      const unsubscribe = comments.subscribe(() => undefined);
+      const asked = getThreads(
+        () => ({ items: [threadAnswered(all.slice(0, 50), 'c50')], nextCursor: null }),
+        ({ params }) => {
+          const from = Number(params.query.cursor.slice(1));
+          const to = Math.min(from + COMMENT_REPLIES_PAGE_SIZE, all.length);
+          return replyPage(all.slice(from, to), to < all.length ? `c${String(to)}` : null);
+        },
+      );
+      const held = [heldFor(target, reason)];
+      expect(await broughtBy(queryClient, held, () => comments.refetch())).toEqual({
+        open: [{ id: held[0]!.id, commentId: target, text: held[0]!.text }],
+        reasons: [],
+      });
+      expect(asked.filter((one) => one.startsWith('replies:'))).toHaveLength(REPLY_READ_ON_PAGES);
+      expect(repliesHeld(queryClient)).toEqual([all.slice(0, REPLIES_KEPT_ON_READ), 'c300']);
+      unsubscribe();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a 대댓글 on screen past the 300 is brought within them with no read at all when the reader deletes an earlier 대댓글 of its thread — counted as a read’s (ADR-0074 7-30 (b), asked of the owner in 결과 4)', async () => {
+    // The thread holding 301: the 301st on screen past the 300, its text held apart under it with
+    // the owner's words (3차 답 3). The reader deletes their own 11th: the answer takes it out of the
+    // pages (`withoutComment`), nothing is read, and the 301st is the 300th. The section opens its
+    // edit with the text — unless the reader has that edit open already: the box keeps what it has,
+    // the text stays, and no toast says it was restored (`useReopened`, the e2e's big thread).
+    const count = REPLIES_KEPT_ON_READ + 1;
+    const queryClient = seededThread(replyIds(0, count), `r${String(count)}`);
+    const read = vi.spyOn(api, 'GET').mockRejectedValue(new Error('nothing is read'));
+    const earlier = replyId(10);
+    vi.spyOn(api, 'POST').mockResolvedValue(answer({ id: earlier, placeholder: false }));
+    const target = replyId(REPLIES_KEPT_ON_READ);
+    const held = [heldFor(target, copy.errCommentEditNotReopened)];
+    const deleteEarlier = () =>
+      new MutationObserver(
+        queryClient,
+        deleteCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ commentId: earlier, expectedAccountId: 'user-1' });
+    expect(await broughtBy(queryClient, held, deleteEarlier)).toEqual({
+      open: [{ id: held[0]!.id, commentId: target, text: held[0]!.text }],
+      reasons: [],
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(repliesHeld(queryClient)).toEqual([
+      replyIds(0, count).filter((id) => id !== earlier),
+      `r${String(count)}`,
+    ]);
+  });
+
+  it('a 대댓글 brought that takes no edit — hidden, or another account’s — keeps its text apart, with why in the server’s words (오너 결정 2026-10-22 (2차) 답 2, (3차) 답 1)', async () => {
+    const queryClient = holding(50);
+    const [hidden, theirs, mine, hiddenSaid] = [replyId(60), replyId(70), replyId(80), replyId(90)];
     getThreads(
       () => ({ items: [], nextCursor: null }),
       (request) => {
@@ -1156,8 +1281,9 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
       // Says it already: nothing new.
       heldFor(hiddenSaid, copy.errCommentNotEditable),
     ];
-    const brought = await readMoreReplies(queryClient, POST, commentId);
-    expect(heldEditsAfterRead(queryClient, POST, commentId, brought, held, 'k7m2p9qx4z')).toEqual({
+    const before = repliesOnScreenOf(threadsNow(queryClient));
+    await readMoreReplies(queryClient, POST, commentId);
+    expect(heldEditsBrought(held, threadsNow(queryClient), before, VIEWER)).toEqual({
       open: [{ id: held[2]!.id, commentId: mine, text: `따로 둔 ${mine}` }],
       reasons: [
         { id: held[0]!.id, reason: copy.errCommentNotEditable },
@@ -1165,60 +1291,50 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
       ],
     });
     // Another account on screen: none of them opens.
-    expect(
-      heldEditsAfterRead(queryClient, POST, commentId, brought, held, 'nobody0000').open,
-    ).toEqual([]);
+    expect(heldEditsBrought(held, threadsNow(queryClient), before, 'nobody0000').open).toEqual([]);
   });
 
-  it('a press whose page lands after another read put its 대댓글 on screen brought nothing: the edit there, open perhaps with what was typed since, does not take the held text (ADR-0074 7-30)', async () => {
+  it('each 대댓글 is brought once, by the read that put it on screen: a press whose page lands after another read moved its thread on brings nothing, and the edit that read opened keeps what it has (ADR-0074 7-30)', async () => {
     // The thread at 100, a text held apart for its 141st (a read that failed). The reader presses
     // 답글 더 보기 and its page is slow; meanwhile the reader's new 대댓글 reads the thread on to the
-    // end (`readOnReplies`), the 141st on screen with it — its edit the reader may open and type in.
+    // end (`readOnReplies`), the 141st on screen with it — its edit opens with the held text there
+    // (3차 답 1), and the reader may type in it.
     const queryClient = seededThread(replyIds(0, 100), 'r100');
-    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
     const slow = onItsWay();
     let first = true;
-    const server = fullPages(200);
+    const server = fullPagesThenMine(200);
     getThreads(
       () => ({ items: [], nextCursor: null }),
       async (request) => {
         if (request.params.query.cursor === 'r100' && first) {
           first = false;
           await slow.arrived;
-          return server(request);
         }
-        const page = server(request);
-        // The new 대댓글 last, after the 200.
-        return page.nextCursor === null
-          ? { ...page, items: [...page.items, published(MINE, commentId)] }
-          : page;
+        return server(request);
       },
     );
     const target = replyId(140);
     const held = [heldFor(target, copy.errNetwork)];
-    const pressedWith = new Set(threadHeld(queryClient)?.replies.map((reply) => reply.id));
+    const pressedWith = repliesOnScreenOf(threadsNow(queryClient));
     const press = readMoreReplies(queryClient, POST, commentId);
-    await new MutationObserver(
-      queryClient,
-      createCommentOptions(queryClient, POST, () => undefined),
-    ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
-    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 200), MINE], null]);
-    slow.arrive();
-    const brought = await press;
-    // Its page went nowhere — the thread had moved on — and brought nothing; the thread as the
-    // other read left it.
-    expect([...brought]).toEqual([]);
-    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 200), MINE], null]);
-    expect(heldEditsAfterRead(queryClient, POST, commentId, brought, held, 'k7m2p9qx4z')).toEqual({
-      open: [],
+    expect(await broughtBy(queryClient, held, writeReply(queryClient))).toEqual({
+      open: [{ id: held[0]!.id, commentId: target, text: held[0]!.text }],
       reasons: [],
     });
-    // Judged against the thread as it was pressed, the 141st would count as brought — and the held
-    // text would go into an edit open with other words, and be lost.
-    expect(repliesBrought(threadHeld(queryClient), pressedWith).has(target)).toBe(true);
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 200), MINE], null]);
+    // Its page goes nowhere — the thread had moved on — and brings nothing: the 141st was the read
+    // on's, and its edit keeps what the reader typed since.
+    slow.arrive();
+    expect(await broughtBy(queryClient, held, () => press)).toEqual({ open: [], reasons: [] });
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 200), MINE], null]);
+    // Judged against the thread as it was pressed, the 141st would count again — and the held text
+    // would go into an edit open with other words, and be lost.
+    expect(heldEditsBrought(held, threadsNow(queryClient), pressedWith, VIEWER).open).toHaveLength(
+      1,
+    );
   });
 
-  it('a text held apart opens in its edit when the read on for drafts taken back brings its 대댓글 — that read is ‘답글 더 보기’ too (ADR-0074 7-30 (a))', async () => {
+  it('a text held apart opens in its edit when the read on for drafts taken back brings its 대댓글 within the 300 — any read does (오너 결정 2026-10-22 (3차) 답 1)', async () => {
     // Held apart for the 121st after an earlier set's read failed; a later set brings a draft for the
     // 221st of the same thread, and its read on passes the 121st on the way.
     const queryClient = holding(50);

@@ -18,17 +18,19 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * the first 50 and '답글 더 보기', and a 답글 written there reads the rest first and stands last;
  * an edit of a 답글 past the first 50 kept through a re-consent step comes back into its box, the
  * page reading on through that thread alone (오너 결정 2026-10-21) — and a read on that fails shows
- * the text apart with why until 답글 더 보기 reads its 답글 and opens its edit with it (오너 결정
- * 2026-10-22 (2차)), unless 답글 더 보기 pressed meanwhile let the box take it; past five unread reply
- * pages a new 답글
+ * the text apart with why until a read — 답글 더 보기, a new 답글's read on — brings its 답글 and
+ * opens its edit with it (오너 결정 2026-10-22 (2차)·(3차)), unless 답글 더 보기 pressed meanwhile let
+ * the box take it; past five unread reply pages a new 답글
  * stands last of those held until '답글 더 보기' brings it into place, and a read of the pages
  * reads a thread on five reply pages at most, the requests counted (오너 결정 2026-10-21 (2차));
  * the read on for such an edit reads no further than the 300 a read of the pages keeps, nothing at
  * all when the thread holds them already — one on the fifth page opens its box, one past them is
- * shown apart with why until 답글 더 보기 reads its 답글 and opens its edit with the text, and
- * nothing of it is left once that box is let go; no box opens past them when the read again on the
- * way back is cancelled before it lands, and a 답글 read hidden keeps the text apart with why, read
- * out — as does one deleted once its thread is read to the end (오너 결정 2026-10-22, (2차)). Leaving
+ * shown apart with why; 답글 더 보기 bringing its 답글 past them opens no box either, the text under
+ * it saying it could not be reopened, and a read of the pages bringing it within them (an earlier
+ * 답글 deleted) opens its edit with the text, nothing of it left once that box is let go; no box
+ * opens past them when the read again on the way back is cancelled before it lands (the same
+ * words under it), and a 답글 read hidden keeps the text apart with why, read out — as does one
+ * deleted once its thread is read to the end (오너 결정 2026-10-22, (2차), (3차)). Leaving
  * a new 댓글, a 답글 or an edit with text asks first (staying keeps it, an empty box asks
  * nothing); an account facing a re-consent still deletes its
  * own comment on the post page, while 답글, 수정 and 올리기 take it to the step — every box's text
@@ -846,7 +848,7 @@ test.describe('댓글·대댓글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('재동의 단계를 지나 돌아오면 처음 50개 밖의 답글에 쓰던 수정은 그 스레드의 남은 답글을 읽어 그 상자에 되살아나고, 그 읽기가 실패하면 그 글자가 읽기 실패의 까닭과 함께 따로 보이다가 답글 더 보기가 그 답글을 읽어 오면 그 수정 상자로 가며, 그사이 답글 더 보기로 상자가 먼저 가져갔으면 따로 보이지 않는다', async ({
+  test('재동의 단계를 지나 돌아오면 처음 50개 밖의 답글에 쓰던 수정은 그 스레드의 남은 답글을 읽어 그 상자에 되살아나고, 그 읽기가 실패하면 그 글자가 읽기 실패의 까닭과 함께 따로 보이다가 답글 더 보기나 새 답글의 이어 읽기가 그 답글을 읽어 오면 그 수정 상자로 가며, 그사이 답글 더 보기로 상자가 먼저 가져갔으면 따로 보이지 않는다', async ({
     admin,
     page,
   }) => {
@@ -999,10 +1001,39 @@ test.describe('댓글·대댓글', () => {
     await page.unroute(replies);
     await editForm.getByTestId('comment-submit').click();
     await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(third);
+
+    // --- a new 답글's read on brings it (오너 결정 2026-10-22 (3차) 답 1 — any read, not only 답글 더
+    // 보기): the read on for the draft fails again and the text is shown apart; the reader writes a
+    // 답글 in that thread, whose read of the thread's unread 답글 brings the 51st onto the screen — its
+    // edit opens with the text, as a draft taken back opens, and the text apart is gone.
+    const fourth = `네 번째로 고친 먼 답글 ${tag}`;
+    await editThroughStep(fourth);
+    await page.route(replies, (route) => route.abort('failed'));
+    await agreeAgain(page);
+    await expect(page).toHaveURL(postPage);
+    await expect(held).toHaveCount(1);
+    await expect(held.getByRole('alert')).toHaveText(copy.errNetwork);
+    await expect(held.getByTestId('comment-held-text')).toHaveValue(fourth);
+    await expect(editForm).toHaveCount(0);
+    await page.unroute(replies);
+    await commentOf(page, top).getByTestId('comment-reply').click();
+    const replyBox = thread.getByTestId('reply-composer');
+    await replyBox.getByTestId('comment-input').fill(`새 답글 ${tag}`);
+    await replyBox.getByTestId('comment-submit').click();
+    await expect(replyBox).toHaveCount(0);
+    await expect(more).toHaveCount(0);
+    await expect(editForm.getByTestId('comment-input')).toHaveValue(fourth);
+    await expect(editForm.getByTestId('comment-draft-restored')).toHaveText(
+      copy.commentDraftRestored,
+    );
+    await expect(held).toHaveCount(0);
+    await editForm.getByTestId('comment-submit').click();
+    await expect(editForm).toHaveCount(0);
+    await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(fourth);
     expect(asked).toEqual([]);
   });
 
-  test('답글이 많은 스레드의 이어 읽기는 다섯 페이지까지다: 새 답글은 읽은 답글 끝에 오고 답글 더 보기가 제자리로, 다시 읽기는 처음 50개와 250개까지만, 재동의 단계를 지나 되살린 수정을 찾는 읽기도 그 300개까지라(이미 쥐었으면 읽지 않고, 돌아올 때의 다시 읽기가 닿지 않아도 300개 밖의 상자는 열지 않는다) 다섯째 페이지의 답글은 그 상자가 열리고 그 밖의 것은 그 글자를 까닭과 함께 따로 보이며, 답글 더 보기가 그 답글을 읽어 오면 그 수정 상자가 그 글자로 열리고 숨긴 답글이면 그 까닭과, 지운 답글이면 스레드 끝까지 읽은 뒤 없다는 까닭과 함께 남는다', async ({
+  test('답글이 많은 스레드의 이어 읽기는 다섯 페이지까지다: 새 답글은 읽은 답글 끝에 오고 답글 더 보기가 제자리로, 다시 읽기는 처음 50개와 250개까지만, 재동의 단계를 지나 되살린 수정을 찾는 읽기도 그 300개까지라(이미 쥐었으면 읽지 않고, 돌아올 때의 다시 읽기가 닿지 않아도 300개 밖의 상자는 열지 않고 그 답글 아래 다시 열지 못했다는 까닭과 함께 둔다) 다섯째 페이지의 답글은 그 상자가 열리고 그 밖의 것은 그 글자를 까닭과 함께 따로 보이며, 답글 더 보기가 그 답글을 300개 밖으로 읽어 오면 그 아래 다시 열지 못했다는 까닭과 함께, 숨긴 답글이면 그 까닭과, 지운 답글이면 스레드 끝까지 읽은 뒤 없다는 까닭과 함께 남고, 앞선 답글이 지워져 다시 읽기가 그 답글을 300개 안으로 데려오면 그 수정 상자가 그 글자로 열리되, 그 수정 상자를 이미 열어 두었으면 앞선 제 답글을 지워 그 답글이 300개 안으로 와도 그 상자는 제 글자를 지키고 따로 보이던 글자도 남으며 되살렸다는 알림은 없다', async ({
     admin,
     page,
   }) => {
@@ -1011,7 +1042,10 @@ test.describe('댓글·대댓글', () => {
     // pages at most — the requests each makes stay bounded however large the thread; and so does
     // the read on for an edit draft taken back after a re-consent step, which never reads past the
     // 300 a read of the pages keeps (오너 결정 2026-10-22 답 5, (2차) 답 1) — and a text it shows
-    // apart opens in its edit once 답글 더 보기 reads its 답글 (오너 결정 2026-10-22 (2차) 답 2).
+    // apart opens in its edit once a read brings its 답글 within those 300, and stays apart under it
+    // with the owner's words when a read brings it past them (오너 결정 2026-10-22 (2차) 답 2, (3차)
+    // 답 1·3) — but an edit open there already keeps what it has, the text stays apart, and nothing
+    // says it was restored (ADR-0074 7-30 (f)).
     test.slow();
     const market = await createOpenMarket(admin);
     const tag = freshTag();
@@ -1020,8 +1054,8 @@ test.describe('댓글·대댓글', () => {
     const top = await commentThroughApi(admin, postId, null, `답글 아주 많은 댓글 ${tag}`);
     // 50 shown, 250 the five pages read, and 60 more past them; written ten at a time (their order
     // within ten is the server's, which this test does not read) — but the 300th, the last of the
-    // fifth page read on, is the reader's own, written on its own between the 299 before it and
-    // the 60 after.
+    // fifth page read on, the 301st, the first past it, and the 302nd are the reader's own, written
+    // on their own between the 299 before them and the 58 after.
     const total = 50 + 250 + 60;
     const fifthPageLast = 50 + 250;
     const replies = async (from: number, to: number) => {
@@ -1040,7 +1074,15 @@ test.describe('댓글·대댓글', () => {
       top,
       `내 ${String(fifthPageLast)}번째 답글 ${tag}`,
     );
-    await replies(fifthPageLast + 1, total);
+    const justPastBody = `내 ${String(fifthPageLast + 1)}번째 답글 ${tag}`;
+    const justPast = await commentThroughApi(page.request, postId, top, justPastBody);
+    const nextPast = await commentThroughApi(
+      page.request,
+      postId,
+      top,
+      `내 ${String(fifthPageLast + 2)}번째 답글 ${tag}`,
+    );
+    await replies(fifthPageLast + 3, total);
     const replyRequests: string[] = [];
     page.on('request', (request) => {
       if (new URL(request.url()).pathname === `/api/v1/comments/${top}/replies`) {
@@ -1180,22 +1222,33 @@ test.describe('댓글·대댓글', () => {
     await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 500)));
     expect(replyRequests).toHaveLength(5);
     await expect(held).toHaveCount(1);
-    // 답글 더 보기 to its 답글: its edit opens with the text, as a draft taken back opens — '쓰던
-    // 내용을 되살렸습니다.' under it — and the text apart is gone (오너 결정 2026-10-22 (2차) 답 2).
+    // 답글 더 보기 to its 답글 — past the 300: no box opens there, for the next read of the pages
+    // would take it away again; the text moves under it with the owner's words, read out as new
+    // (오너 결정 2026-10-22 (3차) 답 1·3 — under (2차) 답 2 that box opened, and went with the next
+    // read of the pages).
+    const heldUnderMine = thread
+      .getByTestId('comment-replies')
+      .getByRole('listitem')
+      .filter({ has: commentOf(page, mine) })
+      .getByTestId('comment-held');
     await more.click();
     await expect(shown).toHaveCount(350);
     await expect(held).toHaveCount(1);
     await expect(editForm).toHaveCount(0);
     await more.click();
     await expect(more).toHaveCount(0);
-    await expect(editForm.getByTestId('comment-input')).toHaveValue(text);
-    await expect(editForm.getByTestId('comment-draft-restored')).toHaveText(
-      copy.commentDraftRestored,
-    );
-    await expect(held).toHaveCount(0);
+    await expect(heldUnderMine).toHaveCount(1);
+    await expect(heldUnderMine.getByRole('alert')).toHaveText(copy.errCommentEditNotReopened);
+    await expect(heldUnderMine.getByTestId('comment-held-text')).toHaveValue(text);
+    await expect(editForm).toHaveCount(0);
+    // The reader opens the edit and puts the text in; the text apart, closed, is gone.
+    await commentOf(page, mine).getByTestId('comment-edit').click();
+    await editForm.getByTestId('comment-input').fill(text);
     await editForm.getByTestId('comment-submit').click();
     await expect(editForm).toHaveCount(0);
     await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(text);
+    await heldUnderMine.getByTestId('comment-held-close').click();
+    await expect(held).toHaveCount(0);
 
     // Again, this time without starting afresh: the thread held all 361 in this tab, and the read
     // again on the way back brings it to its first 50 and 250 more — 300 already, so the read on for
@@ -1218,19 +1271,18 @@ test.describe('댓글·대댓글', () => {
     await expect(shown).toHaveCount(300);
     await expect(editForm).toHaveCount(0);
     expect(await commentDraftsInTab(page)).toEqual({});
-    // 답글 더 보기 to its 답글 opens its edit with the text; 취소 asks first, as for any restored
-    // box, and 버리기 leaves nothing — no text, and leaving asks nothing.
+    // 답글 더 보기 to its 답글, past the 300 again: under it, with the owner's words, no box (3차
+    // 답 1·3). Closed, nothing of it is left.
     await more.click();
     await expect(shown).toHaveCount(350);
     await more.click();
     await expect(more).toHaveCount(0);
-    await expect(editForm.getByTestId('comment-input')).toHaveValue(again);
-    await expect(held).toHaveCount(0);
-    await editForm.getByTestId('comment-cancel').click();
-    await page.getByTestId('comment-discard-confirm').click();
+    await expect(heldUnderMine.getByRole('alert')).toHaveText(copy.errCommentEditNotReopened);
+    await expect(heldUnderMine.getByTestId('comment-held-text')).toHaveValue(again);
     await expect(editForm).toHaveCount(0);
-    await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(text);
+    await heldUnderMine.getByTestId('comment-held-close').click();
     await expect(held).toHaveCount(0);
+    await expect(commentOf(page, mine).getByTestId('comment-body')).toHaveText(text);
     expect(asked).toEqual([]);
 
     // Once more without starting afresh — the thread at 361 in this tab — but the read again on the
@@ -1238,7 +1290,8 @@ test.describe('댓글·대댓글', () => {
     // pages as the step left them all the same, and the 361st's edit does not open there, past the
     // 300 the next read that lands keeps; its text is shown apart under it with the owner's words
     // (오너 결정 2026-10-22 (2차) 답 1, ADR-0074 7-28 — before, that box opened, and the next read of
-    // the pages took it away again, its text apart).
+    // the pages took it away again, its text apart) — '고치던 답글을 다시 열지 못했습니다. 쓰던 내용을
+    // 여기 남겨 둡니다.' (3차 답 3: the 답글 is on screen, so '…아직 불러오지 않은 답글' would not hold).
     const third = `세 번째로 고친 아주 먼 답글 ${tag}`;
     await editThroughStep(mine, third, { reload: false });
     let releasePageReads!: () => void;
@@ -1269,13 +1322,8 @@ test.describe('댓글·대댓글', () => {
     await ownReplyBox.getByTestId('comment-input').fill(`내 댓글의 답글 ${tag}`);
     await ownReplyBox.getByTestId('comment-submit').click();
     await expect(ownReplyBox).toHaveCount(0);
-    const heldUnderMine = thread
-      .getByTestId('comment-replies')
-      .getByRole('listitem')
-      .filter({ has: commentOf(page, mine) })
-      .getByTestId('comment-held');
     await expect(heldUnderMine).toHaveCount(1);
-    await expect(heldUnderMine.getByRole('alert')).toHaveText(copy.errCommentEditNotRead);
+    await expect(heldUnderMine.getByRole('alert')).toHaveText(copy.errCommentEditNotReopened);
     await expect(heldUnderMine.getByTestId('comment-held-text')).toHaveValue(third);
     await expect(editForm).toHaveCount(0);
     await expect(shown).toHaveCount(total + 1);
@@ -1294,7 +1342,9 @@ test.describe('댓글·대댓글', () => {
     await expect(shown).toHaveCount(300);
     await expect(heldUnderMine).toHaveCount(0);
     await expect(held).toHaveCount(1);
-    await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.errCommentEditNotRead);
+    await expect(held.getByTestId('comment-held-reason')).toHaveText(
+      copy.errCommentEditNotReopened,
+    );
     await more.click();
     await expect(shown).toHaveCount(350);
     const repliesOfTop = (url: URL) => url.pathname === `/api/v1/comments/${top}/replies`;
@@ -1351,6 +1401,117 @@ test.describe('댓글·대댓글', () => {
     await expect(held).toHaveCount(0);
     await home.click();
     await expect(page).toHaveURL('/');
+    expect(asked).toHaveLength(1);
+
+    // A read of the pages brings a held edit's 답글 within the 300 (오너 결정 2026-10-22 (3차) 답 1):
+    // the reader's 301st, opened by 답글 더 보기 past the 300 and edited — the next read of the
+    // pages (a new 댓글's) takes the thread back to its 300 and the box with it, its text shown
+    // apart at the thread's end as one not among those read (7-30). An earlier 답글 deleted
+    // meanwhile, the next read of the pages — another new 댓글's, no 답글 더 보기 — ends with the
+    // 301st as the 300th: its edit opens with the text, as a draft taken back opens, and the text
+    // apart is gone. 취소 asks first, as for any restored box, and 버리기 leaves nothing. (No
+    // re-consent step here: the consent bucket counts five answers a minute an account
+    // (`RATE_LIMIT_BUCKETS.consent`), and a step here, after this test's four, was refused 429.)
+    await page.goto(postPage);
+    for (let count = 100; count <= 350; count += 50) {
+      await more.click();
+      await expect(shown).toHaveCount(count);
+    }
+    const pastForm = commentOf(page, justPast).getByTestId('comment-edit-form');
+    const pastText = `고친 301번째 답글 ${tag}`;
+    await commentOf(page, justPast).getByTestId('comment-edit').click();
+    await pastForm.getByTestId('comment-input').fill(pastText);
+    await box.getByTestId('comment-input').fill(`넷째 새 댓글 ${tag}`);
+    await box.getByTestId('comment-submit').click();
+    await expect(page.getByTestId('comments-list').getByText(`넷째 새 댓글 ${tag}`)).toBeVisible();
+    await expect(shown).toHaveCount(300);
+    await expect(pastForm).toHaveCount(0);
+    await expect(commentOf(page, justPast)).toHaveCount(0);
+    await expect(held).toHaveCount(1);
+    await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.errCommentEditNotRead);
+    await expect(held.getByTestId('comment-held-text')).toHaveValue(pastText);
+    const firstReply = await idOf(shown.first());
+    const adminMe = await meOf(admin);
+    const removed = await admin.post(`/api/v1/comments/${firstReply}/delete`, {
+      data: { expectedAccountId: adminMe.id },
+    });
+    expect(removed.status(), await removed.text()).toBe(200);
+    await box.getByTestId('comment-input').fill(`다섯째 새 댓글 ${tag}`);
+    await box.getByTestId('comment-submit').click();
+    await expect(
+      page.getByTestId('comments-list').getByText(`다섯째 새 댓글 ${tag}`),
+    ).toBeVisible();
+    await expect(commentOf(page, firstReply)).toHaveCount(0);
+    await expect(shown).toHaveCount(300);
+    await expect(pastForm.getByTestId('comment-input')).toHaveValue(pastText);
+    await expect(pastForm.getByTestId('comment-draft-restored')).toHaveText(
+      copy.commentDraftRestored,
+    );
+    await expect(held).toHaveCount(0);
+    await pastForm.getByTestId('comment-cancel').click();
+    await page.getByTestId('comment-discard-confirm').click();
+    await expect(pastForm).toHaveCount(0);
+    await expect(commentOf(page, justPast).getByTestId('comment-body')).toHaveText(justPastBody);
+    await expect(held).toHaveCount(0);
+
+    // The reader's 302nd, now the first past the 300, the same way — but its edit open when it moves
+    // within them. Opened by 답글 더 보기 and edited, the next read of the pages (a new 댓글's) takes
+    // the box away and its text apart to the thread's end; 답글 더 보기 brings it back past the 300,
+    // the text under it with the owner's words; the reader opens its 수정 — as that text invites —
+    // and types in it. The reader then deletes their own 301st, earlier in the thread: nothing is
+    // read (`withoutComment`), and the 302nd is the 300th. Its edit keeps what the reader typed, the
+    // text apart stays under it, and nothing says it was restored (ADR-0074 7-30 (f) — the toast
+    // '쓰던 내용을 되살렸습니다.' said so before, the box keeping its own).
+    await more.click();
+    await expect(shown).toHaveCount(350);
+    const nextForm = commentOf(page, nextPast).getByTestId('comment-edit-form');
+    const nextText = `고친 ${String(fifthPageLast + 2)}번째 답글 ${tag}`;
+    await commentOf(page, nextPast).getByTestId('comment-edit').click();
+    await nextForm.getByTestId('comment-input').fill(nextText);
+    await box.getByTestId('comment-input').fill(`여섯째 새 댓글 ${tag}`);
+    await box.getByTestId('comment-submit').click();
+    await expect(
+      page.getByTestId('comments-list').getByText(`여섯째 새 댓글 ${tag}`),
+    ).toBeVisible();
+    await expect(shown).toHaveCount(300);
+    await expect(nextForm).toHaveCount(0);
+    await expect(held).toHaveCount(1);
+    await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.errCommentEditNotRead);
+    const heldUnderNext = thread
+      .getByTestId('comment-replies')
+      .getByRole('listitem')
+      .filter({ has: commentOf(page, nextPast) })
+      .getByTestId('comment-held');
+    await more.click();
+    await expect(shown).toHaveCount(350);
+    await expect(heldUnderNext.getByRole('alert')).toHaveText(copy.errCommentEditNotReopened);
+    await expect(heldUnderNext.getByTestId('comment-held-text')).toHaveValue(nextText);
+    await expect(nextForm).toHaveCount(0);
+    const typed = `손으로 ${nextText}`;
+    await commentOf(page, nextPast).getByTestId('comment-edit').click();
+    await nextForm.getByTestId('comment-input').fill(typed);
+    // The toast of the box restored above goes first (the pointer off the toaster, which holds its
+    // toasts while hovered), so none is left to be mistaken for one this deletion raises.
+    await page.mouse.move(0, 0);
+    await expect(restoredToasts(page)).toHaveCount(0, { timeout: 15_000 });
+    await commentOf(page, justPast).getByTestId('comment-delete').click();
+    await page.getByTestId('comment-delete-confirm').click();
+    await expect(commentOf(page, justPast)).toHaveCount(0);
+    await expect(shown).toHaveCount(349);
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 500)));
+    // Counted once, not waited for: a toast raised would still be there, and a wait could see it go.
+    expect(await restoredToasts(page).count()).toBe(0);
+    await expect(nextForm.getByTestId('comment-input')).toHaveValue(typed);
+    await expect(nextForm.getByTestId('comment-draft-restored')).toHaveCount(0);
+    await expect(heldUnderNext).toHaveCount(1);
+    await expect(heldUnderNext.getByTestId('comment-held-text')).toHaveValue(nextText);
+    // 취소 asks (the text changed); 버리기 closes the box, and the text apart stays until closed.
+    await nextForm.getByTestId('comment-cancel').click();
+    await page.getByTestId('comment-discard-confirm').click();
+    await expect(nextForm).toHaveCount(0);
+    await expect(heldUnderNext).toHaveCount(1);
+    await heldUnderNext.getByTestId('comment-held-close').click();
+    await expect(held).toHaveCount(0);
     expect(asked).toHaveLength(1);
   });
 

@@ -43,7 +43,7 @@ export function useHeldCommentTexts(
   going: CommentBoxGoing;
   hold: (accountId: string, texts: readonly Omit<HeldText, 'focus' | 'shown'>[]) => void;
   dismiss: (id: string) => void;
-  /** The held text `id` says `reason` now: why its edit, read by '답글 더 보기', cannot open. */
+  /** The held text `id` says `reason` now: why its edit, brought onto the screen, cannot open. */
   reason: (id: string, reason: string) => void;
 } {
   const [state, dispatch] = useReducer(heldTextsAfter, accountId, initialHeldTexts);
@@ -100,7 +100,7 @@ export function useHeldCommentTexts(
   // is drawn somewhere (`placeHeldTexts` leaves none out) — but for an edit's text on its way into
   // its edit's box, which the section leaves out while its 대댓글 is on screen (`drawn` in
   // comments-section.tsx) for the commit or two until that box has it: it was drawn, and marked so,
-  // before '답글 더 보기' brought its 대댓글, and it is closed once the box has it — or drawn again
+  // before a read brought its 대댓글, and it is closed once the box has it — or drawn again
   // as it was, should the box not take it.
   useEffect(() => {
     const fresh = held.filter((text) => !text.shown).map((text) => text.id);
@@ -126,10 +126,10 @@ export function useHeldCommentTexts(
  * once a read brings it, back to its thread's end once a read again leaves it out
  * (`placeHeldTexts`) — it is drawn anew in its new place, and then (`held.shown`) its reason is
  * neither read out again nor does it take the focus: nothing new happened to it. An edit's text
- * whose 대댓글 '답글 더 보기' reads opens in that edit instead, or stays here with a new reason —
- * read out then, as new, whether it moved or not (오너 결정 2026-10-22 (2차) 답 2,
- * comments-section.tsx): the reason is drawn anew, in an alert inserted with it, rather than left to
- * a remount that happens to come with the same render.
+ * whose 대댓글 a read brings onto the screen opens in that edit instead, or stays here with a new
+ * reason — read out then, as new, whether it moved or not (오너 결정 2026-10-22 (2차) 답 2·(3차)
+ * 답 1·3, comments-section.tsx): the reason is drawn anew, in an alert inserted with it, rather than
+ * left to a remount that happens to come with the same render.
  */
 export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);

@@ -157,8 +157,9 @@ export const REPLY_READ_ON_PAGES = 5;
  * The 대댓글 a read of the comment pages keeps of a thread at most (`threadReadsOn`): the first page's
  * (COMMENT_REPLIES_PAGE_SIZE, 50) and REPLY_READ_ON_PAGES pages after them (250) — 300. The read on
  * for an edit draft taken back after an onboarding step never reads past them (오너 결정 2026-10-22
- * (2차) 답 1, `editDraftsReadOn`): a box it opened past them would go with the next read of the
- * pages (ADR-0074 7-30).
+ * (2차) 답 1, `editDraftsReadOn`), and an edit's text held apart opens in its edit only for a 대댓글
+ * a read brought within them (2026-10-22 (3차) 답 1, `heldEditsBrought`): a box opened past them
+ * would go with the next read of the pages (ADR-0074 7-30).
  */
 export const REPLIES_KEPT_ON_READ = COMMENT_REPLIES_PAGE_SIZE * (1 + REPLY_READ_ON_PAGES);
 
@@ -535,9 +536,9 @@ function push<T>(map: Map<string, T[]>, key: string, value: T) {
  * Each held text where its box stood, as far as the threads on screen still have that place: an
  * edit under its comment (a placeholder now, perhaps), else at the end of its thread; a reply at
  * the end of its thread; and anything whose place is gone — a thread that left the view, the new
- * 댓글's — under the threads, in the order they were held. (An edit's text whose 대댓글 '답글 더
- * 보기' just read opens that edit instead, when it can — `heldEditsReadIn`: the section leaves it
- * out of what it hands here until the box has it.)
+ * 댓글's — under the threads, in the order they were held. (An edit's text whose 대댓글 a read just
+ * brought within the 300 a read of the pages keeps opens that edit instead, when it can —
+ * `heldEditsBrought`: the section leaves it out of what it hands here until the box has it.)
  */
 export function placeHeldTexts(
   threads: readonly CommentThread[],
@@ -646,63 +647,93 @@ export function goneBoxReason(
   }
 }
 
-/** What reply pages read into a thread do to the edit texts held apart for the 대댓글 they brought. */
-export interface HeldEditsReadIn {
+/**
+ * The 대댓글 the threads on screen hold, by id, each with whether it stands within what a read of the
+ * comment pages keeps of its thread (REPLIES_KEPT_ON_READ: its first 300 as held) — what the
+ * comment section compares from one render to the next to tell what a read brought
+ * (`heldEditsBrought`).
+ */
+export type RepliesOnScreen = ReadonlyMap<string, boolean>;
+
+/** Where each 대댓글 of `threads` stands (`RepliesOnScreen`). */
+export function repliesOnScreenOf(threads: readonly CommentThread[]): RepliesOnScreen {
+  const onScreen = new Map<string, boolean>();
+  for (const thread of threads) {
+    thread.replies.forEach((reply, index) => onScreen.set(reply.id, index < REPLIES_KEPT_ON_READ));
+  }
+  return onScreen;
+}
+
+/** What a read that brought 대댓글 onto the screen does to the edit texts held apart for them. */
+export interface HeldEditsBrought {
   /** Held texts whose 대댓글's edit opens with them (the held text then goes), by held text. */
   open: { id: string; commentId: string; text: string }[];
-  /** Held texts that stay apart, with why their 대댓글, read now, takes no edit. */
+  /** Held texts that stay apart, with why their 대댓글, on screen now, takes no edit from them. */
   reasons: { id: string; reason: string }[];
 }
 
 /**
- * The held texts of edits (`place.kind` 'comment') whose 대댓글 the reply page just read brought
- * into `thread` (`brought`: what that page's write added to it — `readMoreReplies`) — '답글 더 보기'
- * pressed by the reader (오너 결정 2026-10-22 (2차) 답 2), or pressed for the writer by the read on
- * for drafts taken back (that one is this PR's choice, ADR-0074 7-30 (a): it is a '답글 더 보기'
- * read too): a text held apart because its 대댓글 was not among those read
- * (`copy.errCommentEditNotRead` — past the 300 a read of the pages keeps, or not found within them —
- * or a read that failed) opens that 대댓글's edit with it when the edit can open: the 대댓글
- * published and the viewer's own (`viewerPublicId`, the account on screen — the held texts are only
- * ever its, lib/held-comment-texts.ts) — its box shown and said as a draft taken back is (the
- * section's `copy.commentDraftRestored`), the held text gone once the box has it. Otherwise it stays
- * apart with why that edit cannot open, in the words the server would refuse it in — hidden,
- * another account's — when they are not what it says already (the 대댓글 being read now, '아직
- * 불러오지 않은 답글' no longer holds). A text whose 대댓글 was on screen before the read, or is not
- * now, or whose place is not an edit, is nothing to these pages.
+ * The held texts of edits of a 대댓글 (`place.kind` 'comment') that a read just brought onto the
+ * screen — the threads as they stand now (`threads`) against where they stood before the read
+ * (`before`, `repliesOnScreenOf`): on screen now and not before, or within the 300 a read of the
+ * pages keeps now and past them before (earlier 대댓글 deleted meanwhile). Any read: '답글 더 보기'
+ * pressed by the reader, a new 대댓글's read on through its thread (`readOnReplies`), a read of the
+ * comment pages (`threadsReadOn`), the read on for drafts taken back (`editDraftsReadOn`) — 오너 결정
+ * 2026-10-22 (3차) 답 1, which made every read do what (2차) 답 2 had '답글 더 보기' do — and no read
+ * at all for one moved within the 300: the reader's own 삭제 of an earlier 대댓글 (`withoutComment`,
+ * asked of the owner in ADR-0074 결과 4).
+ *
+ * A text held apart — its 대댓글 not among those read (`copy.errCommentEditNotRead`), a read that
+ * failed, a refusal whose box went with its 대댓글 — opens that 대댓글's edit with it when the edit
+ * can open there: the 대댓글 within the 300 (a box past them would go with the next read of the
+ * pages, ADR-0074 7-30), published, and the viewer's own (`viewerPublicId`, the account on screen —
+ * the held texts are only ever its, lib/held-comment-texts.ts). Its box is shown and said as a
+ * draft taken back is (the section's `copy.commentDraftRestored`), the held text gone once the box
+ * has it — and said only then: an edit open already keeps its own text, the held text stays, and
+ * nothing is said (the section's `useReopened`, ADR-0074 7-30 (f)). Otherwise it stays apart, under
+ * that 대댓글 now, with why, when that is not what it says
+ * already: hidden or another account's, in the words the server would refuse it in; the viewer's
+ * own past the 300, '고치던 답글을 다시 열지 못했습니다. 쓰던 내용을 여기 남겨 둡니다.'
+ * (`copy.errCommentEditNotReopened`, 3차 답 3's words for a 대댓글 on screen past them) — '아직
+ * 불러오지 않은 답글' no longer holds once it is read. A text whose 대댓글 was where it is before
+ * the read, or is not on screen now, or whose place is a 댓글's edit or no edit, is nothing to it.
  */
-export function heldEditsReadIn(
+export function heldEditsBrought(
   held: readonly HeldText[],
-  thread: CommentThread | undefined,
-  brought: ReadonlySet<string>,
+  threads: readonly CommentThread[],
+  before: RepliesOnScreen,
   viewerPublicId: string | undefined,
-): HeldEditsReadIn {
-  const open: HeldEditsReadIn['open'] = [];
-  const reasons: HeldEditsReadIn['reasons'] = [];
+): HeldEditsBrought {
+  const open: HeldEditsBrought['open'] = [];
+  const reasons: HeldEditsBrought['reasons'] = [];
   // No account on screen holds no text.
-  if (thread === undefined || viewerPublicId === undefined) return { open, reasons };
+  if (viewerPublicId === undefined) return { open, reasons };
+  const onScreen = new Map<string, { reply: PostComment; kept: boolean }>();
+  for (const thread of threads) {
+    thread.replies.forEach((reply, index) =>
+      onScreen.set(reply.id, { reply, kept: index < REPLIES_KEPT_ON_READ }),
+    );
+  }
   for (const text of held) {
     const { place } = text;
-    if (place.kind !== 'comment' || !brought.has(place.commentId)) continue;
-    const reply = thread.replies.find((one) => one.id === place.commentId);
-    if (reply === undefined) continue;
-    if (reply.state === 'published' && isOwnPost(reply.author, viewerPublicId)) {
+    if (place.kind !== 'comment') continue;
+    const now = onScreen.get(place.commentId);
+    if (now === undefined) continue;
+    const was = before.get(place.commentId);
+    // Where it was: within the 300 then, or on screen at all for one past them now.
+    if (now.kept ? was === true : was !== undefined) continue;
+    const { reply } = now;
+    const editable = reply.state === 'published' && isOwnPost(reply.author, viewerPublicId);
+    if (editable && now.kept) {
       open.push({ id: text.id, commentId: reply.id, text: text.text });
       continue;
     }
-    const reason = editRefusalOf(reply.state) ?? copy.errCommentNotYours;
+    const reason = editable
+      ? copy.errCommentEditNotReopened
+      : (editRefusalOf(reply.state) ?? copy.errCommentNotYours);
     if (reason !== text.reason) reasons.push({ id: text.id, reason });
   }
   return { open, reasons };
-}
-
-/** The 대댓글 ids `thread` holds that `before` did not: what the pages read into it brought. */
-export function repliesBrought(
-  thread: CommentThread | undefined,
-  before: ReadonlySet<string>,
-): ReadonlySet<string> {
-  return new Set(
-    (thread?.replies ?? []).filter((reply) => !before.has(reply.id)).map((reply) => reply.id),
-  );
 }
 
 /** The thread of the 댓글 `threadId` among the pages, if they hold it. */
@@ -714,32 +745,11 @@ export function threadOf(
 }
 
 /**
- * What a reply page written into the pages (`held` before, `next` after) brought into the thread
- * `threadId`: the 대댓글 it holds now and did not before — nothing when the page went nowhere
- * (`withMoreReplies`: the thread read again meanwhile, or gone). Judged as the page is written, not
- * as it was asked for: a 대댓글 another read put on screen while the page was on its way — a new
- * 대댓글's read on (`readOnReplies`), the read on for drafts taken back, a read of the pages — moved
- * the thread's cursor on, so the page goes nowhere and brings nothing; that 대댓글 was not its to
- * bring, and its edit may be open already with what the writer typed since (ADR-0074 7-30).
- */
-export function repliesWritten(
-  held: CommentPages | undefined,
-  next: CommentPages | undefined,
-  threadId: string,
-): ReadonlySet<string> {
-  const before = threadOf(held, threadId);
-  return repliesBrought(
-    threadOf(next, threadId),
-    new Set(before?.replies.map((reply) => reply.id)),
-  );
-}
-
-/**
  * The held texts of edits of a 대댓글 (`place.kind` 'comment', not its 댓글) whose thread is on
  * screen and read to its end without it — no cursor left, the 대댓글 not among its 대댓글 — and that
  * do not say so yet, each with what it says now: '없거나 삭제된 댓글입니다.' (`copy.errCommentGone`).
  * A deleted 대댓글 is in no page (the API leaves it out), so no read ever brings it for
- * `heldEditsReadIn` to say why: without this, a text held apart with '…지워졌거나 아직 불러오지 않은
+ * `heldEditsBrought` to say why: without this, a text held apart with '…지워졌거나 아직 불러오지 않은
  * 답글입니다.' or a read's failure kept saying it once nothing was left to read — and the right reason
  * is the one a box gone from such a thread says (`goneBoxReason`) and a draft taken back for it is
  * shown with (`resolveCommentDrafts`, ADR-0074 7-30; 오너 결정 2026-10-22 (2차) 답 2: «맞는 까닭»).
@@ -908,14 +918,17 @@ export function editDraftsReadOn(
  * 보기') and is gone once they are all read — or shown apart with the read's failure, should that
  * read fail (`waitingEdits`, `draftsHeldOnReadFailure`, 오너 결정 2026-10-21 (2차) 답 2), or with
  * `copy.errCommentEditNotRead` once the thread holds the 300 대댓글 a read of the pages keeps
- * without it (`editDraftsReadOn`, 오너 결정 2026-10-22 답 5 and (2차) 답 1). An edit of a 대댓글
- * held past those 300 opens no box either: it is shown apart with the same words, as one not found
- * within them (2차 답 1: no edit box opens past 300 from this). The page places the drafts once the
- * read again on the way back is over, which takes such a thread back to 300 — but that read can
- * end without landing (cancelled by a write or another '답글 더 보기', failed, offline), the pages
- * as the step left them, and a box opened there would go with the next read that lands
- * (ADR-0074 7-28·7-30). A post out of every view (`gone`) takes none: each is shown apart with
- * '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
+ * without it (`editDraftsReadOn`, 오너 결정 2026-10-22 답 5 and (2차) 답 1). An edit of the
+ * viewer's own published 대댓글 held past those 300 opens no box either (2차 답 1: no edit box opens
+ * past 300 from this): it is shown apart, under that 대댓글, with
+ * '고치던 답글을 다시 열지 못했습니다. 쓰던 내용을 여기 남겨 둡니다.' (오너 결정 2026-10-22 (3차)
+ * 답 3, `copy.errCommentEditNotReopened`) — a hidden one or another account's with why, as anywhere.
+ * The page places the drafts once the read again on the way back is over, which takes such a
+ * thread back to 300 — but that read can end without landing (cancelled by a write or another
+ * '답글 더 보기', failed, offline), the pages as the step left them, and a box opened there would go
+ * with the next read that lands (ADR-0074 7-28·7-30); a read that later brings it within the 300
+ * opens it (3차 답 1, `heldEditsBrought`). A post out of every view (`gone`) takes none: each is
+ * shown apart with '없거나 삭제된 글입니다.' (오너 결정 2026-10-21 답 1).
  */
 export function resolveCommentDrafts(
   drafts: CommentDrafts,
@@ -1009,11 +1022,7 @@ export function resolveCommentDrafts(
         ? undefined
         : [thread.comment, ...thread.replies].find((held) => held.id === commentId);
     const home = threads.find((held) => held.comment.id === keptIn);
-    if (thread !== undefined && keptPast(thread, commentId)) {
-      // Held past the 300 a read of the pages keeps — a read again on the way back that did not
-      // land: as one not found within them, whatever the cache still shows.
-      unplaced.push({ key, text, reason: copy.errCommentEditNotRead, place });
-    } else if (found === undefined && home !== undefined && home.repliesNextCursor !== null) {
+    if (found === undefined && home !== undefined && home.repliesNextCursor !== null) {
       // Among its thread's 대댓글 still unread, perhaps: read on through them.
       waitingThreads.push(keptIn);
       waitingEdits.push({ key, text, place });
@@ -1030,6 +1039,11 @@ export function resolveCommentDrafts(
       });
     } else if (!isOwnPost(found.author, viewerPublicId)) {
       unplaced.push({ key, text, reason: copy.errCommentNotYours, place });
+    } else if (thread !== undefined && keptPast(thread, commentId)) {
+      // On screen past the 300 a read of the pages keeps — a read again on the way back that did
+      // not land: no box opens there, and the text stays under it with the owner's words for that
+      // (오너 결정 2026-10-22 (3차) 답 3) until a read brings it within them (3차 답 1).
+      unplaced.push({ key, text, reason: copy.errCommentEditNotReopened, place });
     } else {
       edits.set(commentId, text);
     }

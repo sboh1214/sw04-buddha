@@ -22,16 +22,12 @@ import {
   REPLY_READ_ON_PAGES,
   type CommentPage,
   type CommentPages,
-  type HeldEditsReadIn,
-  type HeldText,
   type ReplyPage,
   commentPageQuery,
   commentThreadsOf,
-  heldEditsReadIn,
   isCursorRefusal,
   isStaleThreadRefusal,
   postCommentsKey,
-  repliesWritten,
   threadOf,
   threadReadsOn,
   threadWithReplies,
@@ -201,24 +197,17 @@ async function readThreadsAgain(queryClient: QueryClient, postId: string) {
  * read again from the first — fresh cursors, the thread read on as far as it was — and the next
  * page then read once from the thread's fresh cursor; should that read again not bring one, the
  * refusal is thrown, and the next press reads again. Throws when the read fails otherwise, for the
- * button to say so and be pressed again.
- *
- * Resolves with the 대댓글 its page brought into the thread as it was written (`repliesWritten`):
- * nothing when it went nowhere — the thread read again meanwhile, by a new 대댓글's read on or
- * another read — or nothing was read. What its caller opens on them (a held edit text,
- * `heldEditsAfterRead`) is for those alone: a 대댓글 another read put on screen while this one was
- * on its way may have its edit open already (ADR-0074 7-30).
+ * button to say so and be pressed again. What the 대댓글 it brings do to the edit texts held apart
+ * for them is the comment section's, as for every read that brings 대댓글 onto the screen
+ * (`heldEditsBrought`, 오너 결정 2026-10-22 (3차) 답 1).
  */
 export async function readMoreReplies(
   queryClient: QueryClient,
   postId: string,
   threadId: string,
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   return readMoreRepliesOnce(queryClient, postId.toLowerCase(), threadId, false);
 }
-
-/** Nothing brought: no page written. */
-const NOTHING_BROUGHT: ReadonlySet<string> = new Set();
 
 /** The cursor of the thread `threadId` as the pages of `postId` hold it; null: nothing more. */
 function heldRepliesCursor(queryClient: QueryClient, postId: string, threadId: string) {
@@ -234,16 +223,16 @@ async function readMoreRepliesOnce(
   postId: string,
   threadId: string,
   readAgain: boolean,
-): Promise<ReadonlySet<string>> {
+): Promise<void> {
   const from = heldRepliesCursor(queryClient, postId, threadId);
-  if (from === null) return NOTHING_BROUGHT;
+  if (from === null) return;
   let page: ReplyPage;
   try {
     page = await fetchReplyPage(threadId, from);
   } catch (error) {
     if (isApiError(error, 'NOT_FOUND')) {
       await readThreadsAgain(queryClient, postId);
-      return NOTHING_BROUGHT;
+      return;
     }
     if (!isCursorRefusal(error) || readAgain) throw error;
     await queryClient.invalidateQueries({ queryKey: postCommentsKey(postId), exact: true });
@@ -251,36 +240,7 @@ async function readMoreRepliesOnce(
     if (heldRepliesCursor(queryClient, postId, threadId) === from) throw error;
     return readMoreRepliesOnce(queryClient, postId, threadId, true);
   }
-  let brought = NOTHING_BROUGHT;
-  await writePages(queryClient, postId, (held) => {
-    const next = withMoreReplies(held, threadId, from, page);
-    brought = repliesWritten(held, next, threadId);
-    return next;
-  });
-  return brought;
-}
-
-/**
- * What a '답글 더 보기' read of the thread `threadId` that brought the 대댓글 `brought`
- * (`readMoreReplies`) does to the edit texts held apart for them (`heldEditsReadIn`), the thread as
- * the pages of `postId` hold it now: the edits that open with their held text, and the held texts
- * that stay with a new reason (오너 결정 2026-10-22 (2차) 답 2). The comment section does what it
- * says — opens those edits, says those reasons — for the reader's own press and for the read on for
- * drafts taken back alike (components/post/comments-section.tsx).
- */
-export function heldEditsAfterRead(
-  queryClient: QueryClient,
-  postId: string,
-  threadId: string,
-  brought: ReadonlySet<string>,
-  held: readonly HeldText[],
-  viewerPublicId: string | undefined,
-): HeldEditsReadIn {
-  const thread = threadOf(
-    queryClient.getQueryData<CommentPages>(postCommentsKey(postId.toLowerCase())),
-    threadId,
-  );
-  return heldEditsReadIn(held, thread, brought, viewerPublicId);
+  await writePages(queryClient, postId, (held) => withMoreReplies(held, threadId, from, page));
 }
 
 /**
@@ -305,10 +265,7 @@ export async function readMoreComments(comments: CommentListReads): Promise<void
   if (!(await comments.refetch()).isError) await comments.fetchNextPage();
 }
 
-/**
- * '답글 더 보기' of one thread: pressed, pending and failed as a mutation — its data the 대댓글 the
- * press brought (`readMoreReplies`).
- */
+/** '답글 더 보기' of one thread: pressed, pending and failed as a mutation. */
 export function useMoreReplies(postId: string, threadId: string) {
   const queryClient = useQueryClient();
   return useMutation({ mutationFn: () => readMoreReplies(queryClient, postId, threadId) });

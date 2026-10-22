@@ -28,11 +28,12 @@ import { type HeldText, type HeldTextPlace } from './comments';
  * drew them), so a later mount of one — its place moved between its comment and its thread's end as
  * the threads read again hold that comment or not (`placeHeldTexts`) — neither reads its reason out
  * again nor takes the focus (ADR-0074 7-25). A text closed and held again later is new again. An
- * edit's text whose 대댓글 '답글 더 보기' has just read is the section's to open in that edit
- * (`heldEditsReadIn`, 오너 결정 2026-10-22 (2차) 답 2) — it closes it (`dismiss`) once the box has
- * it — or, the edit not opening there, to say why (`reason`); so does an edit's text whose thread is
- * read to its end without its 대댓글 (`heldEditsReadToTheirEnd`: gone). A new reason is new again,
- * read out where the text is drawn, never taking the focus.
+ * edit's text whose 대댓글 a read has just brought onto the screen is the section's to open in that
+ * edit (`heldEditsBrought`, 오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1) — it closes it (`dismiss`)
+ * once the box has it — or, the edit not opening there, to say why (`reason`: hidden, another
+ * account's, or past the 300 a read of the pages keeps — 3차 답 3's words); so does an edit's text
+ * whose thread is read to its end without its 대댓글 (`heldEditsReadToTheirEnd`: gone). A new reason
+ * is new again, read out where the text is drawn, never taking the focus.
  *
  * Each text is its writer's: the section is told who is on screen (`account`), and another account
  * — a sign-out or a sign-in in another tab of this browser, seen by SessionCacheGuard — starts it
@@ -106,10 +107,11 @@ export type HeldTextsEvent =
     }
   | { type: 'dismiss'; id: string }
   /**
-   * A held text's place says something else now (오너 결정 2026-10-22 (2차) 답 2): the edit's 대댓글,
-   * read by '답글 더 보기', takes no edit — hidden, or another account's (`heldEditsReadIn`) — or its
-   * thread, read to its end, does not hold it: gone (`heldEditsReadToTheirEnd`). Nothing for a text
-   * not shown, or one that says it already.
+   * A held text's place says something else now (오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1): the
+   * edit's 대댓글, brought onto the screen by a read, takes no edit from it — hidden, another
+   * account's, or past the 300 a read of the pages keeps (`heldEditsBrought`) — or its thread, read
+   * to its end, does not hold it: gone (`heldEditsReadToTheirEnd`). Nothing for a text not shown, or
+   * one that says it already.
    */
   | { type: 'reason'; id: string; reason: string }
   | { type: 'shown'; ids: readonly string[] }

@@ -405,7 +405,7 @@ describe('a text drawn once (ADR-0074 7-25)', () => {
   });
 });
 
-describe('a held edit’s 대댓글 read by ‘답글 더 보기’ (오너 결정 2026-10-22 (2차) 답 2)', () => {
+describe('a held edit’s 대댓글 brought onto the screen by a read (오너 결정 2026-10-22 (2차) 답 2, (3차) 답 1·3)', () => {
   const EDIT: HeldTextPlace = { kind: 'comment', commentId: 'r9', threadId: 't1' };
   const detailsOf = (state: HeldTextsState) =>
     heldTextsOf(state).map(({ id, reason, text, focus, shown: drawn }) => [
@@ -437,6 +437,16 @@ describe('a held edit’s 대댓글 read by ‘답글 더 보기’ (오너 결�
         }),
       ),
     ).toEqual([['taken-back:r9', copy.errCommentNotEditable, '수정', false, false]]);
+    // Brought past the 300 a read of the pages keeps: no box there — the owner's words, read out.
+    expect(
+      detailsOf(
+        heldTextsAfter(draft, {
+          type: 'reason',
+          id: 'taken-back:r9',
+          reason: copy.errCommentEditNotReopened,
+        }),
+      ),
+    ).toEqual([['taken-back:r9', copy.errCommentEditNotReopened, '수정', false, false]]);
     // An edit's box gone with the focus in it — a read again taking its 대댓글 out of the 300, its
     // write refused for the network meanwhile — and drawn: its place's reason gives way too.
     const box = run([
