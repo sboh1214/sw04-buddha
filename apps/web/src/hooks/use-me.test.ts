@@ -497,6 +497,72 @@ describe('the profile mutations', () => {
     }
   });
 
+  it('asks GET /me again before the nickname PATCH’s ONBOARDING_REQUIRED reaches the card (owner decision 2026-10-22 answer 1)', async () => {
+    // The server changes no nickname of an account that has not done its onboarding — a revision
+    // asked for the consent again while MY 설정 was open: the refusal settles only once `['me']` says
+    // so, and MY 설정's step (`useSettingsStep().afterRefusal`) reads where to go from it. A refused
+    // nickname (the rules) asks nothing.
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const onboarded: Me = {
+      ...following,
+      onboarding: {
+        ...following.onboarding,
+        consent: true,
+        verification: true,
+        nickname: true,
+        completed: true,
+        nextStep: null,
+      },
+    };
+    const reconsent: Me = {
+      ...onboarded,
+      onboarding: {
+        ...onboarded.onboarding,
+        consent: false,
+        completed: false,
+        nextStep: 'consent',
+      },
+    };
+    const me = meObserver(queryClient, (request) =>
+      Promise.resolve(request === 1 ? onboarded : reconsent),
+    );
+    const failures = [
+      new ApiError(409, {
+        code: 'ONBOARDING_REQUIRED',
+        message: 'onboarding',
+        details: { steps: ['consent'] },
+      }),
+      new ApiError(409, {
+        code: 'NICKNAME_NOT_ALLOWED',
+        message: 'reserved',
+        details: { reason: 'reserved_word' },
+      }),
+    ];
+    const rename = new MutationObserver(
+      queryClient,
+      updateNicknameOptions(queryClient, session.refetch, () =>
+        Promise.reject(failures.shift() ?? new Error('no failure left')),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      const body = { nickname: '새이름', expectedAccountId: following.id };
+
+      await expect(rename.mutate(body)).rejects.toThrow('onboarding');
+      // No settling first: the new `['me']` is there as the refusal arrives.
+      expect(me.requests()).toBe(2);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding.nextStep).toBe('consent');
+      await expect(rename.mutate(body)).rejects.toThrow('reserved');
+      await settle();
+      expect(me.requests()).toBe(2);
+      expect(session.count()).toBe(0);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
   it('writes the 소개 PUT /me/bio answered — set and cleared — into every observer (#41)', async () => {
     const queryClient = getQueryClient();
     const sent: UpdateBioBody[] = [];

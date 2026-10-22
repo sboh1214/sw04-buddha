@@ -7,6 +7,7 @@ import { copy } from '@/copy';
 import { signOut } from '@/lib/auth-client';
 import { clearAllSessionCommentDrafts } from '@/lib/comment-drafts';
 import { clearSessionPostDrafts } from '@/lib/post-drafts';
+import { clearSessionProfileDrafts } from '@/lib/profile-drafts';
 
 /** What `signOutInOrder` runs, in its order. */
 export interface SignOutSteps {
@@ -75,11 +76,13 @@ export function useSignOut(beforeSignOut?: () => Promise<void>): () => Promise<v
         // (a localStorage broadcast) and is emptied by SessionCacheGuard when its session
         // identity changes.
         queryClient.clear();
-        // So are the post and comment drafts an onboarding step kept in this tab
-        // (lib/post-drafts.ts, lib/comment-drafts.ts): each is its writer's only, and whoever
-        // signs in next here never sees one.
+        // So are the post, comment and MY 설정 drafts an onboarding step kept in this tab
+        // (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts — owner decision
+        // 2026-10-22 answer 3): each is its writer's only, and whoever signs in next here never
+        // sees one.
         clearSessionPostDrafts();
         clearAllSessionCommentDrafts();
+        clearSessionProfileDrafts();
         router.push('/');
         router.refresh();
       },

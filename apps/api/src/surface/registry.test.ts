@@ -248,9 +248,15 @@ describe('public and owner-only routes (static)', () => {
     // A sanity check on the walk: a post's writes are behind it — but not deleting one's own post,
     // which asks for a session alone (owner decision 2026-10-19, ADR-0073): no guard and no
     // `onboarded` mark. (The interest categories and the 소개 are not either: their service asks
-    // the onboarding for a new value only, ADR-0078.)
+    // the onboarding for a new value only, ADR-0078.) The nickname change is: an account facing a
+    // re-consent changes it once it has agreed again (owner decision 2026-10-22 answer 1).
     expect(guarded.map((route) => route.key)).toEqual(
-      expect.arrayContaining(['POST /posts', 'PUT /posts/:postId', 'POST /media/images']),
+      expect.arrayContaining([
+        'POST /posts',
+        'PUT /posts/:postId',
+        'POST /media/images',
+        'PATCH /me',
+      ]),
     );
     const deletePost = routes.find((route) => route.key === 'POST /posts/:postId/delete');
     expect(deletePost && guardsOf(deletePost)).toEqual([SessionGuard]);

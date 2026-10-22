@@ -9,7 +9,8 @@ import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
 import { useSetInterestCategories } from '@/hooks/use-onboarding';
-import { useSettingsStep } from '@/hooks/use-settings-step';
+import { useProfileDraftTakenBack } from '@/hooks/use-profile-draft';
+import { useKeepForStep, useSettingsStep } from '@/hooks/use-settings-step';
 import { groupCategories } from '@/lib/category-tree';
 import { interestIds, withInterest } from '@/lib/onboarding';
 import {
@@ -18,6 +19,12 @@ import {
   profileItemFailure,
   profileItemSaveGoesToStep,
 } from '@/lib/profile';
+import {
+  clearSessionProfileDraft,
+  interestsDraftToKeep,
+  interestsToRestore,
+  keepSessionProfileDraft,
+} from '@/lib/profile-drafts';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -31,8 +38,9 @@ import { SettingsSection } from './section';
  * here included: only the onboarding screen's first answer is let through (owner decision
  * 2026-10-21 answer 4 and (2nd) answer 2). Dropping needs a session alone, an account facing a
  * re-consent included (answer 2): the page is the gate's exception for it, and a category it adds
- * goes to the step first, coming back here (`useSettingsStep`, ADR-0078 7-24). Its own route
- * (`PUT /me/interest-categories`, `useSetInterestCategories`), the same `['me']` write as the
+ * goes to the step first, coming back here (`useSettingsStep`, ADR-0078 7-24) — the picks kept in
+ * the tab for the hour and put back on return (owner decision 2026-10-22 answer 3, 7-25). Its own
+ * route (`PUT /me/interest-categories`, `useSetInterestCategories`), the same `['me']` write as the
  * onboarding's step, and the same list (`InterestChecklist`).
  */
 export function InterestsSection() {
@@ -47,7 +55,7 @@ export function InterestsSection() {
         <ProfileUnavailable height="24" />
       ) : (
         // Keyed by account: a tab that switched accounts starts from the new one's picks.
-        <InterestsFields key={me.id} held={me.profile.interestCategoryIds} />
+        <InterestsFields key={me.id} held={me.profile.interestCategoryIds} accountId={me.id} />
       )}
     </SettingsSection>
   );
@@ -63,8 +71,16 @@ export function InterestsSection() {
  * member picks again from what is there, as in the onboarding. With a step left — a re-consent, the
  * only one the gate keeps on this page — a save that adds a category is not sent: 저장 goes to the
  * step (`profileItemSaveGoesToStep`), and one the server refused for the onboarding goes there too.
+ * As the page goes to the step — this card's save or another's — the picks, when they differ from
+ * the account's among the categories offered (as 저장 reads them: an untouched card holding a
+ * retired category is no change), are kept in the tab (`useKeepForStep`, lib/profile-drafts.ts —
+ * only once the list has loaded: before it nothing on screen was picked or unpicked); drawn again
+ * for the account with no step left, the card takes them back unsaved once the list has loaded
+ * (`useProfileDraftTakenBack`) — unless it holds picks of the member's own by then (the step done
+ * in another tab, learned while picking here) — and a save that lands drops what was kept (owner
+ * decision 2026-10-22 answer 3).
  */
-function InterestsFields({ held }: { held: readonly number[] }) {
+function InterestsFields({ held, accountId }: { held: readonly number[]; accountId: string }) {
   const categories = useCategories();
   const save = useSetInterestCategories();
   const router = useRouter();
@@ -82,17 +98,34 @@ function InterestsFields({ held }: { held: readonly number[] }) {
     if (!interestsChanged(chosen, base, offered)) setPicked(new Set(held));
   }
   const changed = interestsChanged(chosen, held, offered);
+  useKeepForStep(() => {
+    const listed = categories.isSuccess ? offered : undefined;
+    const categoryIds = interestsDraftToKeep(chosen, held, listed);
+    if (categoryIds !== null) {
+      keepSessionProfileDraft(accountId, { kind: 'interests', categoryIds });
+    }
+  });
+  // Taken back once the list has loaded too: what was kept is read among the categories offered.
+  const waitForDraft = step.stepLeft || !categories.isSuccess;
+  useProfileDraftTakenBack('interests', accountId, waitForDraft, (kept) => {
+    const categoryIds = interestsToRestore(kept, held, offered, chosen);
+    if (categoryIds === null) return false;
+    setPicked(new Set(categoryIds));
+    return true;
+  });
 
   const onSave = async () => {
-    const accountId = save.accountId;
-    if (accountId === undefined) return;
+    const expectedAccountId = save.accountId;
+    if (expectedAccountId === undefined) return;
     setNotice(null);
     if (profileItemSaveGoesToStep(interestsEdit(chosen, held), step.stepLeft)) {
       step.toStep();
       return;
     }
     try {
-      await save.mutateAsync({ categoryIds: chosen, expectedAccountId: accountId });
+      await save.mutateAsync({ categoryIds: chosen, expectedAccountId });
+      // Saved: nothing an earlier trip to the step kept of the card is wanted back.
+      clearSessionProfileDraft('interests');
       toaster.create({ type: 'success', title: copy.interestsSaved });
       // Back to the profile shows the new picks (bio-section.tsx says why). Here, not in the
       // hooks' shared write (`interestsWriteOptions`): the onboarding's step shares it and leaves

@@ -235,8 +235,11 @@ export function interestsEdit(chosen: readonly number[], held: readonly number[]
  * exempt for an account facing a re-consent alone (ONBOARDING_EXEMPT_PAGES) so it can clear its
  * public items with a session alone (owner decision 2026-10-21 answer 2, ADR-0078 7-24); a new value
  * is for an onboarded account only — the server would refuse it — so it goes to the step first, which
- * comes back to MY 설정 (`onboardingEntryPath`), as the post page's writes do (#46, #48, #49).
- * `stepLeft` is `useOnboardingEntry`'s: `GET /me` names a step left — on this page, a re-consent.
+ * comes back to MY 설정 (`onboardingEntryPath`), as the post page's writes do (#46, #48, #49): a 소개
+ * with text, a category added, and a nickname change, which is always `replace` (owner decision
+ * 2026-10-22 answer 1 — `PATCH /me` is behind OnboardedGuard). The 소개 typed and the categories
+ * picked are kept in the tab for the return (lib/profile-drafts.ts, answer 3). `stepLeft` is
+ * `useOnboardingEntry`'s: `GET /me` names a step left — on this page, a re-consent.
  */
 export function profileItemSaveGoesToStep(edit: PublicItemEdit, stepLeft: boolean): boolean {
   return stepLeft && edit === 'replace';

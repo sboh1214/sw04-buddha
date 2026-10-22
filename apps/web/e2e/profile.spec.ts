@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Category, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
@@ -23,9 +23,12 @@ import {
  * the post still counts); only the member gets the link to MY 설정, an admin's profile says
  * '운영자', and an old link shows the new nickname. Every answer is `noindex`, the HTML is the
  * server's and holds nothing private, and an unknown public id is a 404. A member facing a
- * re-consent stays on MY 설정 to clear the 소개 and drop categories; a new 소개, a category added and
- * the marketing switch go to the step and come back (owner decision 2026-10-21 answer 2, ADR-0078
- * 7-24). The field allow-list, the
+ * re-consent stays on MY 설정 to clear the 소개 and drop categories, and keeps its account cards (the
+ * time zone, 2026-10-22 answer 1); a new 소개, a category added, a
+ * nickname change and the marketing switch go to the step and come back (owner decisions 2026-10-21
+ * answer 2 and 2026-10-22 answer 1, ADR-0078 7-24), with the 소개 typed and the categories picked
+ * put back (2026-10-22 answer 3, 7-25); the step links to MY 설정 (answer 2, 7-26), and signing out
+ * drops what was kept. The field allow-list, the
  * counts' rules (deleted, hidden and voided content), the restriction hook and the refusals are the
  * API's tests (profiles.controller.test.ts, public-items*.test.ts, private-data.test.ts); this
  * walks the screens.
@@ -393,7 +396,7 @@ test.describe('공개 프로필', () => {
     await expect(page.locator('meta[name="robots"]').first()).toHaveAttribute('content', /noindex/);
   });
 
-  test('재동의가 남은 회원은 MY 설정에서 로그인만으로 소개를 비우고 관심 카테고리를 빼며, 새 소개·카테고리 더하기와 마케팅 정보 수신은 보내지 않고 남은 단계로 갔다가 마치면 MY 설정으로 돌아온다', async ({
+  test('재동의가 남은 회원은 MY 설정에서 로그인만으로 소개를 비우고 관심 카테고리를 빼며 계정 관리 카드(시간대)도 그대로 쓰고, 새 소개·카테고리 더하기·닉네임 바꾸기와 마케팅 정보 수신은 보내지 않고 남은 단계로 갔다가 마치면 MY 설정으로 돌아와 쓰던 소개와 고른 카테고리를 되살리고, 재동의 단계에는 MY 설정으로 가는 링크가 있으며, 로그아웃하면 둔 것이 사라진다', async ({
     page,
   }) => {
     const tag = freshTag();
@@ -413,16 +416,17 @@ test.describe('공개 프로필', () => {
 
     const settings = '/my/settings';
     const viaStep = `/onboarding?next=${encodeURIComponent(settings)}`;
-    // What the browser sends of the public items and of the consent.
+    // What the browser sends of the public items — the nickname's included — and of the consent.
     const profileWrites: string[] = [];
     let consentWrites = 0;
     page.on('request', (request) => {
       const { pathname } = new URL(request.url());
       if (
-        request.method() === 'PUT' &&
-        (pathname === '/api/v1/me/bio' || pathname === '/api/v1/me/interest-categories')
+        (request.method() === 'PUT' &&
+          (pathname === '/api/v1/me/bio' || pathname === '/api/v1/me/interest-categories')) ||
+        (request.method() === 'PATCH' && pathname === '/api/v1/me')
       ) {
-        profileWrites.push(pathname);
+        profileWrites.push(`${request.method()} ${pathname}`);
       }
       if (request.method() === 'POST' && pathname === '/api/v1/me/consents') consentWrites += 1;
     });
@@ -441,10 +445,21 @@ test.describe('공개 프로필', () => {
       await read;
       await expect(page).toHaveURL(settings);
     };
+    /** What this tab keeps of MY 설정 for the step's return (lib/profile-drafts.ts). */
+    const keptDrafts = () =>
+      page.evaluate(() =>
+        Object.keys(sessionStorage)
+          .filter((key) => key.startsWith('buddha.profileDraft:'))
+          .sort(),
+      );
     const bioCard = page.getByTestId('settings-bio');
     const bioInput = bioCard.getByTestId('bio-input');
     const interests = page.getByTestId('settings-interests');
     const save = interests.getByTestId('interests-settings-save');
+    const subBox = interests.getByTestId(`interest-${sub.slug}`).getByRole('checkbox');
+    const profileCard = page.getByTestId('settings-profile');
+    const nicknameInput = profileCard.getByTestId('nickname-input');
+    const restored = page.getByText(copy.profileDraftRestored);
 
     // --- MY 설정 stays open for the re-consent (ADR-0078 7-24), with the account's 소개.
     reconsent.on = true;
@@ -454,32 +469,74 @@ test.describe('공개 프로필', () => {
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(bio);
 
-    // --- a new 소개: not sent — the step, and back on MY 설정 once agreed, the 소개 as it was.
+    // --- a new 소개: not sent — the step, which links back to MY 설정 (owner decision 2026-10-22
+    // answer 2); agreed, back on MY 설정 with the 소개 typed put back in its box, unsaved (answer 3).
     await bioInput.fill(`${bio} 더`);
     await bioCard.getByTestId('bio-save').click();
     await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    const settingsLink = page.getByTestId('onboarding-settings-link');
+    await expect(settingsLink).toContainText(copy.onboardingReconsentSettingsHint);
+    await expect(
+      settingsLink.getByRole('link', { name: copy.onboardingReconsentSettingsLink }),
+    ).toHaveAttribute('href', settings);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
-    await expect(bioInput).toHaveValue(bio);
+    await expect(bioInput).toHaveValue(`${bio} 더`);
+    await expect(restored).toBeVisible();
+    await expect(bioCard.getByTestId('bio-save')).toBeEnabled();
+    expect(await keptDrafts()).toEqual([]);
     expect(profileWrites).toEqual([]);
 
-    // --- a category added goes the same way.
+    // --- a category added goes the same way, and comes back picked.
     await reloadAsReconsent();
+    // The reload dropped the 소개 put back unsaved: nothing of it was kept any more.
+    await expect(bioInput).toHaveValue(bio);
     await interests.getByTestId(`interest-${sub.slug}`).click();
     await save.click();
     await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:interests']);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
+    await expect(subBox).toBeChecked();
+    await expect(save).toBeEnabled();
     expect(profileWrites).toEqual([]);
 
-    // --- so does the marketing switch: a consent record comes with the consent step's items.
+    // --- so does a nickname change (answer 1: the server would refuse it), with the 소개 typed in
+    // its own card meanwhile kept too — whichever card sent the page — and the nickname not.
     await reloadAsReconsent();
+    await expect(subBox).not.toBeChecked();
+    await bioInput.fill(`${bio} 닉네임과 함께`);
+    await nicknameInput.fill(`n${tag}`.slice(0, 20));
+    await profileCard.getByRole('button', { name: copy.save }).click();
+    await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    await expect(bioInput).toHaveValue(`${bio} 닉네임과 함께`);
+    expect(profileWrites).toEqual([]);
+    expect((await meOf(page.request)).profile.nickname).toBe(me.profile.nickname);
+
+    // --- the step's link leads to MY 설정 before agreeing: what was kept stays kept, and comes back
+    // only once the step is done — reached here by the marketing switch, which goes to the step
+    // too (a consent record comes with the consent step's items).
+    await reloadAsReconsent();
+    await bioInput.fill(`${bio} 링크`);
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep);
+    await settingsLink.getByRole('link', { name: copy.onboardingReconsentSettingsLink }).click();
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(bio);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
     const consentsBefore = consentWrites;
     await page.getByTestId('settings-marketing-switch').click();
     await expect(page).toHaveURL(viaStep);
     expect(consentWrites).toBe(consentsBefore);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(`${bio} 링크`);
+    expect(profileWrites).toEqual([]);
 
     // --- clearing the 소개 and dropping the category: sent with a session alone, right here.
     await reloadAsReconsent();
@@ -490,15 +547,271 @@ test.describe('공개 프로필', () => {
     await save.click();
     await expect(page.getByText(copy.interestsSaved)).toBeVisible();
     await expect(page).toHaveURL(settings);
-    expect(profileWrites).toEqual(['/api/v1/me/bio', '/api/v1/me/interest-categories']);
+    expect(profileWrites).toEqual(['PUT /api/v1/me/bio', 'PUT /api/v1/me/interest-categories']);
     expect((await meOf(page.request)).profile).toMatchObject({
       bio: null,
       interestCategoryIds: [],
     });
 
+    // --- the account cards stay as they are (owner decision 2026-10-22 answer 1): the time zone,
+    // one of them, saves right here with a session alone — no step.
+    await page.getByTestId('time-zone-select').selectOption('Asia/Tokyo');
+    await page.getByTestId('time-zone-save').click();
+    await expect(page.getByText(copy.timeZoneSaved)).toBeVisible();
+    await expect(page).toHaveURL(settings);
+    expect((await meOf(page.request)).profile.timeZone).toBe('Asia/Tokyo');
+
     // --- MY's other screens still send the re-consent to its step.
     await page.goto('/my');
     await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent('/my')}`);
+
+    // --- signing out in the tab drops what a trip to the step kept (as the posts' and comments').
+    await page.goto(settings);
+    await expect(page).toHaveURL(settings);
+    await bioInput.fill(`로그아웃 전에 쓴 소개 ${tag}`);
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    await page.getByTestId('onboarding-logout').click();
+    await expect(page).toHaveURL('/');
+    expect(await keptDrafts()).toEqual([]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('재동의를 늦게 안 MY 설정 — 단계를 말하기 전에 보낸 닉네임·소개가 온보딩으로 거절되면 알림 없이 단계로 가며 쓰던 것을 두고(갈 곳이 없으면 닉네임 카드도 소개와 같은 문장), 카테고리 목록이 읽히기 전에는 카테고리를 두지도 되살리지도 않으며, 다른 탭에서 마친 단계를 늦게 알아도 고치던 소개를 덮지 않는다', async ({
+    page,
+  }) => {
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const { top, sub } = await topAndSub(page.request);
+    const bio = `거절 전에 쓴 소개 ${tag}`;
+    let res = await page.request.put('/api/v1/me/bio', {
+      data: { bio, expectedAccountId: me.id },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+    res = await page.request.put('/api/v1/me/interest-categories', {
+      data: { categoryIds: [top.id], expectedAccountId: me.id },
+    });
+    expect(res.status(), await res.text()).toBe(200);
+
+    const settings = '/my/settings';
+    const viaStep = `/onboarding?next=${encodeURIComponent(settings)}`;
+    const profileWrites: string[] = [];
+    page.on('request', (request) => {
+      const { pathname } = new URL(request.url());
+      if (
+        (request.method() === 'PUT' &&
+          (pathname === '/api/v1/me/bio' || pathname === '/api/v1/me/interest-categories')) ||
+        (request.method() === 'PATCH' && pathname === '/api/v1/me')
+      ) {
+        profileWrites.push(`${request.method()} ${pathname}`);
+      }
+    });
+    const reconsent = await asReconsent(page);
+    /**
+     * `method path` answered once as the server answers an account a revision of the terms asked
+     * the consent again — after the page's `GET /me` said nothing was left — and `GET /me` saying
+     * so from then on (the hook reads it again before the refusal reaches the card).
+     */
+    const refuseOnceForReconsent = async (method: string, path: string) => {
+      let refused = false;
+      await page.route(`**${path}`, async (route) => {
+        if (route.request().method() !== method || refused) return route.fallback();
+        refused = true;
+        reconsent.on = true;
+        await route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: 'ONBOARDING_REQUIRED',
+              message: 'The onboarding is not done',
+              details: { steps: ['consent'] },
+            },
+          },
+        });
+      });
+    };
+    /** `GET /categories` held until the returned function lets it go (the list not loaded yet). */
+    const holdCategories = async () => {
+      let release = () => {};
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route('**/api/v1/categories', async (route) => {
+        await held;
+        await route.fallback();
+      });
+      return release;
+    };
+    const reloadAsReconsent = async () => {
+      reconsent.on = true;
+      const read = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/v1/me' &&
+          response.request().method() === 'GET',
+      );
+      await page.reload();
+      await read;
+      await expect(page).toHaveURL(settings);
+    };
+    const keptDrafts = () =>
+      page.evaluate(() =>
+        Object.keys(sessionStorage)
+          .filter((key) => key.startsWith('buddha.profileDraft:'))
+          .sort(),
+      );
+    const bioCard = page.getByTestId('settings-bio');
+    const bioInput = bioCard.getByTestId('bio-input');
+    const interests = page.getByTestId('settings-interests');
+    const save = interests.getByTestId('interests-settings-save');
+    const subBox = interests.getByTestId(`interest-${sub.slug}`).getByRole('checkbox');
+    const profileCard = page.getByTestId('settings-profile');
+    const nicknameInput = profileCard.getByTestId('nickname-input');
+    const restored = page.getByText(copy.profileDraftRestored);
+
+    // --- MY 설정 drawn while `GET /me` said nothing was left; a revision asks the consent again
+    // meanwhile, and the nickname change sent is refused for it (`PATCH /me`, ADR-0078 7-27). With
+    // nowhere to go — `GET /me` read again fails (a 429 is not retried), so `['me']` still says
+    // nothing is left — the card stays and says MY 설정's sentence, the 소개's, not the onboarding
+    // stepper's (7-24, `settingsNicknameFailure`), and nothing is kept.
+    reconsent.on = false;
+    await page.goto(settings);
+    await expect(bioInput).toHaveValue(bio);
+    let refusedOnce = false;
+    let readFailed = false;
+    const nowhereToGo = async (route: Route) => {
+      const method = route.request().method();
+      if (method === 'PATCH' && !refusedOnce) {
+        refusedOnce = true;
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: 'ONBOARDING_REQUIRED',
+              message: 'The onboarding is not done',
+              details: { steps: ['consent'] },
+            },
+          },
+        });
+      }
+      if (method === 'GET' && refusedOnce && !readFailed) {
+        readFailed = true;
+        return route.fulfill({
+          status: 429,
+          json: { error: { code: 'RATE_LIMITED', message: 'Too many requests' } },
+        });
+      }
+      return route.fallback();
+    };
+    await page.route('**/api/v1/me', nowhereToGo);
+    await bioInput.fill(`${bio} 갈 곳 없음`);
+    await nicknameInput.fill(`r${tag}`.slice(0, 20));
+    await profileCard.getByRole('button', { name: copy.save }).click();
+    await expect(profileCard.getByTestId('nickname-notice')).toHaveText(copy.errPostOnboarding);
+    expect(readFailed).toBe(true);
+    await expect(page).toHaveURL(settings);
+    expect(await keptDrafts()).toEqual([]);
+    await page.unroute('**/api/v1/me', nowhereToGo);
+
+    // --- the same refusal with `GET /me` read again saying the re-consent: the card goes on to the
+    // step without a word, the 소개 typed in its own card kept (7-24, 7-25).
+    await refuseOnceForReconsent('PATCH', '/api/v1/me');
+    await bioInput.fill(`${bio} 닉네임과 거절`);
+    await nicknameInput.fill(`r${tag}`.slice(0, 20));
+    await profileCard.getByRole('button', { name: copy.save }).click();
+    await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    expect(profileWrites).toEqual(['PATCH /api/v1/me', 'PATCH /api/v1/me']);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(`${bio} 닉네임과 거절`);
+    await expect(restored).toBeVisible();
+    await expect(nicknameInput).toHaveValue(me.profile.nickname);
+    expect((await meOf(page.request)).profile.nickname).toBe(me.profile.nickname);
+
+    // --- the 소개's own save refused the same way (`PUT /me/bio`): to the step, both cards' kept.
+    await interests.getByTestId(`interest-${sub.slug}`).click();
+    await refuseOnceForReconsent('PUT', '/api/v1/me/bio');
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual([
+      'buddha.profileDraft:bio',
+      'buddha.profileDraft:interests',
+    ]);
+    expect(profileWrites).toEqual(['PATCH /api/v1/me', 'PATCH /api/v1/me', 'PUT /api/v1/me/bio']);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(`${bio} 닉네임과 거절`);
+    await expect(subBox).toBeChecked();
+    expect(await keptDrafts()).toEqual([]);
+    expect((await meOf(page.request)).profile).toMatchObject({
+      bio,
+      interestCategoryIds: [top.id],
+    });
+
+    // --- the categories' list not loaded yet: the card keeps nothing as the page goes to the step
+    // (nothing on screen was picked or unpicked — read among no categories, the account's would
+    // look dropped, and a save of that clears them).
+    let releaseList = await holdCategories();
+    await reloadAsReconsent();
+    await expect(bioInput).toHaveValue(bio);
+    await expect(save).toBeDisabled();
+    await bioInput.fill(`${bio} 목록 전`);
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    await agreeAgain(page);
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(`${bio} 목록 전`);
+    releaseList();
+    await expect(interests.getByTestId(`interest-${top.slug}`).getByRole('checkbox')).toBeChecked();
+    await expect(subBox).not.toBeChecked();
+    await expect(save).toBeDisabled();
+
+    // --- the picks kept come back only once the list has loaded: MY 설정 opened afresh after the
+    // step was done elsewhere, the list held — what was kept waits for it, then is put back.
+    await reloadAsReconsent();
+    await interests.getByTestId(`interest-${sub.slug}`).click();
+    await save.click();
+    await expect(page).toHaveURL(viaStep);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:interests']);
+    releaseList = await holdCategories();
+    reconsent.on = false;
+    await page.goto(settings);
+    await expect(bioInput).toHaveValue(bio);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:interests']);
+    releaseList();
+    await expect(subBox).toBeChecked();
+    await expect(restored).toBeVisible();
+    await expect(save).toBeEnabled();
+    expect(await keptDrafts()).toEqual([]);
+
+    // --- the step done in another tab, learned late (a later `['me']`) while the member is typing
+    // a 소개 on MY 설정 reached by the step's link: what is typed is not written over, nothing is
+    // said, and what the trip kept is dropped (ADR-0078 7-25 (3)).
+    await reloadAsReconsent();
+    await bioInput.fill(`${bio} 두었던 것`);
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep);
+    await page
+      .getByTestId('onboarding-settings-link')
+      .getByRole('link', { name: copy.onboardingReconsentSettingsLink })
+      .click();
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(bio);
+    expect(await keptDrafts()).toEqual(['buddha.profileDraft:bio']);
+    await bioInput.fill(`${bio} 지금 쓰는 것`);
+    // Agreed elsewhere; this tab learns it from the answer to dropping the category here.
+    reconsent.on = false;
+    await interests.getByTestId(`interest-${top.slug}`).click();
+    await save.click();
+    await expect(page.getByText(copy.interestsSaved)).toBeVisible();
+    await expect.poll(keptDrafts).toEqual([]);
+    await expect(bioInput).toHaveValue(`${bio} 지금 쓰는 것`);
+    await expect(restored).toHaveCount(0);
+    await expect(bioCard.getByTestId('bio-save')).toBeEnabled();
+    expect((await meOf(page.request)).profile).toMatchObject({ bio, interestCategoryIds: [] });
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

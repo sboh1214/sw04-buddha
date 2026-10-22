@@ -9,7 +9,8 @@ import { useForm, useWatch } from 'react-hook-form';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe, useUpdateBio } from '@/hooks/use-me';
-import { useSettingsStep } from '@/hooks/use-settings-step';
+import { useProfileDraftTakenBack } from '@/hooks/use-profile-draft';
+import { useKeepForStep, useSettingsStep } from '@/hooks/use-settings-step';
 import {
   bioDraft,
   bioEdit,
@@ -20,6 +21,12 @@ import {
   profileItemSaveGoesToStep,
   type BioFormValues,
 } from '@/lib/profile';
+import {
+  bioDraftToKeep,
+  bioToRestore,
+  clearSessionProfileDraft,
+  keepSessionProfileDraft,
+} from '@/lib/profile-drafts';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -30,7 +37,8 @@ import { SettingsSection } from './section';
  * new text does not (#37-9, decision 7: the server's check, #185/#139 bring the restriction), and
  * which an account facing a re-consent alone makes here too, with a session alone (owner decision
  * 2026-10-21 answer 2): the page is the gate's exception for it, and its new text goes to the step
- * first, coming back here (`useSettingsStep`, ADR-0078 7-24).
+ * first, coming back here (`useSettingsStep`, ADR-0078 7-24) — the text typed kept in the tab for
+ * the hour and put back in the box on return (owner decision 2026-10-22 answer 3, 7-25).
  */
 export function BioSection() {
   const { data: me, isPending } = useMe();
@@ -53,7 +61,13 @@ export function BioSection() {
  * and 저장 waits while the box holds more than the limit or nothing new. The body names the account
  * the card shows (`expectedAccountId`). With a step left — a re-consent, the only one the gate
  * keeps on this page — a new text is not sent: 저장 goes to the step (`profileItemSaveGoesToStep`),
- * and a new text the server refused for the onboarding goes there too (`afterRefusal`).
+ * and a new text the server refused for the onboarding goes there too (`afterRefusal`). As the page
+ * goes to the step — this card's save or another's — the box's text, when saving it would change
+ * the 소개, is kept in the tab (`useKeepForStep`, lib/profile-drafts.ts); drawn again for the account
+ * with no step left, the box takes it back unsaved (`useProfileDraftTakenBack`) — unless what it
+ * holds by then is a text of the member's own (the step done in another tab, learned while typing
+ * here: `bioToRestore`) — and a save that lands drops what was kept (owner decision 2026-10-22
+ * answer 3).
  */
 function BioFields({ bio, accountId }: { bio: string | null; accountId: string }) {
   const update = useUpdateBio();
@@ -67,6 +81,8 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
     handleSubmit,
     reset,
     setError,
+    setValue,
+    getValues,
     control,
     formState: { errors, isDirty },
   } = useForm<BioFormValues>({
@@ -76,6 +92,16 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
     resetOptions: { keepDirtyValues: true },
   });
   const draft = bioDraft(useWatch({ control, name: 'bio' }));
+  useKeepForStep(() => {
+    const text = bioDraftToKeep(getValues('bio'), bio);
+    if (text !== null) keepSessionProfileDraft(accountId, { kind: 'bio', text });
+  });
+  useProfileDraftTakenBack('bio', accountId, step.stepLeft, (kept) => {
+    const text = bioToRestore(kept, bio, getValues('bio'));
+    if (text === null) return false;
+    setValue('bio', text, { shouldDirty: true });
+    return true;
+  });
 
   const onSubmit = handleSubmit(async (form) => {
     setNotice(null);
@@ -90,6 +116,8 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
       // keepDirtyValues, as the time-zone card does: the form's resetOptions would keep the
       // submitted text as dirty instead of taking the saved one.
       reset({ bio: me.profile.bio ?? '' }, { keepDirtyValues: false });
+      // Saved: nothing an earlier trip to the step kept of the box is wanted back.
+      clearSessionProfileDraft('bio');
       toaster.create({ type: 'success', title: next === null ? copy.bioCleared : copy.bioSaved });
       // The profile is the server's page alone (ADR-0078 7-12), but the router keeps the pages it
       // drew for Back and Forward whatever their age: without this, Back to the profile this

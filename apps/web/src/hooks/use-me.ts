@@ -15,6 +15,7 @@ import {
 } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { applyBalanceEvent } from '@/lib/market-live';
+import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
 import { useSession } from '@/lib/use-session';
 
 /** Query key rule from PLAN 11.5. */
@@ -258,7 +259,12 @@ async function putTimeZone(body: UpdateTimeZoneBody): Promise<Me> {
  * is the hook's session refetch and `patch` stands in the request; both parameters so a test can
  * watch them. Since #58 the body names the account the screen shows (`expectedAccountId`), so the
  * 403 for another account asks for the session again, as the time zone's does: nothing was
- * written, and SessionCacheGuard puts the account really signed in on screen.
+ * written, and SessionCacheGuard puts the account really signed in on screen. A refusal that says
+ * `['me']` is out of date for the account (`nicknameRefusalNeedsRefresh` — ONBOARDING_REQUIRED: a
+ * revision asked for the consent again while the screen was open, and the server changes no
+ * nickname of an account that has not done its onboarding, owner decision 2026-10-22 answer 1)
+ * asks `['me']` again before the promise rejects, as the 소개's does, so the gate or MY 설정's step
+ * (`useSettingsStep`) takes the member on from what the server says now.
  */
 export function updateNicknameOptions(
   queryClient: QueryClient,
@@ -269,8 +275,14 @@ export function updateNicknameOptions(
     mutationFn: patch,
     // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
     onSuccess: (me: Me) => storeMe(queryClient, me, 'nickname', onSessionChanged),
-    onError: (error: Error) => {
-      if (isForAnotherAccount(error)) onSessionChanged();
+    onError: async (error: Error, body: UpdateMeBody) => {
+      if (isForAnotherAccount(error)) {
+        onSessionChanged();
+        return;
+      }
+      if (nicknameRefusalNeedsRefresh(error)) {
+        await refreshOwnMe(queryClient, body.expectedAccountId);
+      }
     },
   };
 }

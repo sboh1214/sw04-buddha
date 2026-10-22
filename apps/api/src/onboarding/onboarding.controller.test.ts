@@ -41,6 +41,7 @@ import { type LightMyRequestResponse } from 'fastify';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PhoneHasher } from '../identity/phone-hash.js';
+import { NicknameService } from '../me/nickname.service.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { expectLedgerChain } from '../test/ledger.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -749,6 +750,73 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       await atNicknameStep();
       expect(stepsOf(await changeNickname(user, '거래왕'))).toEqual(['nickname']);
       expect(await nicknameOf(user.id)).toMatch(/^user_/);
+    });
+
+    it('waits for a re-consent too: the nickname changes once the member has agreed again (owner decision 2026-10-22 answer 1)', async () => {
+      await completeOnboarding(t.db, { userId: user.id });
+      const before = await nicknameOf(user.id);
+      // A revision that changed members' rights asks the consent again (as above).
+      await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, user.id));
+      await createConsents(t.db, { userId: user.id, versions: { terms: 'draft-1999-01-01' } });
+      expect((await getMe(user)).onboarding.nextStep).toBe('consent');
+      // Refused before anything else is looked at — a nickname another rule would refuse, and the
+      // nickname the account has, alike — and nothing changes or is held.
+      expect(stepsOf(await changeNickname(user, '거래왕'))).toEqual(['consent']);
+      expect(stepsOf(await changeNickname(user, 'user_ABCD'))).toEqual(['consent']);
+      expect(stepsOf(await changeNickname(user, before))).toEqual(['consent']);
+      expect(await nicknameOf(user.id)).toBe(before);
+      expect(await holds()).toEqual([]);
+      const [row] = await t.db
+        .select({ changedAt: schema.profiles.nicknameChangedAt })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, user.id));
+      expect(row?.changedAt).toBeNull();
+      // Agreed again: the change goes through.
+      meOf(await consent(user));
+      expect(meOf(await changeNickname(user, '거래왕')).profile.nickname).toBe('거래왕');
+    });
+
+    it('checks the onboarding again inside the change itself, past the guard: a re-consent and a nickname step not done are refused there too (ADR-0078 7-27)', async () => {
+      // OnboardedGuard answers every request above before the service; this is the check that
+      // holds the onboarding to the commit (a consent a revision asks for again between the guard
+      // and the write) — NicknameService.change, as the posts', comments' and likes' tests pin
+      // theirs (#57-8).
+      const nicknames = t.app.get(NicknameService);
+      const refusedFor = (steps: string[]) => ({
+        code: 'ONBOARDING_REQUIRED',
+        status: 409,
+        details: { steps },
+      });
+      const changedAt = async (userId: string) => {
+        const [row] = await t.db
+          .select({ changedAt: schema.profiles.nicknameChangedAt })
+          .from(schema.profiles)
+          .where(eq(schema.profiles.userId, userId));
+        return row?.changedAt;
+      };
+      // An account facing a re-consent: refused naming the consent, and nothing changes or is held.
+      await completeOnboarding(t.db, { userId: user.id });
+      const before = await nicknameOf(user.id);
+      await t.db.delete(schema.consentRecords).where(eq(schema.consentRecords.userId, user.id));
+      await createConsents(t.db, { userId: user.id, versions: { terms: 'draft-1999-01-01' } });
+      await expect(nicknames.change(user.id, '거래왕')).rejects.toMatchObject(
+        refusedFor(['consent']),
+      );
+      expect(await nicknameOf(user.id)).toBe(before);
+      expect(await holds()).toEqual([]);
+      expect(await changedAt(user.id)).toBeNull();
+      // An account before its nickname step: the steps left, as the guard names them.
+      const newcomer = await signUpTestUser(t);
+      const newcomerNickname = await nicknameOf(newcomer.id);
+      await expect(nicknames.change(newcomer.id, '새이름')).rejects.toMatchObject(
+        refusedFor(['consent', 'verification', 'nickname']),
+      );
+      await atNicknameStep(newcomer);
+      await expect(nicknames.change(newcomer.id, '새이름')).rejects.toMatchObject(
+        refusedFor(['nickname']),
+      );
+      expect(await nicknameOf(newcomer.id)).toBe(newcomerNickname);
+      expect(await holds()).toEqual([]);
     });
 
     it('changes once in 30 days, saying when the next is allowed', async () => {

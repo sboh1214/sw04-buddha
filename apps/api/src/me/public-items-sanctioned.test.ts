@@ -14,7 +14,8 @@
  * have passed since the nickname step (owner decision 2026-10-21 (3rd) answer 1: the first answer's
  * window, whose boundary is tested at 23 h 59 min and 24 h 1 min; the screen's skip then records
  * the skip). An account the onboarding holds back (a re-consent) hears that before the restriction
- * (ADR-0078 decision 4). Skips when TEST_* are unset.
+ * (ADR-0078 decision 4), for a nickname change too (owner decision 2026-10-22 answer 1). Skips when
+ * TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -258,7 +259,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     expect(sanction.asked).toEqual([newcomer.id]);
   });
 
-  it('asks the onboarding before the restriction: an account a re-consent holds back hears the consent step (decision 4)', async () => {
+  it('asks the onboarding before the restriction: an account a re-consent holds back hears the consent step (decision 4, owner decision 2026-10-22 answer 1)', async () => {
     const [a, b, c] = await Promise.all([
       createCategory(t.db),
       createCategory(t.db),
@@ -282,6 +283,11 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     expect(
       stepsOf(await send('PUT', '/me/interest-categories', { categoryIds: [a.id, b.id, c.id] })),
     ).toEqual(['consent']);
+    // So does a nickname change (owner decision 2026-10-22 answer 1: MY 설정 sends it to the step,
+    // and the server refuses it until the member has agreed again).
+    expect(stepsOf(await send('PATCH', '/me', { nickname: 'renamed_member' }))).toEqual([
+      'consent',
+    ]);
     expect(sanction.asked).toEqual([]);
     expect(await profileRow()).toEqual(before);
     expect(await picks()).toEqual(sorted([a.id, b.id]));

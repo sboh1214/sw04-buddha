@@ -1,6 +1,16 @@
 'use client';
 
-import { Alert, Box, Button, Heading, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
+import {
+  Alert,
+  Box,
+  Button,
+  Link as ChakraLink,
+  Heading,
+  HStack,
+  Skeleton,
+  Stack,
+  Text,
+} from '@chakra-ui/react';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -18,9 +28,11 @@ import {
   onboardingPath,
   onboardingReturnReason,
   onboardingScreen,
+  settingsLinkOnStep,
   type OnboardingReturnReason,
   type OnboardingScreen,
 } from '@/lib/onboarding';
+import { PROFILE_SETTINGS_PATH } from '@/lib/profile';
 import { profileView } from '@/lib/query-client';
 import { ConsentStep } from './consent-step';
 import { InterestsStep } from './interests-step';
@@ -146,7 +158,9 @@ export function OnboardingForm({ next }: { next: string }) {
  * render, a `status` that screen readers do not reliably read out when it appears with its text in
  * it — so that first screen is the one whose heading takes the focus on arrival, and the heading is
  * described by the sentence (`aria-describedby`): the step's name and the reason are read together
- * (ADR-0072 7-36).
+ * (ADR-0072 7-36). Under the consent step of an account facing a re-consent alone — never on a
+ * first onboarding — a line says what MY 설정 still offers it and links there (`settingsLinkOnStep`,
+ * owner decision 2026-10-22 answer 2, ADR-0078 7-26).
  */
 function Stepper({
   me,
@@ -251,6 +265,14 @@ function Stepper({
         </Heading>
       </Stack>
       {step}
+      {settingsLinkOnStep(me.onboarding, screen) && (
+        <Text textStyle="bodySm" color="fg.muted" data-testid="onboarding-settings-link">
+          {copy.onboardingReconsentSettingsHint}{' '}
+          <ChakraLink asChild color="brand.fg">
+            <NextLink href={PROFILE_SETTINGS_PATH}>{copy.onboardingReconsentSettingsLink}</NextLink>
+          </ChakraLink>
+        </Text>
+      )}
     </Stack>
   );
 }

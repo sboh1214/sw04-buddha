@@ -22,6 +22,7 @@ import {
   onboardingPath,
   onboardingReturnReason,
   onboardingScreen,
+  settingsLinkOnStep,
   startGrantNotice,
   takeOnboardingAnswer,
   withInterest,
@@ -260,6 +261,29 @@ describe('MY 설정 for an account facing a re-consent (#41, 오너 결정 2026-
       '/my/settings',
     );
     expect(onboardingEntryPath('/my/settings', DONE)).toBe('/my/settings');
+  });
+});
+
+describe('the way to MY 설정 on the re-consent step (오너 결정 2026-10-22 답 2)', () => {
+  it('is on the consent step of an account facing a re-consent alone — the one MY 설정 keeps', () => {
+    expect(settingsLinkOnStep(RECONSENT, 'consent')).toBe(true);
+    // The page it leads to keeps that account (the gate's exception), so the link never bounces.
+    expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
+  });
+
+  it('is on no first onboarding, no other step and no re-consent of an account that never finished', () => {
+    expect(settingsLinkOnStep(FRESH, 'consent')).toBe(false);
+    // Agreed once, left before its 본인확인, then a revision: a re-consent the gate does not let
+    // stay on MY 설정, which would send it straight back.
+    const agreedThenLeft: Onboarding = { ...CONSENTED, consent: false, nextStep: 'consent' };
+    expect(isReconsent(agreedThenLeft)).toBe(true);
+    expect(settingsLinkOnStep(agreedThenLeft, 'consent')).toBe(false);
+    for (const screen of ['verification', 'nickname', 'notice', 'interests', null] as const) {
+      expect(settingsLinkOnStep(RECONSENT, screen), String(screen)).toBe(false);
+    }
+    for (const onboarding of [CONSENTED, VERIFIED, COMPLETED, DONE]) {
+      expect(settingsLinkOnStep(onboarding, 'consent'), String(onboarding.nextStep)).toBe(false);
+    }
   });
 });
 

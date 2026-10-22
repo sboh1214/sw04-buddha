@@ -3,7 +3,6 @@
 import { Alert, Button, Link as ChakraLink, Field, HStack, Input, Stack } from '@chakra-ui/react';
 import { NICKNAME_MAX_LENGTH } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useQueryClient } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -12,9 +11,14 @@ import { useForm } from 'react-hook-form';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { refreshOwnMe, useMe, useUpdateNickname } from '@/hooks/use-me';
-import { nicknameFailure, nicknameFormSchema, type NicknameFormValues } from '@/lib/nickname';
-import { profilePath } from '@/lib/profile';
+import { useMe, useUpdateNickname } from '@/hooks/use-me';
+import { useSettingsStep } from '@/hooks/use-settings-step';
+import {
+  nicknameFormSchema,
+  settingsNicknameFailure,
+  type NicknameFormValues,
+} from '@/lib/nickname';
+import { profileItemSaveGoesToStep, profilePath } from '@/lib/profile';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -59,14 +63,21 @@ export function NicknameForm() {
  * (ignoring case) or held for 30 days after another account gave it up, and for the 30 days
  * between changes — with when the next change is allowed, in the member's time zone — under the
  * input. MY 설정 is reached by an onboarded account (the gate) — and by one facing a re-consent
- * alone (ONBOARDING_EXEMPT_PAGES, #41), whose nickname step is done, which is all `PATCH /me` asks
- * of the onboarding — so `ONBOARDING_REQUIRED` here means another tab's state changed: `['me']` is
- * asked again, and the gate follows it.
+ * alone (ONBOARDING_EXEMPT_PAGES, #41), whose change the server takes only once it has agreed again
+ * (owner decision 2026-10-22 answer 1, `PATCH /me` behind OnboardedGuard): a change is a new value
+ * of a public item, so 저장 goes to the step without sending (`profileItemSaveGoesToStep`, as the
+ * 소개 and the categories, `useSettingsStep`), and comes back here. The nickname typed is not kept
+ * for the return (the owner named the 소개 and the categories, ADR-0078 7-25). A change the server
+ * refused for the onboarding — sent before `GET /me` said a step is left — has had `['me']` asked
+ * again by the hook, and goes on as the 소개's does (`afterRefusal`): to the step without a word on
+ * MY 설정, else with the gate; where neither moves, the card says what the 소개's says there
+ * (`settingsNicknameFailure` — '약관 동의 등 남은 절차를 마친 뒤에 할 수 있습니다.', not the onboarding
+ * stepper's '앞 단계를 먼저 마쳐 주세요.').
  */
 function NicknameFields({ nickname, accountId }: { nickname: string; accountId: string }) {
   const update = useUpdateNickname();
   const router = useRouter();
-  const queryClient = useQueryClient();
+  const step = useSettingsStep();
   const formatDate = useFormatDateTime();
   const [notice, setNotice] = useState<string | null>(null);
   const values = useMemo(() => ({ nickname }), [nickname]);
@@ -86,6 +97,11 @@ function NicknameFields({ nickname, accountId }: { nickname: string; accountId: 
 
   const onSubmit = handleSubmit(async (form) => {
     setNotice(null);
+    // A change is always a new value (no nickname is cleared).
+    if (profileItemSaveGoesToStep('replace', step.stepLeft)) {
+      step.toStep();
+      return;
+    }
     try {
       // The account this screen shows (#58: PATCH /me names it, as every owner write does).
       await update.mutateAsync({ nickname: form.nickname, expectedAccountId: accountId });
@@ -94,12 +110,13 @@ function NicknameFields({ nickname, accountId }: { nickname: string; accountId: 
       // Back to the profile (or to a post's byline) shows the new nickname (bio-section.tsx).
       router.refresh();
     } catch (error) {
-      const failure = nicknameFailure(error, formatDate);
+      const failure = settingsNicknameFailure(error, formatDate);
       if (failure.kind === 'field') {
         setError('nickname', { message: failure.message }, { shouldFocus: true });
         return;
       }
-      if (failure.kind === 'refresh') void refreshOwnMe(queryClient, accountId);
+      // `refresh`: the hook has asked `['me']` again, and the gate or the step follows it.
+      if (failure.kind === 'refresh' && step.afterRefusal(error)) return;
       setNotice(failure.message);
     }
   });

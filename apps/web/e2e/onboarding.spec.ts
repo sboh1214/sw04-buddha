@@ -125,8 +125,10 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     const consent = page.getByTestId('consent-step');
     await expect(consent).toBeVisible();
     await expect(page.getByTestId('onboarding-heading')).toHaveText(copy.onboardingStepConsent);
-    // A first consent has nothing to explain: no reason, and arriving moves no focus (7-36).
+    // A first consent has nothing to explain: no reason, and arriving moves no focus (7-36). Nor a
+    // way to MY 설정, which only a re-consent's step offers (ADR-0078, 오너 결정 2026-10-22 답 2).
     await expect(page.getByTestId('onboarding-return-reason')).toHaveCount(0);
+    await expect(page.getByTestId('onboarding-settings-link')).toHaveCount(0);
     await expect(page.getByTestId('onboarding-heading')).not.toBeFocused();
     await expect(page.getByTestId('onboarding-heading')).not.toHaveAttribute('aria-describedby');
     await expect(page.getByTestId('onboarding-position')).toHaveText('1 / 5');
@@ -765,6 +767,14 @@ test.describe('가입 직후 온보딩 (#58)', () => {
       await expect(consent.getByTestId(`consent-item-${item}`)).toHaveCount(0);
     }
     await expect(consent.getByText(copy.consentAllHint)).toHaveCount(0);
+    // A way to MY 설정, which stays open to the account before it agrees (ADR-0078, 오너 결정
+    // 2026-10-22 답 2 — profile.spec.ts follows it).
+    await expect(page.getByTestId('onboarding-settings-link')).toContainText(
+      copy.onboardingReconsentSettingsHint,
+    );
+    await expect(
+      page.getByRole('link', { name: copy.onboardingReconsentSettingsLink }),
+    ).toHaveAttribute('href', '/my/settings');
     await expect(consent.getByTestId('consent-terms').getByRole('checkbox')).not.toBeChecked();
     await page.getByTestId('consent-submit').click();
     await expect(page.getByTestId('consent-required-error')).toBeVisible();

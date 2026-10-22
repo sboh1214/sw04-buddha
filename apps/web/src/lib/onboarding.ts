@@ -106,10 +106,13 @@ export interface OnboardingExemptPage {
  * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
  * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
  * do its 좋아요 (#49, components/post/like-button.tsx). #41's MY 설정 clears the public profile's
- * 소개 and drops its interest categories; a new 소개, a category added and the marketing switch —
- * a consent record, which the consent step's items come with — go to the step
- * (app/my/settings: `profileItemSaveGoesToStep`, lib/profile.ts). Its other cards write what the
- * server takes with a session alone (ADR-0078 7-24).
+ * 소개 and drops its interest categories; a new 소개, a category added, a nickname change (owner
+ * decision 2026-10-22 answer 1) and the marketing switch — a consent record, which the consent
+ * step's items come with — go to the step (app/my/settings: `profileItemSaveGoesToStep`,
+ * lib/profile.ts), the 소개 typed and the categories picked kept in the tab for the return
+ * (lib/profile-drafts.ts, answer 3). Its account cards — email, password, linked sign-ins, real
+ * name, time zone, theme — write what the server takes with a session alone (ADR-0078 7-24). The
+ * re-consent step links to it (`settingsLinkOnStep`, answer 2).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
  * onboarding prompt (#89 — the owner wrote the screen in).
  */
@@ -122,7 +125,7 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
   {
     route: '/my/settings',
     reason:
-      'a member facing a re-consent clears the 소개 and drops interest categories of their public profile with a session alone (owner decision 2026-10-21 answer 2, #41); a new 소개, a category added and the marketing switch go to the step',
+      'a member facing a re-consent clears the 소개 and drops interest categories of their public profile with a session alone (owner decision 2026-10-21 answer 2, #41), and keeps the account cards; a new 소개, a category added, a nickname change (owner decision 2026-10-22 answer 1) and the marketing switch go to the step',
   },
 ];
 
@@ -351,6 +354,21 @@ export function onboardingReturnReason(
 ): OnboardingReturnReason | null {
   if (screen === 'consent' && isReconsent(onboarding)) return 'reconsent';
   return sentBack && screen !== null ? 'earlier_step' : null;
+}
+
+/**
+ * Whether the stepper offers the way to MY 설정 (오너 결정 2026-10-22 답 2, ADR-0078: «재동의 단계
+ * 화면에 MY 설정 링크»): on the consent step of an account facing a re-consent alone — the one account
+ * that MY 설정 is open to with a step left (`ONBOARDING_EXEMPT_PAGES`, `hasOnlyReconsentLeft`), where
+ * it clears its public profile's items and keeps its account cards before agreeing again. Never on
+ * a first onboarding — nor on the re-consent of an account that left before its 본인확인, which MY
+ * 설정 would send straight back — and never on another step.
+ */
+export function settingsLinkOnStep(
+  onboarding: Onboarding,
+  screen: OnboardingScreen | null,
+): boolean {
+  return screen === 'consent' && hasOnlyReconsentLeft(onboarding);
 }
 
 /**

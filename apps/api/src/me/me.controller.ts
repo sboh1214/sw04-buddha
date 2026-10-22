@@ -21,6 +21,7 @@ import { assertExpectedAccount } from '../auth/expected-account.js';
 import { PasswordService } from '../auth/password.service.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { MeService } from './me.service.js';
 
@@ -75,14 +76,20 @@ export class MeController {
    * onboarding, never the auto nickname's prefix or a reserved word, nor a nickname another
    * account has (ignoring case) or gave up less than 30 days ago. The body names the account the
    * screen shows (`expectedAccountId`): a change a month is too dear to spend on the account another
-   * tab signed in as, which the cookie-only write of A-PG-24 would have renamed.
+   * tab signed in as, which the cookie-only write of A-PG-24 would have renamed. For an account that
+   * has done the onboarding only (OnboardedGuard): the nickname step sets the first nickname, and an
+   * account a revision sent back to the consent step (재동의) changes it once it has agreed again —
+   * MY 설정, which it may stay on to clear its public items, sends the change to that step (owner
+   * decision 2026-10-22 answer 1, ADR-0078). The service asks again in its transaction.
    */
   @Patch()
+  @UseGuards(OnboardedGuard)
   @ApiOperation({ operationId: 'updateMe', summary: 'Change nickname' })
   @ApiData(meSchema)
   // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
-  // cookie's account (nothing written). ONBOARDING_REQUIRED: the onboarding's nickname step is not
-  // done — the nickname is set there. NICKNAME_NOT_ALLOWED: the rules and the interval.
+  // cookie's account (nothing written). ONBOARDING_REQUIRED: the onboarding is not done — its
+  // nickname step (the nickname is set there) or a re-consent. NICKNAME_NOT_ALLOWED: the rules and
+  // the interval.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
