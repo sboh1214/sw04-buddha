@@ -404,3 +404,94 @@ describe('a text drawn once (ADR-0074 7-25)', () => {
     expect(drawnOf(forB)).toEqual([['taken-back:x', false, false]]);
   });
 });
+
+describe('a held edit’s 대댓글 read by ‘답글 더 보기’ (오너 결정 2026-10-22 (2차) 답 2)', () => {
+  const EDIT: HeldTextPlace = { kind: 'comment', commentId: 'r9', threadId: 't1' };
+  const detailsOf = (state: HeldTextsState) =>
+    heldTextsOf(state).map(({ id, reason, text, focus, shown: drawn }) => [
+      id,
+      reason,
+      text,
+      focus,
+      drawn,
+    ]);
+
+  it('says why its edit cannot open now that it is read: new news, read out again, never taking the focus', () => {
+    // A draft taken back past the 300 a read of the pages keeps, drawn.
+    const draft = run([
+      {
+        type: 'hold',
+        accountId: A,
+        texts: [
+          { id: 'taken-back:r9', place: EDIT, reason: copy.errCommentEditNotRead, text: '수정' },
+        ],
+      },
+      { type: 'shown', ids: ['taken-back:r9'] },
+    ]);
+    expect(
+      detailsOf(
+        heldTextsAfter(draft, {
+          type: 'reason',
+          id: 'taken-back:r9',
+          reason: copy.errCommentNotEditable,
+        }),
+      ),
+    ).toEqual([['taken-back:r9', copy.errCommentNotEditable, '수정', false, false]]);
+    // An edit's box gone with the focus in it — a read again taking its 대댓글 out of the 300, its
+    // write refused for the network meanwhile — and drawn: its place's reason gives way too.
+    const box = run([
+      {
+        type: 'left',
+        boxId: 'box',
+        accountId: A,
+        text: 'box의 글자',
+        place: EDIT,
+        goneReason: copy.errCommentEditNotRead,
+        focus: true,
+        write: 'none',
+      },
+      refused('box', copy.errNetwork, false),
+      { type: 'shown', ids: ['box'] },
+    ]);
+    expect(detailsOf(box)).toEqual([['box', copy.errCommentEditNotRead, 'box의 글자', true, true]]);
+    expect(
+      detailsOf(
+        heldTextsAfter(box, { type: 'reason', id: 'box', reason: copy.errCommentNotYours }),
+      ),
+    ).toEqual([['box', copy.errCommentNotYours, 'box의 글자', false, false]]);
+  });
+
+  it('changes nothing for a text not held — closed, or another account’s gone with the switch', () => {
+    const state = run([refused('box'), left('box')]);
+    const event: HeldTextsEvent = { type: 'reason', id: 'box', reason: copy.errCommentNotYours };
+    const closed = heldTextsAfter(state, { type: 'dismiss', id: 'box' });
+    expect(heldTextsAfter(closed, event)).toBe(closed);
+    const switched = heldTextsAfter(state, { type: 'account', accountId: B });
+    expect(heldTextsAfter(switched, event)).toBe(switched);
+  });
+
+  it('changes nothing when it says what the text says already, nor for a text not shown yet', () => {
+    // The section asks again on every render a thread ended without the 대댓글 holds
+    // (`heldEditsReadToTheirEnd`): the same words again are no news — not read out again.
+    const drawn = run([
+      {
+        type: 'hold',
+        accountId: A,
+        texts: [{ id: 'taken-back:r9', place: EDIT, reason: copy.errCommentGone, text: '수정' }],
+      },
+      { type: 'shown', ids: ['taken-back:r9'] },
+    ]);
+    const same: HeldTextsEvent = {
+      type: 'reason',
+      id: 'taken-back:r9',
+      reason: copy.errCommentGone,
+    };
+    expect(heldTextsAfter(drawn, same)).toBe(drawn);
+    // A box gone with its write in flight is shown once its refusal comes: a reason before that
+    // shows nothing.
+    const onItsWay = run([left('box', { write: 'pending', goneReason: copy.errCommentGone })]);
+    expect(heldTextsOf(onItsWay)).toEqual([]);
+    const early: HeldTextsEvent = { type: 'reason', id: 'box', reason: copy.errCommentGone };
+    expect(heldTextsAfter(onItsWay, early)).toBe(onItsWay);
+  });
+});

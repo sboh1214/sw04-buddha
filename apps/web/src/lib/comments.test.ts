@@ -1,12 +1,14 @@
 import {
   COMMENT_BODY_EMPTY_MESSAGE,
   COMMENT_BODY_MAX_LENGTH,
+  COMMENT_REPLIES_PAGE_SIZE,
   commentBodyTooLongMessage,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type CommentThread, type PostAuthor, type PublishedComment } from './api';
 import {
+  REPLIES_KEPT_ON_READ,
   REPLY_READ_ON_PAGES,
   type CommentPages,
   type ReplyPage,
@@ -23,11 +25,17 @@ import {
   editDraftReadOnMark,
   editDraftsReadOn,
   goneBoxReason,
+  heldEditsReadIn,
+  heldEditsReadToTheirEnd,
   isCursorRefusal,
   isStaleThreadRefusal,
   placeHeldTexts,
   postCommentsKey,
+  repliesBrought,
+  repliesWritten,
   resolveCommentDrafts,
+  threadKeepsAnotherPage,
+  threadOf,
   threadReadsOn,
   threadWithReplies,
   type HeldText,
@@ -836,52 +844,130 @@ describe('drafts taken back after an onboarding step', () => {
     expect(draftsHeldOnReadFailure(resolved.waitingEdits, 't3', copy.errNetwork)).toEqual([]);
   });
 
-  it('read on one thread at a time and five reply pages at most a thread; past them an edit is shown apart, with why (오너 결정 2026-10-22 답 5)', () => {
-    const first = threadWithMore('t1-50', mine('t1'), mine('r1', 't1'));
-    const second = threadWithMore('t2-50', mine('t2'), mine('s1', 't2'));
-    const threads = [first, second];
-    const resolved = resolveCommentDrafts(
-      drafts({
-        edits: new Map([
-          ['r9', '고친 답글'],
-          ['s9', '다른 스레드의 고친 답글'],
-        ]),
-        editThreads: new Map([
-          ['r9', 't1'],
-          ['s9', 't2'],
-        ]),
-      }),
-      view(threads),
-    );
-    const read = (t1Pages = 0, t2Pages = 0) =>
-      editDraftsReadOn(threads, resolved, {
-        pagesRead: (threadId) => (threadId === 't1' ? t1Pages : t2Pages),
-        failed: () => undefined,
-      });
-    // The first thread waiting; one at a time.
-    expect(read()).toEqual({ read: first, past: [] });
-    // A thread's own pages count: four read, the fifth still to read — from the cursor it stands
-    // at, read from before or not (a read whose page the thread did not take, or one of an earlier
-    // set of drafts): under five pages a thread waiting is always read on, never left unseen.
-    expect(read(REPLY_READ_ON_PAGES - 1)).toEqual({ read: first, past: [] });
-    expect(read(1)).toEqual({ read: first, past: [] });
-    // Five read and its 대댓글 still not all read: its draft is shown apart with the owner’s words
-    // (답 3), and the other thread — none of its pages read — reads on.
+  /** `count` of the viewer's 대댓글 under the 댓글 `top`, as `<prefix>0`, `<prefix>1`, …. */
+  const minesUnder = (top: string, prefix: string, count: number) =>
+    Array.from({ length: count }, (_, index) => mine(`${prefix}${String(index)}`, top));
+
+  it('never read past the 300 대댓글 a read of the pages keeps (오너 결정 2026-10-22 (2차) 답 1)', () => {
+    expect(REPLIES_KEPT_ON_READ).toBe(COMMENT_REPLIES_PAGE_SIZE * (1 + REPLY_READ_ON_PAGES));
+    expect(REPLIES_KEPT_ON_READ).toBe(300);
+    const holding = (count: number) =>
+      threadWithMore('next', mine('t1'), ...minesUnder('t1', 'r', count));
+    // Read from its first page: 50, 100, … 250 — one page more ends at 300 at most.
+    for (const count of [0, 50, 100, 250])
+      expect(threadKeepsAnotherPage(holding(count))).toBe(true);
+    // Holding 300 — or more ('답글 더 보기' opened further), or short of a page's end (its own
+    // deleted, or a new one put at the end) — a page more could end past 300: none.
+    for (const count of [251, 299, 300, 301, 350]) {
+      expect(threadKeepsAnotherPage(holding(count))).toBe(false);
+    }
+  });
+
+  it('never open an edit past the 300 a read of the pages keeps, whatever the pages still hold: the read again on the way back not landed (오너 결정 2026-10-22 (2차) 답 1)', () => {
+    // The thread as '답글 더 보기' left it before the step — all 361 read, or 361 of more — the read
+    // again on the way back over without landing (cancelled by a write or another '답글 더 보기',
+    // failed, offline), so the drafts are placed against it as it is.
+    for (const cursor of [null, 't1-361']) {
+      const threads: CommentThread[] = [
+        { comment: mine('t1'), replies: minesUnder('t1', 'r', 361), repliesNextCursor: cursor },
+      ];
+      const resolved = resolveCommentDrafts(
+        drafts({
+          edits: new Map([
+            ['r329', '330번째 고친 답글'],
+            ['r299', '300번째 고친 답글'],
+          ]),
+          editThreads: new Map([
+            ['r329', 't1'],
+            ['r299', 't1'],
+          ]),
+        }),
+        view(threads),
+      );
+      // Its 300th opens; its 330th is shown apart, as one not found within the 300 — no box past
+      // them for the next read that lands to take away (and its text with it, apart).
+      expect([...resolved.edits]).toEqual([['r299', '300번째 고친 답글']]);
+      expect(resolved.unplaced).toEqual([
+        {
+          key: { kind: 'edit', postId: post, commentId: 'r329', threadId: 't1' },
+          text: '330번째 고친 답글',
+          reason: copy.errCommentEditNotRead,
+          place: { kind: 'comment', commentId: 'r329', threadId: 't1' },
+        },
+      ]);
+      expect([resolved.waitingThreads, resolved.waitingEdits]).toEqual([[], []]);
+    }
+  });
+
+  it('read on one thread at a time, up to its 300th 대댓글; at it an edit not found is shown apart, with why (오너 결정 2026-10-22 답 5, (2차) 답 1)', () => {
+    const drafted = drafts({
+      edits: new Map([
+        ['r9', '고친 답글'],
+        ['s9', '다른 스레드의 고친 답글'],
+      ]),
+      editThreads: new Map([
+        ['r9', 't1'],
+        ['s9', 't2'],
+      ]),
+    });
+    const second = threadWithMore('t2-50', mine('t2'), ...minesUnder('t2', 'y', 50));
     const r9Apart = {
       key: { kind: 'edit', postId: post, commentId: 'r9', threadId: 't1' },
       text: '고친 답글',
       reason: copy.errCommentEditNotRead,
       place: { kind: 'comment', commentId: 'r9', threadId: 't1' },
     };
-    expect(read(REPLY_READ_ON_PAGES)).toEqual({ read: second, past: [r9Apart] });
-    expect(read(REPLY_READ_ON_PAGES + 3)).toEqual({ read: second, past: [r9Apart] });
-    // Both at the cap: both shown apart, nothing more to read.
-    const both = read(REPLY_READ_ON_PAGES, REPLY_READ_ON_PAGES);
-    expect(both.read).toBeUndefined();
-    expect(both.past.map(({ text, reason }) => [text, reason])).toEqual([
-      ['고친 답글', copy.errCommentEditNotRead],
-      ['다른 스레드의 고친 답글', copy.errCommentEditNotRead],
-    ]);
+    /** The next step with the first thread holding `count` 대댓글, nothing read for these drafts. */
+    const stepAt = (count: number) => {
+      const first = threadWithMore('t1-next', mine('t1'), ...minesUnder('t1', 'x', count));
+      const threads = [first, second];
+      const resolved = resolveCommentDrafts(drafted, view(threads));
+      expect(resolved.waitingThreads).toEqual(['t1', 't2']);
+      return {
+        first,
+        step: editDraftsReadOn(threads, resolved, {
+          pagesRead: () => 0,
+          failed: () => undefined,
+        }),
+      };
+    };
+    // Its first 50, or 250 (one page short of 300): the first thread waiting is read; one at a time.
+    for (const count of [50, 250]) {
+      const { first, step } = stepAt(count);
+      expect(step).toEqual({ read: first, past: [] });
+    }
+    // Holding its 300 already — the comments kept in this tab across the step and read again on the
+    // way back as far as the screen had them, a step done in another tab — and r9 not among them:
+    // shown apart at once with the owner's words (답 3), nothing read for it; the other thread
+    // reads on. So for a thread holding more, or short of a page's end.
+    for (const count of [300, 301, 299]) {
+      expect(stepAt(count).step).toEqual({ read: second, past: [r9Apart] });
+    }
+  });
+
+  it('read on five reply pages at most a thread for a set of drafts: pages the thread did not take count too', () => {
+    const first = threadWithMore('t1-100', mine('t1'), ...minesUnder('t1', 'x', 100));
+    const threads = [first];
+    const resolved = resolveCommentDrafts(
+      drafts({ edits: new Map([['r9', '고친 답글']]), editThreads: new Map([['r9', 't1']]) }),
+      view(threads),
+    );
+    const step = (pagesRead: number) =>
+      editDraftsReadOn(threads, resolved, { pagesRead: () => pagesRead, failed: () => undefined });
+    // Four read and the thread at 100 (pages read again from under it): one more.
+    expect(step(REPLY_READ_ON_PAGES - 1)).toEqual({ read: first, past: [] });
+    // Five read: no sixth, though the thread is short of 300 — shown apart, with why.
+    expect(step(REPLY_READ_ON_PAGES)).toEqual({
+      read: undefined,
+      past: [
+        {
+          key: { kind: 'edit', postId: post, commentId: 'r9', threadId: 't1' },
+          text: '고친 답글',
+          reason: copy.errCommentEditNotRead,
+          place: { kind: 'comment', commentId: 'r9', threadId: 't1' },
+        },
+      ],
+    });
   });
 
   it('show an edit apart with the read’s failure when its thread still stands where that read failed, and read not from there again (오너 결정 2026-10-21 (2차) 답 2)', () => {
@@ -955,5 +1041,160 @@ describe('drafts taken back after an onboarding step', () => {
       read: undefined,
       past: [],
     });
+  });
+});
+
+describe('an edit’s text held apart once ‘답글 더 보기’ reads its 대댓글 (오너 결정 2026-10-22 (2차) 답 2)', () => {
+  const viewerPublicId = author.kind === 'member' ? author.publicId : '';
+  const theirs = (id: string, parentId: string): PublishedComment => ({
+    ...comment(id, parentId),
+    author: { ...author, publicId: 'other00000' },
+  });
+  const heldEdit = (id: string, commentId: string, reason: string = copy.errCommentEditNotRead) =>
+    ({
+      id,
+      place: { kind: 'comment', commentId, threadId: 't1' },
+      reason,
+      text: `${id}의 글자`,
+      focus: false,
+      shown: true,
+    }) satisfies HeldText;
+  const read = thread(
+    comment('t1'),
+    comment('before', 't1'),
+    comment('mine', 't1'),
+    comment('failed', 't1'),
+    { state: 'hidden', id: 'hidden' },
+    theirs('their', 't1'),
+    theirs('their-said', 't1'),
+  );
+  const brought = repliesBrought(read, new Set(['before']));
+
+  it('are the 대댓글 the thread holds now and did not as it was pressed', () => {
+    expect([...brought]).toEqual(['mine', 'failed', 'hidden', 'their', 'their-said']);
+    expect([...repliesBrought(undefined, new Set())]).toEqual([]);
+  });
+
+  it('opens the edit of a 대댓글 brought, published and the viewer’s own, with the held text — whatever kept it apart', () => {
+    const held = [
+      heldEdit('a', 'mine'),
+      heldEdit('b', 'failed', copy.errNetwork),
+      heldEdit('c', 'hidden'),
+      heldEdit('d', 'their'),
+      heldEdit('e', 'their-said', copy.errCommentNotYours),
+      // On screen before the press, not among its pages: nothing to them.
+      heldEdit('f', 'before'),
+      // Not in the thread after all (gone with a read again), or not an edit: nothing either.
+      heldEdit('g', 'elsewhere'),
+      { ...heldEdit('h', 'mine'), place: { kind: 'thread', threadId: 't1' } },
+    ] satisfies HeldText[];
+    expect(heldEditsReadIn(held, read, new Set([...brought, 'elsewhere']), viewerPublicId)).toEqual(
+      {
+        open: [
+          { id: 'a', commentId: 'mine', text: 'a의 글자' },
+          { id: 'b', commentId: 'failed', text: 'b의 글자' },
+        ],
+        // Read now, it takes no edit: why, in the server's words — only where they say something new.
+        reasons: [
+          { id: 'c', reason: copy.errCommentNotEditable },
+          { id: 'd', reason: copy.errCommentNotYours },
+        ],
+      },
+    );
+  });
+
+  it('opens nothing with no thread or no account on screen', () => {
+    const held = [heldEdit('a', 'mine')];
+    expect(heldEditsReadIn(held, undefined, brought, viewerPublicId)).toEqual({
+      open: [],
+      reasons: [],
+    });
+    expect(heldEditsReadIn(held, read, brought, undefined)).toEqual({ open: [], reasons: [] });
+    // Another account on screen than the 대댓글's author: stays, with why.
+    expect(heldEditsReadIn(held, read, brought, 'other00000')).toEqual({
+      open: [],
+      reasons: [{ id: 'a', reason: copy.errCommentNotYours }],
+    });
+  });
+});
+
+describe('what a reply page brought, judged as it is written (ADR-0074 7-30)', () => {
+  const held = pagesOf([[threadWithMore('t1-2', comment('t1'), comment('r1', 't1'))]]);
+  const page: ReplyPage = { items: [comment('r2', 't1'), comment('r3', 't1')], nextCursor: null };
+
+  it('is the 대댓글 the page put in the thread, and finds the thread among the pages', () => {
+    expect(threadOf(held, 't1')?.replies.map(({ id }) => id)).toEqual(['r1']);
+    expect(threadOf(held, 'nowhere')).toBeUndefined();
+    const next = withMoreReplies(held, 't1', 't1-2', page);
+    expect([...repliesWritten(held, next, 't1')]).toEqual(['r2', 'r3']);
+  });
+
+  it('is nothing when the page went nowhere: the thread moved on meanwhile — another read put its 대댓글 on screen — or is gone', () => {
+    // A new 대댓글's read on read the same page first: the cursor moved, and r2 is on screen
+    // already — its edit may be open, with what the writer typed since.
+    const movedOn = withMoreReplies(held, 't1', 't1-2', page);
+    const late = withMoreReplies(movedOn, 't1', 't1-2', page);
+    expect(late).toEqual(movedOn);
+    expect([...repliesWritten(movedOn, late, 't1')]).toEqual([]);
+    expect([...repliesWritten(undefined, undefined, 't1')]).toEqual([]);
+    // A 대댓글 the writer added at the end, read in its place now: not brought — it was there.
+    const added = withNewComment(held, comment('r3', 't1'));
+    const placed = withMoreReplies(added, 't1', 't1-2', page);
+    expect([...repliesWritten(added, placed, 't1')]).toEqual(['r2']);
+  });
+});
+
+describe('an edit’s text held apart whose thread is read to its end without its 대댓글 (오너 결정 2026-10-22 (2차) 답 2: 맞는 까닭)', () => {
+  const heldEdit = (
+    id: string,
+    commentId: string,
+    reason: string = copy.errCommentEditNotRead,
+    threadId = 't1',
+  ) =>
+    ({
+      id,
+      place: { kind: 'comment', commentId, threadId },
+      reason,
+      text: `${id}의 글자`,
+      focus: false,
+      shown: true,
+    }) satisfies HeldText;
+
+  it('says it is gone — a deleted 대댓글 is in no page — whatever it said while 대댓글 were unread', () => {
+    const ended = [thread(comment('t1'), comment('r1', 't1'))];
+    expect(
+      heldEditsReadToTheirEnd(ended, [
+        heldEdit('not-read', 'r9'),
+        heldEdit('failed', 'r8', copy.errNetwork),
+        heldEdit('refused', 'r7', copy.errUnknown),
+      ]),
+    ).toEqual([
+      { id: 'not-read', reason: copy.errCommentGone },
+      { id: 'failed', reason: copy.errCommentGone },
+      { id: 'refused', reason: copy.errCommentGone },
+    ]);
+  });
+
+  it('says nothing new while 대댓글 are unread, for a 대댓글 on screen, an edit of the 댓글, a reply box, a thread not on screen, or a text that says it already', () => {
+    const more = [threadWithMore('t1-50', comment('t1'), comment('r1', 't1'))];
+    expect(heldEditsReadToTheirEnd(more, [heldEdit('a', 'r9')])).toEqual([]);
+    const ended = [thread(comment('t1'), comment('r1', 't1'), { state: 'hidden', id: 'r2' })];
+    expect(
+      heldEditsReadToTheirEnd(ended, [
+        heldEdit('on-screen', 'r1'),
+        heldEdit('placeholder', 'r2', copy.errCommentNotEditable),
+        heldEdit('top', 't1', copy.errCommentGone),
+        heldEdit('elsewhere', 's9', copy.errCommentEditNotRead, 't2'),
+        heldEdit('said', 'r9', copy.errCommentGone),
+        {
+          id: 'reply',
+          place: { kind: 'thread', threadId: 't1' },
+          reason: copy.errCommentParentGone,
+          text: '답글',
+          focus: false,
+          shown: true,
+        },
+      ]),
+    ).toEqual([]);
   });
 });

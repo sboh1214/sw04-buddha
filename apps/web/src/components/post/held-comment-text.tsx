@@ -43,6 +43,8 @@ export function useHeldCommentTexts(
   going: CommentBoxGoing;
   hold: (accountId: string, texts: readonly Omit<HeldText, 'focus' | 'shown'>[]) => void;
   dismiss: (id: string) => void;
+  /** The held text `id` says `reason` now: why its edit, read by '답글 더 보기', cannot open. */
+  reason: (id: string, reason: string) => void;
 } {
   const [state, dispatch] = useReducer(heldTextsAfter, accountId, initialHeldTexts);
   // Another account on screen — or none — starts afresh, in this very render: a box this switch
@@ -87,14 +89,19 @@ export function useHeldCommentTexts(
       hold: (writer: string, texts: readonly Omit<HeldText, 'focus' | 'shown'>[]) =>
         dispatch({ type: 'hold', accountId: writer, texts }),
       dismiss: (id: string) => dispatch({ type: 'dismiss', id }),
+      reason: (id: string, reason: string) => dispatch({ type: 'reason', id, reason }),
     };
   }, []);
 
   const held = useMemo(() => heldTextsOf(state), [state]);
   // Every text this commit drew for the first time is drawn now: a later mount of it — its place
   // moved, under its comment or at its thread's end — is not new (`HeldCommentText`). From an
-  // effect of the section, which React runs after the commit that mounted them all (each held text
-  // is drawn somewhere: `placeHeldTexts` leaves none out).
+  // effect of the section, which React runs after the commit that mounted them all: each held text
+  // is drawn somewhere (`placeHeldTexts` leaves none out) — but for an edit's text on its way into
+  // its edit's box, which the section leaves out while its 대댓글 is on screen (`drawn` in
+  // comments-section.tsx) for the commit or two until that box has it: it was drawn, and marked so,
+  // before '답글 더 보기' brought its 대댓글, and it is closed once the box has it — or drawn again
+  // as it was, should the box not take it.
   useEffect(() => {
     const fresh = held.filter((text) => !text.shown).map((text) => text.id);
     if (fresh.length > 0) dispatch({ type: 'shown', ids: fresh });
@@ -116,9 +123,13 @@ export function useHeldCommentTexts(
  * focus elsewhere since. Otherwise — a draft taken back after a step, a box the reader had left —
  * the focus stays where it is and the reason is an alert, read out as it appears, as the refusal
  * under a box's button is. Both only the first time the text is drawn: moved — under its comment
- * once '답글 더 보기' reads it, back to its thread's end once a read again leaves it out
+ * once a read brings it, back to its thread's end once a read again leaves it out
  * (`placeHeldTexts`) — it is drawn anew in its new place, and then (`held.shown`) its reason is
- * neither read out again nor does it take the focus: nothing new happened to it.
+ * neither read out again nor does it take the focus: nothing new happened to it. An edit's text
+ * whose 대댓글 '답글 더 보기' reads opens in that edit instead, or stays here with a new reason —
+ * read out then, as new, whether it moved or not (오너 결정 2026-10-22 (2차) 답 2,
+ * comments-section.tsx): the reason is drawn anew, in an alert inserted with it, rather than left to
+ * a remount that happens to come with the same render.
  */
 export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -132,6 +143,16 @@ export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: ()
       typeof document !== 'undefined' &&
       (document.activeElement === null || document.activeElement === document.body),
   );
+  // The reason as drawn, and whether it is read out: as it first appears, unless the focus comes
+  // here (its name is the reason). A new reason while drawn — the rules mark it new (`held.shown`
+  // false: an edit whose 대댓글, read now, takes no edit, or whose thread ended without it) — is
+  // drawn anew as an alert and read out, whether or not the text moved with it; one the rules do
+  // not call new is drawn quietly (ADR-0074 7-25).
+  const [said, setSaid] = useState(() => ({
+    reason: held.reason,
+    alert: firstShowing && !takesFocus,
+  }));
+  if (said.reason !== held.reason) setSaid({ reason: held.reason, alert: !held.shown });
   useEffect(() => {
     if (takesFocus) ref.current?.focus({ preventScroll: false });
   }, [takesFocus]);
@@ -150,7 +171,7 @@ export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: ()
       bg="surface.card"
       data-testid="comment-held"
     >
-      <Alert.Root status="error" role={takesFocus || !firstShowing ? undefined : 'alert'}>
+      <Alert.Root key={said.reason} status="error" role={said.alert ? 'alert' : undefined}>
         <Alert.Indicator />
         <Alert.Content>
           <Alert.Description id={reasonId} data-testid="comment-held-reason">

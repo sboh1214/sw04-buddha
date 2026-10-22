@@ -27,7 +27,12 @@ import { type HeldText, type HeldTextPlace } from './comments';
  * A text is new once: the section tells which texts it has drawn (`shown`, after the commit that
  * drew them), so a later mount of one — its place moved between its comment and its thread's end as
  * the threads read again hold that comment or not (`placeHeldTexts`) — neither reads its reason out
- * again nor takes the focus (ADR-0074 7-25). A text closed and held again later is new again.
+ * again nor takes the focus (ADR-0074 7-25). A text closed and held again later is new again. An
+ * edit's text whose 대댓글 '답글 더 보기' has just read is the section's to open in that edit
+ * (`heldEditsReadIn`, 오너 결정 2026-10-22 (2차) 답 2) — it closes it (`dismiss`) once the box has
+ * it — or, the edit not opening there, to say why (`reason`); so does an edit's text whose thread is
+ * read to its end without its 대댓글 (`heldEditsReadToTheirEnd`: gone). A new reason is new again,
+ * read out where the text is drawn, never taking the focus.
  *
  * Each text is its writer's: the section is told who is on screen (`account`), and another account
  * — a sign-out or a sign-in in another tab of this browser, seen by SessionCacheGuard — starts it
@@ -100,6 +105,13 @@ export type HeldTextsEvent =
       texts: readonly { id: string; place: HeldTextPlace; reason: string; text: string }[];
     }
   | { type: 'dismiss'; id: string }
+  /**
+   * A held text's place says something else now (오너 결정 2026-10-22 (2차) 답 2): the edit's 대댓글,
+   * read by '답글 더 보기', takes no edit — hidden, or another account's (`heldEditsReadIn`) — or its
+   * thread, read to its end, does not hold it: gone (`heldEditsReadToTheirEnd`). Nothing for a text
+   * not shown, or one that says it already.
+   */
+  | { type: 'reason'; id: string; reason: string }
   | { type: 'shown'; ids: readonly string[] }
   | { type: 'post-gone' };
 
@@ -174,6 +186,24 @@ export function heldTextsAfter(state: HeldTextsState, event: HeldTextsEvent): He
     }
     case 'dismiss':
       return forget(state, event.id);
+    case 'reason': {
+      const one = state.heard.get(event.id);
+      // Only a text shown, and only to say something else: the same words again are no news.
+      if (one === undefined || one.accountId !== state.accountId) return state;
+      const now = reasonOf(one);
+      if (now === undefined || now === event.reason) return state;
+      // The server's words for why, as a draft held: new news, so read out as it is drawn again —
+      // and never taking the focus, which the reader has on the button that read the 대댓글.
+      return {
+        ...state,
+        heard: new Map(state.heard).set(event.id, {
+          ...one,
+          refusal: { reason: event.reason, stale: true },
+          focus: false,
+          shown: false,
+        }),
+      };
+    }
     case 'shown': {
       let heard: Map<string, Heard> | undefined;
       for (const id of event.ids) {
@@ -200,20 +230,26 @@ export function heldTextsAfter(state: HeldTextsState, event: HeldTextsEvent): He
  */
 export function heldTextsOf(state: HeldTextsState): HeldText[] {
   return [...state.heard].flatMap(([id, heard]): HeldText[] => {
-    const { refusal, text, place, goneReason } = heard;
+    const { text, place } = heard;
     if (text === undefined || place === undefined) return [];
     if (heard.accountId !== state.accountId) return [];
-    const reason =
-      refusal === undefined
-        ? heard.write === 'none'
-          ? goneReason
-          : undefined
-        : refusal.stale
-          ? refusal.reason
-          : (goneReason ?? refusal.reason);
+    const reason = reasonOf(heard);
     if (reason === undefined) return [];
     return [{ id, place, reason, text, focus: heard.focus === true, shown: heard.shown === true }];
   });
+}
+
+/** Why the text heard is shown (`heldTextsOf`), or nothing while it is not (yet) shown. */
+function reasonOf(heard: Heard): string | undefined {
+  const { refusal, text, place, goneReason } = heard;
+  if (text === undefined || place === undefined) return undefined;
+  return refusal === undefined
+    ? heard.write === 'none'
+      ? goneReason
+      : undefined
+    : refusal.stale
+      ? refusal.reason
+      : (goneReason ?? refusal.reason);
 }
 
 /**
