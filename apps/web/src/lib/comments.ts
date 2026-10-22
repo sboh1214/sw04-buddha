@@ -681,7 +681,7 @@ export interface HeldEditsBrought {
  * comment pages (`threadsReadOn`), the read on for drafts taken back (`editDraftsReadOn`) — 오너 결정
  * 2026-10-22 (3차) 답 1, which made every read do what (2차) 답 2 had '답글 더 보기' do — and no read
  * at all for one moved within the 300: the reader's own 삭제 of an earlier 대댓글 (`withoutComment`,
- * asked of the owner in ADR-0074 결과 4).
+ * as the owner confirmed, ADR-0074 오너 확인 2026-10-22 (오후) 답 1).
  *
  * A text held apart — its 대댓글 not among those read (`copy.errCommentEditNotRead`), a read that
  * failed, a refusal whose box went with its 대댓글 — opens that 대댓글's edit with it when the edit

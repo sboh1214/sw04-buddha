@@ -1226,7 +1226,7 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
     }
   });
 
-  it('a 대댓글 on screen past the 300 is brought within them with no read at all when the reader deletes an earlier 대댓글 of its thread — counted as a read’s (ADR-0074 7-30 (b), asked of the owner in 결과 4)', async () => {
+  it('a 대댓글 on screen past the 300 is brought within them with no read at all when the reader deletes an earlier 대댓글 of its thread — counted as a read’s (ADR-0074 7-30 (b), 오너 확인 2026-10-22 (오후) 답 1)', async () => {
     // The thread holding 301: the 301st on screen past the 300, its text held apart under it with
     // the owner's words (3차 답 3). The reader deletes their own 11th: the answer takes it out of the
     // pages (`withoutComment`), nothing is read, and the 301st is the 300th. The section opens its

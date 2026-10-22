@@ -325,7 +325,8 @@ export function CommentsSection({
   // already with what the writer typed since). A 대댓글 on screen past the 300 that an earlier one's
   // going moves within them counts as brought too, whatever moved it: a read of the pages after a
   // deletion elsewhere, or no read at all — the reader's own 삭제 of an earlier 대댓글 of the thread
-  // (`withoutComment`; whether that should open the box is asked of the owner, ADR-0074 결과 4).
+  // (`withoutComment`; it opens the box too, as the owner confirmed: ADR-0074 오너 확인
+  // 2026-10-22 (오후) 답 1).
   // Before the paint (a layout effect), so the held text is not seen under its 대댓글 for a frame
   // before its box. An edit open, or opened by a draft taken back in the same render, keeps what it
   // has, and the held text stays apart (`useReopened`) — and no toast says it was restored: the toast
