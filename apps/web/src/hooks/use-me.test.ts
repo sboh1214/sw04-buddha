@@ -836,6 +836,93 @@ describe('the profile image (#141)', () => {
     }
   });
 
+  it('sends a profile image again after a 429 that asks to wait, twice at most, as the post editor does (ADR-0079 7-18)', async () => {
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const busy = (seconds: number) =>
+      new ApiError(429, {
+        code: 'RATE_LIMITED',
+        message: 'busy',
+        details: { retryAfterSeconds: seconds },
+      });
+    const slept: number[] = [];
+    const retry = {
+      sleep: (ms: number) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+      alive: () => true,
+    };
+    const answers: (() => Promise<Me>)[] = [];
+    const sent: ProfileImageUpload[] = [];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          sent.push(body);
+          return answers.shift()!();
+        },
+        retry,
+      ),
+    );
+    const body = {
+      file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+      expectedAccountId: following.id,
+    };
+    try {
+      await me.observer.refetch();
+      // Busy twice, then stored: the third send is the outcome.
+      answers.push(
+        () => Promise.reject(busy(2)),
+        () => Promise.reject(busy(2)),
+        () =>
+          Promise.resolve({
+            ...following,
+            profile: { ...following.profile, imageUrl: `/api/v1/media/${IMAGE}` },
+          }),
+      );
+      await upload.mutate(body);
+      expect(sent).toEqual([body, body, body]);
+      expect(slept).toEqual([2_000, 2_000]);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.imageUrl).toBe(
+        `/api/v1/media/${IMAGE}`,
+      );
+      // Busy three times: the third refusal is the outcome.
+      sent.length = 0;
+      slept.length = 0;
+      answers.push(
+        () => Promise.reject(busy(2)),
+        () => Promise.reject(busy(2)),
+        () => Promise.reject(busy(2)),
+      );
+      await expect(upload.mutate(body)).rejects.toThrow('busy');
+      expect(sent).toHaveLength(3);
+      expect(slept).toEqual([2_000, 2_000]);
+      // A wait longer than 10 seconds, and any other refusal, is the outcome at once.
+      sent.length = 0;
+      slept.length = 0;
+      answers.push(() => Promise.reject(busy(60)));
+      await expect(upload.mutate(body)).rejects.toThrow('busy');
+      answers.push(() =>
+        Promise.reject(
+          new ApiError(422, {
+            code: 'IMAGE_NOT_ALLOWED',
+            message: 'refused',
+            details: { reason: 'type' },
+          }),
+        ),
+      );
+      await expect(upload.mutate(body)).rejects.toThrow('refused');
+      expect(sent).toHaveLength(2);
+      expect(slept).toEqual([]);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
   it('asks for the session again when a deletion is refused for another account', async () => {
     const queryClient = getQueryClient();
     const session = sessionRefetches();

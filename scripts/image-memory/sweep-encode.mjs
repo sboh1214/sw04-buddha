@@ -6,6 +6,13 @@
 // refuses means a bound moved and the case list wants looking at.
 //
 //   node scripts/image-memory/sweep-encode.mjs [--only webp] [--jobs 3] [--keep dir] [--out f]
+//   node scripts/image-memory/sweep-encode.mjs --profile-image ...
+//
+// --profile-image: a profile image's cases instead (#141, ADR-0079), converted by the build's
+// processProfileImage (`measure.mjs --via profile`) — JPEG, PNG and WebP at the bounds of its own
+// header check (`profileLargestFramePixels`), the first frame of an animated WebP, and each way to
+// the square (`profileSquare`: scaled first, or cut from the file first — a PNG always, a JPEG or a
+// WebP four times longer than wide and more).
 //
 // Run it on Linux in the API's image to measure what production runs (README.md); macOS's
 // allocator keeps more and its numbers run higher. --only takes a prefix of the case names.
@@ -23,8 +30,10 @@ const { values } = parseArgs({
     jobs: { type: 'string' },
     keep: { type: 'string' },
     out: { type: 'string' },
+    'profile-image': { type: 'boolean', default: false },
   },
 });
+const profileImage = values['profile-image'];
 
 const api = await loadApi();
 const { IMAGE_MAX_INPUT_PIXELS } = await loadShared();
@@ -295,21 +304,231 @@ const CASES = [
       String(Math.floor(api.WEBP_ANIMATION_MAX_PIXELS / (anim32w * anim32h))),
     ]),
   ],
-].filter(([name]) => values.only === undefined || name.startsWith(values.only));
+];
+
+// A profile image's (#141): its header check's bounds — a PNG's kind and a JPEG's as a post's
+// image's, a WebP cut from the file at PROFILE_WEBP_CUT_BYTES_PER_PIXEL — at the shapes its square
+// costs most: square (scaled first), just at 4:1 and at 32:1 (cut first). The PNGs are the
+// costliest shapes `sweep-png.mjs --profile-image` found for the kinds that cost the most there.
+const profileBound = (type, header, width, height) =>
+  api.profileLargestFramePixels(type, { ...still, pages: 1, ...header }, width, height);
+/** The widest frame at `ratio`:1 within the profile bound of that shape — [width, height]. */
+const profileThin = (type, header, ratio) => {
+  let [width, height] = thin(profileBound(type, header, 4_096, 1_024), ratio);
+  while (width * height > profileBound(type, header, width, height)) {
+    height -= 1;
+    width = ratio * height;
+  }
+  return [width, height];
+};
+const progressiveHeader = { isProgressive: true };
+const cmykHeader = { channels: 4, isProgressive: true };
+const [pj4w, pj4h] = profileThin('image/jpeg', progressiveHeader, 4);
+const [pj32w, pj32h] = profileThin('image/jpeg', progressiveHeader, 32);
+const [cj4w, cj4h] = profileThin('image/jpeg', cmykHeader, 4);
+const [cj32w, cj32h] = profileThin('image/jpeg', cmykHeader, 32);
+const [bj32w, bj32h] = thin(IMAGE_MAX_INPUT_PIXELS, api.IMAGE_MAX_SIDE_RATIO);
+const alphaHeader = { channels: 4, hasAlpha: true };
+const [wa4w, wa4h] = profileThin('image/webp', alphaHeader, 4);
+const [wa30w, wa30h] = profileThin('image/webp', alphaHeader, 30);
+const [wo4w, wo4h] = profileThin('image/webp', {}, 4);
+const PROFILE_CASES = [
+  [
+    'jpeg-progressive-444',
+    make(
+      'jpeg',
+      progressive,
+      progressive,
+      encoder({ quality: 12, progressive: true, chromaSubsampling: '4:4:4' }),
+    ),
+  ],
+  [
+    'jpeg-progressive-444-4to1-o6',
+    make('jpeg', pj4w, pj4h, [
+      ...encoder({ quality: 12, progressive: true, chromaSubsampling: '4:4:4' }),
+      '--orientation',
+      '6',
+    ]),
+  ],
+  [
+    'jpeg-progressive-444-32to1',
+    make(
+      'jpeg',
+      pj32w,
+      pj32h,
+      encoder({ quality: 12, progressive: true, chromaSubsampling: '4:4:4' }),
+    ),
+  ],
+  [
+    'jpeg-progressive-cmyk',
+    make('jpeg', cmyk, cmyk, [
+      '--colourspace',
+      'cmyk',
+      ...encoder({ quality: 1, progressive: true }),
+    ]),
+  ],
+  [
+    'jpeg-progressive-cmyk-4to1-o6-icc',
+    make('jpeg', cj4w, cj4h, [
+      '--colourspace',
+      'cmyk',
+      ...encoder({ quality: 1, progressive: true }),
+      '--orientation',
+      '6',
+      '--icc',
+      'cmyk',
+    ]),
+  ],
+  [
+    'jpeg-progressive-cmyk-32to1',
+    make('jpeg', cj32w, cj32h, [
+      '--colourspace',
+      'cmyk',
+      ...encoder({ quality: 1, progressive: true }),
+    ]),
+  ],
+  [
+    'jpeg-baseline-o6',
+    make('jpeg', baseline, baseline, [...encoder({ quality: 5 }), '--orientation', '6']),
+  ],
+  [
+    'jpeg-baseline-32to1-o6',
+    make('jpeg', bj32w, bj32h, [
+      '--content',
+      'flat',
+      ...encoder({ quality: 50 }),
+      '--orientation',
+      '6',
+    ]),
+  ],
+  // PNG: each the costliest shape `sweep-png.mjs --profile-image` found for its kind (macOS arm64,
+  // libvips' mark) among the kinds that cost the most — the interlaced ones, decoded whole — and
+  // the costliest plain one.
+  [
+    'png-grey16-interlaced',
+    null,
+    [
+      '--channels',
+      '1',
+      '--depth',
+      '16',
+      '--interlaced',
+      '--width',
+      '6477',
+      '--height',
+      '6475',
+      '--profile',
+    ],
+  ],
+  [
+    'png-rgb8-interlaced',
+    null,
+    ['--channels', '3', '--interlaced', '--width', '5189', '--height', '5087', '--profile'],
+  ],
+  [
+    'png-ga16-interlaced',
+    null,
+    [
+      '--channels',
+      '2',
+      '--depth',
+      '16',
+      '--interlaced',
+      '--width',
+      '4260',
+      '--height',
+      '4061',
+      '--profile',
+    ],
+  ],
+  [
+    'png-rgba8-interlaced',
+    null,
+    ['--channels', '4', '--interlaced', '--width', '3963', '--height', '3961', '--profile'],
+  ],
+  [
+    'png-rgb16',
+    null,
+    ['--channels', '3', '--depth', '16', '--width', '20270', '--height', '646', '--profile'],
+  ],
+  [
+    'png-rgb8-32to1',
+    null,
+    ['--channels', '3', '--width', '39572', '--height', '1263', '--profile'],
+  ],
+  [
+    'webp-alpha-read-bound',
+    make('webp', webpAlphaRead, webpAlphaRead, [
+      '--channels',
+      '4',
+      ...encoder({ quality: 1, alphaQuality: 20 }),
+    ]),
+  ],
+  [
+    'webp-alpha-read-bound-o6-p3',
+    make('webp', webpAlphaRead, webpAlphaRead, [
+      '--channels',
+      '4',
+      ...encoder({ quality: 1, alphaQuality: 20 }),
+      '--orientation',
+      '6',
+      '--icc',
+      'p3',
+    ]),
+  ],
+  [
+    'webp-alpha-cut-4to1',
+    make('webp', wa4w, wa4h, ['--channels', '4', ...encoder({ quality: 1, alphaQuality: 20 })]),
+  ],
+  [
+    'webp-alpha-cut-4to1-o6-p3',
+    make('webp', wa4w, wa4h, [
+      '--channels',
+      '4',
+      ...encoder({ quality: 1, alphaQuality: 20 }),
+      '--orientation',
+      '6',
+      '--icc',
+      'p3',
+    ]),
+  ],
+  [
+    'webp-alpha-cut-30to1',
+    make('webp', wa30w, wa30h, ['--channels', '4', ...encoder({ quality: 1, alphaQuality: 20 })]),
+  ],
+  ['webp-opaque-cut-4to1', make('webp', wo4w, wo4h, encoder({ quality: 30 }))],
+  [
+    'webp-animation-first-frame',
+    make('webp', webpAlphaRead, webpAlphaRead, [
+      '--channels',
+      '4',
+      '--alpha-levels',
+      '2',
+      '--frames',
+      '2',
+      ...encoder({ quality: 1 }),
+    ]),
+  ],
+];
+
+const SELECTED = (profileImage ? PROFILE_CASES : CASES).filter(
+  ([name]) => values.only === undefined || name.startsWith(values.only),
+);
 
 const dir = values.keep ?? mkdtempSync(path.join(tmpdir(), 'image-memory-'));
 mkdirSync(dir, { recursive: true });
 try {
-  const results = await pool(CASES, jobs, async ([name, makeFlags, pngFlags]) => {
+  const via = profileImage ? 'profile' : 'api';
+  const results = await pool(SELECTED, jobs, async ([name, makeFlags, pngFlags]) => {
     let measured;
     let made;
     if (makeFlags === null) {
-      measured = await measureInChild([...pngFlags, '--via', 'api']);
+      measured = await measureInChild([...pngFlags, '--via', via]);
     } else {
       const file = path.join(dir, `${name}.${makeFlags[1] === 'jpeg' ? 'jpg' : makeFlags[1]}`);
       made = await makeImageInChild([...makeFlags, '--out', file]);
       if (made.error) return { case: name, error: `make-image: ${made.error}` };
-      measured = await measureInChild(['--file', file, '--via', 'api']);
+      measured = await measureInChild(['--file', file, '--via', via]);
       if (values.keep === undefined) rmSync(file, { force: true });
     }
     if (measured.error) return { case: name, error: measured.error };
@@ -333,6 +552,7 @@ try {
   emit(
     {
       type: 'summary',
+      ...(profileImage ? { pipeline: 'profile image' } : {}),
       budgetMiB,
       cases: results.length,
       errors: results.filter((r) => r.error !== undefined).map((r) => `${r.case}: ${r.error}`),

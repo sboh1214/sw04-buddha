@@ -452,10 +452,13 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     status: 403,
   },
   // B's cookie naming A's account (#141): the file is the body, so the account rides in the query —
-  // refused before the body is looked at; nothing is stored and A's image stays A's (below).
+  // refused before the body is looked at; nothing is stored and A's image stays A's (below). Sent
+  // as an image, as a post's upload is: the route takes no JSON (415 before any check of the
+  // account — image-body.ts).
   'PUT /me/profile-image': {
     query: { expectedAccountId: (fixture) => fixture.a.id },
-    body: () => ({}),
+    body: () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    contentType: 'image/jpeg',
     status: 403,
   },
   // B's cookie naming A's account (#141): refused before anything is read — A's image stays, row

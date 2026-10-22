@@ -26,17 +26,12 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { RawResponse } from '../common/decorators/raw-response.decorator.js';
-import { AppError } from '../common/errors/app-error.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
-import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from './image-body.js';
+import { IMAGE_UPLOAD_CONTENT_TYPES, handleUpload } from './image-body.js';
 import { IMAGE_BINARY, answerImage } from './image-response.js';
-import {
-  IMAGE_BUSY_RETRY_SECONDS,
-  IMAGE_MAX_SIDE_RATIO,
-  WEBP_ALPHA_MAX_OUTPUT_PIXELS,
-} from './image.js';
+import { IMAGE_MAX_SIDE_RATIO, WEBP_ALPHA_MAX_OUTPUT_PIXELS } from './image.js';
 import { MediaService } from './media.service.js';
 
 /**
@@ -58,9 +53,10 @@ export class MediaController {
    * alone would put the upload on whichever account signed in last in another tab.
    *
    * The conversion and the store run as part of the upload the body parser's gate let in
-   * (`runUploadWork`, image-body.ts): the account's place among its three uploads in flight is held
-   * until they settle, even when the client has hung up meanwhile, and a client gone before they
-   * start has nothing stored — there is no one to answer.
+   * (`handleUpload` — `runUploadWork`, image-body.ts, the profile image's upload's too): the
+   * account's place among its three uploads in flight is held until they settle, even when the
+   * client has hung up meanwhile, and a client gone before they start has nothing stored — there is
+   * no one to answer.
    */
   @Post('images')
   @UseGuards(SessionGuard, OnboardedGuard)
@@ -105,30 +101,9 @@ export class MediaController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<UploadedImage | undefined> {
     assertExpectedAccount(user.id, query.expectedAccountId);
-    if (!(body instanceof Buffer)) {
-      throw new AppError('VALIDATION_ERROR', {
-        message: 'The body must be the image file itself',
-        details: [
-          { path: [], message: `send the file as ${IMAGE_UPLOAD_CONTENT_TYPES.join(', ')}` },
-        ],
-      });
-    }
-    const work = runUploadWork(request, () =>
-      this.media.uploadPostImage(user.id, new Uint8Array(body)),
+    return handleUpload(request, reply, body, (bytes) =>
+      this.media.uploadPostImage(user.id, bytes),
     );
-    // The client has gone already: there is no one to answer.
-    if (work === undefined) return undefined;
-    try {
-      return await work;
-    } catch (error) {
-      // Too many conversions waiting, or no room in the API's memory for one in time (image.ts):
-      // the header every other 429 of the API carries, with the same seconds as
-      // `details.retryAfterSeconds`.
-      if (error instanceof AppError && error.code === 'RATE_LIMITED') {
-        void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
-      }
-      throw error;
-    }
   }
 
   /**

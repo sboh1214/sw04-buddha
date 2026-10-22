@@ -364,8 +364,9 @@ export function profileImageRefusalMessage(reason: ImageRefusal): string {
  * #185's and #139's to say (owner decision 2026-10-21 answer 8 on #41, ADR-0078 7-9).
  */
 export function profileImageUploadFailure(error: unknown): string {
-  // Nothing here is ever an editor's upload given up (`UploadAbandoned`), the one thing said as
-  // nothing with `gateMoves` false.
+  // Never an upload given up while it waited to be sent again (`UploadAbandoned`, the one thing
+  // said as nothing with `gateMoves` false): the card's sends are never given up (hooks/use-me.ts).
+  // A 429 here is one still refused after the card sent the file again: a failed upload.
   return imageUploadErrorMessage(error, false, profileImageRefusalMessage) ?? copy.errImageUpload;
 }
 

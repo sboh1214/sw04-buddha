@@ -22,6 +22,7 @@ import { jpegWithComponents, jpegWithFrame } from '../test/jpeg.js';
 import { type PngKind, pngHeaderOnly, pngOf } from '../test/png.js';
 import {
   GIF_ANIMATION_LARGEST_FRAME_PIXELS,
+  IMAGE_BUSY_RETRY_SECONDS,
   IMAGE_CONVERSION_PEAK_BYTES,
   IMAGE_DECODE_BUDGET_BYTES,
   IMAGE_MAX_SIDE_RATIO,
@@ -1037,14 +1038,151 @@ describe('processProfileImage (#141)', () => {
     expect(panorama).toMatchObject({ contentType: 'image/webp', width: 100, height: 100 });
   });
 
-  it('converts through the same one-at-a-time queue', async () => {
+  it('converts in the same turn as a post’s image: one at a time, once the API’s memory has room for a conversion’s peak — or RATE_LIMITED past the wait', async () => {
     const run = vi.spyOn(imageConversions, 'run');
+    const admit = vi.spyOn(memoryAdmission, 'admit');
     try {
       await processProfileImage(await solid(4, 4).png().toBuffer());
       expect(run).toHaveBeenCalledTimes(1);
+      expect(admit.mock.calls.map(([bytes, { kind }]) => [bytes, kind])).toEqual([
+        [IMAGE_CONVERSION_PEAK_BYTES, 'conversion'],
+      ]);
+      // A refusal from the header waits for nothing.
+      expect(await refusal(pngHeaderOnly(100_000, 100_000), processProfileImage)).toBe('pixels');
+      expect(run).toHaveBeenCalledTimes(1);
+      // No room for the peak in its wait: refused, nothing converted.
+      memoryAdmission.configure({ ceilingBytes: 416 * MiB, resident: () => 416 * MiB });
+      memoryWaits.conversionMs = 100;
+      await expect(processProfileImage(await solid(4, 4).png().toBuffer())).rejects.toMatchObject({
+        code: 'RATE_LIMITED',
+        details: { retryAfterSeconds: IMAGE_BUSY_RETRY_SECONDS },
+      });
     } finally {
       run.mockRestore();
+      admit.mockRestore();
+      memoryAdmission.configure({ ceilingBytes: null });
+      memoryWaits.conversionMs = 10_000;
     }
+  });
+
+  it('encodes with a post’s image’s encoder settings, as a still image: a WebP with alpha at its least effort, and never written smaller than its square', async () => {
+    // At most PROFILE_IMAGE_SIZE² pixels: within what a still WebP with alpha is written at
+    // (WEBP_ALPHA_MAX_OUTPUT_PIXELS), so `outputBox` would never shrink a profile square.
+    expect(PROFILE_IMAGE_SIZE ** 2).toBeLessThanOrEqual(WEBP_ALPHA_MAX_OUTPUT_PIXELS);
+    const noise = (width: number, height: number, channels: 3 | 4) => {
+      const raw = Buffer.alloc(width * height * channels);
+      for (let i = 0; i < raw.length; i += 1) raw[i] = (i * 7919) % 251;
+      return sharp(raw, { raw: { width, height, channels } });
+    };
+    /**
+     * The square as `profileSquare` makes it, encoded with `encoder`: a JPEG or a WebP this size is
+     * scaled first (its long side within 2,048px, raw pixels), a PNG cut from the file first.
+     */
+    const square = async (file: Buffer, side: number, encoder: object) => {
+      const { format, width = 0, height = 0 } = await sharp(file).metadata();
+      const as = format as 'jpeg' | 'png' | 'webp';
+      if (as === 'png') {
+        const cut = Math.min(width, height);
+        return sharp(file)
+          .extract({
+            left: Math.floor((width - cut) / 2),
+            top: Math.floor((height - cut) / 2),
+            width: cut,
+            height: cut,
+          })
+          .autoOrient()
+          .resize({ width: side, height: side, fit: 'cover', position: 'centre' })
+          .toFormat(as, encoder)
+          .toBuffer();
+      }
+      const { data, info } = await sharp(file, { animated: false })
+        .autoOrient()
+        .resize({ width: 2_048, height: 2_048, fit: 'inside', withoutEnlargement: true })
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      return sharp(data, {
+        raw: { width: info.width, height: info.height, channels: info.channels },
+      })
+        .resize({ width: side, height: side, fit: 'cover', position: 'centre' })
+        .toFormat(as, encoder)
+        .toBuffer();
+    };
+    const still = { hasAlpha: true, pages: 1 } as const;
+    const cases: [string, Buffer, object][] = [
+      ['jpeg', await noise(700, 600, 3).jpeg().toBuffer(), encoderOptions('image/jpeg', still)],
+      ['png', await noise(700, 600, 4).png().toBuffer(), encoderOptions('image/png', still)],
+      [
+        'webp with alpha',
+        await noise(700, 600, 4).webp().toBuffer(),
+        { quality: 85, effort: 0, smartSubsample: false },
+      ],
+      [
+        'webp',
+        await noise(700, 600, 3).webp().toBuffer(),
+        { quality: 85, effort: 2, smartSubsample: false },
+      ],
+    ];
+    for (const [name, file, encoder] of cases) {
+      const image = await processProfileImage(file);
+      expect({
+        name,
+        same: Buffer.from(image.body).equals(await square(file, 512, encoder)),
+      }).toEqual({
+        name,
+        same: true,
+      });
+    }
+    // An animated WebP with alpha is its first frame, a still: the still's least effort, not an
+    // animation's 2.
+    const frames = 3;
+    const raw = Buffer.alloc(600 * 500 * frames * 4);
+    for (let i = 0; i < raw.length; i += 1) raw[i] = (i * 31) % 253;
+    const animated = await sharp(raw, {
+      raw: { width: 600, height: 500 * frames, channels: 4, pageHeight: 500 },
+    })
+      .webp({ delay: [100, 100, 100], loop: 0 })
+      .toBuffer();
+    const image = await processProfileImage(animated);
+    expect(image).toMatchObject({ contentType: 'image/webp', width: 500, height: 500 });
+    expect(
+      Buffer.from(image.body).equals(
+        await square(animated, 500, { quality: 85, effort: 0, smartSubsample: false }),
+      ),
+    ).toBe(true);
+  });
+
+  it('bounds a PNG by its kind’s largest frame, as a post’s image is (owner decision 2026-10-22, #46 answer 4 of 2026-10-21 (2차))', async () => {
+    // At the bound the header passes and the decoder gets the few bytes there are (`unreadable`); a
+    // column more is refused from the header. RGBA (8-bit and 16-bit) and interlaced RGB: smaller
+    // than the 50 megapixels a grey or RGB PNG may have.
+    const kinds: PngKind[] = [
+      { channels: 4 },
+      { channels: 4, depth: 16 },
+      { channels: 3, interlaced: true },
+    ];
+    for (const kind of kinds) {
+      const bound =
+        PNG_LARGEST_FRAME_PIXELS[kind.channels!][kind.depth ?? 8][kind.interlaced ? 1 : 0];
+      const [width, height] = frameOf(bound);
+      expect({
+        kind,
+        at: await refusal(pngHeaderOnly(width, height, kind), processProfileImage),
+        past: await refusal(pngHeaderOnly(width + 1, height, kind), processProfileImage),
+      }).toEqual({ kind, at: 'unreadable', past: 'pixels' });
+    }
+  });
+
+  it('counts an animated WebP’s first frame alone, as a still WebP: a frame past an animation’s bound is taken', async () => {
+    // Two frames of 1100×1000: each past a WebP animation's largest frame (1.05 megapixels — what a
+    // post's image keeps every frame of), within a still WebP's.
+    expect(1_100 * 1_000).toBeGreaterThan(WEBP_ANIMATION_LARGEST_FRAME_PIXELS);
+    const file = await animation('webp', 1_100, 1_000, 2);
+    expect(await refusal(file)).toBe('pixels');
+    expect(await processProfileImage(file)).toMatchObject({
+      contentType: 'image/webp',
+      width: 512,
+      height: 512,
+    });
   });
 });
 

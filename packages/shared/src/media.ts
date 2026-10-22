@@ -72,6 +72,39 @@ export const IMAGE_MAX_INPUT_PIXELS = 50_000_000;
 export const ORPHAN_MEDIA_HOURS = 24;
 
 /**
+ * How long a removal the store refused waits before a run of the worker's `media.orphan_cleanup`
+ * tries it again (the `media_deletions` queue, #46, ADR-0073 decision 6), by how many times it has
+ * been refused: an hour after the first (the next run), then twice as long each time, at most a
+ * day — a store that is down for a while is not asked every hour for every key, and one that keeps
+ * refusing a key is still asked daily (the key is never given up; each refusal is logged). The
+ * wait counts from the start of the run that was refused, less ORPHAN_MEDIA_RETRY_SLACK_MINUTES, so
+ * the run that many hours later is the one that tries it again. A replaced or deleted profile
+ * image's key, which the API queues and tries at once (#141, ADR-0079), counts a refusal of that
+ * first try from its own moment.
+ */
+export const ORPHAN_MEDIA_RETRY_FIRST_HOURS = 1;
+export const ORPHAN_MEDIA_RETRY_MAX_HOURS = 24;
+
+/**
+ * How much sooner than its wait a refused key comes due, in minutes. The worker's runs are an hour
+ * apart by the cron (`17 * * * *`, queues.ts), but each starts when the worker picks it up — a few
+ * milliseconds after :17, sometimes sooner after it than the run before — and reaches a key only
+ * after the queue's transaction, the deletes before it and the store's own retries. Counted from
+ * the refusal itself, the next run always came a little before the key was due and every wait was
+ * a run longer than it says (2, 3, 5 … 25 hours, review of the Codex-fix round). A run that starts
+ * more than this late tries it an hour later.
+ */
+export const ORPHAN_MEDIA_RETRY_SLACK_MINUTES = 5;
+
+/** The wait after the `attempts`-th refusal, in hours (1, 2, 4 … up to a day). */
+export function orphanMediaRetryHours(attempts: number): number {
+  return Math.min(
+    ORPHAN_MEDIA_RETRY_MAX_HOURS,
+    ORPHAN_MEDIA_RETRY_FIRST_HOURS * 2 ** Math.max(0, attempts - 1),
+  );
+}
+
+/**
  * The path an image is read from, relative to the site (the web proxies `/api`, ADR-0017): a
  * post's image and a profile image alike. A new upload has a new id, so a replaced profile image
  * is a new address and no cache shows the old one under it (ADR-0079).

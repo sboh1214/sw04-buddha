@@ -1,5 +1,9 @@
 import { schema, type Db } from '@buddha/db';
-import { ORPHAN_MEDIA_HOURS } from '@buddha/shared';
+import {
+  ORPHAN_MEDIA_HOURS,
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
+  orphanMediaRetryHours,
+} from '@buddha/shared';
 import { type ObjectStorage } from '@buddha/storage';
 import { and, asc, eq, inArray, isNull, lt, lte, sql } from 'drizzle-orm';
 import { messageOf } from './scan.js';
@@ -12,35 +16,16 @@ import { messageOf } from './scan.js';
  */
 export const ORPHAN_MEDIA_BATCH = 500;
 
-/**
- * How long a removal the store refused waits before a run tries it again, by how many times it
- * has been refused: an hour after the first (the next run), then twice as long each time, at most
- * a day — a store that is down for a while is not asked every hour for every key, and one that
- * keeps refusing a key is still asked daily (the key is never given up; each refusal is logged).
- * The wait counts from the start of the run that was refused, less ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
- * so the run that many hours later is the one that tries it again.
- */
-export const ORPHAN_MEDIA_RETRY_FIRST_HOURS = 1;
-export const ORPHAN_MEDIA_RETRY_MAX_HOURS = 24;
-
-/**
- * How much sooner than its wait a refused key comes due, in minutes. Runs are an hour apart by the
- * cron (`17 * * * *`, queues.ts), but each starts when the worker picks it up — a few milliseconds
- * after :17, sometimes sooner after it than the run before — and reaches a key only after the
- * queue's transaction, the deletes before it and the store's own retries. Counted from the
- * refusal itself, the next run always came a little before the key was due and every wait was a
- * run longer than it says (2, 3, 5 … 25 hours, review of the Codex-fix round). A run that starts
- * more than this late tries it an hour later.
- */
-export const ORPHAN_MEDIA_RETRY_SLACK_MINUTES = 5;
-
-/** The wait after the `attempts`-th refusal, in hours (1, 2, 4 … up to a day). */
-export function orphanMediaRetryHours(attempts: number): number {
-  return Math.min(
-    ORPHAN_MEDIA_RETRY_MAX_HOURS,
-    ORPHAN_MEDIA_RETRY_FIRST_HOURS * 2 ** Math.max(0, attempts - 1),
-  );
-}
+// The retry schedule of `media_deletions` (ORPHAN_MEDIA_RETRY_*, `orphanMediaRetryHours`) lives in
+// @buddha/shared beside ORPHAN_MEDIA_HOURS: the API's ProfileImageService queues the replaced or
+// deleted profile image's key (#141, ADR-0079) and, when the store refuses its own first try,
+// counts that refusal on the same schedule. Re-exported here, where the job and its spec name it.
+export {
+  ORPHAN_MEDIA_RETRY_FIRST_HOURS,
+  ORPHAN_MEDIA_RETRY_MAX_HOURS,
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
+  orphanMediaRetryHours,
+} from '@buddha/shared';
 
 /** One object the store would not remove this run: its key stays queued for a later run. */
 export interface OrphanMediaFailure {
@@ -101,7 +86,9 @@ export interface OrphanMediaOutcome {
  * its images as well, with no retention period (owner decision 2026-10-21, ADR-0077).
  * NoticesService locks the uploads it takes the same way. Nor is a profile image (#141): it is
  * attached from the transaction that stores it (a CHECK of `media_objects`), and the member's
- * replacement or deletion removes it at once (the API's ProfileImageService).
+ * replacement or deletion removes it at once (the API's ProfileImageService) — its key queued here
+ * in that write's transaction and tried by the API right after, so a key the store refused then is
+ * one more key step 2 tries again, whatever wrote it (owner decision 2026-10-22, ADR-0079).
  */
 export async function removeOrphanMedia(
   db: Db,

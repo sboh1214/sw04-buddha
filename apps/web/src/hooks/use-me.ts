@@ -17,6 +17,7 @@ import {
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { applyBalanceEvent } from '@/lib/market-live';
 import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
+import { type UploadRetrySteps, pause, sendRetrying } from '@/lib/post-editor';
 import { profileImageContentType } from '@/lib/profile';
 import { useSession } from '@/lib/use-session';
 
@@ -369,21 +370,33 @@ export async function putProfileImage({
 }
 
 /**
+ * The waits of a profile upload sent again (`sendRetrying`): the page's clock, and never given up —
+ * the member picked the file, and the image is the profile's whether or not the card is still on
+ * screen when it lands (its answer goes into `['me']`).
+ */
+const PROFILE_UPLOAD_RETRY: UploadRetrySteps = { sleep: pause, alive: () => true };
+
+/**
  * `PUT /me/profile-image` as mutation options: the answer's image address goes into `['me']`
  * through `storeMe`, as the 소개's does, so the card and every observer show the new image at once
- * — a new upload is a new address, so no cache shows the old image under it. The 403 for another
- * account asks for the session again; an ONBOARDING_REQUIRED — a revision asked for the consent
- * again while the screen was open — asks `['me']` again, and the gate, or on MY 설정 the step
- * (`useSettingsStep`), takes the member on. A refused file (IMAGE_NOT_ALLOWED) is neither: the card
- * says why.
+ * — a new upload is a new address, so no cache shows the old image under it. A 429 that asks to
+ * wait at most 10 seconds — the API busy for the moment: the uploads it receives, the account's
+ * three in flight, its memory, the conversion queue — is waited out and the file sent again, twice
+ * at most, the mutation pending meanwhile ('올리는 중'), as the post editor sends its images again
+ * (`sendRetrying`, #46's owner decision 2026-10-22 (2차) answer 3 — the same upload path,
+ * ADR-0079 7-18). The 403 for another account asks for the session again; an ONBOARDING_REQUIRED — a
+ * revision asked for the consent again while the screen was open — asks `['me']` again, and the
+ * gate, or on MY 설정 the step (`useSettingsStep`), takes the member on. A refused file
+ * (IMAGE_NOT_ALLOWED) is neither: the card says why.
  */
 export function uploadProfileImageOptions(
   queryClient: QueryClient,
   onSessionChanged: () => void,
   put: (upload: ProfileImageUpload) => Promise<Me> = putProfileImage,
+  retry: UploadRetrySteps = PROFILE_UPLOAD_RETRY,
 ) {
   return {
-    mutationFn: put,
+    mutationFn: (upload: ProfileImageUpload) => sendRetrying(() => put(upload), retry),
     // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
     onSuccess: (me: Me) => storeMe(queryClient, me, 'image', onSessionChanged),
     onError: async (error: Error, upload: ProfileImageUpload) => {

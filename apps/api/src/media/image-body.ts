@@ -251,6 +251,40 @@ export function runUploadWork<T>(
   return running;
 }
 
+/**
+ * The handler's part of an upload — `POST /media/images` (MediaController) and
+ * `PUT /me/profile-image` (ProfileImageController, #141) alike: the body is the file itself (the
+ * image parser's Buffer — the gate refused every other type unread, so anything else is a 400),
+ * `work` converts and stores it as part of the upload the gate let in (`runUploadWork`), and a
+ * RATE_LIMITED from the conversion's turn — too many conversions waiting, or no room in the API's
+ * memory for one in time (image.ts) — carries the `Retry-After` every other 429 of the API carries,
+ * the same seconds as its `details.retryAfterSeconds`. Undefined when the client has gone already:
+ * there is no one to answer.
+ */
+export async function handleUpload<T>(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  body: unknown,
+  work: (bytes: Uint8Array) => Promise<T>,
+): Promise<T | undefined> {
+  if (!(body instanceof Buffer)) {
+    throw new AppError('VALIDATION_ERROR', {
+      message: 'The body must be the image file itself',
+      details: [{ path: [], message: `send the file as ${IMAGE_UPLOAD_CONTENT_TYPES.join(', ')}` }],
+    });
+  }
+  const running = runUploadWork(request, () => work(new Uint8Array(body)));
+  if (running === undefined) return undefined;
+  try {
+    return await running;
+  } catch (error) {
+    if (error instanceof AppError && error.code === 'RATE_LIMITED') {
+      void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
+    }
+    throw error;
+  }
+}
+
 /** Why an upload's body was cut (`BodyCut`). */
 export type BodyCutReason = 'idle' | 'deadline';
 

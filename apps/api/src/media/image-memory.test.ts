@@ -47,12 +47,9 @@
  * allocator holds on to more, so there that check is skipped and only the pipeline itself is
  * checked against processImage.
  */
-import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { promisify } from 'node:util';
 import {
   IMAGE_MAX_BYTES,
   IMAGE_MAX_DIMENSION,
@@ -62,6 +59,16 @@ import {
 import sharp from 'sharp';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
+import {
+  CONVERSION_RUNS,
+  type ChildConversion,
+  type ChildInput,
+  SHARP_FORMAT,
+  convertInChild,
+  makeInChild,
+  median,
+  sha256,
+} from '../test/image-children.js';
 import { type PngKind, pngOf } from '../test/png.js';
 import {
   GIF_ANIMATION_LARGEST_FRAME_PIXELS,
@@ -197,86 +204,21 @@ describe('processImage: memory of a thin image (#46, owner decision 2026-10-21 (
   }, 120_000);
 });
 
-const IMAGE_CHILD = path.join(import.meta.dirname, '..', 'test', 'image-child.mjs');
-const run = promisify(execFile);
-
-/** What `image-child.mjs convert` prints. */
-interface ChildConversion {
-  peakBytes: number;
-  width: number;
-  height: number;
-  bytes: number;
-  sha256: string;
-}
-
-/** The input a case converts, as `image-child.mjs make` takes it. */
-interface ChildInput {
-  format: 'jpeg' | 'png' | 'gif' | 'webp';
-  width: number;
-  height: number;
-  channels?: 3 | 4;
-  frames?: number;
-  content?: 'noise' | 'frames';
-  alphaLevels?: number;
-  /** A JPEG of four components. */
-  colourspace?: 'cmyk';
-  encoder?: Record<string, unknown>;
-}
-
-const SHARP_FORMAT = {
-  'image/jpeg': 'jpeg',
-  'image/png': 'png',
-  'image/gif': 'gif',
-  'image/webp': 'webp',
-} as const;
-
-/**
- * The glibc allocator's setting the API's image starts the API with (the Dockerfile's `api` stage,
- * ADR-0073 9-46): the children convert with it, as production does.
- */
-function apiAllocatorEnv(): Record<string, string> {
-  const dockerfile = readFileSync(new URL('../../../../Dockerfile', import.meta.url), 'utf8');
-  const api = /^FROM \S+ AS api\n([\s\S]*?)^FROM /m.exec(dockerfile)?.[1] ?? '';
-  const threshold = /MALLOC_MMAP_THRESHOLD_=(\d+)/.exec(api)?.[1];
-  expect(threshold, 'the api image sets MALLOC_MMAP_THRESHOLD_').toBeDefined();
-  return { MALLOC_MMAP_THRESHOLD_: threshold! };
-}
-
-async function makeInChild(input: ChildInput, file: string): Promise<void> {
-  await run(process.execPath, [IMAGE_CHILD, 'make', JSON.stringify(input), file], {
-    maxBuffer: 1024 * 1024,
-  });
-}
-
 /** processImage's pipeline on `file` in a process of its own, as processImage would encode it. */
-async function convertInChild(file: string, bytes: Uint8Array): Promise<ChildConversion> {
+async function convertImageInChild(file: string, bytes: Uint8Array): Promise<ChildConversion> {
   const contentType = sniffImageType(bytes)!;
   const animated = contentType === 'image/gif' || contentType === 'image/webp';
   const metadata = await sharp(bytes, { animated, limitInputPixels: false }).metadata();
-  const options = {
+  return convertInChild('convert', file, {
     animated,
     limitInputPixels: IMAGE_MAX_INPUT_PIXELS,
     box: outputBox(contentType, metadata),
     format: SHARP_FORMAT[contentType],
     encoder: encoderOptions(contentType, metadata),
-  };
-  const { stdout } = await run(
-    process.execPath,
-    [IMAGE_CHILD, 'convert', file, JSON.stringify(options)],
-    { maxBuffer: 1024 * 1024, env: { ...process.env, ...apiAllocatorEnv() } },
-  );
-  return JSON.parse(stdout) as ChildConversion;
+  });
 }
 
-const sha256 = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 const side = (pixels: number) => Math.floor(Math.sqrt(pixels));
-
-/** How many times the Linux check converts each case, each in a new process (above). */
-const CONVERSION_RUNS = 3;
-
-/** The middle of an odd count of values. */
-const median = (values: readonly number[]) =>
-  [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!;
 
 describe('processImage: memory of the whole conversion, encoders included (Codex review of #219, round 3)', () => {
   let dir: string;
@@ -319,7 +261,7 @@ describe('processImage: memory of the whole conversion, encoders included (Codex
     for (const [name, bytes] of inputs) {
       const file = path.join(dir, `mirror-${name}`);
       writeFileSync(file, bytes);
-      const child = await convertInChild(file, bytes);
+      const child = await convertImageInChild(file, bytes);
       const image = await processImage(bytes);
       expect({ name, ...child, peakBytes: undefined }).toEqual({
         name,
@@ -484,7 +426,7 @@ describe('processImage: memory of the whole conversion, encoders included (Codex
         );
         const runs: number[] = [];
         for (let run = 0; run < CONVERSION_RUNS; run += 1) {
-          const converted = await convertInChild(file, bytes);
+          const converted = await convertImageInChild(file, bytes);
           expect(Math.max(converted.width, converted.height), name).toBeLessThanOrEqual(
             IMAGE_MAX_DIMENSION,
           );

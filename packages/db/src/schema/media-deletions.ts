@@ -13,21 +13,28 @@ import { timestampTz } from './columns.js';
  * every upload that stores its object before its row calls, ADR-0073 9-45). A removal the store
  * refuses leaves the row, retried on later runs (`next_attempt_at`, backing off up to a day,
  * counted from the start of the run it was refused on) with its last error kept for the log; a
- * run never gives a key up.
+ * run never gives a key up. A member's replaced or deleted profile image (#141, ADR-0079) comes
+ * here the same way: the API's ProfileImageService queues its key in the write that removes its
+ * row, tries the store at once after the commit — taking the key out once the object is gone, or
+ * counting the refusal as the first — and leaves the rest to the same runs (owner decision
+ * 2026-10-22).
  *
- * - `storage_key`: the object's key (`post-images/<id>.<ext>`, OBJECT_KEY_PATTERN in
- *   @buddha/storage), one row per key.
+ * - `storage_key`: the object's key (`post-images/<id>.<ext>`, or `profile-images/<id>.<ext>`;
+ *   OBJECT_KEY_PATTERN in @buddha/storage), one row per key.
  * - `queued_at`: when the row was queued (the upload's row went then, or the API's removal of
  *   its object was refused just before).
  * - `attempts`: removals the store refused so far (0 until one fails; 1 from the API, whose own
  *   removal was refused).
  * - `next_attempt_at`: when a run may try again — at first the time of the run that queued it (a
- *   moment before `queued_at`; the API's: `queued_at`, so the next run), after a refusal that
- *   run's time and the backoff, less a few minutes (ORPHAN_MEDIA_RETRY_SLACK_MINUTES in the
- *   worker).
+ *   moment before `queued_at`; an unrecorded upload's from the API: `queued_at`, so the next run),
+ *   after a refusal that run's time and the backoff, less a few minutes
+ *   (ORPHAN_MEDIA_RETRY_SLACK_MINUTES in @buddha/shared). A profile image's key is due after the
+ *   first wait from its queueing, and from the API's refusal when its own try was refused.
  * - `last_error`: the store's last refusal, for the log and an operator; NULL until one.
  *
- * Only the worker reads it; no row names an account (the key is the upload's random id).
+ * Only the worker reads it, and the API writes only the keys of the uploads it could not record
+ * and of the profile images it replaced or deleted; no row names an account (the key is the
+ * upload's random id).
  */
 export const mediaDeletions = pgTable(
   'media_deletions',

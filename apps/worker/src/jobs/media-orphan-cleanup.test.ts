@@ -24,7 +24,7 @@ import { ORPHAN_MEDIA_HOURS } from '@buddha/shared';
 import { MemoryObjectStorage } from '@buddha/storage';
 import { eq } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ORPHAN_MEDIA_BATCH,
   ORPHAN_MEDIA_RETRY_MAX_HOURS,
@@ -142,12 +142,52 @@ describe.skipIf(!hasTestDb())('media.orphan_cleanup (integration)', () => {
       await storage.put(image.storageKey, new Uint8Array([1]), image.contentType);
     }
     const orphan = await upload(ORPHAN_MEDIA_HOURS + 1);
-    expect(await removeOrphanMedia(t.db, storage)).toEqual({ removed: 1, failed: 0, failures: [] });
+    expect(await removeOrphanMedia(t.db, storage)).toEqual(clean(1, 1));
     expect(await rows()).toEqual([kept.id, current.id].sort());
     expect(storage.objects.has(orphan.storageKey)).toBe(false);
     expect(storage.objects.has(kept.storageKey) && storage.objects.has(current.storageKey)).toBe(
       true,
     );
+  });
+
+  it('removes a replaced profile image’s key the API queued and could not remove, once due, and tries it again until the store lets it go (#141, owner decision 2026-10-22)', async () => {
+    // As the API leaves it (ProfileImageService): the row gone with the member's write, the key
+    // queued in that write, the API's own try refused — counted as the first refusal, due again the
+    // queue's first wait after it.
+    const storageKey = 'profile-images/3f2504e0-4f89-11d3-9a0c-0305e82c3301.png';
+    await storage.put(storageKey, new Uint8Array([1]), 'image/png');
+    const refusedAt = new Date(Date.now() - 2 * HOUR_MS);
+    await t.db.insert(schema.mediaDeletions).values({
+      storageKey,
+      queuedAt: refusedAt,
+      attempts: 1,
+      lastError: 'store down',
+      nextAttemptAt: new Date(
+        refusedAt.getTime() +
+          orphanMediaRetryHours(1) * HOUR_MS -
+          ORPHAN_MEDIA_RETRY_SLACK_MINUTES * MINUTE_MS,
+      ),
+    });
+    // The store refuses again: the second refusal, due two hours after this run.
+    const del = vi.spyOn(storage, 'delete').mockRejectedValueOnce(new Error('still down'));
+    try {
+      const outcome = await removeOrphanMedia(t.db, storage);
+      expect(outcome).toMatchObject({ queued: 0, removed: 0, failed: 1, pending: 1 });
+      expect((await queue())[0]).toMatchObject({
+        storageKey,
+        attempts: 2,
+        lastError: 'still down',
+      });
+    } finally {
+      del.mockRestore();
+    }
+    // Once due and the store lets it go: removed, and the key leaves the queue.
+    const due = (await queue())[0]!.nextAttemptAt;
+    expect(await removeOrphanMedia(t.db, storage, { at: new Date(due.getTime() + 1) })).toEqual(
+      clean(0, 1),
+    );
+    expect(storage.objects.has(storageKey)).toBe(false);
+    expect(await queue()).toEqual([]);
   });
 
   it('works through a backlog a batch at a time, oldest first', async () => {
