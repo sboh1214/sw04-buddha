@@ -14,7 +14,6 @@ import {
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { type ReactNode } from 'react';
-import { AppealGuidance } from '@/components/moderation/appeal-guidance';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
@@ -28,6 +27,8 @@ import {
   REPORT_STATUS_PALETTE,
   actionReasonText,
   actionSubjectView,
+  appealDeadlineView,
+  appealGuidanceText,
   isRestriction,
   moderationActionLabel,
   moderationRows,
@@ -48,19 +49,21 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  * 여기서 본다»). Not a MY tab, so no tab names it: the page names itself (`h3` under MY's `h2`, the
  * sections `h4` under it). Two sections:
  *
- * - 받은 조치: each action an operator took on the member, newest first — its type, what it was
- *   about (their post or comment, or that they deleted it since; their profile), the reason (the
- *   report reason the operator picked and their explanation), when, its end when it has one, and
- *   its cancellation — and on each one standing, how to appeal it (`AppealGuidance`, #186): its
- *   deadline, 14 days on, and the customer centre's email, once per action, the action standing
- *   while reviewed and the answer by email (#45-14). A nickname reset not cancelled
- *   says, for the 30 days of its hold, that the nickname taken away cannot be used again (owner
- *   decision 2026-10-22, `nicknameHoldShown`) — never which it was (#37-3). A writing restriction
- *   (#185, ADR-0082) says its end — '무기한' for none — as it stands now, and '진행 중' while it
- *   stands (`restrictionStanding`); one an operator lifted early or shortened says '조기 해제됨' or
- *   '감경됨' and the end it was given under the changed one (`myEndChangeView`, owner decision
- *   2026-10-23 answer 4 — never the reason); a cancelled one says no end, only '취소됨' and when it
- *   was cancelled (answer 10). Never who reported nor which operator acted (#45-13).
+ * - 받은 조치: above the list, once, how to appeal (#186, ADR-0084; owner decision 2026-10-22 답 4)
+ *   — by the customer centre's email, saying which action from the sign-up email, once per action
+ *   within 14 days, the action standing while reviewed and the answer by email (#45-14) — then
+ *   each action an operator took on the member, newest first: its type, what it was about (their
+ *   post or comment, or that they deleted it since; their profile), the reason (the report reason
+ *   the operator picked and their explanation), when, its end when it has one, its cancellation,
+ *   and on each one standing its '이의 기한' — or, once that has passed, '이의 기한이 지났습니다.'
+ *   with it (답 1·2, `appealDeadlineView`). A nickname reset not cancelled says, for the 30 days of
+ *   its hold, that the nickname taken away cannot be used again (owner decision 2026-10-22,
+ *   `nicknameHoldShown`) — never which it was (#37-3). A writing restriction (#185, ADR-0082) says
+ *   its end — '무기한' for none — as it stands now, and '진행 중' while it stands
+ *   (`restrictionStanding`); one an operator lifted early or shortened says '조기 해제됨' or '감경됨'
+ *   and the end it was given under the changed one (`myEndChangeView`, owner decision 2026-10-23
+ *   answer 4 — never the reason); a cancelled one says no end, only '취소됨' and when it was
+ *   cancelled (answer 10). Never who reported nor which operator acted (#45-13).
  * - 내가 한 신고: each of the member's reports, newest first — what it was about as the public sees
  *   it now, the reason and the description sent, when, and 접수 or the result, 조치함 or 기각, with
  *   when (#45-13). Not which action was taken: that is the member acted on's to read.
@@ -194,19 +197,32 @@ function ListBody<Row extends { id: string }>({
 }
 
 /**
- * The actions received. How to appeal is on each standing action's card rather than once above
- * them (#186, ADR-0084): it is that action's deadline, and a list of cancelled actions alone has
- * nothing to appeal.
+ * The actions received, under how to appeal them: the guidance once, above the list and outside
+ * its ladder, so it is there while the list is read, when it could not be read and when it holds
+ * nothing (owner decision 2026-10-22 답 4, #186) — the way to appeal does not wait on the list.
+ * Each standing action's card gives its own deadline (`ActionItem`). The email is the business
+ * info's, filled in (`appealGuidanceText`); Korean breaks at spaces and the address anywhere, as
+ * the footer's same address does, so neither runs past a phone's edge.
  */
 function ActionsBody() {
   const list = useMyModerationActions();
   return (
-    <ListBody
-      list={list}
-      empty={copy.myModerationActionsEmpty}
-      testId="my-actions-list"
-      renderRow={(action) => <ActionItem action={action} />}
-    />
+    <Stack gap="4">
+      <Text
+        textStyle="bodySm"
+        wordBreak="keep-all"
+        overflowWrap="anywhere"
+        data-testid="my-moderation-appeal"
+      >
+        {appealGuidanceText()}
+      </Text>
+      <ListBody
+        list={list}
+        empty={copy.myModerationActionsEmpty}
+        testId="my-actions-list"
+        renderRow={(action) => <ActionItem action={action} />}
+      />
+    </Stack>
   );
 }
 
@@ -222,7 +238,10 @@ function ReportsBody() {
   );
 }
 
-/** A label and its value on one line, wrapping at phone width. */
+/**
+ * A label and its value on one line, wrapping at phone width. `testId` names the line and, with
+ * '-label' and '-value', its two halves.
+ */
 function Line({
   label,
   children,
@@ -234,10 +253,22 @@ function Line({
 }) {
   return (
     <HStack gap="2" align="baseline" flexWrap="wrap" textStyle="bodySm" data-testid={testId}>
-      <Text as="span" color="fg.muted" flexShrink="0">
+      <Text
+        as="span"
+        color="fg.muted"
+        flexShrink="0"
+        data-testid={testId === undefined ? undefined : `${testId}-label`}
+      >
         {label}
       </Text>
-      <Text as="span" color="fg" wordBreak="break-word" minW="0" whiteSpace="pre-wrap">
+      <Text
+        as="span"
+        color="fg"
+        wordBreak="break-word"
+        minW="0"
+        whiteSpace="pre-wrap"
+        data-testid={testId === undefined ? undefined : `${testId}-value`}
+      >
         {children}
       </Text>
     </HStack>
@@ -284,6 +315,7 @@ function ActionItem({ action }: { action: MyModerationAction }) {
   const reason = actionReasonText(action.reason);
   const restriction = isRestriction(action.type);
   const endChange = myEndChangeView(action);
+  const appeal = appealDeadlineView(action);
   return (
     <ItemCard testId={`my-action-${action.id}`}>
       <HStack gap="2" flexWrap="wrap">
@@ -340,7 +372,18 @@ function ActionItem({ action }: { action: MyModerationAction }) {
       {action.cancelledAt !== null && (
         <Line label={copy.moderationCancelledAt}>{format(action.cancelledAt)}</Line>
       )}
-      <AppealGuidance action={action} testId="my-action-appeal" />
+      {/* Its appeal deadline alone — the guidance is once above the list (owner decision
+          2026-10-22 답 4) — and once that has passed, the owner's sentence with it (답 2). */}
+      {appeal !== null && (
+        <Line
+          label={
+            appeal.passed ? copy.moderationAppealDeadlinePassed : copy.moderationAppealDeadline
+          }
+          testId="my-action-appeal"
+        >
+          {format(appeal.deadline)}
+        </Line>
+      )}
     </ItemCard>
   );
 }

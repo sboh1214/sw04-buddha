@@ -24,7 +24,8 @@ import {
  * Anyone, signed in or not, goes from a byline — a post's or a 대댓글's — to the profile, to an item
  * there and on to its market (#51's acceptance criteria).
  *
- * A hidden item MY marks '숨김' with its reason and offers to delete: one test hides a post and a
+ * A hidden item MY marks '숨김' with its reason and the way to 조치·신고 내역 (#186), and offers to
+ * delete: one test hides a post and a
  * comment for real through #50's operator routes (ADR-0081) and deletes them from MY; another draws
  * the marks' every shape — a reason with and without the operator's explanation, and none — from
  * the API's own answers changed in the browser (`page.route`, as start-grant.spec.ts does: the rows
@@ -586,8 +587,9 @@ test.describe('작성자별 글·댓글', () => {
 
     /**
      * The marks one list draws: '숨김' over the two hidden cards with 삭제 beside it, the reason
-     * (and the note, when there is one) over one of them; nothing over the third. The two 삭제
-     * read '삭제' and are named apart, each by its item.
+     * (and the note, when there is one) over one of them, and under both the way to 조치·신고 내역
+     * (#186, owner decision 2026-10-22 답 9 — a link, no deadline); nothing over the third. The two
+     * 삭제 read '삭제' and are named apart, each by its item.
      */
     const expectMarks = async (
       list: Locator,
@@ -617,8 +619,18 @@ test.describe('작성자별 글·댓글', () => {
       await expect(marked.getByTestId('authored-hidden-delete')).toHaveAccessibleName(
         deleteName.get(withReason.id) ?? '',
       );
+      for (const item of [marked, itemOf(list, card(withoutReason))]) {
+        const link = item.getByTestId('authored-hidden').getByTestId('authored-hidden-moderation');
+        await expect(link).toHaveText(copy.myModerationOpen);
+        await expect(link).toHaveAttribute('href', '/my/moderation');
+        await expect(item.getByTestId('authored-hidden')).not.toContainText(
+          copy.moderationAppealDeadline,
+        );
+      }
       const bare = itemOf(list, card(withoutReason));
-      await expect(bare.getByTestId('authored-hidden')).toHaveText(copy.authoredHidden);
+      await expect(bare.getByTestId('authored-hidden')).toHaveText(
+        `${copy.authoredHidden}${copy.myModerationOpen}`,
+      );
       await expect(bare.getByTestId('authored-hidden-reason')).toHaveCount(0);
       await expect(bare.getByTestId('authored-hidden-note')).toHaveCount(0);
       await expect(bare.getByTestId('authored-hidden-delete')).toHaveText(deleteWord);
@@ -631,6 +643,7 @@ test.describe('작성자별 글·댓글', () => {
       await expect(list.getByTestId('authored-hidden')).toHaveCount(2);
       await expect(list.getByTestId('authored-hidden-delete')).toHaveCount(2);
       await expect(list.getByTestId('authored-hidden-reason')).toHaveCount(1);
+      await expect(list.getByTestId('authored-hidden-moderation')).toHaveCount(2);
     };
     const postCard = (id: string) => `post-card-${id}`;
     const commentCard = (id: string) => `authored-comment-${id}`;

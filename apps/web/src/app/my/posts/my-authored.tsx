@@ -17,9 +17,9 @@ import { DeleteHiddenItem } from './delete-hidden';
  * `/my/posts`: MY '내 글' (#51, ADR-0080; ADR-0069 decision 4 #51 and decision 2 #45-5) — the
  * member's posts and their 댓글 and 대댓글 on two tabs, newest first, nothing to filter. What the
  * member deleted is not here; what an operator hid is, its content and counts as they are, under
- * its '숨김' line with the reason (`HiddenNoticeLine`) — for the member alone — and 삭제 beside that
- * line (`DeleteHiddenItem`, owner decision 2026-10-22), after which it leaves the list. Each item
- * opens its post and its market.
+ * its '숨김' line with the reason and the way to 조치·신고 내역 (`HiddenNoticeLine`, #186) — for the
+ * member alone — and 삭제 beside that line (`DeleteHiddenItem`, owner decision 2026-10-22), after
+ * which it leaves the list. Each item opens its post and its market.
  *
  * Personal and client-only like every MY list: read with the member's cookie after hydration,
  * under the private `['my-authored']` root, so nothing of it is in the HTML; and nobody else's —

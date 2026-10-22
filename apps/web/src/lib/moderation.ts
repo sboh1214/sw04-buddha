@@ -55,9 +55,9 @@ import { profilePath } from './profile';
 
 /**
  * 신고와 운영 처리 (#50, ADR-0081) as the screens draw them: the report dialog's rules and
- * refusals, the member's 조치·신고 내역 (`/my/moderation`), the sanction banner, the appeal
- * guidance an action's card and the two banners carry (#186, ADR-0084), and the operators' queue,
- * pages and dialogs. Pure functions of the API's answers and of what was typed, apart from the
+ * refusals, the member's 조치·신고 내역 (`/my/moderation`) with its appeal guidance and each action's
+ * '이의 기한' (#186, ADR-0084), the sanction and warning banners, and the operators' queue, pages
+ * and dialogs. Pure functions of the API's answers and of what was typed, apart from the
  * components and the hooks so the node test runner reaches them (the rule lib/likes.ts follows).
  *
  * Owner decisions (ADR-0069 decision 2 #45-10…#45-15, decision 3 #37-10, decision 4 #50 rows,
@@ -548,9 +548,10 @@ export function appealDeadline(action: Pick<MyModerationAction, 'createdAt' | 'c
  * Whether the member may still appeal the action at `now` (#45-14: «조치마다 한 번, 조치 뒤 14일
  * 안»): it stands, and its deadline (`appealDeadline`) is still ahead — the deadline's own instant
  * is past it. The one place the window is judged on the web; nothing on the server reads it, as
- * an appeal goes to the customer centre's email and the app takes none (#186, ADR-0084). Whether
- * one was sent already the app cannot know, so «한 번» is the notice's to say and the operator's to
- * check (docs/OPERATIONS.md).
+ * an appeal goes to the customer centre's email and the app takes none (#186, ADR-0084). The
+ * operator judges an appeal by when the customer centre's mailbox received it (owner decision
+ * 2026-10-22 답 10, docs/OPERATIONS.md). Whether one was sent already the app cannot know, so «한
+ * 번» is the notice's to say and the operator's to check.
  */
 export function appealWindowOpen(
   action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
@@ -562,28 +563,31 @@ export function appealWindowOpen(
 }
 
 /**
- * The deadline the appeal guidance (`AppealGuidance`, #186) shows for the action, or null when it
- * shows nothing: the action's deadline (`appealDeadline`) while it stands — whether that deadline
- * is still ahead or has passed — and null once an operator cancelled it (nothing is left to
- * appeal, ADR-0081 7-17). A passed deadline stays on the notice rather than taking the notice with
- * it (ADR-0084 6-3): the member reads the 이의 방법 of every action (#45-13), and whether the notice
- * should say the deadline passed, or go, is the owner's to answer (ADR-0084 결과 4의 2). So this
- * reads no clock — `appealWindowOpen` is the window's judge, not the notice's — and a server
- * render could not disagree with it (6-9). If the owner answers 4-2 otherwise, this is the one
- * place to change.
+ * The '이의 기한' line of an action's card on 조치·신고 내역 (#186, ADR-0084), or null when the card
+ * has none: an action an operator cancelled since has nothing left to appeal (ADR-0081 7-17). For
+ * one that stands, its deadline (`appealDeadline`: APPEAL_WINDOW_DAYS from it, the exact instant —
+ * owner decision 2026-10-22 답 1) and whether it has passed at `now` (`appealWindowOpen` — its own
+ * instant is past it). A passed one keeps its line, as '이의 기한이 지났습니다.' and that deadline
+ * only (답 2); the card says nothing else of the appeal — the sentence is once above the list (답 4).
  */
-export function appealGuidanceDeadline(
+export function appealDeadlineView(
   action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
-): string | null {
-  return appealDeadline(action);
+  // Read in render through this default, as `nicknameHoldShown`'s is: the member's actions are
+  // read in the browser alone, so there is no server render to disagree with it.
+  now: number = Date.now(),
+): { deadline: string; passed: boolean } | null {
+  const deadline = appealDeadline(action);
+  if (deadline === null) return null;
+  return { deadline, passed: !appealWindowOpen(action, now) };
 }
 
 /**
- * The appeal guidance's sentence with the customer centre's email filled in from the business
- * info (ADR-0069 결과 3: the owner supplies it; until then it reads 미정, as every undecided business
- * fact does, ADR-0044): where to send an appeal, once per action within the window, the action
- * standing while it is reviewed, and the answer by email (#45-14, #186). The deadline itself is
- * the line above it (`AppealGuidance`).
+ * The appeal guidance with the customer centre's email filled in from the business info (ADR-0069
+ * 결과 3: the owner supplies it; until then it reads 미정, as every undecided business fact does,
+ * ADR-0044): where appeals go, what to write and from which address (owner decision 2026-10-22
+ * 답 6), once per action within the window, the action standing while it is reviewed, and the
+ * answer by email (#45-14). Once above 조치·신고 내역's list of actions (답 4) — the banners carry
+ * none (답 3) — and each action's own deadline is its card's line (`appealDeadlineView`).
  */
 export function appealGuidanceText(): string {
   return fillBusinessInfo(copy.appealGuidance);

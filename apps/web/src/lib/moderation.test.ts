@@ -59,7 +59,7 @@ import {
   adminUserModerationKey,
   adminUserModerationPath,
   appealDeadline,
-  appealGuidanceDeadline,
+  appealDeadlineView,
   appealGuidanceText,
   appealWindowOpen,
   authorPublicIdOf,
@@ -839,17 +839,24 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
   const DAY_MS = 24 * 60 * 60 * 1_000;
   const TAKEN = '2026-10-21T03:00:00.000Z';
 
-  it('says the four things of #45-14, with the window the shared rule counts', () => {
+  it('says the four things of #45-14 and the owner’s line, with the window the shared rule counts', () => {
     // By the customer centre's email, once per action, within APPEAL_WINDOW_DAYS of it; the action
-    // stands while reviewed and the answer comes by email (ADR-0069 decision 2 #45-14).
+    // stands while reviewed and the answer comes by email (ADR-0069 decision 2 #45-14) — and which
+    // action, from the sign-up email (owner decision 2026-10-22 답 6), one sentence of its own.
     expect(copy.appealGuidance).toContain('고객센터 이메일({{email}})');
+    expect(copy.appealGuidance).toContain(
+      '어느 조치인지(조치의 종류와 조치한 때)를 적어 가입한 이메일로 보내 주세요.',
+    );
     expect(copy.appealGuidance).toContain('조치마다 한 번');
     expect(copy.appealGuidance).toContain(`조치한 때부터 ${String(APPEAL_WINDOW_DAYS)}일 안`);
     expect(copy.appealGuidance).toContain('검토하는 동안 조치는 그대로');
     expect(copy.appealGuidance).toContain('결과는 이메일로');
-    // The email is the one placeholder: the deadline is the line above it, not in the sentence.
+    // Once above the list, with no deadline beside it: no '이 기한' to point at (답 4).
+    expect(copy.appealGuidance).not.toContain('이 기한');
     expect(templateKeys(copy.appealGuidance)).toEqual(['email']);
+    // The card's line, and the owner's sentence for one whose deadline has passed (답 2).
     expect(copy.moderationAppealDeadline).toBe('이의 기한');
+    expect(copy.moderationAppealDeadlinePassed).toBe('이의 기한이 지났습니다.');
   });
 
   it('fills in the business info’s email — 미정 until the owner supplies it', () => {
@@ -872,24 +879,31 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
     expect(appealWindowOpen(cancelled, taken)).toBe(false);
   });
 
-  it('keeps a passed deadline on the notice of an action that stands, and shows none once cancelled', () => {
-    // ADR-0084 6-3: an old hiding or a restriction longer than the window keeps its guidance with
-    // the deadline gone by — the window closing takes the notice nowhere. Whether it should is the
-    // owner's to answer (결과 4의 2); this is the one place to change if the answer differs.
+  it('gives a standing action’s card its deadline, then that it has passed with the same deadline, and a cancelled one none', () => {
+    // Owner decision 2026-10-22 답 1: the exact instant, 14×24 hours on; 답 2: once passed,
+    // '이의 기한이 지났습니다.' and that deadline only — the line stays, the same instant.
     const taken = Date.parse(TAKEN);
     const deadline = new Date(taken + APPEAL_WINDOW_DAYS * DAY_MS).toISOString();
-    const later = taken + (APPEAL_WINDOW_DAYS + 30) * DAY_MS;
     const standing = { createdAt: TAKEN, cancelledAt: null };
-    expect(appealWindowOpen(standing, later)).toBe(false);
-    expect(appealGuidanceDeadline(standing)).toBe(deadline);
+    expect(appealDeadlineView(standing, taken)).toEqual({ deadline, passed: false });
+    expect(appealDeadlineView(standing, Date.parse(deadline) - 1)).toEqual({
+      deadline,
+      passed: false,
+    });
+    expect(appealDeadlineView(standing, Date.parse(deadline))).toEqual({ deadline, passed: true });
+    expect(appealDeadlineView(standing, taken + (APPEAL_WINDOW_DAYS + 30) * DAY_MS)).toEqual({
+      deadline,
+      passed: true,
+    });
     // Nothing left to appeal once an operator cancelled it (ADR-0081 7-17), the window open or not.
     const cancelled = { createdAt: TAKEN, cancelledAt: '2026-10-21T04:00:00.000Z' };
-    expect(appealGuidanceDeadline(cancelled)).toBeNull();
+    expect(appealDeadlineView(cancelled, taken)).toBeNull();
+    expect(appealDeadlineView(cancelled, taken + (APPEAL_WINDOW_DAYS + 1) * DAY_MS)).toBeNull();
   });
 
   /**
    * The function declaration `name` of `file`, read with the compiler rather than a pattern so a
-   * comment or a string naming what is looked for does not count.
+   * comment naming what is looked for does not count.
    */
   function declaration(
     file: string,
@@ -918,78 +932,35 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
     return found;
   }
 
-  const isJsxTag = (node: ts.Node): node is ts.JsxOpeningElement | ts.JsxSelfClosingElement =>
-    ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node);
+  const copyTexts: Readonly<Record<string, string>> = copy;
 
-  /**
-   * The `return`s of `fn` that draw something — those whose value holds JSX, so `return null` is
-   * not one — and never those of a function nested in it, whose returns are its own.
-   */
-  function drawingReturns(fn: ts.FunctionDeclaration): ts.ReturnStatement[] {
-    const found: ts.ReturnStatement[] = [];
-    const visit = (node: ts.Node): void => {
-      if (ts.isFunctionLike(node)) return;
-      if (ts.isReturnStatement(node) && node.expression !== undefined) {
-        if (nodesIn(node.expression, isJsxTag).length > 0) found.push(node);
-      }
-      ts.forEachChild(node, visit);
-    };
-    if (fn.body !== undefined) ts.forEachChild(fn.body, visit);
-    return found;
-  }
-
-  /** The source of the `testId` an element is given — a string's text, an expression's code. */
-  function testIdOf(tree: ts.SourceFile, element: ts.JsxOpeningLikeElement): string | undefined {
-    for (const attribute of element.attributes.properties) {
-      if (!ts.isJsxAttribute(attribute) || attribute.name.getText(tree) !== 'testId') continue;
-      const value = attribute.initializer;
-      if (value === undefined) return undefined;
-      if (ts.isStringLiteral(value)) return value.text;
-      if (ts.isJsxExpression(value)) return value.expression?.getText(tree);
-      return value.getText(tree);
+  it('is not on the warning and sanction banners, which name their end or the owner’s sentence and the link alone', () => {
+    // Owner decision 2026-10-22 답 3: «경고·제재 띠 → 이의 안내를 빼고 정해진 문장(경고)이나 끝나는
+    // 시각(제한)과 조치·신고 내역 링크만». No e2e reaches the sanction banner until #185 and #139 add
+    // a restriction, and #185 — built beside this — drew an appeal sentence on it when last seen
+    // (ADR-0084 결과 5): so neither banner may call anything of the appeal, read a copy key whose
+    // words speak of 이의, fill in the business info (where the email comes from) or write 이의 itself.
+    for (const name of ['SanctionBanner', 'WarningBanner']) {
+      const { tree, fn } = declaration('components/moderation/sanction-banner.tsx', name);
+      const where = `sanction-banner.tsx ${name}`;
+      const identifiers = nodesIn(fn, ts.isIdentifier).map((node) => node.text);
+      expect(
+        identifiers.filter((text) => /appeal/i.test(text)),
+        where,
+      ).toEqual([]);
+      expect(identifiers, where).not.toContain('fillBusinessInfo');
+      const copyRead = nodesIn(fn, ts.isPropertyAccessExpression)
+        .filter((access) => access.expression.getText(tree) === 'copy')
+        .map((access) => access.name.text);
+      expect(copyRead.length, `${where} reads its words from the copy`).toBeGreaterThan(0);
+      for (const key of copyRead)
+        expect(copyTexts[key] ?? '', `${where} copy.${key}`).not.toContain('이의');
+      const written = [
+        ...nodesIn(fn, ts.isStringLiteralLike).map((node) => node.text),
+        ...nodesIn(fn, ts.isJsxText).map((node) => node.text),
+      ];
+      for (const text of written) expect(text, where).not.toContain('이의');
     }
-    return undefined;
-  }
-
-  it('is drawn by the action card and both banners, on every path that draws them', () => {
-    // #45-14 «조치 안내에 이메일과 기한을 적는다» in the three places this PR puts it: the action's card
-    // on 조치·신고 내역, the MY summary's warning banner and the sanction banner (not yet MY '내 글''s
-    // '숨김' line, ADR-0084 결과 4의 3). No e2e reaches the sanction banner until #185 and #139 add a
-    // restriction, and #185 is to give it a path of its own for one without an end (결과 5) — so
-    // every `return` that draws one of these must draw the guidance, not merely one of them, and
-    // under the test id the e2e looks for (a banner's own id with '-appeal').
-    for (const [file, name, testId] of [
-      ['app/my/moderation/my-moderation.tsx', 'ActionItem', 'my-action-appeal'],
-      ['components/moderation/sanction-banner.tsx', 'WarningBanner', '`${testId}-appeal`'],
-    ] as const) {
-      const { tree, fn } = declaration(file, name);
-      const returns = drawingReturns(fn);
-      expect(returns.length, `${file} ${name} draws something`).toBeGreaterThan(0);
-      for (const drawn of returns) {
-        const where = `${file} ${name}, line ${String(tree.getLineAndCharacterOfPosition(drawn.getStart(tree)).line + 1)}`;
-        const guidance = nodesIn(drawn, isJsxTag).filter(
-          (element) => element.tagName.getText(tree) === 'AppealGuidance',
-        );
-        expect(guidance.length, where).toBeGreaterThan(0);
-        for (const element of guidance) expect(testIdOf(tree, element), where).toBe(testId);
-      }
-    }
-  });
-
-  it('decides what it shows by the deadline rule and the filled-in sentence alone', () => {
-    // `AppealGuidance` draws `appealGuidanceDeadline`'s answer and `appealGuidanceText` — so the
-    // email reaches the screen filled in, never as '{{email}}' — and reads no clock: whether a
-    // passed deadline stays is the rule's (6-3), and nothing it draws can differ between a server
-    // and a browser render (6-9).
-    const { tree, fn } = declaration('components/moderation/appeal-guidance.tsx', 'AppealGuidance');
-    const called = nodesIn(fn, ts.isCallExpression).map((call) => call.expression.getText(tree));
-    expect(called).toContain('appealGuidanceDeadline');
-    expect(called).toContain('appealGuidanceText');
-    for (const clock of ['appealWindowOpen', 'appealDeadline', 'Date.now']) {
-      expect(called).not.toContain(clock);
-    }
-    const read = nodesIn(fn, ts.isPropertyAccessExpression).map((access) => access.getText(tree));
-    expect(read).not.toContain('copy.appealGuidance');
   });
 });
 

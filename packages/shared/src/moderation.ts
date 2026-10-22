@@ -87,7 +87,9 @@ export const MODERATION_REASON_MAX_LENGTH = 500;
  * takes nor records one (ADR-0069 decision 2 #45-14 «앱에는 이의를 받거나 기록하는 화면이 없고»). An
  * operator who accepts one uses the action's own cancellation — and, once #185 and #139 add the
  * restrictions, their lifting or shortening (감경) — which keeps its reason like any other. So the
- * window lives in the member's notice alone, and no route enforces it.
+ * window lives in the member's notice alone — each action's '이의 기한', the exact instant (owner
+ * decision 2026-10-22 답 1) — and the operator's procedure, which judges an appeal by when the
+ * customer centre's mailbox received it (답 10, docs/OPERATIONS.md); no route enforces it.
  */
 export const APPEAL_WINDOW_DAYS = 14;
 
