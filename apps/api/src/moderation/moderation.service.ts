@@ -323,9 +323,10 @@ export class ModerationService {
    * (`action_id`) names the member from then on, so they may pick that nickname again, and every
    * other account stays held for the rest of the 30 days from the reset — the hold a member's own
    * change gives (`nickname_held()`). No interval is written: while that hold stands the member
-   * picks that nickname with no interval even after changing to another since the reset, and any
-   * other nickname keeps the interval (NicknameService's `handedBack`, owner decision 2026-10-22
-   * (2차) 1, ADR-0081 7-13). Past the hold (30 days from the reset) there is nothing left to hand:
+   * picks that nickname with no interval even after changing to another since the reset — once:
+   * taken back and given up again, it waits the interval — and any other nickname keeps the
+   * interval (NicknameService's `handedBack`, owner decisions 2026-10-22 (2차) 1 and (4차) 1,
+   * ADR-0081 7-13). Past the hold (30 days from the reset) there is nothing left to hand:
    * the nickname is anybody's, the member's interval applies to it as to any. Under
    * that nickname's lock (`lockNicknames`), the lock a pick of it takes: a pick in flight is
    * answered before the hold changes hands, and one that comes while this runs waits for it and

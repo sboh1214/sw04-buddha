@@ -16,7 +16,8 @@ import {
   type NicknameNotAllowedDetails,
   type OnboardingRequiredDetails,
 } from '@buddha/shared';
-import { and, eq, gt, isNotNull } from 'drizzle-orm';
+import { and, eq, gt, gte, isNotNull, isNull, notExists, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { DB } from '../infra/db/db.provider.js';
@@ -31,6 +32,12 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export const NICKNAME_UNIQUE_INDEX = 'profiles_nickname_lower_unique';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * The member's own holds of a nickname (`handedBack`): what a take-back of a handed-back nickname
+ * leaves once the member gives it up again.
+ */
+const givenUpAgain = alias(schema.nicknameHolds, 'given_up_again');
 
 function refused(details: NicknameNotAllowedDetails): AppError {
   return new AppError('NICKNAME_NOT_ALLOWED', {
@@ -53,7 +60,8 @@ function refused(details: NicknameNotAllowedDetails): AppError {
  *   word (`nicknameRuleViolation`, the rule the web's forms apply too), never one another account
  *   has, ignoring case (the unique index on lower(nickname)), nor one another account — or a
  *   withdrawn one — gave up less than NICKNAME_HOLD_DAYS ago (`nickname_held()`).
- * - The nickname given up is held from other accounts from then on (`nickname_holds`).
+ * - The nickname given up is held from other accounts from then on (`nickname_holds`); a change
+ *   of case only gives nothing up, save from a nickname handed back (`replace`).
  * - After the onboarding a change waits NICKNAME_CHANGE_INTERVAL_DAYS after the last change; the
  *   onboarding's choice is not a change, and an operator's reset to an auto nickname clears the
  *   last change (ModerationService, owner decision 2026-10-21, ADR-0081): the member picks a new
@@ -62,8 +70,10 @@ function refused(details: NicknameNotAllowedDetails): AppError {
  *   the reset, which hands that hold to the member (owner decision 2026-10-22): theirs to pick
  *   again, every other account's still held. While that handed-back hold stands the member picks
  *   that nickname — exactly as it was taken away (owner decision 2026-10-22 (3차) 1) — with no
- *   interval, even after changing to another since the reset; any other nickname keeps the
- *   interval (`handedBack`, owner decision 2026-10-22 (2차) 1, ADR-0081 7-13).
+ *   interval, even after changing to another since the reset, once per handed-back hold (owner
+ *   decision 2026-10-22 (4차) 1): after taking it back and giving it up again — for another case
+ *   of it too — it waits the interval as any; any other nickname keeps the interval (`handedBack`,
+ *   owner decision 2026-10-22 (2차) 1, ADR-0081 7-13).
  *
  * Every write takes the account's profile row FOR UPDATE first (one nickname write of an account at
  * a time), then the nickname locks (`lockNicknames`: the nickname given up and the one taken, in
@@ -114,19 +124,24 @@ export class NicknameService {
   }
 
   /**
-   * Whether `next` is the nickname a cancelled operator's reset handed back to the member and its
-   * hold still stands at `now` (owner decision 2026-10-22 (2차) 1: «넘겨받은 보류가 서 있는 동안 그
-   * 닉네임만 간격 없이 고른다»): the hold a reset wrote (`action_id`) naming the member — which only
-   * the reset's cancellation makes it (`ModerationService.cancel`; until then it names nobody, and
-   * the member's own holds name no action) — released less than NICKNAME_HOLD_DAYS ago, for that
-   * nickname exactly, as it was taken away (owner decision 2026-10-22 (3차) 1, ADR-0081 7-13). Only
-   * the interval is waived: the pick is a change like any other, held to the rules, and the next
-   * interval counts from it. A hold waives it for every pick while it stands: after two cancelled
-   * resets the member may switch between the two nicknames (whether each hold should waive it once
-   * is ADR-0081 결과 4's question 1). Read under the nickname locks the change takes
-   * (`lockNicknames`, re-taken by `replace` in the same order), the lock the cancellation hands the
-   * hold over under: a pick that comes while a cancellation runs waits for it and reads the hold as
-   * handed.
+   * Whether `next` is the nickname a cancelled operator's reset handed back to the member, its hold
+   * still stands at `now` and the member has not used it yet (owner decisions 2026-10-22 (2차) 1:
+   * «넘겨받은 보류가 서 있는 동안 그 닉네임만 간격 없이 고른다», and (4차) 1: once per handed-back hold):
+   * the hold a reset wrote (`action_id`) naming the member — which only the reset's cancellation
+   * makes it (`ModerationService.cancel`; until then it names nobody, and the member's own holds
+   * name no action) — released less than NICKNAME_HOLD_DAYS ago, for that nickname exactly, as it
+   * was taken away (owner decision 2026-10-22 (3차) 1, ADR-0081 7-13), with no hold of the member's
+   * own of that nickname exactly (naming no action) released at or after the cancellation: one is
+   * there once the member took it back and gave it up again — for another case of it too
+   * (`replace`) — the take-back is used, and from then on that nickname waits the interval as
+   * any. (Between the reset and its cancellation the nickname is held from the member, so nothing
+   * of theirs gives it up then; one they gave up before the reset is earlier still. At or after,
+   * not after: the times are the database clock's milliseconds.) Only the interval is waived: the
+   * pick is a change like any other, held to the rules, and the next interval counts from it.
+   * Read under the nickname locks the change takes (`lockNicknames`, re-taken by `replace` in the
+   * same order), the lock the cancellation hands the hold over under: a pick that comes while a
+   * cancellation runs waits for it and reads the hold as handed. The member's own earlier holds
+   * were written under their profile's lock, which this change holds.
    */
   private async handedBack(
     tx: Tx,
@@ -135,17 +150,31 @@ export class NicknameService {
     next: string,
     now: Date,
   ): Promise<boolean> {
-    const { nicknameHolds } = schema;
+    const { moderationActions, nicknameHolds } = schema;
     await lockNicknames(tx, [current, next]);
     const [hold] = await tx
       .select({ id: nicknameHolds.id })
       .from(nicknameHolds)
+      .innerJoin(moderationActions, eq(moderationActions.id, nicknameHolds.actionId))
       .where(
         and(
           eq(nicknameHolds.userId, userId),
-          isNotNull(nicknameHolds.actionId),
           eq(nicknameHolds.nickname, next),
           gt(nicknameHolds.releasedAt, new Date(now.getTime() - NICKNAME_HOLD_DAYS * DAY_MS)),
+          isNotNull(moderationActions.cancelledAt),
+          notExists(
+            tx
+              .select({ one: sql`1` })
+              .from(givenUpAgain)
+              .where(
+                and(
+                  eq(givenUpAgain.userId, userId),
+                  isNull(givenUpAgain.actionId),
+                  eq(givenUpAgain.nickname, next),
+                  gte(givenUpAgain.releasedAt, moderationActions.cancelledAt),
+                ),
+              ),
+          ),
         ),
       )
       .limit(1);
@@ -227,9 +256,43 @@ export class NicknameService {
       }
       throw error;
     }
-    // A change of case only gives nothing up: the nickname is still this account's.
-    if (nicknameKey(current) !== nicknameKey(next)) {
+    // A change of case only gives nothing up — the nickname is still this account's (ADR-0072
+    // decision 4) — save from a nickname a cancelled reset handed back to the member, exactly as
+    // it was taken away: giving that up, for another case of it too, uses its take-back
+    // (`handedBack`, owner decision 2026-10-22 (4차) 1, ADR-0081 7-13). Without that hold, two
+    // cancelled resets of two cases of one nickname would let the member switch between them with
+    // no interval while both holds stand. It is the member's own hold, which keeps nothing from
+    // other accounts that the unique index on lower(nickname) does not already keep while the
+    // account has the nickname — and giving the nickname up later writes a later hold.
+    if (
+      nicknameKey(current) !== nicknameKey(next) ||
+      (await this.isHandedBackNickname(tx, userId, current))
+    ) {
       await tx.insert(schema.nicknameHolds).values({ nickname: current, userId, releasedAt: now });
     }
+  }
+
+  /**
+   * Whether a cancelled operator's reset handed `nickname`, exactly, back to the member: a hold
+   * naming a reset (`action_id`) that names the member, which only the reset's cancellation makes
+   * it (`handedBack`). Whether that hold still stands does not matter: once it has ended the hold
+   * of `nickname` written for it changes nothing — `handedBack` no longer reads that one, and
+   * `nickname_held()` never holds the member's own. Read under the nickname's lock (`replace`),
+   * the lock the cancellation hands the hold over under.
+   */
+  private async isHandedBackNickname(tx: Tx, userId: string, nickname: string): Promise<boolean> {
+    const { nicknameHolds } = schema;
+    const [hold] = await tx
+      .select({ id: nicknameHolds.id })
+      .from(nicknameHolds)
+      .where(
+        and(
+          eq(nicknameHolds.userId, userId),
+          isNotNull(nicknameHolds.actionId),
+          eq(nicknameHolds.nickname, nickname),
+        ),
+      )
+      .limit(1);
+    return hold !== undefined;
   }
 }

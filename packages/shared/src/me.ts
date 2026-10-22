@@ -50,7 +50,7 @@ export const meSchema = z
        * while it never changed after the onboarding's nickname step (which is not a change) or
        * since an operator reset it to an auto nickname (ADR-0081 7-12). The nickname a cancelled
        * reset handed back to the member is the one exception: while its hold stands it may be
-       * picked before this time (ADR-0081 7-13).
+       * picked before this time, once (ADR-0081 7-13).
        */
       nicknameChangeAvailableAt: z.iso.datetime().nullable(),
       /**

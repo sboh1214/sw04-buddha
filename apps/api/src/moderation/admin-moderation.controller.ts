@@ -176,8 +176,9 @@ export class AdminModerationController {
       'not restored. A nickname reset’s cancellation restores no nickname but hands the hold of ' +
       'the nickname taken away to the member: other accounts stay held for the rest of the 30 ' +
       'days from the reset, and while that hold stands the member picks that nickname, exactly ' +
-      'as it was taken away, with no change interval, even after a pick since the reset (any ' +
-      'other nickname keeps the interval). One cancelled already is `cancelled`; one on the ' +
+      'as it was taken away, with no change interval, even after a pick since the reset, once ' +
+      '(taken back and given up again, it keeps the interval, as any other nickname does). One ' +
+      'cancelled already is `cancelled`; one on the ' +
       'acting admin is `own`',
   })
   @ApiData(adminModerationActionSchema)

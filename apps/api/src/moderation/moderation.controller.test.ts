@@ -50,7 +50,7 @@ import {
   type Post,
   type PostSummary,
 } from '@buddha/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, gt, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
@@ -1212,9 +1212,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
       expect((await profileRow(author.id)).nickname).toBe(former);
     });
 
-    it('waives the interval for each handed-back hold while it stands, however often: two cancelled resets let the member switch between their two nicknames (as built — ADR-0081 결과 4 question 1 asks whether once per hold)', async () => {
-      // Pins the behaviour the owner has not ruled on: should the answer be «once per hold», the
-      // third pick below turns into `change_interval` (NicknameService's `handedBack`).
+    it('waives the interval once per handed-back hold: after two cancelled resets the member takes each nickname back at once, and one taken back and given up again waits the interval (owner decision 2026-10-22 (4차) 1)', async () => {
       const first = 'Imposter7';
       const second = '두번째닉네임';
       await t.db
@@ -1249,12 +1247,27 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         .where(eq(schema.nicknameHolds.userId, author.id));
       expect(handed.map((row) => row.nickname)).toEqual(expect.arrayContaining([first, second]));
 
-      // Back and forth, each pick a change within the last one's interval, each 200.
-      for (const nickname of [first, second, first]) {
+      // Each handed-back nickname once, each pick a change within the last one's interval: the
+      // first gives up 셋째닉네임, which is not a take-back of either.
+      for (const nickname of [first, second]) {
         const res = await changeNickname(author, nickname);
         expect(res.statusCode, res.body).toBe(200);
         expect((await profileRow(author.id)).nickname).toBe(nickname);
       }
+      // The first was taken back and given up again: its hold has waived the interval once, and
+      // the member waits the interval the last pick started, as for any nickname.
+      const lastPickAt = (await profileRow(author.id)).nicknameChangedAt!;
+      const again = await changeNickname(author, first);
+      expect(again.statusCode, again.body).toBe(409);
+      expect(again.json<{ error: unknown }>().error).toMatchObject({
+        code: 'NICKNAME_NOT_ALLOWED',
+        details: {
+          reason: 'change_interval',
+          nextChangeAt: new Date(
+            lastPickAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
+          ).toISOString(),
+        },
+      });
       // The nickname the member picked themselves names no reset: its hold waives nothing.
       const own = await changeNickname(author, '셋째닉네임');
       expect(own.statusCode, own.body).toBe(409);
@@ -1262,6 +1275,159 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         code: 'NICKNAME_NOT_ALLOWED',
         details: { reason: 'change_interval' },
       });
+      expect((await profileRow(author.id)).nickname).toBe(second);
+      // The hold still keeps it from every other account, the member's waiver used or not.
+      const taken = await changeNickname(reporter, first);
+      expect(taken.statusCode, taken.body).toBe(409);
+      expect(taken.json<{ error: unknown }>().error).toMatchObject({
+        code: 'NICKNAME_NOT_ALLOWED',
+        details: { reason: 'taken' },
+      });
+    });
+
+    it('counts the take-back used from the member giving that nickname up at or after the cancellation, not one they gave up before the reset (owner decision 2026-10-22 (4차) 1)', async () => {
+      const former = 'Imposter7';
+      // The member gave the nickname up 40 days ago and took it again since — their own hold
+      // never keeps it from them — before the reset took it.
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: former })
+        .where(eq(schema.profiles.userId, author.id));
+      await t.db.insert(schema.nicknameHolds).values({
+        nickname: former,
+        userId: author.id,
+        releasedAt: new Date(Date.now() - 40 * DAY_MS),
+      });
+      const reset = actionOf(
+        await send(
+          `/admin/moderation/users/${author.id}/nickname-reset`,
+          { reason: 'impersonation' },
+          admin,
+        ),
+      );
+      expect((await changeNickname(author, '새닉네임')).statusCode).toBe(200);
+      actionOf(
+        await send(`/admin/moderation/actions/${reset.id}/cancel`, { reason: '이의 인정' }, admin),
+      );
+      // That old hold of the member's own is not a take-back since the cancellation: the waiver
+      // stands, and the member takes the nickname back within the pick's interval.
+      const back = await changeNickname(author, former);
+      expect(back.statusCode, back.body).toBe(200);
+      expect((await profileRow(author.id)).nickname).toBe(former);
+
+      // The interval of the take-back gone by, the member gives the nickname up again…
+      await t.db
+        .update(schema.profiles)
+        .set({
+          nicknameChangedAt: new Date(Date.now() - (NICKNAME_CHANGE_INTERVAL_DAYS + 1) * DAY_MS),
+        })
+        .where(eq(schema.profiles.userId, author.id));
+      expect((await changeNickname(author, '셋째닉네임')).statusCode).toBe(200);
+      const gaveUpAt = (await profileRow(author.id)).nicknameChangedAt!;
+      // …while the handed-back hold still stands (the reset was just now): the take-back is used,
+      // and that nickname waits the interval the last pick started.
+      const expectUsed = async () => {
+        const res = await changeNickname(author, former);
+        expect(res.statusCode, res.body).toBe(409);
+        expect(res.json<{ error: unknown }>().error).toMatchObject({
+          code: 'NICKNAME_NOT_ALLOWED',
+          details: {
+            reason: 'change_interval',
+            nextChangeAt: new Date(
+              gaveUpAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
+            ).toISOString(),
+          },
+        });
+        expect((await profileRow(author.id)).nickname).toBe('셋째닉네임');
+      };
+      await expectUsed();
+      // The member's hold of it from then names no reset; given up in the very millisecond of the
+      // cancellation (the clock's resolution), it counts all the same.
+      const [action] = await t.db
+        .select({ cancelledAt: schema.moderationActions.cancelledAt })
+        .from(schema.moderationActions)
+        .where(eq(schema.moderationActions.id, reset.id));
+      const givenUp = await t.db
+        .update(schema.nicknameHolds)
+        .set({ releasedAt: action!.cancelledAt! })
+        .where(
+          and(
+            eq(schema.nicknameHolds.userId, author.id),
+            eq(schema.nicknameHolds.nickname, former),
+            isNull(schema.nicknameHolds.actionId),
+            gt(schema.nicknameHolds.releasedAt, new Date(Date.now() - DAY_MS)),
+          ),
+        )
+        .returning({ id: schema.nicknameHolds.id });
+      expect(givenUp).toHaveLength(1);
+      await expectUsed();
+    });
+
+    it('counts a change of case away from a handed-back nickname as giving it up: after two cancelled resets of two cases of one nickname the member cannot switch between them within the interval (owner decision 2026-10-22 (4차) 1)', async () => {
+      const upper = 'Imposter7';
+      const lower = 'imposter7';
+      await t.db
+        .update(schema.profiles)
+        .set({ nickname: upper })
+        .where(eq(schema.profiles.userId, author.id));
+      const resetAndCancel = async () => {
+        const reset = actionOf(
+          await send(
+            `/admin/moderation/users/${author.id}/nickname-reset`,
+            { reason: 'impersonation' },
+            admin,
+          ),
+        );
+        actionOf(
+          await send(
+            `/admin/moderation/actions/${reset.id}/cancel`,
+            { reason: '이의 인정' },
+            admin,
+          ),
+        );
+      };
+      const pick = async (nickname: string) => {
+        const res = await changeNickname(author, nickname);
+        expect(res.statusCode, res.body).toBe(200);
+        expect((await profileRow(author.id)).nickname).toBe(nickname);
+      };
+      // Each reset clears the interval, and the hold its cancellation hands the member keeps no
+      // case of it from them: after the first they pick the other case at once, which the second
+      // takes away and hands back in turn, and after the second the first case again.
+      await resetAndCancel();
+      await pick(lower);
+      await resetAndCancel();
+      await pick(upper);
+      // Within that pick's interval the second reset's nickname, not given up since its
+      // cancellation, is taken back once with no interval — a change of case only, which gives up
+      // the first reset's nickname exactly as it was taken away.
+      await pick(lower);
+      const lastPickAt = (await profileRow(author.id)).nicknameChangedAt!;
+      const givenUp = await t.db
+        .select({ userId: schema.nicknameHolds.userId })
+        .from(schema.nicknameHolds)
+        .where(
+          and(
+            eq(schema.nicknameHolds.nickname, upper),
+            isNull(schema.nicknameHolds.actionId),
+            gt(schema.nicknameHolds.releasedAt, new Date(Date.now() - DAY_MS)),
+          ),
+        );
+      expect(givenUp).toEqual([{ userId: author.id }]);
+      // So the first case, taken back and given up again, waits the interval as any: no switching
+      // between the two cases while both holds stand.
+      const again = await changeNickname(author, upper);
+      expect(again.statusCode, again.body).toBe(409);
+      expect(again.json<{ error: unknown }>().error).toMatchObject({
+        code: 'NICKNAME_NOT_ALLOWED',
+        details: {
+          reason: 'change_interval',
+          nextChangeAt: new Date(
+            lastPickAt.getTime() + NICKNAME_CHANGE_INTERVAL_DAYS * DAY_MS,
+          ).toISOString(),
+        },
+      });
+      expect((await profileRow(author.id)).nickname).toBe(lower);
     });
 
     it('hands the hold over under the nickname’s lock: a pick in flight reads it held, one that comes meanwhile waits and takes it — past the interval of a pick since the reset (owner decisions 2026-10-22, (2차) 1)', async () => {
