@@ -12,7 +12,11 @@ import { system } from '@/theme/system';
 import { ApiError } from './api';
 import { postWriteErrorMessage } from './posts';
 import {
+  IMAGE_UPLOAD_RETRIES,
+  IMAGE_UPLOAD_RETRY_DEFAULT_WAIT_MS,
+  IMAGE_UPLOAD_RETRY_MAX_WAIT_MS,
   POST_TEXT_COLOR_LABEL,
+  UploadAbandoned,
   bodyChangedFrom,
   countEditorDocument,
   countWithUploads,
@@ -28,10 +32,12 @@ import {
   pastedLinkHref,
   postTextColorToken,
   refusesImageBatch,
+  sendRetrying,
   takeImageBatch,
   titleTooLong,
   uploadContentType,
   uploadImageBatch,
+  uploadRetryWaitMs,
   uploadWithPreview,
 } from './post-editor';
 
@@ -200,10 +206,10 @@ describe('a picked image', () => {
     expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), false)).toBe(copy.errNetwork);
   });
 
-  it('says that the file failed when the API is busy receiving other uploads, has the account’s three in flight, or cut the body for idling (owner decisions 2026-10-21)', () => {
-    // 429 with Retry-After: the uploads being received hold the process's budget, the account has
-    // three uploads in flight, or too many conversions wait — that file's failure, nothing about
-    // the account.
+  it('says that the file failed when the API is still busy after it was sent again, or cut the body for idling or for its deadline (owner decisions 2026-10-21, 2026-10-22 (2차))', () => {
+    // 429 with Retry-After, the last of the sends (`sendRetrying`): the uploads being received hold
+    // the process's budget, the account has three uploads in flight, the memory has no room or too
+    // many conversions wait — that file's failure, nothing about the account.
     expect(
       imageUploadErrorMessage(
         new ApiError(429, {
@@ -214,13 +220,24 @@ describe('a picked image', () => {
         true,
       ),
     ).toBe(copy.errImageUpload);
-    // 408: no byte of the body came for 30 seconds.
+    // 408: no byte of the body came for 30 seconds, or the whole body not within 2 minutes.
     expect(
       imageUploadErrorMessage(
         new ApiError(408, { code: 'VALIDATION_ERROR', message: 'idle' } as never),
         true,
       ),
     ).toBe(copy.errImageUpload);
+  });
+
+  it('says nothing of an upload given up because the editor went while it waited to be sent again', () => {
+    const busy = new ApiError(429, {
+      code: 'RATE_LIMITED',
+      message: 'busy',
+      details: { retryAfterSeconds: 2 },
+    } as never);
+    expect(imageUploadErrorMessage(new UploadAbandoned(busy), false)).toBeUndefined();
+    expect(imageUploadErrorMessage(new UploadAbandoned(busy), true)).toBeUndefined();
+    expect(refusesImageBatch(new UploadAbandoned(busy))).toBe(false);
   });
 });
 
@@ -861,5 +878,161 @@ describe('the editor’s line, each file sent with its copy (uploadImageBatch ov
     // Each file's failure alone: the batch went on, and every slot is back.
     expect(failed).toHaveBeenCalledTimes(3);
     expect(slots.inFlight).toBe(0);
+  });
+});
+
+describe('an upload the API asks to send again later (owner decision 2026-10-22 (2차) answer 3)', () => {
+  const busy = (retryAfterSeconds?: number) =>
+    refusal(
+      429,
+      'RATE_LIMITED',
+      retryAfterSeconds === undefined ? undefined : { retryAfterSeconds },
+    );
+
+  it('is sent again twice at most, after a wait of at most 10 seconds', () => {
+    expect(IMAGE_UPLOAD_RETRIES).toBe(2);
+    expect(IMAGE_UPLOAD_RETRY_MAX_WAIT_MS).toBe(10_000);
+    // The upload route's own 2 seconds, for a 429 naming none.
+    expect(IMAGE_UPLOAD_RETRY_DEFAULT_WAIT_MS).toBe(2_000);
+  });
+
+  it('waits what the 429 names, up to the bound, and is not sent again for anything else', () => {
+    expect(uploadRetryWaitMs(busy(2))).toBe(2_000);
+    expect(uploadRetryWaitMs(busy(0))).toBe(0);
+    expect(uploadRetryWaitMs(busy(10))).toBe(10_000);
+    expect(uploadRetryWaitMs(busy())).toBe(IMAGE_UPLOAD_RETRY_DEFAULT_WAIT_MS);
+    // Longer than the bound (the address limit's minute): it would be refused again — failed now.
+    expect(uploadRetryWaitMs(busy(11))).toBeUndefined();
+    expect(uploadRetryWaitMs(busy(60))).toBeUndefined();
+    // Anything but the API's own 429 is the outcome at once.
+    expect(uploadRetryWaitMs(NOT_AN_IMAGE)).toBeUndefined();
+    expect(uploadRetryWaitMs(ONBOARDING)).toBeUndefined();
+    expect(uploadRetryWaitMs(ANOTHER_ACCOUNT)).toBeUndefined();
+    expect(uploadRetryWaitMs(refusal(408, 'VALIDATION_ERROR'))).toBeUndefined();
+    expect(uploadRetryWaitMs(refusal(413, 'VALIDATION_ERROR'))).toBeUndefined();
+    expect(uploadRetryWaitMs(new TypeError('Failed to fetch'))).toBeUndefined();
+    // A 429 something between wrote (no envelope): not the API asking.
+    expect(uploadRetryWaitMs(new ApiError(429, undefined))).toBeUndefined();
+  });
+
+  /** `sendRetrying` over answers given in turn, its waits recorded rather than slept. */
+  async function retrying(answers: (Error | string)[], alive: () => boolean = () => true) {
+    const waits: number[] = [];
+    let sends = 0;
+    const outcome = await sendRetrying(
+      () => {
+        const answer = answers[sends];
+        sends += 1;
+        if (answer === undefined) return Promise.reject(new Error('sent more often than answered'));
+        return answer instanceof Error ? Promise.reject(answer) : Promise.resolve(answer);
+      },
+      {
+        sleep: (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+        alive,
+      },
+    ).then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    );
+    return { outcome, waits, sends };
+  }
+
+  it('is the image after two 429s, each waited out', async () => {
+    const result = await retrying([busy(2), busy(1), 'uploaded']);
+    expect(result.outcome).toEqual({ value: 'uploaded' });
+    expect(result.sends).toBe(3);
+    expect(result.waits).toEqual([2_000, 1_000]);
+  });
+
+  it('fails with the third 429: three sends in all', async () => {
+    const third = busy(2);
+    const result = await retrying([busy(2), busy(2), third, 'never sent']);
+    expect(result.outcome).toEqual({ error: third });
+    expect(result.sends).toBe(3);
+    expect(result.waits).toEqual([2_000, 2_000]);
+  });
+
+  it('fails at once for a 429 asking for more than the bound, and for any other refusal', async () => {
+    const long = busy(30);
+    expect(await retrying([long, 'never sent'])).toEqual({
+      outcome: { error: long },
+      sends: 1,
+      waits: [],
+    });
+    expect(await retrying([NOT_AN_IMAGE, 'never sent'])).toEqual({
+      outcome: { error: NOT_AN_IMAGE },
+      sends: 1,
+      waits: [],
+    });
+    // After a 429 waited out, a refusal of the file is the outcome as it comes.
+    expect(await retrying([busy(2), NOT_AN_IMAGE, 'never sent'])).toEqual({
+      outcome: { error: NOT_AN_IMAGE },
+      sends: 2,
+      waits: [2_000],
+    });
+  });
+
+  it('sends nothing more once the editor has gone during the wait', async () => {
+    const first = busy(2);
+    const result = await retrying([first, 'never sent'], () => false);
+    expect(result.sends).toBe(1);
+    expect(result.waits).toEqual([2_000]);
+    const { error } = result.outcome as { error: unknown };
+    expect(error).toBeInstanceOf(UploadAbandoned);
+    expect((error as UploadAbandoned).refused).toBe(first);
+  });
+
+  it('keeps the file uploading, its slot held and the next file waiting its turn, through the waits', async () => {
+    vi.useFakeTimers();
+    try {
+      const slots = createImageSlots();
+      expect(slots.take(0, 2)).toBe(true);
+      const sent: string[] = [];
+      const failed = vi.fn();
+      let refusals = 2;
+      const batch = uploadImageBatch([file('busy'), file('next')], slots, createUploadQueue(), {
+        alive: () => true,
+        send: async (sending, placed) => {
+          await sendRetrying(
+            () => {
+              sent.push(sending.name);
+              if (sending.name === 'busy' && refusals > 0) {
+                refusals -= 1;
+                return Promise.reject(busy(2));
+              }
+              return Promise.resolve();
+            },
+            {
+              sleep: (ms) =>
+                new Promise((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
+              alive: () => true,
+            },
+          );
+          placed();
+        },
+        failed,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toEqual(['busy']);
+      // Waiting out the first 429: both files still on their way, the next not sent.
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(sent).toEqual(['busy']);
+      expect(slots.inFlight).toBe(2);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(sent).toEqual(['busy', 'busy']);
+      await vi.advanceTimersByTimeAsync(2_000);
+      await batch;
+      // The third send took it, then the next file went.
+      expect(sent).toEqual(['busy', 'busy', 'busy', 'next']);
+      expect(failed).not.toHaveBeenCalled();
+      expect(slots.inFlight).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

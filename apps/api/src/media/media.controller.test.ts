@@ -35,8 +35,10 @@ import { ByteBudget } from './byte-budget.js';
 import {
   IMAGE_BODY_LIMIT,
   IMAGE_UPLOADS_PER_ACCOUNT,
+  IMAGE_UPLOAD_DEADLINE_SECONDS,
   IMAGE_UPLOAD_IDLE_SECONDS,
   IMAGE_UPLOAD_RECEIVING_BYTES,
+  imageUploadDeadline,
   imageUploadIdle,
   imageUploadsInFlight,
   imageUploadsReceiving,
@@ -114,6 +116,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   });
   afterEach(async () => {
     imageUploadIdle.ms = IMAGE_UPLOAD_IDLE_SECONDS * 1000;
+    imageUploadDeadline.ms = IMAGE_UPLOAD_DEADLINE_SECONDS * 1000;
     // Every upload a spec began has given its share back and left its account's uploads in flight
     // (a request hung up on is let go at once), and every share of the memory is back.
     await vi.waitFor(() => {
@@ -803,11 +806,63 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     expect((await upload(image)).statusCode).toBe(201);
   });
 
-  it('does not cut an upload that keeps sending, however long its whole body takes', async () => {
+  it('cuts an upload whose whole body has not come by its deadline, however it trickles: its share and its place back, answered 408 (owner decision 2026-10-22 (2차) answer 1)', async () => {
+    // The owner's 30 seconds and 2 minutes, shortened for the spec (image-body.test.ts holds the
+    // cut to the real ones with fake timers).
     imageUploadIdle.ms = 300;
+    imageUploadDeadline.ms = 900;
+    const image = await photo();
+    // A piece every 100ms — never idle for 300 — and too many pieces to be all in by 900.
+    const pieces = 30;
+    const size = Math.ceil(image.length / pieces);
+    const trickle = rawUpload(image.length, image.subarray(0, size));
+    const closed = new Promise<void>((resolve) => {
+      trickle.request.on('close', resolve);
+    });
+    let answered = false;
+    void trickle.answer.then(() => {
+      answered = true;
+    });
+    const started = Date.now();
+    try {
+      await vi.waitFor(() => {
+        expect(imageUploadsReceiving.size).toBe(image.length);
+      });
+      for (let sent = size; sent < image.length && !answered; sent += size) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        if (!answered) trickle.request.write(image.subarray(sent, sent + size));
+      }
+      const res = await trickle.answer;
+      // Cut by the deadline, not by idling: it never stopped for 300ms, and not before 900.
+      expect(Date.now() - started).toBeGreaterThanOrEqual(900);
+      expect(res.status).toBe(408);
+      expect(res.headers.connection).toBe('close');
+      expect(JSON.parse(res.body)).toMatchObject({
+        error: {
+          code: 'VALIDATION_ERROR',
+          message: 'The whole file did not come within 0.9 seconds; send it again',
+        },
+      });
+      // Given back, and its connection closed by the API: nothing more of it waited for.
+      expect(imageUploadsReceiving.size).toBe(0);
+      await closed;
+      await vi.waitFor(() => {
+        expect(imageUploadsInFlight.of(author.id)).toBe(0);
+      });
+    } finally {
+      trickle.request.destroy();
+    }
+    expect(await mediaRows()).toEqual([]);
+    // The account uploads again, and an upload all in at once is not cut.
+    expect((await upload(image)).statusCode).toBe(201);
+  });
+
+  it('does not cut an upload that keeps sending and is all in by its deadline, however long it takes beside the idle time', async () => {
+    imageUploadIdle.ms = 300;
+    imageUploadDeadline.ms = 5_000;
     const image = await photo();
     // Ten pieces a third of the idle time apart, the last completing the declared length: three
-    // times the idle time in all, never idle for it.
+    // times the idle time in all, never idle for it, and all in well before the deadline.
     const pieces = 10;
     const size = Math.ceil(image.length / pieces);
     const slow = rawUpload(image.length, image.subarray(0, size));
@@ -1548,6 +1603,11 @@ describe('the upload bodies received at once', () => {
     expect(IMAGE_UPLOAD_IDLE_SECONDS).toBe(30);
     expect(imageUploadIdle.ms).toBe(30_000);
     expect(IMAGE_UPLOADS_PER_ACCOUNT).toBe(3);
+  });
+
+  it('are cut 2 minutes after they start when not all in, however they trickle (owner decision 2026-10-22 (2차) answer 1)', () => {
+    expect(IMAGE_UPLOAD_DEADLINE_SECONDS).toBe(120);
+    expect(imageUploadDeadline.ms).toBe(120_000);
   });
 });
 

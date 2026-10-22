@@ -175,11 +175,15 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * account to its step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and
  * the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21), and when
  * the gate stays — that read failed — says what a refused send says (owner decision 2026-10-21
- * answer 6); anything else is a failed upload, said apart from an unreachable server — the
- * API busy receiving other uploads or the account's three in flight (RATE_LIMITED), and a body cut
- * for idling (408), included: that file failed, the batch goes on.
+ * answer 6); an upload given up while it waited to be sent again, the editor gone meanwhile
+ * (`UploadAbandoned`), says nothing, as the files a batch never sends once the editor is gone;
+ * anything else is a failed upload, said apart from an unreachable server — the API busy (a 429:
+ * the uploads it receives, the account's three in flight, its memory, the conversion queue) still
+ * after the editor sent it again (`sendRetrying`, owner decision 2026-10-22 (2차) answer 3), and a
+ * body cut for idling or for its deadline (408), included: that file failed, the batch goes on.
  */
 export function imageUploadErrorMessage(error: unknown, gateMoves: boolean): string | undefined {
+  if (error instanceof UploadAbandoned) return undefined;
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'IMAGE_NOT_ALLOWED')) {
     const reason = refusalOf(error.details);
@@ -322,6 +326,104 @@ export function createImageSlots(
 }
 
 /**
+ * How many times the editor sends an upload again after the API refused it with 429 and a wait
+ * (`sendRetrying`): two, so three requests in all (owner decision 2026-10-22 (2차) answer 3).
+ */
+export const IMAGE_UPLOAD_RETRIES = 2;
+
+/**
+ * The longest wait the editor takes before sending an upload again: 10 seconds (the owner's bound,
+ * 2026-10-22 (2차) answer 3). A 429 asking for longer — the address limit's minute, say — fails the
+ * file at once (owner decision 2026-10-22 (3차) answer 2, as built): sending it before the time the
+ * API named would only be refused again.
+ */
+export const IMAGE_UPLOAD_RETRY_MAX_WAIT_MS = 10_000;
+
+/**
+ * The wait when a 429 names none (`details.retryAfterSeconds`): the 2 seconds every 429 of the
+ * upload route names (the API's IMAGE_BUSY_RETRY_SECONDS).
+ */
+export const IMAGE_UPLOAD_RETRY_DEFAULT_WAIT_MS = 2_000;
+
+/**
+ * How long to wait before sending again an upload refused with `error`, in milliseconds, or
+ * undefined when it is not sent again: only a 429 RATE_LIMITED — the API busy for the moment: the
+ * uploads it receives (64MiB), the account's three in flight, its memory, the conversion queue
+ * (apps/api image-body.ts, image.ts) or the address limit; the web cannot tell them apart and they
+ * all mean «send it again later», so every one of them is sent again (owner decision 2026-10-22
+ * (3차) answer 1, as built) — and only when the wait it names, `details.retryAfterSeconds`
+ * (the same seconds as its `Retry-After`; IMAGE_UPLOAD_RETRY_DEFAULT_WAIT_MS when it names none),
+ * is at most IMAGE_UPLOAD_RETRY_MAX_WAIT_MS.
+ */
+export function uploadRetryWaitMs(error: unknown): number | undefined {
+  if (!isApiError(error, 'RATE_LIMITED') || error.status !== 429) return undefined;
+  const { details } = error;
+  const seconds =
+    typeof details === 'object' && details !== null && 'retryAfterSeconds' in details
+      ? (details as { retryAfterSeconds?: unknown }).retryAfterSeconds
+      : undefined;
+  const wait =
+    typeof seconds === 'number' && Number.isFinite(seconds) && seconds >= 0
+      ? seconds * 1_000
+      : IMAGE_UPLOAD_RETRY_DEFAULT_WAIT_MS;
+  return wait <= IMAGE_UPLOAD_RETRY_MAX_WAIT_MS ? wait : undefined;
+}
+
+/**
+ * An upload given up while it waited to be sent again: the editor went meanwhile (the writer left,
+ * or the onboarding gate took the form away), so no one would place its image. It says nothing
+ * (`imageUploadErrorMessage`) — as the files a batch never sends once the editor is gone — and
+ * `refused` is the 429 it waited on.
+ */
+export class UploadAbandoned extends Error {
+  constructor(readonly refused: unknown) {
+    super('The editor went while the upload waited to be sent again');
+    this.name = 'UploadAbandoned';
+  }
+}
+
+/** What `sendRetrying` waits with, and asks before sending again. */
+export interface UploadRetrySteps {
+  /** Resolves after `ms` (`pause` on the page; a fake in the tests). */
+  sleep(ms: number): Promise<void>;
+  /** False once the editor is gone: nothing more is sent. */
+  alive(): boolean;
+}
+
+/** A wait of `ms`. */
+export function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+/**
+ * One file's upload (`send`), sent again after a refusal that only asks to wait (owner decision
+ * 2026-10-22 (2차) answer 3): a 429 with a wait of at most 10 seconds (`uploadRetryWaitMs`) is
+ * waited out and the file sent again, at most IMAGE_UPLOAD_RETRIES times; the answer of the last
+ * send is the outcome — the image, or the refusal the editor says as that file's failure
+ * (`imageUploadErrorMessage`, as before). The whole of it is one upload to the editor: the file
+ * keeps its turn in the editor's line (`createUploadQueue` — the next file waits) and its count
+ * among the uploads, so '올리는 중' stays up and the form holds its send meanwhile. An editor gone
+ * by the end of a wait sends nothing more (`UploadAbandoned`). Any other refusal is the outcome at
+ * once, as before.
+ */
+export async function sendRetrying<T>(send: () => Promise<T>, steps: UploadRetrySteps): Promise<T> {
+  let retried = 0;
+  for (;;) {
+    try {
+      return await send();
+    } catch (error) {
+      const wait = retried < IMAGE_UPLOAD_RETRIES ? uploadRetryWaitMs(error) : undefined;
+      if (wait === undefined) throw error;
+      retried += 1;
+      await steps.sleep(wait);
+      if (!steps.alive()) throw new UploadAbandoned(error);
+    }
+  }
+}
+
+/**
  * Whether an upload's refusal is about the account rather than the file: no session
  * (UNAUTHENTICATED), the cookie as another account (`isForAnotherAccount`), or a step of the
  * onboarding left (ONBOARDING_REQUIRED). Every file after it would be refused the same way.
@@ -425,8 +527,9 @@ export interface ImageBatchSteps<F> {
  * put on screen by the upload (`postImageUploader`) — and so does an editor gone by a file's turn;
  * the files not sent give their slots back at once. Sending on would have every later file refused
  * alike, each refusal reading the account again, on the page the gate moved to. Any other failure
- * is that file's alone (a refused image, the network, the API busy receiving or the account's three
- * uploads in flight — RATE_LIMITED, a body cut for idling): the batch goes on.
+ * is that file's alone (a refused image, the network, the API still busy — RATE_LIMITED — after the
+ * file was sent again (`sendRetrying`, inside `send`), a body cut for idling or for its deadline):
+ * the batch goes on.
  */
 export async function uploadImageBatch<F>(
   files: readonly F[],

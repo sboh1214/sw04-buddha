@@ -46,11 +46,13 @@ export const IMAGE_BODY_LIMIT = IMAGE_MAX_BYTES * 2;
  * the room the reads may still take leave room for it under the ceiling (ADR-0073 9-46).
  *
  * The share is taken before a byte of the body has come, so it is a reservation that costs its
- * sender nothing to hold. Two bounds keep one account from holding the budget with bodies that do
- * not come (owner decision 2026-10-21 answer 4): a body that sends no byte for
- * IMAGE_UPLOAD_IDLE_SECONDS is cut and gives its share back (`IdleCut`), and an account has at
- * most IMAGE_UPLOADS_PER_ACCOUNT uploads in flight — three bodies at the parser's limit are 30MiB,
- * under half the budget.
+ * sender nothing to hold. Three bounds keep one account from holding the budget with bodies that do
+ * not come: a body that sends no byte for IMAGE_UPLOAD_IDLE_SECONDS is cut and gives its share back
+ * (`BodyCut`), and an account has at most IMAGE_UPLOADS_PER_ACCOUNT uploads in flight — three
+ * bodies at the parser's limit are 30MiB, under half the budget (owner decision 2026-10-21 answer
+ * 4); and a body not all in within IMAGE_UPLOAD_DEADLINE_SECONDS of its start is cut the same way,
+ * however it trickles (owner decision 2026-10-22 (2차) answer 1). The reservation itself is counted
+ * as it is, by the declared length, here and by the memory admission (the same answer).
  */
 export const IMAGE_UPLOAD_RECEIVING_BYTES = 64 * 1024 * 1024;
 
@@ -59,12 +61,23 @@ export const imageUploadsReceiving = new ByteBudget(IMAGE_UPLOAD_RECEIVING_BYTES
 
 /**
  * How long an upload's body may send nothing before it is cut: 30 seconds (owner decision
- * 2026-10-21 answer 4). An idle time, not a deadline: a slow phone that keeps sending is
- * never cut, however long its file takes; a body that stops — or never starts — is, and its share
- * of the budget comes back at once. Neither the API (Fastify 5's `requestTimeout` and
- * `connectionTimeout` are 0; main.ts sets neither) nor Caddy (no `read_body`) would cut it.
+ * 2026-10-21 answer 4). An idle time, not the deadline below: a body that stops — or never starts —
+ * is cut, and its share of the budget comes back at once. Neither the API (Fastify 5's
+ * `requestTimeout` and `connectionTimeout` are 0; main.ts sets neither) nor Caddy (no `read_body`)
+ * would cut it.
  */
 export const IMAGE_UPLOAD_IDLE_SECONDS = 30;
+
+/**
+ * How long an upload's whole body may take: 2 minutes from when it starts to be read (owner decision
+ * 2026-10-22 (2차) answer 1). The idle time alone let a body that sends a byte every 29 seconds hold
+ * its reservation — the declared length, up to the parser's 10MiB — for as long as it liked; past
+ * this, such a body is cut as an idle one is (408, its share back at once). Two minutes is the
+ * largest photo the API takes (IMAGE_MAX_BYTES, 5MB — 5,242,880 bytes) at about 350kbit/s of
+ * payload, a little more once TCP/IP's own bytes are counted — a link slower than that is cut on a
+ * photo that size: a slow phone's upload, but not a trickle.
+ */
+export const IMAGE_UPLOAD_DEADLINE_SECONDS = 120;
 
 /**
  * The idle time the gate gives each upload it lets in, read when the upload's body starts: the
@@ -72,6 +85,12 @@ export const IMAGE_UPLOAD_IDLE_SECONDS = 30;
  * cut without waiting half a minute; nothing else changes it.
  */
 export const imageUploadIdle = { ms: IMAGE_UPLOAD_IDLE_SECONDS * 1000 };
+
+/**
+ * The deadline the gate gives each upload's whole body, read when the body starts: the owner's 2
+ * minutes. A setting for the integration test's sake, as `imageUploadIdle` is.
+ */
+export const imageUploadDeadline = { ms: IMAGE_UPLOAD_DEADLINE_SECONDS * 1000 };
 
 /**
  * How many uploads an account may have in flight at once, process-wide: 3 (owner decision
@@ -126,18 +145,20 @@ function uploadBusy(reply: FastifyReply, message: string): AppError {
  * answer from its Content-Length, which it would give at the parser), with three of the account's
  * uploads in flight already, or past the budget. Both of those are RATE_LIMITED with `Retry-After`,
  * the upload route's answer for a full conversion queue (image.ts) — a client may send it again
- * then; the web's editor says that file failed and goes on with its batch (owner decision
- * 2026-10-21). A body that declares no length takes the parser's limit, the most it can hold
- * (owner decision 2026-10-21 answer 5), and the parser still cuts it there. Then the same length
+ * then; the web's editor waits out the wait it names and sends the file again, twice at most,
+ * still uploading, and only when the third send is refused too says that file failed and goes on
+ * with its batch (owner decisions 2026-10-21, 2026-10-22 (2차) answer 3). A body that declares no
+ * length takes the parser's limit, the most it can hold (owner decision 2026-10-21 answer 5), and
+ * the parser still cuts it there. Then the same length
  * is asked of the API's memory, holding the place and the share meanwhile: the body waits, unread,
  * up to `memoryWaits.uploadMs` for the RSS, the shares out and the reads' room to leave room for
  * it under the ceiling, and is RATE_LIMITED unread when they did not (owner decision 2026-10-22
  * answer 3) — or simply let go if its client went meanwhile.
  * 429 leaves the connection open: what is still coming of the body is let through unheld (Node's
  * HTTP server), and a browser still sending reads the answer rather than a reset. The shares come
- * back when the parser has the whole body, when the body is cut for idling (`IdleCut`), or when
- * the answer ends without it — refused after this, cut off, or the client gone mid-body or while
- * waiting. The account's place comes back when the answer has ended and the handler's work on the
+ * back when the parser has the whole body, when the body is cut for idling or for its deadline
+ * (`BodyCut`), or when the answer ends without it — refused after this, cut off, or the client gone
+ * mid-body or while waiting. The account's place comes back when the answer has ended and the handler's work on the
  * upload, if it started, has settled (`runUploadWork`).
  */
 async function letUploadIn(
@@ -222,28 +243,53 @@ export function runUploadWork<T>(
   return running;
 }
 
+/** Why an upload's body was cut (`BodyCut`). */
+export type BodyCutReason = 'idle' | 'deadline';
+
+/** The two bounds on an upload's body (`BodyCut`), in milliseconds from when it starts. */
+export interface BodyCutLimits {
+  /** No byte for this long: cut (IMAGE_UPLOAD_IDLE_SECONDS). */
+  readonly idleMs: number;
+  /**
+   * Not all in this long after it started: cut, however it trickles
+   * (IMAGE_UPLOAD_DEADLINE_SECONDS).
+   */
+  readonly deadlineMs: number;
+}
+
 /**
  * An upload's body as the parser reads it (the `preParsing` hook below hands it over in place of
  * the request): every byte passed on as it came, and the stream failed — the parser then answers
- * with the error — once no byte has come for `idleMs`, from when the body starts to be read. Its
- * `receivedEncodedLength` is what Fastify counts against the parser's limit, as it would count the
- * request's own bytes.
+ * with the error — once no byte has come for `idleMs`, or once `deadlineMs` has gone by without the
+ * whole body, both from when the body starts to be read. `onCut` is told which, once, and fails the
+ * stream. Its `receivedEncodedLength` is what Fastify counts against the parser's limit, as it would
+ * count the request's own bytes. Exported for its unit test (fake timers, image-body.test.ts).
  */
-class IdleCut extends Transform {
+export class BodyCut extends Transform {
   receivedEncodedLength = 0;
-  private readonly timer: NodeJS.Timeout;
+  private readonly idle: NodeJS.Timeout;
+  private readonly deadline: NodeJS.Timeout;
   private stopped = false;
 
-  constructor(idleMs: number, onIdle: (body: IdleCut) => void) {
+  constructor(limits: BodyCutLimits, onCut: (body: BodyCut, reason: BodyCutReason) => void) {
     super();
-    this.timer = setTimeout(() => {
-      onIdle(this);
-    }, idleMs);
+    const cut = (reason: BodyCutReason) => {
+      if (this.stopped) return;
+      this.stop();
+      onCut(this, reason);
+    };
+    this.idle = setTimeout(() => {
+      cut('idle');
+    }, limits.idleMs);
+    this.deadline = setTimeout(() => {
+      cut('deadline');
+    }, limits.deadlineMs);
   }
 
   override _transform(chunk: Buffer, _encoding: BufferEncoding, callback: TransformCallback): void {
     this.receivedEncodedLength += chunk.length;
-    if (!this.stopped) this.timer.refresh();
+    // A byte came: the idle time starts again. The deadline does not.
+    if (!this.stopped) this.idle.refresh();
     callback(null, chunk);
   }
 
@@ -257,35 +303,42 @@ class IdleCut extends Transform {
     callback(error);
   }
 
-  /** No cut any more: the body is in, or the request has ended. */
+  /** No cut any more: the body is in, the request has ended, or it was cut. */
   stop(): void {
     this.stopped = true;
-    clearTimeout(this.timer);
+    clearTimeout(this.idle);
+    clearTimeout(this.deadline);
   }
 }
 
+/** The 408 an upload's body is cut with (`watchUploadBody`), saying which bound it passed. */
+function bodyCutError(reason: BodyCutReason, limits: BodyCutLimits): AppError {
+  const message =
+    reason === 'idle'
+      ? `No byte of the file came for ${String(limits.idleMs / 1000)} seconds; send it again`
+      : `The whole file did not come within ${String(limits.deadlineMs / 1000)} seconds; send it again`;
+  return new AppError('VALIDATION_ERROR', { status: HttpStatus.REQUEST_TIMEOUT, message });
+}
+
 /**
- * Watches the body of an upload the gate let in for `idleMs` without a byte (`IdleCut`): cut, its
- * share back at once, answered 408 VALIDATION_ERROR — the code ApiExceptionFilter gives any other
- * 4xx it has no code for (`codeForStatus`), as for the 413 — and its connection closed, so nothing
- * more of it is waited for. The request's own stream is piped, not wrapped in a pipeline: a
- * pipeline would destroy it with the cut, and with it the socket the answer goes out on.
+ * Watches the body of an upload the gate let in (`BodyCut`): once it sends no byte for the idle
+ * time (owner decision 2026-10-21 answer 4), or is not all in by its deadline (owner decision
+ * 2026-10-22 (2차) answer 1), it is cut — its share back at once, answered 408 VALIDATION_ERROR (the
+ * code ApiExceptionFilter gives any other 4xx it has no code for, `codeForStatus`, as for the 413)
+ * and its connection closed, so nothing more of it is waited for. The two cuts differ only in their
+ * `message`. The request's own stream is piped, not wrapped in a pipeline: a pipeline would destroy
+ * it with the cut, and with it the socket the answer goes out on.
  */
 function watchUploadBody(
   request: FastifyRequest,
   reply: FastifyReply,
   payload: NodeJS.ReadableStream,
-): IdleCut {
-  const idleMs = imageUploadIdle.ms;
-  const body = new IdleCut(idleMs, (idle) => {
+): BodyCut {
+  const limits: BodyCutLimits = { idleMs: imageUploadIdle.ms, deadlineMs: imageUploadDeadline.ms };
+  const body = new BodyCut(limits, (cut, reason) => {
     receiving.get(request)?.();
     void reply.header('connection', 'close');
-    idle.destroy(
-      new AppError('VALIDATION_ERROR', {
-        status: HttpStatus.REQUEST_TIMEOUT,
-        message: `No byte of the file came for ${String(idleMs / 1000)} seconds; send it again`,
-      }),
-    );
+    cut.destroy(bodyCutError(reason, limits));
   });
   // The request failing (a client gone mid-body) fails the body, as it would fail the parser.
   const fail = (error: Error) => body.destroy(error);
@@ -403,7 +456,8 @@ export interface ImageBodySenders {
  *   the API's memory has room for it (owner decision 2026-10-22 answer 3 — it waits up to
  *   `memoryWaits.uploadMs` for that): one declared over the limit is refused unread, and one past
  *   any of those bounds is RATE_LIMITED unread. Its body is cut once it sends no byte for 30
- *   seconds (`watchUploadBody`, a `preParsing` hook — the parser reads the stream it returns). The
+ *   seconds, or is not all in 2 minutes after it started (`watchUploadBody`, a `preParsing` hook —
+ *   the parser reads the stream it returns). The
  *   handler runs its work on the upload through `runUploadWork`, so the account's place is held
  *   until that work has settled.
  */

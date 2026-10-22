@@ -53,6 +53,8 @@ import {
   isPostTextColor,
   linkInputHref,
   pastedLinkHref,
+  pause,
+  sendRetrying,
   takeImageBatch,
   uploadImageBatch,
   uploadWithPreview,
@@ -416,10 +418,16 @@ export function PostEditor({
         try {
           // The preview is drawn while the file goes up, and only it is kept (`boundedPreviewOf`).
           // A failed upload is said once its copy has settled too, so the line decodes one file
-          // at a time however fast the uploads fail.
+          // at a time however fast the uploads fail. A 429 that asks to wait is waited out and the
+          // file sent again, twice at most, still counted as uploading (`sendRetrying`, owner
+          // decision 2026-10-22 (2차) answer 3).
           const { uploaded, preview } = await uploadWithPreview(
             file,
-            (picked) => upload(picked, accountId),
+            (picked) =>
+              sendRetrying(() => upload(picked, accountId), {
+                sleep: pause,
+                alive: () => !editor.isDestroyed,
+              }),
             boundedPreviewOf,
           );
           if (preview !== undefined) previews.set(uploaded.id, preview);
@@ -452,7 +460,8 @@ export function PostEditor({
       // while the gate takes the account to its step, the draft kept in the tab — a toast would
       // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
       // gate stays, and it says what a refused send says (owner decision 2026-10-21
-      // answer 6). Any other is said: that file's failure alone.
+      // answer 6). An upload given up for the editor gone while it waited says nothing. Any other
+      // is said: that file's failure alone.
       failed: (error) => {
         const message = imageUploadErrorMessage(error, gateMoves());
         if (message !== undefined) toaster.create({ type: 'error', title: message });

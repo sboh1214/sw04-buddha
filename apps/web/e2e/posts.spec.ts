@@ -48,12 +48,16 @@ import {
  * the build's), so `GET /me` says it in the browser (`asReconsent`), as onboarding.spec.ts draws
  * it. An image upload refused for the onboarding takes the writer to the step as a refused send
  * does, saying nothing, and one refused as another account reads the session again — either way
- * the rest of the batch is not sent; one refused because the API is busy receiving uploads (429)
- * is that file's failure alone; images picked while others upload count those too — and so does
- * '이미지 n / 10장' — so a post never takes more than ten, and an image refused or failed gives its
- * place back (owner decisions 2026-10-21); and an image the API asked
- * to read again later (429) is drawn once it can be — a post's and a card's — but asked for three
- * times at most (ADR-0073 결과 5, Codex review of #219).
+ * the rest of the batch is not sent; one the API asks to send again later (a 429 of the upload
+ * route — its memory, the uploads it receives — naming a wait of at most 10 seconds) stays
+ * uploading — '이미지를 올리는 중' up, '이미지 n / 10장' as it was, the form's submit held — and
+ * is sent again after that wait, twice at most, and only a third refusal is that file's failure
+ * alone (owner decisions 2026-10-22 (2차) answer 3 and (3차)); a writer who leaves during such a
+ * wait is asked first, and once gone the file is not sent again and nothing is said; images
+ * picked while others upload count those too — and so does '이미지 n / 10장' — so a post never
+ * takes more than ten, and an image refused or failed gives its place back (owner decisions
+ * 2026-10-21); and an image the API asked to read again later (429) is drawn once it can be — a
+ * post's and a card's — but asked for three times at most (ADR-0073 결과 5, Codex review of #219).
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -176,6 +180,9 @@ const toastsOf = (page: Page) => page.locator('body > [data-scope="toast"][data-
 
 /** Long enough for a request the screen would send next (a batch's next upload) to have left. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 1_000));
+
+/** `ms` of the page's own wait gone by, for what the screen shows in the middle of it. */
+const partOf = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The post drafts kept in this tab's sessionStorage (lib/post-drafts.ts), by storage key. */
 function draftsInTab(page: Page): Promise<Record<string, { previews: Record<string, string> }>> {
@@ -1269,7 +1276,7 @@ test.describe('근거 글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('API가 받는 중인 업로드로 예산(64MiB)을 넘어 거절한(429) 이미지는 그 파일의 실패만 알리고, 함께 고른 나머지는 올라간다', async ({
+  test('API가 잠시 뒤에 다시 보내라고(429) 한 이미지는 올리는 중인 채 Retry-After만큼 기다려 다시 올리고, 두 번 거절된 뒤 세 번째에 받으면 알림 없이 들어간다', async ({
     admin,
     page,
   }) => {
@@ -1278,33 +1285,162 @@ test.describe('근거 글', () => {
     await page.goto(`/community/write?market=${market.id}`);
     const editor = page.getByTestId('post-editor-content');
     await expect(editor).toBeVisible();
-    // The second upload would take the API's uploads being received past their budget (owner
-    // decision 2026-10-21: 64MiB per process — the API's own refusal is its integration test's).
+    // A title and a line of the body: with them, the upload is all that holds the form's submit.
+    await page.getByTestId('post-title-input').fill('기다렸다 올린 이미지');
+    await editor.click();
+    await page.keyboard.type('다시 올린 근거');
+    const submit = page.getByTestId('post-submit');
+    await expect(submit).toBeEnabled();
+    // The API's memory, then the uploads it receives, have no room for the moment (owner decisions
+    // 2026-10-22 answer 3, 2026-10-21 answer 1 — the API's own refusals are its integration
+    // tests'); the third send goes through. Each refusal names 3 seconds to wait — the editor
+    // waits what `details.retryAfterSeconds` says, up to 10 — long enough to look inside the wait.
+    const sentAt: number[] = [];
+    await page.route('**/api/v1/media/images**', async (route) => {
+      sentAt.push(Date.now());
+      if (sentAt.length > 2) return route.continue();
+      await route.fulfill({
+        status: 429,
+        headers: { 'retry-after': '3' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message:
+              sentAt.length === 1
+                ? 'The server is short of memory for uploads; send it again'
+                : 'Too many uploads are being received; send it again',
+            details: { retryAfterSeconds: 3 },
+          },
+        },
+      });
+    });
+    const refusal = () =>
+      page.waitForResponse(
+        (response) => response.url().includes('/api/v1/media/images') && response.status() === 429,
+      );
+    const uploading = page.getByTestId('post-editor-uploading');
+    const images = page.getByTestId('post-body-images');
+    let refused = refusal();
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(1));
+    // Refused once, then twice: a second into each wait — the next send two seconds off — the file
+    // is still uploading (owner decision 2026-10-22 (2차) answer 3): the line up, the count as it
+    // was, the form's submit held, nothing in the document. Read once rather than waited for: a
+    // line gone during the wait would be back with the next send, and a waiting check would pass.
+    for (const refusals of [1, 2]) {
+      await refused;
+      if (refusals === 1) refused = refusal();
+      await partOf(1_000);
+      expect(sentAt).toHaveLength(refusals);
+      expect(await uploading.isVisible()).toBe(true);
+      expect(await images.textContent()).toContain('1 / 10');
+      expect(await submit.isDisabled()).toBe(true);
+      expect(await editor.locator('img[data-media-id]').count()).toBe(0);
+    }
+    // The third send takes it: in the document, the uploading line gone, the submit free, no toast.
+    await expect(editor.locator('img[data-media-id]')).toHaveCount(1);
+    await expect(uploading).toHaveCount(0);
+    await expect(submit).toBeEnabled();
+    expect(sentAt).toHaveLength(3);
+    // Each sent again only after the 3 seconds its refusal named.
+    expect(sentAt[1]! - sentAt[0]!).toBeGreaterThanOrEqual(2_950);
+    expect(sentAt[2]! - sentAt[1]!).toBeGreaterThanOrEqual(2_950);
+    await expect(images).toContainText('1 / 10');
+    await expect(toastsOf(page).locator('[data-part="root"]')).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('세 번 모두 429로 거절된 이미지는 그 파일의 실패만 알리고, 함께 고른 나머지는 올라간다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await page.goto(`/community/write?market=${market.id}`);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toBeVisible();
+    // The second file would take the API's uploads being received past their budget (owner
+    // decision 2026-10-21: 64MiB per process) at each of its three sends: the first and the two
+    // the editor sends again (owner decision 2026-10-22 (2차) answer 3). The files go one at a
+    // time, so the second to the fourth requests are the second file's.
     let uploads = 0;
     await page.route('**/api/v1/media/images**', async (route) => {
       uploads += 1;
-      if (uploads !== 2) return route.continue();
+      if (uploads < 2 || uploads > 4) return route.continue();
       await route.fulfill({
         status: 429,
-        headers: { 'retry-after': '2' },
+        headers: { 'retry-after': '1' },
         json: {
           error: {
             code: 'RATE_LIMITED',
             message: 'Too many uploads are being received; send it again',
-            details: { retryAfterSeconds: 2 },
+            details: { retryAfterSeconds: 1 },
           },
         },
       });
     });
     await page.getByTestId('post-editor-file').setInputFiles(pngFiles(3));
     // That file's failure, said once; the batch goes on and the other two go in.
+    await expect.poll(() => uploads, { timeout: 15_000 }).toBe(5);
     await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
-    await expect.poll(() => uploads).toBe(3);
     await expect(editor.locator('img[data-media-id]')).toHaveCount(2);
     await expect(page.getByTestId('post-body-images')).toContainText('2 / 10');
     const toasts = toastsOf(page);
     await expect(toasts.getByText(copy.errImageUpload)).toHaveCount(1);
     await expect(toasts.locator('[data-part="root"]')).toHaveCount(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('429 뒤에 다시 보내기를 기다리는 이미지가 있으면 떠나기 전에 묻고, 떠난 뒤에는 그 이미지를 다시 보내지 않으며 아무것도 알리지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    await page.goto(`/community/write?market=${market.id}`);
+    await expect(page.getByTestId('post-editor-content')).toBeVisible();
+    // The first send is refused with a wait of 8 seconds — under the editor's 10, so it waits —
+    // room for the writer to leave inside it; any send after it would go through.
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', async (route) => {
+      uploads += 1;
+      if (uploads > 1) return route.continue();
+      await route.fulfill({
+        status: 429,
+        headers: { 'retry-after': '8' },
+        json: {
+          error: {
+            code: 'RATE_LIMITED',
+            message: 'Too many uploads are being received; send it again',
+            details: { retryAfterSeconds: 8 },
+          },
+        },
+      });
+    });
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.accept();
+    });
+    const refused = page.waitForResponse(
+      (response) => response.url().includes('/api/v1/media/images') && response.status() === 429,
+    );
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(1));
+    await refused;
+    const refusedAt = Date.now();
+    // In the wait the file is still uploading — something leaving would lose — so the header link
+    // asks first (ADR-0073 decision 9-47); the writer leaves.
+    await expect(page.getByTestId('post-editor-uploading')).toBeVisible();
+    await page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link').click();
+    await expect(page).toHaveURL('/');
+    expect(asked).toEqual([`confirm: ${copy.postLeaveConfirm}`]);
+    // Gone before the wait was over (else the editor would rightly have sent it again).
+    expect(Date.now() - refusedAt).toBeLessThan(8_000);
+    // Past the wait, and a second more: with the editor gone the file is not sent again, and
+    // nothing is said on the screen the writer went to (`UploadAbandoned`, owner decision
+    // 2026-10-22 (2차) answer 3).
+    await partOf(refusedAt + 9_000 - Date.now());
+    expect(uploads).toBe(1);
+    await expect(toastsOf(page).locator('[data-part="root"]')).toHaveCount(0);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
