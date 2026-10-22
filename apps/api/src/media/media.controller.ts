@@ -32,8 +32,9 @@ import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from './image-body.js';
 import { IMAGE_READ_BUSY_RETRY_SECONDS, imageReads, imageReadsBusy } from './image-reads.js';
-import { IMAGE_BUSY_RETRY_SECONDS } from './image.js';
+import { IMAGE_BUSY_RETRY_SECONDS, WEBP_ALPHA_MAX_OUTPUT_PIXELS } from './image.js';
 import { MediaService } from './media.service.js';
+import { memoryAdmission, memoryWaits } from './memory-admission.js';
 
 const BINARY = { schema: { type: 'string', format: 'binary' } } as const;
 
@@ -66,7 +67,8 @@ export class MediaController {
     operationId: 'uploadImage',
     summary:
       `An image for a post: JPEG, PNG, WebP or GIF by its content, at most ${String(IMAGE_MAX_BYTES)} ` +
-      `bytes. Stored without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px, a GIF ` +
+      `bytes. Stored without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a ` +
+      `still WebP with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF ` +
       'still moving. Its id goes into the post’s image node; it is served once a post shows it, and ' +
       `removed if no post takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
   })
@@ -81,8 +83,9 @@ export class MediaController {
   // and one declared over the parser's limit (413, VALIDATION_ERROR); a body that sends no byte
   // for 30 seconds is cut (408, VALIDATION_ERROR — image-body.ts). RATE_LIMITED (every route
   // documents it) is also the answer, with `Retry-After`, when the account has three uploads in
-  // flight or the uploads being received hold the process's budget (that hook again, unread —
-  // image-body.ts) and when too many conversions are waiting (image.ts).
+  // flight, the uploads being received hold the process's budget or the API's memory had no room
+  // for the body in time (that hook again, unread — image-body.ts), and when too many conversions
+  // are waiting or the memory had no room for the conversion in time (image.ts).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -114,8 +117,9 @@ export class MediaController {
     try {
       return await work;
     } catch (error) {
-      // Too many conversions waiting (image.ts `imageConversions`): the header every other 429
-      // of the API carries, with the same seconds as `details.retryAfterSeconds`.
+      // Too many conversions waiting, or no room in the API's memory for one in time (image.ts):
+      // the header every other 429 of the API carries, with the same seconds as
+      // `details.retryAfterSeconds`.
       if (error instanceof AppError && error.code === 'RATE_LIMITED') {
         void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
       }
@@ -137,7 +141,12 @@ export class MediaController {
    * goes gives the read up (an aborted signal), and the share comes back once that read has stopped.
    * Past the budget the read is RATE_LIMITED with `Retry-After`, as a full conversion queue is for an
    * upload — so clients that read slowly, or not at all, or hang up mid-read, fill the budget and not
-   * the API's memory (ADR-0073 decision 9-36). A 304 holds nothing.
+   * the API's memory (ADR-0073 decision 9-36). Within the budget, the image's bytes are then asked
+   * of the API's memory (`memoryAdmission`, owner decision 2026-10-22 answer 3): the read waits up
+   * to `memoryWaits.readMs` for the process's RSS and the shares out — a running conversion's
+   * aside, which keeps room for the reads instead (9-46) — to leave room for the image under the
+   * ceiling, and is RATE_LIMITED with `Retry-After` when they did not; that share comes back once
+   * the store's read has settled. A 304 holds nothing.
    *
    * A HEAD (Fastify answers it with this handler, the GET's) is answered from the row alone: the
    * headers a GET would carry, its length the stored object's (`media_objects.byte_size`, written
@@ -161,7 +170,7 @@ export class MediaController {
   })
   @ApiResponse({ status: 304, description: 'Not modified (If-None-Match)' })
   // RATE_LIMITED (every route documents it) is also the answer while the images being sent hold
-  // the process's budget (image-reads.ts).
+  // the process's budget (image-reads.ts) or the API's memory has no room for the image.
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
   async read(
     @Param('mediaId', { schema: uuidParamSchema }) mediaId: string,
@@ -187,15 +196,16 @@ export class MediaController {
       // of an undefined body to 0, and leaves a stream's to the headers.
       return Readable.from([]);
     }
-    const release = imageReads.take(image.byteSize);
-    if (release === null) {
+    const giveShare = imageReads.take(image.byteSize);
+    if (giveShare === null) {
       void reply.header('retry-after', String(IMAGE_READ_BUSY_RETRY_SECONDS));
       throw imageReadsBusy();
     }
     // The client going gives the store's read up (`gone`) — at once if it went already — but the
-    // share is given back only when the answer is out or the client has gone AND the read has
-    // settled: a read given up still holds what it has gathered until it stops, so a client that
-    // hangs up mid-read cannot hand its share on while its image is still being read into memory.
+    // budget's share is given back only when the answer is out or the client has gone AND the read
+    // has settled: a read given up still holds what it has gathered until it stops, so a client
+    // that hangs up mid-read cannot hand its share on while its image is still being read into
+    // memory.
     const gone = new AbortController();
     const answered = new Promise<void>((resolve) => {
       finished(reply.raw, () => {
@@ -203,8 +213,30 @@ export class MediaController {
         resolve();
       });
     });
+    const giveMemory = await memoryAdmission.admit(image.byteSize, {
+      kind: 'read',
+      waitMs: memoryWaits.readMs,
+      signal: gone.signal,
+    });
+    if (giveMemory === null) {
+      giveShare();
+      // Gone while it waited: there is no one to answer.
+      if (gone.signal.aborted) return undefined;
+      void reply.header('retry-after', String(IMAGE_READ_BUSY_RETRY_SECONDS));
+      throw imageReadsBusy();
+    }
+    if (gone.signal.aborted) {
+      giveShare();
+      giveMemory();
+      return undefined;
+    }
     const reading = this.media.bytesOf(image, gone.signal);
-    void Promise.allSettled([answered, reading]).then(release);
+    // The memory's share only while the store is read: once that read has settled its bytes are in
+    // the RSS the admission reads (or gone), and counting them as a share as well would count them
+    // twice for as long as a slow client takes. The budget's share still bounds them until the
+    // answer is out (ADR-0073 9-46).
+    void Promise.allSettled([reading]).then(giveMemory);
+    void Promise.allSettled([answered, reading]).then(giveShare);
     let body: Uint8Array | null;
     try {
       body = await reading;

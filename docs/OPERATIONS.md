@@ -1,6 +1,6 @@
 # 운영 절차
 
-배포 환경(buddha.sboh.dev)에서 운영자가 화면 없이 DB에서 손으로 하는 일의 절차다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
+배포 환경(buddha.sboh.dev)에서 운영자가 화면 없이 DB에서 손으로 하는 일과 API 컨테이너의 메모리 확인의 절차다. 운영 DB 초기화는 [RESET.md](RESET.md), 셸·시크릿·덤프 같은 인프라 일은 [terraform/README.md](../terraform/README.md)에 있다.
 
 ## 회원의 휴대전화 번호 바꾸기 (#57 3항)
 
@@ -172,3 +172,21 @@ corepack pnpm --filter api build
 corepack pnpm --filter api run phone-hash --psql
 docker compose exec -e PSQL_HISTORY=/dev/null postgres psql -U buddha_app -d buddha
 ```
+
+## API 컨테이너의 메모리 확인 (#46, ADR-0073 9-46)
+
+API는 이미지 업로드의 본문·변환·이미지 읽기를 받기 전에 자기 상주 메모리(RSS)를 본다(오너 결정 2026-10-22 답 3). 그 RSS와 이미 내준 몫에 제 몫(본문의 길이, 변환 하나의 144MiB, 이미지의 바이트)을 더해 한도를 넘으면 기다리고(업로드 10초, 변환은 대기열에 든 때부터 10초, 읽기 2초), 그래도 자리가 나지 않으면 429로 돌려보낸다. 업로드 본문과 변환은 이미지 읽기가 아직 가져갈 수 있는 몫(읽기의 예산 32MiB 가운데 빈 것)도 남겨 두고, 이미지 읽기는 그 대신 도는 변환의 몫을 세지 않는다 — 변환이 이미지 읽기를 붙잡지 않는다. 한도는 컨테이너의 메모리 한도(`deploy/compose.yaml`의 api `memory: 448m`)에서 32MiB를 뺀 416MiB다(`API_MEMORY_CEILING_MIB`로 바꾼다, docs/SETTINGS.md). 그래서 **대기 중의 API에 변환 하나(144MiB)와 읽기의 몫(32MiB)을 더해 416MiB 안이어야** 업로드가 변환된다(대기 중의 값이 240MiB 아래). 이 PR은 그 값을 운영과 같은 이미지·한도(linux arm64, 448MiB) 안에서 약 150MiB로 쟀다 — 운영의 실제 값은 오너가 확인한다(ADR-0073 결과 3).
+
+1. 배포 뒤 요청이 없는 때에 호스트 셸에서 api 컨테이너의 메모리를 본다. `MEM USAGE`가 대기 중의 값이다(그 컨테이너가 쥔 메모리 — 페이지 캐시 가운데 비활성인 것은 빠진다).
+
+   ```bash
+   sudo docker stats --no-stream buddha-api-1   # compose 프로젝트 buddha의 api 서비스
+   ```
+
+2. API의 시작 로그에서 한도와 그때의 RSS를 본다(맥락이 `MemoryAdmission`인 `image work memory: ceiling set` 줄 — 줄의 메시지는 문장 뒤에 값들의 JSON이 붙은 것이다: `ceilingMiB`·`limitMiB`·`residentMiB`).
+
+   ```bash
+   sudo docker compose -f /data/buddha/compose.yaml logs api | grep 'image work'
+   ```
+
+3. 메모리가 모자라 기다리다 돌려보낸 요청이 있으면 `image work refused: no room under the memory ceiling in time` 줄이 남는다(값들은 그 문장 뒤의 JSON에 있다) — 첫 거절은 곧바로, 그 뒤로는 1분에 한 줄까지이고, 그 1분 안의 거절은 1분이 끝날 때 한 줄로 남는다(API가 멈출 때 남은 것도). 줄마다 `refused`는 앞 줄 뒤의 수, `kind`(`body` 업로드 본문·`conversion` 변환·`read` 이미지 읽기)·`residentMiB`·`heldMiB`·`neededMiB`·`ceilingMiB`는 그 가운데 마지막 거절의 것이다. 메모리를 기다리는 업로드가 받는 본문의 예산(64MiB)을 채운 동안 기다리지 않고 거절된 업로드(`Too many uploads are being received`의 429)는 이 줄에 세지 않는다. 요청이 몰리지 않았는데도 이 줄이 이어지면(대기 중의 값에 144와 32를 더한 것이 416에 가깝거나 넘는다) 한도(`API_MEMORY_CEILING_MIB`)나 컨테이너의 메모리를 다시 정한다.

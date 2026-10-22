@@ -8,6 +8,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { ByteBudget } from './byte-budget.js';
 import { IMAGE_BUSY_RETRY_SECONDS } from './image.js';
 import { InFlightPerKey } from './in-flight.js';
+import { type Release, memoryAdmission, memoryWaits } from './memory-admission.js';
 
 /**
  * The Content-Types `POST /media/images` takes its file under: the four image types and the
@@ -36,12 +37,13 @@ export const IMAGE_BODY_LIMIT = IMAGE_MAX_BYTES * 2;
  * 2026-10-21, ADR-0073). The gate below lets a body in only for an account that may upload, but
  * one such account could still send many uploads at once, each held up to IMAGE_BODY_LIMIT while
  * it arrives — past the API container's 448MiB (deploy/compose.yaml) beside a conversion's
- * IMAGE_CONVERSION_PEAK_BYTES (144MiB, image.ts) and the reads' 32MiB (image-reads.ts); ADR-0073
- * 결과 5 found that these and the API's own use cannot all fit at once (a question for the owner,
- * 결과 4). So an upload takes its declared length
- * (`Content-Length`), or the parser's limit when it declares none, out of this budget before a
- * byte of its body is read, and gives it back once the body is in or the request has ended
- * without it. 64MiB is six bodies at the parser's limit, or a dozen photos near 5MB.
+ * IMAGE_CONVERSION_PEAK_BYTES (144MiB, image.ts) and the reads' 32MiB (image-reads.ts). So an
+ * upload takes its declared length (`Content-Length`), or the parser's limit when it declares
+ * none, out of this budget before a byte of its body is read, and gives it back once the body is
+ * in or the request has ended without it. 64MiB is six bodies at the parser's limit, or a dozen
+ * photos near 5MB. The same length is then asked of the API's memory (`memoryAdmission`, owner
+ * decision 2026-10-22 answer 3): the body is read only once the process's RSS, the shares out and
+ * the room the reads may still take leave room for it under the ceiling (ADR-0073 9-46).
  *
  * The share is taken before a byte of the body has come, so it is a reservation that costs its
  * sender nothing to hold. Two bounds keep one account from holding the budget with bodies that do
@@ -126,15 +128,23 @@ function uploadBusy(reply: FastifyReply, message: string): AppError {
  * the upload route's answer for a full conversion queue (image.ts) — a client may send it again
  * then; the web's editor says that file failed and goes on with its batch (owner decision
  * 2026-10-21). A body that declares no length takes the parser's limit, the most it can hold
- * (owner decision 2026-10-21 answer 5), and the parser still cuts it there. 429 leaves the
- * connection open: what is still coming of the body is let through unheld (Node's HTTP server),
- * and a browser still sending reads the answer rather than a reset. The share comes back when the
- * parser has the whole body, when the body is cut for idling (`IdleCut`), or when the answer ends
- * without it — refused after this, cut off, or the client gone mid-body. The account's place comes
- * back when the answer has ended and the handler's work on the upload, if it started, has settled
- * (`runUploadWork`).
+ * (owner decision 2026-10-21 answer 5), and the parser still cuts it there. Then the same length
+ * is asked of the API's memory, holding the place and the share meanwhile: the body waits, unread,
+ * up to `memoryWaits.uploadMs` for the RSS, the shares out and the reads' room to leave room for
+ * it under the ceiling, and is RATE_LIMITED unread when they did not (owner decision 2026-10-22
+ * answer 3) — or simply let go if its client went meanwhile.
+ * 429 leaves the connection open: what is still coming of the body is let through unheld (Node's
+ * HTTP server), and a browser still sending reads the answer rather than a reset. The shares come
+ * back when the parser has the whole body, when the body is cut for idling (`IdleCut`), or when
+ * the answer ends without it — refused after this, cut off, or the client gone mid-body or while
+ * waiting. The account's place comes back when the answer has ended and the handler's work on the
+ * upload, if it started, has settled (`runUploadWork`).
  */
-function letUploadIn(request: FastifyRequest, reply: FastifyReply, accountId: string): void {
+async function letUploadIn(
+  request: FastifyRequest,
+  reply: FastifyReply,
+  accountId: string,
+): Promise<void> {
   const length = declaredLength(request) ?? IMAGE_BODY_LIMIT;
   if (length > IMAGE_BODY_LIMIT) {
     // As Fastify answers it: the client would send the rest anyway.
@@ -145,15 +155,22 @@ function letUploadIn(request: FastifyRequest, reply: FastifyReply, accountId: st
   if (leave === null) {
     throw uploadBusy(reply, 'Too many uploads of this account are in flight; send it again');
   }
-  const release = imageUploadsReceiving.take(length);
-  if (release === null) {
+  const giveShare = imageUploadsReceiving.take(length);
+  if (giveShare === null) {
     leave();
     throw uploadBusy(reply, 'Too many uploads are being received; send it again');
   }
+  let giveMemory: Release | undefined;
+  const release = () => {
+    giveShare();
+    giveMemory?.();
+  };
   receiving.set(request, release);
   const place: UploadPlace = { ended: false, work: undefined };
   places.set(request, place);
+  const gone = new AbortController();
   finished(reply.raw, () => {
+    gone.abort();
     release();
     place.ended = true;
     // A client that hangs up once its whole body is in leaves the handler working on it: the place
@@ -161,6 +178,19 @@ function letUploadIn(request: FastifyRequest, reply: FastifyReply, accountId: st
     if (place.work === undefined) leave();
     else void place.work.then(leave);
   });
+  // After the account's place and the share of the budget (ADR-0073 9-46): that budget bounds the
+  // bodies waiting here, and refusing past it costs no wait.
+  const memory = await memoryAdmission.admit(length, {
+    kind: 'body',
+    waitMs: memoryWaits.uploadMs,
+    signal: gone.signal,
+  });
+  if (memory === null) {
+    throw uploadBusy(reply, 'The server is short of memory for uploads; send it again');
+  }
+  // The client went while it waited (the abort and the room came in one turn): nothing to hold.
+  if (gone.signal.aborted) memory();
+  else giveMemory = memory;
 }
 
 /**
@@ -369,11 +399,13 @@ export interface ImageBodySenders {
  *   SessionGuard does not read it again; SessionGuard and OnboardedGuard still run after the body;
  * - a body of a type the route does not take is then refused unread (415, `assertUploadType`);
  * - and then the body is let in (`letUploadIn`) only as one of the account's three uploads in
- *   flight and within the bytes the API receives at once (owner decisions 2026-10-21): one declared
- *   over the limit is refused unread, and one past either bound is RATE_LIMITED unread. Its body
- *   is cut once it sends no byte for 30 seconds (`watchUploadBody`, a `preParsing` hook — the
- *   parser reads the stream it returns). The handler runs its work on the upload through
- *   `runUploadWork`, so the account's place is held until that work has settled.
+ *   flight and within the bytes the API receives at once (owner decisions 2026-10-21), and once
+ *   the API's memory has room for it (owner decision 2026-10-22 answer 3 — it waits up to
+ *   `memoryWaits.uploadMs` for that): one declared over the limit is refused unread, and one past
+ *   any of those bounds is RATE_LIMITED unread. Its body is cut once it sends no byte for 30
+ *   seconds (`watchUploadBody`, a `preParsing` hook — the parser reads the stream it returns). The
+ *   handler runs its work on the upload through `runUploadWork`, so the account's place is held
+ *   until that work has settled.
  */
 export function installImageBodyParser(fastify: FastifyInstance, senders: ImageBodySenders): void {
   fastify.addHook('onRequest', async (request, reply) => {
@@ -386,7 +418,7 @@ export function installImageBodyParser(fastify: FastifyInstance, senders: ImageB
     authenticated.auth = session;
     await senders.assertOnboarded(session.user.id);
     assertUploadType(request);
-    letUploadIn(request, reply, session.user.id);
+    await letUploadIn(request, reply, session.user.id);
   });
   fastify.addHook('preParsing', async (request, reply, payload) =>
     receiving.has(request) ? watchUploadBody(request, reply, payload) : payload,

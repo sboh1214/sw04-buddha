@@ -75,16 +75,16 @@ export type UploadImageQuery = z.infer<typeof uploadImageQuerySchema>;
 
 /**
  * Why an upload was refused (IMAGE_NOT_ALLOWED): `type` — its content is not a JPEG, PNG, WebP or
- * GIF, whatever its name or declared type says; `size` — larger than IMAGE_MAX_BYTES; `pixels` —
- * an image (one frame of an animation) too large to convert: more pixels than its kind's bound
- * (what decoding it takes, and for a WebP with alpha, a WebP animation and a GIF animation what
- * encoding it again takes — apps/api's image.ts), or than IMAGE_MAX_INPUT_PIXELS, or so thin that
- * converting it costs far more than its pixels (its long side more than 32 times its short side,
- * owner 2026-10-22); `frames` — an animation whose frames each fit but together decode to more
- * than IMAGE_MAX_INPUT_PIXELS, or a WebP animation's own smaller bound (too many frames, not too
- * large a picture); `unreadable` — it says it is
- * one of the four and does not decode as one (a JPEG of more than four components too); `empty` —
- * no bytes.
+ * GIF, whatever its name or declared type says; `size` — larger than IMAGE_MAX_BYTES; `pixels` — an
+ * image (one frame of an animation) too large to convert: more pixels than its kind's bound (what
+ * decoding it takes, and for a WebP animation and a GIF animation what encoding it again takes —
+ * apps/api's image.ts; a still WebP with alpha is written smaller instead, owner decision
+ * 2026-10-22 answer 1), or than IMAGE_MAX_INPUT_PIXELS, or so thin that converting it costs far
+ * more than its pixels (its long side more than 32 times its short side, owner decision 2026-10-21
+ * (2차) answer 1); `frames` — an animation whose frames each fit but together decode to more than
+ * IMAGE_MAX_INPUT_PIXELS, or a WebP animation's own smaller bound (too many frames, not too large a
+ * picture); `unreadable` — it says it is one of the four and does not decode as one (a JPEG of more
+ * than four components too); `empty` — no bytes.
  */
 export const IMAGE_REFUSALS = ['type', 'size', 'pixels', 'frames', 'unreadable', 'empty'] as const;
 export type ImageRefusal = (typeof IMAGE_REFUSALS)[number];

@@ -1,9 +1,9 @@
 /**
- * What converting a PNG asks of memory (#46, owner 2026-10-22, ADR-0073 9-8), by libvips' own
- * high-water mark of the memory it allocates (`sharp.cache().memory.high`, in MiB): process-wide
- * and never lowered, so this file has its own process (vitest runs each test file in a process of
- * its own), builds its PNGs by hand (`pngOf` — zlib, no libvips) and checks the mark after each
- * conversion, cheapest first. No database.
+ * What converting a PNG asks of memory (#46, owner decision 2026-10-21 (2차) answers 1 and 4,
+ * ADR-0073 9-8), by libvips' own high-water mark of the memory it allocates
+ * (`sharp.cache().memory.high`, in MiB): process-wide and never lowered, so this file has its own
+ * process (vitest runs each test file in a process of its own), builds its PNGs by hand (`pngOf` —
+ * zlib, no libvips) and checks the mark after each conversion, cheapest first. No database.
  *
  * A thin image: a frame's long side at most IMAGE_MAX_SIDE_RATIO times its short side. Fitting a
  * strip inside 2,048px leaves libvips a few output rows to make, so it holds every input row at
@@ -16,32 +16,36 @@
  * profile 73; 16-bit grey 78; RGB 116 with its quarter turn, 118 with a profile as well — at 48:1
  * the RGB frame would take 132MiB, at 100:1 162MiB.
  *
- * The other PNG kinds — with alpha, 16-bit samples or interlacing (owner 2026-10-22, 2nd answer):
- * most went over the budget at the bound they had before (up to ~275MiB at 32:1), so each kind
- * has its own largest frame (PNG_LARGEST_FRAME_PIXELS), measured at every shape up to 32:1; 16-bit
- * grey and interlaced 8-bit grey keep the bound they had (IMAGE_MAX_INPUT_PIXELS, and 41,943,040
- * for interlaced 16-bit grey). Each kind's costliest shape at its largest frame converts within
- * the budget, with a profile — and a palette with transparency at RGBA's, the kind it decodes to.
- * Those shapes sit just under the steps of libvips' vertical shrink, which come from fitting the
- * frame inside IMAGE_MAX_DIMENSION: this file converts only the shapes recorded, so a change to
- * IMAGE_MAX_DIMENSION, the budget, the ratio or IMAGE_MAX_INPUT_PIXELS, or to sharp or libvips,
- * needs the measurement again (ADR-0073 결과 5).
+ * The other PNG kinds — with alpha, 16-bit samples or interlacing (owner decision 2026-10-21 (2차)
+ * answer 4): most went over the budget at the bound they had before (up to ~275MiB at 32:1), so
+ * each kind has its own largest frame (PNG_LARGEST_FRAME_PIXELS), measured at every shape up to
+ * 32:1; 16-bit grey and interlaced 8-bit grey keep the bound they had (IMAGE_MAX_INPUT_PIXELS, and
+ * 41,943,040 for interlaced 16-bit grey). Each kind's costliest shape at its largest frame converts
+ * within the budget, with a profile — and a palette with transparency at RGBA's, the kind it
+ * decodes to. Those shapes sit just under the steps of libvips' vertical shrink, which come from
+ * fitting the frame inside IMAGE_MAX_DIMENSION: this file converts only the shapes recorded, so a
+ * change to IMAGE_MAX_DIMENSION, the budget, the ratio or IMAGE_MAX_INPUT_PIXELS, or to sharp or
+ * libvips, needs the measurement again (ADR-0073 결과 5).
  *
  * The whole conversion (Codex review of #219, round 3): libvips' mark leaves the encoders out —
  * libwebp's alpha coder, libimagequant's palette, mozjpeg's coefficients — and a high-entropy WebP
  * with alpha at the bound it had took ~223MiB of the process while libvips counted 66. The last
  * block converts each kind's costliest case, at its bounds, in a process of its own
- * (`test/image-child.mjs` — this one has converted already, and the allocator keeps and reuses
- * what it freed) and checks the process's resident memory rose by at most
- * IMAGE_CONVERSION_PEAK_BYTES — a progressive CMYK JPEG among them, whose fourth component's
- * coefficients took ~158MiB at the three-component bound. Each case is converted
- * CONVERSION_RUNS times, each in a new process, and the median is what is checked: one case moves
- * by 10MiB or so from run to run (the allocator, ADR-0073 결과 5), and the costliest sit within
- * 7–14MiB of the bound, so one sample would fail now and then with nothing changed — a bound or
- * an encoder setting that costs more lifts every run. Those values are Linux's (production's:
- * measured in the API's image, arm64, and the same within a few MiB on x64): macOS's allocator
- * holds on to more, so there that check is skipped and only the pipeline itself is checked
- * against processImage.
+ * (`test/image-child.mjs` — this one has converted already, and the allocator keeps and reuses what
+ * it freed) and checks the process's resident memory rose by at most IMAGE_CONVERSION_PEAK_BYTES —
+ * a progressive CMYK JPEG among them, whose fourth component's coefficients took ~158MiB at the
+ * three-component bound, and a still WebP with alpha read up to its decoding bound and written at
+ * WEBP_ALPHA_MAX_OUTPUT_PIXELS (owner decision 2026-10-22 answer 1: the largest one taken, and the
+ * costliest measured). The children run with the allocator's setting the API's image has
+ * (MALLOC_MMAP_THRESHOLD_, read from the Dockerfile — glibc then gives a conversion's large buffers
+ * back as it frees them; without it the API's RSS kept what each conversion took, ADR-0073 9-46).
+ * Each case is converted CONVERSION_RUNS times, each in a new process, and the median is what is
+ * checked: one case moves by 10MiB or so from run to run (the allocator, ADR-0073 결과 5), and the
+ * costliest sit within 7–14MiB of the bound, so one sample would fail now and then with nothing
+ * changed — a bound or an encoder setting that costs more lifts every run. Those values are Linux's
+ * (production's: measured in the API's image, arm64, and the same within a few MiB on x64): macOS's
+ * allocator holds on to more, so there that check is skipped and only the pipeline itself is
+ * checked against processImage.
  */
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -65,12 +69,13 @@ import {
   IMAGE_DECODE_BUDGET_BYTES,
   IMAGE_MAX_SIDE_RATIO,
   PNG_LARGEST_FRAME_PIXELS,
-  WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+  WEBP_ALPHA_MAX_OUTPUT_PIXELS,
   WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
   WEBP_ANIMATION_MAX_PIXELS,
   encoderOptions,
   largestFramePixels,
   largestImagePixels,
+  outputBox,
   processImage,
   sniffImageType,
 } from './image.js';
@@ -107,7 +112,7 @@ function largestFrame(kind: PngKind): number {
   return PNG_LARGEST_FRAME_PIXELS[channels === 1 ? 2 : 4][depth][column];
 }
 
-describe('processImage: memory of a thin image (#46, owner 2026-10-22)', () => {
+describe('processImage: memory of a thin image (#46, owner decision 2026-10-21 (2차))', () => {
   beforeAll(() => {
     // A process of its own: nothing has decoded an image here yet, or the mark would say nothing.
     expect(highWater()).toBe(0);
@@ -225,6 +230,18 @@ const SHARP_FORMAT = {
   'image/webp': 'webp',
 } as const;
 
+/**
+ * The glibc allocator's setting the API's image starts the API with (the Dockerfile's `api` stage,
+ * ADR-0073 9-46): the children convert with it, as production does.
+ */
+function apiAllocatorEnv(): Record<string, string> {
+  const dockerfile = readFileSync(new URL('../../../../Dockerfile', import.meta.url), 'utf8');
+  const api = /^FROM \S+ AS api\n([\s\S]*?)^FROM /m.exec(dockerfile)?.[1] ?? '';
+  const threshold = /MALLOC_MMAP_THRESHOLD_=(\d+)/.exec(api)?.[1];
+  expect(threshold, 'the api image sets MALLOC_MMAP_THRESHOLD_').toBeDefined();
+  return { MALLOC_MMAP_THRESHOLD_: threshold! };
+}
+
 async function makeInChild(input: ChildInput, file: string): Promise<void> {
   await run(process.execPath, [IMAGE_CHILD, 'make', JSON.stringify(input), file], {
     maxBuffer: 1024 * 1024,
@@ -239,14 +256,14 @@ async function convertInChild(file: string, bytes: Uint8Array): Promise<ChildCon
   const options = {
     animated,
     limitInputPixels: IMAGE_MAX_INPUT_PIXELS,
-    maxDimension: IMAGE_MAX_DIMENSION,
+    box: outputBox(contentType, metadata),
     format: SHARP_FORMAT[contentType],
     encoder: encoderOptions(contentType, metadata),
   };
   const { stdout } = await run(
     process.execPath,
     [IMAGE_CHILD, 'convert', file, JSON.stringify(options)],
-    { maxBuffer: 1024 * 1024 },
+    { maxBuffer: 1024 * 1024, env: { ...process.env, ...apiAllocatorEnv() } },
   );
   return JSON.parse(stdout) as ChildConversion;
 }
@@ -291,6 +308,11 @@ describe('processImage: memory of the whole conversion, encoders included (Codex
       ['png', await rgba(2_300, 200).png().toBuffer()],
       ['gif', await frames('gif', 120, 80, 3)],
       ['webp-alpha', await rgba(200, 100).webp().toBuffer()],
+      // Written smaller (WEBP_ALPHA_MAX_OUTPUT_PIXELS): 2200×2000 turned upright, at 1757×1933.
+      [
+        'webp-alpha-shrunk',
+        await rgba(2_200, 2_000).webp().withMetadata({ orientation: 6 }).toBuffer(),
+      ],
       ['webp-opaque', await rgba(300, 100).flatten().webp().toBuffer()],
       ['webp-animation', await frames('webp', 100, 80, 3)],
     ];
@@ -323,6 +345,8 @@ describe('processImage: memory of the whole conversion, encoders included (Codex
       });
       const gifStillBound = largestFramePixels('image/gif', still);
       const webpOpaqueBound = largestFramePixels('image/webp', still);
+      const webpAlphaBound = largestFramePixels('image/webp', { ...still, channels: 4 });
+      const webpAlphaSide = side(webpAlphaBound);
       const [progressive, cmyk, gifStill, webpOpaque] = [
         progressiveBound,
         cmykBound,
@@ -386,15 +410,40 @@ describe('processImage: memory of the whole conversion, encoders included (Codex
           webpOpaqueBound,
         ],
         [
-          'WebP with alpha, colour and alpha both noise',
+          'WebP with alpha, colour and alpha both noise, as large as it is written',
           {
             format: 'webp',
-            width: IMAGE_MAX_DIMENSION,
-            height: Math.floor(WEBP_ALPHA_LARGEST_FRAME_PIXELS / IMAGE_MAX_DIMENSION),
+            width: side(WEBP_ALPHA_MAX_OUTPUT_PIXELS),
+            height: side(WEBP_ALPHA_MAX_OUTPUT_PIXELS),
             channels: 4,
             encoder: { quality: 1 },
           },
-          WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+          WEBP_ALPHA_MAX_OUTPUT_PIXELS,
+        ],
+        // Read larger and written at that size (owner decision 2026-10-22 answer 1): the largest
+        // taken — its decoding bound, 2,991², written at 1843² (its alpha quantised so the file
+        // fits 5MB) — and one read a little larger, its alpha noise of every level.
+        [
+          'WebP with alpha, noise, at its decoding bound, written smaller',
+          {
+            format: 'webp',
+            width: webpAlphaSide,
+            height: webpAlphaSide,
+            channels: 4,
+            encoder: { quality: 1, alphaQuality: 20 },
+          },
+          webpAlphaBound,
+        ],
+        [
+          'WebP with alpha, colour and alpha both noise, read larger and written smaller',
+          {
+            format: 'webp',
+            width: 2_000,
+            height: 2_000,
+            channels: 4,
+            encoder: { quality: 1 },
+          },
+          2_000 * 2_000,
         ],
         [
           'WebP animation of noise with alpha, as many frames as fit',
@@ -439,6 +488,11 @@ describe('processImage: memory of the whole conversion, encoders included (Codex
           expect(Math.max(converted.width, converted.height), name).toBeLessThanOrEqual(
             IMAGE_MAX_DIMENSION,
           );
+          if (contentType === 'image/webp' && metadata.hasAlpha && (metadata.pages ?? 1) === 1) {
+            expect(converted.width * converted.height, name).toBeLessThanOrEqual(
+              WEBP_ALPHA_MAX_OUTPUT_PIXELS,
+            );
+          }
           runs.push(converted.peakBytes);
         }
         const mib = runs.map((peak) => Math.round(peak / (1024 * 1024)));

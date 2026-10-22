@@ -8,7 +8,8 @@
 //   node scripts/image-memory/measure.mjs --file photo.webp [--via sharp|api] [--encoder '{...}']
 //
 // --via sharp (default): processImage's pipeline without its header checks (the header read, then
-//   autoOrient, a resize to fit IMAGE_MAX_DIMENSION and the encoder with the build's
+//   autoOrient, a resize to fit inside the build's `outputBox` — IMAGE_MAX_DIMENSION, and
+//   WEBP_ALPHA_MAX_OUTPUT_PIXELS for a still WebP with alpha — and the encoder with the build's
 //   `encoderOptions`) — shapes past the bounds can be measured. Mirrors apps/api/src/media/image.ts:
 //   change both together. --encoder '{"effort":4}' changes the encoder's options on top (to try a
 //   setting before image.ts takes it).
@@ -61,7 +62,7 @@ const encoderOverride = values.encoder === undefined ? {} : JSON.parse(values.en
 if (values.via === 'api' && values.encoder !== undefined) {
   throw new Error('--encoder is for --via sharp: the API encodes with its own options');
 }
-const { IMAGE_MAX_DIMENSION, IMAGE_MAX_INPUT_PIXELS } = await loadShared();
+const { IMAGE_MAX_INPUT_PIXELS } = await loadShared();
 // As the API does (image.ts): no cache, one libvips thread.
 const highAtStart = sharp.cache(false).memory.high;
 sharp.concurrency(1);
@@ -146,8 +147,7 @@ if (values.via === 'api') {
   const pipeline = sharp(bytes, options)
     .autoOrient()
     .resize({
-      width: IMAGE_MAX_DIMENSION,
-      height: IMAGE_MAX_DIMENSION,
+      ...api.outputBox(`image/${format}`, metadata),
       fit: 'inside',
       withoutEnlargement: true,
     })

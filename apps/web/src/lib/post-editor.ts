@@ -143,12 +143,12 @@ export function uploadContentType(file: { type: string }): string {
 const IMAGE_REFUSAL_MESSAGE: Record<ImageRefusal, string> = {
   type: copy.errImageType,
   size: copy.errImageSize,
-  // One sentence for both (owner decision 2026-10-19): a frame too large to decode, or more
-  // frames than the decoding budget — the writer picks a smaller or shorter image. `pixels` is
-  // also a frame whose long side is more than 32 times its short side (the API's
-  // IMAGE_MAX_SIDE_RATIO), and the owner chose this same sentence for it (owner decision
-  // 2026-10-22, answer 1): there a smaller copy of the same shape is refused again — only a less
-  // thin one passes (ADR-0073 결과 5).
+  // One sentence for both (owner decision 2026-10-19): a frame too large to decode, or more frames
+  // than the decoding budget — the writer picks a smaller or shorter image. `pixels` is also a
+  // frame whose long side is more than 32 times its short side (the API's IMAGE_MAX_SIDE_RATIO),
+  // and the owner chose this same sentence for it (owner decision 2026-10-21 (2차), answer 1): there
+  // a smaller copy of the same shape is refused again — only a less thin one passes
+  // (ADR-0073 결과 5).
   pixels: copy.errImageTooLarge,
   frames: copy.errImageTooLarge,
   unreadable: copy.errImageUnreadable,

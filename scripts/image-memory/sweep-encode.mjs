@@ -46,7 +46,10 @@ const cmyk = side(
 );
 const gifStill = side(api.largestFramePixels('image/gif', still));
 const webpOpaque = side(api.largestFramePixels('image/webp', still));
-const webpAlpha = api.WEBP_ALPHA_LARGEST_FRAME_PIXELS;
+// A still WebP with alpha is read up to its decoding bound (the same as without alpha) and written
+// at most WEBP_ALPHA_MAX_OUTPUT_PIXELS large (`outputBox`).
+const webpAlpha = api.WEBP_ALPHA_MAX_OUTPUT_PIXELS;
+const webpAlphaRead = side(api.largestFramePixels('image/webp', { ...still, channels: 4 }));
 const animFrame = api.WEBP_ANIMATION_LARGEST_FRAME_PIXELS;
 const animFrames = Math.floor(api.WEBP_ANIMATION_MAX_PIXELS / side(animFrame) ** 2);
 const gifFrame = api.GIF_ANIMATION_LARGEST_FRAME_PIXELS;
@@ -186,7 +189,10 @@ const CASES = [
       ...encoder({ colours: 4, dither: 0 }),
     ]),
   ],
-  // WebP: without alpha at its decoding bound; with alpha at its own; animations at theirs.
+  // WebP: without alpha at its decoding bound; with alpha as large as it is written (square, and as
+  // wide as 2,048px lets it be), read a little larger and written smaller, and read at its
+  // decoding bound and written smaller (its alpha quantised so the file fits 5MB); animations at
+  // their bounds.
   ['webp-opaque', make('webp', webpOpaque, webpOpaque, encoder({ quality: 60 }))],
   [
     'webp-opaque-o6-p3',
@@ -221,6 +227,31 @@ const CASES = [
       '4',
       ...encoder({ quality: 1 }),
     ]),
+  ],
+  [
+    'webp-alpha-read-bound',
+    make('webp', webpAlphaRead, webpAlphaRead, [
+      '--channels',
+      '4',
+      ...encoder({ quality: 1, alphaQuality: 20 }),
+    ]),
+  ],
+  [
+    'webp-alpha-read-bound-o6-p3',
+    make('webp', webpAlphaRead, webpAlphaRead, [
+      '--channels',
+      '4',
+      ...encoder({ quality: 1, alphaQuality: 20 }),
+      '--orientation',
+      '6',
+      '--icc',
+      'p3',
+    ]),
+  ],
+  ['webp-alpha-shrunk', make('webp', 2000, 2000, ['--channels', '4', ...encoder({ quality: 1 })])],
+  [
+    'webp-alpha-shrunk-wide',
+    make('webp', 2236, 1385, ['--channels', '4', ...encoder({ quality: 1, alphaQuality: 20 })]),
   ],
   [
     'webp-animation-noise',

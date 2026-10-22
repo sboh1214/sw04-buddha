@@ -7,7 +7,9 @@
  * the process's budget; the upload bodies received at once stay within theirs, an account has at
  * most three uploads in flight — each until its conversion and store have settled, a client that
  * hangs up included — and a body that sends nothing for 30 seconds is cut (owner decisions
- * 2026-10-21). Skips when TEST_* are unset.
+ * 2026-10-21); an upload body, a conversion and a read each wait for room in the API's memory and
+ * are refused when none comes in time (owner decision 2026-10-22 answer 3 — the RSS stubbed).
+ * Skips when TEST_* are unset.
  */
 import {
   type IncomingHttpHeaders,
@@ -23,6 +25,7 @@ import { completeOnboarding, createMarket, createMedia, createPost } from '@budd
 import { IMAGE_MAX_BYTES, uploadedImageSchema, type UploadedImage } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import sharp from 'sharp';
+import { Logger } from '@nestjs/common';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { SESSION_COOKIE } from '../openapi/document.js';
@@ -53,6 +56,14 @@ import {
 } from './image.js';
 import { InFlightPerKey } from './in-flight.js';
 import { MediaService } from './media.service.js';
+import {
+  MEMORY_CEILING_MARGIN_BYTES,
+  memoryAdmission,
+  memoryCeilingBytes,
+  memoryWaits,
+} from './memory-admission.js';
+
+const MiB = 1024 * 1024;
 
 /** setup-env.ts fixes WEB_ORIGIN to this. */
 const TRUSTED_ORIGIN = 'http://localhost:3000';
@@ -71,9 +82,27 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   let t: TestApp;
   let author: TestUser;
 
+  /**
+   * What MediaModule turned the API's memory admission on with as the app started, under the api
+   * container's memory limit (owner decision 2026-10-22 answer 3).
+   */
+  let started: Parameters<typeof memoryAdmission.configure>[0] | undefined;
+
   beforeAll(async () => {
-    // Listening too: a client that goes away mid-read needs a socket (`inject` has none).
-    t = await createTestApp({ listen: true });
+    // As in the api container: the process runs under 448MiB (`process.constrainedMemory()`).
+    const limit = vi.spyOn(process, 'constrainedMemory').mockReturnValue(448 * MiB);
+    const configure = vi.spyOn(memoryAdmission, 'configure');
+    try {
+      // Listening too: a client that goes away mid-read needs a socket (`inject` has none).
+      t = await createTestApp({ listen: true });
+      started = configure.mock.calls[0]?.[0];
+    } finally {
+      configure.mockRestore();
+      limit.mockRestore();
+      // The specs run without a ceiling unless they stub the RSS: the test process's own RSS has
+      // nothing to do with the container's.
+      memoryAdmission.configure({ ceilingBytes: null });
+    }
   });
   afterAll(async () => {
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
@@ -86,12 +115,33 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   afterEach(async () => {
     imageUploadIdle.ms = IMAGE_UPLOAD_IDLE_SECONDS * 1000;
     // Every upload a spec began has given its share back and left its account's uploads in flight
-    // (a request hung up on is let go at once).
+    // (a request hung up on is let go at once), and every share of the memory is back.
     await vi.waitFor(() => {
       expect(imageUploadsReceiving.size).toBe(0);
       expect(imageUploadsInFlight.size).toBe(0);
+      expect(memoryAdmission.heldBytes).toBe(0);
+      expect(memoryAdmission.waitingCount).toBe(0);
     });
+    // As the module set it here: no ceiling (no memory limit outside a container).
+    memoryAdmission.configure({ ceilingBytes: null });
+    memoryWaits.uploadMs = 10_000;
+    memoryWaits.conversionMs = 10_000;
+    memoryWaits.readMs = 2_000;
   });
+
+  /**
+   * The API's memory as the admission reads it from now on (owner decision 2026-10-22 answer 3):
+   * `resident` MiB under a ceiling of 416 — the api container's (448MiB less the margin).
+   */
+  function stubMemory(resident: number): { set: (mib: number) => void } {
+    let now = resident * MiB;
+    memoryAdmission.configure({ ceilingBytes: 416 * MiB, resident: () => now });
+    return {
+      set: (mib) => {
+        now = mib * MiB;
+      },
+    };
+  }
 
   /** Another account that may upload. */
   const uploader = async (): Promise<TestUser> => {
@@ -217,6 +267,27 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       });
     });
 
+  it('turns the API’s memory admission on as it starts: under the api container’s 448MiB a ceiling of 416, and its refusals in the log (owner decision 2026-10-22 answer 3)', () => {
+    expect(started?.ceilingBytes).toBe(416 * MiB);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      started?.onRefused?.({
+        kind: 'read',
+        residentBytes: 400 * MiB,
+        heldBytes: 0,
+        neededBytes: MiB,
+        ceilingBytes: 416 * MiB,
+      });
+      // One message — its words, then its figures — on Nest's Logger (`nestAdmissionLogger`).
+      expect(warn).toHaveBeenCalledWith(
+        'image work refused: no room under the memory ceiling in time ' +
+          '{"refused":1,"kind":"read","residentMiB":400,"heldMiB":0,"neededMiB":1,"ceilingMiB":416}',
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // ---- upload -------------------------------------------------------------------------------
 
   it('stores an upload as its own encoding, without its metadata, attached to nothing', async () => {
@@ -280,7 +351,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     expect(await mediaRows()).toEqual([]);
   });
 
-  it('refuses an image thin as a line as too large, storing nothing (owner decision 2026-10-22)', async () => {
+  it('refuses an image thin as a line as too large, storing nothing (owner decision 2026-10-21 (2차) answer 1)', async () => {
     // 49KB of grey PNG, 5,000,000×10: within every other check, and ~500MiB to convert.
     const res = await upload(pngOf(5_000_000, 10, { channels: 1 }), { type: 'image/png' });
     expect(res.statusCode).toBe(422);
@@ -929,6 +1000,107 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     expect(t.storage.objects.size).toBe(0);
   });
 
+  it('waits with an upload’s body unread while the API’s memory has no room for it, and takes it once there is (owner decision 2026-10-22 answer 3)', async () => {
+    // At the ceiling: not a byte more fits, the conversion's 144MiB even less.
+    const memory = stubMemory(416);
+    const image = await photo();
+    const sent = rawUpload(image.length, image);
+    try {
+      sent.request.end();
+      // Let in as one of the account's uploads and within the bytes received at once, then held
+      // for the memory before its body is read.
+      await vi.waitFor(() => {
+        expect(memoryAdmission.waitingCount).toBe(1);
+      });
+      expect(imageUploadsReceiving.size).toBe(image.length);
+      expect(imageUploadsInFlight.of(author.id)).toBe(1);
+      expect(memoryAdmission.heldBytes).toBe(0);
+      // Room comes (the RSS falls): the body is read, converted and stored.
+      memory.set(200);
+      const res = await sent.answer;
+      expect(res.status).toBe(201);
+    } finally {
+      sent.request.destroy();
+    }
+    expect(await mediaRows()).toHaveLength(1);
+  });
+
+  it('refuses an upload unread with Retry-After when no room comes in its wait, giving everything back', async () => {
+    stubMemory(416);
+    memoryWaits.uploadMs = 300;
+    const res = await upload(await photo());
+    expect(res.statusCode).toBe(429);
+    expect(res.headers['retry-after']).toBe(String(IMAGE_BUSY_RETRY_SECONDS));
+    expect(res.json<{ error: { code: string; details: unknown } }>().error).toMatchObject({
+      code: 'RATE_LIMITED',
+      details: { retryAfterSeconds: IMAGE_BUSY_RETRY_SECONDS },
+    });
+    expect(await mediaRows()).toEqual([]);
+    // Its share of the bytes received at once, its place and its memory are back at once.
+    expect(imageUploadsReceiving.size).toBe(0);
+    expect(imageUploadsInFlight.size).toBe(0);
+    expect(memoryAdmission.heldBytes).toBe(0);
+  });
+
+  it('lets an upload waiting for memory go when its client hangs up: its share, its place and its wait back at once', async () => {
+    stubMemory(416);
+    const { answers, stop } = serverAnswers();
+    const sent = rawUpload(IMAGE_BODY_LIMIT, Buffer.alloc(1024));
+    try {
+      await vi.waitFor(() => {
+        expect(memoryAdmission.waitingCount).toBe(1);
+      });
+      const gone = ended(answers[0]!);
+      sent.request.destroy();
+      await gone;
+      expect(memoryAdmission.waitingCount).toBe(0);
+      expect(imageUploadsReceiving.size).toBe(0);
+      expect(imageUploadsInFlight.size).toBe(0);
+    } finally {
+      stop();
+      sent.request.destroy();
+    }
+  });
+
+  it('starts a conversion only once the API’s memory has room for its peak: past the wait, RATE_LIMITED and nothing stored', async () => {
+    // A photo's body fits (300MiB and a few KB, with the reads' 32MiB kept), a conversion's
+    // IMAGE_CONVERSION_PEAK_BYTES does not (300 + 144 + 32 > 416).
+    const memory = stubMemory(300);
+    memoryWaits.conversionMs = 300;
+    const busy = await upload(await photo());
+    expect(busy.statusCode).toBe(429);
+    expect(busy.headers['retry-after']).toBe(String(IMAGE_BUSY_RETRY_SECONDS));
+    expect(busy.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+    expect(await mediaRows()).toEqual([]);
+    expect(t.storage.objects.size).toBe(0);
+
+    // Waiting, it starts once the RSS leaves room: the body asked for its length, the conversion
+    // for its peak.
+    memoryWaits.conversionMs = 10_000;
+    const image = await photo();
+    const admit = vi.spyOn(memoryAdmission, 'admit');
+    try {
+      const pending = upload(image);
+      await vi.waitFor(() => {
+        expect(memoryAdmission.waitingCount).toBe(1);
+      });
+      // 250 + 144 would fit; with the room kept for the reads (32MiB, their budget all free) it
+      // does not.
+      memory.set(250);
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(memoryAdmission.waitingCount).toBe(1);
+      memory.set(240);
+      expect((await pending).statusCode).toBe(201);
+      expect(admit.mock.calls.map(([bytes, { kind }]) => [bytes, kind])).toEqual([
+        [image.length, 'body'],
+        [IMAGE_CONVERSION_PEAK_BYTES, 'conversion'],
+      ]);
+    } finally {
+      admit.mockRestore();
+    }
+    expect(await mediaRows()).toHaveLength(1);
+  });
+
   it('asks the client to send again when too many conversions are waiting, storing nothing', async () => {
     // The queue's own refusal, as a full queue gives it (none may wait behind none).
     const run = vi
@@ -1119,6 +1291,67 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     }
   });
 
+  it('holds a read back while the API’s memory has no room for its image: past the wait, refused unread with Retry-After (owner decision 2026-10-22 answer 3)', async () => {
+    const image = await shown();
+    const memory = stubMemory(416);
+    memoryWaits.readMs = 300;
+    const get = vi.spyOn(t.storage, 'get');
+    const admit = vi.spyOn(memoryAdmission, 'admit');
+    try {
+      const busy = await read(image.id);
+      expect(busy.statusCode).toBe(429);
+      expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+      expect(busy.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+      expect(get).not.toHaveBeenCalled();
+      expect(imageReads.size).toBe(0);
+      // A revalidation holds nothing, and waits for nothing.
+      expect((await read(image.id, { 'if-none-match': `"${image.id}"` })).statusCode).toBe(304);
+
+      // Waiting, it is read once room comes, and holds its image's bytes until it is sent.
+      memoryWaits.readMs = 10_000;
+      const pending = read(image.id);
+      await vi.waitFor(() => {
+        expect(memoryAdmission.waitingCount).toBe(1);
+      });
+      memory.set(200);
+      const res = await pending;
+      expect(res.statusCode).toBe(200);
+      expect(new Uint8Array(res.rawPayload)).toEqual(image.body);
+      // Each asked for its image's bytes (the row's size, the stored object's length) as a read;
+      // the 304 asked for nothing.
+      expect(admit.mock.calls.map(([bytes, { kind }]) => [bytes, kind])).toEqual([
+        [image.body.length, 'read'],
+        [image.body.length, 'read'],
+      ]);
+    } finally {
+      admit.mockRestore();
+      get.mockRestore();
+    }
+  });
+
+  it('lets a read in while a conversion runs near its peak: a read does not wait for the conversion’s share, which keeps room for the reads instead (ADR-0073 9-46)', async () => {
+    const image = await shown();
+    // At idle a conversion comes in, keeping the reads' 32MiB beside its 144.
+    const memory = stubMemory(150);
+    const conversion = memoryAdmission.tryTake(IMAGE_CONVERSION_PEAK_BYTES, 'conversion');
+    expect(conversion).not.toBeNull();
+    try {
+      // Its peak in the RSS: past the ceiling less the conversion's share (272MiB), within the
+      // ceiling less the reads' room (384MiB).
+      memory.set(350);
+      memoryWaits.readMs = 300;
+      const res = await read(image.id);
+      expect(res.statusCode).toBe(200);
+      expect(new Uint8Array(res.rawPayload)).toEqual(image.body);
+      // An upload body still waits for the conversion: it counts its share, and the reads' room.
+      memoryWaits.uploadMs = 300;
+      const busy = await upload(await photo());
+      expect(busy.statusCode).toBe(429);
+    } finally {
+      conversion?.();
+    }
+  });
+
   it('answers a HEAD from the row: the headers and length of the GET, no store read and no share (Codex review of #219, round 2)', async () => {
     const image = await stored();
     const market = await createMarket(t.db);
@@ -1193,18 +1426,22 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       request.on('error', () => undefined);
       const signal = await reading;
       expect(imageReads.size).toBe(image.body.length);
+      // The memory's share too, while the store is read.
+      expect(memoryAdmission.heldBytes).toBe(image.body.length);
       expect(signal?.aborted).toBe(false);
       // The client hangs up while the store is still being read: the read is given up…
       request.destroy();
       await vi.waitFor(() => {
         expect(signal?.aborted).toBe(true);
       });
-      // …but its share stays taken while that read has not stopped.
+      // …but its shares stay taken while that read has not stopped.
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(imageReads.size).toBe(image.body.length);
+      expect(memoryAdmission.heldBytes).toBe(image.body.length);
       open();
       await vi.waitFor(() => {
         expect(imageReads.size).toBe(0);
+        expect(memoryAdmission.heldBytes).toBe(0);
       });
       // Nothing more is taken back afterwards.
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -1273,8 +1510,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
       });
       expect(settled).toBe(true);
       await new Promise((resolve) => setTimeout(resolve, 100));
-      // The store read has settled, but the answer is not out: the share stays taken (9-36).
+      // The store read has settled, but the answer is not out: the budget's share stays taken
+      // (9-36). The memory's is back: the image's bytes are in the RSS the admission reads, and
+      // counting them as a share too would count them twice for as long as the client takes (9-46).
       expect(imageReads.size).toBe(image.body.length);
+      expect(memoryAdmission.heldBytes).toBe(0);
       // Read to its end: the answer is out, the share comes back.
       let received = 0;
       response!.on('data', (chunk: Buffer) => {
@@ -1311,9 +1551,7 @@ describe('the upload bodies received at once', () => {
   });
 });
 
-describe('the image budgets in the API container (ADR-0073 결과 5, open: 결과 4 question 3)', () => {
-  const MiB = 1024 * 1024;
-
+describe('the image budgets in the API container (ADR-0073 결과 5, owner decision 2026-10-22 answer 3)', () => {
   /** The api service's memory limit in deploy/compose.yaml. */
   function apiContainerLimit(): number {
     const compose = readFileSync(
@@ -1326,32 +1564,54 @@ describe('the image budgets in the API container (ADR-0073 결과 5, open: 결�
     return Number(limit) * MiB;
   }
 
+  /**
+   * What the API held at idle in its image under that limit (ADR-0073 결과 5): every module up,
+   * connected to its database and Redis, ~148–152MiB resident (~86–91 anonymous, ~61 mapped
+   * files), on linux arm64 — the owner checks production's with `docker stats` (결과 3). Without
+   * the limit the same process held ~293: Node sizes its heap by the memory it sees.
+   */
+  const IDLE_RESIDENT = 152 * MiB;
+
   it('wait for at most eight conversions and read 32MiB at once, the values the owner kept', () => {
     // Implementation-chosen and kept by the owner: one conversion and eight waiting (owner decision
     // 2026-10-19 answer 6, decision 9-8), 32MiB of reads (owner decision 2026-10-20 answer 4,
-    // decision 9-36). Lowering them so the container total fits is the owner's call (결과 4
-    // question 3), not the code's.
+    // decision 9-36). The infrastructure stays as it is (owner decision 2026-10-22 answer 3).
     expect(IMAGE_CONVERSIONS_WAITING_MAX).toBe(8);
     expect(IMAGE_READ_BUDGET_BYTES).toBe(32 * MiB);
   });
 
-  it('leave the API less of its container than it holds idle, as 결과 5 says, until the owner answers', () => {
-    // Every budget full at once: the bodies being received, the bodies the conversions hold (the
+  it('keep the API under a ceiling below its container’s limit, with room for a conversion and the reads from idle', () => {
+    const limit = apiContainerLimit();
+    expect(limit).toBe(448 * MiB);
+    // The ceiling the API derives from it: 448 less the 32MiB margin.
+    const ceiling = memoryCeilingBytes(undefined, limit);
+    expect(ceiling).toBe(limit - MEMORY_CEILING_MARGIN_BYTES);
+    expect(ceiling).toBe(416 * MiB);
+    // From idle, a conversion's peak and the room it keeps for the reads fit under it (with 88MiB
+    // to spare for the heap and the shares out) — or no upload would ever be converted.
+    expect(
+      IDLE_RESIDENT + IMAGE_CONVERSION_PEAK_BYTES + IMAGE_READ_BUDGET_BYTES,
+    ).toBeLessThanOrEqual(ceiling! - 80 * MiB);
+    // Every budget full at once — the bodies being received, the bodies the conversions hold (the
     // one converting, outside its peak, and those waiting, each up to IMAGE_MAX_BYTES), the reads
-    // and one conversion's peak.
+    // and one conversion's peak — on top of the idle API would come within 11MiB of the limit
+    // (before the heap grows with the requests): past the ceiling, so it is the admission that
+    // holds the last of them back, not the budgets.
     const budgets =
       IMAGE_UPLOAD_RECEIVING_BYTES +
       (1 + IMAGE_CONVERSIONS_WAITING_MAX) * IMAGE_MAX_BYTES +
       IMAGE_READ_BUDGET_BYTES +
       IMAGE_CONVERSION_PEAK_BYTES;
     expect(budgets).toBe((64 + 45 + 32 + 144) * MiB);
-    const limit = apiContainerLimit();
-    expect(limit).toBe(448 * MiB);
-    // What is left for the API itself (163MiB) is under what it held idle in its image: ~293MiB
-    // resident, ~234MiB of it anonymous (결과 5). When the owner's answer changes the limit or a
-    // budget, this fails: write the answer into 결과 4·5 and this test with it.
-    expect(limit - budgets).toBe(163 * MiB);
-    expect(limit - budgets).toBeLessThan(234 * MiB);
+    expect(IDLE_RESIDENT + budgets).toBeGreaterThan(ceiling!);
+    expect(IDLE_RESIDENT + budgets).toBeLessThan(limit);
+    expect(limit - (IDLE_RESIDENT + budgets)).toBeLessThan(16 * MiB);
+  });
+
+  it('run with glibc giving a conversion’s large buffers back (MALLOC_MMAP_THRESHOLD_), or the RSS the admission watches would keep them', () => {
+    const dockerfile = readFileSync(new URL('../../../../Dockerfile', import.meta.url), 'utf8');
+    const api = /^FROM \S+ AS api\n([\s\S]*?)^FROM /m.exec(dockerfile)?.[1] ?? '';
+    expect(api).toMatch(/MALLOC_MMAP_THRESHOLD_=131072\b/);
   });
 });
 

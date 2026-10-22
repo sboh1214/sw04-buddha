@@ -10,13 +10,14 @@
 //     never does.
 //   node image-child.mjs convert <file> <options json>
 //     runs processImage's pipeline on the file — the header read, then autoOrient, a resize to fit
-//     `maxDimension` and the encoder `toFormat(format, encoder)` — with the cache off and one thread,
-//     and prints one JSON line: `peakBytes` (the most the process's RSS rose above what it held
-//     before, sampled every millisecond), the output's size and its SHA-256 (the test checks this
-//     pipeline converts byte for byte what processImage does).
+//     inside `box` (image.ts `outputBox`) and the encoder `toFormat(format, encoder)` — with the
+//     cache off and one thread, and prints one JSON line: `peakBytes` (the most the process's RSS
+//     rose above what it held before, sampled every millisecond), the output's size and its
+//     SHA-256 (the test checks this pipeline converts byte for byte what processImage does).
 //
 // Plain JavaScript: a child cannot load the API's TypeScript, so the test hands it what image.ts
-// decides (`encoderOptions`, the limits) as JSON.
+// decides (`outputBox`, `encoderOptions`, the limits) as JSON — and the allocator's setting the
+// API's image runs with (MALLOC_MMAP_THRESHOLD_, Dockerfile) in its environment.
 
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -97,12 +98,7 @@ async function convert(file, options) {
   await sharp(bytes, { ...input, limitInputPixels: false }).metadata();
   const { data, info } = await sharp(bytes, input)
     .autoOrient()
-    .resize({
-      width: options.maxDimension,
-      height: options.maxDimension,
-      fit: 'inside',
-      withoutEnlargement: true,
-    })
+    .resize({ ...options.box, fit: 'inside', withoutEnlargement: true })
     .toFormat(options.format, options.encoder)
     .toBuffer({ resolveWithObject: true });
   clearInterval(sampler);

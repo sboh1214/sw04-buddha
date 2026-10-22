@@ -7,7 +7,7 @@
  */
 import { IMAGE_MAX_BYTES, IMAGE_MAX_DIMENSION, IMAGE_MAX_INPUT_PIXELS } from '@buddha/shared';
 import sharp from 'sharp';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
 import { jpegWithComponents, jpegWithFrame } from '../test/jpeg.js';
 import { type PngKind, pngHeaderOnly, pngOf } from '../test/png.js';
@@ -19,7 +19,7 @@ import {
   JPEG_MAX_COMPONENTS,
   OneAtATime,
   PNG_LARGEST_FRAME_PIXELS,
-  WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+  WEBP_ALPHA_MAX_OUTPUT_PIXELS,
   WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
   WEBP_ANIMATION_MAX_PIXELS,
   decodeBytesPerPixel,
@@ -27,9 +27,13 @@ import {
   imageConversions,
   largestFramePixels,
   largestImagePixels,
+  outputBox,
   processImage,
   sniffImageType,
 } from './image.js';
+import { memoryAdmission, memoryWaits } from './memory-admission.js';
+
+const MiB = 1024 * 1024;
 
 const solid = (width: number, height: number) =>
   sharp({ create: { width, height, channels: 3, background: { r: 200, g: 30, b: 30 } } });
@@ -86,6 +90,17 @@ async function atAndPast(kind: PngKind, bound: number) {
   const past = await refusal(pngHeaderOnly(width + 1, height, kind));
   return { kind, width, height, at, past };
 }
+
+// Every conversion gives its share of the API's memory back, whether it stored an image or failed
+// in the pipeline — as the header-only PNGs at their bound do (`unreadable`): a share kept would
+// stay held for the life of the process, and every later conversion would wait for it (counted
+// without a ceiling too).
+afterEach(async () => {
+  await vi.waitFor(() => {
+    expect(memoryAdmission.heldBytes).toBe(0);
+    expect(memoryAdmission.waitingCount).toBe(0);
+  });
+});
 
 describe('sniffImageType: the content decides, never the name', () => {
   it('knows the four types by their magic numbers', async () => {
@@ -223,7 +238,7 @@ describe('processImage', () => {
       'pixels',
     );
     // An 8-bit RGBA PNG of 8000×6000 (48 megapixels, under the 50 million every frame together may
-    // have) is past that kind's largest frame (owner 2026-10-22).
+    // have) is past that kind's largest frame (owner decision 2026-10-21 (2차) answer 4).
     expect(await refusal(pngHeaderOnly(8_000, 6_000, { channels: 4 }))).toBe('pixels');
   });
 
@@ -246,7 +261,6 @@ describe('processImage', () => {
       channels: 4,
       depth: 'uchar',
       isProgressive: true,
-      hasAlpha: false,
     });
     const [width, height] = frameOf(bound);
     expect(await refusal(jpegWithFrame(cmyk, width, height))).toBe('unreadable');
@@ -359,9 +373,9 @@ describe('processImage', () => {
 
   it('refuses a frame over 32 times longer than wide, either way round, from its header', async () => {
     expect(IMAGE_MAX_SIDE_RATIO).toBe(32);
-    // The owner's case (2026-10-22): 49KB of grey PNG that took ~500MiB to convert, ~1.5GiB as
-    // RGB — within the pixels and the decode budget its format is allowed (the memory is
-    // `image-memory.test.ts`'s).
+    // The owner's case (owner decision 2026-10-21 (2차) answer 1): 49KB of grey PNG that took
+    // ~500MiB to convert, ~1.5GiB as RGB — within the pixels and the decode budget its format is
+    // allowed (the memory is `image-memory.test.ts`'s).
     const line = pngOf(5_000_000, 10, { channels: 1 });
     expect(line.length).toBeLessThan(64 * 1024);
     expect(await refusal(line)).toBe('pixels');
@@ -421,19 +435,22 @@ describe('processImage', () => {
     expect(largestFramePixels('image/webp', still)).toBe(8_947_848);
     expect(3_840 * 2_160).toBeLessThan(largestFramePixels('image/gif', still));
     expect(IMAGE_DECODE_BUDGET_BYTES).toBe(128 * 1024 * 1024);
-    // What the encoders hold is not libvips' to count: a still WebP with alpha, a WebP animation
-    // and a GIF animation have bounds measured on the whole conversion, within
-    // IMAGE_CONVERSION_PEAK_BYTES (Codex review of #219, round 3; `image-memory.test.ts`). A WebP
-    // animation's frames together have a bound of their own too; a GIF's do not.
+    // What the encoders hold is not libvips' to count: a WebP animation and a GIF animation have
+    // bounds measured on the whole conversion, within IMAGE_CONVERSION_PEAK_BYTES (Codex review of
+    // #219, round 3; `image-memory.test.ts`), and a still WebP with alpha is written at most
+    // WEBP_ALPHA_MAX_OUTPUT_PIXELS large instead of being refused (owner decision 2026-10-22
+    // answer 1) — its frame is bounded by its decoding, as one without alpha. A WebP animation's
+    // frames together have a bound of their own too; a GIF's do not.
     expect(IMAGE_CONVERSION_PEAK_BYTES).toBe(144 * 1024 * 1024);
     expect([
-      WEBP_ALPHA_LARGEST_FRAME_PIXELS,
+      WEBP_ALPHA_MAX_OUTPUT_PIXELS,
       WEBP_ANIMATION_LARGEST_FRAME_PIXELS,
       WEBP_ANIMATION_MAX_PIXELS,
       GIF_ANIMATION_LARGEST_FRAME_PIXELS,
-    ]).toEqual([2_600_000, 1_050_000, 12_000_000, 5_000_000]);
+    ]).toEqual([3_400_000, 1_050_000, 12_000_000, 5_000_000]);
     const alpha = { ...still, channels: 4, hasAlpha: true } as const;
-    expect(largestFramePixels('image/webp', alpha)).toBe(WEBP_ALPHA_LARGEST_FRAME_PIXELS);
+    expect(largestFramePixels('image/webp', alpha)).toBe(8_947_848);
+    expect(largestFramePixels('image/webp', { ...alpha, pages: 1 })).toBe(8_947_848);
     expect(largestFramePixels('image/webp', { ...still, pages: 1 })).toBe(8_947_848);
     for (const animation of [
       { ...still, pages: 2 },
@@ -446,16 +463,16 @@ describe('processImage', () => {
     }
     expect(largestFramePixels('image/gif', { ...alpha, pages: 1 })).toBe(8_388_608);
     expect(largestImagePixels('image/webp', { ...alpha, pages: 1 })).toBe(IMAGE_MAX_INPUT_PIXELS);
-    // A 1280×720 WebP animation and a 1600×1600 sticker fit; so does a 2560×1440 (QHD) frame of
-    // a GIF animation (a 4K one does not: 8.3 megapixels).
+    // A 1280×720 WebP animation fits, and an 1800×1800 sticker is written as it is; so does a
+    // 2560×1440 (QHD) frame of a GIF animation fit (a 4K one does not: 8.3 megapixels).
     expect(1_280 * 720).toBeLessThanOrEqual(WEBP_ANIMATION_LARGEST_FRAME_PIXELS);
-    expect(1_600 * 1_600).toBeLessThanOrEqual(WEBP_ALPHA_LARGEST_FRAME_PIXELS);
+    expect(1_800 * 1_800).toBeLessThanOrEqual(WEBP_ALPHA_MAX_OUTPUT_PIXELS);
     expect(2_560 * 1_440).toBeLessThanOrEqual(GIF_ANIMATION_LARGEST_FRAME_PIXELS);
-    // A PNG frame: its kind's measured value (owner 2026-10-22; `image-memory.test.ts` converts
-    // each kind's costliest shape at it), by the channels it decodes to, 8 or 16 bits a sample,
-    // interlaced or not. 8-bit grey (interlaced too), plain 8-bit RGB and plain 16-bit grey keep
-    // the 50 million pixels every frame together may have, and interlaced 16-bit grey the bound it
-    // had (128MiB at 3.2 bytes a pixel).
+    // A PNG frame: its kind's measured value (owner decision 2026-10-21 (2차) answers 4 and 5;
+    // `image-memory.test.ts` converts each kind's costliest shape at it), by the channels it
+    // decodes to, 8 or 16 bits a sample, interlaced or not. 8-bit grey (interlaced too), plain
+    // 8-bit RGB and plain 16-bit grey keep the 50 million pixels every frame together may have, and
+    // interlaced 16-bit grey the bound it had (128MiB at 3.2 bytes a pixel).
     expect(PNG_LARGEST_FRAME_PIXELS).toEqual({
       1: {
         8: [IMAGE_MAX_INPUT_PIXELS, IMAGE_MAX_INPUT_PIXELS],
@@ -466,12 +483,7 @@ describe('processImage', () => {
       4: { 8: [19_700_000, 15_700_000], 16: [3_300_000, 4_600_000] },
     });
     const png = (channels: 1 | 2 | 3 | 4, depth: 'uchar' | 'ushort', isProgressive: boolean) =>
-      largestFramePixels('image/png', {
-        channels,
-        depth,
-        isProgressive,
-        hasAlpha: channels % 2 === 0,
-      });
+      largestFramePixels('image/png', { channels, depth, isProgressive });
     expect(png(4, 'uchar', false)).toBe(PNG_LARGEST_FRAME_PIXELS[4][8][0]);
     expect(png(2, 'ushort', false)).toBe(PNG_LARGEST_FRAME_PIXELS[2][16][0]);
     expect(png(3, 'uchar', true)).toBe(PNG_LARGEST_FRAME_PIXELS[3][8][1]);
@@ -519,23 +531,122 @@ describe('the encoders: settings and the bounds the whole conversion needs (Code
     expect(encoderOptions('image/webp', { hasAlpha: true, pages: 3 })).toMatchObject({ effort: 2 });
   });
 
-  it('refuses a WebP with alpha, a WebP animation and a GIF animation past their own bounds, from the header', async () => {
+  it('fits a still WebP with alpha in the box of at most WEBP_ALPHA_MAX_OUTPUT_PIXELS, its own shape upright', () => {
+    const MAX = IMAGE_MAX_DIMENSION;
+    const square = { width: MAX, height: MAX };
+    const alpha = (width: number, height: number, more: object = {}) => ({
+      width,
+      height,
+      hasAlpha: true,
+      ...more,
+    });
+    // Within the bound once fitted inside 2,048px: the box every other image has.
+    expect(outputBox('image/webp', alpha(1_800, 1_800))).toEqual(square);
+    expect(outputBox('image/webp', alpha(2_048, 1_660))).toEqual(square);
+    // 4000×3000 is 12 megapixels, and 2048×1536 — within the bound — once fitted: a 4:3 photo or
+    // anything wider is written as large as any other image.
+    expect(outputBox('image/webp', alpha(4_000, 3_000))).toEqual(square);
+    // Past it: a box of the frame's shape with at most that many pixels.
+    expect(outputBox('image/webp', alpha(1_900, 1_900))).toEqual({ width: 1_843, height: 1_843 });
+    expect(outputBox('image/webp', alpha(2_991, 2_991))).toEqual({ width: 1_843, height: 1_843 });
+    // Upright: EXIF 5 to 8 turn it a quarter before the resize (sharp's autoOrient).
+    expect(outputBox('image/webp', alpha(2_200, 2_000, { orientation: 6 }))).toEqual({
+      width: 1_758,
+      height: 1_933,
+    });
+    for (const orientation of [5, 7, 8]) {
+      expect(
+        outputBox('image/webp', alpha(2_200, 2_000, { orientation })),
+        String(orientation),
+      ).toEqual({
+        width: 1_758,
+        height: 1_933,
+      });
+    }
+    for (const orientation of [1, 2, 3, 4]) {
+      expect(
+        outputBox('image/webp', alpha(2_200, 2_000, { orientation })),
+        String(orientation),
+      ).toEqual({
+        width: 1_933,
+        height: 1_758,
+      });
+    }
+    // Any shape: written with at most that many pixels, at most 2,048px a side — fitted inside its
+    // box as sharp fits it (the long side, the other rounded).
+    const fit = (box: { width: number; height: number }, width: number, height: number) => {
+      const factor = Math.max(1, width / box.width, height / box.height);
+      return [Math.round(width / factor), Math.round(height / factor)] as const;
+    };
+    for (const [width, height] of [
+      [2_100, 1_300],
+      [1_844, 1_843],
+      [2_200, 2_100],
+      [2_992, 2_990],
+      [5_000, 1_700],
+      [1_200, 7_000],
+      [16_383, 546],
+    ] as const) {
+      const [outWidth, outHeight] = fit(
+        outputBox('image/webp', alpha(width, height)),
+        width,
+        height,
+      );
+      expect(outWidth * outHeight).toBeLessThanOrEqual(WEBP_ALPHA_MAX_OUTPUT_PIXELS);
+      expect(Math.max(outWidth, outHeight)).toBeLessThanOrEqual(MAX);
+    }
+    // Every other image: the 2,048px box — a WebP without alpha, a WebP animation with alpha, a PNG.
+    expect(outputBox('image/webp', { width: 2_991, height: 2_991, hasAlpha: false })).toEqual(
+      square,
+    );
+    expect(
+      outputBox('image/webp', alpha(1_024, 3 * 1_024, { pageHeight: 1_024, pages: 3 })),
+    ).toEqual(square);
+    expect(outputBox('image/png', alpha(4_000, 4_000))).toEqual(square);
+  });
+
+  it('writes a still WebP with alpha past that size smaller, up to its decoding bound, and refuses a WebP animation and a GIF animation past their own bounds, from the header', async () => {
     const sticker = (width: number, height: number) =>
       sharp({
         create: { width, height, channels: 4, background: { r: 9, g: 99, b: 199, alpha: 0.5 } },
       })
         .webp()
         .toBuffer();
-    // 1700×1700 is 2.89 megapixels: past a WebP with alpha's bound, within one without alpha's.
-    expect(await refusal(await sticker(1_700, 1_700))).toBe('pixels');
-    expect(await processImage(await sticker(1_600, 1_600))).toMatchObject({
+    // 1900×1900 is 3.61 megapixels: written at 1843×1843, 3.4 (owner decision 2026-10-22 answer
+    // 1 — past 2.6 it was refused before), with its alpha; 1800×1800 as it is, and one without
+    // alpha at its size.
+    const shrunk = await processImage(await sticker(1_900, 1_900));
+    expect(shrunk).toMatchObject({ contentType: 'image/webp', width: 1_843, height: 1_843 });
+    expect(await sharp(shrunk.body).metadata()).toMatchObject({ hasAlpha: true, width: 1_843 });
+    expect(await processImage(await sticker(1_800, 1_800))).toMatchObject({
       contentType: 'image/webp',
-      width: 1_600,
+      width: 1_800,
     });
-    expect(await processImage(await solid(1_700, 1_700).webp().toBuffer())).toMatchObject({
+    expect(await processImage(await solid(1_900, 1_900).webp().toBuffer())).toMatchObject({
       contentType: 'image/webp',
-      width: 1_700,
+      width: 1_900,
     });
+    // Up to the frame its decoding allows (~8.9 megapixels, 2,991²), turned upright first; past
+    // it, `pixels` from the header as before.
+    expect(await processImage(await sticker(2_991, 2_991))).toMatchObject({
+      contentType: 'image/webp',
+      width: 1_843,
+      height: 1_843,
+    });
+    const turned = await sharp({
+      create: {
+        width: 2_200,
+        height: 2_000,
+        channels: 4,
+        background: { r: 1, g: 2, b: 3, alpha: 0.5 },
+      },
+    })
+      .webp()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    // Within its box (1758×1933): sharp fits the long side and rounds the other.
+    expect(await processImage(turned)).toMatchObject({ width: 1_757, height: 1_933 });
+    expect(await refusal(await sticker(3_000, 3_000))).toBe('pixels');
     // A WebP animation: a frame past its bound is `pixels`, frames together past theirs `frames`.
     expect(await refusal(await animation('webp', 1_100, 1_000, 2))).toBe('pixels');
     expect(await refusal(await animation('webp', 600, 600, 34))).toBe('frames');
@@ -605,6 +716,81 @@ describe('one conversion at a time', () => {
     waiting.state.finish();
     await Promise.all(held);
     await expect(queue.run(() => Promise.resolve('next'))).resolves.toBe('next');
+  });
+
+  it('refuses the conversions queued behind one that waited in vain for memory within their own wait, not one wait after another', async () => {
+    // No room for a conversion's peak, ever: 416 resident under a ceiling of 416.
+    memoryAdmission.configure({ ceilingBytes: 416 * MiB, resident: () => 416 * MiB });
+    memoryWaits.conversionMs = 400;
+    const admit = vi.spyOn(memoryAdmission, 'admit');
+    try {
+      const photos = await Promise.all(
+        [1, 2, 3].map((n) =>
+          solid(20 + n, 20)
+            .jpeg()
+            .toBuffer(),
+        ),
+      );
+      const started = Date.now();
+      const settled = await Promise.all(
+        photos.map((photo) =>
+          processImage(photo).then(
+            () => ({ code: 'stored', after: Date.now() - started }),
+            (error: unknown) => ({
+              code: error instanceof AppError ? error.code : String(error),
+              after: Date.now() - started,
+            }),
+          ),
+        ),
+      );
+      expect(settled.map(({ code }) => code)).toEqual([
+        'RATE_LIMITED',
+        'RATE_LIMITED',
+        'RATE_LIMITED',
+      ]);
+      // The first waits its 400ms; the two behind it, queued at the same moment, have no wait
+      // left by their turn and are refused at once — not at 800 and 1,200ms.
+      for (const { after } of settled) expect(after).toBeLessThan(700);
+      const waits = admit.mock.calls.map(([, options]) => options.waitMs);
+      expect(waits).toHaveLength(3);
+      expect(waits[0]).toBeGreaterThan(300);
+      expect(waits[0]).toBeLessThanOrEqual(400);
+      expect(waits[1]).toBeLessThan(100);
+      expect(waits[2]).toBeLessThan(100);
+      expect(admit.mock.calls.map(([, options]) => options.kind)).toEqual([
+        'conversion',
+        'conversion',
+        'conversion',
+      ]);
+    } finally {
+      admit.mockRestore();
+      memoryAdmission.configure({ ceilingBytes: null });
+      memoryWaits.conversionMs = 10_000;
+    }
+  });
+
+  it('still converts one whose wait went by in the queue behind conversions that ran, when its turn finds room', async () => {
+    memoryAdmission.configure({ ceilingBytes: 416 * MiB, resident: () => 100 * MiB });
+    memoryWaits.conversionMs = 100;
+    let finish!: () => void;
+    const running = imageConversions.run(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    try {
+      const pending = processImage(await solid(30, 20).jpeg().toBuffer());
+      // Longer than its wait, behind a conversion that takes its time.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      finish();
+      await running;
+      await expect(pending).resolves.toMatchObject({ contentType: 'image/jpeg', width: 30 });
+    } finally {
+      finish();
+      memoryAdmission.configure({ ceilingBytes: null });
+      memoryWaits.conversionMs = 10_000;
+    }
   });
 
   it('is what processImage converts through', async () => {

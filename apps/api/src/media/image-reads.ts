@@ -15,8 +15,13 @@ import { ByteBudget } from './byte-budget.js';
  * thumbnails is not refused for the size a few large GIFs would take: 32MiB is some forty ordinary
  * photos (2,048px JPEG, under 1MB) or six animated GIFs near 5MB. It was chosen beside decision
  * 9-8's 128MiB for a conversion, as it was then, and the heap; a conversion is now bounded at
- * IMAGE_CONVERSION_PEAK_BYTES (144MiB, image.ts), and ADR-0073 결과 5 found that the budgets and
- * the API's own use cannot all fit in the 448MiB at once (a question for the owner, 결과 4).
+ * IMAGE_CONVERSION_PEAK_BYTES (144MiB, image.ts). A read within the budget is still asked of the
+ * API's memory before the store is read (`memoryAdmission`, owner decision 2026-10-22 answer 3,
+ * ADR-0073 9-46): every budget full at once and the API's own use (~150MiB resident at idle in
+ * its container) come within a few MiB of the container's 448MiB, and the heap grows with the
+ * requests, so it is the process's RSS that decides whether one more fits. A read does not wait
+ * for a running conversion's share there: the upload bodies and the conversions keep room for
+ * what of this budget is not taken instead, so a conversion does not hold every image read back.
  */
 export const IMAGE_READ_BUDGET_BYTES = 32 * 1024 * 1024;
 

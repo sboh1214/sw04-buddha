@@ -160,6 +160,10 @@ services:
     deploy:
       resources:
         limits:
+          # The api reads this limit and takes on image work (upload bodies, conversions, image
+          # reads) only while its own RSS and what it has handed out stay under it less 32MiB, 416MiB
+          # (ADR-0073 9-46). To set that ceiling instead, add API_MEMORY_CEILING_MIB (MiB) to the
+          # api's `environment` above (docs/SETTINGS.md).
           memory: 448m
     stop_grace_period: 15s
 
