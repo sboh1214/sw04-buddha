@@ -11,6 +11,7 @@ import {
   roleSchema,
   type ReportReason,
 } from './enums.js';
+import { NICKNAME_HOLD_DAYS } from './nickname.js';
 import { postAuthorSchema } from './post.js';
 import { codePointLength, postDocumentSchema } from './post-document.js';
 import { publicIdSchema } from './public-id.js';
@@ -78,6 +79,18 @@ export const APPEAL_WINDOW_DAYS = 14;
 export function appealDeadlineOf(createdAt: string | Date): Date {
   const start = typeof createdAt === 'string' ? new Date(createdAt) : createdAt;
   return new Date(start.getTime() + APPEAL_WINDOW_DAYS * 24 * 60 * 60 * 1_000);
+}
+
+/**
+ * When the hold of the nickname a reset taken at `createdAt` took away ends (NICKNAME_HOLD_DAYS
+ * later): the hold starts at the action's own time (ModerationService), and `nickname_held()` holds
+ * it while `released_at` is less than 30 days back — so up to this instant, not at it. The member's
+ * 조치·신고 내역 tells them of it until then, unless the reset was cancelled (owner decision
+ * 2026-10-22, ADR-0081): a cancellation hands the hold to the member.
+ */
+export function nicknameHoldEndOf(createdAt: string | Date): Date {
+  const start = typeof createdAt === 'string' ? new Date(createdAt) : createdAt;
+  return new Date(start.getTime() + NICKNAME_HOLD_DAYS * 24 * 60 * 60 * 1_000);
 }
 
 // ---- plain text inputs ---------------------------------------------------------------------------

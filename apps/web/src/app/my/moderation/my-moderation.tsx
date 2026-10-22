@@ -30,6 +30,7 @@ import {
   appealDeadline,
   moderationActionLabel,
   moderationRows,
+  nicknameHoldShown,
   reportStatusLabel,
   reportTargetTypeLabel,
   reportTargetView,
@@ -46,8 +47,10 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  *   about (their post or comment, or that they deleted it since; their profile), the reason (the
  *   report reason the operator picked and their explanation), when, its end when it has one, and
  *   its cancellation — with how to appeal: by the customer centre's email, once per action within
- *   14 days (#45-14), and each standing action's last day for it. Never who reported nor which
- *   operator acted (#45-13).
+ *   14 days (#45-14), and each standing action's last day for it. A nickname reset not cancelled
+ *   says, for the 30 days of its hold, that the nickname taken away cannot be used again (owner
+ *   decision 2026-10-22, `nicknameHoldShown`) — never which it was (#37-3). Never who reported nor
+ *   which operator acted (#45-13).
  * - 내가 한 신고: each of the member's reports, newest first — what it was about as the public sees
  *   it now, the reason and the description sent, when, and 접수 or the result, 조치함 or 기각, with
  *   when (#45-13). Not which action was taken: that is the member acted on's to read.
@@ -266,6 +269,11 @@ function ActionItem({ action }: { action: MyModerationAction }) {
         <Line label={copy.authoredHiddenNote} testId="my-action-note">
           {reason.note}
         </Line>
+      )}
+      {nicknameHoldShown(action) && (
+        <Text textStyle="bodySm" color="fg" data-testid="my-action-nickname-held">
+          {copy.moderationNicknameHeld}
+        </Text>
       )}
       <Line label={copy.moderationTakenAt}>{format(action.createdAt)}</Line>
       {action.endsAt !== null && (

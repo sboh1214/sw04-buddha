@@ -47,6 +47,7 @@ import {
   actionReasonText,
   adminTargetPath,
   adminUserModerationPath,
+  cancelDialogBody,
   concernsOperator,
   dismissBatch,
   dismissBatchText,
@@ -693,7 +694,7 @@ export function cancelDialog(action: AdminModerationAction): DialogSpec {
   return {
     kind: 'record',
     title: copy.adminModerationCancelTitle,
-    body: copy.adminModerationCancelBody,
+    body: cancelDialogBody(action),
     success: copy.adminModerationCancelDone,
     testId: 'moderation-cancel-dialog',
     details: (

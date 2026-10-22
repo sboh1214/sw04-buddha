@@ -37,7 +37,14 @@ import {
  *   and both tabs) and a visitor's press back to the list; the operator's '운영' links on the post,
  *   its comment and the profile, shown to no one else; a warning given from the profile's link
  *   shows its banner on the member's MY summary — not the write page — until it is cancelled
- *   (owner decisions 2026-10-21).
+ *   (owner decisions 2026-10-21);
+ * - the report dialog names the post or comment it reports on one line — from the post page, a
+ *   comment, a 대댓글 whose first line is cut with '…', and the cards (owner decision 2026-10-22 답 4);
+ *   the reported operator still reads the count of reporters (답 1);
+ * - a nickname reset: the member reads on 조치·신고 내역 that the former nickname cannot be used for
+ *   30 days and is refused it, as another member is (the approved refusal); the cancellation's
+ *   dialog says the hold becomes the member's, the line goes, and the member takes the nickname
+ *   back at once while the other member is still refused (owner decisions 2026-10-22 답 2·3).
  *
  * Every report a test files is processed before it ends, so a persistent database's queue does not
  * grow run after run; the queue is walked page by page all the same (`showInQueue`). A check that
@@ -69,15 +76,16 @@ async function postThroughApi(
   return ((await res.json()) as { data: { id: string } }).data.id;
 }
 
-/** A 댓글 straight at the API with the context's cookie. */
+/** A 댓글 — or a 대댓글 under `parentId` — straight at the API with the context's cookie. */
 async function commentThroughApi(
   context: APIRequestContext,
   postId: string,
   body: string,
+  parentId: string | null = null,
 ): Promise<string> {
   const me = await meOf(context);
   const res = await context.post(`/api/v1/posts/${postId}/comments`, {
-    data: { parentId: null, body, expectedAccountId: me.id },
+    data: { parentId, body, expectedAccountId: me.id },
   });
   expect(res.status(), await res.text()).toBe(201);
   return ((await res.json()) as { data: { id: string } }).data.id;
@@ -139,6 +147,28 @@ function shownNav(page: Page): Locator {
     : page.getByRole('navigation', { name: copy.navPrimary });
 }
 
+/** A nickname nobody has: a prefix and the run's random tail, within the 20 characters. */
+function freshNickname(prefix: string): string {
+  return `${prefix}${freshTag().slice(-10)}`.slice(0, 20);
+}
+
+/**
+ * The open report dialog names `item` on one line under its title (owner decision 2026-10-22 답 4)
+ * — the line is the dialog's name after the title — and a line wider than the dialog is cut with
+ * an ellipsis rather than wrapped.
+ */
+async function expectReportItem(page: Page, title: string, item: string): Promise<void> {
+  const line = page.getByTestId('report-dialog').getByTestId('report-dialog-item');
+  await expect(line).toHaveText(item);
+  await expect(page.getByRole('dialog')).toHaveAccessibleName(`${title} ${item}`);
+  expect(
+    await line.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [style.whiteSpace, style.textOverflow, style.overflow];
+    }),
+  ).toEqual(['nowrap', 'ellipsis', 'hidden']);
+}
+
 /** Sends the open report dialog and waits for its answer, returning the report's id. */
 async function sendReport(page: Page, path: string): Promise<string> {
   const answer = page.waitForResponse(
@@ -197,6 +227,8 @@ test.describe('신고와 운영 처리', () => {
       await postReport.click();
       const dialog = reporter.getByTestId('report-dialog');
       await expect(dialog).toContainText(copy.reportPostTitle);
+      // Which post: its title, on one line under the dialog's title (owner decision 2026-10-22).
+      await expectReportItem(reporter, copy.reportPostTitle, postTitle);
       await expect(reporter.getByRole('dialog')).toHaveAccessibleDescription(copy.reportNotAReason);
       await expect(dialog.getByRole('radio')).toHaveCount(8);
       await expect(
@@ -237,9 +269,34 @@ test.describe('신고와 운영 처리', () => {
       await reporter.getByTestId('report-cancel').click();
       await expect(dialog).toHaveCount(0);
 
-      // The comment, 괴롭힘, from its own 신고.
+      // A 대댓글 whose first line is longer than the cap: named by its first 300 characters and
+      // '…' — the dialog's line cut by its width besides — and left unreported.
+      const longLine = `긴 답글 ${tag} ${'가나다라마바사'.repeat(60)}`;
+      const replyId = await commentThroughApi(
+        page.request,
+        postId,
+        `${longLine}\n둘째 줄`,
+        commentId,
+      );
+      await reporter.reload();
+      await reporter.getByTestId(`comment-${replyId}`).getByTestId('report-open').click();
+      await expect(dialog).toContainText(copy.reportCommentTitle);
+      await expectReportItem(
+        reporter,
+        copy.reportCommentTitle,
+        `${[...longLine].slice(0, 300).join('').trimEnd()}…`,
+      );
+      const item = dialog.getByTestId('report-dialog-item');
+      expect(await item.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(
+        true,
+      );
+      await reporter.getByTestId('report-cancel').click();
+      await expect(dialog).toHaveCount(0);
+
+      // The comment, 괴롭힘, from its own 신고: named by its first line.
       await reporter.getByTestId(`comment-${commentId}`).getByTestId('report-open').click();
       await expect(dialog).toContainText(copy.reportCommentTitle);
+      await expectReportItem(reporter, copy.reportCommentTitle, `신고될 댓글 ${tag}`);
       await reporter.getByTestId('report-reason-harassment').click();
       const commentReportId = await sendReport(reporter, `/api/v1/comments/${commentId}/reports`);
 
@@ -440,6 +497,8 @@ test.describe('신고와 운영 처리', () => {
       await reporter.goto(profileUrl);
       await reporter.getByTestId('profile-actions').getByTestId('report-open').click();
       await expect(reporter.getByTestId('report-dialog')).toContainText(copy.reportProfileTitle);
+      // A profile's dialog names no post or comment: its title says what is reported.
+      await expect(reporter.getByTestId('report-dialog-item')).toHaveCount(0);
       await reporter.getByTestId('report-reason-personal_info').click();
       const reportId = await sendReport(
         reporter,
@@ -540,6 +599,10 @@ test.describe('신고와 운영 처리', () => {
       await expect(ownReports).toContainText(copy.reportReasonOther);
       await expect(ownReports).not.toContainText(reporterMe.profile.nickname);
       await expect(ownReports).not.toContainText(`운영자 글 신고 ${tag}`);
+      // The count of reporters stays (owner decision 2026-10-22 답 1).
+      await expect(adminPage.getByTestId('moderation-reporter-count')).toHaveText(
+        `${copy.adminReporterCount} 1${copy.adminCountUnitPeople}`,
+      );
 
       // Another operator processes it — hides the post, which closes that report (and leaves no
       // report waiting in a persistent database). The operator reads the action on their own post
@@ -638,6 +701,7 @@ test.describe('신고와 운영 처리', () => {
       await expect(cardReport).toHaveAccessibleName(`${postTitle} ${copy.reportAction}`);
       await cardReport.click();
       await expect(reporter.getByTestId('report-dialog')).toContainText(copy.reportPostTitle);
+      await expectReportItem(reporter, copy.reportPostTitle, postTitle);
       await expect(reporter).toHaveURL(listPath);
       await reporter.getByTestId('report-reason-spam').click();
       const postReportId = await sendReport(reporter, `/api/v1/posts/${postId}/reports`);
@@ -663,6 +727,7 @@ test.describe('신고와 운영 처리', () => {
       );
       await commentReport.click();
       await expect(reporter.getByTestId('report-dialog')).toContainText(copy.reportCommentTitle);
+      await expectReportItem(reporter, copy.reportCommentTitle, `카드에서 신고될 댓글 ${tag}`);
       await reporter.getByTestId('report-reason-off_topic').click();
       const commentReportId = await sendReport(reporter, `/api/v1/comments/${commentId}/reports`);
       await expect(reporter).toHaveURL(new RegExp(`/u/${author.profile.publicId}\\?tab=comments$`));
@@ -755,6 +820,94 @@ test.describe('신고와 운영 처리', () => {
     } finally {
       await reporterContext.close();
       await visitorContext.close();
+      await adminContext.close();
+    }
+  });
+
+  test('닉네임 강제 변경을 받은 회원은 조치·신고 내역에서 이전 닉네임을 30일 동안 다시 쓸 수 없다는 줄을 보고 다른 회원처럼 그 닉네임을 거절당하며, 운영자가 취소하면 취소 창이 그 보류를 말하고 회원만 곧바로 다시 고른다', async ({
+    page,
+    browser,
+  }) => {
+    const nickname = freshNickname('Ns');
+    await signUp(page, freshEmail(), undefined, { nickname });
+    const member = await meOf(page.request);
+    expect(member.profile.nickname).toBe(nickname);
+
+    const otherContext = await browser.newContext();
+    const adminContext = await browser.newContext();
+    /** Tries `wanted` on MY 설정's nickname form of `who`. */
+    const pick = async (who: Page, wanted: string) => {
+      await who.goto('/my/settings');
+      const input = who.getByTestId('nickname-input');
+      await expect(input).toBeEditable();
+      await input.fill(wanted);
+      await who.getByTestId('settings-profile').getByRole('button', { name: copy.save }).click();
+    };
+    try {
+      // The operator gives the nickname back to an auto nickname from the member's page.
+      const adminPage = await adminContext.newPage();
+      await signIn(adminPage, adminAccount.email, adminAccount.password);
+      await adminPage.goto(`/admin/moderation/users/${member.id}`);
+      await adminPage.getByTestId('moderation-nickname-reset').click();
+      await adminPage.getByTestId('moderation-reason').selectOption('impersonation');
+      await adminPage.getByTestId('moderation-submit').click();
+      await expect(adminPage.getByText(copy.adminModerationNicknameResetDone)).toBeVisible();
+      const memberActions = adminPage.getByTestId('moderation-author-actions');
+      await expect(memberActions.getByTestId('moderation-action-removed')).toContainText(nickname);
+
+      // The member: the reset on 조치·신고 내역 with the line about the former nickname — never
+      // the nickname itself (#37-3).
+      await page.goto('/my/moderation');
+      const action = page.getByTestId('my-actions-list').locator('article');
+      await expect(action).toHaveCount(1);
+      await expect(action.getByTestId('my-action-type')).toHaveText(
+        copy.moderationActionNicknameReset,
+      );
+      await expect(action.getByTestId('my-action-nickname-held')).toHaveText(
+        copy.moderationNicknameHeld,
+      );
+      await expect(page.getByTestId('my-moderation')).not.toContainText(nickname);
+      // Held from the member too, with the approved words — and from another member.
+      await pick(page, nickname);
+      await expect(page.getByTestId('nickname-error')).toHaveText(copy.errNicknameTaken);
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      await pick(other, nickname.toUpperCase());
+      await expect(other.getByTestId('nickname-error')).toHaveText(copy.errNicknameTaken);
+
+      // Cancelled: the dialog says the former nickname is the member's alone to pick again.
+      await adminPage.reload();
+      await memberActions.getByTestId('moderation-action-cancel').click();
+      const cancelDialog = adminPage.getByTestId('moderation-cancel-dialog');
+      await expect(cancelDialog).toContainText(copy.adminModerationCancelNicknameResetBody);
+      await expect(cancelDialog).not.toContainText(copy.adminModerationCancelBody);
+      await adminPage.getByTestId('moderation-record').fill('이의를 받아들임');
+      await adminPage.getByTestId('moderation-submit').click();
+      await expect(adminPage.getByText(copy.adminModerationCancelDone)).toBeVisible();
+      await expect(memberActions.getByTestId('moderation-action-cancelled')).toHaveText(
+        copy.moderationCancelled,
+      );
+
+      // The member: cancelled, without the line; the nickname is not restored, theirs to pick.
+      await page.goto('/my/moderation');
+      await expect(action.getByTestId('my-action-cancelled')).toHaveText(copy.moderationCancelled);
+      await expect(action.getByTestId('my-action-nickname-held')).toHaveCount(0);
+      expect((await meOf(page.request)).profile.nickname).not.toBe(nickname);
+      // The other member is still refused it, in any case; the member, who has picked no
+      // nickname since the reset, takes it back at once.
+      for (const wanted of [nickname, nickname.toUpperCase()]) {
+        await pick(other, wanted);
+        await expect(other.getByTestId('nickname-error')).toHaveText(copy.errNicknameTaken);
+      }
+      await pick(page, nickname);
+      await expect(page.getByText(copy.nicknameSaved)).toBeVisible();
+      await expect(page.getByTestId('nickname-input')).toHaveValue(nickname);
+      expect((await meOf(page.request)).profile.nickname).toBe(nickname);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+    } finally {
+      await otherContext.close();
       await adminContext.close();
     }
   });

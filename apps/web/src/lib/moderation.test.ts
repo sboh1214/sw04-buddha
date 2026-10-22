@@ -5,10 +5,13 @@ import {
   MODERATION_REASON_MAX_LENGTH,
   NICKNAME_HOLD_DAYS,
   OTHER_NEEDS_TEXT_MESSAGE,
+  POST_EXCERPT_MAX_LENGTH,
   REPORTS_PER_DAY,
   REPORT_DESCRIPTION_MAX_LENGTH,
   REPORT_REASONS,
   REPORT_WINDOW_HOURS,
+  postExcerpt,
+  readPostDocument,
   type ErrorCode,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
@@ -18,6 +21,7 @@ import {
   type AdminModerationAction,
   type AdminReport,
   type MyModerationAction,
+  type PublishedPost,
   type ReportTarget,
 } from './api';
 import { reportReasonLabel } from './authored';
@@ -48,6 +52,7 @@ import {
   adminUserModerationPath,
   appealDeadline,
   authorPublicIdOf,
+  cancelDialogBody,
   concernsOperator,
   countText,
   dismissBatch,
@@ -58,8 +63,10 @@ import {
   moderationFailure,
   moderationItemStateLabel,
   moderationRows,
+  nicknameHoldShown,
   operatorLineText,
   pendingReportIds,
+  postReportItem,
   queueEntryText,
   reasonCountsText,
   recordReasonDraft,
@@ -68,6 +75,7 @@ import {
   reportDialogTitle,
   reportDraft,
   reportFailure,
+  reportItemName,
   reportLengthText,
   reportReasonOf,
   reportStatusLabel,
@@ -201,6 +209,108 @@ describe('names', () => {
     expect(reportDialogTitle('profile')).toBe(copy.reportProfileTitle);
   });
 
+  it('names the item a report is about: a post by its title or first line, a comment by its own first line (owner decision 2026-10-22 답 4)', () => {
+    expect(reportItemName({ type: 'post', title: '금리 전망', excerpt: '본문' })).toBe('금리 전망');
+    expect(reportItemName({ type: 'post', title: null, excerpt: '첫 줄\n둘째 줄' })).toBe('첫 줄');
+    // A comment (a 대댓글 too) by the first non-empty line of its own text, trimmed.
+    expect(reportItemName({ type: 'comment', body: '\n  첫 댓글  \n더' })).toBe('첫 댓글');
+    // Never its post's: two comments under one post are named apart.
+    expect(reportItemName({ type: 'comment', body: '둘째 댓글' })).not.toBe(
+      reportItemName({ type: 'comment', body: '첫 댓글' }),
+    );
+  });
+
+  it('names an item whose first line is longer by its first 300 characters and an ellipsis, as #51’s dialog (owner decision 2026-10-22 답 4)', () => {
+    // The cap: a card's preview's.
+    expect(POST_EXCERPT_MAX_LENGTH).toBe(300);
+    // A comment can be 1,000 characters on one line: its first 300, cut where they end and marked
+    // as cut, without the rest of the line or the lines after it.
+    const line = `${'가'.repeat(150)}${'a'.repeat(850)}`;
+    expect(reportItemName({ type: 'comment', body: `${line}\n둘째 줄` })).toBe(
+      `${line.slice(0, 300)}…`,
+    );
+    expect(reportButtonName({ type: 'comment', body: line })).toBe(
+      `${line.slice(0, 300)}… ${copy.reportAction}`,
+    );
+    // Counted in code points, as a comment's length is: an emoji is one.
+    expect(reportItemName({ type: 'comment', body: '😀'.repeat(400) })).toBe(
+      `${'😀'.repeat(300)}…`,
+    );
+    // The mark only where a cut is: a first line of 300 or fewer is whole and bare.
+    expect(
+      reportItemName({ type: 'comment', body: `${'a'.repeat(300)}\n${'b'.repeat(900)}` }),
+    ).toBe('a'.repeat(300));
+    // A cut just after a space ends at the word before it, the mark beside it.
+    expect(reportItemName({ type: 'comment', body: `${'a'.repeat(299)} ${'b'.repeat(9)}` })).toBe(
+      `${'a'.repeat(299)}…`,
+    );
+    // A post's excerpt comes cut at the same 300: one that reaches the cap on one line was cut
+    // there; one with a line break or shorter was not.
+    expect(reportItemName({ type: 'post', title: null, excerpt: 'a'.repeat(300) })).toBe(
+      `${'a'.repeat(300)}…`,
+    );
+    expect(
+      reportItemName({
+        type: 'post',
+        title: null,
+        excerpt: `${'a'.repeat(200)}\n${'b'.repeat(99)}`,
+      }),
+    ).toBe('a'.repeat(200));
+    expect(reportItemName({ type: 'post', title: null, excerpt: 'a'.repeat(299) })).toBe(
+      'a'.repeat(299),
+    );
+    // A title is never cut, however long the text under it.
+    expect(reportItemName({ type: 'post', title: '금리 전망', excerpt: 'a'.repeat(300) })).toBe(
+      '금리 전망',
+    );
+  });
+
+  it('names a post on its page as its card does: the page’s text cut as the card’s preview is (owner decision 2026-10-22 답 4)', () => {
+    const doc = (...lines: string[]) =>
+      ({
+        type: 'doc',
+        content: lines.map((text) => ({ type: 'paragraph', content: [{ type: 'text', text }] })),
+      }) as PublishedPost['body'];
+    // An untitled post whose first line is past the cap, with a line after it: its whole text
+    // keeps the line break, and a name from it would lose the cut's '…'.
+    const long = `${'가'.repeat(150)}${'a'.repeat(200)}`;
+    const body = doc(long, '둘째 줄');
+    expect(readPostDocument(body).text).toContain('\n');
+    // The card's item: the API's `excerpt`, `postExcerpt` of the same text.
+    const card = {
+      type: 'post',
+      title: null,
+      excerpt: postExcerpt(readPostDocument(body).text),
+    } as const;
+    const page = postReportItem({ title: null, body });
+    expect(page).toEqual(card);
+    expect(reportItemName(page)).toBe(`${long.slice(0, POST_EXCERPT_MAX_LENGTH)}…`);
+    expect(reportItemName(page)).toBe(reportItemName(card));
+    // A short first line is whole and bare; a titled post is its title.
+    expect(reportItemName(postReportItem({ title: null, body: doc('첫 줄', '둘째 줄') }))).toBe(
+      '첫 줄',
+    );
+    expect(reportItemName(postReportItem({ title: '금리 전망', body }))).toBe('금리 전망');
+  });
+
+  it('cuts a long first line between two characters as they are seen, never inside an emoji', () => {
+    // Four people joined by three ZWJs: seven code points, one character on screen.
+    const family = '👨‍👩‍👧‍👦';
+    expect([...family]).toHaveLength(7);
+    expect(
+      reportItemName({ type: 'comment', body: `${'a'.repeat(298)}${family}${'b'.repeat(10)}` }),
+    ).toBe(`${'a'.repeat(298)}…`);
+    expect(
+      reportItemName({ type: 'comment', body: `${'a'.repeat(293)}${family}${'b'.repeat(10)}` }),
+    ).toBe(`${'a'.repeat(293)}${family}…`);
+    expect(reportItemName({ type: 'comment', body: `${'a'.repeat(299)}🇰🇷b` })).toBe(
+      `${'a'.repeat(299)}…`,
+    );
+    expect(reportItemName({ type: 'comment', body: `${'a'.repeat(299)}😀😀` })).toBe(
+      `${'a'.repeat(299)}😀…`,
+    );
+  });
+
   it('names a card’s 신고 by the item it reports, ending with the word on screen', () => {
     // A post by its card's heading: the title, or the first line of its text without one.
     expect(reportButtonName({ type: 'post', title: '금리 전망', excerpt: '본문' })).toBe(
@@ -221,6 +331,13 @@ describe('names', () => {
       reportButtonName({ type: 'comment', body: '댓글' }),
     ]) {
       expect(name.endsWith(copy.reportAction)).toBe(true);
+    }
+    // The item the dialog it opens names, then the word: one naming for both.
+    for (const item of [
+      { type: 'post', title: null, excerpt: '첫 줄\n둘째 줄' },
+      { type: 'comment', body: '대댓글 첫 줄\n둘째 줄' },
+    ] as const) {
+      expect(reportButtonName(item)).toBe(`${reportItemName(item)} ${copy.reportAction}`);
     }
   });
 
@@ -249,6 +366,19 @@ describe('the copy’s numbers are the rules’', () => {
     expect(copy.errModerationRecordRequired).toContain(`${String(MODERATION_REASON_MAX_LENGTH)}자`);
     expect(copy.errModerationReportIds).toContain(`${String(DISMISS_REPORTS_MAX)}건`);
     expect(copy.adminModerationDismissPartial).toContain(`${String(DISMISS_REPORTS_MAX)}건`);
+    expect(copy.moderationNicknameHeld).toContain(`${String(NICKNAME_HOLD_DAYS)}일`);
+    expect(copy.adminModerationCancelNicknameResetBody).toContain(
+      `${String(NICKNAME_HOLD_DAYS)}일`,
+    );
+  });
+
+  it('says the owner’s words for a nickname reset and its cancellation (owner decision 2026-10-22 답 2·3)', () => {
+    expect(copy.moderationNicknameHeld).toBe('이전 닉네임은 30일 동안 다시 쓸 수 없습니다.');
+    // The owner's example sentence, and that nothing is restored.
+    expect(copy.adminModerationCancelNicknameResetBody).toContain(
+      '이전 닉네임은 이 회원만 다시 고를 수 있습니다.',
+    );
+    expect(copy.adminModerationCancelNicknameResetBody).toContain('되살리지 않습니다');
   });
 
   it('tells the reporter that a wrong forecast is not a reason (#45-10)', () => {
@@ -502,6 +632,47 @@ describe('the member’s 조치·신고 내역', () => {
   });
 });
 
+describe('the nickname reset’s hold on 조치·신고 내역 (owner decision 2026-10-22 답 3)', () => {
+  const NOW = Date.parse('2026-10-22T12:00:00.000Z');
+  const DAY_MS = 24 * 60 * 60 * 1_000;
+  const reset = (overrides: Partial<MyModerationAction>): MyModerationAction => ({
+    id: '22222222-2222-4222-8222-222222222222',
+    type: 'nickname_reset',
+    reason: { code: 'impersonation', note: null },
+    subject: { type: 'profile' },
+    createdAt: new Date(NOW - DAY_MS).toISOString(),
+    endsAt: null,
+    cancelledAt: null,
+    ...overrides,
+  });
+
+  it('says it for the 30 days of the hold — NICKNAME_HOLD_DAYS from the reset — and no longer', () => {
+    expect(nicknameHoldShown(reset({}), NOW)).toBe(true);
+    expect(
+      nicknameHoldShown(
+        reset({ createdAt: new Date(NOW - NICKNAME_HOLD_DAYS * DAY_MS + 1).toISOString() }),
+        NOW,
+      ),
+    ).toBe(true);
+    // At the hold's end the nickname is anybody's again (`nickname_held()`: less than 30 days).
+    expect(
+      nicknameHoldShown(
+        reset({ createdAt: new Date(NOW - NICKNAME_HOLD_DAYS * DAY_MS).toISOString() }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+
+  it('says nothing once the reset is cancelled — the hold is the member’s then — nor on any other action', () => {
+    expect(
+      nicknameHoldShown(reset({ cancelledAt: new Date(NOW - 1_000).toISOString() }), NOW),
+    ).toBe(false);
+    for (const type of ['hide', 'warning', 'bio_clear', 'image_remove'] as const) {
+      expect(nicknameHoldShown(reset({ type }), NOW)).toBe(false);
+    }
+  });
+});
+
 describe('the sanction banner', () => {
   const NOW = Date.parse('2026-10-21T12:00:00.000Z');
   const action = (overrides: Partial<MyModerationAction>): MyModerationAction => ({
@@ -694,6 +865,34 @@ describe('operators', () => {
     const standing = { cancelledAt: null } as Pick<AdminModerationAction, 'cancelledAt'>;
     expect(isCancellable(standing)).toBe(true);
     expect(isCancellable({ cancelledAt: '2026-10-21T00:00:00.000Z' })).toBe(false);
+  });
+
+  it('says in a nickname reset’s cancellation that the nickname taken away is the member’s to pick again, while its hold runs (owner decision 2026-10-22 답 2)', () => {
+    const NOW = Date.parse('2026-10-22T12:00:00.000Z');
+    const DAY_MS = 24 * 60 * 60 * 1_000;
+    const at = (ms: number) => new Date(ms).toISOString();
+    const reset = (createdAt: string) => ({ type: 'nickname_reset' as const, createdAt });
+    expect(cancelDialogBody(reset(at(NOW - DAY_MS)), NOW)).toBe(
+      copy.adminModerationCancelNicknameResetBody,
+    );
+    // Up to the hold's last instant — NICKNAME_HOLD_DAYS from the reset, as the member's line.
+    expect(cancelDialogBody(reset(at(NOW - NICKNAME_HOLD_DAYS * DAY_MS + 1)), NOW)).toBe(
+      copy.adminModerationCancelNicknameResetBody,
+    );
+    // From its end the cancellation hands nothing: the nickname is anybody's (`nickname_held()`:
+    // less than 30 days), so the dialog says what every other cancellation says.
+    for (const createdAt of [at(NOW - NICKNAME_HOLD_DAYS * DAY_MS), at(NOW - 40 * DAY_MS)]) {
+      expect(cancelDialogBody(reset(createdAt), NOW)).toBe(copy.adminModerationCancelBody);
+    }
+    // Every other type keeps the words for a hiding and the profile items, whenever it was.
+    for (const type of ['hide', 'warning', 'bio_clear', 'image_remove'] as const) {
+      expect(cancelDialogBody({ type, createdAt: at(NOW - DAY_MS) }, NOW)).toBe(
+        copy.adminModerationCancelBody,
+      );
+    }
+    expect(copy.adminModerationCancelBody).not.toContain('이 회원만');
+    // What a cancellation past the hold falls back to is still true of a nickname reset.
+    expect(copy.adminModerationCancelBody).toContain('프로필 항목은 되살리지 않습니다.');
   });
 
   it('needs a reason for an action, and the explanation with 기타 (owner decision 2026-10-22)', () => {

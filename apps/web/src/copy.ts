@@ -63,6 +63,7 @@ export const copy = {
   // 탈퇴로 비운 지 30일이 안 된 닉네임은 같은 답이다 — 어느 쪽인지 말하면 누가 최근에 닉네임을 바꿨는지
   // 알려 주게 된다(#37-3). 운영자가 강제로 바꾼 옛 닉네임은 그 회원 자신에게서도 30일 보류되므로(#50, 오너 결정
   // 2026-10-21 답 4(나), ADR-0081 7-27) 그 회원도 이 답을 받는다 — 그래서 누가 쓰던 것인지 말하지 않는다.
+  // 문장은 오너가 승인했다(오너 결정 2026-10-22 답 3).
   // 30은 NICKNAME_HOLD_DAYS, 간격의 30은 NICKNAME_CHANGE_INTERVAL_DAYS, 예약어 목록은
   // NICKNAME_RESERVED_WORDS와 같아야 한다(lib/nickname.test.ts가 확인한다).
   errNicknameTaken: '이미 사용 중이거나 최근 30일 안에 쓰인 닉네임이라 지금은 쓸 수 없습니다.',
@@ -1277,6 +1278,10 @@ export const copy = {
   moderationAppealDeadline: '이의 기한',
   moderationCancelled: '취소됨',
   moderationCancelledAt: '취소한 때',
+  // 닉네임 강제 변경에 덧붙이는 줄(오너 결정 2026-10-22 답 3): 취소되지 않았고 강제 변경한 때부터 30일
+  // (NICKNAME_HOLD_DAYS)이 지나지 않은 동안만 보인다. 취소되면 그 보류는 본인의 것이라 다시 고를 수 있다(답 2).
+  // 옛 닉네임 자체는 보이지 않는다(#37-3).
+  moderationNicknameHeld: '이전 닉네임은 30일 동안 다시 쓸 수 없습니다.',
   // 조치가 가리킨 내 글·댓글을 그 뒤 내가 지웠다(MY는 지운 것을 보이지 않는다, #45-5).
   moderationSubjectDeletedPost: '삭제한 글',
   moderationSubjectDeletedComment: '삭제한 댓글',
@@ -1410,6 +1415,13 @@ export const copy = {
   adminModerationCancelTitle: '조치를 취소합니다',
   adminModerationCancelBody:
     '숨김을 취소하면 그 글·댓글이 다시 보입니다. 프로필 항목은 되살리지 않습니다.',
+  // 닉네임 강제 변경의 취소(오너 결정 2026-10-22 답 2): 닉네임은 저절로 되살리지 않고, 옛 닉네임의 보류는 그
+  // 회원의 것이 되어 다른 회원은 강제 변경한 때부터 30일(NICKNAME_HOLD_DAYS) 동안 못 고른다. 그 회원의 변경
+  // 간격은 그대로라 강제 변경 뒤 닉네임을 바꾼 회원은 그 간격이 지나야 고른다(ADR-0081 7-13, 결과 4에 물었다).
+  // 보류가 끝난 뒤의 취소에는 이 문장 대신 adminModerationCancelBody를 보인다(cancelDialogBody).
+  // 둘째 문장은 오너가 든 예 그대로다.
+  adminModerationCancelNicknameResetBody:
+    '닉네임은 되살리지 않습니다. 이전 닉네임은 이 회원만 다시 고를 수 있습니다. 다른 회원은 강제 변경한 때부터 30일 동안 쓸 수 없습니다.',
   adminModerationReasonLabel: '사유',
   adminModerationReasonPlaceholder: '사유 고르기',
   adminModerationNoteLabel: '회원에게 보일 설명',

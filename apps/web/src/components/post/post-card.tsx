@@ -17,7 +17,7 @@ import { type PostSummary } from '@/lib/api';
 import { commentCountText } from '@/lib/comments';
 import { likeCountText } from '@/lib/likes';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { authorPublicIdOf, reportButtonName } from '@/lib/moderation';
+import { authorPublicIdOf } from '@/lib/moderation';
 import { postFirstLine, postPath } from '@/lib/posts';
 import { PostByline } from './post-author';
 import { RetriedImage } from './retried-image';
@@ -168,9 +168,9 @@ export function PostCard({
             {report !== undefined && (
               <CardReportButton
                 subject={{ type: 'post', postId: post.id }}
+                item={{ type: 'post', title: post.title, excerpt: post.excerpt }}
                 authorPublicId={authorPublicIdOf(post.author)}
                 backPath={report.backPath}
-                name={reportButtonName({ type: 'post', title: post.title, excerpt: post.excerpt })}
               />
             )}
           </HStack>

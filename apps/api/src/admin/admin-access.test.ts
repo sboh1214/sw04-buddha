@@ -29,6 +29,7 @@ import {
   adminCommentModerationSchema,
   adminModerationActionSchema,
   adminPostModerationSchema,
+  adminReportGroupSchema,
   adminUserModerationSchema,
   type AdminModerationAction,
   type AdminReport,
@@ -318,11 +319,30 @@ describe.skipIf(!hasTestInfra)(
           });
         }
       }
-      // What stays: the reasons, the times, what was done — and the count of reporters.
+      // What stays: the reasons, the times, what was done — and the count of reporters, on the
+      // pages about A and in both halves of the queue (owner decision 2026-10-22 답 1: «신고자 수 →
+      // 보임»).
       const postPage = adminPostModerationSchema.parse(
         (await read(`/admin/moderation/posts/${post.id}`, a)).json<{ data: unknown }>().data,
       );
       expect(postPage.reporterCount).toBe(1);
+      for (const queue of ['/admin/reports', '/admin/reports?status=resolved']) {
+        const groups = (await read(queue, a))
+          .json<{ data: unknown[] }>()
+          .data.map((item) => adminReportGroupSchema.parse(item))
+          .filter((group) => group.user.id === a.id);
+        expect({ queue, targets: groups.map((group) => group.target.type).sort() }).toEqual({
+          queue,
+          targets: queue.endsWith('resolved') ? ['comment', 'post'] : ['profile'],
+        });
+        for (const group of groups) {
+          expect({
+            queue,
+            reporterCount: group.reporterCount,
+            reportCount: group.reportCount,
+          }).toEqual({ queue, reporterCount: 1, reportCount: 1 });
+        }
+      }
       expect(postPage.reports).toEqual([
         expect.objectContaining<Partial<AdminReport>>({
           reporter: null,

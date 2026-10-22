@@ -15,7 +15,7 @@ import { type AuthoredComment } from '@/lib/api';
 import { commentKindLabel, commentedPostText } from '@/lib/authored';
 import { likeCountText } from '@/lib/likes';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { authorPublicIdOf, reportButtonName } from '@/lib/moderation';
+import { authorPublicIdOf } from '@/lib/moderation';
 import { postPath } from '@/lib/posts';
 
 /**
@@ -147,9 +147,9 @@ export function AuthoredCommentCard({
           {report !== undefined && (
             <CardReportButton
               subject={{ type: 'comment', commentId: comment.id, postId: comment.post.id }}
+              item={{ type: 'comment', body: comment.body }}
               authorPublicId={authorPublicIdOf(comment.author)}
               backPath={report.backPath}
-              name={reportButtonName({ type: 'comment', body: comment.body })}
             />
           )}
         </HStack>

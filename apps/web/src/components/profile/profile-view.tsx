@@ -146,6 +146,7 @@ export function ProfileView({ profile }: { profile: PublicProfile }) {
           <OwnProfileLink publicId={member.publicId} />
           <ReportButton
             subject={{ type: 'profile', publicId: member.publicId }}
+            item={null}
             authorPublicId={member.publicId}
           />
           <OperatorLink

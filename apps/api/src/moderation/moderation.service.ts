@@ -216,7 +216,9 @@ export class ModerationService {
    * the member (`nickname_held()`), each candidate under its nickname lock. The nickname taken away
    * is held for NICKNAME_HOLD_DAYS from everybody, the member included (owner decision 2026-10-21:
    * the hold other accounts get — a `nickname_holds` row naming no account, ADR-0081), and kept for
-   * operators (`profile_item_removals`). The member's 30-day change interval is waived (the same
+   * operators (`profile_item_removals`). The hold names the action (`action_id`) and starts at the
+   * action's own time, so its cancellation finds it (`cancel`) and the member's 조치·신고 내역 counts
+   * its 30 days from the action. The member's 30-day change interval is waived (the same
    * decision): `nickname_changed_at` is cleared, so they pick a new nickname at once, and that pick
    * starts the 30 days again (NicknameService). An auto nickname already is `nothing_to_remove`.
    */
@@ -235,10 +237,7 @@ export class ModerationService {
         .update(schema.profiles)
         .set({ nicknameChangedAt: null })
         .where(eq(schema.profiles.userId, userId));
-      await tx
-        .insert(schema.nicknameHolds)
-        .values({ nickname: profile.nickname, userId: null, releasedAt: now });
-      return this.record(
+      const actionId = await this.record(
         tx,
         adminId,
         { type: 'nickname_reset', userId },
@@ -247,7 +246,12 @@ export class ModerationService {
         'moderation_nickname_reset',
         {},
         { nickname: profile.nickname },
+        now,
       );
+      await tx
+        .insert(schema.nicknameHolds)
+        .values({ nickname: profile.nickname, userId: null, releasedAt: now, actionId });
+      return actionId;
     });
     return this.answer(id, adminId);
   }
@@ -313,9 +317,18 @@ export class ModerationService {
   /**
    * `POST /admin/moderation/actions/:actionId/cancel` (decision 4 #50 «사유를 남기고 취소», #45-14:
    * how an accepted appeal is answered): the action no longer stands — a hiding's item shows again
-   * (`hidden_at` cleared); a profile item is not restored (#37-10: the member sets it again). The
-   * reports it resolved stay resolved (조치함 is what was done). Refused: an action on the acting
-   * operator (`own`) and one cancelled already (`cancelled`).
+   * (`hidden_at` cleared); a profile item is not restored (#37-10: the member sets it again). A
+   * nickname reset's hold of the nickname it took away becomes the member's (owner decision
+   * 2026-10-22: «그 보류가 본인의 것이 됨 … 닉네임을 저절로 되살리지는 않음»): the hold the reset wrote
+   * (`action_id`) names the member from then on, so they may pick that nickname again, and every
+   * other account stays held for the rest of the 30 days from the reset — the hold a member's own
+   * change gives (`nickname_held()`). No interval is touched: a member who has changed no nickname
+   * since the reset (which cleared the interval) picks it at once, one who has waits out the
+   * interval that change started (ADR-0081 7-13; whether to waive it is 결과 4's question). Under
+   * that nickname's lock (`lockNicknames`), the lock a pick of it takes: a pick in flight is
+   * answered before the hold changes hands, and one that comes while this runs waits for it and
+   * reads the hold as handed. The reports it resolved stay resolved (조치함 is what was done).
+   * Refused: an action on the acting operator (`own`) and one cancelled already (`cancelled`).
    */
   async cancel(adminId: string, actionId: string, reason: string): Promise<AdminModerationAction> {
     await this.db.transaction(async (tx) => {
@@ -340,6 +353,8 @@ export class ModerationService {
             .set({ hiddenAt: null })
             .where(eq(postComments.id, action.commentId));
         }
+      } else if (action.type === 'nickname_reset') {
+        await this.handHoldOver(tx, action.id, action.userId);
       }
       const now = await clockTimestamp(tx);
       await tx
@@ -397,7 +412,9 @@ export class ModerationService {
 
   /**
    * The records of an action, in its transaction: the action, what a profile action took away, the
-   * pending reports on `target` resolved by it, and the audit row. Answers the action's id.
+   * pending reports on `target` resolved by it, and the audit row. Answers the action's id. `at` is
+   * the action's time when the caller wrote something at that instant (a nickname reset's hold);
+   * the database clock's now otherwise.
    */
   private async record(
     tx: Tx,
@@ -408,9 +425,10 @@ export class ModerationService {
     auditType: AdminActionType,
     payload: Record<string, unknown>,
     removed?: { nickname?: string; bio?: string; imageId?: string },
+    at?: Date,
   ): Promise<string> {
     const { moderationActions, profileItemRemovals } = schema;
-    const now = await clockTimestamp(tx);
+    const now = at ?? (await clockTimestamp(tx));
     let action: { id: string } | undefined;
     try {
       [action] = await tx
@@ -511,6 +529,25 @@ export class ModerationService {
     payload: Record<string, unknown>,
   ): Promise<void> {
     await tx.insert(schema.adminActions).values({ adminId, type, targetType, targetId, payload });
+  }
+
+  /**
+   * A cancelled nickname reset's hold, handed to the member (`cancel`): the hold the reset wrote
+   * (`nickname_holds.action_id`) names the member from now on. Taken under that nickname's lock
+   * (`lockNicknames`, migration 0032's `lock_nickname`), as every nickname write and every pick of
+   * a nickname is, after the action's row: nothing takes a nickname's lock and then an action's.
+   * A reset whose hold is gone (#184 removes it past the 30 days) hands nothing.
+   */
+  private async handHoldOver(tx: Tx, actionId: string, userId: string): Promise<void> {
+    const { nicknameHolds } = schema;
+    const [hold] = await tx
+      .select({ id: nicknameHolds.id, nickname: nicknameHolds.nickname })
+      .from(nicknameHolds)
+      .where(eq(nicknameHolds.actionId, actionId))
+      .limit(1);
+    if (!hold) return;
+    await lockNicknames(tx, [hold.nickname]);
+    await tx.update(nicknameHolds).set({ userId }).where(eq(nicknameHolds.id, hold.id));
   }
 
   /** The member's profile row, locked for the write (a report on the profile holds it shared). */

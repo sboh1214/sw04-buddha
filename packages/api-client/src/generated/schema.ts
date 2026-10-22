@@ -308,7 +308,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. One cancelled already is `cancelled`; one on the acting admin is `own` */
+        /** Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. A nickname reset’s cancellation restores no nickname but hands the hold of the nickname taken away to the member: other accounts stay held for the rest of the 30 days from the reset, and the member may pick it under their own change interval (a nickname picked since the reset started a new one). One cancelled already is `cancelled`; one on the acting admin is `own` */
         post: operations["adminCancelModerationAction"];
         delete?: never;
         options?: never;
@@ -461,7 +461,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from every account, the member’s included, for 30 days, and the member’s 30-day change interval is waived (they pick a new one at once). An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
+        /** Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from every account for 30 days (from the member too, until the reset is cancelled), and the member’s 30-day change interval is waived (they pick a new one at once). An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
         post: operations["adminResetNickname"];
         delete?: never;
         options?: never;

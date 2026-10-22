@@ -179,6 +179,10 @@ describe('the nickname copy', () => {
     // Whose it was is never said (#37-3) — and the member an operator's reset took it from is
     // refused it too for those days (#50, ADR-0081 7-27), so it never says it was someone else's.
     expect(copy.errNicknameTaken).not.toMatch(/다른 (회원|계정|사람)/);
+    // The owner's approved sentence (owner decision 2026-10-22 답 3, ADR-0081).
+    expect(copy.errNicknameTaken).toBe(
+      '이미 사용 중이거나 최근 30일 안에 쓰인 닉네임이라 지금은 쓸 수 없습니다.',
+    );
     expect(copy.errNicknameChangeInterval).toContain(`${String(NICKNAME_CHANGE_INTERVAL_DAYS)}일`);
     expect(copy.nicknameChangeRule).toContain(`${String(NICKNAME_CHANGE_INTERVAL_DAYS)}일`);
     expect(copy.errNicknameReservedWord).toContain(`(${NICKNAME_RESERVED_WORDS.join('·')})`);

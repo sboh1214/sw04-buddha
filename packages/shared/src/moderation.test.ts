@@ -27,10 +27,12 @@ import {
   moderationActionBodySchema,
   myModerationActionSchema,
   myReportSchema,
+  nicknameHoldEndOf,
   reportTargetSchema,
   textTooLongMessage,
   warningBodySchema,
 } from './moderation.js';
+import { NICKNAME_HOLD_DAYS } from './nickname.js';
 
 const ID = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
 const OTHER = '1c7a7b4f-3d2e-4d9f-8a1b-2c3d4e5f6071';
@@ -79,6 +81,12 @@ describe('the moderation lists (#50)', () => {
     expect(APPEAL_WINDOW_DAYS).toBe(14);
     expect(appealDeadlineOf(AT).toISOString()).toBe('2026-11-03T01:02:03.000Z');
     expect(appealDeadlineOf(new Date(AT)).toISOString()).toBe('2026-11-03T01:02:03.000Z');
+  });
+
+  it('ends a reset’s hold of the nickname it took away 30 days after the reset (owner decision 2026-10-22)', () => {
+    expect(NICKNAME_HOLD_DAYS).toBe(30);
+    expect(nicknameHoldEndOf(AT).toISOString()).toBe('2026-11-19T01:02:03.000Z');
+    expect(nicknameHoldEndOf(new Date(AT)).toISOString()).toBe('2026-11-19T01:02:03.000Z');
   });
 
   it('serves stored images to operators at their own address', () => {

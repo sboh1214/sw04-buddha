@@ -1126,6 +1126,7 @@ function PublishedCommentItem({
             )}
             <ReportButton
               subject={{ type: 'comment', commentId: comment.id, postId }}
+              item={{ type: 'comment', body: comment.body }}
               authorPublicId={authorPublicIdOf(comment.author)}
             />
             <CommentOperatorLink commentId={comment.id} />

@@ -30,7 +30,7 @@ import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
 import { type Post, type PostMarket } from '@/lib/api';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
-import { adminPostModerationPath, authorPublicIdOf } from '@/lib/moderation';
+import { adminPostModerationPath, authorPublicIdOf, postReportItem } from '@/lib/moderation';
 import {
   COMMUNITY_PATH,
   communityPath,
@@ -167,6 +167,8 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
             <LikesUnreadableNotice postId={post.id} />
             <ReportButton
               subject={{ type: 'post', postId: post.id }}
+              // Named as its card names it (`postReportItem`).
+              item={postReportItem(post)}
               authorPublicId={authorPublicIdOf(post.author)}
             />
             <PostOperatorLink postId={post.id} />

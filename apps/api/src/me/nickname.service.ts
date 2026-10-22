@@ -57,7 +57,11 @@ function refused(details: NicknameNotAllowedDetails): AppError {
  *   onboarding's choice is not a change, and an operator's reset to an auto nickname clears the
  *   last change (ModerationService, owner decision 2026-10-21, ADR-0081): the member picks a new
  *   one at once, and that pick is the change the next interval counts from. The nickname the reset
- *   took away is held from the member too (a hold naming no account).
+ *   took away is held from the member too (a hold naming no account) — until an operator cancels
+ *   the reset, which hands that hold to the member (owner decision 2026-10-22): theirs to pick
+ *   again, every other account's still held. The cancellation touches no interval: a member who
+ *   has changed no nickname since the reset picks it at once, one who has waits out the interval
+ *   that change started (ADR-0081 7-13; whether it should be waived is 결과 4's question).
  *
  * Every write takes the account's profile row FOR UPDATE first (one nickname write of an account at
  * a time), then the nickname locks (`lockNicknames`: the nickname given up and the one taken, in

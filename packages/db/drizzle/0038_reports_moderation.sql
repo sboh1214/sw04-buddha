@@ -10,6 +10,8 @@
 --   profile items), with its reason, operator, time and cancellation. `type` is a varchar held to
 --   MODERATION_ACTION_TYPES by a CHECK, which #185 and #139 replace to add theirs.
 -- - profile_item_removals: what a profile action took away, kept for operators (#37-10).
+-- - nickname_holds.action_id: the operator's nickname reset a hold came from, so the reset's
+--   cancellation hands that hold to the member (owner decision 2026-10-22, ADR-0081).
 CREATE TYPE "public"."report_reason" AS ENUM('spam', 'harassment', 'personal_info', 'impersonation', 'collusion_manipulation', 'off_topic', 'rights_infringement', 'other');--> statement-breakpoint
 CREATE TYPE "public"."report_status" AS ENUM('pending', 'actioned', 'dismissed');--> statement-breakpoint
 CREATE TYPE "public"."report_target_type" AS ENUM('post', 'comment', 'profile');--> statement-breakpoint
@@ -70,6 +72,7 @@ CREATE TABLE "reports" (
 	CONSTRAINT "reports_not_own_check" CHECK ("reports"."reporter_id" <> "reports"."reported_user_id" AND "reports"."resolved_by" IS DISTINCT FROM "reports"."reported_user_id")
 );
 --> statement-breakpoint
+ALTER TABLE "nickname_holds" ADD COLUMN "action_id" uuid;--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_post_id_posts_id_fk" FOREIGN KEY ("post_id") REFERENCES "public"."posts"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_comment_id_post_comments_id_fk" FOREIGN KEY ("comment_id") REFERENCES "public"."post_comments"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -95,6 +98,8 @@ CREATE INDEX "reports_reporter_id_created_at_id_idx" ON "reports" USING btree ("
 CREATE INDEX "reports_reporter_phone_hash_created_at_idx" ON "reports" USING btree ("reporter_phone_hash","created_at");--> statement-breakpoint
 CREATE INDEX "reports_reported_user_id_idx" ON "reports" USING btree ("reported_user_id");--> statement-breakpoint
 CREATE INDEX "reports_action_id_idx" ON "reports" USING btree ("action_id") WHERE "reports"."action_id" IS NOT NULL;--> statement-breakpoint
+ALTER TABLE "nickname_holds" ADD CONSTRAINT "nickname_holds_action_id_moderation_actions_id_fk" FOREIGN KEY ("action_id") REFERENCES "public"."moderation_actions"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "nickname_holds" ADD CONSTRAINT "nickname_holds_action_id_unique" UNIQUE("action_id");--> statement-breakpoint
 -- Hand-edited: a report is the record of what a member sent and of how it was processed. What was
 -- sent — the target, the reporter, the reason, the description, the intake time — never changes,
 -- and the processing is written once, pending to actioned or dismissed: the processing time stays

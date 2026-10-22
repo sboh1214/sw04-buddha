@@ -3,12 +3,16 @@ import {
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
   OTHER_NEEDS_TEXT_MESSAGE,
+  POST_EXCERPT_MAX_LENGTH,
   REPORT_DESCRIPTION_MAX_LENGTH,
   REPORT_REASONS,
   appealDeadlineOf,
   codePointLength,
   moderationNotAllowedDetailsSchema,
+  nicknameHoldEndOf,
   normaliseCommentBody,
+  postExcerpt,
+  readPostDocument,
   reasonNeedsText,
   reportLimitedDetailsSchema,
   reportNotAllowedDetailsSchema,
@@ -29,6 +33,7 @@ import {
   type MyActionSubject,
   type MyModerationAction,
   type PostAuthor,
+  type PublishedPost,
   type RemovedProfileItem,
   type ReportStatus,
   type ReportTarget,
@@ -292,21 +297,100 @@ export function reportDialogTitle(type: ReportTargetType): string {
 }
 
 /**
- * The accessible name of a card's 신고 (`CardReportButton`): the item it reports, then the
- * button's own word — as every repeated per-item button here is named (ADR-0080 7-19's
- * `hiddenDeleteName`, market-search.tsx's 삭제, market-picker.tsx's 고르기). A list holds up to
- * twenty cards, each with its 신고, and '신고' alone would read alike for each in a screen reader's
- * list of buttons and give a spoken command nothing to tell them apart. A post is named as its
- * card's heading names it — its title, or the first line of its text when it has none
- * (post-card.tsx) — and a 댓글 or 대댓글 by the first line of its own text: its post's would name
- * every comment under one post alike. The words on screen stay '신고', which the name ends with.
+ * What a report of a post or a comment is about, as the report dialog and a card's 신고 name it: a
+ * post's title and the start of its text (`postExcerpt` — a card's `excerpt`, or the post page's
+ * own text cut the same way, so both name a post alike), a 댓글's or 대댓글's own text. A profile's
+ * report has none.
  */
-export function reportButtonName(
-  item: { type: 'post'; title: string | null; excerpt: string } | { type: 'comment'; body: string },
-): string {
-  return item.type === 'post'
-    ? `${item.title ?? postFirstLine(item.excerpt)} ${copy.reportAction}`
-    : `${postFirstLine(item.body)} ${copy.reportAction}`;
+export type ReportItem =
+  { type: 'post'; title: string | null; excerpt: string } | { type: 'comment'; body: string };
+
+/**
+ * The post page's item for its report dialog: the post's title and the start of its text cut as
+ * its card's preview is (`postExcerpt`, what the API sends a card as `excerpt`), so the post page
+ * and the card name one post alike (owner decision 2026-10-22 답 4, `reportItemName`) — its whole
+ * text would keep the line break after a long first line and lose the cut's '…'.
+ */
+export function postReportItem(post: Pick<PublishedPost, 'title' | 'body'>): ReportItem {
+  return {
+    type: 'post',
+    title: post.title,
+    excerpt: postExcerpt(readPostDocument(post.body).text),
+  };
+}
+
+/** What ends an item's name that was cut (owner decision 2026-10-22: «'…'», as #51's dialog). */
+const ITEM_NAME_CUT = '…';
+
+/** The first non-empty line of a text, trimmed, whole. */
+function firstLineOf(text: string): string {
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (trimmed !== '') return trimmed;
+  }
+  return '';
+}
+
+/**
+ * The longest start of `text` of at most `max` code points that ends between two characters as
+ * they are seen (grapheme clusters, `Intl.Segmenter`): a cut never leaves part of an emoji's ZWJ
+ * sequence, a flag's pair of letters or a letter's combining mark. Where `Intl.Segmenter` is
+ * missing, the first `max` code points — never half of a surrogate pair.
+ */
+function cutAtCharacter(text: string, max: number): string {
+  if (typeof Intl.Segmenter !== 'function') return Array.from(text).slice(0, max).join('');
+  let out = '';
+  let count = 0;
+  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(
+    text,
+  )) {
+    count += codePointLength(segment);
+    if (count > max) break;
+    out += segment;
+  }
+  return out;
+}
+
+/**
+ * Which post or comment is reported, on one line (owner decision 2026-10-22 답 4: «카드·글 화면·
+ * 댓글에서 연 신고 창 → 그 글·댓글의 제목이나 첫 줄을 한 줄로 보임»): a post by its title, or the
+ * first line of its text when it has none — as its card's heading and the post page's name it —
+ * and a 댓글 or 대댓글 by the first line of its own text: its post's would name every comment under
+ * one post alike. The rule of #51's dialog for a hidden item (ADR-0080, owner decisions 2026-10-22
+ * 3rd and 4th — `hiddenItemName` on #51's branch, one rule at the restack): a first line is at most
+ * POST_EXCERPT_MAX_LENGTH (300) code points, as a card's preview is, and one cut there ends in '…'
+ * to say so; a line within the cap is whole and has none. A comment's line comes whole and is cut
+ * here, between two characters as they are seen (`cutAtCharacter`), the spaces before the cut
+ * dropped. A post's `excerpt` comes cut at the cap already (`postExcerpt`, the card's), and nothing
+ * past it is seen: an excerpt with no line break that reaches the cap is a first line cut there and
+ * ends in '…' — as does a first line of exactly 300, which it cannot tell apart. A title is never
+ * cut (at most POST_TITLE_MAX_LENGTH, 100). The dialog draws it on one line and cuts what does not
+ * fit the width with an ellipsis of its own (CSS); a screen reader hears the whole of it.
+ */
+export function reportItemName(item: ReportItem): string {
+  if (item.type === 'post') {
+    if (item.title !== null) return item.title;
+    const line = postFirstLine(item.excerpt);
+    const cut =
+      !item.excerpt.includes('\n') && codePointLength(item.excerpt) >= POST_EXCERPT_MAX_LENGTH;
+    return cut ? `${line}${ITEM_NAME_CUT}` : line;
+  }
+  const line = firstLineOf(item.body);
+  return codePointLength(line) > POST_EXCERPT_MAX_LENGTH
+    ? `${cutAtCharacter(line, POST_EXCERPT_MAX_LENGTH).trimEnd()}${ITEM_NAME_CUT}`
+    : line;
+}
+
+/**
+ * The accessible name of a card's 신고 (`CardReportButton`): the item it reports, as the dialog it
+ * opens names it (`reportItemName`), then the button's own word — as every repeated per-item
+ * button here is named (ADR-0080 7-19's `hiddenDeleteName`, market-search.tsx's 삭제,
+ * market-picker.tsx's 고르기). A list holds up to twenty cards, each with its 신고, and '신고' alone
+ * would read alike for each in a screen reader's list of buttons and give a spoken command nothing
+ * to tell them apart. The words on screen stay '신고', which the name ends with.
+ */
+export function reportButtonName(item: ReportItem): string {
+  return `${reportItemName(item)} ${copy.reportAction}`;
 }
 
 /**
@@ -526,6 +610,26 @@ export function warningInWindow<
   return found;
 }
 
+/**
+ * Whether the member's 조치·신고 내역 says, on a nickname reset, that the nickname taken away cannot
+ * be used again for 30 days (owner decision 2026-10-22 답 3: «조치·신고 내역의 닉네임 초기화에
+ * '이전 닉네임은 30일 동안 다시 쓸 수 없습니다.' 덧붙임(취소된 것에는 빼고)»): a reset not cancelled —
+ * a cancellation hands the hold to the member (답 2), who may pick the nickname again — whose hold
+ * has not ended at `now` (`nicknameHoldEndOf`: 30 days from the reset, the hold's own start). The
+ * line never names the nickname: MY shows no former nickname (#37-3).
+ */
+export function nicknameHoldShown(
+  action: Pick<MyModerationAction, 'type' | 'createdAt' | 'cancelledAt'>,
+  // Read in render through this default, as `warningInWindow`'s is: never on the server.
+  now: number = Date.now(),
+): boolean {
+  return (
+    action.type === 'nickname_reset' &&
+    action.cancelledAt === null &&
+    nicknameHoldEndOf(action.createdAt).getTime() > now
+  );
+}
+
 /** Every row of the pages held, in order. */
 export function moderationRows<Row>(
   pages: readonly { items: readonly Row[] }[] | undefined,
@@ -642,6 +746,27 @@ export function removedItemLabel(removed: RemovedProfileItem): string {
 /** Whether an action still stands and so can be cancelled. */
 export function isCancellable(action: Pick<AdminModerationAction, 'cancelledAt'>): boolean {
   return action.cancelledAt === null;
+}
+
+/**
+ * What the cancellation's dialog says it does, by the action's type: a hiding's item shows again
+ * and a profile item is not restored (#37-10) — and for a nickname reset whose hold still runs at
+ * `now`, that the nickname is not restored and the nickname taken away becomes the member's alone
+ * to pick again, every other member still held for the rest of the 30 days (owner decision
+ * 2026-10-22 답 2: «그 보류가 본인의 것이 됨 …, 취소 창에 그렇게 적음. 닉네임을 저절로 되살리지는
+ * 않음»). Past the hold (`nicknameHoldEndOf`: 30 days from the reset, as `nicknameHoldShown`
+ * counts them) the cancellation hands nothing — the nickname is anybody's, maybe another's already
+ * — so it says what every other cancellation says, true of a nickname reset too ('프로필 항목은
+ * 되살리지 않습니다.'); whether it should say more is the owner's (ADR-0081 결과 4).
+ */
+export function cancelDialogBody(
+  action: Pick<AdminModerationAction, 'type' | 'createdAt'>,
+  // Read when the dialog opens (a click), never on the server.
+  now: number = Date.now(),
+): string {
+  return action.type === 'nickname_reset' && nicknameHoldEndOf(action.createdAt).getTime() > now
+    ? copy.adminModerationCancelNicknameResetBody
+    : copy.adminModerationCancelBody;
 }
 
 /**

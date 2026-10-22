@@ -2177,6 +2177,63 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await t.db.delete(profileItemRemovals).where(eq(profileItemRemovals.actionId, removal.id));
       await t.db.delete(mediaObjects).where(eq(mediaObjects.id, image.id));
     });
+
+    it('names the nickname reset a hold came from: one hold an action, kept with it, and handed to the member alone (owner decision 2026-10-22)', async () => {
+      const { author, reporter, admin } = await moderationFixture();
+      const reset = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        type: 'nickname_reset',
+        removed: { nickname: '사칭닉네임' },
+      });
+      const held = (nickname: string, userId: string) =>
+        t.db.transaction((tx) => isNicknameHeld(tx, nickname, userId));
+      // The reset's hold names no account: held from everybody, the member too (2026-10-21).
+      const [hold] = await t.db
+        .insert(nicknameHolds)
+        .values({ nickname: '사칭닉네임', userId: null, actionId: reset.id })
+        .returning();
+      expect(await held('사칭닉네임', author.id)).toBe(true);
+      expect(await held('사칭닉네임', reporter.id)).toBe(true);
+      // One hold an action, and only an action there is.
+      await expect(
+        t.db
+          .insert(nicknameHolds)
+          .values({ nickname: '사칭닉네임', userId: null, actionId: reset.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'nickname_holds_action_id_unique',
+      );
+      await expect(
+        t.db.insert(nicknameHolds).values({ nickname: '아무닉네임', actionId: randomUUID() }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23503' &&
+          sqlConstraint(e) === 'nickname_holds_action_id_moderation_actions_id_fk',
+      );
+      // The action stays while its hold does (#184 removes the hold first).
+      await t.db.delete(profileItemRemovals).where(eq(profileItemRemovals.actionId, reset.id));
+      await expect(
+        t.db.delete(moderationActions).where(eq(moderationActions.id, reset.id)),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23503' &&
+          sqlConstraint(e) === 'nickname_holds_action_id_moderation_actions_id_fk',
+      );
+      // Handed to the member (the reset's cancellation): theirs to pick, nobody else's yet.
+      await t.db
+        .update(nicknameHolds)
+        .set({ userId: author.id })
+        .where(eq(nicknameHolds.id, hold!.id));
+      expect(await held('사칭닉네임', author.id)).toBe(false);
+      expect(await held('사칭닉네임', reporter.id)).toBe(true);
+      expect(await held('사칭닉네임', admin.id)).toBe(true);
+      // A member's own change names no action.
+      const [own] = await t.db
+        .insert(nicknameHolds)
+        .values({ nickname: '내가버린닉', userId: author.id })
+        .returning();
+      expect(own?.actionId).toBeNull();
+    });
   });
 
   describe('the direct AMM is gone (migration 0017, #125)', () => {
