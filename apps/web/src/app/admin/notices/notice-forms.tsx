@@ -104,7 +104,7 @@ function NoticeWriterGate({ children }: { children: (accountId: string) => React
  * from the send through the move to the list (`pending`), so that move asks nothing. The
  * onboarding gate taking the admin to a step left (a re-consent) asks nothing, and keeps what was
  * typed in this tab for an hour, as a post's draft: this screen opened again after the step takes
- * it back (오너 결정 2026-10-22, ADR-0077 decision 8-20 — the key `notice-new`).
+ * it back (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20 — the key `notice-new`).
  */
 export function AdminNoticeNew() {
   const router = useRouter();
@@ -348,7 +348,7 @@ function PinCard({ notice }: { notice: AdminNotice }) {
  * what a save sent is the form's start from then on (`saved`, `PostForm`): leaving after it asks
  * nothing until something changes again. A refused save keeps it changed. The onboarding gate's
  * move asks nothing and keeps what was typed in this tab for an hour, with the version it was
- * typed on (오너 결정 2026-10-22, ADR-0077 decision 8-20 — the key `notice-edit` per notice): the
+ * typed on (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20 — the key `notice-edit` per notice): the
  * screen opened again after the step takes it back, and its save sends that version
  * (`PostFormValues['version']`) — not the one the screen opened on after the step — so a save made
  * meanwhile still refuses it. A discard puts back the notice as this form opened on it (`base`),

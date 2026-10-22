@@ -18,7 +18,7 @@ import { gatedPagePath, needsOnboarding, onboardingPath } from '@/lib/onboarding
  * 2026-10-20), and resumes at that step. A post draft on the page it replaces is kept in
  * the tab as the form goes, and comes back with the form after the step (lib/post-drafts.ts); the
  * leave confirm asks nothing here — `router.replace` is the screen's own move. A notice's form on
- * an admin screen (#138) keeps its draft the same way (오너 결정 2026-10-22, ADR-0077 decision
+ * an admin screen (#138) keeps its draft the same way (오너 결정 2026-10-21 (3차), ADR-0077 decision
  * 8-20).
  * Not for the interest categories: shown once after the nickname step, they are skipped by an
  * account that left before answering them (오너 결정 2026-10-19 (2차) 5).

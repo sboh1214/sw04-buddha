@@ -310,7 +310,7 @@ describe('the admin screen', () => {
   });
 
   it('opens the edit form on a read made after the screen opened, never on a copy held from before', async () => {
-    // Owner decisions 2026-10-21 7 and 2차 1: a save is refused when the notice was saved after
+    // Owner decisions 2026-10-21 7 and (2차) 1: a save is refused when the notice was saved after
     // the screen opened, whoever saved it. The form saves against the version it opens on, so a
     // copy the cache held from an earlier visit — fresh by the client's 30 s, and older than a save
     // since — must not be what it opens on (ADR-0077 decision 8-19).
@@ -537,7 +537,7 @@ describe('the writes', () => {
   });
 });
 
-describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-22, ADR-0077 decision 8-20)', () => {
+describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20)', () => {
   const newKey = { kind: 'notice-new' } as const;
   const editKey = { kind: 'notice-edit', noticeId: notice } as const;
   const draft = { title: '쓰던 공지', body: { type: 'doc', content: [] }, previews: {} };

@@ -22,7 +22,7 @@ import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test 
  * a saved form asks nothing, and a link's leave keeps nothing in the tab. The onboarding gate, which
  * moves an admin as it moves anyone, takes a notice's form away without asking and keeps what was
  * typed in this tab, as a post's draft: the screen opened again after the step takes it back, says
- * so, and offers to discard it, asked first (오너 결정 2026-10-22, ADR-0077 decision 8-20) — an
+ * so, and offers to discard it, asked first (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20) — an
  * edit's draft is saved against the version it was typed on, so a save made meanwhile still
  * refuses it.
  *
@@ -878,7 +878,7 @@ test.describe('운영 공지 (#138)', () => {
   }) => {
     // Owner decision 2026-10-21 8: «공지 쓰기·수정 화면 → 떠날 때 묻기만» — the posts' question (#46,
     // '쓰던 내용이 사라집니다. 나갈까요?'); a link's leave keeps nothing in the tab, as a post's does
-    // (only the onboarding gate's move keeps it — 2026-10-22, the next tests). Never pinned: the
+    // (only the onboarding gate's move keeps it — 2026-10-21 (3차), the next tests). Never pinned: the
     // pinned set is not touched.
     const tag = freshTag();
     // Every dialog is recorded and answered from `answers` — dismissed when none was expected, which
@@ -997,7 +997,7 @@ test.describe('운영 공지 (#138)', () => {
   test('쓰던 공지에서 온보딩 게이트가 남은 단계로 보내면 묻지 않고 이 탭에 두었다가, 단계를 마치고 돌아오면 되살리고, 되살린 내용 버리기는 먼저 묻는다', async ({
     page,
   }) => {
-    // 오너 결정 2026-10-22 (ADR-0077 decision 8-20): /admin is gated like every screen
+    // 오너 결정 2026-10-21 (3차) (ADR-0077 decision 8-20): /admin is gated like every screen
     // (lib/onboarding.ts), and the gate's move keeps a notice's draft in this tab for an hour, as a
     // post's (posts.spec.ts): the screen opened again after the step takes it back, says so, and
     // offers to discard it, asked first. A link's leave still only asks (the test before). Here
@@ -1118,7 +1118,7 @@ test.describe('운영 공지 (#138)', () => {
     secondAdmin,
     page,
   }) => {
-    // 오너 결정 2026-10-22 (ADR-0077 decision 8-20) on the edit screen, which stays on the form after
+    // 오너 결정 2026-10-21 (3차) (ADR-0077 decision 8-20) on the edit screen, which stays on the form after
     // a save: a draft taken back is the form's until a save of it lands — then the restore notice
     // goes and leaving asks nothing — and what is changed after a save is kept again, however the
     // gate moves (an upload refused here, no save). An edit's draft keeps the version it was typed

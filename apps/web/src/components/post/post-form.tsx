@@ -71,7 +71,7 @@ export interface PostFormProps {
   /**
    * Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts): a post's
    * write or edit screen, or a notice's (#138 — the admin screens are gated like the rest, and a
-   * notice's draft is kept the same way, 오너 결정 2026-10-22, ADR-0077).
+   * notice's draft is kept the same way, 오너 결정 2026-10-21 (3차), ADR-0077).
    */
   draftKey: PostDraftKey;
   /**
@@ -174,7 +174,7 @@ export interface NoticeFormOptions {
  * says so in a toast like the app's other completions — on screen and, once, to screen readers
  * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
  * storage: the form holds it, and guards it like any draft. A notice's forms do the same (#138,
- * 오너 결정 2026-10-22, ADR-0077 decision 8-20) — a notice edit's draft with the version it was typed
+ * 오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20) — a notice edit's draft with the version it was typed
  * on (`draftVersion`), which its save sends — and a write that lands ends what was taken back
  * (`landed`): the notice's edit screen stays on the form, holding the server's content then.
  *

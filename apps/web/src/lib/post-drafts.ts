@@ -20,7 +20,7 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  * - Keyed by the screen: a new post per market, an edit per post (`postDraftStorageKey`), and held
  *   for the account that wrote it — another account signed in on the tab never reads it. An
  *   operator notice's write and edit screens (#138) use the same form and keep their drafts the
- *   same way (오너 결정 2026-10-22, ADR-0077: the gate moves an admin as it moves anyone): one key
+ *   same way (오너 결정 2026-10-21 (3차), ADR-0077: the gate moves an admin as it moves anyone): one key
  *   for the new notice, one per notice edited — and an edit's draft keeps the version it was typed
  *   on (`PostDraft['version']`).
  * - Gone: once taken back (the form holds it again and guards it like any draft — leaving asks,
@@ -48,7 +48,7 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
 
 /**
  * Which screen's draft: a new post on a market, an edit of a post, and — the same form, kept the
- * same way (#138, 오너 결정 2026-10-22, ADR-0077) — a new operator notice and an edit of a notice.
+ * same way (#138, 오너 결정 2026-10-21 (3차), ADR-0077) — a new operator notice and an edit of a notice.
  */
 export type PostDraftKey =
   | { kind: 'new'; marketId: string }

@@ -221,7 +221,7 @@ async function afterNoticeWrite(queryClient: QueryClient, notice: AdminNotice): 
 /**
  * A refused admin write's side effects: a refusal for the onboarding reads `['me']` again, so the
  * onboarding gate takes the admin to its step (and a notice's form, going, keeps its draft in this
- * tab — hooks/use-post-draft.ts, 오너 결정 2026-10-22, ADR-0077 decision 8-20); a full
+ * tab — hooks/use-post-draft.ts, 오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20); a full
  * fixed area (NOTICE_PIN_LIMIT_REACHED) reads the lists again, since another admin may have pinned
  * what this screen does not show yet; an edit another save overtook, whoever made it
  * (NOTICE_EDIT_CONFLICT, `noticeId` given), reads that notice, its records and versions and the

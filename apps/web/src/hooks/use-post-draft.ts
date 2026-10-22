@@ -106,7 +106,7 @@ export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): bo
  * `['me']` is read from the cache rather than through `useMe`: the form never renders again with
  * the answer that unmounts it. The gate moves an admin as it moves anyone (/admin is not exempt,
  * lib/onboarding.ts), and a notice's forms keep their drafts the same way (#138, 오너 결정
- * 2026-10-22, ADR-0077).
+ * 2026-10-21 (3차), ADR-0077).
  */
 export function useKeepPostDraftForOnboarding(draft: HeldPostDraft, pending: boolean): void {
   const queryClient = useQueryClient();

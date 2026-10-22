@@ -85,7 +85,7 @@ const IMAGE = 'c3d4e5f6-0000-4000-8000-000000000003';
 const NEW: { kind: 'new'; marketId: string } = { kind: 'new', marketId: MARKET };
 const EDIT: { kind: 'edit'; postId: string } = { kind: 'edit', postId: POST };
 const NOTICE = 'D4E5F6A7-0000-4000-8000-000000000008';
-/** A notice's write and edit screens (#138, 오너 결정 2026-10-22, ADR-0077). */
+/** A notice's write and edit screens (#138, 오너 결정 2026-10-21 (3차), ADR-0077). */
 const NOTICE_NEW = { kind: 'notice-new' } as const;
 const NOTICE_EDIT = { kind: 'notice-edit', noticeId: NOTICE } as const;
 const EDITED_AT = '2026-10-22T01:02:03.456Z';
@@ -116,7 +116,7 @@ describe('where a draft is kept', () => {
     );
   });
 
-  it('is one item for the new notice and one per notice edited, under the same prefix (#138, 오너 결정 2026-10-22)', () => {
+  it('is one item for the new notice and one per notice edited, under the same prefix (#138, 오너 결정 2026-10-21 (3차))', () => {
     expect(postDraftStorageKey(NOTICE_NEW)).toBe(`${POST_DRAFT_PREFIX}notice-new`);
     expect(postDraftStorageKey(NOTICE_EDIT)).toBe(
       `${POST_DRAFT_PREFIX}notice-edit:${NOTICE.toLowerCase()}`,
@@ -139,7 +139,7 @@ describe('where a draft is kept', () => {
   });
 });
 
-describe('the version a notice edit’s draft was typed on (#138, 오너 결정 2026-10-22)', () => {
+describe('the version a notice edit’s draft was typed on (#138, 오너 결정 2026-10-21 (3차))', () => {
   it('is kept and taken back with the draft — a time, or null for a notice never edited', () => {
     for (const version of [EDITED_AT, null]) {
       const storage = new MemoryStorage();

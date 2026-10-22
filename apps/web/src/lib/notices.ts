@@ -191,7 +191,7 @@ export function adminNoticeMissing(error: unknown): boolean {
  *
  * `openedAt` is the edit screen's: when it opened (`Date.now()`, the clock `dataUpdatedAt` is on).
  * The form saves against the version it opens on (`expectedEditedAt`, owner decisions 2026-10-21 7
- * and 2차 1: a save is refused when the notice was saved «연 뒤» — after the screen opened —
+ * and (2차) 1: a save is refused when the notice was saved «연 뒤» — after the screen opened —
  * whoever saved it), so it opens only on a read that landed since: a copy the cache held from
  * before — an earlier visit's, or a pin's answer on the list, read before a later save perhaps — is
  * `pending` until the read the screen asks for on opening lands (`refetchOnMount: 'always'`,
