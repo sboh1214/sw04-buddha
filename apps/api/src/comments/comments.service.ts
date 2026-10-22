@@ -256,7 +256,8 @@ export class CommentsService {
    * first within each: a LATERAL subquery per 댓글 that walks its undeleted replies' index
    * (`post_comments_live_parent_id_created_at_id_idx`) and stops at the limit, so a thread of any
    * size — and any number of 대댓글 deleted in it — costs its first page and one row more (whether
-   * more follow).
+   * more follow). Each carries its like count (#49), as `columns` gives every public read — counted
+   * in the outer select, so only for the rows the LATERAL read returns.
    */
   private async firstReplies(threadIds: string[]): Promise<CommentRow[]> {
     if (threadIds.length === 0) return [];
@@ -291,6 +292,7 @@ export class CommentsService {
         deletedAt: reply.deletedAt,
         hiddenAt: reply.hiddenAt,
         author: { publicId: reply.publicId, nickname: reply.nickname, role: reply.role },
+        likeCount: commentLikeCountSql(reply.id),
       })
       .from(thread)
       .crossJoinLateral(reply)

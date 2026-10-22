@@ -28,8 +28,9 @@ import { postPath } from '@/lib/posts';
  * 좋아요 on the post page (#49, ADR-0076): the toggle beside the post (`target.kind` 'post') and
  * beside each 댓글 and 대댓글 ('comment'), with the count in it ('좋아요 N').
  *
- * The count is public and comes from the post or the comment the page holds, so the server's HTML
- * has it for every reader; whether the reader liked it is theirs alone and is decided in the
+ * The count is public and comes from the post or the comment the page holds — the post's in the
+ * server's HTML for every reader, a comment's with the comments the browser reads (오너 결정
+ * 2026-10-21, ADR-0074); whether the reader liked it is theirs alone and is decided in the
  * browser (`useLike`, the one `GET /me/likes/posts/:postId` of the page). Every rung is
  * `likeButtonView` and every press `likePressAction` (lib/likes.ts); this component draws and
  * dispatches them. A toggle button: `aria-pressed` says whether the reader likes it and the name

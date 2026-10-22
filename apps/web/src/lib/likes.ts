@@ -106,7 +106,8 @@ export function commentLikeCount(
 
 /**
  * The pages with the count of the published comment `commentId` — a 댓글 or a 대댓글, on any page
- * — set to `count`. Every other comment, and a placeholder of the same id, as it was.
+ * and among the 대댓글 '답글 더 보기' read into its thread (#48) — set to `count`. Every other
+ * comment, a placeholder of the same id, and each thread's cursor of the rest, as they were.
  */
 export function withCommentLikeCount(
   pages: CommentPages | undefined,
@@ -122,6 +123,7 @@ export function withCommentLikeCount(
     pages: pages.pages.map((page) => ({
       ...page,
       items: page.items.map((thread) => ({
+        ...thread,
         comment: set(thread.comment),
         replies: thread.replies.map(set),
       })),
@@ -144,8 +146,9 @@ export function likeCountText(count: number): string {
 export type LikePress = 'like' | 'unlike' | 'wait';
 
 /**
- * What a like button draws. The count is drawn on every rung — it is public and in the server's
- * HTML — and only the reader's own state waits for the browser:
+ * What a like button draws. The count is drawn on every rung — it is public, the post's in the
+ * server's HTML and a comment's in the comments the browser reads — and only the reader's own
+ * state waits for the browser:
  * - `pending`: the session, or the reader's likes, not known yet — the count, unpressed, and a
  *   press sends nothing;
  * - `unavailable`: signed in, and the read of the reader's likes failed before any succeeded —

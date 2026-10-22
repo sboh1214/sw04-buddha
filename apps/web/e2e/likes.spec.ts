@@ -14,22 +14,25 @@ import {
 
 /**
  * 좋아요 (#49, ADR-0076; owner decisions in ADR-0069 decision 4, the #49 rows): a member likes a
- * 근거 글 — their own — a 댓글 and a 대댓글 and takes the likes back, the toggle pressed and the count
- * moving by one at each press; the page read again shows the same counts (in the server's HTML)
- * and the member's own presses; the post's community card carries the count. A post of an ended
- * market still takes likes; a deleted post's placeholder has no count and no button, while the
- * comments under it keep theirs. A visitor reads the counts and a press goes straight to the login
- * page, coming back to the post (owner decision 2026-10-20), the button keeping the keyboard focus
- * as the session answers. For both, the page hydrates without a mismatch. A member facing a
- * re-consent, whom the post page keeps, sees its toggles, and a press of the post's or a comment's
- * goes to the remaining step, coming back to the post, and sends nothing (owner decision
- * 2026-10-20, answer 1); a press made before `GET /me` said so is refused by the server and goes
- * there then, with no toast — the toast only when `GET /me` cannot be read again (2026-10-21).
- * When the member's own likes cannot be read, the counts stay, the buttons cannot be pressed, and
- * one line on the page says why (owner decision 2026-10-20). The once-per-person rule, the
- * refusals, the onboarding and the concurrency are the API's tests (likes.controller.test.ts), and
- * so is that a like moves no Coin and writes no ledger entry (a balance read here could move under
- * a start Coin the worker pays meanwhile); this walks the screens.
+ * 근거 글 — their own — a 댓글 and a 대댓글 and takes the likes back, the toggle pressed and the
+ * count moving by one at each press; the page read again shows the same counts (the post's in the
+ * server's HTML, the comments' as the browser reads them, ADR-0074) and the member's own presses;
+ * the post's community card carries the count. A post of an ended market still takes likes; a
+ * deleted post's placeholder has no count and no button, while the comments under it keep theirs. A
+ * 대댓글 past its thread's first 50, which '답글 더 보기' brings (#48), carries its count and
+ * button too, and a like in the thread keeps that button. A visitor reads the counts and a press
+ * goes straight to the login page, coming back to the post (owner decision 2026-10-20), the button
+ * keeping the keyboard focus as the session answers. For both, the page hydrates without a
+ * mismatch. A member facing a re-consent, whom the post page keeps, sees its toggles, and a press
+ * of the post's or a comment's goes to the remaining step, coming back to the post, and sends
+ * nothing (owner decision 2026-10-20, answer 1); a press made before `GET /me` said so is refused
+ * by the server and goes there then, with no toast — the toast only when `GET /me` cannot be read
+ * again (2026-10-21). When the member's own likes cannot be read, the counts stay, the buttons
+ * cannot be pressed, and one line on the page says why (owner decision 2026-10-20). The
+ * once-per-person rule, the refusals, the onboarding and the concurrency are the API's tests
+ * (likes.controller.test.ts), and so is that a like moves no Coin and writes no ledger entry (a
+ * balance read here could move under a start Coin the worker pays meanwhile); this walks the
+ * screens.
  */
 
 /** A post straight at the API with the context's cookie: this spec's subject is its likes. */
@@ -200,10 +203,12 @@ test.describe('좋아요', () => {
     // The keyboard's toggle stays where it was pressed (never disabled while on the wire).
     await expect(commentLike(page, reply)).toBeFocused();
 
-    // As the server keeps them, read again: the counts in the HTML for everyone, the presses the
-    // member's own once the browser knows who reads.
+    // As the server keeps them, read again: the post's count in the HTML for everyone — the
+    // comments, and their counts, the browser reads (오너 결정 2026-10-21, ADR-0074) — and the
+    // presses the member's own once the browser knows who reads.
     const html = await (await request.get(`/community/posts/${postId}`)).text();
     expect(html).toContain(likes(2));
+    expect(html).not.toContain(`운영자의 댓글 ${tag}`);
     await page.reload();
     await expectToggle(postLike, 2, true);
     await expectToggle(commentLike(page, adminComment), 1, true);
@@ -247,6 +252,55 @@ test.describe('좋아요', () => {
     await expectToggle(commentLike(page, adminComment), 1, true);
   });
 
+  test('답글이 50개를 넘는 댓글에 좋아요를 눌러도 답글 더 보기가 남고, 답글 더 보기가 읽어 온 답글에도 수와 단추가 있어 누르면 하나 오르며, 다시 열어 읽어 와도 자기가 누른 것으로 보인다', async ({
+    admin,
+    page,
+  }) => {
+    // #48 (오너 결정 2026-10-21, ADR-0074): a 댓글 shows its first 50 대댓글 and '답글 더 보기'
+    // reads the rest; the like counts ride on every page of the thread (ADR-0076).
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `답글 많은 글 ${tag}`, tag);
+    const top = await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`);
+    // A later 댓글 with nothing behind a button, which a like elsewhere must not give one.
+    const other = await commentThroughApi(admin, postId, null, `답글 없는 댓글 ${tag}`);
+    let last = '';
+    for (let index = 1; index <= 51; index += 1) {
+      last = await commentThroughApi(admin, postId, top, `답글 ${String(index)} ${tag}`);
+    }
+    // Somebody else liked the 51st 답글, the one past the first page.
+    await likeThroughApi(admin, 'comments', last);
+
+    await page.goto(`/community/posts/${postId}`);
+    const thread = page.getByTestId(`comment-thread-${top}`);
+    const more = thread.getByTestId('comment-replies-more');
+    await expect(more).toHaveText(copy.commentRepliesMore);
+    await expect(page.getByTestId(`comment-${last}`)).toHaveCount(0);
+    // A like on the 댓글 writes its count into the thread and keeps the rest behind the button.
+    await expectToggle(commentLike(page, top), 0, false);
+    await commentLike(page, top).click();
+    await expectToggle(commentLike(page, top), 1, true);
+    await expect(more).toHaveText(copy.commentRepliesMore);
+    await expect(
+      page.getByTestId(`comment-thread-${other}`).getByTestId('comment-replies-more'),
+    ).toHaveCount(0);
+
+    // '답글 더 보기' brings the 51st with its count and its button, which a press moves by one.
+    await more.click();
+    await expect(more).toHaveCount(0);
+    await expectToggle(commentLike(page, last), 1, false);
+    await commentLike(page, last).click();
+    await expectToggle(commentLike(page, last), 2, true);
+
+    // Read again: the first 50 and the button; brought again, it is the reader's own.
+    await page.reload();
+    await expectToggle(commentLike(page, top), 1, true);
+    await expect(page.getByTestId(`comment-${last}`)).toHaveCount(0);
+    await more.click();
+    await expectToggle(commentLike(page, last), 2, true);
+  });
+
   test('로그인하지 않은 방문자는 좋아요 수를 읽고, 누르면 곧바로 이 글로 돌아오는 로그인 화면으로 간다', async ({
     admin,
     page,
@@ -260,9 +314,11 @@ test.describe('좋아요', () => {
     await likeThroughApi(admin, 'comments', comment);
     const login = `/login?next=${encodeURIComponent(`/community/posts/${postId}`)}`;
 
-    // The counts are the server's: in the HTML before any script runs.
+    // The post's count is the server's: in the HTML before any script runs. The comment's comes
+    // with the comments, which the browser reads (오너 결정 2026-10-21, ADR-0074).
     const html = await (await request.get(`/community/posts/${postId}`)).text();
     expect(html).toContain(likes(1));
+    expect(html).not.toContain(`방문자가 보는 댓글 ${tag}`);
 
     const hydration = hydrationErrors(page);
     // The session held back: the button is the pending rung the server drew, and the focus a

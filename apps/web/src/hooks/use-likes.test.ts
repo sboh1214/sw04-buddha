@@ -59,7 +59,13 @@ const published = (
 
 /** The first page of comments: COMMENT ('좋아요 `count`') and its 대댓글, and what follows it. */
 const firstPage = (count = 2, nextCursor: string | null = null): CommentPage => ({
-  items: [{ comment: published(commentId, count), replies: [published(REPLY, 0, commentId)] }],
+  items: [
+    {
+      comment: published(commentId, count),
+      replies: [published(REPLY, 0, commentId)],
+      repliesNextCursor: null,
+    },
+  ],
   nextCursor,
 });
 
@@ -508,7 +514,10 @@ describe('a comment’s press while 더 보기 is on its way', () => {
     });
     const unsubscribe = comments.subscribe(() => undefined);
     const more = comments.fetchNextPage();
-    const page = { items: [{ comment: published(OLDER, 0), replies: [] }], nextCursor: null };
+    const page = {
+      items: [{ comment: published(OLDER, 0), replies: [], repliesNextCursor: null }],
+      nextCursor: null,
+    };
     return { comments, unsubscribe, more, arrive: () => next.resolve(page) };
   }
 

@@ -54,7 +54,8 @@ export type UpdateLikeBody = z.infer<typeof updateLikeBodySchema>;
  * of the 댓글 and 대댓글 under it they like (any page of the thread; a comment no longer in view may
  * be among them, and the screen draws only what it shows). Owner-only, the 관심 등록's way
  * (`GET /me/watchlist/:marketId`): the public post, its comments and their counts are the same
- * answer for everyone, so the server can draw them and nobody's like rides on them.
+ * answer for everyone — the server draws the post, the browser reads the comments (ADR-0074) — and
+ * nobody's like rides on them.
  */
 export const myPostLikesSchema = z
   .object({ postLiked: z.boolean(), likedCommentIds: z.array(z.uuid()) })

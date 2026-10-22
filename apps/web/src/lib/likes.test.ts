@@ -46,6 +46,8 @@ const COMMENT = '6F9619FF-8B86-D011-B42D-00C04FC964FF';
 const commentId = COMMENT.toLowerCase();
 const REPLY = 'd3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11';
 const OTHER = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d';
+/** A 대댓글 '답글 더 보기' read into its thread (#48), after the first page's. */
+const READ_ON = 'c4ca4238-a0b9-4382-8dcc-509a6f75849b';
 /** A deleted 댓글 kept as its placeholder, and the 대댓글 under it. */
 const DELETED = 'c1d2e3f4-a5b6-4c7d-8e9f-0a1b2c3d4e5f';
 const UNDER_DELETED = 'f0e1d2c3-b4a5-4968-8776-655443322110';
@@ -73,19 +75,29 @@ const comment = (
   likeCount,
 });
 
-/** Two pages: a 댓글 with a 대댓글, then another 댓글 and a deleted one's placeholder. */
+/**
+ * Two pages: a 댓글 with a 대댓글 of its first page and one '답글 더 보기' read after it (#48), more
+ * still behind its cursor; then another 댓글 and a deleted one's placeholder.
+ */
 const pages = (): CommentPages => ({
   pages: [
     {
-      items: [{ comment: comment(commentId, 2), replies: [comment(REPLY, 1, commentId)] }],
+      items: [
+        {
+          comment: comment(commentId, 2),
+          replies: [comment(REPLY, 1, commentId), comment(READ_ON, 4, commentId)],
+          repliesNextCursor: 'r2',
+        },
+      ],
       nextCursor: 'c2',
     },
     {
       items: [
-        { comment: comment(OTHER, 0), replies: [] },
+        { comment: comment(OTHER, 0), replies: [], repliesNextCursor: null },
         {
           comment: { state: 'deleted', id: DELETED },
           replies: [comment(UNDER_DELETED, 3, DELETED)],
+          repliesNextCursor: null,
         },
       ],
       nextCursor: null,
@@ -178,6 +190,7 @@ describe('the counts held', () => {
     // A placeholder carries no count (#49: it takes no like).
     expect(commentLikeCount(held, DELETED)).toBeUndefined();
     expect(commentLikeCount(held, UNDER_DELETED)).toBe(3);
+    expect(commentLikeCount(held, READ_ON)).toBe(4);
     expect(commentLikeCount(undefined, COMMENT)).toBeUndefined();
 
     const reply = withCommentLikeCount(held, REPLY, 7);
@@ -185,6 +198,13 @@ describe('the counts held', () => {
     expect(commentLikeCount(reply, COMMENT)).toBe(2);
     expect(reply?.pages[1]).toEqual(held.pages[1]);
     expect(reply?.pageParams).toEqual(held.pageParams);
+    // A 대댓글 '답글 더 보기' read is set the same way, and the thread keeps the cursor of the rest
+    // (#48): a count never costs the thread its '답글 더 보기'.
+    const readOn = withCommentLikeCount(held, READ_ON, 5);
+    expect(commentLikeCount(readOn, READ_ON)).toBe(5);
+    expect(commentLikeCount(readOn, REPLY)).toBe(1);
+    expect(readOn?.pages[0]?.items[0]?.repliesNextCursor).toBe('r2');
+    expect(reply?.pages[0]?.items[0]?.repliesNextCursor).toBe('r2');
     const other = withCommentLikeCount(held, OTHER, 1);
     expect(commentLikeCount(other, OTHER)).toBe(1);
     expect(other?.pages[0]).toEqual(held.pages[0]);

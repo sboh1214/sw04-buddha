@@ -24,9 +24,11 @@ import {
   createUser,
 } from '@buddha/db/test';
 import {
+  COMMENT_REPLIES_PAGE_SIZE,
   commentThreadSchema,
   likeStateSchema,
   myPostLikesSchema,
+  postCommentSchema,
   postSchema,
   type CommentThread,
   type LikeState,
@@ -738,6 +740,49 @@ describe.skipIf(!hasTestInfra)('/api/v1 likes (integration)', () => {
     expect(await mine(author)).toEqual({ postLiked: false, likedCommentIds: [comment.id] });
     // Another post, or one that does not exist: the caller's rows say nothing.
     expect(await mine(reader, UNKNOWN)).toEqual({ postLiked: false, likedCommentIds: [] });
+  });
+
+  it('counts a 대댓글 on every page of its thread: the comment page’s first 50 and each ‘답글 더 보기’ after (#48)', async () => {
+    // `reply` is the thread's first 대댓글; COMMENT_REPLIES_PAGE_SIZE more follow it, so the last
+    // is past the first page the comment page carries and only '답글 더 보기' reads it.
+    const more = [];
+    for (let index = 0; index < COMMENT_REPLIES_PAGE_SIZE; index += 1) {
+      more.push(
+        await createComment(t.db, {
+          postId: post.id,
+          authorId: author.id,
+          parentId: comment.id,
+          createdAt: new Date(reply.createdAt.getTime() + 1_000 * (index + 1)),
+        }),
+      );
+    }
+    const last = more.at(-1)!;
+    stateOf(await likeComment(reply.id, true));
+    stateOf(await likeComment(last.id, true));
+    stateOf(await likeComment(last.id, true, author));
+
+    const [thread] = await threads();
+    expect(thread!.replies).toHaveLength(COMMENT_REPLIES_PAGE_SIZE);
+    expect(thread!.replies[0]).toMatchObject({ id: reply.id, likeCount: 1 });
+    expect(
+      thread!.replies.slice(1).every((one) => one.state === 'published' && one.likeCount === 0),
+    ).toBe(true);
+    expect(thread!.repliesNextCursor).not.toBeNull();
+    const url = `/comments/${comment.id}/replies?cursor=${thread!.repliesNextCursor!}`;
+    const anonymous = await read(url);
+    expect(anonymous.statusCode, anonymous.body).toBe(200);
+    const page = anonymous.json<{ data: unknown[]; meta: { nextCursor: string | null } }>();
+    expect(page.data.map((item) => postCommentSchema.parse(item))).toEqual([
+      expect.objectContaining({ id: last.id, likeCount: 2 }),
+    ]);
+    expect(page.meta.nextCursor).toBeNull();
+    // The same answer for everyone: whether the reader liked it is the owner-only route's.
+    expect((await read(url, reader.cookie)).body).toBe(anonymous.body);
+    expect(anonymous.body).not.toContain('liked');
+    expect(await mine(reader)).toEqual({
+      postLiked: false,
+      likedCommentIds: [reply.id, last.id].sort(),
+    });
   });
 
   it('keeps the community list newest first, whatever the likes (#45-7, D5)', async () => {
