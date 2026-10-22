@@ -8,6 +8,7 @@ import {
   moderationActionTypeSchema,
   reportReasonSchema,
   reportStatusSchema,
+  restrictionEndChangeKindSchema,
   roleSchema,
   type ReportReason,
 } from './enums.js';
@@ -36,6 +37,15 @@ import { publicIdSchema } from './public-id.js';
  *   (decision 4 #50). Reports on an operator's own post, comment or profile are another operator's
  *   to process. Every action, cancellation and dismissal records the reason, the operator and the
  *   time; every report its intake and processing times (N05 §8, for #95's metrics).
+ * - 작성 제한 (#185, ADR-0082; ADR-0069 decision 2 #45-12, #45-14, decision 3 #37-9, decision 4 #185
+ *   rows): an operator restricts a member's writing for WRITING_RESTRICTION_DAYS — 1, 3, 7 or 30
+ *   days — or 무기한, from the report queue or directly, with a reason. Under it the member writes
+ *   no post, comment or 대댓글, edits none of their own and gives no public profile item a new value
+ *   (RESTRICTED, with the end); deleting their own, likes, reports and private settings stay open.
+ *   A term ends by itself — the time is compared, nothing runs — and an operator lifts it early or
+ *   brings its end forward (감경, 무기한 to a term included), each with a reason. Restricted again
+ *   while one stands, the one that ends later governs (#45-12 «더 늦게 끝나는 쪽»): every
+ *   restriction is its own record, and the latest end among those standing is the member's.
  * - Effects are immediate (#45-13). The member acted on sees the action, its reason, its end when
  *   it has one and how to appeal (by email, once per action within APPEAL_WINDOW_DAYS, #45-14 —
  *   #186 words it); never who reported nor which operator acted. The reporter sees the receipt and
@@ -92,6 +102,59 @@ export function nicknameHoldEndOf(createdAt: string | Date): Date {
   const start = typeof createdAt === 'string' ? new Date(createdAt) : createdAt;
   return new Date(start.getTime() + NICKNAME_HOLD_DAYS * 24 * 60 * 60 * 1_000);
 }
+
+/**
+ * The terms of a writing restriction, in days (ADR-0069 decision 2 #45-12 «1·3·7·30일과 무기한에서
+ * 고른다»); 무기한 is none (`days: null`). A day is 24 hours from the restriction's own time.
+ */
+export const WRITING_RESTRICTION_DAYS = [1, 3, 7, 30] as const;
+export type WritingRestrictionDays = (typeof WRITING_RESTRICTION_DAYS)[number];
+
+/**
+ * When a writing restriction given at `createdAt` for `days` ends (null: 무기한, no end). The
+ * restriction holds while the clock is before this instant, and not at it.
+ */
+export function writingRestrictionEndOf(
+  createdAt: string | Date,
+  days: WritingRestrictionDays | null,
+): Date | null {
+  if (days === null) return null;
+  const start = typeof createdAt === 'string' ? new Date(createdAt) : createdAt;
+  return new Date(start.getTime() + days * 24 * 60 * 60 * 1_000);
+}
+
+/**
+ * The restrictions that refuse a member's action (RESTRICTED): `writing` (작성 제한, #185). The
+ * account restriction (계정 제한, #139) joins it.
+ */
+export const RESTRICTION_KINDS = ['writing'] as const;
+export type RestrictionKind = (typeof RESTRICTION_KINDS)[number];
+
+/**
+ * RESTRICTED (#185, owner decision 2026-10-21 on #41: a code of its own carrying the end): which
+ * restriction refused the action and when it ends — null for 무기한, which ends only when an
+ * operator lifts it. Restricted more than once, the end is the latest among the standing ones
+ * (#45-12). Only ever the requester's own: nothing public carries it (#45-12, #37-8).
+ */
+export const restrictedDetailsSchema = z
+  .object({
+    kind: z.enum(RESTRICTION_KINDS).meta({ id: 'RestrictionKind' }),
+    endsAt: z.iso.datetime().nullable(),
+  })
+  .meta({ id: 'RestrictedDetails' });
+export type RestrictedDetails = z.infer<typeof restrictedDetailsSchema>;
+
+/**
+ * `GET /me/moderation/restriction` (#185): the restriction that governs the member now — the
+ * kind and end a refused write names (RESTRICTED's details) — or null when none stands. What the
+ * banner reads (ADR-0069 decision 4 #50 «진행 중인 제재가 있으면 MY 요약·글쓰기 화면의 안내 띠»),
+ * apart from the paged list of actions, so no number of later actions keeps it from the banner.
+ * The member's own: never the operator, the reason nor a report (#45-13).
+ */
+export const myRestrictionSchema = z
+  .object({ restriction: restrictedDetailsSchema.nullable() })
+  .meta({ id: 'MyRestriction' });
+export type MyRestriction = z.infer<typeof myRestrictionSchema>;
 
 // ---- plain text inputs ---------------------------------------------------------------------------
 
@@ -287,9 +350,11 @@ export type MyActionSubject = z.infer<typeof myActionSubjectSchema>;
 /**
  * One action an operator took on the member (`GET /me/moderation/actions`, #45-13: «조치 종류·사유·
  * 기간·이의 방법»): its type, the reason — the report reason the operator picked and the explanation
- * they wrote (`HiddenReason`'s shape, ADR-0080) — when, its end (`endsAt`: a restriction's, #185 and
- * #139; null for every type #50 takes) and whether it was cancelled since. The appeal deadline is
- * `appealDeadlineOf(createdAt)`. Never the operator, nor a report or its reporter.
+ * they wrote (`HiddenReason`'s shape, ADR-0080) — when, its end (`endsAt`: a writing restriction's
+ * as it stands now — brought forward when an operator lifted it or shortened it (#185) — and null
+ * for 무기한; null for every type #50 takes, which have no end) and whether it was cancelled since.
+ * The appeal deadline is `appealDeadlineOf(createdAt)`. Never the operator, nor a report or its
+ * reporter, nor who changed the end or why (operators' record, ADR-0082).
  */
 export const myModerationActionSchema = z
   .object({
@@ -395,6 +460,25 @@ export const removedProfileItemSchema = z
 export type RemovedProfileItem = z.infer<typeof removedProfileItemSchema>;
 
 /**
+ * One change of a writing restriction's end, for operators (#185, ADR-0082): a shortening (감경) or
+ * an early lift (조기 해제), the end before it (null for 무기한) and after it, the operator's reason
+ * (operators only, as a cancellation's), who and when — the operator withheld for the admin the
+ * restriction is on (`aboutViewer`).
+ */
+export const restrictionEndChangeSchema = z
+  .object({
+    kind: restrictionEndChangeKindSchema,
+    previousEndsAt: z.iso.datetime().nullable(),
+    endsAt: z.iso.datetime(),
+    reason: z.string(),
+    /** Null for the admin the restriction is on (`aboutViewer`). */
+    createdBy: adminAccountActorSchema.nullable(),
+    createdAt: z.iso.datetime(),
+  })
+  .meta({ id: 'RestrictionEndChange' });
+export type RestrictionEndChange = z.infer<typeof restrictionEndChangeSchema>;
+
+/**
  * One moderation action, for operators: everything recorded with it — but the operators, for the
  * admin it was taken on (`aboutViewer`).
  */
@@ -403,12 +487,16 @@ export const adminModerationActionSchema = z
     id: z.uuid(),
     type: moderationActionTypeSchema,
     user: moderationUserSchema,
-    /** The item it was about (a hiding's, a warning's when given), or null. */
+    /** The item it was about (a hiding's, a warning's or a restriction's when given), or null. */
     subject: moderationTargetSchema.nullable(),
     reason: hiddenReasonSchema,
     /** The operator who took it; null for the admin it was taken on (`aboutViewer`). */
     createdBy: adminAccountActorSchema.nullable(),
     createdAt: z.iso.datetime(),
+    /**
+     * A writing restriction's end as it stands now (null: 무기한); null for the other types. The
+     * changes that brought it forward are `endChanges`.
+     */
     endsAt: z.iso.datetime().nullable(),
     cancelledAt: z.iso.datetime().nullable(),
     /** Who cancelled it; null while it stands, and for the admin it was taken on. */
@@ -417,6 +505,8 @@ export const adminModerationActionSchema = z
     removed: removedProfileItemSchema.nullable(),
     /** How many reports it resolved. */
     reportCount: z.number().int().min(0),
+    /** A writing restriction's shortenings and lift, oldest first; empty for the other types. */
+    endChanges: z.array(restrictionEndChangeSchema),
     aboutViewer: aboutViewerSchema,
   })
   .meta({ id: 'AdminModerationAction' });
@@ -636,6 +726,51 @@ export const warningBodySchema = z
 export type WarningBody = z.input<typeof warningBodySchema>;
 export type ParsedWarningBody = z.output<typeof warningBodySchema>;
 
+/**
+ * `POST /admin/moderation/users/:userId/writing-restriction` (#185): the reason (a report reason
+ * and the explanation the member reads), the term — `days` of WRITING_RESTRICTION_DAYS, or null for
+ * 무기한, always said — and what it is about (optional, a warning's `subject`: the member's post,
+ * comment or profile, whose pending reports it resolves — the report queue's way to it).
+ */
+export const writingRestrictionBodySchema = z
+  .object({
+    ...actionReasonShape,
+    days: z
+      .literal(WRITING_RESTRICTION_DAYS)
+      .nullable()
+      .describe('The term in days, 24 hours each from the restriction; null for 무기한 (no end)'),
+    subject: warningSubjectSchema.nullable().default(null),
+  })
+  .superRefine(noteForOther)
+  .meta({ id: 'WritingRestrictionBody' });
+export type WritingRestrictionBody = z.input<typeof writingRestrictionBodySchema>;
+export type ParsedWritingRestrictionBody = z.output<typeof writingRestrictionBodySchema>;
+
+/**
+ * `POST /admin/moderation/actions/:actionId/shorten` (감경, #45-14): the new end — earlier than the
+ * restriction's end now (any, for 무기한) and still to come (a lift ends it now) — and why
+ * (required, operators only, as a cancellation's).
+ */
+export const shortenRestrictionBodySchema = z
+  .object({
+    endsAt: z.iso.datetime(),
+    reason: requiredTextSchema(MODERATION_REASON_MAX_LENGTH),
+    expectedAccountId: expectedAccountIdSchema,
+  })
+  .meta({ id: 'ShortenRestrictionBody' });
+export type ShortenRestrictionBody = z.input<typeof shortenRestrictionBodySchema>;
+export type ParsedShortenRestrictionBody = z.output<typeof shortenRestrictionBodySchema>;
+
+/** `POST /admin/moderation/actions/:actionId/lift` (조기 해제, #45-12): why (required, operators only). */
+export const liftRestrictionBodySchema = z
+  .object({
+    reason: requiredTextSchema(MODERATION_REASON_MAX_LENGTH),
+    expectedAccountId: expectedAccountIdSchema,
+  })
+  .meta({ id: 'LiftRestrictionBody' });
+export type LiftRestrictionBody = z.input<typeof liftRestrictionBodySchema>;
+export type ParsedLiftRestrictionBody = z.output<typeof liftRestrictionBodySchema>;
+
 /** `POST /admin/moderation/actions/:actionId/cancel`: why (required, operators only). */
 export const cancelModerationBodySchema = z
   .object({
@@ -681,7 +816,11 @@ export type DismissedReports = z.infer<typeof dismissedReportsSchema>;
  * - `nothing_to_remove`: the profile has no 소개 or image, or its nickname is an auto nickname;
  * - `cancelled`: the action was cancelled already;
  * - `resolved`: a report was processed already;
- * - `not_theirs`: a warning's subject is not the member's.
+ * - `not_theirs`: a warning's or a restriction's subject is not the member's;
+ * - `not_restriction`: a shortening or a lift of an action that is no writing restriction (#185);
+ * - `ended`: a shortening or a lift of a writing restriction that has ended already;
+ * - `not_earlier`: a shortening whose end is not before the restriction's end now;
+ * - `end_passed`: a shortening whose end is not to come — a lift ends it now.
  */
 export const MODERATION_REFUSALS = [
   'own',
@@ -691,6 +830,10 @@ export const MODERATION_REFUSALS = [
   'cancelled',
   'resolved',
   'not_theirs',
+  'not_restriction',
+  'ended',
+  'not_earlier',
+  'end_passed',
 ] as const;
 export type ModerationRefusal = (typeof MODERATION_REFUSALS)[number];
 export const moderationNotAllowedDetailsSchema = z

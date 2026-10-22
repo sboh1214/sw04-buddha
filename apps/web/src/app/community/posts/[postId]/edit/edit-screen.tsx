@@ -8,6 +8,7 @@ import { useEffect, useState } from 'react';
 import { PostForm } from '@/components/post/post-form';
 import { WriteGate } from '@/components/post/write-gate';
 import { EmptyState } from '@/components/ui/empty-state';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { postQueryOptions, useUpdatePost } from '@/hooks/use-posts';
 import { type Post } from '@/lib/api';
@@ -27,6 +28,7 @@ import {
   postWriteErrorMessage,
   refusedImageIds,
 } from '@/lib/posts';
+import { type Refusal, refusalOf } from '@/lib/restriction';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -168,7 +170,8 @@ function EditForm({
   const router = useRouter();
   const { refetch: refetchSession } = useSession();
   const update = useUpdatePost(() => void refetchSession());
-  const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const format = useFormatDateTime();
+  const [refusal, setRefusal] = useState<Refusal | undefined>(undefined);
   return (
     <Stack gap="4">
       <Stack gap="0.5">
@@ -189,7 +192,8 @@ function EditForm({
         // stays locked, and leaving no longer asks (the draft is the server's).
         pending={update.isPending || update.isSuccess}
         saved={update.isSuccess}
-        errorMessage={refusal}
+        errorMessage={refusal?.message}
+        errorRestricted={refusal?.restricted}
         refusedImageIds={refusedImageIds(update.error)}
         gone={held}
         goneMessage={heldMessage}
@@ -201,7 +205,8 @@ function EditForm({
             { postId: post.id, title, body, expectedAccountId: accountId },
             {
               onSuccess: (saved) => router.push(postPath(saved.id) as Route),
-              onError: (error) => setRefusal(postWriteErrorMessage(error)),
+              onError: (error) =>
+                setRefusal(refusalOf(error, postWriteErrorMessage(error, format))),
             },
           );
         }}

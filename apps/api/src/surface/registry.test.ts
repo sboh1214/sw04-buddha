@@ -563,6 +563,62 @@ describe('the public API document (static)', () => {
     expect(missing).toEqual([]);
   });
 
+  it('documents RESTRICTED (403) on exactly the writes a writing restriction refuses, and sorts every owner write into refused or open (#185)', () => {
+    // ADR-0082 decision 4 (#45-12, #37-9): the writes whose service calls `assertWriter`,
+    // `assertPublicItemEdit` or `assertNotWritingRestricted` in its transaction (docs/GUARDS.md, a
+    // new route's step 4). The document says so, as for every other code a client can get.
+    const REFUSED = [
+      'POST /posts',
+      'PUT /posts/:postId',
+      'POST /posts/:postId/comments',
+      'PUT /comments/:commentId',
+      'POST /media/images',
+      'PATCH /me',
+      'PUT /me/bio',
+      'PUT /me/interest-categories',
+      'POST /me/onboarding/interests',
+      'PUT /me/profile-image',
+    ];
+    // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
+    // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is
+    // not writing at all — the account's own steps, the 관심 등록, payments.
+    const OPEN = [
+      'POST /me/consents',
+      'POST /me/onboarding/nickname',
+      'POST /posts/:postId/delete',
+      'POST /comments/:commentId/delete',
+      'PUT /posts/:postId/like',
+      'PUT /comments/:commentId/like',
+      'POST /posts/:postId/reports',
+      'POST /comments/:commentId/reports',
+      'POST /profiles/:publicId/reports',
+      'POST /me/profile-image/delete',
+      'POST /me/password',
+      'POST /me/phone-verification/code',
+      'POST /me/phone-verification/confirm',
+      'PUT /me/real-name',
+      'PUT /me/time-zone',
+      'PUT /me/watchlist/:marketId',
+      'POST /me/search-history',
+      'POST /me/search-history/:id/delete',
+      'POST /me/search-history/clear',
+      'POST /payments/charge',
+      'POST /coupons/redeem',
+    ];
+    // A new owner write — #77's market proposal, #140's withdrawal — fails here until it is put
+    // in one list or the other: whether a writing restriction refuses it is decided, not missed.
+    const writes = Object.keys(OWNER_ROUTES).filter((key) => !key.startsWith('GET '));
+    expect([...REFUSED, ...OPEN].sort()).toEqual([...writes].sort());
+    const documented = operations
+      .filter(({ operation }) => {
+        const forbidden = operation.responses?.['403'] as { description?: string } | undefined;
+        return (forbidden?.description ?? '').split(' | ').includes('RESTRICTED');
+      })
+      .map(({ key }) => key);
+    // Every refused write documents it, and no other operation does (the admin surface included).
+    expect(documented.sort()).toEqual([...REFUSED].sort());
+  });
+
   it('shows a person only where a public route says why, and then by its public face alone (#46, #47, #48, #41, #51)', () => {
     // ADR-0069 decision 5: a public answer may name a person — a post's or a comment's author, a
     // profile's member — only on a route registered with the reason, and then by the public id,

@@ -25,6 +25,7 @@ import { LikeButton, LikesUnreadableNotice } from '@/components/post/like-button
 import { PostByline } from '@/components/post/post-author';
 import { PostBody } from '@/components/post/post-body';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
@@ -284,6 +285,7 @@ function AuthorActions({ post }: { post: Extract<Post, { state: 'published' }> }
   const { entryPath } = useOnboardingEntry();
   const { refetch: refetchSession } = useSession();
   const remove = useDeletePost(() => void refetchSession());
+  const format = useFormatDateTime();
   const [confirming, setConfirming] = useState(false);
 
   if (!isOwnPost(post.author, writer.publicId) || writer.accountId === undefined) return null;
@@ -351,7 +353,10 @@ function AuthorActions({ post }: { post: Extract<Post, { state: 'published' }> }
                         },
                         onError: (error) => {
                           setConfirming(false);
-                          toaster.create({ type: 'error', title: postWriteErrorMessage(error) });
+                          toaster.create({
+                            type: 'error',
+                            title: postWriteErrorMessage(error, format),
+                          });
                         },
                       },
                     )

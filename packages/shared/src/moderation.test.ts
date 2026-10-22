@@ -5,7 +5,9 @@ import {
   REPORT_REASONS,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
+  RESTRICTION_END_CHANGE_KINDS,
 } from './enums.js';
+import { ERROR_CODES } from './api/errors.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { findPrivateField } from './guards/private-data.js';
 import {
@@ -17,20 +19,29 @@ import {
   REPORTS_PER_DAY,
   REPORT_DESCRIPTION_MAX_LENGTH,
   REPORT_WINDOW_HOURS,
+  RESTRICTION_KINDS,
+  WRITING_RESTRICTION_DAYS,
   adminMediaPath,
+  adminModerationActionSchema,
   adminReportGroupSchema,
   adminReportQuerySchema,
   appealDeadlineOf,
   cancelModerationBodySchema,
   createReportBodySchema,
   dismissReportsBodySchema,
+  liftRestrictionBodySchema,
   moderationActionBodySchema,
   myModerationActionSchema,
   myReportSchema,
+  myRestrictionSchema,
   nicknameHoldEndOf,
   reportTargetSchema,
+  restrictedDetailsSchema,
+  shortenRestrictionBodySchema,
   textTooLongMessage,
   warningBodySchema,
+  writingRestrictionBodySchema,
+  writingRestrictionEndOf,
 } from './moderation.js';
 import { NICKNAME_HOLD_DAYS } from './nickname.js';
 
@@ -48,13 +59,14 @@ describe('the moderation lists (#50)', () => {
     expect(REPORT_STATUSES).toEqual(['pending', 'actioned', 'dismissed']);
   });
 
-  it('acts by hiding, warning and the three profile items, chosen by weight (#45-11, #37-10)', () => {
+  it('acts by hiding, warning, the three profile items and the writing restriction, chosen by weight (#45-11, #37-10, #185)', () => {
     expect(MODERATION_ACTION_TYPES).toEqual([
       'hide',
       'warning',
       'nickname_reset',
       'bio_clear',
       'image_remove',
+      'writing_restriction',
     ]);
   });
 
@@ -91,6 +103,125 @@ describe('the moderation lists (#50)', () => {
 
   it('serves stored images to operators at their own address', () => {
     expect(adminMediaPath(ID)).toBe(`/api/v1/admin/media/${ID}`);
+  });
+});
+
+describe('the writing restriction (#185)', () => {
+  it('takes the owner’s terms: 1, 3, 7 or 30 days, or 무기한 (#45-12)', () => {
+    expect(WRITING_RESTRICTION_DAYS).toEqual([1, 3, 7, 30]);
+    expect(writingRestrictionEndOf(AT, 1)?.toISOString()).toBe('2026-10-21T01:02:03.000Z');
+    expect(writingRestrictionEndOf(new Date(AT), 30)?.toISOString()).toBe(
+      '2026-11-19T01:02:03.000Z',
+    );
+    expect(writingRestrictionEndOf(AT, null)).toBeNull();
+  });
+
+  it('records each change of an end as a shortening or a lift, and audits all three writes', () => {
+    expect(RESTRICTION_END_CHANGE_KINDS).toEqual(['shorten', 'lift']);
+    expect(ADMIN_ACTION_TYPES).toEqual(
+      expect.arrayContaining([
+        'moderation_writing_restriction',
+        'moderation_restriction_shorten',
+        'moderation_restriction_lift',
+      ]),
+    );
+  });
+
+  it('refuses with a code of its own carrying the kind and the end, null for 무기한', () => {
+    expect(ERROR_CODES).toContain('RESTRICTED');
+    expect(RESTRICTION_KINDS).toEqual(['writing']);
+    expect(restrictedDetailsSchema.parse({ kind: 'writing', endsAt: AT })).toEqual({
+      kind: 'writing',
+      endsAt: AT,
+    });
+    expect(restrictedDetailsSchema.parse({ kind: 'writing', endsAt: null }).endsAt).toBeNull();
+    expect(restrictedDetailsSchema.safeParse({ kind: 'account', endsAt: null }).success).toBe(
+      false,
+    );
+  });
+
+  it('answers the member the restriction that governs as a refusal names it, or none', () => {
+    expect(myRestrictionSchema.parse({ restriction: { kind: 'writing', endsAt: AT } })).toEqual({
+      restriction: { kind: 'writing', endsAt: AT },
+    });
+    expect(myRestrictionSchema.parse({ restriction: { kind: 'writing', endsAt: null } })).toEqual({
+      restriction: { kind: 'writing', endsAt: null },
+    });
+    expect(myRestrictionSchema.parse({ restriction: null })).toEqual({ restriction: null });
+    // Nothing but the kind and the end: never the operator, the reason nor a report (#45-13).
+    expect(
+      Object.keys(
+        myRestrictionSchema.parse({
+          restriction: { kind: 'writing', endsAt: AT, reason: 'spam', createdBy: ID },
+        }).restriction ?? {},
+      ),
+    ).toEqual(['kind', 'endsAt']);
+  });
+
+  it('takes a term always said, a reason as every action’s and a warning’s subject', () => {
+    for (const days of [...WRITING_RESTRICTION_DAYS, null]) {
+      expect(
+        writingRestrictionBodySchema.parse({ reason: 'spam', days, expectedAccountId: ACCOUNT }),
+      ).toEqual({ reason: 'spam', note: null, days, subject: null, expectedAccountId: ACCOUNT });
+    }
+    for (const days of [0, 2, 14, 31, '7', undefined]) {
+      expect(
+        writingRestrictionBodySchema.safeParse({ reason: 'spam', days, expectedAccountId: ACCOUNT })
+          .success,
+        String(days),
+      ).toBe(false);
+    }
+    expect(
+      writingRestrictionBodySchema.safeParse({
+        reason: 'other',
+        days: 7,
+        expectedAccountId: ACCOUNT,
+      }).error?.issues,
+    ).toEqual([expect.objectContaining({ path: ['note'], message: OTHER_NEEDS_TEXT_MESSAGE })]);
+    expect(
+      writingRestrictionBodySchema.parse({
+        reason: 'spam',
+        days: 3,
+        subject: { type: 'comment', commentId: ID.toUpperCase() },
+        expectedAccountId: ACCOUNT,
+      }).subject,
+    ).toEqual({ type: 'comment', commentId: ID });
+  });
+
+  it('brings an end forward to an instant, and lifts, each with a reason operators read', () => {
+    expect(
+      shortenRestrictionBodySchema.parse({
+        endsAt: AT,
+        reason: ' 이의 일부 인정 ',
+        expectedAccountId: ACCOUNT,
+      }),
+    ).toEqual({ endsAt: AT, reason: '이의 일부 인정', expectedAccountId: ACCOUNT });
+    for (const endsAt of ['tomorrow', '2026-10-20', null, undefined]) {
+      expect(
+        shortenRestrictionBodySchema.safeParse({
+          endsAt,
+          reason: '이의',
+          expectedAccountId: ACCOUNT,
+        }).success,
+      ).toBe(false);
+    }
+    expect(
+      liftRestrictionBodySchema.parse({ reason: '소명 확인', expectedAccountId: ACCOUNT }),
+    ).toEqual({ reason: '소명 확인', expectedAccountId: ACCOUNT });
+    for (const reason of ['', '   ', 'x'.repeat(MODERATION_REASON_MAX_LENGTH + 1)]) {
+      expect(
+        liftRestrictionBodySchema.safeParse({ reason, expectedAccountId: ACCOUNT }).success,
+      ).toBe(false);
+      expect(
+        shortenRestrictionBodySchema.safeParse({ endsAt: AT, reason, expectedAccountId: ACCOUNT })
+          .success,
+      ).toBe(false);
+    }
+  });
+
+  it('shows operators every change of an end, the member none', () => {
+    expect(Object.keys(adminModerationActionSchema.shape)).toContain('endChanges');
+    expect(Object.keys(myModerationActionSchema.shape)).not.toContain('endChanges');
   });
 });
 

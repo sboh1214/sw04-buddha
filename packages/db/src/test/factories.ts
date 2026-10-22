@@ -1033,6 +1033,10 @@ export interface CreateModerationActionInput {
   note?: string | null;
   /** Default: the database clock. */
   createdAt?: Date;
+  /**
+   * A `writing_restriction`'s end (#185): null or left out for 무기한. Nothing else has one.
+   */
+  endsAt?: Date | null;
   /** A cancellation: when, by whom and why. */
   cancelled?: { at: Date; by: string; reason: string };
   /**
@@ -1062,6 +1066,7 @@ export async function createModerationAction(db: Db, input: CreateModerationActi
         note: input.note ?? null,
         createdBy: input.createdBy,
         ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+        endsAt: input.endsAt ?? null,
         ...(input.cancelled === undefined
           ? {}
           : {

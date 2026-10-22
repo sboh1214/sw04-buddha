@@ -15,6 +15,7 @@ import { type Node as ProseMirrorNode, type NodeType } from '@tiptap/pm/model';
 import { NodeSelection, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 import { copy } from '@/copy';
 import { isApiError, isApiUnreachable, isForAnotherAccount } from './api';
+import { type RestrictedWrite, restrictedMessage } from './restriction';
 
 /**
  * The post editor's decisions (#46, ADR-0073), as pure functions the node test runner reaches: what
@@ -179,27 +180,34 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
 /**
  * What a refused upload says, or nothing: the server's reason (IMAGE_NOT_ALLOWED); a body refused
  * by its length before the route (413, twice the limit) is the size; the cookie as another account
- * is a stale screen; a refusal for the onboarding says nothing while the onboarding gate takes the
- * account to its step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and
- * the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21), and when
- * the gate stays — that read failed — says what a refused send says (owner decision 2026-10-21
- * answer 6); an upload given up while it waited to be sent again, the editor gone meanwhile
- * (`UploadAbandoned`), says nothing, as the files a batch never sends once the editor sends no
- * more;
- * anything else is a failed upload, said apart from an unreachable server — the API busy (a 429:
- * the uploads it receives, the account's three in flight, its memory, the conversion queue) still
- * after the editor sent it again (`sendRetrying`, owner decision 2026-10-22 (2차) answer 3), and a
- * body cut for idling or for its deadline (408), included: that file failed, the batch goes on.
- * `refusalMessage` words a reason: a post image's by default, the profile image's (#141,
- * lib/profile.ts) names its own three types.
+ * is a stale screen; a writing restriction (RESTRICTED, #185, ADR-0082 — refused before the image
+ * is looked at) says what it closes and until when in the member's zone (`formatDate`) or 무기한
+ * (`restrictedMessage` — the toast adds the way to 조치·신고 내역, `isRestricted`): a post's image as
+ * the post's writing (`restricted: 'writing'`, the default), the profile image as a public profile
+ * item (`'profile'`, whose deletion stays open); a refusal for the onboarding says nothing while
+ * the onboarding gate takes the account to its step (`gateMoves` — `['me']`, read again after the
+ * refusal, names a step left) and the form keeps its draft in the tab, as for a refused send (owner
+ * decision 2026-10-21), and when the gate stays — that read failed — says what a refused send says
+ * (owner decision 2026-10-21 answer 6); an upload given up while it waited to be sent again, the
+ * editor gone meanwhile (`UploadAbandoned`), says nothing, as the files a batch never sends once
+ * the editor sends no more; anything else is a failed upload, said apart from an unreachable
+ * server — the API busy (a 429: the uploads it receives, the account's three in flight, its memory,
+ * the conversion queue) still after the editor sent it again (`sendRetrying`, owner decision
+ * 2026-10-22 (2차) answer 3), and a body cut for idling or for its deadline (408), included: that
+ * file failed, the batch goes on. `refusalMessage` words a reason: a post image's by default, the
+ * profile image's (#141, lib/profile.ts) names its own three types.
  */
 export function imageUploadErrorMessage(
   error: unknown,
   gateMoves: boolean,
+  formatDate: (iso: string) => string,
   refusalMessage: (reason: ImageRefusal) => string = imageRefusalMessage,
+  restricted: RestrictedWrite = 'writing',
 ): string | undefined {
   if (error instanceof UploadAbandoned) return undefined;
   if (isForAnotherAccount(error)) return copy.sessionChanged;
+  const restriction = restrictedMessage(error, restricted, formatDate);
+  if (restriction !== undefined) return restriction;
   if (isApiError(error, 'IMAGE_NOT_ALLOWED')) {
     const reason = refusalOf(error.details);
     return reason === undefined ? copy.errImageUpload : refusalMessage(reason);

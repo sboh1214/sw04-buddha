@@ -139,10 +139,20 @@ export const ERROR_CODES = [
   /**
    * An operator action or a processing of reports the rules refuse: the target is the acting
    * operator, the item is hidden already or deleted, there is nothing to take away, the action
-   * was cancelled already, a report was processed already, or a warning names a post or a comment
-   * of another member. Details carry the reason, moderationNotAllowedDetailsSchema.
+   * was cancelled already, a report was processed already, a warning or a restriction names a
+   * post or a comment of another member, or a shortening or a lift is not of a writing
+   * restriction, of one that ended already, or not to an earlier end still to come. Details carry
+   * the reason, moderationNotAllowedDetailsSchema.
    */
   'MODERATION_NOT_ALLOWED',
+  /**
+   * An operator restriction on the account refuses the action until it ends: a writing
+   * restriction keeps the account from new posts, comments and replies, from editing its own and
+   * from new values of its public profile items, while deleting its own, likes and reports stay
+   * open. Details carry the kind and the end, null for one with no end,
+   * restrictedDetailsSchema — the end the account also reads at GET /me/moderation/restriction.
+   */
+  'RESTRICTED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

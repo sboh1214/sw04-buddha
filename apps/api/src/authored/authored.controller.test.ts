@@ -15,10 +15,11 @@
  * cleared leaves the profile. Nothing of the member's trading rides on an item. Skips when TEST_*
  * are unset.
  *
- * Not pinned here, because neither state exists yet: a withdrawn account's lists answering
- * NOT_FOUND (`memberIdOf` through `postAuthorOf`, #37-16) — #140 adds it — and a restricted
- * member's items staying in every list (#37-14: the lists read no sanction) — #185/#139 add it
- * (ADR-0080 결과 5).
+ * Not pinned here: a withdrawn account's lists answering NOT_FOUND (`memberIdOf` through
+ * `postAuthorOf`, #37-16), a state that does not exist yet — #140 adds it — and a restricted
+ * member's items staying in every list (#37-14: the lists read no sanction), which
+ * restrictions.controller.test.ts pins for a writing restriction (#185, ADR-0082) and #139 adds
+ * for an account restriction (ADR-0080 결과 5).
  */
 import { schema } from '@buddha/db';
 import {

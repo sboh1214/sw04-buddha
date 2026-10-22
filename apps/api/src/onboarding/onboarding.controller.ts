@@ -138,10 +138,17 @@ export class OnboardingController {
   @ApiData(meSchema)
   // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
   // write answers the step (picks or the skip while it is unanswered) or adds a category.
-  // FORBIDDEN (no field named): a category added under a writing or an account restriction once
-  // the step is answered, or 24 hours after the nickname step while it is not.
+  // RESTRICTED (with its end): a category added under a writing restriction (#37-9, #185) once the
+  // step is answered, or 24 hours after the nickname step while it is not.
   // VALIDATION_ERROR: a category that does not exist or is not active (details name each).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
+    'RESTRICTED',
+  )
   answerInterestsStep(
     @CurrentUser() user: SessionUser,
     @Body({ schema: answerInterestsStepBodySchema }) body: AnswerInterestsStepBody,
@@ -166,10 +173,17 @@ export class OnboardingController {
   })
   @ApiData(meSchema)
   // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
-  // write adds a category. FORBIDDEN (no field named): a category added under a writing or an
-  // account restriction. VALIDATION_ERROR: a category that does not exist or is not active
-  // (details name each).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  // write adds a category. RESTRICTED (with its end): a category added under a writing
+  // restriction (#37-9, #185) — dropping is open. VALIDATION_ERROR: a category that does not exist
+  // or is not active (details name each).
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
+    'RESTRICTED',
+  )
   setInterestCategories(
     @CurrentUser() user: SessionUser,
     @Body({ schema: setInterestCategoriesBodySchema }) body: SetInterestCategoriesBody,

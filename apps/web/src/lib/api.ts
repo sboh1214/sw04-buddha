@@ -174,6 +174,15 @@ export type ModerationActionBody = components['schemas']['ModerationActionBody']
 export type WarningBody = components['schemas']['WarningBody'];
 export type WarningSubject = components['schemas']['WarningSubject'];
 export type CancelModerationBody = components['schemas']['CancelModerationBody'];
+/**
+ * 작성 제한 (#185, ADR-0082): the body that gives one (a reason, the term in days or null for
+ * 무기한, and what it is about, a warning's subject), the bodies of a shortening (감경, the new end)
+ * and of an early lift, and one change of a restriction's end as operators read it with the action.
+ */
+export type WritingRestrictionBody = components['schemas']['WritingRestrictionBody'];
+export type ShortenRestrictionBody = components['schemas']['ShortenRestrictionBody'];
+export type LiftRestrictionBody = components['schemas']['LiftRestrictionBody'];
+export type RestrictionEndChange = components['schemas']['RestrictionEndChange'];
 export type DismissReportsBody = components['schemas']['DismissReportsBody'];
 export type DismissedReports = components['schemas']['DismissedReports'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */

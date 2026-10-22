@@ -27,6 +27,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
@@ -94,6 +95,11 @@ export interface PostFormProps {
   saved: boolean;
   /** The last refusal, in Korean; undefined when there is none. */
   errorMessage: string | undefined;
+  /**
+   * Whether a writing restriction gave it (#185, `isRestricted`): the way to 조치·신고 내역 goes
+   * under it (`RefusalText`).
+   */
+  errorRestricted?: boolean;
   /** The images the last refusal named (`refusedImageIds`). */
   refusedImageIds?: readonly string[];
   onSubmit: (values: PostFormValues) => void;
@@ -339,6 +345,7 @@ function PostFormFields({
   pending,
   saved,
   errorMessage,
+  errorRestricted = false,
   refusedImageIds,
   onSubmit,
   gone = false,
@@ -579,7 +586,9 @@ function PostFormFields({
         <Alert.Root status="error" role="alert" data-testid="post-form-error">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{errorMessage}</Alert.Description>
+            <Alert.Description>
+              <RefusalText message={errorMessage} restricted={errorRestricted} />
+            </Alert.Description>
             {errorAction}
           </Alert.Content>
         </Alert.Root>

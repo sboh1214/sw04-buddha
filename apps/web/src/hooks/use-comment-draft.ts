@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
@@ -259,6 +260,8 @@ export function useCommentBoxDraft(box: CommentBoxDraft): {
 } {
   const queryClient = useQueryClient();
   const going = useContext(CommentBoxGoingContext);
+  // A writing restriction's refusal (#185) says its end in the member's zone.
+  const format = useFormatDateTime();
   // Unique among the boxes mounted in the page's life: a box mounted later gets a new one.
   const boxId = useId();
   useLeaveGuard(!box.pending && commentTextChanged(box.text, box.initial), copy.postLeaveConfirm);
@@ -358,7 +361,7 @@ export function useCommentBoxDraft(box: CommentBoxDraft): {
     landed: () => going?.landed(boxId),
     refused: (error) =>
       going?.refused(boxId, box.accountId, {
-        reason: commentWriteErrorMessage(error, write),
+        reason: commentWriteErrorMessage(error, write, format),
         stale: isStaleThreadRefusal(error),
       }),
     close: () => {

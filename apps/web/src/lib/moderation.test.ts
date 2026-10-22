@@ -11,6 +11,7 @@ import {
   REPORT_DESCRIPTION_MAX_LENGTH,
   REPORT_REASONS,
   REPORT_WINDOW_HOURS,
+  WRITING_RESTRICTION_DAYS,
   postExcerpt,
   readPostDocument,
   type ErrorCode,
@@ -82,7 +83,14 @@ import {
   reportStatusLabel,
   reportTargetTypeLabel,
   reportTargetView,
-  sanctionInForce,
+  RESTRICTION_TERM_OPTIONS,
+  adminRestrictionEndText,
+  endChangeLabel,
+  endChangeText,
+  isRestriction,
+  restrictionStanding,
+  restrictionTermOf,
+  shortenEndDraft,
   warningInWindow,
 } from './moderation';
 import { formatKst } from './datetime';
@@ -719,7 +727,7 @@ describe('the nickname reset’s hold on 조치·신고 내역 (owner decision 2
   });
 });
 
-describe('the sanction banner', () => {
+describe('a standing restriction (#185)', () => {
   const NOW = Date.parse('2026-10-21T12:00:00.000Z');
   const action = (overrides: Partial<MyModerationAction>): MyModerationAction => ({
     id: '11111111-1111-4111-8111-111111111111',
@@ -731,34 +739,49 @@ describe('the sanction banner', () => {
     cancelledAt: null,
     ...overrides,
   });
+  const restriction = (overrides: Partial<MyModerationAction>) =>
+    action({ type: 'writing_restriction', ...overrides });
 
-  it('shows nothing for #50’s actions, none of which is a sanction', () => {
-    expect(
-      sanctionInForce(
-        [
-          action({ type: 'warning' }),
-          action({ type: 'hide' }),
-          action({ type: 'nickname_reset' }),
-          action({ type: 'bio_clear' }),
-          action({ type: 'image_remove' }),
-        ],
-        NOW,
-      ),
-    ).toBeNull();
+  it('holds until the end and not at it, as the server counts (#45-12: it ends by itself)', () => {
+    expect(restrictionStanding(restriction({ endsAt: new Date(NOW).toISOString() }), NOW)).toBe(
+      false,
+    );
+    expect(restrictionStanding(restriction({ endsAt: new Date(NOW + 1).toISOString() }), NOW)).toBe(
+      true,
+    );
   });
 
-  it('shows the latest-ending action whose end is ahead and that stands', () => {
-    const soon = action({ id: 'a', endsAt: '2026-10-22T00:00:00.000Z' });
-    const later = action({ id: 'b', endsAt: '2026-10-30T00:00:00.000Z' });
-    const over = action({ id: 'c', endsAt: '2026-10-21T11:59:59.000Z' });
-    const cancelled = action({
-      id: 'd',
-      endsAt: '2026-12-01T00:00:00.000Z',
-      cancelledAt: '2026-10-21T00:00:00.000Z',
-    });
-    expect(sanctionInForce([soon, later, over, cancelled], NOW)).toBe(later);
-    expect(sanctionInForce([over, cancelled], NOW)).toBeNull();
-    expect(sanctionInForce([], NOW)).toBeNull();
+  it('stands with no end (무기한) until cancelled, and a cancellation ends any at once', () => {
+    expect(restrictionStanding(restriction({ endsAt: null }), NOW)).toBe(true);
+    const cancelledAt = '2026-10-21T00:00:00.000Z';
+    expect(restrictionStanding(restriction({ endsAt: null, cancelledAt }), NOW)).toBe(false);
+    expect(
+      restrictionStanding(restriction({ endsAt: '2026-12-01T00:00:00.000Z', cancelledAt }), NOW),
+    ).toBe(false);
+  });
+
+  it('counts a lifted or a shortened restriction by its end as it stands now', () => {
+    // A lift sets the end to the lift's time; a 감경 to an earlier one (ADR-0082).
+    expect(
+      restrictionStanding(restriction({ endsAt: new Date(NOW - 60_000).toISOString() }), NOW),
+    ).toBe(false);
+    expect(
+      restrictionStanding(restriction({ endsAt: new Date(NOW + 60_000).toISOString() }), NOW),
+    ).toBe(true);
+  });
+
+  it('takes no other type for a restriction, whatever its end', () => {
+    expect(isRestriction('writing_restriction')).toBe(true);
+    for (const type of [
+      'hide',
+      'warning',
+      'nickname_reset',
+      'bio_clear',
+      'image_remove',
+    ] as const) {
+      expect(isRestriction(type)).toBe(false);
+      expect(restrictionStanding(action({ type, endsAt: null }), NOW)).toBe(false);
+    }
   });
 });
 
@@ -810,7 +833,7 @@ describe('the warning banner (owner decision 2026-10-21)', () => {
   });
 
   it('is no sanction: the write page’s banner stays for restrictions', () => {
-    expect(sanctionInForce([action({})], NOW)).toBeNull();
+    expect(restrictionStanding(action({}), NOW)).toBe(false);
     expect(copy.moderationWarningReceived).toBe('경고를 받았습니다.');
   });
 });
@@ -917,7 +940,12 @@ describe('operators', () => {
     const NOW = Date.parse('2026-10-22T12:00:00.000Z');
     const DAY_MS = 24 * 60 * 60 * 1_000;
     const at = (ms: number) => new Date(ms).toISOString();
-    const reset = (createdAt: string) => ({ type: 'nickname_reset' as const, createdAt });
+    const reset = (createdAt: string) => ({
+      type: 'nickname_reset' as const,
+      createdAt,
+      endsAt: null,
+      cancelledAt: null,
+    });
     expect(cancelDialogBody(reset(at(NOW - DAY_MS)), NOW)).toBe(
       copy.adminModerationCancelNicknameResetBody,
     );
@@ -946,11 +974,105 @@ describe('operators', () => {
     // Every other type keeps the words for a hiding and the profile items, whenever it was.
     for (const type of ['hide', 'warning', 'bio_clear', 'image_remove'] as const) {
       for (const createdAt of [at(NOW - DAY_MS), at(NOW - 40 * DAY_MS)]) {
-        expect(cancelDialogBody({ type, createdAt }, NOW)).toBe(copy.adminModerationCancelBody);
+        expect(cancelDialogBody({ type, createdAt, endsAt: null, cancelledAt: null }, NOW)).toBe(
+          copy.adminModerationCancelBody,
+        );
       }
     }
     expect(copy.adminModerationCancelBody).not.toContain('이 회원만');
     expect(copy.adminModerationCancelBody).not.toContain('보류');
+    // A standing writing restriction's cancellation ends it at once and is told apart from a lift
+    // (#185): a term still to come, or 무기한.
+    const restriction = (endsAt: string | null) => ({
+      type: 'writing_restriction' as const,
+      createdAt: at(NOW - DAY_MS),
+      endsAt,
+      cancelledAt: null,
+    });
+    for (const endsAt of [at(NOW + DAY_MS), at(NOW + 1), null]) {
+      expect(cancelDialogBody(restriction(endsAt), NOW)).toBe(
+        copy.adminModerationCancelRestrictionBody,
+      );
+    }
+    expect(copy.adminModerationCancelRestrictionBody).toContain(copy.adminModerationLift);
+    // One that has ended — its term passed, or lifted (its end the lift's time) — has nothing to
+    // end and no 조기 해제 on its row: the dialog says neither (an appeal accepted after it, #45-14).
+    for (const endsAt of [at(NOW), at(NOW - 1), at(NOW - DAY_MS)]) {
+      const body = cancelDialogBody(restriction(endsAt), NOW);
+      expect(body).toBe(copy.adminModerationCancelRestrictionEndedBody);
+      expect(body).not.toContain(copy.adminModerationLift);
+      expect(body).not.toContain('곧바로 끝나');
+    }
+  });
+
+  describe('the writing restriction (#185, ADR-0082)', () => {
+    const NOW = Date.parse('2026-10-22T03:00:00.000Z');
+    const HOUR_MS = 60 * 60 * 1_000;
+
+    it('offers the owner’s terms in order — 1, 3, 7, 30 days and 무기한 — none picked by default', () => {
+      expect(RESTRICTION_TERM_OPTIONS.map((option) => option.days)).toEqual([
+        ...WRITING_RESTRICTION_DAYS,
+        null,
+      ]);
+      expect(RESTRICTION_TERM_OPTIONS.map((option) => option.label)).toEqual([
+        '1일',
+        '3일',
+        '7일',
+        '30일',
+        '무기한',
+      ]);
+      expect(restrictionTermOf('7')).toEqual({ days: 7 });
+      expect(restrictionTermOf('none')).toEqual({ days: null });
+      for (const value of ['', '2', '14', 'null']) expect(restrictionTermOf(value)).toBeUndefined();
+    });
+
+    it('writes an end in Korean time, 무기한 for none, and each change of it', () => {
+      expect(adminRestrictionEndText(null)).toBe('무기한');
+      expect(adminRestrictionEndText('2026-10-23T06:00:00.000Z')).toBe(
+        formatKst('2026-10-23T06:00:00.000Z'),
+      );
+      expect(endChangeLabel('shorten')).toBe('감경');
+      expect(endChangeLabel('lift')).toBe('조기 해제');
+      expect(
+        endChangeText({
+          kind: 'shorten',
+          previousEndsAt: null,
+          endsAt: '2026-10-25T06:00:00.000Z',
+        }),
+      ).toBe(`감경 · 무기한 → ${formatKst('2026-10-25T06:00:00.000Z')}`);
+      expect(
+        endChangeText({
+          kind: 'lift',
+          previousEndsAt: '2026-10-25T06:00:00.000Z',
+          endsAt: '2026-10-22T03:00:00.000Z',
+        }),
+      ).toBe(
+        `조기 해제 · ${formatKst('2026-10-25T06:00:00.000Z')} → ${formatKst('2026-10-22T03:00:00.000Z')}`,
+      );
+    });
+
+    it('reads a 감경’s new end in Korean time: still to come, and before the end now (any, for 무기한)', () => {
+      // 2026-10-22 12:00 KST is 03:00Z, NOW: an hour later is still to come.
+      expect(shortenEndDraft('2026-10-22T13:00', null, NOW)).toEqual({
+        endsAt: '2026-10-22T04:00:00.000Z',
+        error: null,
+      });
+      expect(shortenEndDraft('', null, NOW)).toEqual({
+        endsAt: null,
+        error: copy.errModerationEndRequired,
+      });
+      expect(shortenEndDraft('2026-10-22T12:00', null, NOW).error).toBe(
+        copy.errModerationEndPassed,
+      );
+      const end = new Date(NOW + 2 * HOUR_MS).toISOString();
+      expect(shortenEndDraft('2026-10-22T13:00', end, NOW).error).toBeNull();
+      expect(shortenEndDraft('2026-10-22T14:00', end, NOW).error).toBe(
+        copy.errModerationNotEarlier,
+      );
+      expect(shortenEndDraft('2026-10-22T15:00', end, NOW).error).toBe(
+        copy.errModerationNotEarlier,
+      );
+    });
   });
 
   it('needs a reason for an action, and the explanation with 기타 (owner decision 2026-10-22)', () => {
@@ -993,6 +1115,11 @@ describe('operators', () => {
       cancelled: copy.errModerationCancelled,
       resolved: copy.errModerationResolved,
       not_theirs: copy.errModerationNotTheirs,
+      // A writing restriction's 감경 and lift (#185, ADR-0082).
+      not_restriction: copy.errModerationNotRestriction,
+      ended: copy.errModerationEnded,
+      not_earlier: copy.errModerationNotEarlier,
+      end_passed: copy.errModerationEndPassed,
     };
     for (const [reason, message] of Object.entries(expected)) {
       expect(moderationFailure(notAllowed(reason))).toEqual({ kind: 'alert', message });
@@ -1033,6 +1160,16 @@ describe('operators', () => {
     expect(moderationFailure(validation('reportIds', 'Too big'))).toEqual({
       kind: 'alert',
       message: copy.errModerationReportIds,
+    });
+    // A 감경's end the server could not read, a term it does not take (#185).
+    expect(moderationFailure(validation('endsAt', 'Invalid ISO datetime'))).toEqual({
+      kind: 'field',
+      field: 'endsAt',
+      message: copy.errModerationEndRequired,
+    });
+    expect(moderationFailure(validation('days', 'Invalid input'))).toEqual({
+      kind: 'alert',
+      message: copy.errModerationTermRequired,
     });
     expect(moderationFailure(new TypeError('Failed to fetch'))).toEqual({
       kind: 'alert',

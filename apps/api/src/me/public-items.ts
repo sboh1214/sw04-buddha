@@ -1,5 +1,6 @@
 import { type Db } from '@buddha/db';
-import { AppError } from '../common/errors/app-error.js';
+import { type RestrictedDetails } from '@buddha/shared';
+import { restrictedError, writingRestrictionOf } from '../moderation/restrictions.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -26,19 +27,25 @@ type Executor = Db | Tx;
 export type PublicItemEdit = 'replace' | 'clear' | 'first';
 
 /**
- * Whether a sanction that stops public-item edits is in force on the account: a writing
+ * The sanction that stops public-item edits in force on the account, or null: a writing
  * restriction (작성 제한, #185) or an account restriction (계정 제한, #139), either of which keeps
- * the public items from new values (#37-9). Read inside the caller's transaction, after it locked
- * the profile row, so the answer holds until the write commits.
+ * the public items from new values (#37-9) — its kind and its end (null: 무기한), which the refusal
+ * carries. Read inside the caller's transaction, after it locked the profile row, so the answer
+ * holds until the write commits: an operator's restriction locks that row before it is written.
  */
-export type SanctionCheck = (executor: Executor, userId: string) => Promise<boolean>;
+export type SanctionCheck = (
+  executor: Executor,
+  userId: string,
+) => Promise<RestrictedDetails | null>;
 
 /**
- * Neither sanction exists yet: #185 and #139 come later and answer here, from their own records —
- * the one place they have to change for every public-item write to follow (#41's scope: «두 이슈
- * 가운데 이 이슈보다 늦게 끝나는 쪽은 제한 중 프로필 수정 차단 … 의 적용도 맡는다»).
+ * The writing restriction in force (#185, ADR-0082: `writingRestrictionOf`, the same answer every
+ * post, comment and edit reads) — the one place a sanction answers for every public-item write
+ * (#41's scope: «두 이슈 가운데 이 이슈보다 늦게 끝나는 쪽은 제한 중 프로필 수정 차단 … 의 적용도
+ * 맡는다»). #139's account restriction answers here too once it is stacked: the later of the two
+ * ends, the one the member waits for.
  */
-export const sanctionInForce: SanctionCheck = () => Promise.resolve(false);
+export const sanctionInForce: SanctionCheck = writingRestrictionOf;
 
 /**
  * The one check point of every public profile item write (#37-9, decision 7): under a writing or
@@ -56,10 +63,11 @@ export const sanctionInForce: SanctionCheck = () => Promise.resolve(false);
  * (#141, ProfileImageService: `replace` for an upload — asked before the conversion too — and
  * `clear` for a deletion). `sanctioned` is the lookup — `sanctionInForce` but in unit tests.
  *
- * The refusal is a 403 FORBIDDEN that names no field (the web tells the other account's cookie by
- * its `expectedAccountId` detail) — until #185 and #139, which give it a code of its own carrying
- * the sanction's end and the notice that one appeals by email (owner decision 2026-10-21 answer 8,
- * ADR-0078 결과 5), with their records; nothing reaches it before them.
+ * The refusal is RESTRICTED (403) with the sanction's kind and end (`RestrictedDetails`, null for
+ * 무기한): a code of its own rather than a plain FORBIDDEN, so the screen says what stays closed
+ * until when — «…(…까지).» or «…(무기한).» — with the way to 조치·신고 내역 under it, where the
+ * appeal is (owner decision 2026-10-21 answer 8, ADR-0078 결과 5, as the owner's 2026-10-22
+ * evening answer words it: «끝나는 시각과 조치·신고 내역 링크(기한은 내역에)»; #185, ADR-0082).
  */
 export async function assertPublicItemEdit(
   executor: Executor,
@@ -68,11 +76,8 @@ export async function assertPublicItemEdit(
   sanctioned: SanctionCheck = sanctionInForce,
 ): Promise<void> {
   if (edit !== 'replace') return;
-  if (await sanctioned(executor, userId)) {
-    throw new AppError('FORBIDDEN', {
-      message: 'A public profile item cannot take a new value during a restriction',
-    });
-  }
+  const sanction = await sanctioned(executor, userId);
+  if (sanction !== null) throw restrictedError(sanction);
 }
 
 /**

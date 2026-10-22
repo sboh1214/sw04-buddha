@@ -63,6 +63,7 @@ import {
   profiles,
   releaseSettings,
   reports,
+  restrictionEndChanges,
   startGrantNumbers,
   startGrants,
   user,
@@ -2233,6 +2234,211 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .values({ nickname: '내가버린닉', userId: author.id })
         .returning();
       expect(own?.actionId).toBeNull();
+    });
+  });
+
+  describe('writing restrictions and the changes of their end (migration 0039, #185)', () => {
+    const DAY = 24 * 60 * 60 * 1_000;
+
+    async function restrictionFixture() {
+      const { user: member } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: member.id });
+      const comment = await createComment(t.db, { postId: post.id, authorId: member.id });
+      return { member, admin, post, comment };
+    }
+    /** A writing restriction given `ago` ms back for `term` ms (null: 무기한). */
+    const restrict = (
+      userId: string,
+      createdBy: string,
+      ago: number,
+      term: number | null,
+      extra: { postId?: string; commentId?: string } = {},
+    ) => {
+      const createdAt = new Date(Date.now() - ago);
+      return createModerationAction(t.db, {
+        userId,
+        createdBy,
+        type: 'writing_restriction',
+        createdAt,
+        endsAt: term === null ? null : new Date(createdAt.getTime() + term),
+        ...extra,
+      });
+    };
+    const setEnd = (id: string, endsAt: Date | null | ReturnType<typeof sql>) =>
+      t.db.update(moderationActions).set({ endsAt }).where(eq(moderationActions.id, id));
+    const onlyForward = (e: unknown) =>
+      errorMessage(e).includes('only brings a standing restriction');
+
+    it('takes a term or none, about one of the member’s items at most, never ending before it began', async () => {
+      const { member, admin, post, comment } = await restrictionFixture();
+      const base = {
+        type: 'writing_restriction',
+        userId: member.id,
+        createdBy: admin.id,
+        reason: 'spam' as const,
+      };
+      await restrict(member.id, admin.id, 0, 7 * DAY);
+      await restrict(member.id, admin.id, 0, null);
+      await restrict(member.id, admin.id, 0, DAY, { postId: post.id });
+      await restrict(member.id, admin.id, 0, DAY, { commentId: comment.id });
+      await expect(
+        t.db.insert(moderationActions).values({ ...base, postId: post.id, commentId: comment.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_subject_check',
+      );
+      const at = new Date();
+      await expect(
+        t.db
+          .insert(moderationActions)
+          .values({ ...base, createdAt: at, endsAt: new Date(at.getTime() - 1) }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_ends_at_check',
+      );
+      // Nothing else has an end; the operator is never the member.
+      for (const type of ['warning', 'hide', 'bio_clear']) {
+        await expect(
+          t.db.insert(moderationActions).values({
+            ...base,
+            type,
+            postId: type === 'hide' ? post.id : null,
+            endsAt: new Date(Date.now() + DAY),
+          }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_ends_at_check',
+        );
+      }
+      await expect(
+        t.db.insert(moderationActions).values({ ...base, createdBy: member.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_not_own_check',
+      );
+      expect(
+        await t.db
+          .select()
+          .from(moderationActions)
+          .where(eq(moderationActions.type, 'writing_restriction')),
+      ).toHaveLength(4);
+    });
+
+    it('brings a standing restriction’s end forward only — never back, never to 무기한, never to the past, never once ended', async () => {
+      const { member, admin } = await restrictionFixture();
+      const week = await restrict(member.id, admin.id, DAY, 7 * DAY);
+      const sixDaysOn = new Date(week.createdAt.getTime() + 6 * DAY);
+      await setEnd(week.id, new Date(week.createdAt.getTime() + 3 * DAY));
+      // Back, to 무기한, to the past (after its start, before now): refused.
+      await expect(setEnd(week.id, sixDaysOn)).rejects.toSatisfy(onlyForward);
+      await expect(setEnd(week.id, null)).rejects.toSatisfy(onlyForward);
+      await expect(setEnd(week.id, new Date(Date.now() - 60_000))).rejects.toSatisfy(onlyForward);
+      // 무기한 to a term (감경 includes it).
+      const indefinite = await restrict(member.id, admin.id, DAY, null);
+      await setEnd(indefinite.id, new Date(Date.now() + DAY));
+      // A lift: the end at the transaction's now; then it has ended, and nothing moves it again.
+      await setEnd(week.id, sql`now()`);
+      await expect(setEnd(week.id, new Date(Date.now() + 1_000))).rejects.toSatisfy(onlyForward);
+      // One ended by its term is as closed.
+      const ended = await restrict(member.id, admin.id, 2 * DAY, DAY);
+      await expect(setEnd(ended.id, new Date(Date.now() + 1_000))).rejects.toSatisfy(onlyForward);
+      // What was given stays: the reason, the operator, the time.
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ note: '다른 설명' })
+          .where(eq(moderationActions.id, indefinite.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('cannot change what was done'));
+      // Another type's end never opens, and a cancelled restriction no longer changes.
+      const warning = await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        type: 'warning',
+      });
+      await expect(setEnd(warning.id, new Date(Date.now() + DAY))).rejects.toSatisfy(onlyForward);
+      await t.db
+        .update(moderationActions)
+        .set({ cancelledAt: new Date(), cancelledBy: admin.id, cancelReason: '이의 인정' })
+        .where(eq(moderationActions.id, indefinite.id));
+      await expect(setEnd(indefinite.id, new Date(Date.now() + 1_000))).rejects.toSatisfy((e) =>
+        errorMessage(e).includes('was cancelled'),
+      );
+      // A cancellation and an end change are never one write.
+      const both = await restrict(member.id, admin.id, 0, 7 * DAY);
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({
+            endsAt: new Date(Date.now() + DAY),
+            cancelledAt: new Date(),
+            cancelledBy: admin.id,
+            cancelReason: '이의 인정',
+          })
+          .where(eq(moderationActions.id, both.id)),
+      ).rejects.toSatisfy(onlyForward);
+    });
+
+    it('keeps each change of an end as made: earlier only, a kind and a reason, never rewritten', async () => {
+      const { member, admin } = await restrictionFixture();
+      const action = await restrict(member.id, admin.id, 0, 7 * DAY);
+      const previousEndsAt = action.endsAt!;
+      const endsAt = new Date(previousEndsAt.getTime() - 4 * DAY);
+      const base = { actionId: action.id, createdBy: admin.id, reason: '이의 일부 인정' };
+      const [change] = await t.db
+        .insert(restrictionEndChanges)
+        .values({ ...base, kind: 'shorten', previousEndsAt, endsAt })
+        .returning();
+      // From 무기한 to anything.
+      await t.db
+        .insert(restrictionEndChanges)
+        .values({ ...base, kind: 'lift', previousEndsAt: null, endsAt: new Date() });
+      await expect(
+        t.db
+          .insert(restrictionEndChanges)
+          .values({ ...base, kind: 'extend', previousEndsAt, endsAt }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'restriction_end_changes_kind_check',
+      );
+      await expect(
+        t.db
+          .insert(restrictionEndChanges)
+          .values({ ...base, kind: 'shorten', previousEndsAt: endsAt, endsAt: previousEndsAt }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' && sqlConstraint(e) === 'restriction_end_changes_earlier_check',
+      );
+      await expect(
+        t.db
+          .insert(restrictionEndChanges)
+          .values({ ...base, kind: 'shorten', previousEndsAt, endsAt, reason: '   ' }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' && sqlConstraint(e) === 'restriction_end_changes_reason_check',
+      );
+      await expect(
+        t.db
+          .insert(restrictionEndChanges)
+          .values({ ...base, kind: 'shorten', previousEndsAt, endsAt, actionId: randomUUID() }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23503' &&
+          sqlConstraint(e) === 'restriction_end_changes_action_id_moderation_actions_id_fk',
+      );
+      // buddha_app never rewrites one (UPDATE revoked); the action stays while its changes do.
+      await expect(
+        t.db
+          .update(restrictionEndChanges)
+          .set({ reason: '다른 사유' })
+          .where(eq(restrictionEndChanges.id, change!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db.delete(moderationActions).where(eq(moderationActions.id, action.id)),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23503' &&
+          sqlConstraint(e) === 'restriction_end_changes_action_id_moderation_actions_id_fk',
+      );
+      // #184 removes the changes first, then the action.
+      await t.db.delete(restrictionEndChanges).where(eq(restrictionEndChanges.actionId, action.id));
+      await t.db.delete(moderationActions).where(eq(moderationActions.id, action.id));
     });
   });
 

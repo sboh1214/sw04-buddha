@@ -5,6 +5,7 @@ import {
   OTHER_NEEDS_TEXT_MESSAGE,
   REPORT_DESCRIPTION_MAX_LENGTH,
   REPORT_REASONS,
+  WRITING_RESTRICTION_DAYS,
   appealDeadlineOf,
   codePointLength,
   moderationNotAllowedDetailsSchema,
@@ -20,6 +21,8 @@ import {
   type ReportReason,
   type ReportRefusal,
   type ReportTargetType,
+  type RestrictionEndChangeKind,
+  type WritingRestrictionDays,
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import {
@@ -36,6 +39,7 @@ import {
   type RemovedProfileItem,
   type ReportStatus,
   type ReportTarget,
+  type RestrictionEndChange,
   isApiError,
   isApiUnreachable,
   isForAnotherAccount,
@@ -43,7 +47,7 @@ import {
   validationMessage,
 } from './api';
 import { hiddenItemName, reportReasonLabel } from './authored';
-import { formatKst } from './datetime';
+import { formatKst, kstLocalToIso } from './datetime';
 import { formatWait } from './phone-verification';
 import { postFirstLine, postPath } from './posts';
 import { profilePath } from './profile';
@@ -63,6 +67,12 @@ import { profilePath } from './profile';
  * cancels with a reason, and never processes what concerns themselves. The member acted on reads
  * the type, the reason, the end (if any) and how to appeal; the reporter reads 접수 and then
  * 조치함 or 기각. Neither reads who reported or which operator acted.
+ *
+ * 작성 제한 (#185, ADR-0082; ADR-0069 decision 2 #45-12, #45-14, decision 4 #185 rows) joins them:
+ * an operator restricts a member's writing for 1, 3, 7 or 30 days or 무기한, from an item's page
+ * (its pending reports resolved) or the member's, and lifts it early or brings its end forward
+ * (감경), each with a reason. The member reads it on the banner and in 조치·신고 내역 with its end,
+ * and every refused write says it (lib/restriction.ts).
  */
 
 // ---- addresses ---------------------------------------------------------------------------------
@@ -130,13 +140,15 @@ export function adminTargetPath(target: ModerationTarget): string {
 
 /**
  * The member's own reports and the actions taken on them (`GET /me/reports`,
- * `/me/moderation/actions`): read with their cookie, so the root is in `PRIVATE_QUERY_ROOTS`
- * (market-keys.ts) — never fetched on the server, never dehydrated, reset with every other
- * personal entry when the session changes. No key under it says whose it is.
+ * `/me/moderation/actions`), and the restriction that governs them now (`GET
+ * /me/moderation/restriction`, #185 — the banner's): read with their cookie, so the root is in
+ * `PRIVATE_QUERY_ROOTS` (market-keys.ts) — never fetched on the server, never dehydrated, reset
+ * with every other personal entry when the session changes. No key under it says whose it is.
  */
 export const MY_MODERATION_KEY = ['my-moderation'] as const;
 export const MY_REPORTS_KEY = [...MY_MODERATION_KEY, 'reports'] as const;
 export const MY_ACTIONS_KEY = [...MY_MODERATION_KEY, 'actions'] as const;
+export const MY_RESTRICTION_KEY = [...MY_MODERATION_KEY, 'restriction'] as const;
 
 /**
  * The operators' reads, under the `admin` root (`PRIVATE_QUERY_ROOTS`). One prefix, so an action
@@ -191,6 +203,7 @@ const ACTION_LABELS: Readonly<Record<ModerationActionType, string>> = {
   nickname_reset: copy.moderationActionNicknameReset,
   bio_clear: copy.moderationActionBioClear,
   image_remove: copy.moderationActionImageRemove,
+  writing_restriction: copy.moderationActionWritingRestriction,
 };
 
 /** An action's name, the same for the member and the operators. */
@@ -524,28 +537,33 @@ export function appealDeadline(action: Pick<MyModerationAction, 'createdAt' | 'c
 }
 
 /**
- * The sanction in force the banner speaks of (ADR-0069 decision 4 #50: «진행 중인 제재가 있으면
- * MY 요약·글쓰기 화면의 안내 띠»), or null: an action not cancelled whose end (`endsAt`) is still
- * ahead of `now` — the latest-ending of them. A sanction is a restriction (#45-12: «제재(작성
- * 제한·계정 제한)»), which #185 and #139 add with their end; none of #50's actions is one — a
- * warning is a record and the member's notice only (#45-11), and a hiding or a profile item has no
- * end — so with #50 alone this is always null. A restriction without an end (#139's 무기한) is
- * that issue's to add here.
+ * The types that restrict the member until they end (#45-12: «제재(작성 제한·계정 제한)»): the
+ * writing restriction (#185, ADR-0082). #139's account restriction joins this set. #50's actions
+ * restrict nothing — a warning is a record and the member's notice only (#45-11), and a hiding or
+ * a profile item has no end.
  */
-export function sanctionInForce<A extends Pick<MyModerationAction, 'endsAt' | 'cancelledAt'>>(
-  actions: readonly A[],
-  // Read in render through this default, as `refundAction`'s is (admin-payments.tsx): the
-  // member's actions are never read on the server, so there is no hydration to mismatch.
+const RESTRICTION_TYPES: ReadonlySet<ModerationActionType> = new Set<ModerationActionType>([
+  'writing_restriction',
+]);
+
+/** Whether an action of `type` restricts the member until it ends. */
+export function isRestriction(type: ModerationActionType): boolean {
+  return RESTRICTION_TYPES.has(type);
+}
+
+/**
+ * Whether a restriction stands at `now`, as the server counts it (`writingRestrictionOf`): one of
+ * the restriction types, not cancelled — a cancellation ends it at once — and with no end (무기한,
+ * until an operator lifts it) or an end still ahead. An early lift sets its end to the lift's time
+ * and a 감경 to an earlier one (#185): `endsAt` is the end as it stands now.
+ */
+export function restrictionStanding(
+  action: Pick<MyModerationAction, 'type' | 'endsAt' | 'cancelledAt'>,
+  // Read in render through this default, as `warningInWindow`'s is: never on the server.
   now: number = Date.now(),
-): A | null {
-  let found: A | null = null;
-  for (const action of actions) {
-    if (action.cancelledAt !== null || action.endsAt === null) continue;
-    const end = Date.parse(action.endsAt);
-    if (!(end > now)) continue;
-    if (found === null || end > Date.parse(found.endsAt ?? '')) found = action;
-  }
-  return found;
+): boolean {
+  if (!isRestriction(action.type) || action.cancelledAt !== null) return false;
+  return action.endsAt === null || Date.parse(action.endsAt) > now;
 }
 
 /**
@@ -553,13 +571,15 @@ export function sanctionInForce<A extends Pick<MyModerationAction, 'endsAt' | 'c
  * 동안 MY 요약에만 안내 띠»), or null: the newest warning not cancelled whose appeal window —
  * APPEAL_WINDOW_DAYS from it (`appealDeadlineOf`) — is still open at `now`. A cancelled one is
  * nothing to tell any more. Only the summary shows it: a warning restricts nothing (#45-11), so the
- * write page's banner stays for restrictions (`sanctionInForce`).
+ * write page's banner stays for restrictions (`SanctionBanner`, which reads the member's
+ * restriction on its own — lib/restriction.ts `restrictionShown`).
  */
 export function warningInWindow<
   A extends Pick<MyModerationAction, 'type' | 'createdAt' | 'cancelledAt'>,
 >(
   actions: readonly A[],
-  // Read in render through this default, as `sanctionInForce`'s is: never on the server.
+  // Read in render through this default, as `refundAction`'s is (admin-payments.tsx): the
+  // member's actions are never read on the server, so there is no hydration to mismatch.
   now: number = Date.now(),
 ): A | null {
   let found: A | null = null;
@@ -723,10 +743,19 @@ export function isCancellable(action: Pick<AdminModerationAction, 'cancelledAt'>
  * (2차) 3: «닉네임은 되살리지 않습니다. 이전 닉네임의 30일 보류는 끝났습니다.»).
  */
 export function cancelDialogBody(
-  action: Pick<AdminModerationAction, 'type' | 'createdAt'>,
+  action: Pick<AdminModerationAction, 'type' | 'createdAt' | 'endsAt' | 'cancelledAt'>,
   // Read when the dialog opens (a click), never on the server.
   now: number = Date.now(),
 ): string {
+  // A writing restriction's cancellation voids it and ends it at once; an early lift keeps it and
+  // ends it now (#185, ADR-0082 결정 7) — the dialog says which this is. One that has ended
+  // already (its term passed, or lifted) can still be cancelled — an appeal accepted within its
+  // 14 days (#45-14) — and then there is nothing to end, and no 조기 해제 on its row to point at.
+  if (isRestriction(action.type)) {
+    return restrictionStanding(action, now)
+      ? copy.adminModerationCancelRestrictionBody
+      : copy.adminModerationCancelRestrictionEndedBody;
+  }
   if (action.type !== 'nickname_reset') return copy.adminModerationCancelBody;
   return nicknameHoldEndOf(action.createdAt).getTime() > now
     ? copy.adminModerationCancelNicknameResetBody
@@ -777,6 +806,78 @@ export function recordReasonDraft(text: string): { reason: string; error: string
   };
 }
 
+// ---- operators: the writing restriction (#185, ADR-0082) -------------------------------------
+
+/**
+ * The terms an operator picks a writing restriction's from (ADR-0069 decision 2 #45-12: «1·3·7·30일과
+ * 무기한에서 고른다»), in that order: the days, 24 hours each from the restriction, or 무기한
+ * (`days: null`). The radio's value is the days written out, or 'none'.
+ */
+export const RESTRICTION_TERM_OPTIONS: readonly {
+  value: string;
+  days: WritingRestrictionDays | null;
+  label: string;
+}[] = [
+  ...WRITING_RESTRICTION_DAYS.map((days) => ({
+    value: String(days),
+    days,
+    label: `${String(days)}${copy.adminModerationTermDayUnit}`,
+  })),
+  { value: 'none', days: null, label: copy.restrictionIndefinite },
+];
+
+/** The term a radio's value names, or undefined for none picked (the dialog then says so). */
+export function restrictionTermOf(
+  value: string,
+): { days: WritingRestrictionDays | null } | undefined {
+  const found = RESTRICTION_TERM_OPTIONS.find((option) => option.value === value);
+  return found === undefined ? undefined : { days: found.days };
+}
+
+/** A restriction's end on an operator's page: the time in Korean time (ADR-0061), or '무기한'. */
+export function adminRestrictionEndText(endsAt: string | null): string {
+  return endsAt === null ? copy.restrictionIndefinite : formatKst(endsAt);
+}
+
+const END_CHANGE_LABELS: Readonly<Record<RestrictionEndChangeKind, string>> = {
+  shorten: copy.adminModerationEndChangeShorten,
+  lift: copy.adminModerationEndChangeLift,
+};
+
+/** '감경' · '조기 해제': how an operator brought a restriction's end forward. */
+export function endChangeLabel(kind: RestrictionEndChangeKind): string {
+  return END_CHANGE_LABELS[kind];
+}
+
+/** One change of an end, as the operators' list says it: '감경 · 무기한 → 2026. 10. 25. 오후 3:00'. */
+export function endChangeText(
+  change: Pick<RestrictionEndChange, 'kind' | 'previousEndsAt' | 'endsAt'>,
+): string {
+  return `${endChangeLabel(change.kind)} · ${adminRestrictionEndText(change.previousEndsAt)} → ${formatKst(change.endsAt)}`;
+}
+
+/**
+ * The 감경 dialog's new end as typed (a `datetime-local` read in Korean time, `kstLocalToIso`, as
+ * every admin time input is — ADR-0061 #60-8): the instant to send, or what is wrong with it —
+ * nothing or nothing readable, not ahead of `now` (a lift ends it now; the server's `end_passed`),
+ * not before the end now (the server's `not_earlier`; any instant is, for 무기한). The server
+ * judges again by its own clock.
+ */
+export function shortenEndDraft(
+  local: string,
+  currentEndsAt: string | null,
+  // Read when the dialog is sent (a click), never on the server.
+  now: number = Date.now(),
+): { endsAt: string | null; error: string | null } {
+  const endsAt = kstLocalToIso(local);
+  if (endsAt === null) return { endsAt: null, error: copy.errModerationEndRequired };
+  if (!(Date.parse(endsAt) > now)) return { endsAt, error: copy.errModerationEndPassed };
+  if (currentEndsAt !== null && !(Date.parse(endsAt) < Date.parse(currentEndsAt))) {
+    return { endsAt, error: copy.errModerationNotEarlier };
+  }
+  return { endsAt, error: null };
+}
+
 /** Parses a `<select>`'s value into a reason, or null for the empty option. */
 export function reportReasonOf(value: string): ReportReason | null {
   return REPORT_REASONS.find((code) => code === value) ?? null;
@@ -790,6 +891,10 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
   cancelled: copy.errModerationCancelled,
   resolved: copy.errModerationResolved,
   not_theirs: copy.errModerationNotTheirs,
+  not_restriction: copy.errModerationNotRestriction,
+  ended: copy.errModerationEnded,
+  not_earlier: copy.errModerationNotEarlier,
+  end_passed: copy.errModerationEndPassed,
 };
 
 /**
@@ -798,10 +903,13 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
  * all but `own`, and the hook reads it again either way), the target gone, the cookie of another
  * account, a session that ended or an account no longer an admin (sending again cannot help, as
  * the admin role dialogs say, `adminRoleChangeRefusal`), more reports named than one dismissal
- * takes, a request that never reached the API.
+ * takes, a 감경's end the server could not read or a term it does not take (#185), a request that
+ * never reached the API. A 감경 or a lift refused by the restriction's state (`not_restriction`,
+ * `ended`, `not_earlier`, `end_passed`) is MODERATION_NOT_ALLOWED's with the rest.
  */
 export type ModerationFailure =
-  { kind: 'field'; field: 'note' | 'reason'; message: string } | { kind: 'alert'; message: string };
+  | { kind: 'field'; field: 'note' | 'reason' | 'endsAt'; message: string }
+  | { kind: 'alert'; message: string };
 
 export function moderationFailure(error: unknown): ModerationFailure {
   const alert = (message: string): ModerationFailure => ({ kind: 'alert', message });
@@ -831,6 +939,10 @@ export function moderationFailure(error: unknown): ModerationFailure {
     if (field === 'reason') {
       return { kind: 'field', field: 'reason', message: copy.errModerationRecordRequired };
     }
+    if (field === 'endsAt') {
+      return { kind: 'field', field: 'endsAt', message: copy.errModerationEndRequired };
+    }
+    if (field === 'days') return alert(copy.errModerationTermRequired);
     if (field === 'reportIds') return alert(copy.errModerationReportIds);
     return alert(copy.errPostInvalid);
   }

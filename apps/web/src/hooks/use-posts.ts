@@ -33,6 +33,7 @@ import {
   postKey,
   postListQuery,
 } from '@/lib/posts';
+import { afterRestricted } from '@/lib/query-client';
 
 /**
  * 근거 글 (#46, ADR-0073): the community list, a post page, the writes and the image upload — and a
@@ -292,13 +293,18 @@ export async function uploadPostImage(
  * (`afterRefusal`) — an upload refused for the onboarding (a revision asked for consent again) or
  * as another account (the cookie changed in another tab) puts the account's real state on screen,
  * as a refused send does, rather than leaving the form up with every later upload and the send
- * refused the same way — and is then the editor's to show.
+ * refused the same way; a writing restriction's (RESTRICTED, #185 — the server refuses a post's
+ * image before converting it) reads the member's restriction and actions again, so the write
+ * page's banner says it (`afterRestricted`, query-client.ts — what the app's MutationCache does for
+ * every mutation's refusal; the upload is a plain call, so it asks here) — and is then the editor's
+ * to show.
  */
 export function postImageUploader(queryClient: QueryClient, onSessionChanged: () => void) {
   return async (file: Blob & { type: string }, expectedAccountId: string) => {
     try {
       return await uploadPostImage(file, expectedAccountId);
     } catch (error) {
+      afterRestricted(queryClient, error);
       await afterRefusal(queryClient, error as Error, onSessionChanged);
       throw error;
     }

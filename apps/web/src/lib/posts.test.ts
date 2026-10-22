@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type Post, type PostAuthor, type PublishedPost } from './api';
 import { goneBoxReason } from './comments';
+import { formatKst } from './datetime';
 import { isPrivateQueryKey } from './market-keys';
 import {
   COMMUNITY_PATH,
@@ -871,19 +872,23 @@ describe('a refused write', () => {
     expect(
       postWriteErrorMessage(
         refusal(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'other account' }]),
+        formatKst,
       ),
     ).toBe(copy.sessionChanged);
-    expect(postWriteErrorMessage(refusal(403, 'FORBIDDEN'))).toBe(copy.errPostNotYours);
-    expect(postWriteErrorMessage(refusal(409, 'POST_NOT_EDITABLE', { reason: 'hidden' }))).toBe(
-      copy.errPostNotEditable,
-    );
+    expect(postWriteErrorMessage(refusal(403, 'FORBIDDEN'), formatKst)).toBe(copy.errPostNotYours);
+    expect(
+      postWriteErrorMessage(refusal(409, 'POST_NOT_EDITABLE', { reason: 'hidden' }), formatKst),
+    ).toBe(copy.errPostNotEditable);
     expect(
       postWriteErrorMessage(
         refusal(404, 'NOT_FOUND', [{ path: ['marketId'], message: 'no such market' }]),
+        formatKst,
       ),
     ).toBe(copy.errPostMarketUnavailable);
-    expect(postWriteErrorMessage(refusal(404, 'NOT_FOUND'))).toBe(copy.errPostGone);
-    expect(postWriteErrorMessage(refusal(409, 'ONBOARDING_REQUIRED'))).toBe(copy.errPostOnboarding);
+    expect(postWriteErrorMessage(refusal(404, 'NOT_FOUND'), formatKst)).toBe(copy.errPostGone);
+    expect(postWriteErrorMessage(refusal(409, 'ONBOARDING_REQUIRED'), formatKst)).toBe(
+      copy.errPostOnboarding,
+    );
   });
 
   it('tells the body’s refusals apart by the messages the server writes', () => {
@@ -900,6 +905,7 @@ describe('a refused write', () => {
     const body = (message: string) =>
       postWriteErrorMessage(
         refusal(400, 'VALIDATION_ERROR', [{ path: ['body', 'content', 0], message }]),
+        formatKst,
       );
     expect(body(sanitised(doc()))).toBe(copy.errPostBodyEmpty);
     expect(body(sanitised(doc(p('가'.repeat(POST_BODY_MAX_LENGTH + 1)))))).toBe(
@@ -913,6 +919,7 @@ describe('a refused write', () => {
     expect(
       postWriteErrorMessage(
         refusal(400, 'VALIDATION_ERROR', [{ path: ['title'], message: 'at most 100 characters' }]),
+        formatKst,
       ),
     ).toBe(copy.errPostTitle);
   });
@@ -936,10 +943,23 @@ describe('a refused write', () => {
     expect(refusedImageIds(new TypeError('Failed to fetch'))).toEqual([]);
   });
 
+  it('says a writing restriction with its end in the writer’s zone, or 무기한 — no appeal sentence (#185)', () => {
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    const zone = (iso: string) => `<${iso}>`;
+    expect(
+      postWriteErrorMessage(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt }), zone),
+    ).toBe(`${copy.errRestrictedWriting}(<${endsAt}>까지).`);
+    expect(
+      postWriteErrorMessage(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }), zone),
+    ).toBe(`${copy.errRestrictedWriting}(무기한).`);
+  });
+
   it('says an unreachable server apart from anything else', () => {
-    expect(postWriteErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
-    expect(postWriteErrorMessage(new ApiError(502, undefined))).toBe(copy.errNetwork);
-    expect(postWriteErrorMessage(refusal(500, 'INTERNAL'))).toBe(copy.errUnknown);
+    expect(postWriteErrorMessage(new TypeError('Failed to fetch'), formatKst)).toBe(
+      copy.errNetwork,
+    );
+    expect(postWriteErrorMessage(new ApiError(502, undefined), formatKst)).toBe(copy.errNetwork);
+    expect(postWriteErrorMessage(refusal(500, 'INTERNAL'), formatKst)).toBe(copy.errUnknown);
     expect(postReadErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
     expect(postReadErrorMessage(refusal(500, 'INTERNAL'))).toBe(copy.errUnknown);
   });

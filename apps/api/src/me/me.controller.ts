@@ -89,7 +89,7 @@ export class MeController {
   // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
   // cookie's account (nothing written). ONBOARDING_REQUIRED: the onboarding is not done — its
   // nickname step (the nickname is set there) or a re-consent. NICKNAME_NOT_ALLOWED: the rules and
-  // the interval.
+  // the interval. RESTRICTED: a change under a writing restriction (#37-9, #185), with its end.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -97,6 +97,7 @@ export class MeController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'NICKNAME_NOT_ALLOWED',
+    'RESTRICTED',
   )
   updateMe(
     @CurrentUser() user: SessionUser,
@@ -155,12 +156,19 @@ export class MeController {
     summary: `Set the public profile’s 소개: plain text, line breaks kept, at most ${String(BIO_MAX_LENGTH)} characters; null or blank clears it`,
   })
   @ApiData(meSchema)
-  // FORBIDDEN: a mutation whose Origin is not ours, a body whose `expectedAccountId` is not the
-  // cookie's account (details name the field; nothing written), or a 소개 with text under a writing
-  // or an account restriction (no field named). ONBOARDING_REQUIRED: a 소개 with text from an
-  // account that has not done the onboarding (clearing it is open). VALIDATION_ERROR: more than
-  // BIO_MAX_LENGTH characters (`bioTooLongMessage`).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
+  // cookie's account (details name the field; nothing written). RESTRICTED: a 소개 with text under
+  // a writing restriction (#37-9, #185), with its end — clearing it is open. ONBOARDING_REQUIRED: a
+  // 소개 with text from an account that has not done the onboarding (clearing it is open).
+  // VALIDATION_ERROR: more than BIO_MAX_LENGTH characters (`bioTooLongMessage`).
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
+    'RESTRICTED',
+  )
   updateBio(
     @CurrentUser() user: SessionUser,
     @Body({ schema: updateBioBodySchema }) body: ParsedBioBody,

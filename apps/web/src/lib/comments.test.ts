@@ -14,6 +14,7 @@ import {
   type PostComment,
   type PublishedComment,
 } from './api';
+import { formatKst } from './datetime';
 import {
   PLACED_COMMENTS_KEPT,
   PLACED_REPLIES_KEPT,
@@ -757,8 +758,20 @@ describe('a refused write', () => {
       [refusal(500, 'INTERNAL', undefined), 'create', copy.errUnknown],
     ];
     for (const [error, write, message] of cases) {
-      expect(commentWriteErrorMessage(error, write)).toBe(message);
+      expect(commentWriteErrorMessage(error, write, formatKst)).toBe(message);
     }
+  });
+
+  it('says a writing restriction with its end under the box — no appeal sentence (#185)', () => {
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    const restricted = refusal(403, 'RESTRICTED', { kind: 'writing', endsAt });
+    for (const write of ['create', 'edit'] as const) {
+      expect(commentWriteErrorMessage(restricted, write, formatKst)).toBe(
+        `${copy.errRestrictedWriting}(${formatKst(endsAt)}까지).`,
+      );
+    }
+    // Not a stale thread: the box and its text stay, the refusal under the button.
+    expect(isStaleThreadRefusal(restricted)).toBe(false);
   });
 
   it('reads the thread again only when it says the thread on screen is stale', () => {

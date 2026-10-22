@@ -1,4 +1,5 @@
 import {
+  MutationCache,
   type Query,
   QueryCache,
   QueryClient,
@@ -22,10 +23,28 @@ import {
   WATCHLIST_PAGES_KEY,
 } from './market-keys';
 import { type MarketPages, joinMarket, joinMarketPages, joinPositions } from './market-live';
+import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from './moderation';
 import { type CachedSeries, joinSeries } from './ticks';
 
+/**
+ * A write refused with RESTRICTED (#185, ADR-0082) means a writing restriction stands — maybe one
+ * an operator gave while the page was open — so the member's restriction is read again and the
+ * banner on the page (`SanctionBanner`: MY 요약, 글쓰기, MY 설정) says it with its end, and their
+ * actions too, for 조치·신고 내역. Nothing for any other answer. `active` only, as every
+ * invalidation here: an unmounted list just goes stale.
+ *
+ * One rule for every write that can meet it — posts, comments, edits, the public profile items,
+ * every mutation through the MutationCache below, and a post's image, a plain call, through its
+ * uploader (`postImageUploader`, use-posts.ts) — rather than in each hook.
+ */
+export function afterRestricted(client: QueryClient, error: unknown): void {
+  if (!isApiError(error, 'RESTRICTED')) return;
+  void client.invalidateQueries({ queryKey: MY_RESTRICTION_KEY });
+  void client.invalidateQueries({ queryKey: MY_ACTIONS_KEY });
+}
+
 function makeQueryClient() {
-  const client = new QueryClient({
+  const client: QueryClient = new QueryClient({
     // Tells a 더 보기's failure from every other the moment it lands, while the query still says
     // which fetch failed (`moreFailures` below).
     queryCache: new QueryCache({
@@ -33,6 +52,7 @@ function makeQueryClient() {
         noteMoreFailure(error, query.state.fetchMeta);
       },
     }),
+    mutationCache: new MutationCache({ onError: (error) => afterRestricted(client, error) }),
     defaultOptions: {
       queries: {
         // Do not refetch immediately on mount; the realtime socket patches the caches with

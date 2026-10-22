@@ -7,6 +7,8 @@
  * `admin-markets-resolve.controller.test` for the market transitions,
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
+ * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
+ * (#185),
  * `release-settings.controller.test` for the release settings,
  * `admin-accounts.controller.test` for the admin grants and revokes and
  * `notices.controller.test` for the notices' writes, pins and unpins. What none of them can
@@ -64,6 +66,9 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/moderation/users/:userId/image-remove': 'moderation_image_remove',
   'POST /admin/moderation/actions/:actionId/cancel': 'moderation_cancel',
   'POST /admin/reports/dismiss': 'report_dismiss',
+  'POST /admin/moderation/users/:userId/writing-restriction': 'moderation_writing_restriction',
+  'POST /admin/moderation/actions/:actionId/shorten': 'moderation_restriction_shorten',
+  'POST /admin/moderation/actions/:actionId/lift': 'moderation_restriction_lift',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

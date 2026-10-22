@@ -49,8 +49,8 @@ function tab(key: MyTabKey) {
  * them, so the summary card and the previews are drawn from one price and one list.
  *
  * Above them, the way to the member's own public profile (`ViewOwnProfileLink`, owner decision
- * 2026-10-21 answer 7), as from MY 설정's 프로필 card — and above that, while a sanction is in force,
- * its banner (`SanctionBanner`, ADR-0069 decision 4 #50; #50 has no sanction, ADR-0081 7-8), and for
+ * 2026-10-21 answer 7), as from MY 설정's 프로필 card — and above that, while a writing restriction
+ * stands, its banner (`SanctionBanner`, ADR-0069 decision 4 #50; #185, ADR-0082), and for
  * the appeal window of a warning received, its banner (`WarningBanner`, owner decision 2026-10-21 —
  * the summary only).
  */

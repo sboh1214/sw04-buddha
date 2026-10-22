@@ -24,6 +24,7 @@ import {
   validationMessage,
 } from './api';
 import { POSTS_KEY, isOwnPost, mapKept, withAuthorImage } from './posts';
+import { restrictedMessage } from './restriction';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
@@ -910,11 +911,21 @@ function notAllowedReason(details: unknown): CommentNotAllowedReason | undefined
  * - FORBIDDEN: another account's comment;
  * - ONBOARDING_REQUIRED: a write or an edit before the onboarding is done (a consent a revision
  *   asked for again, #57-5) — the gate follows `['me']`; deleting one's own never meets it;
+ * - RESTRICTED: a writing restriction (#185, ADR-0082) keeps the writer from new 댓글 and 대댓글
+ *   and from editing their own — until when (in the writer's zone, `formatDate`) or 무기한
+ *   (`restrictedMessage`), the way to 조치·신고 내역 under it (`isRestricted`); deleting one's own
+ *   never meets it either (#45-12);
  * - VALIDATION_ERROR on `body`, told apart by `commentBodyRefusalOf`: no text, or too long;
  * - a request that never reached the API, and anything else.
  */
-export function commentWriteErrorMessage(error: unknown, write: CommentWrite): string {
+export function commentWriteErrorMessage(
+  error: unknown,
+  write: CommentWrite,
+  formatDate: (iso: string) => string,
+): string {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
+  const restricted = restrictedMessage(error, 'writing', formatDate);
+  if (restricted !== undefined) return restricted;
   if (isApiError(error, 'COMMENT_NOT_ALLOWED')) {
     const reason = notAllowedReason(error.details);
     return reason === undefined ? copy.errCommentNotAllowed : NOT_ALLOWED_MESSAGES[reason];

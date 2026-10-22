@@ -88,7 +88,8 @@ export class PostCommentsController {
     summary:
       `A comment of plain text (at most ${String(COMMENT_BODY_MAX_LENGTH)} characters, line ` +
       'breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of ' +
-      'the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED)',
+      'the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED); an ' +
+      'author under a writing restriction writes none (RESTRICTED, with its end — asked first)',
   })
   @ApiData(publishedCommentSchema, 201)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
@@ -100,6 +101,7 @@ export class PostCommentsController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'COMMENT_NOT_ALLOWED',
+    'RESTRICTED',
   )
   create(
     @CurrentUser() user: SessionUser,
@@ -155,7 +157,8 @@ export class CommentsController {
     summary:
       'The author replaces the body; the comment shows as edited and the earlier version is kept ' +
       'for operators. The same text changes nothing. A hidden comment cannot be edited ' +
-      '(COMMENT_NOT_EDITABLE)',
+      '(COMMENT_NOT_EDITABLE), nor any under a writing restriction (RESTRICTED, with its end — ' +
+      'asked first). Deleting stays open',
   })
   @ApiData(publishedCommentSchema)
   @ApiErrors(
@@ -165,6 +168,7 @@ export class CommentsController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'COMMENT_NOT_EDITABLE',
+    'RESTRICTED',
   )
   update(
     @CurrentUser() user: SessionUser,

@@ -10,6 +10,7 @@ import { type InfiniteData } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import {
+  type ApiError,
   type Post,
   type PostAuthor,
   type PostSummary,
@@ -22,6 +23,7 @@ import {
 } from './api';
 import { firstValue } from './market-ssr';
 import { profilePath } from './profile';
+import { restrictedMessage } from './restriction';
 
 /**
  * 근거 글과 커뮤니티 (#46, ADR-0073) as the screens read them: the community list's URL and its
@@ -685,14 +687,21 @@ export function postPageMetadata(post: Post | null): Metadata {
  * - ONBOARDING_REQUIRED: a consent a revision asked for again (#57-5), say — the gate follows `['me']`
  *   (a write and an edit only: deleting one's own post asks for a session alone, owner decision
  *   2026-10-19);
+ * - RESTRICTED: a writing restriction (#185, ADR-0082) keeps the writer from new posts and from
+ *   editing their own — what it closes and until when (in the writer's zone, `formatDate`) or
+ *   무기한 (`restrictedMessage`); the form shows the way to 조치·신고 내역 under it (`isRestricted`).
+ *   The server asks it before the post, so a restricted writer reads it before any refusal about
+ *   the post itself. A deletion never meets it;
  * - VALIDATION_ERROR on `title` or on `body`, the body's told apart by `postBodyRefusalOf` (the
  *   shared module that writes the server's messages reads them): no text, too long, too many
  *   images, or an image the writer cannot use — an upload no post took is removed after
  *   ORPHAN_MEDIA_HOURS, and another post may have taken it (`refusedImageIds` names which);
  * - a request that never reached the API, and anything else.
  */
-export function postWriteErrorMessage(error: unknown): string {
+export function postWriteErrorMessage(error: unknown, formatDate: (iso: string) => string): string {
   if (isForAnotherAccount(error)) return copy.sessionChanged;
+  const restricted = restrictedMessage(error, 'writing', formatDate);
+  if (restricted !== undefined) return restricted;
   if (isApiError(error, 'POST_NOT_EDITABLE')) return copy.errPostNotEditable;
   if (isApiError(error, 'NOT_FOUND')) {
     return validationField(error) === 'marketId' ? copy.errPostMarketUnavailable : copy.errPostGone;
@@ -702,23 +711,32 @@ export function postWriteErrorMessage(error: unknown): string {
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
     if (field === 'title') return copy.errPostTitle;
-    if (field === 'body') {
-      switch (postBodyRefusalOf(validationMessage(error) ?? '')?.kind) {
-        case 'empty':
-          return copy.errPostBodyEmpty;
-        case 'too_long':
-          return copy.errPostBodyTooLong;
-        case 'too_many_images':
-          return copy.errPostTooManyImages;
-        case 'image_not_usable':
-          return copy.errPostImageUnusable;
-        case undefined:
-          break;
-      }
-    }
+    if (field === 'body') return postBodyErrorMessage(error);
     return copy.errPostInvalid;
   }
   return isApiUnreachable(error) ? copy.errNetwork : copy.errUnknown;
+}
+
+/**
+ * What a VALIDATION_ERROR on a body the post editor wrote says — a post's (`postWriteErrorMessage`)
+ * or a notice's (#138, lib/notices.ts) — told apart by `postBodyRefusalOf`: no text, too long, too
+ * many images, or an image the writer cannot use; anything else is an invalid post. Never a writing
+ * restriction's (#185): a notice's write never meets one (ADR-0082), so it needs no zone to say an
+ * end in.
+ */
+export function postBodyErrorMessage(error: ApiError): string {
+  switch (postBodyRefusalOf(validationMessage(error) ?? '')?.kind) {
+    case 'empty':
+      return copy.errPostBodyEmpty;
+    case 'too_long':
+      return copy.errPostBodyTooLong;
+    case 'too_many_images':
+      return copy.errPostTooManyImages;
+    case 'image_not_usable':
+      return copy.errPostImageUnusable;
+    case undefined:
+      return copy.errPostInvalid;
+  }
 }
 
 /**

@@ -17,8 +17,11 @@ import {
   type CancelModerationBody,
   type DismissReportsBody,
   type DismissedReports,
+  type LiftRestrictionBody,
   type ModerationActionBody,
+  type ShortenRestrictionBody,
   type WarningBody,
+  type WritingRestrictionBody,
   api,
   isApiError,
   isForAnotherAccount,
@@ -39,8 +42,9 @@ import { useSession } from '@/lib/use-session';
 /**
  * 신고·조치 (#50, ADR-0081), the operators' side: the report queue (grouped by target, its two
  * halves), every action, the moderation pages of a post, a comment and a member, and the actions
- * themselves. Every admin reads all of it (ADR-0056 1-2). Under the `admin` root
- * (`PRIVATE_QUERY_ROOTS`, `ADMIN_MODERATION_KEY`): an action answered — or refused, since another
+ * themselves — the writing restriction, its lift and its 감경 among them (#185, ADR-0082). Every
+ * admin reads all of it (ADR-0056 1-2). Under the `admin` root (`PRIVATE_QUERY_ROOTS`,
+ * `ADMIN_MODERATION_KEY`): an action answered — or refused, since another
  * operator may have acted first — re-reads the whole area, so the queue, the log and every page
  * agree with what was just done.
  *
@@ -182,13 +186,16 @@ export function useAdminProfileModeration(publicId: string) {
 
 /**
  * One operator action, as the dialogs send it: hiding a post or a comment, a warning, one of the
- * three profile items (#37-10), a cancellation, a dismissal. Each body names the admin on screen
- * (`expectedAccountId`).
+ * three profile items (#37-10), a writing restriction and its early lift or 감경 (#185, ADR-0082),
+ * a cancellation, a dismissal. Each body names the admin on screen (`expectedAccountId`).
  */
 export type ModerationVariables =
   | { kind: 'hide-post'; postId: string; body: ModerationActionBody }
   | { kind: 'hide-comment'; commentId: string; body: ModerationActionBody }
   | { kind: 'warn'; userId: string; body: WarningBody }
+  | { kind: 'restrict'; userId: string; body: WritingRestrictionBody }
+  | { kind: 'shorten'; actionId: string; body: ShortenRestrictionBody }
+  | { kind: 'lift'; actionId: string; body: LiftRestrictionBody }
   | {
       kind: 'nickname-reset' | 'bio-clear' | 'image-remove';
       userId: string;
@@ -219,6 +226,27 @@ async function moderate(
       return unwrap(
         await api.POST('/api/v1/admin/moderation/users/{userId}/warn', {
           params: { path: { userId: variables.userId } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'restrict':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/users/{userId}/writing-restriction', {
+          params: { path: { userId: variables.userId } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'shorten':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/actions/{actionId}/shorten', {
+          params: { path: { actionId: variables.actionId.toLowerCase() } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'lift':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/actions/{actionId}/lift', {
+          params: { path: { actionId: variables.actionId.toLowerCase() } },
           body: variables.body,
         }),
       ).data;

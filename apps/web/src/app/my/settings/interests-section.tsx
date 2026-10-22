@@ -3,8 +3,10 @@
 import { Alert, Button, HStack, Skeleton, Stack } from '@chakra-ui/react';
 import { useRouter } from 'next/navigation';
 import { type ReactNode, useMemo, useState } from 'react';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { InterestChecklist } from '@/components/profile/interest-checklist';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
@@ -25,6 +27,7 @@ import {
   interestsToRestore,
   keepSessionProfileDraft,
 } from '@/lib/profile-drafts';
+import { type Refusal, refusalOf } from '@/lib/restriction';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -85,9 +88,10 @@ function InterestsFields({ held, accountId }: { held: readonly number[]; account
   const save = useSetInterestCategories();
   const router = useRouter();
   const step = useSettingsStep();
+  const format = useFormatDateTime();
   const [picked, setPicked] = useState<ReadonlySet<number>>(() => new Set(held));
   const [base, setBase] = useState<readonly number[]>(held);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Refusal | null>(null);
   const offered = useMemo(() => categories.data ?? [], [categories.data]);
   const tree = useMemo(() => groupCategories(offered), [offered]);
   const chosen = interestIds(picked, offered);
@@ -133,9 +137,9 @@ function InterestsFields({ held, accountId }: { held: readonly number[]; account
       router.refresh();
     } catch (error) {
       if (step.afterRefusal(error)) return;
-      const failure = profileItemFailure(error);
+      const failure = profileItemFailure(error, format);
       if (failure.kind === 'categories') void categories.refetch();
-      setNotice(failure.message);
+      setNotice(refusalOf(error, failure.message));
     }
   };
 
@@ -172,7 +176,9 @@ function InterestsFields({ held, accountId }: { held: readonly number[]; account
         <Alert.Root status="error" role="alert" data-testid="interests-notice">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{notice}</Alert.Description>
+            <Alert.Description>
+              <RefusalText message={notice.message} restricted={notice.restricted} />
+            </Alert.Description>
           </Alert.Content>
         </Alert.Root>
       )}

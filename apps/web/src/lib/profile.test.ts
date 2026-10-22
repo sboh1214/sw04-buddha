@@ -8,6 +8,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type PublicProfile } from './api';
+import { formatKst } from './datetime';
 import { type Onboarding, isOnboardingExemptPage } from './onboarding';
 import {
   PROFILE_IMAGE_ACCEPT,
@@ -20,6 +21,7 @@ import {
   interestCategoryLabel,
   interestsChanged,
   interestsEdit,
+  interestsStepFailure,
   isOwnProfile,
   joinedMonthText,
   profileCounts,
@@ -156,14 +158,16 @@ describe('MY 설정: a refused public-item write', () => {
     expect(
       profileItemFailure(
         refusal(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'other' }]),
+        formatKst,
       ),
     ).toEqual({ kind: 'notice', message: copy.sessionChanged });
-    expect(profileItemFailure(refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] }))).toEqual(
-      { kind: 'refresh', message: copy.errPostOnboarding },
-    );
+    expect(
+      profileItemFailure(refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] }), formatKst),
+    ).toEqual({ kind: 'refresh', message: copy.errPostOnboarding });
     expect(
       profileItemFailure(
         refusal(400, 'VALIDATION_ERROR', [{ path: ['bio'], message: bioTooLongMessage(161) }]),
+        formatKst,
       ),
     ).toEqual({ kind: 'field', message: copy.errBioTooLong });
     expect(
@@ -171,18 +175,32 @@ describe('MY 설정: a refused public-item write', () => {
         refusal(400, 'VALIDATION_ERROR', [
           { path: ['categoryIds', 0], message: 'not an active category' },
         ]),
+        formatKst,
       ),
     ).toEqual({ kind: 'categories', message: copy.errInterestsUnavailable });
   });
 
-  it('says nothing of a restriction it cannot tell apart: that is #185’s and #139’s to say', () => {
-    // The FORBIDDEN a writing or an account restriction answers for a new value names no field
-    // (ADR-0078); so does the CSRF refusal.
-    expect(profileItemFailure(refusal(403, 'FORBIDDEN'))).toEqual({
+  it('says a writing restriction with its end and that clearing stays open — no appeal sentence (#185)', () => {
+    // RESTRICTED (owner decision 2026-10-21 answer 8 on #41): a code of its own with the end.
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    expect(
+      profileItemFailure(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt }), formatKst),
+    ).toEqual({
+      kind: 'notice',
+      message: `${copy.errRestrictedProfile}(${formatKst(endsAt)}까지). ${copy.errRestrictedClearAllowed}`,
+    });
+    expect(
+      profileItemFailure(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }), formatKst),
+    ).toEqual({
+      kind: 'notice',
+      message: `${copy.errRestrictedProfile}(무기한). ${copy.errRestrictedClearAllowed}`,
+    });
+    // A FORBIDDEN that names no field is the CSRF refusal: the generic sentence.
+    expect(profileItemFailure(refusal(403, 'FORBIDDEN'), formatKst)).toEqual({
       kind: 'notice',
       message: copy.errUnknown,
     });
-    expect(profileItemFailure(new TypeError('Failed to fetch'))).toEqual({
+    expect(profileItemFailure(new TypeError('Failed to fetch'), formatKst)).toEqual({
       kind: 'notice',
       message: copy.errNetwork,
     });
@@ -291,9 +309,67 @@ describe('MY 설정 for an account facing a re-consent (owner decision 2026-10-2
       }),
     ).toBeUndefined();
     // What the card then says.
-    expect(profileItemFailure(onboardingRefusal)).toEqual({
+    expect(profileItemFailure(onboardingRefusal, formatKst)).toEqual({
       kind: 'refresh',
       message: copy.errPostOnboarding,
+    });
+  });
+});
+
+describe('the onboarding’s interests step: a refused answer', () => {
+  it('says a writing restriction on a late pick with its end, or 무기한, and the way to 조치·신고 내역 — nothing to clear on that screen (#185)', () => {
+    // A pick past the 24 hours after the nickname step is a change (ADR-0078 3rd answer 1).
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    expect(
+      interestsStepFailure(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt }), formatKst),
+    ).toEqual({
+      message: `${copy.errRestrictedProfile}(${formatKst(endsAt)}까지).`,
+      restricted: true,
+      refetchCategories: false,
+    });
+    const indefinite = interestsStepFailure(
+      refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }),
+      formatKst,
+    );
+    expect(indefinite).toEqual({
+      message: `${copy.errRestrictedProfile}(무기한).`,
+      restricted: true,
+      refetchCategories: false,
+    });
+    // MY 설정's sentence that clearing stays open is not this screen's: it has nothing to clear.
+    expect(indefinite.message).not.toContain(copy.errRestrictedClearAllowed);
+  });
+
+  it('says the rest as before, none of it with the way to 조치·신고 내역', () => {
+    expect(
+      interestsStepFailure(
+        refusal(400, 'VALIDATION_ERROR', [
+          { path: ['categoryIds', 0], message: 'not an active category' },
+        ]),
+        formatKst,
+      ),
+    ).toEqual({
+      message: copy.errInterestsUnavailable,
+      restricted: false,
+      refetchCategories: true,
+    });
+    expect(
+      interestsStepFailure(refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] }), formatKst),
+    ).toEqual({
+      message: copy.errOnboardingStepsFirst,
+      restricted: false,
+      refetchCategories: false,
+    });
+    expect(
+      interestsStepFailure(
+        refusal(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'other' }]),
+        formatKst,
+      ),
+    ).toEqual({ message: copy.sessionChanged, restricted: false, refetchCategories: false });
+    expect(interestsStepFailure(new TypeError('Failed to fetch'), formatKst)).toEqual({
+      message: copy.errUnknown,
+      restricted: false,
+      refetchCategories: false,
     });
   });
 });
@@ -337,13 +413,15 @@ describe('MY 설정: the image (#141, #37-6)', () => {
   });
 
   it('says what each refused upload means', () => {
-    expect(profileImageUploadFailure(refused('type'))).toBe(copy.errProfileImageType);
-    expect(profileImageUploadFailure(refused('size'))).toBe(copy.errProfileImageSize);
-    expect(profileImageUploadFailure(refused('unreadable'))).toBe(copy.errImageUnreadable);
+    expect(profileImageUploadFailure(refused('type'), formatKst)).toBe(copy.errProfileImageType);
+    expect(profileImageUploadFailure(refused('size'), formatKst)).toBe(copy.errProfileImageSize);
+    expect(profileImageUploadFailure(refused('unreadable'), formatKst)).toBe(
+      copy.errImageUnreadable,
+    );
     // A reason the route does not name is a failed upload.
-    expect(profileImageUploadFailure(refused('later'))).toBe(copy.errImageUpload);
+    expect(profileImageUploadFailure(refused('later'), formatKst)).toBe(copy.errImageUpload);
     // Fastify's own cut-off, twice the limit: the size.
-    expect(profileImageUploadFailure(refusal(413, 'VALIDATION_ERROR'))).toBe(
+    expect(profileImageUploadFailure(refusal(413, 'VALIDATION_ERROR'), formatKst)).toBe(
       copy.errProfileImageSize,
     );
     expect(
@@ -351,14 +429,29 @@ describe('MY 설정: the image (#141, #37-6)', () => {
         refusal(403, 'FORBIDDEN', [
           { path: ['expectedAccountId'], message: 'session belongs to another account' },
         ]),
+        formatKst,
       ),
     ).toBe(copy.sessionChanged);
     expect(
-      profileImageUploadFailure(refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] })),
+      profileImageUploadFailure(
+        refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] }),
+        formatKst,
+      ),
     ).toBe(copy.errPostOnboarding);
-    // A restriction's refusal names no field: a failed upload until #185/#139 word it.
-    expect(profileImageUploadFailure(refusal(403, 'FORBIDDEN'))).toBe(copy.errImageUpload);
-    expect(profileImageUploadFailure(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
+    // A FORBIDDEN that names no field (the CSRF refusal) is a failed upload.
+    expect(profileImageUploadFailure(refusal(403, 'FORBIDDEN'), formatKst)).toBe(
+      copy.errImageUpload,
+    );
+    // A writing restriction (#185): a public profile item's refusal, its deletion left open.
+    expect(
+      profileImageUploadFailure(
+        refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }),
+        formatKst,
+      ),
+    ).toBe(`${copy.errRestrictedProfile}(무기한). ${copy.errRestrictedClearAllowed}`);
+    expect(profileImageUploadFailure(new TypeError('Failed to fetch'), formatKst)).toBe(
+      copy.errNetwork,
+    );
   });
 
   it('says what a refused deletion means', () => {

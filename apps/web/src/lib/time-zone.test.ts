@@ -525,9 +525,10 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     reason: 'the admin SMS send status (ADR-0070): 기준 시각, when the counts were read',
   },
   'lib/moderation.ts': {
-    names: ['operatorLineText'],
+    names: ['adminRestrictionEndText', 'endChangeText', 'operatorLineText'],
     reason:
-      'the admin moderation pages (#50, ADR-0081): who processed, acted or cancelled, and when',
+      'the admin moderation pages (#50, ADR-0081): who processed, acted or cancelled, and when; ' +
+      'a writing restriction’s end and each change of it (#185, ADR-0082)',
   },
 };
 

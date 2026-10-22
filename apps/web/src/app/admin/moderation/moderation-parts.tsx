@@ -9,6 +9,7 @@ import {
   Field,
   HStack,
   Heading,
+  Input,
   Link as ChakraLink,
   NativeSelect,
   Portal,
@@ -21,6 +22,7 @@ import {
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
   type ReportReason,
+  type WritingRestrictionDays,
 } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
@@ -43,15 +45,19 @@ import {
   ADMIN_REPORTS_PATH,
   REPORT_REASON_OPTIONS,
   REPORT_STATUS_PALETTE,
+  RESTRICTION_TERM_OPTIONS,
   actionReasonDraft,
   actionReasonText,
+  adminRestrictionEndText,
   adminTargetPath,
   adminUserModerationPath,
   cancelDialogBody,
   concernsOperator,
   dismissBatch,
   dismissBatchText,
+  endChangeText,
   isCancellable,
+  isRestriction,
   moderationActionLabel,
   moderationFailure,
   operatorLineText,
@@ -60,6 +66,9 @@ import {
   reportReasonOf,
   reportStatusLabel,
   reportTargetTypeLabel,
+  restrictionStanding,
+  restrictionTermOf,
+  shortenEndDraft,
 } from '@/lib/moderation';
 import { useSession } from '@/lib/use-session';
 
@@ -67,8 +76,9 @@ import { useSession } from '@/lib/use-session';
  * The pieces every page of the admin 신고·조치 area shares (#50, ADR-0081): the area's own row of
  * links, an account's name, the lists of reports and of actions, and the two dialogs every action
  * goes through — one with the reason the member reads (a report reason and the operator's
- * explanation, owner decision 2026-10-22 on #51), one with the operators' own reason (a
- * cancellation, a dismissal). Times are Korean time without a mark (ADR-0061 #60-8, `formatKst`).
+ * explanation, owner decision 2026-10-22 on #51; a writing restriction's term too, #185), one with
+ * the operators' own reason (a cancellation, a dismissal, a restriction's early lift and its 감경
+ * with the new end, #185). Times are Korean time without a mark (ADR-0061 #60-8, `formatKst`).
  */
 
 /**
@@ -307,15 +317,21 @@ export function ReportRows({ reports }: { reports: readonly AdminReport[] }) {
  * that stands, unless it is about the operator (decision 4 #50) — the server refuses it either way.
  * On an action taken on the admin reading it (`aboutViewer`) the operators who took and cancelled
  * it are withheld — the times alone, and a line that says so (owner decision 2026-10-21).
+ *
+ * A writing restriction (#185, ADR-0082) also shows its end as it stands now ('무기한' for none),
+ * '진행 중' while it stands (`restrictionStanding`), and every change of its end — 감경 and 조기
+ * 해제, the end before and after, the operators' reason, who and when (withheld as above). While it
+ * stands, and unless it is about the operator, '조기 해제' and '감경' open their dialogs beside 조치
+ * 취소. `onOpen` opens a dialog; without it the rows offer nothing.
  */
 export function ActionRows({
   actions,
   showUser = false,
-  onCancel,
+  onOpen,
 }: {
   actions: readonly AdminModerationAction[];
   showUser?: boolean;
-  onCancel?: (action: AdminModerationAction) => void;
+  onOpen?: (spec: DialogSpec) => void;
 }) {
   const operatorId = useOperatorId();
   if (actions.length === 0) {
@@ -330,6 +346,8 @@ export function ActionRows({
       {actions.map((action) => {
         const reason = actionReasonText(action.reason);
         const own = concernsOperator(action.user.id, operatorId);
+        const restriction = isRestriction(action.type);
+        const standing = restrictionStanding(action);
         return (
           <Stack
             as="li"
@@ -360,6 +378,16 @@ export function ActionRows({
                     {copy.moderationCancelled}
                   </Badge>
                 )}
+                {standing && (
+                  <Badge
+                    size="sm"
+                    variant="subtle"
+                    colorPalette="orange"
+                    data-testid="moderation-action-standing"
+                  >
+                    {copy.restrictionStanding}
+                  </Badge>
+                )}
                 {showUser && <UserName user={action.user} />}
                 {action.subject !== null && action.subject.type !== 'profile' && (
                   <ChakraLink asChild color="brand.fg" fontSize="sm">
@@ -369,15 +397,39 @@ export function ActionRows({
                   </ChakraLink>
                 )}
               </HStack>
-              {onCancel !== undefined && isCancellable(action) && own === false && (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  onClick={() => onCancel(action)}
-                  data-testid="moderation-action-cancel"
-                >
-                  {copy.adminModerationCancel}
-                </Button>
+              {onOpen !== undefined && own === false && (
+                <HStack gap="1.5" flexWrap="wrap">
+                  {standing && (
+                    <>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => onOpen(liftDialog(action))}
+                        data-testid="moderation-action-lift"
+                      >
+                        {copy.adminModerationLift}
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        onClick={() => onOpen(shortenDialog(action))}
+                        data-testid="moderation-action-shorten"
+                      >
+                        {copy.adminModerationShorten}
+                      </Button>
+                    </>
+                  )}
+                  {isCancellable(action) && (
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() => onOpen(cancelDialog(action))}
+                      data-testid="moderation-action-cancel"
+                    >
+                      {copy.adminModerationCancel}
+                    </Button>
+                  )}
+                </HStack>
               )}
             </HStack>
             <Line label={copy.moderationReason}>{reason.reason}</Line>
@@ -392,8 +444,39 @@ export function ActionRows({
             >
               {operatorLineText(action.createdBy, action.createdAt, action.aboutViewer)}
             </Line>
-            {action.endsAt !== null && (
-              <Line label={copy.moderationEndsAt}>{formatKst(action.endsAt)}</Line>
+            {(restriction || action.endsAt !== null) && (
+              <Line label={copy.moderationEndsAt} testId="moderation-action-ends">
+                {adminRestrictionEndText(action.endsAt)}
+              </Line>
+            )}
+            {action.endChanges.length > 0 && (
+              <Stack as="ul" gap="1.5" listStyleType="none" data-testid="moderation-end-changes">
+                {action.endChanges.map((change) => (
+                  <Stack
+                    as="li"
+                    key={`${change.kind}-${change.createdAt}`}
+                    gap="0.5"
+                    ps="3"
+                    borderStartWidth="2px"
+                    borderColor="border.subtle"
+                    data-testid="moderation-end-change"
+                  >
+                    <Text fontSize="sm" fontWeight="medium">
+                      {endChangeText(change)}
+                    </Text>
+                    <Line label={copy.adminModerationEndChangeReason}>{change.reason}</Line>
+                    <Line
+                      label={
+                        action.aboutViewer
+                          ? copy.adminModerationChangedAt
+                          : copy.adminModerationChangedBy
+                      }
+                    >
+                      {operatorLineText(change.createdBy, change.createdAt, action.aboutViewer)}
+                    </Line>
+                  </Stack>
+                ))}
+              </Stack>
             )}
             {action.removed !== null && (
               <Line label={removedItemLabel(action.removed)} testId="moderation-action-removed">
@@ -452,8 +535,11 @@ export interface SubjectOption {
 
 /**
  * The dialog an action waits in. `action`: the reason the member reads — a report reason and the
- * explanation (required with '기타') — and, for a warning, what it is about. `record`: the
- * operators' own reason, never shown to the member — a cancellation, a dismissal.
+ * explanation (required with '기타') — and, for a warning or a writing restriction, what it is
+ * about (`subjects`, under `subjectLabel`), and for a writing restriction its term (`term`: 1, 3, 7
+ * or 30 days or 무기한, one required — #185). `record`: the operators' own reason, never shown to
+ * the member — a cancellation, a dismissal, a restriction's early lift and its 감경, which also
+ * takes the new end (`end`, Korean time, earlier than the end now and still to come).
  */
 export type DialogSpec =
   | {
@@ -463,10 +549,16 @@ export type DialogSpec =
       success: string;
       testId: string;
       subjects?: readonly SubjectOption[];
+      /** The subjects' label: a warning's ('경고의 대상') unless said. */
+      subjectLabel?: string;
+      /** A writing restriction's term is asked (RESTRICTION_TERM_OPTIONS). */
+      term?: boolean;
       build: (input: {
         reason: ReportReason;
         note: string | null;
         subject: WarningSubject | null;
+        /** The term picked; null for 무기한 and for a dialog that asks none. */
+        days: WritingRestrictionDays | null;
         expectedAccountId: string;
       }) => ModerationVariables;
     }
@@ -477,7 +569,14 @@ export type DialogSpec =
       success: string;
       testId: string;
       details?: ReactNode;
-      build: (input: { reason: string; expectedAccountId: string }) => ModerationVariables;
+      /** A 감경's new end is asked, earlier than `currentEndsAt` (null: 무기한). */
+      end?: { currentEndsAt: string | null };
+      build: (input: {
+        reason: string;
+        /** The new end a 감경 asked for (ISO); null for a dialog that asks none. */
+        endsAt: string | null;
+        expectedAccountId: string;
+      }) => ModerationVariables;
     };
 
 /**
@@ -495,40 +594,63 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
   const [subjectValue, setSubjectValue] = useState(
     spec.kind === 'action' ? (spec.subjects?.[0]?.value ?? '') : '',
   );
+  // A restriction's term: none picked until the operator picks one (no default term).
+  const [termValue, setTermValue] = useState('');
+  // A 감경's new end as typed (`datetime-local`, Korean time) and what was wrong with it when sent.
+  const [endLocal, setEndLocal] = useState('');
+  const [endError, setEndError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
   const [fieldError, setFieldError] = useState<{
-    field: 'note' | 'reason';
+    field: 'note' | 'reason' | 'endsAt';
     message: string;
   } | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const pending = moderate.isPending;
   const action = actionReasonDraft({ reason, note: text });
   const record = recordReasonDraft(text);
+  const term = restrictionTermOf(termValue);
   const reasonError = spec.kind === 'action' && tried ? action.reasonError : null;
+  const termError =
+    spec.kind === 'action' && spec.term === true && tried && term === undefined
+      ? copy.errModerationTermRequired
+      : null;
   const textError =
-    fieldError?.message ??
+    (fieldError !== null && fieldError.field !== 'endsAt' ? fieldError.message : null) ??
     (tried ? (spec.kind === 'action' ? action.noteError : record.error) : null);
+  const endFieldError = fieldError?.field === 'endsAt' ? fieldError.message : endError;
 
   const submit = () => {
     setTried(true);
     setFieldError(null);
     setRefusal(null);
+    setEndError(null);
     if (operatorId === undefined) return;
     let variables: ModerationVariables;
     if (spec.kind === 'action') {
       if (action.reason === null || action.reasonError !== null || action.noteError !== null)
         return;
+      if (spec.term === true && term === undefined) return;
       const subject =
         spec.subjects?.find((option) => option.value === subjectValue)?.subject ?? null;
       variables = spec.build({
         reason: action.reason,
         note: action.note,
         subject,
+        days: term?.days ?? null,
         expectedAccountId: operatorId,
       });
     } else {
+      let endsAt: string | null = null;
+      if (spec.end !== undefined) {
+        const draft = shortenEndDraft(endLocal, spec.end.currentEndsAt);
+        if (draft.error !== null) {
+          setEndError(draft.error);
+          return;
+        }
+        endsAt = draft.endsAt;
+      }
       if (record.error !== null) return;
-      variables = spec.build({ reason: record.reason, expectedAccountId: operatorId });
+      variables = spec.build({ reason: record.reason, endsAt, expectedAccountId: operatorId });
     }
     void moderate
       .mutateAsync(variables)
@@ -582,7 +704,7 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
                       size="sm"
                     >
                       <RadioGroup.Label fontWeight="medium" mb="1">
-                        {copy.adminModerationWarnSubject}
+                        {spec.subjectLabel ?? copy.adminModerationWarnSubject}
                       </RadioGroup.Label>
                       <HStack gap="4" flexWrap="wrap">
                         {spec.subjects.map((option) => (
@@ -598,6 +720,61 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
                         ))}
                       </HStack>
                     </RadioGroup.Root>
+                  )}
+                  {spec.kind === 'action' && spec.term === true && (
+                    <Field.Root invalid={termError !== null} required>
+                      <RadioGroup.Root
+                        name={`${id}-term`}
+                        value={termValue}
+                        onValueChange={(details) => setTermValue(details.value ?? '')}
+                        disabled={pending}
+                        colorPalette="brand"
+                        size="sm"
+                      >
+                        <RadioGroup.Label fontWeight="medium" mb="1">
+                          {copy.adminModerationTerm}
+                        </RadioGroup.Label>
+                        <HStack gap="4" flexWrap="wrap">
+                          {RESTRICTION_TERM_OPTIONS.map((option) => (
+                            <RadioGroup.Item
+                              key={option.value}
+                              value={option.value}
+                              data-testid={`moderation-term-${option.value}`}
+                            >
+                              <RadioGroup.ItemHiddenInput />
+                              <RadioGroup.ItemIndicator />
+                              <RadioGroup.ItemText>{option.label}</RadioGroup.ItemText>
+                            </RadioGroup.Item>
+                          ))}
+                        </HStack>
+                      </RadioGroup.Root>
+                      <Field.ErrorText data-testid="moderation-term-error">
+                        {termError}
+                      </Field.ErrorText>
+                    </Field.Root>
+                  )}
+                  {spec.kind === 'record' && spec.end !== undefined && (
+                    <Field.Root invalid={endFieldError !== null} required>
+                      <Field.Label>{copy.adminModerationShortenEndLabel}</Field.Label>
+                      <Input
+                        type="datetime-local"
+                        size="sm"
+                        value={endLocal}
+                        onChange={(event) => {
+                          setEndLocal(event.target.value);
+                          setEndError(null);
+                          setFieldError(null);
+                        }}
+                        disabled={pending}
+                        data-testid="moderation-end"
+                      />
+                      <Field.HelperText>
+                        {`${copy.moderationEndsAt} ${adminRestrictionEndText(spec.end.currentEndsAt)}`}
+                      </Field.HelperText>
+                      <Field.ErrorText data-testid="moderation-end-error">
+                        {endFieldError}
+                      </Field.ErrorText>
+                    </Field.Root>
                   )}
                   {spec.kind === 'action' && (
                     <Field.Root invalid={reasonError !== null} required>
@@ -707,6 +884,81 @@ export function cancelDialog(action: AdminModerationAction): DialogSpec {
       kind: 'cancel',
       actionId: action.id,
       body: { reason, expectedAccountId },
+    }),
+  };
+}
+
+/** The action a lift or a 감경 is about, above its dialog's fields: type, member, time and end. */
+function RestrictionSummary({ action }: { action: AdminModerationAction }) {
+  return (
+    <Text fontSize="sm" fontWeight="medium">
+      {moderationActionLabel(action.type)} · {action.user.nickname} · {formatKst(action.createdAt)}{' '}
+      · {copy.moderationEndsAt} {adminRestrictionEndText(action.endsAt)}
+    </Text>
+  );
+}
+
+/**
+ * A writing restriction on `user` (#185, ADR-0082): the reason the member reads, its term — 1, 3,
+ * 7 or 30 days or 무기한, none picked until the operator picks one — and what it is about
+ * (`subjects`, a warning's choices: the item's pending reports are resolved by it).
+ */
+export function restrictDialog(
+  user: ModerationUser,
+  subjects: readonly SubjectOption[],
+): DialogSpec {
+  return {
+    kind: 'action',
+    title: copy.adminModerationRestrictTitle,
+    body: copy.adminModerationRestrictBody,
+    success: copy.adminModerationRestricted,
+    testId: 'moderation-restrict-dialog',
+    subjects,
+    subjectLabel: copy.adminModerationRestrictSubject,
+    term: true,
+    build: ({ reason, note, subject, days, expectedAccountId }) => ({
+      kind: 'restrict',
+      userId: user.id,
+      body: { reason, note, subject, days, expectedAccountId },
+    }),
+  };
+}
+
+/** A standing restriction's early lift (조기 해제, #45-12), with the operators' reason. */
+export function liftDialog(action: AdminModerationAction): DialogSpec {
+  return {
+    kind: 'record',
+    title: copy.adminModerationLiftTitle,
+    body: copy.adminModerationLiftBody,
+    success: copy.adminModerationLifted,
+    testId: 'moderation-lift-dialog',
+    details: <RestrictionSummary action={action} />,
+    build: ({ reason, expectedAccountId }) => ({
+      kind: 'lift',
+      actionId: action.id,
+      body: { reason, expectedAccountId },
+    }),
+  };
+}
+
+/**
+ * A standing restriction's 감경 (#45-14: «종료 시각을 앞당기는 기능», 무기한 to a term included): the
+ * new end in Korean time and the operators' reason.
+ */
+export function shortenDialog(action: AdminModerationAction): DialogSpec {
+  return {
+    kind: 'record',
+    title: copy.adminModerationShortenTitle,
+    body: copy.adminModerationShortenBody,
+    success: copy.adminModerationShortened,
+    testId: 'moderation-shorten-dialog',
+    details: <RestrictionSummary action={action} />,
+    end: { currentEndsAt: action.endsAt },
+    build: ({ reason, endsAt, expectedAccountId }) => ({
+      kind: 'shorten',
+      actionId: action.id,
+      // The dialog sends nothing until the end reads (`shortenEndDraft`).
+      body: { endsAt: endsAt ?? '', reason, expectedAccountId },
     }),
   };
 }

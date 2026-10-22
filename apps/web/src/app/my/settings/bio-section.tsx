@@ -6,7 +6,9 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import { useId, useMemo, useState } from 'react';
 import { useForm, useWatch } from 'react-hook-form';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useMe, useUpdateBio } from '@/hooks/use-me';
 import { useProfileDraftTakenBack } from '@/hooks/use-profile-draft';
@@ -27,6 +29,7 @@ import {
   clearSessionProfileDraft,
   keepSessionProfileDraft,
 } from '@/lib/profile-drafts';
+import { type Refusal, refusalOf } from '@/lib/restriction';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -73,8 +76,9 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
   const update = useUpdateBio();
   const router = useRouter();
   const step = useSettingsStep();
+  const format = useFormatDateTime();
   const id = useId();
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Refusal | null>(null);
   const values = useMemo(() => ({ bio: bio ?? '' }), [bio]);
   const {
     register,
@@ -125,14 +129,14 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
       // screen was opened from would show the 소개 from before the save.
       router.refresh();
     } catch (error) {
-      const failure = profileItemFailure(error);
+      const failure = profileItemFailure(error, format);
       if (failure.kind === 'field') {
         setError('bio', { message: failure.message }, { shouldFocus: true });
         return;
       }
       // `refresh`: the hook has asked `['me']` again, and the gate or the step follows it.
       if (step.afterRefusal(error)) return;
-      setNotice(failure.message);
+      setNotice(refusalOf(error, failure.message));
     }
   });
 
@@ -143,7 +147,9 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
           <Alert.Root status="error" role="alert" data-testid="bio-notice">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{notice}</Alert.Description>
+              <Alert.Description>
+                <RefusalText message={notice.message} restricted={notice.restricted} />
+              </Alert.Description>
             </Alert.Content>
           </Alert.Root>
         )}

@@ -69,7 +69,8 @@ export class MediaController {
       `without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a still WebP ` +
       `with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF still moving. Its ` +
       'id goes into the post’s image node; it is served once a post shows it, and ' +
-      `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
+      `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours. Refused under a ` +
+      'writing restriction (RESTRICTED, with its end), which no post of the account gets past',
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
   @ApiBody(IMAGE_BINARY)
@@ -92,6 +93,7 @@ export class MediaController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'IMAGE_NOT_ALLOWED',
+    'RESTRICTED',
   )
   async upload(
     @CurrentUser() user: SessionUser,

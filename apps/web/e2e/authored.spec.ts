@@ -31,9 +31,10 @@ import {
  * stay published, so its 삭제 goes through the real delete route and the lists after it are the
  * server's). A list longer than a page takes a smaller `limit` on the browser's requests. The
  * exclusions on the profile against MY are the API's (authored.controller.test.ts,
- * private-data.test.ts). Restricted members and withdrawn accounts are tested nowhere yet: neither
- * state exists and the lists read neither, so #185/#139 add the test that a restricted member's
- * items stay listed and #140 the withdrawn account's 404 (ADR-0080 결과 5).
+ * private-data.test.ts). A restricted member's items staying listed is the API's too, the lists
+ * reading no sanction: restrictions.controller.test.ts for a writing restriction (#185, ADR-0082),
+ * #139 for an account restriction. Withdrawn accounts are tested nowhere yet: that state does not
+ * exist, and #140 adds the withdrawn account's 404 (ADR-0080 결과 5).
  */
 
 /**

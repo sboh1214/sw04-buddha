@@ -20,7 +20,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { commentLikeCountSql } from '../likes/like-queries.js';
-import { assertOnboarded } from '../onboarding/onboarded.guard.js';
+import { assertWriter } from '../moderation/restrictions.js';
 import { authorColumns, postAuthorOf, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { CommentCursors } from './comment-cursor.js';
@@ -311,7 +311,8 @@ export class CommentsService {
    * (NOT_FOUND, naming `parentId` for the parent), a hidden or deleted post (#45-5: no new comment)
    * and a hidden or deleted 댓글 to hang under (no new 대댓글) — COMMENT_NOT_ALLOWED with the
    * reason. Comments are taken on posts of markets in every public status (#45-6, the post's own
-   * rule). Nothing about the author's trading is read or attached (N05 §2).
+   * rule). An author under a writing restriction is refused before anything is read (RESTRICTED,
+   * `checkWriter`, #185). Nothing about the author's trading is read or attached (N05 §2).
    */
   async create(
     authorId: string,
@@ -357,18 +358,22 @@ export class CommentsService {
    * replaced goes to the operators' history (`post_comment_revisions`) and the comment is marked
    * edited; sending what it already says changes nothing. Refused for anyone but the author
    * (FORBIDDEN), a deleted or unknown comment (NOT_FOUND) and a hidden one (COMMENT_NOT_EDITABLE,
-   * #45-5). A comment under a hidden or deleted post, and a 대댓글 under a hidden 댓글 or under a
-   * deleted 댓글's placeholder, stays its author's to edit: only new comments are refused there
-   * (오너 결정 2026-10-20, ADR-0074 7-6).
+   * #45-5) — and, asked first, any under the author's writing restriction (RESTRICTED, #185;
+   * deleting stays open). A comment under a hidden or deleted post, and a 대댓글 under a hidden
+   * 댓글 or under a deleted 댓글's placeholder, stays its author's to edit: only new comments are
+   * refused there (오너 결정 2026-10-20, ADR-0074 7-6).
    */
   async update(authorId: string, commentId: string, body: string): Promise<PublishedComment> {
     await this.db.transaction(async (tx) => {
+      // The writer before the comment's row (`checkWriter`): the profile's lock comes first, as in
+      // an operator's restriction that names the comment — and the writer's refusal before the
+      // comment's.
+      await this.checkWriter(tx, authorId);
       const current = await this.lockOwnComment(tx, authorId, commentId);
       if (current.hiddenAt !== null) {
         const details: CommentNotEditableDetails = { reason: 'hidden' };
         throw new AppError('COMMENT_NOT_EDITABLE', { message: 'The comment is hidden', details });
       }
-      await this.checkWriter(tx, authorId);
       if (current.body === body) return;
       await tx.insert(schema.postCommentRevisions).values({
         commentId,
@@ -404,15 +409,16 @@ export class CommentsService {
   }
 
   /**
-   * The checks every new comment and every edit passes, in the write's transaction — the one place
-   * the later rules plug in: #185's 작성 제한 (which blocks writing and editing, never deleting,
-   * ADR-0069 decision 2 #45-12) and #187's frequency limits (comments 5 a minute and 200 a day,
-   * edits 10 in 10 minutes and 50 a day, counted per verified number's keyed hash, admins exempt,
-   * #45-15 and decision 7) and its repeated-link review list. Today: the onboarding, which
-   * OnboardedGuard checked before the body was read, held to the commit here (#57-8).
+   * The checks every new comment and every edit passes, in the write's transaction and before any
+   * row of the write is locked — the one place the rules on the writer plug in: `assertWriter` —
+   * the writer's profile held until the commit, the onboarding (#57-8) and #185's 작성 제한
+   * (RESTRICTED with its end; it blocks writing and editing, never deleting, ADR-0069 decision 2
+   * #45-12) — and #187's frequency limits next (comments 5 a minute and 200 a day, edits 10 in 10
+   * minutes and 50 a day, counted per verified number's keyed hash, admins exempt, #45-15 and
+   * decision 7) and its repeated-link review list.
    */
   private async checkWriter(tx: Tx, authorId: string): Promise<void> {
-    await assertOnboarded(tx, authorId);
+    await assertWriter(tx, authorId);
   }
 
   /**

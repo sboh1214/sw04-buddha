@@ -22,6 +22,8 @@ import {
   type MyModerationAction,
   type RemovedProfileItem,
   type ReportTargetType,
+  type RestrictedDetails,
+  type RestrictionEndChangeKind,
 } from '@buddha/shared';
 import { and, asc, desc, eq, gt, inArray, sql, type SQL } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -31,6 +33,7 @@ import { keysetPredicate, tupleKeysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { cardText, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
+import { writingRestrictionOf } from './restrictions.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Executor = Db | Tx;
@@ -41,6 +44,14 @@ const reporterProfile = alias(schema.profiles, 'reporter_profile');
 const resolverProfile = alias(schema.profiles, 'resolver_profile');
 const creatorProfile = alias(schema.profiles, 'creator_profile');
 const cancellerProfile = alias(schema.profiles, 'canceller_profile');
+const changerProfile = alias(schema.profiles, 'changer_profile');
+
+/** The actions on a public profile item (#37-10): what the member reads as about '내 프로필'. */
+const PROFILE_ITEM_TYPES: ReadonlySet<ModerationActionType> = new Set<ModerationActionType>([
+  'nickname_reset',
+  'bio_clear',
+  'image_remove',
+]);
 
 /**
  * An account's columns as the moderation screens name it (`ModerationUser`): the member acted on or
@@ -87,6 +98,17 @@ export class ModerationReadsService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   // ---- the member -------------------------------------------------------------------------------
+
+  /**
+   * `GET /me/moderation/restriction` (#185, ADR-0082): the writing restriction that governs the
+   * member now, read as every write reads it (`writingRestrictionOf` — 무기한 over any term, else
+   * the latest end, by the database clock), so the banner says the end a refused write names. Its
+   * own read rather than the actions' first page: a restriction followed by twenty other actions
+   * still stands, and the banner must say so (ADR-0069 decision 4 #50).
+   */
+  async myRestriction(userId: string): Promise<RestrictedDetails | null> {
+    return writingRestrictionOf(this.db, userId);
+  }
 
   /**
    * `GET /me/moderation/actions`: the actions taken on the member, newest first, each with what it
@@ -149,7 +171,10 @@ export class ModerationReadsService {
             postId: row.commentPostId!,
             excerpt: row.commentDeletedAt === null ? postExcerpt(row.commentBody ?? '') : null,
           };
-        } else if (type !== 'warning') {
+        } else if (PROFILE_ITEM_TYPES.has(type)) {
+          // A profile item's action is about the profile. A warning or a writing restriction
+          // without an item is about nothing in particular — its subject 'profile' is not kept
+          // (ADR-0081 7-9), and a restriction is the member's writing, not their profile (#185).
           subject = { type: 'profile' };
         }
         return {
@@ -713,6 +738,10 @@ export class ModerationReadsService {
       .where(where)
       .orderBy(desc(moderationActions.createdAt), desc(moderationActions.id));
     const rows = await (limit === undefined ? query : query.limit(limit));
+    const changes = await this.endChanges(
+      executor,
+      rows.filter((row) => row.type === 'writing_restriction').map((row) => row.id),
+    );
     return rows.map((row) => {
       const withheld = withheldFor(viewerId, row.user.id);
       return {
@@ -737,9 +766,61 @@ export class ModerationReadsService {
         cancelReason: row.cancelReason,
         removed: removedOf(row),
         reportCount: row.reportCount,
+        endChanges: (changes.get(row.id) ?? []).map((change) => ({
+          kind: change.kind as RestrictionEndChangeKind,
+          previousEndsAt: change.previousEndsAt?.toISOString() ?? null,
+          endsAt: change.endsAt.toISOString(),
+          reason: change.reason,
+          createdBy: withheld
+            ? null
+            : { id: change.createdById, nickname: change.createdByNickname ?? '' },
+          createdAt: change.createdAt.toISOString(),
+        })),
         aboutViewer: withheld,
       };
     });
+  }
+
+  /**
+   * The changes of the writing restrictions `actionIds` (#185: shortenings and lifts), oldest first
+   * per action, with the operator who made each.
+   */
+  private async endChanges(executor: Executor, actionIds: string[]) {
+    const byAction = new Map<
+      string,
+      {
+        kind: string;
+        previousEndsAt: Date | null;
+        endsAt: Date;
+        reason: string;
+        createdById: string;
+        createdByNickname: string | null;
+        createdAt: Date;
+      }[]
+    >();
+    if (actionIds.length === 0) return byAction;
+    const { restrictionEndChanges } = schema;
+    const rows = await executor
+      .select({
+        actionId: restrictionEndChanges.actionId,
+        kind: restrictionEndChanges.kind,
+        previousEndsAt: restrictionEndChanges.previousEndsAt,
+        endsAt: restrictionEndChanges.endsAt,
+        reason: restrictionEndChanges.reason,
+        createdById: restrictionEndChanges.createdBy,
+        createdByNickname: changerProfile.nickname,
+        createdAt: restrictionEndChanges.createdAt,
+      })
+      .from(restrictionEndChanges)
+      .leftJoin(changerProfile, eq(changerProfile.userId, restrictionEndChanges.createdBy))
+      .where(inArray(restrictionEndChanges.actionId, actionIds))
+      .orderBy(asc(restrictionEndChanges.createdAt), asc(restrictionEndChanges.id));
+    for (const { actionId, ...change } of rows) {
+      const list = byAction.get(actionId) ?? [];
+      list.push(change);
+      byAction.set(actionId, list);
+    }
+    return byAction;
   }
 }
 

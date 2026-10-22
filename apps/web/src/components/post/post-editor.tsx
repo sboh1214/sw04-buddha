@@ -35,9 +35,11 @@ import {
 } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import { useQueryClient } from '@tanstack/react-query';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { restrictedToastAction } from '@/components/moderation/refusal-text';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { useUploadPostImage } from '@/hooks/use-posts';
@@ -62,6 +64,7 @@ import {
   type ImageSlots,
 } from '@/lib/post-editor';
 import { previewSize } from '@/lib/post-drafts';
+import { isRestricted } from '@/lib/restriction';
 import { useSession } from '@/lib/use-session';
 import { POST_CONTENT_CSS } from './post-content-style';
 
@@ -316,6 +319,8 @@ export function PostEditor({
   const [previews] = useState(() => new Map<string, string>(Object.entries(initialPreviews ?? {})));
   // The editors whose baseline was told (`onMount`): once each, as its view is made.
   const [settled] = useState(() => new WeakSet<Editor>());
+  const format = useFormatDateTime();
+  const router = useRouter();
   const editor = useEditor({
     // Next renders this component on the server too; the editor exists in the browser only.
     immediatelyRender: false,
@@ -539,11 +544,19 @@ export function PostEditor({
       // while the gate takes the account to its step, the draft kept in the tab — a toast would
       // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
       // gate stays, and it says what a refused send says (owner decision 2026-10-21
-      // answer 6). An upload given up for the editor gone while it waited says nothing. Any
-      // other is said: that file's failure alone.
+      // answer 6). An upload given up for the editor gone while it waited says nothing. Any other
+      // is said: that file's failure alone — a writing restriction's (#185) with the way to
+      // 조치·신고 내역 as the toast's action: the end is in the sentence, the appeal's guidance there.
       failed: (error) => {
-        const message = imageUploadErrorMessage(error, gateMoves());
-        if (message !== undefined) toaster.create({ type: 'error', title: message });
+        const message = imageUploadErrorMessage(error, gateMoves(), format);
+        if (message === undefined) return;
+        toaster.create({
+          type: 'error',
+          title: message,
+          action: isRestricted(error)
+            ? restrictedToastAction((href) => router.push(href))
+            : undefined,
+        });
       },
     });
   };

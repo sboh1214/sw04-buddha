@@ -552,8 +552,9 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await page.goto('/onboarding');
     await expect(page).toHaveURL('/');
 
-    // The first pick is MY 설정's, a change the server takes as one (no restriction exists yet —
-    // under one it would be refused, as the API suite shows), not the step's first answer.
+    // The first pick is MY 설정's, a change the server takes as one (this account is under no
+    // restriction — under one it would be refused, as the API suite shows), not the step's first
+    // answer.
     await page.goto('/my/settings');
     const interests = page.getByTestId('settings-interests');
     await interests.getByTestId(`interest-${category.slug}`).click();

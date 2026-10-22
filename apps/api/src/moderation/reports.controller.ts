@@ -7,11 +7,13 @@ import {
   cursorQuerySchema,
   myModerationActionSchema,
   myReportSchema,
+  myRestrictionSchema,
   publicIdParamSchema,
   uuidParamSchema,
   type CursorQuery,
   type MyModerationAction,
   type MyReport,
+  type MyRestriction,
   type ParsedReportBody,
 } from '@buddha/shared';
 import { type SessionUser } from '../auth/auth.js';
@@ -161,8 +163,9 @@ export class ProfileReportsController {
 
 /**
  * `/api/v1/me/reports` and `/me/moderation/actions` (#50, ADR-0069 decision 4 #50: the MY page of
- * the actions received and the reports filed). Owner-only: the session decides whose records are
- * read, and nothing here takes another account. Signed in is enough.
+ * the actions received and the reports filed), and `/me/moderation/restriction` (#185, ADR-0082:
+ * the restriction the banner speaks of). Owner-only: the session decides whose records are read,
+ * and nothing here takes another account. Signed in is enough.
  */
 @ApiTags('me')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -214,5 +217,20 @@ export class MyModerationController {
   ): Promise<ApiPage<MyModerationAction>> {
     const { items, nextCursor } = await this.reads.myActions(user.id, query);
     return new ApiPage(items, { nextCursor });
+  }
+
+  @Get('moderation/restriction')
+  @ApiOperation({
+    operationId: 'getMyRestriction',
+    summary:
+      'The writing restriction that governs the account now, as a refused write names it: its ' +
+      'kind and its end (null: none, until an operator lifts it) — the latest end of those ' +
+      'standing, one with no end over any. Null when none stands. Never the operator, the reason ' +
+      'nor a report',
+  })
+  @ApiData(myRestrictionSchema)
+  @ApiErrors('UNAUTHENTICATED')
+  async restriction(@CurrentUser() user: SessionUser): Promise<MyRestriction> {
+    return { restriction: await this.reads.myRestriction(user.id) };
   }
 }

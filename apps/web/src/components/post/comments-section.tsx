@@ -29,10 +29,12 @@ import {
   useState,
 } from 'react';
 import { OperatorLink } from '@/components/moderation/operator-link';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { ReportButton } from '@/components/moderation/report-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import {
   type CommentBoxDialogRef,
@@ -95,6 +97,7 @@ import { adminCommentModerationPath, authorPublicIdOf } from '@/lib/moderation';
 import { loginPathBackTo } from '@/lib/next-path';
 import { isOwnPost, postKey, postPath, postReadErrorMessage } from '@/lib/posts';
 import { refreshFailed } from '@/lib/query-client';
+import { isRestricted } from '@/lib/restriction';
 import { useSession } from '@/lib/use-session';
 import { CommentText } from './comment-text';
 import { HeldCommentText, useHeldCommentTexts } from './held-comment-text';
@@ -1194,6 +1197,7 @@ function CommentComposer({
   const [restored, setRestored] = useState(startText !== undefined);
   const { refetch: refetchSession } = useSession();
   const create = useCreateComment(postId, () => void refetchSession());
+  const format = useFormatDateTime();
   const reply = parentId !== null;
   const key: CommentDraftKey =
     parentId === null
@@ -1225,8 +1229,9 @@ function CommentComposer({
       pending={create.isPending}
       restored={restored}
       errorMessage={
-        create.error === null ? undefined : commentWriteErrorMessage(create.error, 'create')
+        create.error === null ? undefined : commentWriteErrorMessage(create.error, 'create', format)
       }
+      errorRestricted={isRestricted(create.error)}
       focusSignal={focusSignal}
       focusOnMount={startText === undefined}
       rootRef={box.rootRef}
@@ -1295,6 +1300,7 @@ function CommentEditForm({
   const [text, setText] = useState(startText ?? comment.body);
   const { refetch: refetchSession } = useSession();
   const update = useUpdateComment(postId, () => void refetchSession());
+  const format = useFormatDateTime();
   const box = useCommentBoxDraft({
     key: { kind: 'edit', postId: postId.toLowerCase(), commentId: comment.id, threadId },
     accountId,
@@ -1315,8 +1321,9 @@ function CommentEditForm({
       pending={update.isPending}
       restored={startText !== undefined}
       errorMessage={
-        update.error === null ? undefined : commentWriteErrorMessage(update.error, 'edit')
+        update.error === null ? undefined : commentWriteErrorMessage(update.error, 'edit', format)
       }
+      errorRestricted={isRestricted(update.error)}
       focusSignal={0}
       focusOnMount={startText === undefined}
       rootRef={box.rootRef}
@@ -1363,6 +1370,7 @@ function CommentBox({
   pending,
   restored,
   errorMessage,
+  errorRestricted,
   focusSignal,
   focusOnMount = true,
   rootRef,
@@ -1379,6 +1387,8 @@ function CommentBox({
   pending: boolean;
   restored: boolean;
   errorMessage: string | undefined;
+  /** A writing restriction's refusal (#185): the way to 조치·신고 내역 goes under it. */
+  errorRestricted: boolean;
   /** Focus the box on mount and whenever this changes; undefined: never. */
   focusSignal: number | undefined;
   /**
@@ -1501,7 +1511,9 @@ function CommentBox({
         <Alert.Root status="error" role="alert" data-testid="comment-error">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{errorMessage}</Alert.Description>
+            <Alert.Description>
+              <RefusalText message={errorMessage} restricted={errorRestricted} />
+            </Alert.Description>
           </Alert.Content>
         </Alert.Root>
       )}
@@ -1639,6 +1651,7 @@ function DeleteComment({
   const [confirming, setConfirming] = useState(false);
   const { refetch: refetchSession } = useSession();
   const remove = useDeleteComment(postId, () => void refetchSession());
+  const format = useFormatDateTime();
 
   return (
     <>
@@ -1698,7 +1711,7 @@ function DeleteComment({
                           setConfirming(false);
                           toaster.create({
                             type: 'error',
-                            title: commentWriteErrorMessage(error, 'delete'),
+                            title: commentWriteErrorMessage(error, 'delete', format),
                           });
                         },
                       );

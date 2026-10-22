@@ -1,8 +1,10 @@
 /**
  * Every public profile item write goes through the one check point (#41, ADR-0069 decision 3
  * #37-9 and decision 7), proven against the docker `test` profile with the sanction lookup
- * stubbed — no writing restriction (#185) or account restriction (#139) exists yet, so a flag here
- * stands for "the account is under one". Under it: the 소개 can be emptied but not written, interest
+ * stubbed — a flag here stands for "the account is under one" (a writing restriction with no end,
+ * #185 — restrictions.controller.test.ts proves the same writes against real restrictions, and
+ * #139's account restriction answers the same check point), refused with RESTRICTED and its end.
+ * Under it: the 소개 can be emptied but not written, interest
  * categories dropped but not added, the nickname not changed, the profile image (#141) deleted but
  * not uploaded — refused before the file is converted; the time zone (a private setting)
  * still changes, and the profile still opens (#37-9: «그대로 열린다»). Nothing is written by a
@@ -37,6 +39,9 @@ import type * as PublicItems from './public-items.js';
 /** Whether the stubbed lookup says the account is under a sanction. */
 const sanction = vi.hoisted(() => ({ on: false, asked: [] as string[] }));
 
+/** The sanction the stub answers while on: a writing restriction with no end (#185). */
+const SANCTION = { kind: 'writing', endsAt: null } as const;
+
 vi.mock('./public-items.js', async (importOriginal) => {
   const actual = await importOriginal<typeof PublicItems>();
   return {
@@ -47,7 +52,7 @@ vi.mock('./public-items.js', async (importOriginal) => {
     ) =>
       actual.assertPublicItemEdit(executor, userId, edit, (_executor, asked) => {
         sanction.asked.push(asked);
-        return Promise.resolve(sanction.on);
+        return Promise.resolve(sanction.on ? SANCTION : null);
       }),
   };
 });
@@ -154,11 +159,11 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
 
     // New values: refused, nothing written.
     const refusedBio = await send('PUT', '/me/bio', { bio: '새 소개' });
-    expect(codeOf(refusedBio)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(refusedBio)).toEqual({ status: 403, code: 'RESTRICTED' });
     const added = await send('PUT', '/me/interest-categories', { categoryIds: [a.id, c.id] });
-    expect(codeOf(added)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(added)).toEqual({ status: 403, code: 'RESTRICTED' });
     const renamed = await send('PATCH', '/me', { nickname: '다른이름' });
-    expect(codeOf(renamed)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(renamed)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(await profileRow()).toEqual(before);
     expect(await picks()).toEqual([a.id, b.id].sort((x, y) => x - y));
     expect(sanction.asked).toEqual([member.id, member.id, member.id]);
@@ -231,7 +236,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     const run = vi.spyOn(imageConversions, 'run');
     try {
       const refused = await upload();
-      expect(codeOf(refused)).toEqual({ status: 403, code: 'FORBIDDEN' });
+      expect(codeOf(refused)).toEqual({ status: 403, code: 'RESTRICTED' });
       expect(run).not.toHaveBeenCalled();
     } finally {
       run.mockRestore();
@@ -273,13 +278,13 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     const added = await send('PUT', '/me/interest-categories', {
       categoryIds: [first.id, second.id, later.id],
     });
-    expect(codeOf(added)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(added)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(sanction.asked).toEqual([member.id]);
     // Nor is the step's screen a way back to a first choice once it is answered.
     const again = await send('POST', '/me/onboarding/interests', {
       categoryIds: [first.id, later.id],
     });
-    expect(codeOf(again)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(again)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(sanction.asked).toEqual([member.id, member.id]);
     const dropped = await send('PUT', '/me/interest-categories', { categoryIds: [first.id] });
     expect(dropped.statusCode, dropped.body).toBe(200);
@@ -309,7 +314,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     expect(me.onboarding.nickname).toBe(true);
     // Its later change in MY 설정 is refused (the first change after the onboarding is open).
     const renamed = await send('PATCH', '/me', { nickname: 'second_name' }, newcomer);
-    expect(codeOf(renamed)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(renamed)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(sanction.asked).toEqual([newcomer.id]);
   });
 
@@ -332,7 +337,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     sanction.on = true;
 
     // New values name the consent step and never reach the restriction: the web sends the member to
-    // the step (`profileItemFailure`) instead of showing the field-less 403's generic sentence.
+    // the step (`profileItemFailure`) instead of showing the restriction's refusal.
     expect(stepsOf(await send('PUT', '/me/bio', { bio: '새 소개' }))).toEqual(['consent']);
     expect(
       stepsOf(await send('PUT', '/me/interest-categories', { categoryIds: [a.id, b.id, c.id] })),
@@ -372,7 +377,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
     // MY 설정's first pick is a change for both: refused, nothing written, the step unanswered
     // where it was.
     const unrecorded = await send('PUT', '/me/interest-categories', { categoryIds: [category.id] });
-    expect(codeOf(unrecorded)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(unrecorded)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(await answeredAt()).toBeNull();
     const recorded = await send(
       'PUT',
@@ -380,7 +385,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
       { categoryIds: [category.id] },
       leaver,
     );
-    expect(codeOf(recorded)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(recorded)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(sanction.asked).toEqual([member.id, leaver.id]);
     // The step's screen after the recorded leave (its page restored by the back button): a change.
     const restored = await send(
@@ -389,7 +394,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
       { categoryIds: [category.id] },
       leaver,
     );
-    expect(codeOf(restored)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(restored)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(await picks()).toEqual([]);
     expect(await picks(leaver.id)).toEqual([]);
 
@@ -432,7 +437,7 @@ describe.skipIf(!hasTestInfra)('public profile items under a restriction (integr
       { categoryIds: [category.id] },
       late,
     );
-    expect(codeOf(past)).toEqual({ status: 403, code: 'FORBIDDEN' });
+    expect(codeOf(past)).toEqual({ status: 403, code: 'RESTRICTED' });
     expect(sanction.asked).toEqual([late.id]);
     expect(await picks(late.id)).toEqual([]);
     expect(await answeredAt(late.id)).toBeNull();

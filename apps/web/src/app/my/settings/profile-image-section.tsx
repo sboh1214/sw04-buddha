@@ -3,7 +3,9 @@
 import { Alert, Avatar, Button, Dialog, HStack, Portal, Stack, Text } from '@chakra-ui/react';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useDeleteProfileImage, useMe, useUploadProfileImage } from '@/hooks/use-me';
 import { useSettingsStep } from '@/hooks/use-settings-step';
@@ -16,6 +18,7 @@ import {
   profileImageUploadFailure,
   profileItemSaveGoesToStep,
 } from '@/lib/profile';
+import { type Refusal, isRestricted } from '@/lib/restriction';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -93,6 +96,7 @@ function ProfileImageFields({
   const remove = useDeleteProfileImage();
   const router = useRouter();
   const step = useSettingsStep();
+  const format = useFormatDateTime();
   const fileInput = useRef<HTMLInputElement>(null);
   const uploadButton = useRef<HTMLButtonElement>(null);
   // Whether the dialog closes on a deletion that went through: the 삭제 button it opened from is
@@ -101,11 +105,12 @@ function ProfileImageFields({
   const deleted = useRef(false);
   // A new key per refusal: each mounts an alert of its own, which a screen reader announces — the
   // same sentence set again (a second GIF picked) would leave the page as it was, and say nothing.
-  const [notice, setNotice] = useState<{ text: string; key: number } | null>(null);
+  const [notice, setNotice] = useState<(Refusal & { key: number }) | null>(null);
   const refusals = useRef(0);
-  const say = (text: string) => {
+  // `restricted`: a writing restriction's refusal (#185), the way to 조치·신고 내역 under it.
+  const say = (message: string, restricted = false) => {
     refusals.current += 1;
-    setNotice({ text, key: refusals.current });
+    setNotice({ message, restricted, key: refusals.current });
   };
   const [confirming, setConfirming] = useState(false);
   const busy = upload.isPending || remove.isPending;
@@ -124,7 +129,7 @@ function ProfileImageFields({
     } catch (error) {
       // The hook has asked `['me']` again for an ONBOARDING_REQUIRED: the gate or the step follows.
       if (step.afterRefusal(error)) return;
-      say(profileImageUploadFailure(error));
+      say(profileImageUploadFailure(error, format), isRestricted(error));
     }
   };
 
@@ -156,7 +161,9 @@ function ProfileImageFields({
         <Alert.Root key={notice.key} status="error" role="alert" data-testid="profile-image-notice">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{notice.text}</Alert.Description>
+            <Alert.Description>
+              <RefusalText message={notice.message} restricted={notice.restricted} />
+            </Alert.Description>
           </Alert.Content>
         </Alert.Root>
       )}

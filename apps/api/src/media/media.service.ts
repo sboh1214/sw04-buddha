@@ -5,6 +5,7 @@ import { type ImageContentType, type UploadedImage } from '@buddha/shared';
 import { type ObjectStorage } from '@buddha/storage';
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { DB } from '../infra/db/db.provider.js';
+import { assertNotWritingRestricted } from '../moderation/restrictions.js';
 import { IMAGE_EXTENSION, processImage } from './image.js';
 import { OBJECT_STORAGE } from './object-storage.provider.js';
 import { removeUnrecordedUpload } from './unrecorded-upload.js';
@@ -48,6 +49,10 @@ export class MediaService {
    * with.
    */
   async uploadPostImage(ownerId: string, bytes: Uint8Array): Promise<UploadedImage> {
+    // A post's image is for a post the account writes or edits, which a writing restriction
+    // refuses (#185): refused here too, before anything is decoded or stored (RESTRICTED, with its
+    // end). The post's own write asks again under its lock (`assertWriter`).
+    await assertNotWritingRestricted(this.db, ownerId);
     // #187 plugs in here: the daily upload limit (50 a day, counted per verified number's keyed
     // hash, ADR-0069 decision 7) is checked before anything is decoded or stored.
     const image = await processImage(bytes);

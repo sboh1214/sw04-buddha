@@ -14,8 +14,12 @@ import {
   type ModerationRefusal,
   type ParsedModerationActionBody,
   type ParsedWarningBody,
+  type ParsedWritingRestrictionBody,
   type ReportReason,
   type ReportTargetType,
+  type RestrictionEndChangeKind,
+  type WarningSubject,
+  writingRestrictionEndOf,
 } from '@buddha/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
@@ -39,6 +43,16 @@ interface ActionRow {
   userId: string;
   postId?: string | null;
   commentId?: string | null;
+  /** A writing restriction's end (null: 무기한); none for the other types. */
+  endsAt?: Date | null;
+}
+
+/** What a warning or a writing restriction is about, resolved against the member's items. */
+interface ResolvedSubject {
+  postId: string | null;
+  commentId: string | null;
+  /** The target whose pending reports the action resolves; null for none. */
+  target: ReportTarget | null;
 }
 
 /** A target whose pending reports an action resolves. */
@@ -59,9 +73,10 @@ const NICKNAME_DRAWS = 10;
 /**
  * 운영 처리 (#50, ADR-0081; ADR-0069 decision 2 #45-5, #45-11…#45-14, decision 3 #37-10, decision
  * 4 #50 rows): what an operator does on the admin screen — hide a 근거 글 or a comment, warn a
- * member, give a nickname back to an auto nickname, empty a 소개, remove a profile image, cancel
- * an action, dismiss reports (기각). Chosen by the violation's weight, from the report queue or
- * directly without a report (decision 4 #50); never step by step and never by a count of reports
+ * member, give a nickname back to an auto nickname, empty a 소개, remove a profile image, restrict a
+ * member's writing and bring its end forward or lift it (#185, ADR-0082), cancel an action,
+ * dismiss reports (기각). Chosen by the violation's weight, from the report queue or directly
+ * without a report (decision 4 #50, #185); never step by step and never by a count of reports
  * (#45-10, #45-11).
  *
  * Every write is one transaction with its records: the effect (the item's `hidden_at`, the
@@ -170,32 +185,7 @@ export class ModerationService {
       if (userId === adminId) throw refused('own');
       await this.lockProfile(tx, userId);
       const subject = body.subject;
-      let postId: string | null = null;
-      let commentId: string | null = null;
-      let target: ReportTarget | null = null;
-      if (subject?.type === 'post') {
-        const [post] = await tx
-          .select({ authorId: schema.posts.authorId })
-          .from(schema.posts)
-          .where(eq(schema.posts.id, subject.postId))
-          .for('update');
-        if (!post) throw notFound('Post');
-        if (post.authorId !== userId) throw refused('not_theirs');
-        postId = subject.postId;
-        target = { targetType: 'post', targetKey: postId };
-      } else if (subject?.type === 'comment') {
-        const [comment] = await tx
-          .select({ authorId: schema.postComments.authorId })
-          .from(schema.postComments)
-          .where(eq(schema.postComments.id, subject.commentId))
-          .for('update');
-        if (!comment) throw notFound('Comment');
-        if (comment.authorId !== userId) throw refused('not_theirs');
-        commentId = subject.commentId;
-        target = { targetType: 'comment', targetKey: commentId };
-      } else if (subject?.type === 'profile') {
-        target = { targetType: 'profile', targetKey: userId };
-      }
+      const { postId, commentId, target } = await this.subjectOf(tx, userId, subject);
       return this.record(
         tx,
         adminId,
@@ -207,6 +197,82 @@ export class ModerationService {
       );
     });
     return this.answer(id, adminId);
+  }
+
+  /**
+   * `POST /admin/moderation/users/:userId/writing-restriction` (작성 제한, #185, ADR-0082; ADR-0069
+   * decision 2 #45-12, decision 4 #185 rows): the member writes no post, comment or 대댓글, edits
+   * none of their own and gives no public profile item a new value (#37-9) until it ends — `days`
+   * from now (1, 3, 7 or 30, 24 hours each), or 무기한 (`null`) until an operator lifts it — with
+   * the reason the member reads. From the report queue (a subject, a warning's: its pending reports
+   * are resolved, 조치함) or directly (decision 4 #185 «운영자가 사용자를 골라 직접 걸 수 있다»).
+   * Effective at its commit (#45-13): the member's profile row is locked FOR UPDATE first — every
+   * post, comment and edit holds it shared until its commit (`assertWriter`), and every public item
+   * write locks it — so a write in flight commits before it and none after gets past it. A member
+   * restricted already keeps the one that ends later (#45-12): this is recorded as its own action
+   * and the latest end among the standing ones governs (`writingRestrictionOf`), so a shorter one
+   * changes nothing and a longer one takes over at once. Never on the acting operator (`own`).
+   * What the member wrote stays as it is (#139·#45-12 «그대로 둔다»).
+   */
+  async restrictWriting(
+    adminId: string,
+    userId: string,
+    body: ParsedWritingRestrictionBody,
+  ): Promise<AdminModerationAction> {
+    const id = await this.db.transaction(async (tx) => {
+      if (userId === adminId) throw refused('own');
+      await this.lockProfile(tx, userId);
+      const subject = body.subject;
+      const { postId, commentId, target } = await this.subjectOf(tx, userId, subject);
+      const now = await clockTimestamp(tx);
+      const endsAt = writingRestrictionEndOf(now, body.days);
+      return this.record(
+        tx,
+        adminId,
+        { type: 'writing_restriction', userId, postId, commentId, endsAt },
+        body,
+        target,
+        'moderation_writing_restriction',
+        { subject, days: body.days, endsAt: endsAt?.toISOString() ?? null },
+        undefined,
+        now,
+      );
+    });
+    return this.answer(id, adminId);
+  }
+
+  /**
+   * `POST /admin/moderation/actions/:actionId/shorten` (감경, ADR-0069 decision 2 #45-14: «감경은
+   * 운영자가 사유를 남기고 제한의 끝나는 시각을 앞당기는 기능», 무기한 to a term included; no approval
+   * for a writing restriction): the restriction's end brought forward to `endsAt`, which is still
+   * to come — a lift ends it now — and earlier than its end now. The change is recorded with the
+   * end before, the reason (operators only, as a cancellation's) and who and when
+   * (`restriction_end_changes`, `admin_actions`). The member reads the new end.
+   */
+  async shortenRestriction(
+    adminId: string,
+    actionId: string,
+    endsAt: Date,
+    reason: string,
+  ): Promise<AdminModerationAction> {
+    await this.changeEnd(adminId, actionId, 'shorten', reason, endsAt);
+    return this.answer(actionId, adminId);
+  }
+
+  /**
+   * `POST /admin/moderation/actions/:actionId/lift` (조기 해제, ADR-0069 decision 2 #45-12: «운영자가
+   * 일찍 풀 수 있다»): the restriction ends now — its end set to the database clock's now, the
+   * action kept as it was given (unlike a cancellation, which voids it). Recorded as a shortening
+   * is, of the kind `lift`. Other standing restrictions of the member, if any, stand: each is
+   * lifted on its own.
+   */
+  async liftRestriction(
+    adminId: string,
+    actionId: string,
+    reason: string,
+  ): Promise<AdminModerationAction> {
+    await this.changeEnd(adminId, actionId, 'lift', reason);
+    return this.answer(actionId, adminId);
   }
 
   /**
@@ -317,7 +383,9 @@ export class ModerationService {
   /**
    * `POST /admin/moderation/actions/:actionId/cancel` (decision 4 #50 «사유를 남기고 취소», #45-14:
    * how an accepted appeal is answered): the action no longer stands — a hiding's item shows again
-   * (`hidden_at` cleared); a profile item is not restored (#37-10: the member sets it again). A
+   * (`hidden_at` cleared); a writing restriction ends at once (#185: only standing ones count,
+   * `writingRestrictionOf` — its end is left as it was, the record of what was given, ended or
+   * not); a profile item is not restored (#37-10: the member sets it again). A
    * nickname reset's hold of the nickname it took away becomes the member's (owner decision
    * 2026-10-22: «그 보류가 본인의 것이 됨 … 닉네임을 저절로 되살리지는 않음»): the hold the reset wrote
    * (`action_id`) names the member from then on, so they may pick that nickname again, and every
@@ -445,6 +513,7 @@ export class ModerationService {
           note: body.note,
           createdBy: adminId,
           createdAt: now,
+          endsAt: row.endsAt ?? null,
         })
         .returning({ id: moderationActions.id });
     } catch (error) {
@@ -520,6 +589,127 @@ export class ModerationService {
         ),
       )
       .returning({ id: reports.id });
+  }
+
+  /**
+   * What a warning or a writing restriction is about (`subject`, optional): the member's post or
+   * comment, locked for the write after the member's profile (the order an edit of it takes them
+   * in, `assertWriter`), or their profile — the target whose pending reports the action resolves.
+   * One not the member's is `not_theirs`; one unknown NOT_FOUND.
+   */
+  private async subjectOf(
+    tx: Tx,
+    userId: string,
+    subject: WarningSubject | null,
+  ): Promise<ResolvedSubject> {
+    if (subject?.type === 'post') {
+      const [post] = await tx
+        .select({ authorId: schema.posts.authorId })
+        .from(schema.posts)
+        .where(eq(schema.posts.id, subject.postId))
+        .for('update');
+      if (!post) throw notFound('Post');
+      if (post.authorId !== userId) throw refused('not_theirs');
+      return {
+        postId: subject.postId,
+        commentId: null,
+        target: { targetType: 'post', targetKey: subject.postId },
+      };
+    }
+    if (subject?.type === 'comment') {
+      const [comment] = await tx
+        .select({ authorId: schema.postComments.authorId })
+        .from(schema.postComments)
+        .where(eq(schema.postComments.id, subject.commentId))
+        .for('update');
+      if (!comment) throw notFound('Comment');
+      if (comment.authorId !== userId) throw refused('not_theirs');
+      return {
+        postId: null,
+        commentId: subject.commentId,
+        target: { targetType: 'comment', targetKey: subject.commentId },
+      };
+    }
+    if (subject?.type === 'profile') {
+      return {
+        postId: null,
+        commentId: null,
+        target: { targetType: 'profile', targetKey: userId },
+      };
+    }
+    return { postId: null, commentId: null, target: null };
+  }
+
+  /**
+   * A writing restriction's end brought forward (`shortenRestriction`, `liftRestriction`), in one
+   * transaction: the action locked, the rules, the new end, its `restriction_end_changes` row and
+   * the audit row. Refused: an action on the acting operator (`own` — another operator lifts an
+   * operator's, as they cancel it, decision 4 #50), another type (`not_restriction`), a cancelled
+   * one (`cancelled`), one ended already (`ended` — by the database clock, read after the lock),
+   * and for a shortening an end not to come (`end_passed`) or not earlier than the end now
+   * (`not_earlier`; any is, for 무기한). The trigger of migration 0039 holds the same: earlier only,
+   * never 무기한 again, never once ended. No lock on the member's profile: an earlier end only
+   * opens what a write in flight was refused.
+   */
+  private async changeEnd(
+    adminId: string,
+    actionId: string,
+    kind: RestrictionEndChangeKind,
+    reason: string,
+    requested?: Date,
+  ): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      const { moderationActions, restrictionEndChanges } = schema;
+      const [action] = await tx
+        .select({
+          userId: moderationActions.userId,
+          type: moderationActions.type,
+          endsAt: moderationActions.endsAt,
+          cancelledAt: moderationActions.cancelledAt,
+        })
+        .from(moderationActions)
+        .where(eq(moderationActions.id, actionId))
+        .for('update');
+      if (!action) throw notFound('Action');
+      if (action.userId === adminId) throw refused('own');
+      if (action.type !== 'writing_restriction') throw refused('not_restriction');
+      if (action.cancelledAt !== null) throw refused('cancelled');
+      const now = await clockTimestamp(tx);
+      if (action.endsAt !== null && action.endsAt.getTime() <= now.getTime()) {
+        throw refused('ended');
+      }
+      const endsAt = kind === 'lift' ? now : requested!;
+      if (kind === 'shorten') {
+        if (endsAt.getTime() <= now.getTime()) throw refused('end_passed');
+        if (action.endsAt !== null && endsAt.getTime() >= action.endsAt.getTime()) {
+          throw refused('not_earlier');
+        }
+      }
+      await tx.update(moderationActions).set({ endsAt }).where(eq(moderationActions.id, actionId));
+      await tx.insert(restrictionEndChanges).values({
+        actionId,
+        kind,
+        previousEndsAt: action.endsAt,
+        endsAt,
+        reason,
+        createdBy: adminId,
+        createdAt: now,
+      });
+      await this.audit(
+        tx,
+        adminId,
+        kind === 'lift' ? 'moderation_restriction_lift' : 'moderation_restriction_shorten',
+        'moderation_action',
+        actionId,
+        {
+          actionId,
+          userId: action.userId,
+          previousEndsAt: action.endsAt?.toISOString() ?? null,
+          endsAt: endsAt.toISOString(),
+          reason,
+        },
+      );
+    });
   }
 
   /** The `admin_actions` row of a write (admin-audit.test.ts), in its transaction. */

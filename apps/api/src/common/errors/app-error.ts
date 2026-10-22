@@ -62,6 +62,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   REPORT_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
   // The item's, the action's or the report's state refuses the operator's write (#50): a conflict.
   MODERATION_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // An operator's restriction keeps the account from the action until it ends (#185): a right taken
+  // away for a while, as the 403 the public-item check answered before it had a code of its own
+  // (ADR-0078) — the code and its details (the end) tell it from every other 403.
+  RESTRICTED: HttpStatus.FORBIDDEN,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

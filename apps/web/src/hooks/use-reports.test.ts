@@ -2,13 +2,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError, type MyModerationAction, type MyReport, api } from '@/lib/api';
 import { myAuthoredKey, profileAuthoredKey } from '@/lib/authored';
 import { postCommentsKey } from '@/lib/comments';
-import { MY_ACTIONS_KEY, MY_REPORTS_KEY } from '@/lib/moderation';
+import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY } from '@/lib/moderation';
 import { POST_LIST_KEY, marketPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
   isStaleReportRefusal,
   myModerationActionsInfiniteQueryOptions,
   myReportsInfiniteQueryOptions,
+  myRestrictionQueryOptions,
   reportOptions,
 } from './use-reports';
 
@@ -86,8 +87,21 @@ describe('the member’s lists', () => {
     });
   });
 
+  it('ask for the restriction that governs the member now, apart from the actions (#185)', async () => {
+    const restriction = { kind: 'writing', endsAt: null };
+    const get = vi.spyOn(api, 'GET').mockResolvedValue(answer({ restriction }));
+    const options = myRestrictionQueryOptions(signedIn);
+    expect(options.queryKey).toEqual(MY_RESTRICTION_KEY);
+    expect(await options.queryFn()).toEqual({ restriction });
+    expect(get).toHaveBeenLastCalledWith('/api/v1/me/moderation/restriction');
+  });
+
   it('wait for the session and are read again on every mount', () => {
-    for (const make of [myReportsInfiniteQueryOptions, myModerationActionsInfiniteQueryOptions]) {
+    for (const make of [
+      myReportsInfiniteQueryOptions,
+      myModerationActionsInfiniteQueryOptions,
+      myRestrictionQueryOptions,
+    ]) {
       expect(make(undefined).enabled).toBe(false);
       expect(make(null).enabled).toBe(false);
       expect(make(signedIn).enabled).toBe(true);
