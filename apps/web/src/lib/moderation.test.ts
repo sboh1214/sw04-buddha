@@ -5,6 +5,7 @@ import {
   MODERATION_REASON_MAX_LENGTH,
   NICKNAME_HOLD_DAYS,
   NICKNAME_MAX_LENGTH,
+  NO_EMAIL_DOMAIN,
   OTHER_NEEDS_TEXT_MESSAGE,
   POST_EXCERPT_MAX_LENGTH,
   REPORTS_PER_DAY,
@@ -60,6 +61,7 @@ import {
   adminUserModerationPath,
   appealDeadline,
   appealDeadlineView,
+  appealEmailRequired,
   appealGuidanceText,
   appealWindowOpen,
   authorPublicIdOf,
@@ -863,6 +865,24 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
     const text = appealGuidanceText();
     expect(text).toContain(`고객센터 이메일(${BUSINESS_INFO.email})`);
     expect(text).not.toContain('{{');
+  });
+
+  it('asks an account on a Kakao or Naver placeholder address alone to register an email first, by GET /me’s email', () => {
+    // Owner decision 2026-10-22 (2차) 3: the owner's sentence word for word, and a link of its own
+    // to MY 설정 (where the 계정 card registers the address).
+    expect(copy.appealEmailRequired).toBe(
+      '이의를 보내려면 MY 설정에서 이메일을 먼저 등록해 주세요.',
+    );
+    expect(copy.appealEmailRequiredOpen).toContain('MY 설정');
+    expect(templateKeys(copy.appealEmailRequired)).toEqual([]);
+    // The placeholder a Kakao or Naver sign-in without an email stores, whatever its case.
+    expect(appealEmailRequired({ email: `kakao_42@${NO_EMAIL_DOMAIN}` })).toBe(true);
+    expect(appealEmailRequired({ email: `NAVER_abc@${NO_EMAIL_DOMAIN.toUpperCase()}` })).toBe(true);
+    // A real address — one registered over a placeholder too — sends appeals itself.
+    expect(appealEmailRequired({ email: 'member@example.com' })).toBe(false);
+    expect(appealEmailRequired({ email: `member@sub.${NO_EMAIL_DOMAIN}` })).toBe(false);
+    // `GET /me` not answered yet, or not readable: nothing is known, so nothing is added.
+    expect(appealEmailRequired(undefined)).toBe(false);
   });
 
   it('holds the window open until the deadline, 14 days on, and never for a cancelled action', () => {

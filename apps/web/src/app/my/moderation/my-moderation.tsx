@@ -18,6 +18,7 @@ import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import { useMyModerationActions, useMyReports } from '@/hooks/use-reports';
 import { type MyModerationAction, type MyReport } from '@/lib/api';
 import { reportReasonLabel } from '@/lib/authored';
@@ -28,6 +29,7 @@ import {
   actionReasonText,
   actionSubjectView,
   appealDeadlineView,
+  appealEmailRequired,
   appealGuidanceText,
   isRestriction,
   moderationActionLabel,
@@ -39,6 +41,7 @@ import {
   reportTargetView,
   restrictionStanding,
 } from '@/lib/moderation';
+import { MY_SETTINGS_PATH } from '@/lib/my';
 import { postReadErrorMessage } from '@/lib/posts';
 import { listSection } from '@/lib/query-client';
 import { restrictionEndText } from '@/lib/restriction';
@@ -51,7 +54,9 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  *
  * - 받은 조치: above the list, once, how to appeal (#186, ADR-0084; owner decision 2026-10-22 답 4)
  *   — by the customer centre's email, saying which action from the sign-up email, once per action
- *   within 14 days, the action standing while reviewed and the answer by email (#45-14) — then
+ *   within 14 days, the action standing while reviewed and the answer by email (#45-14); under it,
+ *   for an account on a Kakao or Naver placeholder address alone, that an appeal needs an email
+ *   registered in MY 설정 first, with the way there (owner decision 2026-10-22 (2차) 3) — then
  *   each action an operator took on the member, newest first: its type, what it was about (their
  *   post or comment, or that they deleted it since; their profile), the reason (the report reason
  *   the operator picked and their explanation), when, its end when it has one, its cancellation,
@@ -200,28 +205,57 @@ function ListBody<Row extends { id: string }>({
  * The actions received, under how to appeal them: the guidance once, above the list and outside
  * its ladder, so it is there while the list is read, when it could not be read and when it holds
  * nothing (owner decision 2026-10-22 답 4, #186) — the way to appeal does not wait on the list.
- * Each standing action's card gives its own deadline (`ActionItem`). The email is the business
- * info's, filled in (`appealGuidanceText`); Korean breaks at spaces and the address anywhere, as
- * the footer's same address does, so neither runs past a phone's edge.
+ * Under it, for a placeholder address alone, the email to register first (`AppealEmailRequired`,
+ * (2차) 3) — read from `GET /me`, not from the list either. Each standing action's card gives its
+ * own deadline (`ActionItem`). The email is the business info's, filled in (`appealGuidanceText`);
+ * Korean breaks at spaces and the address anywhere, as the footer's same address does, so neither
+ * runs past a phone's edge.
  */
 function ActionsBody() {
   const list = useMyModerationActions();
   return (
     <Stack gap="4">
-      <Text
-        textStyle="bodySm"
-        wordBreak="keep-all"
-        overflowWrap="anywhere"
-        data-testid="my-moderation-appeal"
-      >
-        {appealGuidanceText()}
-      </Text>
+      <Stack gap="2">
+        <Text
+          textStyle="bodySm"
+          wordBreak="keep-all"
+          overflowWrap="anywhere"
+          data-testid="my-moderation-appeal"
+        >
+          {appealGuidanceText()}
+        </Text>
+        <AppealEmailRequired />
+      </Stack>
       <ListBody
         list={list}
         empty={copy.myModerationActionsEmpty}
         testId="my-actions-list"
         renderRow={(action) => <ActionItem action={action} />}
       />
+    </Stack>
+  );
+}
+
+/**
+ * Under the guidance, for an account on a Kakao or Naver placeholder address alone: an appeal needs
+ * an email registered in MY 설정 first, and the way there (owner decision 2026-10-22 (2차) 3, #186) —
+ * operators take appeals from the account's current email only (답 5), and none can be sent from
+ * the placeholder. Decided by `GET /me`'s email (`appealEmailRequired`): nothing while it is read or
+ * when it could not be. The link is MY 설정, whose 계정 card registers the address.
+ */
+function AppealEmailRequired() {
+  const { data: me } = useMe();
+  if (!appealEmailRequired(me)) return null;
+  return (
+    <Stack gap="1" align="flex-start" data-testid="my-moderation-appeal-email">
+      <Text textStyle="bodySm" wordBreak="keep-all" overflowWrap="anywhere">
+        {copy.appealEmailRequired}
+      </Text>
+      <ChakraLink asChild color="brand.fg" textStyle="bodySm">
+        <NextLink href={MY_SETTINGS_PATH} data-testid="my-moderation-appeal-email-settings">
+          {copy.appealEmailRequiredOpen}
+        </NextLink>
+      </ChakraLink>
     </Stack>
   );
 }

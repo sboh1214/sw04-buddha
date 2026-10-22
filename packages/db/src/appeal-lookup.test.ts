@@ -24,6 +24,7 @@ import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harnes
 import { splitPsqlStatements, writePsqlVariables } from './test/operator.js';
 
 const OPERATIONS = readFileSync(new URL('../../../docs/OPERATIONS.md', import.meta.url), 'utf8');
+const DECISIONS = readFileSync(new URL('../../../docs/DECISIONS.md', import.meta.url), 'utf8');
 
 /** The doc's text from one marker to the next given one, inside the appeal section. */
 function sectionOf(from: string, to: string): string {
@@ -127,6 +128,107 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(appealSection()).not.toContain('같은 순간이다');
   });
 
+  it('answers unconfirmed mail with the owner’s one sentence, the same whoever sent it', () => {
+    // Owner decision 2026-10-22 (2차) 1: the sentence that names neither the account nor an action,
+    // to the sender's address — it replaced the first draft's proposal.
+    const text = step2();
+    expect(text).toContain(
+      inListItem(['```text', '이의는 가입한 이메일로 보낸 메일만 받습니다.', '```']),
+    );
+    expect(text).toContain('오너 결정 2026-10-22 (2차) 1');
+    expect(appealSection()).not.toContain('이 메일로는 이의를 받을 수 없습니다');
+    // The same sentence whoever sent it (답 5): no second reply that would tell an account's own
+    // address from another, so step 2 gives one text and says it is the one in every case.
+    expect(text).toContain(
+      '회신은 계정이 있는지(그리고 조치가 있는지) 드러내지 않는 아래의 한 문장만이고, 어느 경우든 같다',
+    );
+    expect(text.match(/```text/g)).toHaveLength(1);
+  });
+
+  it('leaves to the owner the member whose own address fails the sender check', () => {
+    // From the account's current email yet failing authentication, a resend fails the same way:
+    // the sentence tells that member nothing to do, and what may be done is the owner's to say.
+    const text = sectionOf('   - 확인되지 않은 메일:', '3. **기한과 횟수.**');
+    expect(text).toContain(
+      '그 계정의 지금 이메일에서 왔는데 발신 인증을 통과하지 못한 메일도 이 문장을 받는다',
+    );
+    expect(text).toContain('이 문장으로는 달리 할 것을 알 수 없다');
+    expect(text).toContain('오너에게 묻는다(ADR-0084 결과 4의 8). 그 답 전에는 위 그대로다.');
+  });
+
+  it('asks back an appeal whose action it cannot tell, without using up that action’s one', () => {
+    // (2차) 2: asking back is no appeal received; the member resends within the deadline, and the
+    // mail that comes back is a new one, from step 2 and by its own arrival time.
+    const text = sectionOf('   - 되묻기:', '   - 기한:');
+    expect(text).toContain('어느 조치인지 정할 수 없는 이의는 검토하지 않고 아래의 글로 되묻는다');
+    expect(text).toContain('되묻는 것은 그 조치의 한 번을 쓰지 않는다');
+    expect(text).toContain('그 조치의 기한 안에 다시 보내야');
+    expect(text).toContain('그 메일이 메일함에 도착한 시각으로 본다');
+    expect(text).toContain(
+      inListItem([
+        '```text',
+        '어느 조치인지(조치의 종류와 조치한 때)를 적어 그 조치의 이의 기한 안에 다시 보내 주세요.',
+        '```',
+      ]),
+    );
+  });
+
+  it('takes to the owner, rather than asking back again, a resend that still names no one action', () => {
+    // The ask-back takes only the type and the time the member already gave: several actions of a
+    // type in one minute (hides of a member's posts and comments — all '숨김' at the same minute on
+    // the card), or a time copied without its '(GMT…)', come back the same. Asked back again, the
+    // member loops until the deadline; the doc sends that to the owner instead (ADR-0084 결과 4의 6).
+    const text = sectionOf('   - 되묻기:', '   - 기한:');
+    expect(text).toContain('같은 종류의 조치를 같은 분에 여럿 받은 경우다');
+    expect(text).toContain("차이('(GMT…)')를 빼고 옮긴 시각도 그렇다");
+    expect(text).toContain(
+      '되물은 뒤 다시 온 메일이 이렇게 여전히 조치 하나를 정하지 못하면, 같은 글로 다시 되묻지 않고 오너에게 묻는다',
+    );
+    expect(text).toContain('그 조치의 대상(글의 제목이나 댓글의 첫 줄)');
+    expect(text).toContain('(ADR-0084 결과 4의 6)');
+    // An ask-back sent at or after the deadline leaves no resend on time: the owner's to say.
+    expect(text).toContain('기한 가까이 온 메일을 기한이 지난 뒤에 되물으면');
+    expect(text).toContain('(ADR-0084 결과 4의 7)');
+  });
+
+  it('answers an appeal it does not take with its reason, one sentence, and counts only the ones taken', () => {
+    // (2차) 2: a cancelled action, a passed deadline, one appealed already — that reason alone, in
+    // the order the member's card speaks (취소됨 with no deadline, then 이의 기한이 지났습니다.).
+    const text = sectionOf('   - 받지 않는 것:', '4. **검토.**');
+    const sentences = [
+      '이 조치는 이미 취소되었습니다.',
+      '이의 기한이 지났습니다.',
+      '이 조치에는 이미 이의를 받았습니다.',
+    ];
+    expect(text).toContain('받지 않고, 그 까닭을 아래의 한 문장으로 회신한다');
+    const at = sentences.map((sentence) => text.indexOf(inListItem(['```text', sentence, '```'])));
+    for (const index of at) expect(index).toBeGreaterThan(-1);
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    expect(text).toContain('여럿에 해당하면 이 차례에서 앞의 것 하나다');
+    // What counts as the action's one appeal: taken for review — never the mail step 2 could not
+    // confirm, nor the one asked back.
+    expect(text).toContain('4의 검토로 넘긴 이의만 센다');
+    expect(text).toContain('확인되지 않은 메일(2), 되물은 메일(위)');
+    // Nothing about these replies is left undecided in the doc.
+    expect(appealSection()).not.toContain('무엇을 회신할지는 정하지 않았다');
+  });
+
+  it('marks an appeal taken by its account and action, and looks for that mark, not the sender', () => {
+    // The app keeps no appeal, and a mail under review looks like one nobody has read: the mark
+    // goes on before the review, and the next appeal is checked by `user_id` and `action_id` —
+    // the account's email changes in MY 설정 and the database keeps no earlier one.
+    const text = sectionOf('   - 받지 않는 것:', '4. **검토.**');
+    expect(text).toContain(
+      '검토를 시작하기 전에 그 메일에 2의 조회의 `user_id`와 `action_id`를 함께 적은 표시',
+    );
+    expect(text).toContain(
+      '`user_id`와 `action_id`로 메일함에서 그 표시를 찾는다 — 보낸 주소로 찾지 않는다',
+    );
+    expect(text).toContain('계정의 이메일은 MY 설정에서 바뀌고(ADR-0023)');
+    expect(text).toContain('표시가 있으면 6의 회신이 아직 없어도 받은 이의다');
+    expect(text).toContain('이 표시와 찾기는 설계 제안이다(ADR-0084 6-8, 결과 4의 9)');
+  });
+
   it('turns the member’s 조치한 때 into KST before matching it', () => {
     const text = sectionOf('   - 어느 조치인지:', '   - 기한:');
     expect(text).toContain('회원이 MY 설정에서 고른 시간대');
@@ -135,6 +237,60 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(text).toContain("'2026. 10. 21. 오전 2:00 (GMT-4)'는 한국 시간 2026-10-21 15:00이다");
     // A time with no marker that pins no single action is the open question, not a guess.
     expect(text).toContain('어느 조치인지 정할 수 없는 이의다');
+  });
+});
+
+/** ADR-0084, from its heading to the next ADR's or the end of the file. */
+function adr0084(): string {
+  const start = DECISIONS.indexOf('\n## ADR-0084 ');
+  expect(start).toBeGreaterThan(-1);
+  const end = DECISIONS.indexOf('\n## ADR-', start + 1);
+  return DECISIONS.slice(start, end === -1 ? undefined : end);
+}
+
+/** ADR-0084's 결과 4 — what is asked of the owner — item by item, by its number. */
+function ownerQuestions(): Map<number, string> {
+  const adr = adr0084();
+  const start = adr.indexOf('**4. 오너에게 물을 것.**');
+  const end = adr.indexOf('**5. 알려진 한계', start);
+  expect(start).toBeGreaterThan(-1);
+  expect(end).toBeGreaterThan(start);
+  return new Map(
+    [...adr.slice(start, end).matchAll(/^(\d+)\. (.+)$/gm)].map((m) => [Number(m[1]), m[2]!]),
+  );
+}
+
+describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', () => {
+  it('asks the owner each question the procedure sends there, under the number it cites', () => {
+    const questions = ownerQuestions();
+    const cited = [...appealSection().matchAll(/ADR-0084 (?:6-8, )?결과 4의 (\d+)/g)].map((m) =>
+      Number(m[1]),
+    );
+    // The open cases: the deadline's same second (4), the ask-back that cannot help (6), the
+    // ask-back sent after the deadline (7), the own address failing the sender check (8), and how
+    // an appeal taken is found again (9).
+    expect([...new Set(cited)].sort((a, b) => a - b)).toEqual([4, 6, 7, 8, 9]);
+    const about: Record<number, string> = {
+      4: '같은 초라 앞뒤를 정할 수 없는 메일',
+      6: '같은 종류의 조치 여럿이 같은 분에 있으면',
+      7: '기한 뒤에 되물은 메일',
+      8: '지금 이메일에서 보냈는데 발신 인증을 통과하지 못하는 회원',
+      9: '`user_id`·`action_id`를 함께 적은 표시',
+    };
+    for (const n of cited) expect(questions.get(n)).toContain(about[n]);
+  });
+
+  it('cites the second round’s answer 3 as (2차) and the second commit’s item 3 as its', () => {
+    const adr = adr0084();
+    // '그 계정의 내역에만' is (2차) 답 3, the placeholder-email line; a bare 답 3 is the first
+    // round's, the banners.
+    const quoted = [...adr.matchAll(/답 3 '그 계정의 내역에만'/g)].map((m) => m.index);
+    expect(quoted.length).toBeGreaterThan(0);
+    for (const at of quoted) expect(adr.slice(at - '(2차) '.length, at)).toBe('(2차) ');
+    // The item that asked for the line '안내 아래에' was da19ec8's; this ADR's 결과 4 starts at 4.
+    expect(adr).toContain("둘째 커밋(da19ec8) 결과 4의 3이 '안내 아래에'로 물은 자리");
+    expect(adr).not.toContain("(결과 4의 3이 '안내 아래에'");
+    expect(ownerQuestions().has(3)).toBe(false);
   });
 });
 

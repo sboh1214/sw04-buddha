@@ -8,6 +8,7 @@ import {
   WRITING_RESTRICTION_DAYS,
   appealDeadlineOf,
   codePointLength,
+  isNoEmailAddress,
   moderationNotAllowedDetailsSchema,
   nicknameHoldEndOf,
   normaliseCommentBody,
@@ -30,6 +31,7 @@ import {
   type AdminModerationAction,
   type AdminReport,
   type AdminReportGroup,
+  type Me,
   type ModerationActionType,
   type ModerationItemState,
   type ModerationTarget,
@@ -591,6 +593,18 @@ export function appealDeadlineView(
  */
 export function appealGuidanceText(): string {
   return fillBusinessInfo(copy.appealGuidance);
+}
+
+/**
+ * Whether 조치·신고 내역 adds, under the guidance, that an appeal needs an email registered in MY
+ * 설정 first (`copy.appealEmailRequired`, owner decision 2026-10-22 (2차) 3): only for an account
+ * whose email is the placeholder a Kakao or Naver sign-in without one stores
+ * (`…@noemail.buddha.local`, `isNoEmailAddress`) — operators take appeals from the account's
+ * current email alone (답 5), and nothing can be sent from that one. Read from `GET /me`'s email
+ * (`me`); while it is read, or when it could not be, nothing is known and nothing is added.
+ */
+export function appealEmailRequired(me: Pick<Me, 'email'> | undefined): boolean {
+  return me !== undefined && isNoEmailAddress(me.email);
 }
 
 /**

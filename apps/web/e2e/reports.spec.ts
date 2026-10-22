@@ -1,4 +1,4 @@
-import { APPEAL_WINDOW_DAYS } from '@buddha/shared';
+import { APPEAL_WINDOW_DAYS, NO_EMAIL_DOMAIN, type Me } from '@buddha/shared';
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import { fillBusinessInfo } from '../src/legal/business-info';
@@ -25,7 +25,11 @@ import {
  *   their own; a visitor's press goes to the login page;
  * - the reporter reads both as 접수 on 조치·신고 내역, reached from MY 설정 — with how to appeal once
  *   above the actions received, there while that list is read, when it could not be read and when
- *   it holds nothing (#186, owner decision 2026-10-22 답 4);
+ *   it holds nothing (#186, owner decision 2026-10-22 답 4), and nothing under it while the account
+ *   has a real email; on a Kakao or Naver placeholder address (`GET /me` swapped in the browser),
+ *   that an appeal needs an email registered in MY 설정 first — beside an empty list, while the
+ *   list is read and when it could not be — its link to the 계정 card there (owner decision
+ *   2026-10-22 (2차) 3);
  * - the operator finds the post in the queue, hides it with a reason and an explanation, and
  *   dismisses the comment's report with a reason of their own, the comment reached from the post's
  *   page;
@@ -249,6 +253,85 @@ async function expectAppealGuidance(page: Page): Promise<void> {
 }
 
 /**
+ * Opens `path` and waits until `GET /me` has answered and been drawn: the line under the appeal
+ * guidance is drawn from its email and draws nothing while it is read, so a check that it is absent
+ * proves nothing before it. With `placeholder`, the answer's email is swapped in the browser for a
+ * Kakao placeholder address (`…@noemail.buddha.local`), unverified as such an account's is — no e2e
+ * signs in with Kakao or Naver, whose keys it has not — the rest of the answer the server's, and
+ * every later read the same until `unroute`. Returns the predicate to unroute with.
+ */
+async function gotoWithMeRead(
+  page: Page,
+  path: string,
+  placeholder: boolean,
+): Promise<(url: URL) => boolean> {
+  const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+  if (placeholder) {
+    const email = `kakao_${freshTag()}@${NO_EMAIL_DOMAIN}`;
+    await page.route(isMeRead, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: Me };
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          data: { ...body.data, email, emailVerified: false },
+        },
+      });
+    });
+  }
+  const read = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && isMeRead(new URL(response.url())),
+  );
+  await page.goto(path);
+  const response = await read;
+  expect(response.status(), await response.text()).toBe(200);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+  return isMeRead;
+}
+
+/**
+ * For an account on a Kakao or Naver placeholder address alone (owner decision 2026-10-22 (2차) 3):
+ * under the appeal guidance, the owner's sentence and a link of its own to MY 설정 — after the
+ * guidance and before whatever the list of actions shows, as `expectAppealGuidance` orders them.
+ */
+async function expectAppealEmailRequired(page: Page): Promise<void> {
+  const line = page.getByTestId('my-moderation-appeal-email');
+  await expect(line).toHaveCount(1);
+  await expect(line.getByText(copy.appealEmailRequired, { exact: true })).toBeVisible();
+  const link = line.getByTestId('my-moderation-appeal-email-settings');
+  await expect(link).toHaveText(copy.appealEmailRequiredOpen);
+  await expect(link).toHaveAttribute('href', '/my/settings');
+  await expect
+    .poll(() =>
+      page.getByTestId('my-moderation-actions').evaluate((element) => {
+        const following = (from: Element, to: Element) =>
+          (from.compareDocumentPosition(to) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        const appeal = element.querySelector('[data-testid="my-moderation-appeal"]');
+        const email = element.querySelector('[data-testid="my-moderation-appeal-email"]');
+        const list = [...element.querySelectorAll('[data-testid^="my-action"]')];
+        return (
+          appeal !== null &&
+          email !== null &&
+          following(appeal, email) &&
+          list.length > 0 &&
+          list.every((item) => following(email, item))
+        );
+      }),
+    )
+    .toBe(true);
+}
+
+/**
  * An action's card on 조치·신고 내역 gives its appeal deadline (owner decision 2026-10-22 답 1) —
  * '이의 기한' and `deadline`, or once that has passed '이의 기한이 지났습니다.' and the same deadline
  * (답 2) — and nothing more of the appeal: the guidance is the page's, once (답 4).
@@ -270,6 +353,30 @@ async function deadlineOnCard(card: Locator): Promise<string> {
   await expect(card.getByTestId('my-action-taken-label')).toHaveText(copy.moderationTakenAt);
   const taken = (await card.getByTestId('my-action-taken-value').textContent()) ?? '';
   return seoulDaysLater(taken, APPEAL_WINDOW_DAYS);
+}
+
+/**
+ * Holds `page`'s reads of the actions received on 조치·신고 내역 — the list shows its pending
+ * skeleton — until `release`, then answers them with a server error (each retry too: every 5xx is
+ * retried twice), so the list shows '다시 시도'. `unroute` with `isActionsRead`.
+ */
+async function holdActionsThenFail(
+  page: Page,
+): Promise<{ release: () => void; isActionsRead: (url: URL) => boolean }> {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const isActionsRead = (url: URL) => url.pathname === '/api/v1/me/moderation/actions';
+  await page.route(isActionsRead, async (route) => {
+    await held;
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+    });
+  });
+  return { release, isActionsRead };
 }
 
 /** The areas' links a reader at this width has: the tab bar below md, header row 1 from md up. */
@@ -464,30 +571,48 @@ test.describe('신고와 운영 처리', () => {
       // 2026-10-22 답 4) — and while they are read, and when they could not be: the read held,
       // then answered with a server error (retried twice, as every 5xx is), the guidance stays.
       await expectAppealGuidance(reporter);
-      let answerActions = () => {};
-      const actionsHeld = new Promise<void>((resolve) => {
-        answerActions = resolve;
-      });
-      const isActionsRead = (url: URL) => url.pathname === '/api/v1/me/moderation/actions';
-      await reporter.route(isActionsRead, async (route) => {
-        await actionsHeld;
-        await route.fulfill({
-          status: 500,
-          contentType: 'application/json',
-          body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
-        });
-      });
+      const failingActions = await holdActionsThenFail(reporter);
       await reporter.reload();
       await expect(reporter.getByTestId('my-actions-list-pending')).toBeVisible();
       await expectAppealGuidance(reporter);
-      answerActions();
+      failingActions.release();
       await expect(reporter.getByTestId('my-actions-list-error')).toBeVisible();
       await expect(reporter.getByTestId('my-actions-list')).toHaveCount(0);
       await expectAppealGuidance(reporter);
       expect(
         await reporter.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
-      await reporter.unroute(isActionsRead);
+      await reporter.unroute(failingActions.isActionsRead);
+      // The appeal comes from the account's current email alone (owner decision 2026-10-22 답 5):
+      // an account with a real one reads nothing more under the guidance, once `GET /me` has said
+      // so; one on a Kakao or Naver placeholder address reads that an appeal needs an email
+      // registered in MY 설정 first, and its link leads there — to the 계정 card that shows the
+      // address missing ((2차) 3).
+      await gotoWithMeRead(reporter, '/my/moderation', false);
+      await expectAppealGuidance(reporter);
+      await expect(reporter.getByTestId('my-moderation-appeal-email')).toHaveCount(0);
+      const isMeRead = await gotoWithMeRead(reporter, '/my/moderation', true);
+      await expectAppealGuidance(reporter);
+      await expectAppealEmailRequired(reporter);
+      expect(
+        await reporter.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      // The line sits with the guidance, outside the list's states (ADR-0084 decision 2, 6-13): it
+      // is there while the actions received are read and once they could not be, not only beside
+      // an empty list — `GET /me` still swapped, the actions read held, then answered with a 500.
+      const failingAgain = await holdActionsThenFail(reporter);
+      await reporter.reload();
+      await expect(reporter.getByTestId('my-actions-list-pending')).toBeVisible();
+      await expectAppealEmailRequired(reporter);
+      failingAgain.release();
+      await expect(reporter.getByTestId('my-actions-list-error')).toBeVisible();
+      await expectAppealEmailRequired(reporter);
+      await reporter.unroute(failingAgain.isActionsRead);
+      await reporter.getByTestId('my-moderation-appeal-email-settings').click();
+      await expect(reporter).toHaveURL('/my/settings');
+      await expect(reporter.getByTestId('account-email')).toHaveText(copy.noEmail);
+      await expect(reporter.getByText(copy.noEmailNotice)).toBeVisible();
+      await reporter.unroute(isMeRead);
 
       // The operator: the post's entry in the queue, its page, 숨기기 with a reason.
       const adminPage = await adminContext.newPage();
