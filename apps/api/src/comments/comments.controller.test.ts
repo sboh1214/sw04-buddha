@@ -11,13 +11,14 @@
  * a position. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
-import { schema, type Db } from '@buddha/db';
+import { closeDb, createDb, schema, type Db } from '@buddha/db';
 import {
   completeOnboarding,
   createComment,
   createMarket,
   createPost,
   createUser,
+  testDbUrls,
 } from '@buddha/db/test';
 import {
   COMMENT_BODY_EMPTY_MESSAGE,
@@ -54,6 +55,8 @@ interface ExplainedPlan {
   'Actual Loops': number;
   'Rows Removed by Filter'?: number;
   'Rows Removed by Index Recheck'?: number;
+  'Shared Hit Blocks'?: number;
+  'Shared Read Blocks'?: number;
   Plans?: ExplainedPlan[];
 }
 
@@ -288,7 +291,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
   });
 
   it('pages the 댓글 in view through two walks — the undeleted ones and those 대댓글 in view hang under — in one order, ties by id across the two', async () => {
-    // Codex review on PR #220 (ADR-0074 decision 4): the page reads the undeleted 댓글 down one
+    // Codex review on PR #220 (ADR-0074 7-31): the page reads the undeleted 댓글 down one
     // index and the deleted 댓글 still in view through their undeleted 대댓글 down another, and
     // takes the first of the two together. Every kind of 댓글, interleaved and tied, paged at every
     // size: the pages together are the 댓글 in view, oldest first, ties by id, each page full while
@@ -388,10 +391,14 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     // Thousands of 댓글 written and deleted with nothing under them, before and after the ones in
     // view, and thousands of 대댓글 deleted before a thread's first one in view — under an
     // undeleted 댓글 and under a deleted one kept as its placeholder. Every statement the comment
-    // page and the reply page run is explained as it runs (EXPLAIN ANALYZE): the rows they read of
-    // `post_comments` stay with what the answers carry, never the deleted history (ADR-0074 decision
-    // 4, which records the plans).
+    // page and the reply page run is explained as it runs (EXPLAIN ANALYZE, BUFFERS), on a table
+    // with statistics and with another post's comments in its indexes: the rows they read of
+    // `post_comments` and the pages they touch stay with what the answers carry, never the deleted
+    // history (ADR-0074 7-31, which records the plans). The indexes holding no deleted comment are
+    // schema.test.ts's to pin; this pins that the statements read them, and read them by their
+    // leading columns.
     const DEAD = 3_000;
+    const ELSEWHERE = 5_000;
     const base = Date.now() - 86_400_000;
     const at = (seconds: number) => new Date(base + seconds * 1_000);
     const deadRoots = (fromSeconds: number) =>
@@ -441,6 +448,30 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       createdAt: at(4_000),
     });
     await deadRoots(5_000);
+    // Another post's comments, all in view — 댓글 each with a 대댓글 — so the indexes of the comments
+    // not deleted are not this post's alone: a statement that read one off its leading columns (a
+    // thread's 대댓글 down the post's 대댓글 by their `parent_id`) would walk all of it, which the
+    // rows a scan returns do not show and the pages it touches do.
+    const elsewhere = await createPost(t.db, { marketId: market.id, authorId: author.id });
+    await t.db.execute(sql`
+      INSERT INTO post_comments (post_id, author_id, body, created_at)
+      SELECT ${elsewhere.id}::uuid, ${other.id}::text, '다른 글의 댓글 ' || n,
+             ${at(0).toISOString()}::timestamptz + make_interval(secs => n::double precision)
+      FROM generate_series(1, ${ELSEWHERE}) AS n`);
+    await t.db.execute(sql`
+      INSERT INTO post_comments (post_id, parent_id, parent_created_at, author_id, body, created_at)
+      SELECT post_id, id, created_at, author_id, '다른 글의 답', created_at + interval '1 second'
+      FROM post_comments
+      WHERE post_id = ${elsewhere.id}::uuid`);
+    // Planned as a database with statistics plans them (autovacuum analyzes), not as a table never
+    // measured, where a small partial index read off its leading columns can look cheapest — the
+    // plan the review found the deleted 대댓글 hiding behind. ANALYZE is the owner's.
+    const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+    try {
+      await owner.execute(sql`ANALYZE post_comments`);
+    } finally {
+      await closeDb(owner);
+    }
 
     // The service on a database handle that records each statement it sends.
     const statements: { text: string; values: unknown[] }[] = [];
@@ -459,18 +490,27 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
             (plan['Rows Removed by Index Recheck'] ?? 0)) *
           plan['Actual Loops']
         : 0) + (plan.Plans ?? []).reduce((sum, child) => sum + commentRowsRead(child), 0);
+    /**
+     * Pages a statement touched (shared buffers hit and read; a node counts its children's): an
+     * index walked off its leading columns shows here, where the rows it returns are few.
+     */
+    const pagesTouched = (plan: ExplainedPlan): number =>
+      (plan['Shared Hit Blocks'] ?? 0) + (plan['Shared Read Blocks'] ?? 0);
     const readBy = async (run: () => Promise<unknown>) => {
       statements.length = 0;
       await run();
       let rows = 0;
+      let pages = 0;
       for (const { text, values } of statements) {
         const explained = await t.db.$client.query<{ 'QUERY PLAN': [{ Plan: ExplainedPlan }] }>(
-          `EXPLAIN (ANALYZE, FORMAT JSON) ${text}`,
+          `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ${text}`,
           values,
         );
-        rows += commentRowsRead(explained.rows[0]!['QUERY PLAN'][0].Plan);
+        const plan = explained.rows[0]!['QUERY PLAN'][0].Plan;
+        rows += commentRowsRead(plan);
+        pages += pagesTouched(plan);
       }
-      return { rows, statements: statements.length };
+      return { rows, pages, statements: statements.length };
     };
 
     const listed = await service.list(post.id, { limit: 20 });
@@ -481,13 +521,18 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     ]);
     expect(listed.items.map(({ replies }) => replies.length)).toEqual([3, 3, 0]);
     // The post's state, its 댓글 and their 대댓글: a few rows each — not the 9,000 댓글 and 6,000
-    // 대댓글 deleted.
+    // 대댓글 deleted — and a few pages: the ceilings below stand well above what the readings touch
+    // (69, 46, 22 and 11 on Postgres 16) and well below what they touched with a thread's 대댓글
+    // read down the post's 대댓글 index by their `parent_id` (some 320, 170, 100 and 90, the rows as
+    // few as here — ADR-0074 decision 8).
     const listing = await readBy(() => service.list(post.id, { limit: 20 }));
     expect(listing.statements).toBe(4);
     expect(listing.rows).toBeLessThan(40);
+    expect(listing.pages).toBeLessThan(120);
     // A page whose cursor stands among the deleted ones, and the last (empty) page after them.
     const second = await readBy(() => service.list(post.id, { limit: 1 }));
     expect(second.rows).toBeLessThan(20);
+    expect(second.pages).toBeLessThan(80);
     const firstPage = await service.list(post.id, { limit: 2 });
     const rest = await service.list(post.id, { limit: 2, cursor: firstPage.nextCursor! });
     expect(rest.items.map(({ comment }) => comment.id)).toEqual([after.id]);
@@ -496,6 +541,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       service.list(post.id, { limit: 2, cursor: firstPage.nextCursor! }),
     );
     expect(lastPage.rows).toBeLessThan(20);
+    expect(lastPage.pages).toBeLessThan(50);
     // A thread's replies, under the undeleted 댓글 and under the placeholder: 3 in view, 3,000
     // deleted before them.
     for (const thread of [live, placeholder]) {
@@ -503,6 +549,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       expect(replies.items).toHaveLength(3);
       const read = await readBy(() => service.replies(thread.id, {}));
       expect(read.rows).toBeLessThan(15);
+      expect(read.pages).toBeLessThan(40);
     }
   });
 

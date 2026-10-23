@@ -37,7 +37,7 @@ import { posts } from './posts.js';
  *   written and held to the 댓글's by the parent's foreign key, so it is never anything else. It
  *   lets a post's 대댓글 be walked in their 댓글's order (the second index below), which is how the
  *   comment page finds the deleted 댓글 still in view — those that 대댓글 hang under — without
- *   walking those that left every view (Codex review on PR #220, ADR-0074 decision 4).
+ *   walking those that left every view (Codex review on PR #220, ADR-0074 decision 2 and 7-31).
  * - `is_reply` and `parent_is_reply`: generated, for the parent's foreign key only.
  *
  * The post and the author are RESTRICT, as a post's market and author are: nothing here is ever
@@ -103,7 +103,7 @@ export const postComments = pgTable(
     }).onDelete('restrict'),
     /**
      * A post's 댓글 its author did not delete, in the order they are shown, oldest first (#45-2),
-     * page by page — with the next index, the comment page's two walks (ADR-0074 decision 4): a
+     * page by page — with the next index, the comment page's two walks (ADR-0074 7-31): a
      * deleted 댓글 is in neither unless a 대댓글 not deleted hangs under it, so a page never walks
      * the 댓글 that left every view, however many (Codex review on PR #220).
      */

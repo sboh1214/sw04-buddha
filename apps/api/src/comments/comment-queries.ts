@@ -30,7 +30,7 @@ const under = alias(schema.postComments, 'under');
  * stop at the first row found, so a post or a thread whose rows are mostly deleted — estimated
  * from the whole table, where rows not deleted are many — could be read by a sequential scan that
  * expects an early match and meets the deleted history first (seen on a table of 450,000 deleted
- * comments and 100,000 others, ADR-0074 decision 4). Ordered as its index is, the first row is one
+ * comments and 100,000 others, ADR-0074 7-31). Ordered as its index is, the first row is one
  * descent of that index and a scan would have to read and sort every row: the index is the plan.
  */
 function anyInOrder(where: SQL, order: SQL): SQL<boolean> {

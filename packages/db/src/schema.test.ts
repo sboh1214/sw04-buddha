@@ -1057,8 +1057,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
 
     it('pages from indexes that hold no deleted comment (Codex review on PR #220)', async () => {
-      // The comment page and '답글 더 보기' walk these three (ADR-0074 decision 4): a deleted 댓글
-      // or 대댓글 is in none of them, so no history of written and deleted comments is walked.
+      // The comment page and '답글 더 보기' walk these three (ADR-0074 decision 2 and 7-31): a
+      // deleted 댓글 or 대댓글 is in none of them, so no history of written and deleted comments is
+      // walked. This pins each index's predicate; that the statements read them, by their leading
+      // columns, is comments.controller.test.ts's (rows read and pages touched, ADR-0074 decision 8).
       const { rows } = await t.db.execute<{ indexname: string; indexdef: string }>(
         sql`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'post_comments' ORDER BY indexname`,
       );
