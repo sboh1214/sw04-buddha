@@ -2237,7 +2237,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  describe('writing restrictions and the changes of their end (migration 0039, #185)', () => {
+  describe('writing restrictions and the changes of their end (migration 0040, #185)', () => {
     const DAY = 24 * 60 * 60 * 1_000;
 
     async function restrictionFixture() {

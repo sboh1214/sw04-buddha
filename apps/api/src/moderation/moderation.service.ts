@@ -647,7 +647,7 @@ export class ModerationService {
    * operator's, as they cancel it, decision 4 #50), another type (`not_restriction`), a cancelled
    * one (`cancelled`), one ended already (`ended` — by the database clock, read after the lock),
    * and for a shortening an end not to come (`end_passed`) or not earlier than the end now
-   * (`not_earlier`; any is, for 무기한). The trigger of migration 0039 holds the same: earlier only,
+   * (`not_earlier`; any is, for 무기한). The trigger of migration 0040 holds the same: earlier only,
    * never 무기한 again, never once ended. No lock on the member's profile: an earlier end only
    * opens what a write in flight was refused.
    */

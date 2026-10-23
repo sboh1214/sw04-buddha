@@ -433,7 +433,7 @@ export const reportStatusSchema = z.enum(REPORT_STATUSES).meta({ id: 'ReportStat
  * The account restriction (#139) joins this list. Stored as a varchar with a CHECK rather than a
  * Postgres enum, so the migration that adds a type can use it in the same batch (drizzle runs a
  * batch in one transaction, where a value an `ADD VALUE` added cannot be used — 55P04, migration
- * 0014; migration 0039 added `writing_restriction` so).
+ * 0014; migration 0040 added `writing_restriction` so).
  */
 export const MODERATION_ACTION_TYPES = [
   'hide',

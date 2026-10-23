@@ -33,8 +33,8 @@ const END_CHANGE_KINDS_SQL = sql.raw(
  *   `post_comments.hidden_at` set in the same transaction), `warning` (a record and the member's
  *   notice only, #45-11), `nickname_reset`, `bio_clear`, `image_remove` (#37-10; what was taken
  *   away is kept in `profile_item_removals`), `writing_restriction` (작성 제한, #185, ADR-0082 —
- *   migration 0039). A varchar the CHECK below holds to the list, so #139's account restriction
- *   adds its type by replacing the CHECK in the migration that uses it, as 0039 did (a Postgres
+ *   migration 0040). A varchar the CHECK below holds to the list, so #139's account restriction
+ *   adds its type by replacing the CHECK in the migration that uses it, as 0040 did (a Postgres
  *   enum's new value cannot be used in that batch).
  * - `user_id`: the member acted on — a hidden item's author, a profile's member, the member
  *   restricted. Never the acting operator (decision 4 #50 «다른 운영자만 처리한다»: the CHECK holds
@@ -54,7 +54,7 @@ const END_CHANGE_KINDS_SQL = sql.raw(
  *   a restriction's ends at once. The cancelling operator is not the member either.
  *
  * Only the cancellation ever changes, once, and a writing restriction's end, earlier each time and
- * only while it stands (trigger `moderation_actions_keep_record`, migrations 0039 and 0039). DELETE
+ * only while it stands (trigger `moderation_actions_keep_record`, migrations 0039 and 0040). DELETE
  * stays for #184: the actions are kept for the retention period (#57-18 «신고·제재·이의 기록»). Rows
  * of a withdrawn member stay with the account (RESTRICT, as every record #140 anonymises around).
  */
@@ -161,10 +161,10 @@ export const moderationActions = pgTable(
  * 7-17). So the rows go with their action: the member's 조치·신고 내역 reads them.
  *
  * An action's changes are ordered by their ends, never by `created_at`: each brings the end
- * strictly forward (the CHECK below and the trigger of migration 0039, under the action's lock),
+ * strictly forward (the CHECK below and the trigger of migration 0040, under the action's lock),
  * while two made one behind the other can share a millisecond of the clock.
  *
- * Never rewritten: buddha_app loses UPDATE (migration 0039); DELETE stays for #184, which removes
+ * Never rewritten: buddha_app loses UPDATE (migration 0040); DELETE stays for #184, which removes
  * these rows before their action (RESTRICT).
  */
 export const restrictionEndChanges = pgTable(

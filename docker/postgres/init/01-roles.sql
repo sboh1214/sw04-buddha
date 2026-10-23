@@ -16,7 +16,7 @@
 --                   notice_revisions, profile_item_removals, restriction_end_changes: no UPDATE;
 --                   post_comment_counts: SELECT only, written by its trigger) are applied later by
 --                   migrations with REVOKE (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032,
---                   0033, 0034, 0035, 0036, 0039, 0039), see bottom.
+--                   0033, 0034, 0035, 0036, 0039, 0040), see bottom.
 
 CREATE ROLE buddha_migrate LOGIN PASSWORD 'buddha';
 CREATE ROLE buddha_app LOGIN PASSWORD 'buddha';
@@ -55,5 +55,5 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- (post_revisions: UPDATE), 0034 (post_comment_revisions: UPDATE; post_comment_counts: INSERT,
 -- UPDATE, DELETE — its SECURITY DEFINER trigger writes it as the owner), 0035 (post_likes,
 -- comment_likes: UPDATE), 0036 (notice_revisions: UPDATE), 0039 (profile_item_removals:
--- UPDATE) and 0039 (restriction_end_changes: UPDATE).
+-- UPDATE) and 0040 (restriction_end_changes: UPDATE).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

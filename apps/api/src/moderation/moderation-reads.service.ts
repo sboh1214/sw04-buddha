@@ -92,7 +92,7 @@ const changeRows = schema.restrictionEndChanges;
  *
  * The changes are ordered by the end each gave, never by their time (`endChanges` the same): every
  * change brings the end strictly forward — `restriction_end_changes_earlier_check` and the trigger
- * of migration 0039, under the action's lock, each change's `previous_ends_at` the end the one
+ * of migration 0040, under the action's lock, each change's `previous_ends_at` the end the one
  * before gave — so the latest change gives the earliest end and the first the latest. Their times
  * do not order them: a change right behind another can read the same millisecond of the clock, or
  * an earlier one should the clock step back (`strictlyAfter`, infra/db/clock.ts), and the random
