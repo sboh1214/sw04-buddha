@@ -33,15 +33,14 @@ import {
   withoutCommentDrafts,
 } from '@/lib/comment-drafts';
 import {
+  type CommentBoxRefusal,
   type HeldText,
   type HeldTextPlace,
+  commentBoxRefusal,
   commentDraftKeyOfPlace,
   commentTextChanged,
-  commentWriteErrorMessage,
-  isStaleThreadRefusal,
 } from '@/lib/comments';
 import { type GoingBoxWrite } from '@/lib/held-comment-texts';
-import { isRestricted } from '@/lib/restriction';
 
 /**
  * What the comment section does with a box that goes (components/post/held-comment-text.tsx, rules
@@ -54,15 +53,12 @@ import { isRestricted } from '@/lib/restriction';
  */
 export interface CommentBoxGoing {
   /**
-   * The box's write was refused, in these words; `stale`: they say the thread on screen is out of
-   * date (`isStaleThreadRefusal`); `restricted`: a writing restriction refused it (`isRestricted`,
-   * #185 — the way to 조치·신고 내역 goes under its words wherever they are shown).
+   * The box's write was refused (`commentBoxRefusal`): in these words; `stale`, they say the thread
+   * on screen is out of date (`isStaleThreadRefusal`); `restricted`, a writing restriction refused
+   * it (`isRestricted`, #185 — the way to 조치·신고 내역 goes under its words wherever they are
+   * shown).
    */
-  refused(
-    boxId: string,
-    accountId: string,
-    refusal: { reason: string; stale: boolean; restricted: boolean },
-  ): void;
+  refused(boxId: string, accountId: string, refusal: CommentBoxRefusal): void;
   /**
    * The box went holding `text` other than it started with, its write as `write` says (in flight,
    * refused, or none); `focus`: the focus was in it as it went.
@@ -366,11 +362,7 @@ export function useCommentBoxDraft(box: CommentBoxDraft): {
   return {
     landed: () => going?.landed(boxId),
     refused: (error) =>
-      going?.refused(boxId, box.accountId, {
-        reason: commentWriteErrorMessage(error, write, format),
-        stale: isStaleThreadRefusal(error),
-        restricted: isRestricted(error),
-      }),
+      going?.refused(boxId, box.accountId, commentBoxRefusal(error, write, format)),
     close: () => {
       const last = held.get(boxId);
       if (last !== undefined) held.set(boxId, { ...last, closed: true });

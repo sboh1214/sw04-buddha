@@ -24,6 +24,7 @@ import {
   type CommentPages,
   type RepliesOnScreen,
   type ReplyPage,
+  commentBoxRefusal,
   commentCountText,
   commentDraft,
   commentLengthText,
@@ -772,6 +773,31 @@ describe('a refused write', () => {
     }
     // Not a stale thread: the box and its text stay, the refusal under the button.
     expect(isStaleThreadRefusal(restricted)).toBe(false);
+  });
+
+  it('tells the section a box’s refusal whole: its words, whether the thread is stale, whether a writing restriction gave it (#185, ADR-0082 7-6)', () => {
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    const restricted = refusal(403, 'RESTRICTED', { kind: 'writing', endsAt });
+    // What `useCommentBoxDraft` hands `CommentBoxGoing.refused`: the way to 조치·신고 내역 goes
+    // under its words wherever they are shown — under a text held apart too.
+    for (const write of ['create', 'edit'] as const) {
+      expect(commentBoxRefusal(restricted, write, formatKst)).toStrictEqual({
+        reason: `${copy.errRestrictedWriting}(${formatKst(endsAt)}까지).`,
+        stale: false,
+        restricted: true,
+      });
+    }
+    const hidden = refusal(409, 'COMMENT_NOT_ALLOWED', { reason: 'post_hidden' });
+    expect(commentBoxRefusal(hidden, 'create', formatKst)).toStrictEqual({
+      reason: commentWriteErrorMessage(hidden, 'create', formatKst),
+      stale: true,
+      restricted: false,
+    });
+    expect(commentBoxRefusal(new TypeError('Failed to fetch'), 'edit', formatKst)).toStrictEqual({
+      reason: copy.errNetwork,
+      stale: false,
+      restricted: false,
+    });
   });
 
   it('reads the thread again only when it says the thread on screen is stale', () => {

@@ -306,7 +306,9 @@ export async function uploadPostImage(
  * image before converting it) reads the member's restriction and actions again, so the write
  * page's banner says it (`afterRestricted`, query-client.ts — what the app's MutationCache does for
  * every mutation's refusal; the upload is a plain call, so it asks here) — and is then the editor's
- * to show. Each call is one attempt: the editor sends a 429's file again around it (`sendRetrying`,
+ * to show, once: like the other two, it ends the editor's batch (`refusesImageBatch`,
+ * lib/post-editor.ts), so the restriction is read again once, not for every file picked. Each call
+ * is one attempt: the editor sends a 429's file again around it (`sendRetrying`,
  * lib/post-editor.ts), and each attempt refused runs these. A notice's editor (#138) uploads with
  * `purpose` `notice`, which no writing restriction refuses (owner decision 2026-10-23 answer 13).
  */

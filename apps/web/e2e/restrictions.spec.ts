@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import { type APIRequestContext, type Locator, type Page, type Request } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   adminAccount,
@@ -22,12 +22,13 @@ import {
  *   default, with a reason); the member's write page and MY summary show the banner with the end
  *   and the way to 조치·신고 내역 — no reason, no appeal (owner decision 2026-10-22 evening); a new
  *   post, an edit of their own, a 댓글 and a new 소개 are refused with the end and that way, no
- *   appeal sentence; a post image is refused in a toast with the end and no button (owner
- *   decision 2026-10-23 answer 12); a like and deleting their own stay open; 조치·신고 내역 lists it
- *   '진행 중'; the operator lifts it early with a reason of their own — the banner goes, the member
- *   writes again, and 조치·신고 내역 says '조기 해제됨', the changed end and the end it was given,
- *   not the reason (owner decision 2026-10-23 answer 4; the brief: «admin restricts a user for 1
- *   day → write button shows restriction message, likes still work, admin lifts → can write»);
+ *   appeal sentence; two post images picked at once are refused in one toast with the end and no
+ *   button, the second never sent (owner decision 2026-10-23 answer 12; the refusal ends the
+ *   batch); a like and deleting their own stay open; 조치·신고 내역 lists it '진행 중'; the
+ *   operator lifts it early with a reason of their own — the banner goes, the member writes again,
+ *   and 조치·신고 내역 says '조기 해제됨', the changed end and the end it was given, not the reason
+ *   (owner decision 2026-10-23 answer 4; the brief: «admin restricts a user for 1 day → write
+ *   button shows restriction message, likes still work, admin lifts → can write»);
  * - from a reported post's page the operator restricts its author 무기한 about that post — its
  *   pending report is resolved (조치함) — the member's banner and refusal say 무기한, clearing the
  *   소개 stays open, and the operator's 감경 brings the end forward to a time, which the member
@@ -249,13 +250,37 @@ test.describe('작성 제한', () => {
       ).toBe(true);
       // A post image: refused in a toast that says the end and has no button — the banner above
       // has the way to 내역 (owner decision 2026-10-23 answer 12). Nothing goes into the editor.
-      await page
-        .getByTestId('post-editor-file')
-        .setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: PNG });
+      // Two picked at once: the refusal is the account's, so it ends the batch — the second is
+      // never sent, and the refusal is said once (`refusesImageBatch`).
+      const uploads: string[] = [];
+      const countUpload = (request: Request) => {
+        if (
+          request.method() === 'POST' &&
+          new URL(request.url()).pathname === '/api/v1/media/images'
+        ) {
+          uploads.push(request.url());
+        }
+      };
+      page.on('request', countUpload);
+      const refused = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/media/images',
+      );
+      await page.getByTestId('post-editor-file').setInputFiles([
+        { name: 'evidence.png', mimeType: 'image/png', buffer: PNG },
+        { name: 'evidence-2.png', mimeType: 'image/png', buffer: PNG },
+      ]);
+      expect((await refused).status()).toBe(403);
       const toast = page.locator('[data-scope="toast"][data-part="root"]').filter({
         hasText: writing,
       });
       await expect(toast).toBeVisible();
+      // The batch is over once nothing uploads: the second file was never sent.
+      await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+      await expect(toast).toHaveCount(1);
+      expect(uploads).toHaveLength(1);
+      page.off('request', countUpload);
       await expect(toast.locator('[data-part="action-trigger"]')).toHaveCount(0);
       await expect(toast.getByRole('button', { name: copy.myModerationOpen })).toHaveCount(0);
       await expect(toast).not.toContainText(copy.myModerationOpen);

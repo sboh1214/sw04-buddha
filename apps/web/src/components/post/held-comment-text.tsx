@@ -18,6 +18,7 @@ import {
   heldTextsOf,
   initialHeldTexts,
   pageMayGo,
+  refusedEvent,
 } from '@/lib/held-comment-texts';
 
 /**
@@ -66,8 +67,7 @@ export function useHeldCommentTexts(
 
   const actions = useMemo(() => {
     const going: CommentBoxGoing = {
-      refused: (boxId, writer, { reason, stale, restricted }) =>
-        dispatch({ type: 'refused', boxId, accountId: writer, reason, stale, restricted }),
+      refused: (boxId, writer, refusal) => dispatch(refusedEvent(boxId, writer, refusal)),
       left: (boxId, writer, text, place: HeldTextPlace, focus, write: GoingBoxWrite) =>
         dispatch({
           type: 'left',

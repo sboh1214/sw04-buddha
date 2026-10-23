@@ -24,7 +24,7 @@ import {
   validationMessage,
 } from './api';
 import { POSTS_KEY, isOwnPost, mapKept, withAuthorImage } from './posts';
-import { restrictedMessage } from './restriction';
+import { isRestricted, restrictedMessage } from './restriction';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
@@ -970,6 +970,33 @@ export function isStaleThreadRefusal(error: unknown): boolean {
     isApiError(error, 'COMMENT_NOT_EDITABLE') ||
     isApiError(error, 'NOT_FOUND')
   );
+}
+
+/**
+ * A box's refused write as the box tells the section (`CommentBoxGoing.refused`,
+ * hooks/use-comment-draft.ts): its words (`commentWriteErrorMessage`), whether they say the thread
+ * on screen is out of date (`isStaleThreadRefusal`), and whether a writing restriction gave them
+ * (`isRestricted`, #185) — then the way to 조치·신고 내역 goes under them wherever they are shown,
+ * under the box or with its text held apart once the box went (`HeldText.restricted`, ADR-0082
+ * 7-6, held-comment-texts.ts).
+ */
+export interface CommentBoxRefusal {
+  reason: string;
+  stale: boolean;
+  restricted: boolean;
+}
+
+/** `error`, refusing a box's `write`, as `CommentBoxRefusal` (its end in the writer's zone). */
+export function commentBoxRefusal(
+  error: unknown,
+  write: CommentWrite,
+  formatDate: (iso: string) => string,
+): CommentBoxRefusal {
+  return {
+    reason: commentWriteErrorMessage(error, write, formatDate),
+    stale: isStaleThreadRefusal(error),
+    restricted: isRestricted(error),
+  };
 }
 
 /**

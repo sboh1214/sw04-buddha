@@ -1,4 +1,4 @@
-import { type HeldText, type HeldTextPlace } from './comments';
+import { type CommentBoxRefusal, type HeldText, type HeldTextPlace } from './comments';
 
 /**
  * The texts a post page's comment section holds apart from any box (오너 결정 2026-10-20 답 4 and
@@ -127,6 +127,21 @@ export type HeldTextsEvent =
   | { type: 'reason'; id: string; reason: string }
   | { type: 'shown'; ids: readonly string[] }
   | { type: 'post-gone' };
+
+/**
+ * What the section hears of a box's refused write (`CommentBoxGoing.refused`,
+ * components/post/held-comment-text.tsx): the refusal as the box told it (`commentBoxRefusal`),
+ * every part of it — a writing restriction's mark too (#185), which puts the way to 조치·신고 내역
+ * under the text should it be held apart with those words (`heldTextsOf`, ADR-0082 7-6).
+ */
+export function refusedEvent(
+  boxId: string,
+  accountId: string,
+  refusal: CommentBoxRefusal,
+): Extract<HeldTextsEvent, { type: 'refused' }> {
+  const { reason, stale, restricted } = refusal;
+  return { type: 'refused', boxId, accountId, reason, stale, restricted };
+}
 
 export function initialHeldTexts(accountId: string | undefined): HeldTextsState {
   return { accountId, heard: new Map(), gone: new Set(), postGone: false };

@@ -183,8 +183,9 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * is a stale screen; a writing restriction (RESTRICTED, #185, ADR-0082 — refused before the image
  * is looked at) says what it closes and until when in the member's zone (`formatDate`) or 무기한
  * (`restrictedMessage`): a post's image as the post's writing (`restricted: 'writing'`, the default
- * — its toast says that alone, `imageUploadToast`), the profile image as a public profile item
- * (`'profile'`, whose deletion stays open — its card adds the way to 조치·신고 내역, `isRestricted`);
+ * — its toast says that alone, `imageUploadToast`, once: it ends the batch, `refusesImageBatch`),
+ * the profile image as a public profile item (`'profile'`, whose deletion stays open — its card
+ * adds the way to 조치·신고 내역, `isRestricted`);
  * a refusal for the onboarding says nothing while the onboarding gate takes the account to its
  * step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and the form keeps
  * its draft in the tab, as for a refused send (owner decision 2026-10-21), and when the gate stays
@@ -499,13 +500,16 @@ export async function sendRetrying<T>(send: () => Promise<T>, steps: UploadRetry
 
 /**
  * Whether an upload's refusal is about the account rather than the file: no session
- * (UNAUTHENTICATED), the cookie as another account (`isForAnotherAccount`), or a step of the
- * onboarding left (ONBOARDING_REQUIRED). Every file after it would be refused the same way.
+ * (UNAUTHENTICATED), the cookie as another account (`isForAnotherAccount`), a step of the
+ * onboarding left (ONBOARDING_REQUIRED), or a writing restriction (RESTRICTED, #185, ADR-0082 —
+ * refused before the image is looked at, whatever the file). Every file after it would be refused
+ * the same way.
  */
 export function refusesImageBatch(error: unknown): boolean {
   return (
     isApiError(error, 'ONBOARDING_REQUIRED') ||
     isApiError(error, 'UNAUTHENTICATED') ||
+    isApiError(error, 'RESTRICTED') ||
     isForAnotherAccount(error)
   );
 }
@@ -610,17 +614,19 @@ export interface ImageBatchSteps<F> {
  * the editor's line (`queue` — behind the sends of its other batches, `createUploadQueue`), and
  * gives each file's slot back however it ends: placed in the document, or failed. A refusal about
  * the account (`refusesImageBatch`) ends the batch — handed to `failed` once (said once; for the
- * onboarding only when the gate stays — `imageUploadErrorMessage`), the account's state already
- * put on screen by the upload (`postImageUploader`) — and so does an editor that sends no more by
- * a file's turn (gone, or held — its post gone, the form kept read-only, ADR-0073 9-53); the files
- * not sent give their slots back at once. Sending on would have every later file refused alike,
- * each refusal reading the account again, on the page the gate moved to. An upload that lands once
- * the form is held still goes in — 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (9-53), one sent
- * again after a 429 meanwhile too (`sendRetrying`) — but `insert` is told so, and puts the image
- * after what is selected, never over it: the text is held to be copied (an image over a selected
- * line replaced it, Codex review of #219, round 6). The files after it are not sent (each turn
- * asks). An upload that lands once the editor is gone puts nothing in: its slot comes back, and
- * the upload stays on the API unused, removed after 24 hours as any upload no post took (9-11).
+ * onboarding only when the gate stays — `imageUploadErrorMessage`; a writing restriction's one
+ * toast with its end, owner decision 2026-10-23 answer 12), the account's state already put on
+ * screen by the upload (`postImageUploader` — for a restriction, the banner's read again) — and so
+ * does an editor that sends no more by a file's turn (gone, or held — its post gone, the form kept
+ * read-only, ADR-0073 9-53); the files not sent give their slots back at once. Sending on would
+ * have every later file refused alike, each refusal reading the account again, on the page the gate
+ * moved to — a restricted member's every file going up whole to be refused, and said again. An
+ * upload that lands once the form is held still goes in — 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (9-53),
+ * one sent again after a 429 meanwhile too (`sendRetrying`) — but `insert` is told so, and puts the
+ * image after what is selected, never over it: the text is held to be copied (an image over a
+ * selected line replaced it, Codex review of #219, round 6). The files after it are not sent (each
+ * turn asks). An upload that lands once the editor is gone puts nothing in: its slot comes back,
+ * and the upload stays on the API unused, removed after 24 hours as any upload no post took (9-11).
  * Any other failure is that file's alone (a refused image, the network, the API still busy —
  * RATE_LIMITED — after the file was sent again (`sendRetrying`, inside `send`), a body cut for
  * idling or for its deadline): the batch goes on.

@@ -620,6 +620,11 @@ const ANOTHER_ACCOUNT = refusal(403, 'FORBIDDEN', [
   { path: ['expectedAccountId'], message: 'not the signed-in account' },
 ]);
 const SIGNED_OUT = refusal(401, 'UNAUTHENTICATED');
+/** A writing restriction (#185): refused before the image is looked at, whatever the file. */
+const RESTRICTED = refusal(403, 'RESTRICTED', {
+  kind: 'writing',
+  endsAt: '2026-10-24T06:00:00.000Z',
+});
 const NOT_AN_IMAGE = refusal(422, 'IMAGE_NOT_ALLOWED', { reason: 'type' });
 
 describe('refusesImageBatch', () => {
@@ -627,6 +632,7 @@ describe('refusesImageBatch', () => {
     expect(refusesImageBatch(ONBOARDING)).toBe(true);
     expect(refusesImageBatch(ANOTHER_ACCOUNT)).toBe(true);
     expect(refusesImageBatch(SIGNED_OUT)).toBe(true);
+    expect(refusesImageBatch(RESTRICTED)).toBe(true);
     expect(refusesImageBatch(NOT_AN_IMAGE)).toBe(false);
     expect(refusesImageBatch(refusal(413, 'VALIDATION_ERROR'))).toBe(false);
     expect(refusesImageBatch(refusal(429, 'RATE_LIMITED'))).toBe(false);
@@ -765,6 +771,9 @@ describe('uploadImageBatch', () => {
     ['for the onboarding', ONBOARDING],
     ['as another account', ANOTHER_ACCOUNT],
     ['for no session', SIGNED_OUT],
+    // Every later file would go up whole to be refused alike, the restriction read again and its
+    // toast shown for each (#185 — one toast with its end, owner decision 2026-10-23 answer 12).
+    ['for a writing restriction', RESTRICTED],
   ])(
     'ends the batch at an upload refused %s: said once, nothing more sent, every slot back',
     async (_name, error) => {
