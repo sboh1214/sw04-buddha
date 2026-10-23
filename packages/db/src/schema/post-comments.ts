@@ -33,6 +33,11 @@ import { posts } from './posts.js';
  *   hangs under it, and nothing otherwise.
  * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal come with
  *   #50). '운영 정책에 따라 숨긴 글입니다', no new 대댓글 under it, no edits by its author; deletable.
+ * - `parent_created_at`: a 대댓글's 댓글's `created_at`, NULL for a 댓글 — copied when the 대댓글 is
+ *   written and held to the 댓글's by the parent's foreign key, so it is never anything else. It
+ *   lets a post's 대댓글 be walked in their 댓글's order (the second index below), which is how the
+ *   comment page finds the deleted 댓글 still in view — those that 대댓글 hang under — without
+ *   walking those that left every view (Codex review on PR #220, ADR-0074 decision 4).
  * - `is_reply` and `parent_is_reply`: generated, for the parent's foreign key only.
  *
  * The post and the author are RESTRICT, as a post's market and author are: nothing here is ever
@@ -47,6 +52,8 @@ export const postComments = pgTable(
       .references(() => posts.id, { onDelete: 'restrict' }),
     /** The 댓글 a 대댓글 hangs under; NULL for a 댓글. */
     parentId: uuid(),
+    /** That 댓글's `created_at` (the parent's foreign key holds it to it); NULL for a 댓글. */
+    parentCreatedAt: timestampTz(),
     authorId: text()
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),
@@ -68,26 +75,58 @@ export const postComments = pgTable(
   (t) => [
     /** A comment has text: the API trims the body and refuses a blank one. */
     check('post_comments_body_check', sql`btrim(${t.body}) <> ''`),
+    /**
+     * A 대댓글 carries its 댓글's time and a 댓글 none: with it NULL the parent's foreign key would
+     * not be checked at all (MATCH SIMPLE), and a 대댓글 could hang anywhere.
+     */
+    check(
+      'post_comments_parent_created_at_check',
+      sql`(${t.parentId} IS NULL) = (${t.parentCreatedAt} IS NULL)`,
+    ),
     /** The key the parent's foreign key references: the primary key alone cannot carry the rule. */
-    unique('post_comments_post_id_id_is_reply_unique').on(t.postId, t.id, t.isReply),
+    unique('post_comments_post_id_id_created_at_is_reply_unique').on(
+      t.postId,
+      t.id,
+      t.createdAt,
+      t.isReply,
+    ),
     /**
      * The two layers (#45-2), held by the database: a 대댓글's parent is a comment of the same post
-     * that is not itself a 대댓글. A 댓글 that has replies cannot become a 대댓글 either (its key is
-     * still referenced). RESTRICT, as everything here.
+     * that is not itself a 대댓글, and `parent_created_at` is that comment's `created_at`. A 댓글
+     * that has replies cannot become a 대댓글 either (its key is still referenced), nor its time
+     * change. RESTRICT, as everything here.
      */
     foreignKey({
       name: 'post_comments_parent_fk',
-      columns: [t.postId, t.parentId, t.parentIsReply],
-      foreignColumns: [t.postId, t.id, t.isReply],
+      columns: [t.postId, t.parentId, t.parentCreatedAt, t.parentIsReply],
+      foreignColumns: [t.postId, t.id, t.createdAt, t.isReply],
     }).onDelete('restrict'),
-    /** A post's 댓글 in the order they are shown, oldest first (#45-2), page by page. */
-    index('post_comments_post_id_created_at_id_idx')
+    /**
+     * A post's 댓글 its author did not delete, in the order they are shown, oldest first (#45-2),
+     * page by page — with the next index, the comment page's two walks (ADR-0074 decision 4): a
+     * deleted 댓글 is in neither unless a 대댓글 not deleted hangs under it, so a page never walks
+     * the 댓글 that left every view, however many (Codex review on PR #220).
+     */
+    index('post_comments_live_post_id_created_at_id_idx')
       .on(t.postId, t.createdAt, t.id)
-      .where(sql`${t.parentId} IS NULL`),
-    /** A 댓글's 대댓글 in the order they are shown, and whether any hangs under it. */
-    index('post_comments_parent_id_created_at_id_idx')
+      .where(sql`${t.parentId} IS NULL AND ${t.deletedAt} IS NULL`),
+    /**
+     * A post's 대댓글 not deleted in their 댓글's order: walked one 댓글 at a time (each step one
+     * descent to the next `(parent_created_at, parent_id)`), the 댓글 that 대댓글 in view hang
+     * under — the deleted ones among them are the placeholders of the comment page. Also whether
+     * any 대댓글 not deleted hangs under the post.
+     */
+    index('post_comments_live_post_id_parent_created_at_parent_id_idx')
+      .on(t.postId, t.parentCreatedAt, t.parentId)
+      .where(sql`${t.parentId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
+    /**
+     * A 댓글's 대댓글 not deleted, in the order they are shown, and whether any hangs under it: the
+     * first 50 of each thread on the comment page and '답글 더 보기' walk no deleted 대댓글, however
+     * many were written and deleted before the next one in view (Codex review on PR #220).
+     */
+    index('post_comments_live_parent_id_created_at_id_idx')
       .on(t.parentId, t.createdAt, t.id)
-      .where(sql`${t.parentId} IS NOT NULL`),
+      .where(sql`${t.parentId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
     /**
      * A post's comment count on its card (#45-7): the comments the public reads, 댓글 and 대댓글
      * alike, never a deleted or a hidden one — exactly what this partial index holds.

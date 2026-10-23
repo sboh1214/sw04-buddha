@@ -903,7 +903,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         isReply: false,
         parentIsReply: null,
       });
-      expect(reply).toMatchObject({ parentId: comment.id, isReply: true, parentIsReply: false });
+      expect(reply).toMatchObject({
+        parentId: comment.id,
+        parentCreatedAt: comment.createdAt,
+        isReply: true,
+        parentIsReply: false,
+      });
+      expect(comment.parentCreatedAt).toBeNull();
       const withAll = await t.db.query.postComments.findFirst({
         where: eq(postComments.id, comment.id),
         with: { post: true, author: true, replies: true },
@@ -944,12 +950,17 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy(parentRefused);
       // A parent that does not exist, and a comment its own parent.
       await expect(
-        createComment(t.db, { postId: post.id, authorId: author.id, parentId: randomUUID() }),
+        createComment(t.db, {
+          postId: post.id,
+          authorId: author.id,
+          parentId: randomUUID(),
+          parentCreatedAt: comment.createdAt,
+        }),
       ).rejects.toSatisfy(parentRefused);
       await expect(
         t.db
           .update(postComments)
-          .set({ parentId: comment.id })
+          .set({ parentId: comment.id, parentCreatedAt: comment.createdAt })
           .where(eq(postComments.id, comment.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23503');
       // A 댓글 with a 대댓글 cannot become a 대댓글 itself, nor move to another post.
@@ -957,12 +968,46 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await expect(
         t.db
           .update(postComments)
-          .set({ parentId: second.id })
+          .set({ parentId: second.id, parentCreatedAt: second.createdAt })
           .where(eq(postComments.id, comment.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23503');
       await expect(
         t.db.update(postComments).set({ postId: other.id }).where(eq(postComments.id, comment.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      // A 대댓글 carries its 댓글's time, exactly (the comment page walks the 대댓글 in their 댓글's
+      // order by it, ADR-0074 decision 2): another time, none at all, and a 댓글 with one are
+      // refused; the 댓글's own time cannot move from under its 대댓글.
+      const off = new Date(comment.createdAt.getTime() + 1);
+      await expect(
+        createComment(t.db, {
+          postId: post.id,
+          authorId: author.id,
+          parentId: comment.id,
+          parentCreatedAt: off,
+        }),
+      ).rejects.toSatisfy(parentRefused);
+      const timeMissing = (e: unknown) =>
+        sqlState(e) === '23514' && sqlConstraint(e) === 'post_comments_parent_created_at_check';
+      await expect(
+        t.db.execute(
+          sql`INSERT INTO post_comments (post_id, parent_id, author_id, body) VALUES (${post.id}, ${comment.id}, ${author.id}, 'x')`,
+        ),
+      ).rejects.toSatisfy(timeMissing);
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentCreatedAt: null })
+          .where(eq(postComments.id, reply.id)),
+      ).rejects.toSatisfy(timeMissing);
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentCreatedAt: second.createdAt })
+          .where(eq(postComments.id, second.id)),
+      ).rejects.toSatisfy(timeMissing);
+      await expect(
+        t.db.update(postComments).set({ createdAt: off }).where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy(parentRefused);
       // The generated keys are the database's: nobody writes them.
       await expect(
         t.db.execute(
@@ -1009,6 +1054,35 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy((e) => sqlState(e) === '42501');
       await t.db.delete(postCommentRevisions).where(eq(postCommentRevisions.id, revision!.id));
       expect(await t.db.select().from(postCommentRevisions)).toEqual([]);
+    });
+
+    it('pages from indexes that hold no deleted comment (Codex review on PR #220)', async () => {
+      // The comment page and '답글 더 보기' walk these three (ADR-0074 decision 4): a deleted 댓글
+      // or 대댓글 is in none of them, so no history of written and deleted comments is walked.
+      const { rows } = await t.db.execute<{ indexname: string; indexdef: string }>(
+        sql`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'post_comments' ORDER BY indexname`,
+      );
+      const defs = Object.fromEntries(rows.map((row) => [row.indexname, row.indexdef]));
+      expect(defs['post_comments_live_post_id_created_at_id_idx']).toContain(
+        '(post_id, created_at, id) WHERE ((parent_id IS NULL) AND (deleted_at IS NULL))',
+      );
+      expect(defs['post_comments_live_post_id_parent_created_at_parent_id_idx']).toContain(
+        '(post_id, parent_created_at, parent_id) WHERE ((parent_id IS NOT NULL) AND (deleted_at IS NULL))',
+      );
+      expect(defs['post_comments_live_parent_id_created_at_id_idx']).toContain(
+        '(parent_id, created_at, id) WHERE ((parent_id IS NOT NULL) AND (deleted_at IS NULL))',
+      );
+      // No index of a post's or a thread's comments holds the deleted ones besides the key of the
+      // parent's foreign key (whose leading post_id serves the operators' read of every comment).
+      expect(Object.keys(defs).sort()).toEqual([
+        'post_comments_author_id_created_at_idx',
+        'post_comments_live_parent_id_created_at_id_idx',
+        'post_comments_live_post_id_created_at_id_idx',
+        'post_comments_live_post_id_parent_created_at_parent_id_idx',
+        'post_comments_pkey',
+        'post_comments_post_id_id_created_at_is_reply_unique',
+        'post_comments_visible_post_id_idx',
+      ]);
     });
 
     it('counts a post’s visible comments, what its partial index holds', async () => {

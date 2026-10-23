@@ -808,6 +808,12 @@ export interface CreateCommentInput {
   authorId: string;
   /** The 댓글 a 대댓글 hangs under. Default: none — a 댓글. */
   parentId?: string | null;
+  /**
+   * That 댓글's `created_at`, which a 대댓글 carries. Default: read from the row `parentId` names (a
+   * parent that is not there gives NULL, refused by `post_comments_parent_created_at_check`); a
+   * test of the parent's foreign key sets it.
+   */
+  parentCreatedAt?: Date;
   /** Default: '댓글 <tag>'. Stored as given: the API's normalisation is the API's. */
   body?: string;
   /** Default: the database clock. An order test sets it. */
@@ -830,6 +836,11 @@ export async function createComment(db: Db, input: CreateCommentInput) {
       postId: input.postId,
       authorId: input.authorId,
       parentId: input.parentId ?? null,
+      parentCreatedAt:
+        input.parentCreatedAt ??
+        (input.parentId === undefined || input.parentId === null
+          ? null
+          : sql`(SELECT ${postComments.createdAt} FROM ${postComments} WHERE ${postComments.id} = ${input.parentId})`),
       body: input.body ?? `댓글 ${tag()}`,
       ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
       ...(input.editedAt === undefined ? {} : { editedAt: input.editedAt }),

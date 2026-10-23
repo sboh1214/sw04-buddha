@@ -4,9 +4,13 @@
 --
 -- - post_comments: one row per comment on a post — a 댓글 (no parent) or a 대댓글 under a 댓글 of
 --   the same post, never under a 대댓글 (#45-2). The shape is the database's to hold: the parent's
---   foreign key reaches (post, id, is_reply) through two generated columns, so a 대댓글's parent is
---   a 댓글 of its own post whoever writes. The body is plain text (#45-3, 1,000 characters);
---   '수정됨', the author's deletion and an operator's hiding are times, as on posts.
+--   foreign key reaches (post, id, created_at, is_reply) through two generated columns and the
+--   댓글's created_at the 대댓글 carries (parent_created_at, never NULL on a 대댓글), so a 대댓글's
+--   parent is a 댓글 of its own post whoever writes. The body is plain text (#45-3, 1,000
+--   characters); '수정됨', the author's deletion and an operator's hiding are times, as on posts.
+--   The paging indexes hold only comments not deleted: the comment page walks a post's live 댓글
+--   and, through its live 대댓글 in their 댓글's order, the deleted 댓글 still in view — never the
+--   deleted 댓글 and 대댓글 that left every view (Codex review on PR #220, ADR-0074 decision 2).
 -- - post_comment_revisions: every body an edit replaced, for operators only (append-only below).
 CREATE TABLE "post_comment_revisions" (
 	"id" bigserial PRIMARY KEY NOT NULL,
@@ -20,6 +24,7 @@ CREATE TABLE "post_comments" (
 	"id" uuid PRIMARY KEY DEFAULT gen_random_uuid() NOT NULL,
 	"post_id" uuid NOT NULL,
 	"parent_id" uuid,
+	"parent_created_at" timestamp (3) with time zone,
 	"author_id" text NOT NULL,
 	"body" varchar(1000) NOT NULL,
 	"created_at" timestamp (3) with time zone DEFAULT now() NOT NULL,
@@ -28,17 +33,19 @@ CREATE TABLE "post_comments" (
 	"hidden_at" timestamp (3) with time zone,
 	"is_reply" boolean GENERATED ALWAYS AS (parent_id IS NOT NULL) STORED NOT NULL,
 	"parent_is_reply" boolean GENERATED ALWAYS AS (CASE WHEN parent_id IS NOT NULL THEN false END) STORED,
-	CONSTRAINT "post_comments_post_id_id_is_reply_unique" UNIQUE("post_id","id","is_reply"),
-	CONSTRAINT "post_comments_body_check" CHECK (btrim("post_comments"."body") <> '')
+	CONSTRAINT "post_comments_post_id_id_created_at_is_reply_unique" UNIQUE("post_id","id","created_at","is_reply"),
+	CONSTRAINT "post_comments_body_check" CHECK (btrim("post_comments"."body") <> ''),
+	CONSTRAINT "post_comments_parent_created_at_check" CHECK (("post_comments"."parent_id" IS NULL) = ("post_comments"."parent_created_at" IS NULL))
 );
 --> statement-breakpoint
 ALTER TABLE "post_comment_revisions" ADD CONSTRAINT "post_comment_revisions_comment_id_post_comments_id_fk" FOREIGN KEY ("comment_id") REFERENCES "public"."post_comments"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_post_id_posts_id_fk" FOREIGN KEY ("post_id") REFERENCES "public"."posts"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_author_id_user_id_fk" FOREIGN KEY ("author_id") REFERENCES "public"."user"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_parent_fk" FOREIGN KEY ("post_id","parent_id","parent_is_reply") REFERENCES "public"."post_comments"("post_id","id","is_reply") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_parent_fk" FOREIGN KEY ("post_id","parent_id","parent_created_at","parent_is_reply") REFERENCES "public"."post_comments"("post_id","id","created_at","is_reply") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "post_comment_revisions_comment_id_id_idx" ON "post_comment_revisions" USING btree ("comment_id","id");--> statement-breakpoint
-CREATE INDEX "post_comments_post_id_created_at_id_idx" ON "post_comments" USING btree ("post_id","created_at","id") WHERE "post_comments"."parent_id" IS NULL;--> statement-breakpoint
-CREATE INDEX "post_comments_parent_id_created_at_id_idx" ON "post_comments" USING btree ("parent_id","created_at","id") WHERE "post_comments"."parent_id" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "post_comments_live_post_id_created_at_id_idx" ON "post_comments" USING btree ("post_id","created_at","id") WHERE "post_comments"."parent_id" IS NULL AND "post_comments"."deleted_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "post_comments_live_post_id_parent_created_at_parent_id_idx" ON "post_comments" USING btree ("post_id","parent_created_at","parent_id") WHERE "post_comments"."parent_id" IS NOT NULL AND "post_comments"."deleted_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "post_comments_live_parent_id_created_at_id_idx" ON "post_comments" USING btree ("parent_id","created_at","id") WHERE "post_comments"."parent_id" IS NOT NULL AND "post_comments"."deleted_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "post_comments_visible_post_id_idx" ON "post_comments" USING btree ("post_id") WHERE "post_comments"."deleted_at" IS NULL AND "post_comments"."hidden_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "post_comments_author_id_created_at_idx" ON "post_comments" USING btree ("author_id","created_at" desc);--> statement-breakpoint
 -- Hand-edited: an edit's history is the record (#45-4: earlier versions kept for operators, the

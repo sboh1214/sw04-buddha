@@ -34,6 +34,7 @@ import {
   type PostSummary,
 } from '@buddha/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -45,6 +46,16 @@ import { CommentsService } from './comments.service.js';
 const TRUSTED_ORIGIN = 'http://localhost:3000';
 
 type ThreadPage = { data: CommentThread[]; meta: { nextCursor: string | null } };
+
+/** A node of `EXPLAIN (ANALYZE, FORMAT JSON)`'s plan, as far as these tests read it. */
+interface ExplainedPlan {
+  'Relation Name'?: string;
+  'Actual Rows': number;
+  'Actual Loops': number;
+  'Rows Removed by Filter'?: number;
+  'Rows Removed by Index Recheck'?: number;
+  Plans?: ExplainedPlan[];
+}
 
 describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
   let t: TestApp;
@@ -273,6 +284,225 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
         code: 'VALIDATION_ERROR',
         details: [{ path: ['cursor'] }],
       });
+    }
+  });
+
+  it('pages the 댓글 in view through two walks — the undeleted ones and those 대댓글 in view hang under — in one order, ties by id across the two', async () => {
+    // Codex review on PR #220 (ADR-0074 decision 4): the page reads the undeleted 댓글 down one
+    // index and the deleted 댓글 still in view through their undeleted 대댓글 down another, and
+    // takes the first of the two together. Every kind of 댓글, interleaved and tied, paged at every
+    // size: the pages together are the 댓글 in view, oldest first, ties by id, each page full while
+    // more follow — whichever walk the page's last 댓글 came from.
+    const base = Date.now() - 3_600_000;
+    const at = (seconds: number) => new Date(base + seconds * 1_000);
+    const root = (seconds: number, extra: Partial<Parameters<typeof createComment>[1]> = {}) =>
+      createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        createdAt: at(seconds),
+        ...extra,
+      });
+    const under = (
+      parentId: string,
+      seconds: number,
+      extra: { deletedAt?: Date; hiddenAt?: Date } = {},
+    ) =>
+      createComment(t.db, {
+        postId: post.id,
+        authorId: other.id,
+        parentId,
+        createdAt: at(seconds),
+        ...extra,
+      });
+    const gone = new Date();
+    const inView: { id: string; createdAt: Date }[] = [];
+    const kinds = [
+      'live',
+      'live-with-replies',
+      'hidden',
+      'placeholder',
+      'placeholder-hidden-reply',
+      'dead',
+      'dead-deleted-replies',
+      'hidden-placeholder',
+    ] as const;
+    const deletedKinds: readonly string[] = [
+      'placeholder',
+      'placeholder-hidden-reply',
+      'dead',
+      'dead-deleted-replies',
+      'hidden-placeholder',
+    ];
+    for (let round = 0; round < 3; round += 1) {
+      // Three 댓글 of each kind a round: one of each kind at one moment, again at another — ties
+      // within and across the two walks, broken by id — and one of each kind a moment apart.
+      for (let slot = 0; slot < 3; slot += 1) {
+        for (const [index, kind] of kinds.entries()) {
+          const seconds = 10 + round * 100 + slot * 20 + (slot === 2 ? index : 0);
+          const row = await root(seconds, {
+            ...(deletedKinds.includes(kind) ? { deletedAt: gone } : {}),
+            ...(kind === 'hidden' || kind === 'hidden-placeholder' ? { hiddenAt: gone } : {}),
+          });
+          switch (kind) {
+            case 'live-with-replies':
+            case 'placeholder':
+            case 'hidden-placeholder':
+              await under(row.id, 500 + seconds, { deletedAt: gone });
+              await under(row.id, 501 + seconds);
+              break;
+            case 'placeholder-hidden-reply':
+              await under(row.id, 500 + seconds, { hiddenAt: gone });
+              break;
+            case 'dead-deleted-replies':
+              await under(row.id, 500 + seconds, { deletedAt: gone });
+              await under(row.id, 501 + seconds, { deletedAt: gone });
+              break;
+            default:
+              break;
+          }
+          if (kind !== 'dead' && kind !== 'dead-deleted-replies') inView.push(row);
+        }
+      }
+    }
+    const expected = [...inView]
+      .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime() || (x.id < y.id ? -1 : 1))
+      .map((row) => row.id);
+    expect(expected).toHaveLength(3 * 3 * 6);
+    for (const limit of [1, 2, 3, 7, 20]) {
+      const seen: string[] = [];
+      let cursor: string | null = null;
+      for (;;) {
+        const one: ThreadPage = await page(
+          `limit=${String(limit)}${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+        );
+        seen.push(...one.data.map(({ comment }) => comment.id));
+        cursor = one.meta.nextCursor;
+        if (cursor === null) break;
+        expect(one.data, `limit ${String(limit)}`).toHaveLength(limit);
+      }
+      expect(seen, `limit ${String(limit)}`).toEqual(expected);
+    }
+  });
+
+  it('walks no deleted comment out of view: a page and a reply page cost what is in view, however many were written and deleted (Codex review on PR #220)', async () => {
+    // Thousands of 댓글 written and deleted with nothing under them, before and after the ones in
+    // view, and thousands of 대댓글 deleted before a thread's first one in view — under an
+    // undeleted 댓글 and under a deleted one kept as its placeholder. Every statement the comment
+    // page and the reply page run is explained as it runs (EXPLAIN ANALYZE): the rows they read of
+    // `post_comments` stay with what the answers carry, never the deleted history (ADR-0074 decision
+    // 4, which records the plans).
+    const DEAD = 3_000;
+    const base = Date.now() - 86_400_000;
+    const at = (seconds: number) => new Date(base + seconds * 1_000);
+    const deadRoots = (fromSeconds: number) =>
+      t.db.execute(sql`
+        INSERT INTO post_comments (post_id, author_id, body, created_at, deleted_at)
+        SELECT ${post.id}::uuid, ${other.id}::text, '지운 댓글 ' || n,
+               ${at(fromSeconds).toISOString()}::timestamptz + make_interval(secs => n::double precision / 10),
+               now()
+        FROM generate_series(1, ${DEAD}) AS n`);
+    const deadReplies = (parentId: string, fromSeconds: number) =>
+      t.db.execute(sql`
+        INSERT INTO post_comments (post_id, parent_id, parent_created_at, author_id, body, created_at, deleted_at)
+        SELECT ${post.id}::uuid, ${parentId}::uuid,
+               (SELECT created_at FROM post_comments WHERE id = ${parentId}::uuid),
+               ${other.id}::text, '지운 답 ' || n,
+               ${at(fromSeconds).toISOString()}::timestamptz + make_interval(secs => n::double precision / 10),
+               now()
+        FROM generate_series(1, ${DEAD}) AS n`);
+    await deadRoots(0);
+    const live = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(1_000),
+    });
+    const placeholder = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(1_001),
+      deletedAt: new Date(),
+    });
+    await deadReplies(live.id, 1_100);
+    await deadReplies(placeholder.id, 1_100);
+    for (const thread of [live, placeholder]) {
+      for (let index = 0; index < 3; index += 1) {
+        await createComment(t.db, {
+          postId: post.id,
+          authorId: other.id,
+          parentId: thread.id,
+          createdAt: at(2_000 + index),
+        });
+      }
+    }
+    await deadRoots(3_000);
+    const after = await createComment(t.db, {
+      postId: post.id,
+      authorId: author.id,
+      createdAt: at(4_000),
+    });
+    await deadRoots(5_000);
+
+    // The service on a database handle that records each statement it sends.
+    const statements: { text: string; values: unknown[] }[] = [];
+    const recording: Db = drizzle({
+      client: t.db.$client,
+      schema,
+      casing: 'snake_case',
+      logger: { logQuery: (text, values) => statements.push({ text, values }) },
+    });
+    const service = new CommentsService(recording, t.app.get(CommentCursors));
+    /** Rows of `post_comments` a plan's scans read: those they kept and those they filtered out. */
+    const commentRowsRead = (plan: ExplainedPlan): number =>
+      (plan['Relation Name'] === 'post_comments'
+        ? (plan['Actual Rows'] +
+            (plan['Rows Removed by Filter'] ?? 0) +
+            (plan['Rows Removed by Index Recheck'] ?? 0)) *
+          plan['Actual Loops']
+        : 0) + (plan.Plans ?? []).reduce((sum, child) => sum + commentRowsRead(child), 0);
+    const readBy = async (run: () => Promise<unknown>) => {
+      statements.length = 0;
+      await run();
+      let rows = 0;
+      for (const { text, values } of statements) {
+        const explained = await t.db.$client.query<{ 'QUERY PLAN': [{ Plan: ExplainedPlan }] }>(
+          `EXPLAIN (ANALYZE, FORMAT JSON) ${text}`,
+          values,
+        );
+        rows += commentRowsRead(explained.rows[0]!['QUERY PLAN'][0].Plan);
+      }
+      return { rows, statements: statements.length };
+    };
+
+    const listed = await service.list(post.id, { limit: 20 });
+    expect(listed.items.map(({ comment }) => [comment.state, comment.id])).toEqual([
+      ['published', live.id],
+      ['deleted', placeholder.id],
+      ['published', after.id],
+    ]);
+    expect(listed.items.map(({ replies }) => replies.length)).toEqual([3, 3, 0]);
+    // The post's state, its 댓글 and their 대댓글: a few rows each — not the 9,000 댓글 and 6,000
+    // 대댓글 deleted.
+    const listing = await readBy(() => service.list(post.id, { limit: 20 }));
+    expect(listing.statements).toBe(4);
+    expect(listing.rows).toBeLessThan(40);
+    // A page whose cursor stands among the deleted ones, and the last (empty) page after them.
+    const second = await readBy(() => service.list(post.id, { limit: 1 }));
+    expect(second.rows).toBeLessThan(20);
+    const firstPage = await service.list(post.id, { limit: 2 });
+    const rest = await service.list(post.id, { limit: 2, cursor: firstPage.nextCursor! });
+    expect(rest.items.map(({ comment }) => comment.id)).toEqual([after.id]);
+    expect(rest.nextCursor).toBeNull();
+    const lastPage = await readBy(() =>
+      service.list(post.id, { limit: 2, cursor: firstPage.nextCursor! }),
+    );
+    expect(lastPage.rows).toBeLessThan(20);
+    // A thread's replies, under the undeleted 댓글 and under the placeholder: 3 in view, 3,000
+    // deleted before them.
+    for (const thread of [live, placeholder]) {
+      const replies = await service.replies(thread.id, {});
+      expect(replies.items).toHaveLength(3);
+      const read = await readBy(() => service.replies(thread.id, {}));
+      expect(read.rows).toBeLessThan(15);
     }
   });
 
@@ -527,6 +757,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
         postId: post.id,
         authorId: other.id,
         parentId: thread.id,
+        parentCreatedAt: thread.createdAt,
         body: `같은 때 ${id}`,
         createdAt: at(100),
       });
@@ -597,8 +828,10 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     }
     const fill = (parentId: string, count: number) =>
       t.db.execute(sql`
-        INSERT INTO post_comments (post_id, parent_id, author_id, body, created_at)
-        SELECT ${post.id}::uuid, ${parentId}::uuid, ${other.id}::text, '대댓글 ' || n,
+        INSERT INTO post_comments (post_id, parent_id, parent_created_at, author_id, body, created_at)
+        SELECT ${post.id}::uuid, ${parentId}::uuid,
+               (SELECT created_at FROM post_comments WHERE id = ${parentId}::uuid),
+               ${other.id}::text, '대댓글 ' || n,
                now() - make_interval(secs => (${count}::int - n)::double precision)
         FROM generate_series(1, ${count}) AS n`);
     await fill(big.id, 5_000);
@@ -1166,7 +1399,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       [
         ['SELECT id FROM post_comments WHERE id = $1 FOR SHARE', [lone.id]],
         [
-          'INSERT INTO post_comments (id, post_id, parent_id, author_id, body) VALUES ($1, $2, $3, $4, $5)',
+          'INSERT INTO post_comments (id, post_id, parent_id, parent_created_at, author_id, body) SELECT $1::uuid, $2::uuid, id, created_at, $4::text, $5::text FROM post_comments WHERE id = $3::uuid',
           [answer, post.id, lone.id, other.id, '먼저 쓴 답'],
         ],
       ],

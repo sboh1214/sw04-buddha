@@ -14,7 +14,7 @@ import {
   type PublishedComment,
   type Role,
 } from '@buddha/shared';
-import { and, asc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -23,7 +23,12 @@ import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { postAuthorOf, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { CommentCursors } from './comment-cursor.js';
-import { commentHasReplies, commentHasRepliesSql, postHasComments } from './comment-queries.js';
+import {
+  commentHasReplies,
+  commentHasRepliesSql,
+  commentPageIdsSql,
+  postHasComments,
+} from './comment-queries.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -143,10 +148,11 @@ export class CommentsService {
    * may end on a placeholder, and no cursor tells its time; one that does not open is a
    * VALIDATION_ERROR.
    *
-   * Bounded whatever a thread holds (Codex review on PR #220): one query for the page's 댓글, one
-   * for their 대댓글 — a LATERAL read of at most COMMENT_REPLIES_PAGE_SIZE + 1 per 댓글 down
-   * `post_comments_parent_id_created_at_id_idx` — and one pass that appends each 대댓글 to its
-   * 댓글's list.
+   * Bounded whatever a thread holds and whatever was deleted (Codex reviews on PR #220): one query
+   * for the page's 댓글 — which 댓글 it holds is `commentPageIdsSql`'s two walks, neither of which
+   * reads a deleted 댓글 out of view — one for their 대댓글 — a LATERAL read of at most
+   * COMMENT_REPLIES_PAGE_SIZE + 1 per 댓글 down `post_comments_live_parent_id_created_at_id_idx`,
+   * which holds no deleted 대댓글 — and one pass that appends each 대댓글 to its 댓글's list.
    */
   async list(postId: string, query: CommentsQuery): Promise<Page<CommentThread>> {
     const { posts, postComments, profiles } = schema;
@@ -163,18 +169,8 @@ export class CommentsService {
       .select({ ...this.columns, hasReplies: commentHasRepliesSql(postComments.id) })
       .from(postComments)
       .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
-      .where(
-        and(
-          eq(postComments.postId, postId),
-          isNull(postComments.parentId),
-          or(isNull(postComments.deletedAt), commentHasRepliesSql(postComments.id)),
-          cursor === undefined
-            ? undefined
-            : keysetPredicate(postComments.createdAt, postComments.id, cursor, 'uuid', 'after'),
-        ),
-      )
-      .orderBy(asc(postComments.createdAt), asc(postComments.id))
-      .limit(query.limit + 1);
+      .where(sql`${postComments.id} = ANY (${commentPageIdsSql(postId, cursor, query.limit + 1)})`)
+      .orderBy(asc(postComments.createdAt), asc(postComments.id));
     const hasMore = rows.length > query.limit;
     const kept = hasMore ? rows.slice(0, query.limit) : rows;
     const byParent = new Map<string, CommentRow[]>();
@@ -208,7 +204,9 @@ export class CommentsService {
    * comment of a post that left every view: a 댓글 still in view means an undeleted comment on its
    * post, itself or a 대댓글 under it, which keeps the post in view too. The cursor is sealed for
    * this 댓글's list: another thread's, the comment page's, or one tampered with is a
-   * VALIDATION_ERROR (`CommentCursors`).
+   * VALIDATION_ERROR (`CommentCursors`). The page walks 51 rows from the cursor down the index of
+   * the undeleted 대댓글 (`post_comments_live_parent_id_created_at_id_idx`), which holds no deleted
+   * one however many were written and deleted (Codex review on PR #220).
    */
   async replies(commentId: string, query: CommentRepliesQuery): Promise<Page<PostComment>> {
     const { postComments, profiles } = schema;
@@ -248,8 +246,10 @@ export class CommentsService {
 
   /**
    * The first COMMENT_REPLIES_PAGE_SIZE + 1 undeleted 대댓글 of each 댓글 `threadIds` names, oldest
-   * first within each: a LATERAL subquery per 댓글 that walks its replies' index and stops at the
-   * limit, so a thread of any size costs its first page and one row more (whether more follow).
+   * first within each: a LATERAL subquery per 댓글 that walks its undeleted replies' index
+   * (`post_comments_live_parent_id_created_at_id_idx`) and stops at the limit, so a thread of any
+   * size — and any number of 대댓글 deleted in it — costs its first page and one row more (whether
+   * more follow).
    */
   private async firstReplies(threadIds: string[]): Promise<CommentRow[]> {
     if (threadIds.length === 0) return [];
@@ -327,7 +327,14 @@ export class CommentsService {
           break;
       }
       const parent = parentId === null ? null : await this.lockParent(tx, postId, parentId);
-      await tx.insert(postComments).values({ id, postId, parentId: parent, authorId, body });
+      await tx.insert(postComments).values({
+        id,
+        postId,
+        parentId: parent?.id ?? null,
+        parentCreatedAt: parent?.createdAt ?? null,
+        authorId,
+        body,
+      });
     });
     return this.published(id);
   }
@@ -401,9 +408,14 @@ export class CommentsService {
    * open: one that left every view, or is on another post, is NOT_FOUND naming `parentId`; a hidden
    * one, or a 댓글 hidden or deleted to its placeholder, takes no 대댓글 (COMMENT_NOT_ALLOWED).
    * Locks the named comment, then its 댓글: a deletion or a hiding locks one row only, so the order
-   * cannot deadlock against them.
+   * cannot deadlock against them. Its `created_at` goes with it: the new 대댓글 carries it
+   * (`parent_created_at`, which the parent's foreign key holds to it).
    */
-  private async lockParent(tx: Tx, postId: string, parentId: string): Promise<string> {
+  private async lockParent(
+    tx: Tx,
+    postId: string,
+    parentId: string,
+  ): Promise<{ id: string; createdAt: Date }> {
     const target = await this.lockComment(tx, parentId);
     if (!target || target.postId !== postId) throw parentNotFound();
     let comment = target;
@@ -423,7 +435,7 @@ export class CommentsService {
       case 'hidden':
         throw commentNotAllowed('parent_hidden');
       case 'published':
-        return comment.id;
+        return { id: comment.id, createdAt: comment.createdAt };
     }
   }
 
@@ -434,6 +446,7 @@ export class CommentsService {
         id: postComments.id,
         postId: postComments.postId,
         parentId: postComments.parentId,
+        createdAt: postComments.createdAt,
         deletedAt: postComments.deletedAt,
         hiddenAt: postComments.hiddenAt,
       })
