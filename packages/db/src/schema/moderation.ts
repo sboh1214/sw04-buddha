@@ -42,7 +42,7 @@ const ACTION_TYPES_SQL = sql.raw(MODERATION_ACTION_TYPES.map((type) => `'${type}
  *   The cancelling operator is not the member either.
  *
  * Only the cancellation ever changes, once (trigger `moderation_actions_keep_record`, migration
- * 0038); #185's 감경 (shortening `ends_at`) is the next column to open. DELETE stays for #184: the
+ * 0039); #185's 감경 (shortening `ends_at`) is the next column to open. DELETE stays for #184: the
  * actions are kept for the retention period (#57-18 «신고·제재·이의 기록»). Rows of a withdrawn member
  * stay with the account (RESTRICT, as every record #140 anonymises around).
  */
@@ -144,7 +144,7 @@ export const moderationActions = pgTable(
  * One pending report per account and target (the unique index; ADR-0069 decision 7: «처리 중일 때만
  * 막는다»), and the API refuses the same of a withdrawn account on the same number. Only the
  * processing ever changes a row, once, and the number change's hash alone (trigger
- * `reports_keep_record`, migration 0038: only to the hash and for the reports that change's
+ * `reports_keep_record`, migration 0039: only to the hash and for the reports that change's
  * transaction names, so no write of the API moves it). DELETE
  * stays for #184 (#57-18: kept for the retention period; a pending one until it is processed,
  * decision 7). Nothing public ever reads this table (PRIVATE_DATA `reports`).
@@ -230,7 +230,7 @@ export const reports = pgTable(
  *   (ADR-0079 7-6); RESTRICT keeps its row and bytes until #184 removes this row after the retention
  *   period.
  *
- * Never rewritten: buddha_app loses UPDATE (migration 0038); DELETE stays for #184.
+ * Never rewritten: buddha_app loses UPDATE (migration 0039); DELETE stays for #184.
  */
 export const profileItemRemovals = pgTable(
   'profile_item_removals',

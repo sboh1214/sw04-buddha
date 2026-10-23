@@ -51,7 +51,7 @@ interface LockedTarget {
   readonly reportedUserId: string;
 }
 
-/** The unique index of one pending report per account and target (migration 0038). */
+/** The unique index of one pending report per account and target (migration 0039). */
 const PENDING_REPORT_INDEX = 'reports_pending_reporter_target_idx';
 
 const HOUR_MS = 60 * 60 * 1_000;

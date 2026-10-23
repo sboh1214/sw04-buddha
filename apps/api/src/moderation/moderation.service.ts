@@ -47,7 +47,7 @@ interface ReportTarget {
   targetKey: string;
 }
 
-/** The standing-hiding indexes (migration 0038): a second hiding of one item at once. */
+/** The standing-hiding indexes (migration 0039): a second hiding of one item at once. */
 const STANDING_HIDE_INDEXES = [
   'moderation_actions_standing_post_hide_idx',
   'moderation_actions_standing_comment_hide_idx',
@@ -72,7 +72,7 @@ const NICKNAME_DRAWS = 10;
  *
  * An operator never acts on themselves — their post, comment or profile, or a report on one
  * (decision 4 #50 «다른 운영자만 처리한다»): MODERATION_NOT_ALLOWED `own`, and the CHECKs of migration
- * 0038 hold it whoever writes. The item's row is locked FOR UPDATE first: a report on it holds it
+ * 0039 hold it whoever writes. The item's row is locked FOR UPDATE first: a report on it holds it
  * shared (ReportsService), so every report committed before the action is resolved by it and none
  * lands on a hidden item after; a new comment or like waits likewise (ADR-0074, ADR-0076).
  */

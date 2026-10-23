@@ -1724,7 +1724,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  describe('reports and moderation actions (migration 0038, #50)', () => {
+  describe('reports and moderation actions (migration 0039, #50)', () => {
     async function moderationFixture() {
       const { user: author } = await createUser(t.db);
       const { user: reporter } = await createUser(t.db);

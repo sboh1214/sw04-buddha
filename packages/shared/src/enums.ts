@@ -362,7 +362,7 @@ export const approvalStatusSchema = z.enum(APPROVAL_STATUSES).meta({ id: 'Approv
  * comment: the reason a hiding carries is one of these and the operator's explanation, if any
  * (owner decision 2026-10-22, ADR-0080; `hiddenReasonSchema`, authored.ts). #50 takes reports with
  * them and records a hiding's in the Postgres enum `report_reason` built from this tuple (migration
- * 0038). Labels: copy.ts (`reportReason*`, the web's `reportReasonLabel`).
+ * 0039). Labels: copy.ts (`reportReason*`, the web's `reportReasonLabel`).
  */
 export const REPORT_REASONS = [
   'spam',
