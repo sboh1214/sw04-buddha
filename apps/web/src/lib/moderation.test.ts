@@ -1786,6 +1786,12 @@ describe('operators', () => {
         message: copy.errModerationNoDecider,
       });
       expect(copy.errModerationNoDecider).toContain('결정할 운영자가 없습니다');
+      // A new action against an account its member closed (#140, owner decision 2026-10-23 (2차)
+      // 1): the same sentence the member's screen shows in place of the three buttons.
+      expect(moderationFailure(notAllowed('closed'))).toEqual({
+        kind: 'alert',
+        message: copy.errModerationClosed,
+      });
     });
   });
 

@@ -2951,19 +2951,22 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       | 'reset'
       | 'verification'
       | 'watch'
+      | 'unwatch'
       | 'search'
       | 'interest'
       | 'hold'
+      | 'timeZone'
       | 'coin'
       | 'address'
       | 'request';
 
     /**
      * An account with every row a closure deletes or changes: a session, a sign-in method, a
-     * password-reset token, a 본인확인 record, a watch, a search, an interest category, a nickname
-     * hold of its own, Coin, its address and name — and the two kinds of account restriction
-     * request about it still waiting: one to restrict it (`request`, its target the member) and
-     * one to lift an ended restriction of its (`change`, its target that restriction).
+     * password-reset token, a 본인확인 record, a watch (and its event), a search, an interest
+     * category, a nickname hold of its own, a time zone, Coin, its address and name — and the two
+     * kinds of account restriction request about it still waiting: one to restrict it (`request`,
+     * its target the member) and one to lift an ended restriction of its (`change`, its target that
+     * restriction).
      */
     async function closable() {
       const { user: member } = await createUser(t.db, { balanceCoin: 5_000n });
@@ -3000,6 +3003,10 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         .insert(profileInterestCategories)
         .values({ userId: member.id, categoryId: category.id });
       await t.db.insert(nicknameHolds).values({ nickname: 'gave_up', userId: member.id });
+      await t.db
+        .update(profiles)
+        .set({ timeZone: 'America/New_York' })
+        .where(eq(profiles.userId, member.id));
       const request = await createApprovalRequest(t.db, {
         kind: 'account_restriction',
         targetType: 'user',
@@ -3087,7 +3094,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           .values({ nickname: profile!.nickname!, userId: null, releasedAt: closedAt });
         await tx
           .update(profiles)
-          .set({ closedAt, nickname: null, bio: null, imageId: null })
+          .set({
+            closedAt,
+            nickname: null,
+            bio: null,
+            imageId: null,
+            ...(keep === 'timeZone' ? {} : { timeZone: null }),
+          })
           .where(eq(profiles.userId, userId));
         if (keep !== 'interest') {
           await tx
@@ -3097,8 +3110,17 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         if (keep !== 'verification') {
           await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
         }
-        if (keep !== 'watch')
-          await tx.delete(marketWatches).where(eq(marketWatches.userId, userId));
+        if (keep !== 'watch') {
+          const unwatched = await tx
+            .delete(marketWatches)
+            .where(eq(marketWatches.userId, userId))
+            .returning({ marketId: marketWatches.marketId });
+          if (keep !== 'unwatch') {
+            for (const { marketId } of unwatched) {
+              await tx.insert(marketWatchEvents).values({ userId, marketId, action: 'unwatch' });
+            }
+          }
+        }
         if (keep !== 'search') {
           await tx.delete(marketSearches).where(eq(marketSearches.userId, userId));
         }
@@ -3139,7 +3161,23 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       const { member, requestIds } = await closable();
       const closedAt = await closeInDb(member.id, requestIds);
       const [profile] = await t.db.select().from(profiles).where(eq(profiles.userId, member.id));
-      expect(profile).toMatchObject({ closedAt, nickname: null, bio: null, imageId: null });
+      expect(profile).toMatchObject({
+        closedAt,
+        nickname: null,
+        bio: null,
+        imageId: null,
+        timeZone: null,
+      });
+      // The watch history is kept, each watch ended by its unwatch (owner decision 2026-10-23 (2차)).
+      expect(
+        (
+          await t.db
+            .select({ action: marketWatchEvents.action })
+            .from(marketWatchEvents)
+            .where(eq(marketWatchEvents.userId, member.id))
+            .orderBy(marketWatchEvents.id)
+        ).map((event) => event.action),
+      ).toEqual(['watch', 'unwatch']);
       // Whoever writes: no change, no reopening (#57-17).
       for (const change of [
         { timeZone: 'Asia/Seoul' },
@@ -3169,9 +3207,11 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         ['reset', 'a password reset'],
         ['verification', 'its verified number'],
         ['watch', 'its watchlist'],
+        ['unwatch', 'a watch with no unwatch event'],
         ['search', 'its search history'],
         ['interest', 'its interest categories'],
         ['hold', 'a nickname hold of its own'],
+        ['timeZone', 'its time zone'],
         ['coin', 'Coin'],
         ['address', 'its address, name or photo'],
         ['request', 'a request about it waiting'],

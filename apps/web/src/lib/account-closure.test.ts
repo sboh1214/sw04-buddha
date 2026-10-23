@@ -9,6 +9,7 @@ import {
   closureBlockers,
   closureCoinText,
   closureFailure,
+  closureLines,
   isClosureConfirmed,
   nicknameShown,
 } from './account-closure';
@@ -34,6 +35,7 @@ const check = (overrides: Partial<AccountClosureCheck> = {}): AccountClosureChec
   availableCoin: '12000',
   refusals: [],
   restriction: null,
+  startGrantReceived: false,
   ...overrides,
 });
 
@@ -55,6 +57,38 @@ describe('the confirmation screen', () => {
     for (const typed of ['', '탈', '탈 퇴', '탈퇴합니다', '탈퇴.', '확인', 'withdraw']) {
       expect(isClosureConfirmed(typed), typed).toBe(false);
     }
+  });
+
+  it('says what goes, that the 본인확인 record waits out its retention, and what stays (owner decision 2026-10-23 (3차) 7)', () => {
+    expect(closureLines(check())).toEqual([
+      { testId: 'closure-deleted', text: copy.closureDeleted },
+      // Right under what goes at once: the code-send records keep the number and the real name
+      // for #184's retention period (ADR-0070 2차 답 1).
+      { testId: 'closure-phone-records', text: copy.closurePhoneRecords },
+      { testId: 'closure-kept', text: copy.closureKept },
+    ]);
+    expect(copy.closurePhoneRecords).toBe(
+      '휴대전화 본인확인 기록(번호·실명)은 보존기간 동안 보관된 뒤 지워집니다.',
+    );
+    // The line of what goes at once names neither the real name nor the number (ADR-0086 7-2).
+    expect(copy.closureDeleted).not.toMatch(/실명|휴대전화|번호/);
+  });
+
+  it('tells only an account whose start Coin was paid that its number gets none again (owner decision 2026-10-23 (3차) 9)', () => {
+    const lines = closureLines(check({ startGrantReceived: true }));
+    expect(lines.at(-1)).toEqual({ testId: 'closure-start-grant', text: copy.closureStartGrant });
+    expect(copy.closureStartGrant).toBe(
+      '같은 휴대전화 번호로 다시 가입해도 시작 Coin은 다시 받을 수 없습니다.',
+    );
+    // A grant still waiting (cancelled by the closure, its number free again), none asked yet, or
+    // the number's start Coin another account's: the API says false, and nothing is said.
+    expect(closureLines(check({ startGrantReceived: false })).map((line) => line.testId)).toEqual([
+      'closure-deleted',
+      'closure-phone-records',
+      'closure-kept',
+    ]);
+    // No other limit counted by number is mentioned (the same answer).
+    expect(copy.closureStartGrant).not.toMatch(/한도|신고|좋아요|제안|빈도/);
   });
 
   it('writes the Coin the closure forfeits as every screen writes Coin (#57-16)', () => {

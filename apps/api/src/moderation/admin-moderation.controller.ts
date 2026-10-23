@@ -360,7 +360,7 @@ export class AdminModerationController {
     summary:
       'Warn a member with a reason: a record and the member’s notice only. With a subject (the ' +
       'member’s post, comment or profile) its pending reports are resolved (조치함); one not the ' +
-      'member’s is `not_theirs`',
+      'member’s is `not_theirs`; an account its member closed (탈퇴) is `closed`',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)
@@ -383,7 +383,8 @@ export class AdminModerationController {
       'new value of a public profile item (RESTRICTED, with the end) — deleting their own, likes ' +
       'and reports stay open. Restricted already, the one that ends later governs. With a subject ' +
       '(the member’s post, comment or profile) its pending reports are resolved (조치함); one not ' +
-      'the member’s is `not_theirs`; the acting admin is `own`',
+      'the member’s is `not_theirs`; the acting admin is `own`; an account its member closed ' +
+      '(탈퇴) is `closed`',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)

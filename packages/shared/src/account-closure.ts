@@ -92,13 +92,21 @@ export type AccountClosureNotAllowedDetails = z.infer<typeof accountClosureNotAl
  * the closure would forfeit now (the available balance; reserved Coin cannot exist without orders)
  * and whatever refuses it now: the reasons in the order the closure asks them, and the restriction
  * it would answer RESTRICTED with (the later of the two when both stand, as every refusal names
- * it), or none. Read as of now: the closure asks everything again in its own transaction.
+ * it), or none — and whether the account's start Coin was paid (`startGrantReceived`, owner
+ * decision 2026-10-23 (3차) 9, ADR-0086): only then does the screen say that the same number gets
+ * no start Coin again on a new sign-up (#57-1). A grant still waiting is cancelled by the closure
+ * and its number may receive the start Coin with the next account (owner decision 2026-10-18 on
+ * #70), and an account that never had one (none asked yet, or its number's went to another
+ * account — `number_used`) is told nothing either. Read as of now: the closure asks everything
+ * again in its own transaction.
  */
 export const accountClosureCheckSchema = z
   .object({
     availableCoin: coinAmountSchema,
     refusals: z.array(accountClosureRefusalSchema),
     restriction: restrictedDetailsSchema.nullable(),
+    /** The account's start grant was paid (`granted`): its number never gets one again. */
+    startGrantReceived: z.boolean(),
   })
   .meta({ id: 'AccountClosureCheck' });
 export type AccountClosureCheck = z.infer<typeof accountClosureCheckSchema>;

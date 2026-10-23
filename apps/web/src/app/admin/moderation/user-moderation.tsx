@@ -28,6 +28,8 @@ import { profilePath } from '@/lib/profile';
 import {
   ActionRows,
   Block,
+  ClosedBadge,
+  ClosedMemberNotice,
   type DialogSpec,
   Line,
   LoadFailedNotice,
@@ -133,6 +135,8 @@ function UserView({
   onOpen: (spec: DialogSpec) => void;
 }) {
   const own = concernsOperator(member.user.id, useOperatorId());
+  // Closed by its member (#140): the only account with no nickname (migration 0041).
+  const closed = member.user.nickname === null;
   const pendingProfileReports = pendingReportIds(member.reports).length > 0;
   // About the profile first while its reports wait, so the warning resolves them by default.
   const profileSubject: SubjectOption = {
@@ -168,9 +172,10 @@ function UserView({
         <Heading as="h3" size="lg" data-testid="moderation-user-nickname">
           <UserName user={member.user} link={false} />
         </Heading>
+        {closed && <ClosedBadge />}
         {/* A member who closed the account (#140) has no public profile: its address answers as
             for no account (#37-16), so there is nothing to open. */}
-        {member.user.nickname !== null && (
+        {!closed && (
           <ChakraLink asChild fontSize="sm" color="brand.fg">
             <NextLink href={profilePath(member.user.publicId) as Route}>
               {copy.adminModerationOpenPublic}
@@ -182,32 +187,39 @@ function UserView({
       {own === true && <OwnNotice />}
       {own === false && (
         <HStack gap="2" flexWrap="wrap" data-testid="moderation-action-bar">
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => onOpen(warn)}
-            data-testid="moderation-warn"
-          >
-            {copy.adminModerationWarn}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            colorPalette="no"
-            onClick={() => onOpen(restrictDialog(member.user, subjects))}
-            data-testid="moderation-restrict"
-          >
-            {copy.adminModerationRestrict}
-          </Button>
-          <Button
-            size="sm"
-            variant="outline"
-            colorPalette="no"
-            onClick={() => onOpen(accountRestrictDialog(member.user, subjects))}
-            data-testid="moderation-account-restrict"
-          >
-            {copy.adminModerationAccountRestrict}
-          </Button>
+          {/* No new action against a closed account (#140, owner decision 2026-10-23 (2차) 1). */}
+          {closed ? (
+            <ClosedMemberNotice />
+          ) : (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => onOpen(warn)}
+                data-testid="moderation-warn"
+              >
+                {copy.adminModerationWarn}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                colorPalette="no"
+                onClick={() => onOpen(restrictDialog(member.user, subjects))}
+                data-testid="moderation-restrict"
+              >
+                {copy.adminModerationRestrict}
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                colorPalette="no"
+                onClick={() => onOpen(accountRestrictDialog(member.user, subjects))}
+                data-testid="moderation-account-restrict"
+              >
+                {copy.adminModerationAccountRestrict}
+              </Button>
+            </>
+          )}
           {member.user.nickname !== null && !isAutoNickname(member.user.nickname) && (
             <Button
               size="sm"

@@ -20,7 +20,9 @@ import { type Refusal, refusalOf, restrictedMessage, restrictionSentence } from 
 /**
  * The confirmation screen: under MY 설정, which it is opened from (the brief's «MY 설정 탈퇴»), so
  * the 설정 tab stays the current one (`isMyTabCurrent` covers a tab's subtree). No cash-out word
- * in it (#113): 탈퇴 closes an account, it never takes Coin out.
+ * in it (#113): 탈퇴 closes an account, it never takes Coin out. The onboarding gate leaves it to
+ * an account that has not finished its onboarding, a re-consent left included
+ * (`ONBOARDING_EXEMPT_PATHS`, owner decision 2026-10-23 (2차) 3).
  */
 export const MY_CLOSURE_PATH = '/my/settings/closure';
 
@@ -70,6 +72,36 @@ export function closureBlockers(
   return [
     ...refusals,
     { message: restrictionSentence(check.restriction, 'closure', formatDate), restricted: true },
+  ];
+}
+
+/** One line of what the closure deletes and keeps, under the Coin on the confirmation screen. */
+export interface ClosureLine {
+  readonly testId: string;
+  readonly text: string;
+}
+
+/**
+ * What the confirmation says the closure deletes and keeps, in its order (owner decision 2026-10-23
+ * (3차) 7, ADR-0086): what goes at once (#57-18) and, right under it, that the 본인확인 record —
+ * number and real name — is kept for the retention period and then deleted (ADR-0070 2차 답 1, the
+ * exception to «곧바로»); what stays — posts, comments and likes, bylined '탈퇴한 사용자' (#37-16,
+ * #37-17); and, only for an account whose start Coin was paid (`startGrantReceived`, owner
+ * decision 2026-10-23 (3차) 9), that the same number gets no start Coin again on a new sign-up
+ * (#57-1). A grant still waiting is cancelled by the closure and its number may receive the start
+ * Coin with the next account (owner decision 2026-10-18 on #70), so that account is told nothing,
+ * and no other limit counted by number is mentioned.
+ */
+export function closureLines(
+  check: Pick<AccountClosureCheck, 'startGrantReceived'>,
+): readonly ClosureLine[] {
+  return [
+    { testId: 'closure-deleted', text: copy.closureDeleted },
+    { testId: 'closure-phone-records', text: copy.closurePhoneRecords },
+    { testId: 'closure-kept', text: copy.closureKept },
+    ...(check.startGrantReceived
+      ? [{ testId: 'closure-start-grant', text: copy.closureStartGrant }]
+      : []),
   ];
 }
 

@@ -27,6 +27,7 @@ import {
   closureBlockers,
   closureCoinText,
   closureFailure,
+  closureLines,
   isClosureConfirmed,
 } from '@/lib/account-closure';
 import { signOut } from '@/lib/auth-client';
@@ -41,9 +42,13 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  * (`GET /me/closure`): the Coin left, which the closure forfeits ('탈퇴 소멸', #57-16), and what
  * refuses it now — the admin role (#57-17), contracts not settled (#57-16), a payment in progress
  * (decision 7), waiting orders (#178's to cancel), a writing or an account restriction with its end
- * and the way to 조치·신고 내역 (decision 4 #140 «제재 중 탈퇴») — and says that the closure is
- * immediate and cannot be undone (#57-17). While something refuses it, the field and the button are
- * off and the screen says why. The button waits for '탈퇴' typed exactly (`isClosureConfirmed`, the
+ * and the way to 조치·신고 내역 (decision 4 #140 «제재 중 탈퇴») — what goes and what stays
+ * (`closureLines`: the 본인확인 record kept for the retention period, and the start Coin not given
+ * again to the same number only for an account that received it — owner decision 2026-10-23 (3차)
+ * 7 and 9) and says that the closure is immediate and cannot be undone (#57-17). While something
+ * refuses it, the field and the button are off and the screen says why. The onboarding gate leaves
+ * this screen to an account that has not finished its onboarding (owner decision 2026-10-23 (2차)
+ * 3). The button waits for '탈퇴' typed exactly (`isClosureConfirmed`, the
  * API's own rule) and for the session to say which account the screen shows.
  *
  * Closed, the screen says so at once (the session is gone, so MY's signed-out rung must not take
@@ -145,8 +150,11 @@ function ClosureScreen({ onClosed }: { onClosed: () => void }) {
                 <Text data-testid="closure-forfeit">{copy.closureForfeit}</Text>
               </Stack>
               <Stack gap="1" fontSize="sm" color="fg.muted">
-                <Text data-testid="closure-deleted">{copy.closureDeleted}</Text>
-                <Text data-testid="closure-kept">{copy.closureKept}</Text>
+                {closureLines(check.data).map((line) => (
+                  <Text key={line.testId} data-testid={line.testId}>
+                    {line.text}
+                  </Text>
+                ))}
               </Stack>
               <Text fontWeight="semibold" data-testid="closure-irreversible">
                 {copy.closureIrreversible}

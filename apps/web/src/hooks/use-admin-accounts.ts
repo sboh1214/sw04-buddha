@@ -66,10 +66,13 @@ export function useAdminRoleChanges() {
 }
 
 /**
- * The accounts a grant can be aimed at: the 사용자 search (`GET /admin/users?q=`, email or
- * nickname), asked only once a term is given. Each row carries its role, so an admin already is
- * marked rather than offered. Each page carries its term: the previous term's pages stay on
- * screen while a new one loads (`keepPreviousData`), and `grantSearchRows` offers no 부여 on them.
+ * The accounts a grant can be aimed at: the 사용자 search (`GET /admin/users?q=&status=open`, email
+ * or nickname), asked only once a term is given. Open accounts only: one its member closed never
+ * takes the role, so it is not offered at all (#140, owner decision 2026-10-23 (2차) 5 — the grant
+ * still refuses one closed since the search, ACCOUNT_CLOSED). Each row carries its role, so an
+ * admin already is marked rather than offered. Each page carries its term: the previous term's
+ * pages stay on screen while a new one loads (`keepPreviousData`), and `grantSearchRows` offers no
+ * 부여 on them.
  */
 export function useAdminGrantCandidates(term: string) {
   return useInfiniteQuery({
@@ -81,7 +84,9 @@ export function useAdminGrantCandidates(term: string) {
     }): Promise<GrantCandidatePage> => {
       const { data, meta } = unwrap(
         await api.GET('/api/v1/admin/users', {
-          params: { query: { q: term, ...(pageParam ? { cursor: pageParam } : {}) } },
+          params: {
+            query: { q: term, status: 'open', ...(pageParam ? { cursor: pageParam } : {}) },
+          },
         }),
       );
       return { term, items: data, nextCursor: meta.nextCursor };

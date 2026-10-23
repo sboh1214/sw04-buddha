@@ -64,8 +64,17 @@ describe('탈퇴 (#140)', () => {
         availableCoin: '10000',
         refusals: ['unsettled_contracts'],
         restriction: { kind: 'account', endsAt: null },
+        startGrantReceived: true,
       }),
-    ).toMatchObject({ availableCoin: '10000' });
+    ).toMatchObject({ availableCoin: '10000', startGrantReceived: true });
+    // Whether the start Coin was paid is always said (owner decision 2026-10-23 (3차) 9).
+    expect(
+      accountClosureCheckSchema.safeParse({
+        availableCoin: '0',
+        refusals: [],
+        restriction: null,
+      }).success,
+    ).toBe(false);
     expect(
       accountClosureResultSchema.parse({
         closedAt: '2026-10-23T03:00:00.000Z',

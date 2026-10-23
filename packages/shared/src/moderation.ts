@@ -1231,7 +1231,12 @@ export type DismissedReports = z.infer<typeof dismissedReportsSchema>;
  * - `not_account_restriction`: a request to shorten, lift or cancel an action that is no account
  *   restriction (#139);
  * - `no_decider`: an account restriction request no admin could decide — there is none but the one
- *   asking and the member it is about (#139, owner decision 2026-10-23: refused when asked).
+ *   asking and the member it is about (#139, owner decision 2026-10-23: refused when asked);
+ * - `closed`: a new action against an account its member closed (탈퇴 #140, owner decision
+ *   2026-10-23 (2차) 1, ADR-0086) — a warning, a writing restriction, an account restriction
+ *   request and the approval of one. Hiding a post or a comment of theirs is not refused (it stays
+ *   public), nor is the cancellation of an earlier action; a nickname reset, a 소개 cleared and an
+ *   image removed have nothing to take away (`nothing_to_remove`).
  */
 export const MODERATION_REFUSALS = [
   'own',
@@ -1248,6 +1253,7 @@ export const MODERATION_REFUSALS = [
   'approval_required',
   'not_account_restriction',
   'no_decider',
+  'closed',
 ] as const;
 export type ModerationRefusal = (typeof MODERATION_REFUSALS)[number];
 export const moderationNotAllowedDetailsSchema = z

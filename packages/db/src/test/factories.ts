@@ -1374,11 +1374,12 @@ export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
  * (a read, an audit): a waiting start grant cancelled (its numbers freed by migration 0031's
  * trigger), the Coin left forfeited by a CLOSURE_FORFEIT entry, the nickname held unlinked and the
  * holds naming the account unlinked, the profile closed without its public items, the interest
- * categories, the profile image's row (its object is the test's store's), the 본인확인 record,
- * the watchlist, the search history, the sessions, sign-in methods and reset tokens gone, the
- * address replaced and the name and photo emptied, and the account restriction requests about
- * the member still waiting rejected by no admin, '탈퇴'. Returns the closure's instant. Throws
- * where migration 0041 would refuse the commit (Coin reserved, say).
+ * categories, the profile image's row (its object is the test's store's), the time zone, the
+ * 본인확인 record, the watchlist (each watch's unwatch event written), the search history, the
+ * sessions, sign-in methods and reset tokens gone, the address replaced and the name and photo
+ * emptied, and the account restriction requests about the member still waiting rejected by no
+ * admin, '탈퇴'. Returns the closure's instant. Throws where migration 0041 would refuse the
+ * commit (Coin reserved, say).
  */
 export async function closeAccount(db: Db, userId: string): Promise<Date> {
   return db.transaction(async (tx) => {
@@ -1423,14 +1424,24 @@ export async function closeAccount(db: Db, userId: string): Promise<Date> {
       .values({ nickname: profile.nickname, userId: null, releasedAt: at });
     await tx
       .update(profiles)
-      .set({ closedAt: at, nickname: null, bio: null, imageId: null })
+      .set({ closedAt: at, nickname: null, bio: null, imageId: null, timeZone: null })
       .where(eq(profiles.userId, userId));
     await tx.delete(profileInterestCategories).where(eq(profileInterestCategories.userId, userId));
     if (profile.imageId !== null) {
       await tx.delete(mediaObjects).where(eq(mediaObjects.id, profile.imageId));
     }
     await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
-    await tx.delete(marketWatches).where(eq(marketWatches.userId, userId));
+    const unwatched = await tx
+      .delete(marketWatches)
+      .where(eq(marketWatches.userId, userId))
+      .returning({ marketId: marketWatches.marketId });
+    if (unwatched.length > 0) {
+      await tx
+        .insert(marketWatchEvents)
+        .values(
+          unwatched.map(({ marketId }) => ({ userId, marketId, action: 'unwatch', createdAt: at })),
+        );
+    }
     await tx.delete(marketSearches).where(eq(marketSearches.userId, userId));
     await tx.delete(session).where(eq(session.userId, userId));
     await tx.delete(account).where(eq(account.userId, userId));

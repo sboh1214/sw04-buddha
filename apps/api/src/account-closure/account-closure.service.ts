@@ -12,7 +12,7 @@ import {
   type Role,
 } from '@buddha/shared';
 import { type ObjectStorage } from '@buddha/storage';
-import { and, eq, gt, inArray, like, or, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNotNull, like, or, sql } from 'drizzle-orm';
 import { ApprovalService } from '../approvals/approval.service.js';
 import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
@@ -91,7 +91,9 @@ interface Closed {
  *    the 소개, the image (row now, object after the commit), the interest categories; the profile is
  *    marked closed, so every byline is '탈퇴한 사용자' and the profile and its lists answer 404
  *    (`postAuthorOf`). Posts, comments and likes stay as they are (#37-17).
- * 5. The current watchlist (the watch events stay, ADR-0064) and the search history go (#57-18).
+ * 5. The current watchlist goes, each watch ended by its unwatch event in the watch history, which
+ *    stays (ADR-0064; owner decision 2026-10-23 (2차) 2), and the search history goes (#57-18).
+ *    So does the profile's time zone (point 4; owner decision 2026-10-23 (3차) 6).
  * 6. Signing in ends: every session, every sign-in method (password and social links), better-auth's
  *    password-reset tokens for the account; the address is replaced by `closedAccountEmail` (freed
  *    for a new sign-up at once, #57-17), the name and photo emptied (decision 7). Migration 0041
@@ -138,7 +140,24 @@ export class AccountClosureService {
       availableCoin: serializeCoinAmount(account.availableCoin),
       refusals: await this.refusalsOf(this.db, userId, account.role),
       restriction: await restrictionInForce(this.db, userId),
+      startGrantReceived: await this.startGrantReceived(userId),
     };
+  }
+
+  /**
+   * Whether the account's start Coin was paid (owner decision 2026-10-23 (3차) 9): only then is its
+   * number one that never gets the start Coin again (#57-1), and the screen says so. A grant still
+   * waiting is not — the closure cancels it and the number may receive it with the next account
+   * (owner decision 2026-10-18 on #70) — nor is none at all (not asked yet, or `number_used`: the
+   * number's start Coin is another account's).
+   */
+  private async startGrantReceived(userId: string): Promise<boolean> {
+    const [grant] = await this.db
+      .select({ one: sql`1` })
+      .from(schema.startGrants)
+      .where(and(eq(schema.startGrants.userId, userId), isNotNull(schema.startGrants.grantedAt)))
+      .limit(1);
+    return grant !== undefined;
   }
 
   /** `POST /me/closure`: closes the account (see the class); the confirmation was checked. */
@@ -214,7 +233,7 @@ export class AccountClosureService {
     await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
     const forfeitedCoin = await this.forfeit(tx, userId, balance.availableCoin, closedAt);
     const imageKey = await this.anonymise(tx, userId, profile.nickname!, profile.imageId, closedAt);
-    await tx.delete(schema.marketWatches).where(eq(schema.marketWatches.userId, userId));
+    await this.unwatchAll(tx, userId, closedAt);
     await tx.delete(schema.marketSearches).where(eq(schema.marketSearches.userId, userId));
     await this.endSignIn(tx, userId);
     await this.closeRequests(tx, userId, closedAt);
@@ -320,8 +339,10 @@ export class AccountClosureService {
    * every nickname write takes it; the holds that named the account — a change's, one an operator's
    * cancelled reset handed it (ADR-0081) — lose that link and hold the nickname from everybody for
    * what is left of their 30 days. Then the profile is marked closed with no nickname, 소개 or image
-   * (one UPDATE, profiles_closed_check), the interest categories are deleted, and the profile
-   * image's row with them — its object after the commit. Returns that object's key, or null.
+   * (one UPDATE, profiles_closed_check) and no time zone either — the private setting of MY 설정
+   * goes with the rest (owner decision 2026-10-23 (3차) 6: NULL, "follow the browser", as for an
+   * account that never picked one) — the interest categories are deleted, and the profile image's
+   * row with them — its object after the commit. Returns that object's key, or null.
    */
   private async anonymise(
     tx: Tx,
@@ -336,7 +357,7 @@ export class AccountClosureService {
     await tx.insert(nicknameHolds).values({ nickname, userId: null, releasedAt: closedAt });
     await tx
       .update(profiles)
-      .set({ closedAt, nickname: null, bio: null, imageId: null })
+      .set({ closedAt, nickname: null, bio: null, imageId: null, timeZone: null })
       .where(eq(profiles.userId, userId));
     await tx
       .delete(schema.profileInterestCategories)
@@ -347,6 +368,32 @@ export class AccountClosureService {
       .where(eq(schema.mediaObjects.id, imageId))
       .returning({ storageKey: schema.mediaObjects.storageKey });
     return image?.storageKey ?? null;
+  }
+
+  /**
+   * The watchlist goes (#57-18 «관심 시장»), each watch ended in the watch history as an unwatch
+   * would end it (owner decision 2026-10-23 (2차) 2): one `unwatch` event per watch deleted, at the
+   * closure's instant, so the history kept for metrics (ADR-0064, #95 — the account linked) counts
+   * no watch the closed account no longer has. The watch row's primary key orders this with a
+   * watch or an unwatch of the same pair in flight, as WatchlistService's own writes are ordered:
+   * one committed first is deleted here with its event, and a later one is refused (migration
+   * 0041's `market_watches_open_account`) or finds nothing to delete. Migration 0041 checks at the
+   * commit that no watch of the account is left without its unwatch.
+   */
+  private async unwatchAll(tx: Tx, userId: string, closedAt: Date): Promise<void> {
+    const { marketWatches, marketWatchEvents } = schema;
+    const deleted = await tx
+      .delete(marketWatches)
+      .where(eq(marketWatches.userId, userId))
+      .returning({ marketId: marketWatches.marketId });
+    if (deleted.length === 0) return;
+    await tx
+      .insert(marketWatchEvents)
+      .values(
+        deleted
+          .sort((a, b) => a.marketId.localeCompare(b.marketId))
+          .map(({ marketId }) => ({ userId, marketId, action: 'unwatch', createdAt: closedAt })),
+      );
   }
 
   /**

@@ -36,6 +36,7 @@ import { api, isApiError, unwrap, type AdminUser } from '@/lib/api';
 import { boundedInteger } from '@/lib/form-schema';
 import { readFailed } from '@/lib/query-client';
 import { adminUserModerationPath } from '@/lib/moderation';
+import { ClosedBadge } from '../moderation/moderation-parts';
 
 const ADMIN_USERS_KEY = ['admin', 'users'] as const;
 
@@ -149,9 +150,10 @@ function adjustFailureMessage(error: unknown): string {
 
 /**
  * One account: its nickname — '탈퇴한 사용자' for one its member closed (#140: the nickname went
- * with the closure; the address is the closed placeholder) — role, address, the way to its
- * moderation page, its balance and the adjustment, which a closed account never takes, so its card
- * says so instead of offering the form.
+ * with the closure; the address is the closed placeholder), with the '탈퇴' marker beside it (owner
+ * decision 2026-10-23 (2차) 5: the closed account stays in the list, marked apart) — role, address,
+ * the way to its moderation page, its balance and the adjustment, which a closed account never
+ * takes, so its card says so instead of offering the form.
  */
 function UserCard({ user }: { user: AdminUser }) {
   // A closed account is the only one with no nickname (profiles_closed_check, migration 0041).
@@ -208,6 +210,7 @@ function UserCard({ user }: { user: AdminUser }) {
                     {copy.adminTitle}
                   </Badge>
                 )}
+                {closed && <ClosedBadge />}
               </HStack>
               <Text fontSize="sm" color="fg.muted">
                 {user.email}

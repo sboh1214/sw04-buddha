@@ -72,7 +72,8 @@ export function AdminAccounts() {
  */
 interface PendingRoleChange {
   kind: 'grant' | 'revoke';
-  // A search match may be an account its member closed (#140): no nickname then.
+  // A search match is `AdminUser`, whose nickname is nullable (#140) — never null here: the
+  // search lists open accounts only.
   account: Pick<AdminAccount, 'id' | 'email'> & { nickname: string | null };
 }
 
@@ -179,10 +180,11 @@ function AdminRow({
 }
 
 /**
- * The grant: the 사용자 search (email or nickname), each match with its role — an admin is
- * badged, an account its member closed says it takes no role (#140), everyone else is offered
- * 부여. Whether the account may become one (verified email, real name and phone) is the server's
- * to say, and the dialog shows its answer. While a new term loads, the previous term's matches
+ * The grant: the 사용자 search (email or nickname) over open accounts — one its member closed is not
+ * listed at all (#140, owner decision 2026-10-23 (2차) 5) — each match with its role: an admin is
+ * badged, everyone else is offered 부여. Whether the account may become one (verified email, real
+ * name and phone) is the server's to say, and the dialog shows its answer — an account closed
+ * since the search included (ACCOUNT_CLOSED). While a new term loads, the previous term's matches
  * stay dimmed with no 부여 (`grantSearchRows`).
  */
 function GrantSearch() {
@@ -311,24 +313,17 @@ function CandidateRow({
           {user.email}
         </Text>
       </Stack>
-      {user.role !== 'admin' &&
-        // A closed account (#140) is never granted: it signs in no more and its profile never
-        // changes again — said here rather than refused after the dialog (ADR-0086 7-19).
-        (user.nickname === null ? (
-          <Text fontSize="sm" color="fg.muted" data-testid="admin-grant-closed">
-            {copy.adminGrantClosed}
-          </Text>
-        ) : (
-          <Button
-            size="xs"
-            variant="outline"
-            disabled={disabled}
-            onClick={onGrant}
-            data-testid="admin-grant-open"
-          >
-            {copy.adminAccountsGrant}
-          </Button>
-        ))}
+      {user.role !== 'admin' && (
+        <Button
+          size="xs"
+          variant="outline"
+          disabled={disabled}
+          onClick={onGrant}
+          data-testid="admin-grant-open"
+        >
+          {copy.adminAccountsGrant}
+        </Button>
+      )}
     </HStack>
   );
 }

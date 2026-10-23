@@ -143,8 +143,10 @@ export const ERROR_CODES = [
    * was cancelled already, a report was processed already, a warning or a restriction names a
    * post or a comment of another member, or a shortening or a lift is not of a writing
    * restriction, of one that ended already, or not to an earlier end still to come — or an account
-   * restriction request no admin could decide (none but the one asking and the member). Details
-   * carry the reason, moderationNotAllowedDetailsSchema.
+   * restriction request no admin could decide (none but the one asking and the member), or a new
+   * warning, writing restriction or account restriction request, or the approval of one, against
+   * an account its member closed (#140). Details carry the reason,
+   * moderationNotAllowedDetailsSchema.
    */
   'MODERATION_NOT_ALLOWED',
   /**

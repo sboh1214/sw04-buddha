@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   EVERY_ROUTE_PATH_FEATURES,
   PAID_COIN_SALES_ENABLED,
+  accountClosureCheckSchema,
   errorEnvelopeSchema,
   findExcludedIdentifier,
   findPrivateField,
@@ -240,6 +241,15 @@ describe('public and owner-only routes (static)', () => {
       ...AUTH_ROUTES,
     })) {
       expect(entry.reason.trim(), key).not.toBe('');
+    }
+  });
+
+  it("names in the 탈퇴 check's reason every field it answers with (#140, ADR-0086)", () => {
+    // The reason lists what the route answers and ends with '만' (only these): a field added to
+    // the answer (`startGrantReceived`, owner decision 2026-10-23 (3차) 9) must be named there too.
+    const reason = OWNER_ROUTES['GET /me/closure']?.reason ?? '';
+    for (const field of Object.keys(accountClosureCheckSchema.shape)) {
+      expect(reason, field).toContain(field);
     }
   });
 

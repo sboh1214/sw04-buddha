@@ -1304,6 +1304,7 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
   approval_required: copy.errModerationApprovalRequired,
   not_account_restriction: copy.errModerationNotAccountRestriction,
   no_decider: copy.errModerationNoDecider,
+  closed: copy.errModerationClosed,
 };
 
 /**

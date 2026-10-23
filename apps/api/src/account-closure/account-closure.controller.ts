@@ -22,7 +22,8 @@ import { AccountClosureService } from './account-closure.service.js';
  * nothing here takes another one; there is no operator's closure (#57-17). Sign-in only, no
  * OnboardedGuard: an account that never finished the onboarding, or one a re-consent holds back,
  * closes as well — leaving is not a write the onboarding gates (#57-8 names posts, likes, reports,
- * proposals and orders), as deleting one's own posts is not.
+ * proposals and orders), as deleting one's own posts is not; the web's screen is outside the
+ * onboarding gate for the same accounts (owner decision 2026-10-23 (2차) 3, ADR-0086).
  */
 @ApiTags('me')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -35,7 +36,8 @@ export class MeClosureController {
   @ApiOperation({
     operationId: 'getMyClosureCheck',
     summary:
-      'What closing the account would do now: the Coin it forfeits and what refuses it (탈퇴, #140)',
+      'What closing the account would do now: the Coin it forfeits, what refuses it, and whether ' +
+      'the start Coin was paid to it — its number gets none again (탈퇴, #140)',
   })
   @ApiData(accountClosureCheckSchema)
   @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND')

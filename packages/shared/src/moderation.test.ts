@@ -50,6 +50,7 @@ import {
   dismissReportsBodySchema,
   liftRestrictionBodySchema,
   moderationActionBodySchema,
+  moderationNotAllowedDetailsSchema,
   myModerationActionSchema,
   myReportSchema,
   myRestrictionEndChangeSchema,
@@ -435,6 +436,11 @@ describe('the account restriction (#139)', () => {
       'retracted',
     );
     expect(MODERATION_REFUSALS).toContain('no_decider');
+    // A new action against a closed account (#140, owner decision 2026-10-23 (2차) 1).
+    expect(MODERATION_REFUSALS).toContain('closed');
+    expect(moderationNotAllowedDetailsSchema.parse({ reason: 'closed' })).toEqual({
+      reason: 'closed',
+    });
     // A retraction takes the screen's admin alone: no reason.
     expect(approvalRetractionBodySchema.parse({ expectedAccountId: ACCOUNT })).toEqual({
       expectedAccountId: ACCOUNT,

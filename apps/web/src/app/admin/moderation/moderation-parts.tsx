@@ -179,6 +179,34 @@ export function UserName({ user, link = true }: { user: ModerationUser; link?: b
   );
 }
 
+/**
+ * The '탈퇴' marker beside an account its member closed (#140, owner decision 2026-10-23 (2차) 5,
+ * ADR-0086): the account stays on the operators' screens — the account list, the member's page —
+ * named '탈퇴한 사용자' as every byline names it, and this says apart that it is closed. A closed
+ * account is the only one with no nickname (profiles_closed_check, migration 0041).
+ */
+export function ClosedBadge() {
+  return (
+    <Badge size="sm" variant="outline" colorPalette="gray" data-testid="admin-closed-badge">
+      {copy.adminClosedBadge}
+    </Badge>
+  );
+}
+
+/**
+ * In place of 경고, 작성 제한 and 계정 제한 요청 for a member who closed the account (#140, owner
+ * decision 2026-10-23 (2차) 1): the server takes no new action against a closed account
+ * (MODERATION_NOT_ALLOWED `closed`, the same sentence when the page was read before the closure).
+ * Hiding the item, dismissing reports and cancelling an earlier action stay where they are.
+ */
+export function ClosedMemberNotice() {
+  return (
+    <Text fontSize="sm" color="fg.muted" data-testid="moderation-closed">
+      {copy.errModerationClosed}
+    </Text>
+  );
+}
+
 /** A card with its heading, one level under the page's. */
 export function Block({
   title,

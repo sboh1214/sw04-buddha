@@ -96,9 +96,11 @@ interface LockedAction {
  * another admin to decide. One about an operator is decided — approved or rejected — only by a
  * third admin (7-15). An `apply` carries the operators' own memo, optional and never the member's
  * (owner decision 2026-10-23). What becomes of a pending request once its member closes the
- * account is #140's (owner decision 2026-10-23: closed then, rejected for '탈퇴' — ADR-0085 결과 5).
- * Nothing here touches a balance, an order or a record of trades (N02 §9: «잔액·기록·이의제기
- * 경로는 유지»).
+ * account is #140's (owner decision 2026-10-23: closed then, rejected for '탈퇴' — ADR-0085 결과 5),
+ * and no new `apply` about a closed account is taken or approved (`closed`, owner decision
+ * 2026-10-23 (2차) 1, ADR-0086); a change of an earlier one (a cancellation, say) is asked as for
+ * any member. Nothing here touches a balance, an order or a record of trades (N02 §9:
+ * «잔액·기록·이의제기 경로는 유지»).
  */
 @Injectable()
 export class AccountRestrictionService {
@@ -117,8 +119,9 @@ export class AccountRestrictionService {
    * — the request's reason as well — what it is about (a post, a comment or the profile of the
    * member's, from the report queue; checked now and again on approval) and the operators' memo
    * (optional). Nothing is in force until another admin approves it. Refused: the acting operator
-   * (`own`), an unknown member (NOT_FOUND), a subject not the member's (`not_theirs`), no admin
-   * but the acting one and the member to decide it (`no_decider`).
+   * (`own`), an unknown member (NOT_FOUND), a member who closed the account (`closed`, #140 — owner
+   * decision 2026-10-23 (2차) 1), a subject not the member's (`not_theirs`), no admin but the acting
+   * one and the member to decide it (`no_decider`).
    */
   async requestApply(
     adminId: string,
@@ -129,7 +132,7 @@ export class AccountRestrictionService {
       if (userId === adminId) throw refused('own');
       // The role lock before the profile's, as a role grant takes them (see `assertDecider`).
       await lockAdminRoles(tx, 'shared');
-      await this.moderation.lockProfile(tx, userId);
+      await this.moderation.lockOpenProfile(tx, userId);
       const { postId, commentId } = await this.moderation.subjectOf(tx, userId, body.subject);
       const subject = await this.targetOf(tx, userId, body.subject, postId, commentId);
       await this.assertDecider(tx, adminId, userId);
@@ -287,9 +290,10 @@ export class AccountRestrictionService {
    * each other's members do not deadlock — and then the rows they come before.
    *
    * Refused: no such request of #139 (NOT_FOUND), the member deciding about themselves (`own`), the
-   * one who asked (APPROVAL_NOT_ALLOWED `requester`), one decided already (`decided`), and what the
-   * restriction outgrew since the request (`cancelled`, `ended`, `not_earlier`, `end_passed`) —
-   * nothing is written then, the decision included.
+   * one who asked (APPROVAL_NOT_ALLOWED `requester`), one decided already (`decided`), an `apply`
+   * about a member who closed the account (`closed`, #140), and what the restriction outgrew since
+   * the request (`cancelled`, `ended`, `not_earlier`, `end_passed`) — nothing is written then, the
+   * decision included.
    */
   async approve(
     deciderId: string,
@@ -488,7 +492,10 @@ export class AccountRestrictionService {
    * The profiles an approval locks, before any other row of it (see `approve`; ADR-0085 7-17): the
    * deciding admin's FOR SHARE — the lock migration 0021's `approval_requests_keep_record` takes on
    * it when the decision is written, which then finds it held — and, for an `apply`, the member's
-   * FOR UPDATE (`ModerationService.lockProfile`: NOT_FOUND for no such member), the two in
+   * FOR UPDATE (`ModerationService.lockOpenProfile`: NOT_FOUND for no such member, `closed` for one
+   * who closed the account since — #140, owner decision 2026-10-23 (2차) 1: the closure rejects
+   * every `apply` about the member still waiting and no new one is taken, so none should be left
+   * to approve — asked all the same, under the lock the closure takes first), the two in
    * account-id order. Taken as they came (the member's here, the decider's by the trigger), two
    * approvals whose deciders are each other's members — A approving a request about B while B
    * approves one about A — would each hold the profile the other's trigger waits for: a deadlock,
@@ -502,7 +509,7 @@ export class AccountRestrictionService {
     locks.sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0));
     for (const { userId, member } of locks) {
       if (member) {
-        await this.moderation.lockProfile(tx, userId);
+        await this.moderation.lockOpenProfile(tx, userId);
       } else {
         await tx
           .select({ userId: schema.profiles.userId })

@@ -185,9 +185,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       const image = await createProfileImage(t.db, { userId: member.id });
       await t.storage.put(image.storageKey, randomBytes(16), image.contentType);
       const category = await createCategory(t.db);
+      // The public items, and a private setting of MY 설정: the time zone (owner decision
+      // 2026-10-23 (3차) 6 — it goes too).
       await t.db
         .update(schema.profiles)
-        .set({ bio: '탈퇴할 회원의 소개' })
+        .set({ bio: '탈퇴할 회원의 소개', timeZone: 'America/New_York' })
         .where(eq(schema.profiles.userId, member.id));
       await t.db
         .insert(schema.profileInterestCategories)
@@ -313,11 +315,14 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       const othersBefore = await othersRows();
       expect(Object.values(othersBefore).every((rows) => rows.length > 0)).toBe(true);
 
-      // What the confirmation screen says first: the Coin to be forfeited, nothing refusing.
+      // What the confirmation screen says first: the Coin to be forfeited, nothing refusing, and
+      // that the start Coin was paid — the screen says its number gets none again (owner decision
+      // 2026-10-23 (3차) 9).
       expect(await checkOf(member)).toEqual({
         availableCoin: '10000',
         refusals: [],
         restriction: null,
+        startGrantReceived: true,
       });
       const result = await closed(member);
       expect(result.forfeitedCoin).toBe('10000');
@@ -338,13 +343,15 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       expectLedgerChain(ledger, 0n);
       expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
 
-      // The profile: closed, the public items gone, the public id kept (never shown again).
+      // The profile: closed, the public items and the time zone gone, the public id kept (never
+      // shown again).
       const profile = await profileOf(member.id);
       expect(profile).toMatchObject({
         closedAt,
         nickname: null,
         bio: null,
         imageId: null,
+        timeZone: null,
         publicId: before.publicId,
         role: 'user',
       });
@@ -394,7 +401,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       });
 
       // Kept: the start grant and its number (#57-1), the code-send record (ADR-0070), the consent
-      // records (#57-18, operators only), the watch event (ADR-0064), the post and comment as
+      // records (#57-18, operators only), the watch history (ADR-0064) — the watch ended by its
+      // unwatch at the closure (owner decision 2026-10-23 (2차) 2) — the post and comment as
       // written, the likes (#37-17) and the report, still waiting to be processed.
       const [grant] = await t.db
         .select()
@@ -421,9 +429,24 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       ).toEqual(consentsBefore);
       expect(
         await t.db
+          .select({
+            marketId: schema.marketWatchEvents.marketId,
+            action: schema.marketWatchEvents.action,
+            createdAt: schema.marketWatchEvents.createdAt,
+          })
+          .from(schema.marketWatchEvents)
+          .where(eq(schema.marketWatchEvents.userId, member.id))
+          .orderBy(asc(schema.marketWatchEvents.id)),
+      ).toEqual([
+        { marketId: market.id, action: 'watch', createdAt: expect.any(Date) as Date },
+        { marketId: market.id, action: 'unwatch', createdAt: closedAt },
+      ]);
+      // The other member's watch history is left as it was: their watch stands.
+      expect(
+        await t.db
           .select({ action: schema.marketWatchEvents.action })
           .from(schema.marketWatchEvents)
-          .where(eq(schema.marketWatchEvents.userId, member.id)),
+          .where(eq(schema.marketWatchEvents.userId, other.id)),
       ).toEqual([{ action: 'watch' }]);
       const [kept] = await t.db
         .select({ authorId: schema.posts.authorId, bodyText: schema.posts.bodyText })
@@ -544,6 +567,65 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       const me = await nicknameStep(again);
       expect(me.startGrant).toEqual({ status: 'number_used', amountCoin: null, grantedAt: null });
       expect(await ledgerOf(again.id)).toEqual([]);
+      // That account received nothing: its own confirmation screen says nothing of the start Coin
+      // (owner decision 2026-10-23 (3차) 9).
+      expect((await checkOf(again)).startGrantReceived).toBe(false);
+    });
+
+    it('ends each watch it deletes with one unwatch at the closure, and writes none for a market already unwatched (owner decision 2026-10-23 (2차) 2)', async () => {
+      const otherMarket = await createMarket(t.db, { title: '환율 상승' });
+      const unwatchedMarket = await createMarket(t.db, { title: '유가 하락' });
+      // Two watches standing, and a market watched and unwatched before: its history already
+      // ends with an unwatch, and no watch row is left of it.
+      await createWatch(t.db, { userId: member.id, marketId: market.id });
+      await createWatch(t.db, { userId: member.id, marketId: otherMarket.id });
+      const watchlist = t.app.get(WatchlistService);
+      await watchlist.set(member.id, unwatchedMarket.id, true);
+      await watchlist.set(member.id, unwatchedMarket.id, false);
+      const { marketWatchEvents } = schema;
+      const eventsOf = () =>
+        t.db
+          .select({
+            id: marketWatchEvents.id,
+            marketId: marketWatchEvents.marketId,
+            action: marketWatchEvents.action,
+            createdAt: marketWatchEvents.createdAt,
+          })
+          .from(marketWatchEvents)
+          .where(eq(marketWatchEvents.userId, member.id))
+          .orderBy(asc(marketWatchEvents.id));
+      const before = await eventsOf();
+      expect(before.map(({ marketId, action }) => [marketId, action])).toEqual([
+        [market.id, 'watch'],
+        [otherMarket.id, 'watch'],
+        [unwatchedMarket.id, 'watch'],
+        [unwatchedMarket.id, 'unwatch'],
+      ]);
+
+      const closedAt = new Date((await closed(member)).closedAt);
+
+      // Every earlier event as it was, and after them exactly one unwatch at the closure's
+      // instant for each watch the closure deleted — none for the market already unwatched.
+      const after = await eventsOf();
+      expect(after.slice(0, before.length)).toEqual(before);
+      const byMarket = (a: { marketId: string }, b: { marketId: string }) =>
+        a.marketId.localeCompare(b.marketId);
+      expect(
+        after
+          .slice(before.length)
+          .map(({ marketId, action, createdAt }) => ({ marketId, action, createdAt }))
+          .sort(byMarket),
+      ).toEqual(
+        [market.id, otherMarket.id]
+          .map((marketId) => ({ marketId, action: 'unwatch', createdAt: closedAt }))
+          .sort(byMarket),
+      );
+      expect(
+        await t.db
+          .select()
+          .from(schema.marketWatches)
+          .where(eq(schema.marketWatches.userId, member.id)),
+      ).toEqual([]);
     });
 
     it('closes the member’s waiting requests to change a restriction of theirs, and none of another member’s (owner decision 2026-10-23)', async () => {
@@ -665,8 +747,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         release();
         observer.release();
       }
-      // The closure committed, and the request came after it: about the closed member, waiting
-      // (requests about a closed member are taken and recorded, ADR-0086 7-19).
+      // The closure committed, and the request came after it: about the closed member, waiting —
+      // a cancellation of an earlier restriction is still taken about a closed member; only a new
+      // action is refused (`closed`, owner decision 2026-10-23 (2차) 1, ADR-0086 7-28).
       const request = accountRestrictionRequestSchema.parse(dataOf(asked));
       expect(request.status).toBe('pending');
       const [row] = await t.db
@@ -687,6 +770,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         userId: member.id,
         phoneHash: t.app.get(PhoneHasher).hash(phone),
       });
+      // Still waiting: nothing paid, so the screen says nothing of the start Coin (owner decision
+      // 2026-10-23 (3차) 9) — the closure cancels it and the number may receive it again.
+      expect((await checkOf(member)).startGrantReceived).toBe(false);
       const result = await closed(member);
       expect(result.forfeitedCoin).toBe('0');
       // Nothing was left to forfeit: no entry at all.
@@ -756,7 +842,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
 
     it('closes an account that never finished the onboarding, with sign-in only', async () => {
       const fresh = await signUpTestUser(t);
-      expect(await checkOf(fresh)).toEqual({ availableCoin: '0', refusals: [], restriction: null });
+      expect(await checkOf(fresh)).toEqual({
+        availableCoin: '0',
+        refusals: [],
+        restriction: null,
+        startGrantReceived: false,
+      });
       expect((await closed(fresh)).forfeitedCoin).toBe('0');
       expect(await profileOf(fresh.id)).toMatchObject({ nickname: null });
     });
@@ -1060,6 +1151,133 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
           .from(schema.adminActions)
           .where(eq(schema.adminActions.type, 'admin_grant')),
       ).toEqual([]);
+    });
+
+    it('takes no new warning, writing restriction or account restriction request, nor approves one, while a hiding stays open (owner decision 2026-10-23 (2차) 1)', async () => {
+      const own = await createPost(t.db, {
+        marketId: market.id,
+        authorId: member.id,
+        text: '탈퇴할 회원의 글',
+      });
+      await closed(member);
+      const actionsOf = () =>
+        t.db
+          .select({ type: schema.moderationActions.type })
+          .from(schema.moderationActions)
+          .where(eq(schema.moderationActions.userId, member.id));
+      const requestsAbout = () =>
+        t.db
+          .select({ id: schema.approvalRequests.id })
+          .from(schema.approvalRequests)
+          .where(eq(schema.approvalRequests.targetId, member.id));
+      // Each new action against the closed account, with a subject of theirs or none.
+      for (const [url, body] of [
+        ['warn', { reason: 'spam', note: null, subject: null }],
+        ['warn', { reason: 'spam', note: null, subject: { type: 'post', postId: own.id } }],
+        ['writing-restriction', { reason: 'spam', note: null, days: 7, subject: null }],
+        [
+          'account-restriction',
+          { reason: 'multi_account', note: '설명', days: 7, subject: null, memo: null },
+        ],
+      ] as const) {
+        expect(
+          errorOf(
+            await post(`/admin/moderation/users/${member.id}/${url}`, body, admin),
+            409,
+            'MODERATION_NOT_ALLOWED',
+          ),
+          url,
+        ).toEqual({ reason: 'closed' });
+      }
+      expect(await actionsOf()).toEqual([]);
+      expect(await requestsAbout()).toEqual([]);
+
+      // A request about the member left waiting past the closure (none is, the closure closes
+      // them all — written here by hand) is not approved either, and stays to be rejected.
+      const waiting = await createApprovalRequest(t.db, {
+        kind: 'account_restriction',
+        targetType: 'user',
+        targetId: member.id,
+        requestedBy: admin.id,
+        payload: {
+          userId: member.id,
+          reason: 'multi_account',
+          note: '설명',
+          days: 7,
+          subject: null,
+          memo: null,
+        },
+      });
+      expect(
+        errorOf(
+          await post(
+            `/admin/moderation/account-restriction-requests/${waiting.id}/approve`,
+            { reason: '승인' },
+            second,
+          ),
+          409,
+          'MODERATION_NOT_ALLOWED',
+        ),
+      ).toEqual({ reason: 'closed' });
+      const [still] = await t.db
+        .select({ status: schema.approvalRequests.status })
+        .from(schema.approvalRequests)
+        .where(eq(schema.approvalRequests.id, waiting.id));
+      expect(still).toEqual({ status: 'pending' });
+      expect(await actionsOf()).toEqual([]);
+      dataOf(
+        await post(
+          `/admin/moderation/account-restriction-requests/${waiting.id}/reject`,
+          { reason: '탈퇴한 회원' },
+          second,
+        ),
+      );
+
+      // The post stays public, so it is still hidden as any: not a new action against the account.
+      dataOf(
+        await post(`/admin/moderation/posts/${own.id}/hide`, { reason: 'spam', note: null }, admin),
+      );
+      expect(await actionsOf()).toEqual([{ type: 'hide' }]);
+      // Nickname reset, 소개 and image: nothing to take away, as before.
+      for (const url of ['nickname-reset', 'bio-clear', 'image-remove']) {
+        expect(
+          errorOf(
+            await post(
+              `/admin/moderation/users/${member.id}/${url}`,
+              { reason: 'spam', note: null },
+              admin,
+            ),
+            409,
+            'MODERATION_NOT_ALLOWED',
+          ),
+          url,
+        ).toEqual({ reason: 'nothing_to_remove' });
+      }
+    });
+
+    it('keeps the closed account in the operators’ account list and leaves it out of the open accounts the admin grant searches (owner decision 2026-10-23 (2차) 5)', async () => {
+      await closed(member);
+      const ids = async (query: string) =>
+        dataOf<{ id: string; nickname: string | null }[]>(
+          await read(`/admin/users?${query}`, admin),
+        ).map((user) => [user.id, user.nickname]);
+      // Every account by default: the closed one beside the rest, with no nickname.
+      expect(await ids(`q=${encodeURIComponent(`closed_${member.id}`)}`)).toEqual([
+        [member.id, null],
+      ]);
+      const all = await ids('limit=100');
+      expect(all).toContainEqual([member.id, null]);
+      expect(all.map(([id]) => id)).toContain(other.id);
+      // `open`: the grant's search finds no closed account at all, whatever it is searched by.
+      expect(await ids(`q=${encodeURIComponent(`closed_${member.id}`)}&status=open`)).toEqual([]);
+      const open = await ids('status=open&limit=100');
+      expect(open.map(([id]) => id)).not.toContain(member.id);
+      expect(open.map(([id]) => id)).toEqual(
+        expect.arrayContaining([other.id, admin.id, second.id]),
+      );
+      // `closed`: only the closed ones.
+      expect(await ids('status=closed&limit=100')).toEqual([[member.id, null]]);
+      errorOf(await read('/admin/users?status=gone', admin), 400, 'VALIDATION_ERROR');
     });
 
     it('hands a cancelled nickname reset’s hold to nobody (ADR-0081 결과 5)', async () => {

@@ -70,12 +70,14 @@ const DONE: Onboarding = { ...COMPLETED, interests: true };
 const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
 describe('isOnboardingExempt', () => {
-  it('lists exactly the routes ADR-0043 names, plus /api', () => {
+  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, plus /api', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',
         // The public charge guide, only while paid Coin is on sale (ADR-0049).
         ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
+        // 탈퇴 (#140, owner decision 2026-10-23 (2차) 3): an account not onboarded closes itself.
+        '/my/settings/closure',
         '/login',
         '/onboarding',
         '/privacy',
@@ -99,6 +101,7 @@ describe('isOnboardingExempt', () => {
       '/privacy',
       '/refund',
       '/terms/',
+      '/my/settings/closure',
       '/reset-password/confirm',
       '/api/auth/callback/kakao',
       '/api/auth/sign-out',
@@ -119,6 +122,8 @@ describe('isOnboardingExempt', () => {
       '/my',
       '/my/wallet',
       '/my/settings',
+      '/my/settings/closurex',
+      '/my/moderation',
       '/community',
       '/markets/btc-100k',
       '/admin/users',
@@ -339,6 +344,16 @@ describe('needsOnboarding', () => {
     expect(needsOnboarding('/set-password', FRESH)).toBe(false);
     expect(needsOnboarding('/privacy', FRESH)).toBe(false);
     expect(needsOnboarding('/terms', RECONSENT)).toBe(false);
+  });
+
+  it('leaves the 탈퇴 screen to an account with any step left, a re-consent included, and only it (2026-10-23 (2차) 3)', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      expect(needsOnboarding('/my/settings/closure', onboarding), String(onboarding.nextStep)).toBe(
+        false,
+      );
+      // MY 설정, where its card is, stays gated: the screen is reached by its address.
+      expect(needsOnboarding('/my/settings', onboarding)).toBe(true);
+    }
   });
 
   it('never redirects while the answer is unknown, or once nothing is left', () => {

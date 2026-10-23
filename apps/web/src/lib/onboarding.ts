@@ -5,6 +5,7 @@ import {
   type ConsentRecord,
   type Onboarding as SharedOnboarding,
 } from '@buddha/shared';
+import { MY_CLOSURE_PATH } from './account-closure';
 import type { Me } from './api';
 import { safeNextPath } from './next-path';
 
@@ -53,6 +54,11 @@ export const ONBOARDING_PATH = '/onboarding';
  *   three legal documents — the consent step links /terms and /privacy in a new tab — and the
  *   public charge guide (ADR-0044) while paid Coin is on sale — `/charge` is not found otherwise
  *   (PAID_COIN_SALES_ENABLED, ADR-0049).
+ * - The 탈퇴 screen, /my/settings/closure (#140, owner decision 2026-10-23 (2차) 3, ADR-0086): an
+ *   account that has not finished its onboarding — a re-consent left included — may still close
+ *   itself, as it may delete its own items with sign-in only (#46, #77); the API's closure is
+ *   sign-in only too (`SessionGuard`, no `OnboardedGuard`). Only that screen: the rest of MY, its
+ *   설정 tab included, stays gated.
  * - /api: never a page — the layout the gate lives in does not render for it — but the list is
  *   total so the decision could move into `proxy.ts` without ever answering an API call (the
  *   auth routes included) with a redirect to an HTML form.
@@ -70,6 +76,7 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
   '/privacy',
   '/refund',
   ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
+  MY_CLOSURE_PATH,
   '/api',
 ];
 

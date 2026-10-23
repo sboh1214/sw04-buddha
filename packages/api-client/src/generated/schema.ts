@@ -359,7 +359,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`, a retracted one `retracted`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands */
+        /** Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`, a retracted one `retracted`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead — and so is a restriction of an account its member closed (`closed`). Answers the request and the restriction as it stands */
         post: operations["adminApproveAccountRestrictionRequest"];
         delete?: never;
         options?: never;
@@ -631,7 +631,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; with no admin but the acting one and the member to decide it, `no_decider`. An optional `memo` is for the operators (not the admin it is about), never the member */
+        /** Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; an account its member closed (탈퇴) is `closed`; with no admin but the acting one and the member to decide it, `no_decider`. An optional `memo` is for the operators (not the admin it is about), never the member */
         post: operations["adminRequestAccountRestriction"];
         delete?: never;
         options?: never;
@@ -699,7 +699,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Warn a member with a reason: a record and the member’s notice only. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs` */
+        /** Warn a member with a reason: a record and the member’s notice only. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs`; an account its member closed (탈퇴) is `closed` */
         post: operations["adminWarnUser"];
         delete?: never;
         options?: never;
@@ -716,7 +716,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Restrict a member’s writing (작성 제한) with a reason, for `days` (1, 3, 7 or 30) or with no end (`null`, until lifted): no new post, comment or reply, no edit of their own and no new value of a public profile item (RESTRICTED, with the end) — deleting their own, likes and reports stay open. Restricted already, the one that ends later governs. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs`; the acting admin is `own` */
+        /** Restrict a member’s writing (작성 제한) with a reason, for `days` (1, 3, 7 or 30) or with no end (`null`, until lifted): no new post, comment or reply, no edit of their own and no new value of a public profile item (RESTRICTED, with the end) — deleting their own, likes and reports stay open. Restricted already, the one that ends later governs. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; an account its member closed (탈퇴) is `closed` */
         post: operations["adminRestrictWriting"];
         delete?: never;
         options?: never;
@@ -1005,7 +1005,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Search users by email or nickname */
+        /** Search users by email or nickname — every account, or with `status` the open ones only or those their member closed (탈퇴) only */
         get: operations["adminListUsers"];
         put?: never;
         post?: never;
@@ -1329,7 +1329,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** What closing the account would do now: the Coin it forfeits and what refuses it (탈퇴, #140) */
+        /** What closing the account would do now: the Coin it forfeits, what refuses it, and whether the start Coin was paid to it — its number gets none again (탈퇴, #140) */
         get: operations["getMyClosureCheck"];
         put?: never;
         /** Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session */
@@ -2088,6 +2088,7 @@ export type components = {
             availableCoin: components["schemas"]["CoinAmount"];
             refusals: components["schemas"]["AccountClosureRefusal"][];
             restriction: components["schemas"]["RestrictedDetails"] | null;
+            startGrantReceived: boolean;
         };
         /** @enum {string} */
         AccountClosureRefusal: "admin" | "unsettled_contracts" | "payment_in_progress" | "pending_orders";
@@ -2622,6 +2623,8 @@ export type components = {
             /** @default 20 */
             limit: number;
             q?: string;
+            /** @enum {string} */
+            status?: "open" | "closed";
         };
         AnswerInterestsStepBody: {
             categoryIds: number[];
@@ -9056,6 +9059,7 @@ export interface operations {
                 cursor?: string;
                 limit?: number;
                 q?: string;
+                status?: "open" | "closed";
             };
             header?: never;
             path?: never;

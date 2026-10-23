@@ -20,6 +20,7 @@ import {
   updateChargePackageBodySchema,
   updateCouponBodySchema,
   adminPaymentSchema,
+  ADMIN_USER_STATUSES,
   adminUserQuerySchema,
   adminUserSchema,
   auditFailureSchema,
@@ -171,8 +172,18 @@ export class AdminController {
   }
 
   @Get('users')
-  @ApiOperation({ operationId: 'adminListUsers', summary: 'Search users by email or nickname' })
+  @ApiOperation({
+    operationId: 'adminListUsers',
+    summary:
+      'Search users by email or nickname — every account, or with `status` the open ones only or ' +
+      'those their member closed (탈퇴) only',
+  })
   @ApiQuery({ name: 'q', required: false, schema: { type: 'string' } })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    schema: { type: 'string', enum: [...ADMIN_USER_STATUSES] },
+  })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminUserSchema)
@@ -180,7 +191,12 @@ export class AdminController {
   async listUsers(
     @Query({ schema: adminUserQuerySchema }) query: AdminUserQuery,
   ): Promise<ApiPage<AdminUser>> {
-    const { items, nextCursor } = await this.admin.listUsers(query.q, query.cursor, query.limit);
+    const { items, nextCursor } = await this.admin.listUsers(
+      query.q,
+      query.status,
+      query.cursor,
+      query.limit,
+    );
     return new ApiPage(items, { nextCursor });
   }
 
