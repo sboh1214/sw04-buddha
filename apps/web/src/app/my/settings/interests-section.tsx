@@ -115,15 +115,14 @@ function InterestsFields({ held, accountId }: { held: readonly number[]; account
   });
 
   const onSave = async () => {
-    const expectedAccountId = save.accountId;
-    if (expectedAccountId === undefined) return;
     setNotice(null);
     if (profileItemSaveGoesToStep(interestsEdit(chosen, held), step.stepLeft)) {
       step.toStep();
       return;
     }
     try {
-      await save.mutateAsync({ categoryIds: chosen, expectedAccountId });
+      // The account the card shows, not the session's (`useSetInterestCategories` says why).
+      await save.mutateAsync({ categoryIds: chosen, expectedAccountId: accountId });
       // Saved: nothing an earlier trip to the step kept of the card is wanted back.
       clearSessionProfileDraft('interests');
       toaster.create({ type: 'success', title: copy.interestsSaved });
@@ -181,7 +180,7 @@ function InterestsFields({ held, accountId }: { held: readonly number[]; account
         <Button
           onClick={() => void onSave()}
           loading={save.isPending}
-          disabled={!save.ready || !categories.isSuccess || !changed}
+          disabled={!categories.isSuccess || !changed}
           data-testid="interests-settings-save"
         >
           {copy.save}

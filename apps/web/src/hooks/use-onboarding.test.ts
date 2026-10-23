@@ -1,6 +1,12 @@
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, api, type AnswerInterestsStepBody, type Me } from '@/lib/api';
+import {
+  ApiError,
+  api,
+  type AnswerInterestsStepBody,
+  type Me,
+  type SetInterestCategoriesBody,
+} from '@/lib/api';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import {
@@ -423,6 +429,68 @@ describe('the onboarding mutations', () => {
   });
 });
 
+describe('MY 설정’s interest categories card (PR #224 Codex review, ADR-0078 7-29)', () => {
+  it('names the account the card shows: with the session already on B, A’s picks are refused, not written to B', async () => {
+    // The render between the session naming B and SessionCacheGuard's reset (an effect): ['me'] —
+    // the card — still holds A's picks while the session already says B. The card's save names the
+    // account of the `Me` it was drawn from (its `accountId`, as the 소개 and nickname cards do), so
+    // the server, whose cookie is now B's, refuses it (A-PG-24) and writes nothing.
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const a: Me = { ...named, profile: { ...named.profile, interestCategoryIds: [1] } };
+    const b: Me = {
+      ...named,
+      id: 'user-2',
+      email: 'b@example.com',
+      profile: { ...named.profile, publicId: 'b7m2p9qx4z', interestCategoryIds: [7] },
+    };
+    /** Each account's interest categories on the server, and the account its cookie names. */
+    const server = new Map<string, readonly number[]>([
+      [a.id, [1]],
+      [b.id, [7]],
+    ]);
+    const signedIn = b.id;
+    const put = (body: SetInterestCategoriesBody): Promise<Me> => {
+      if (body.expectedAccountId !== signedIn) return Promise.reject(forAnotherAccount());
+      server.set(signedIn, body.categoryIds);
+      return Promise.resolve({
+        ...b,
+        profile: { ...b.profile, interestCategoryIds: body.categoryIds },
+      });
+    };
+    const me = meObserver(queryClient, () => Promise.resolve(a));
+    const save = new MutationObserver(
+      queryClient,
+      setInterestCategoriesOptions(queryClient, session.onSessionChanged, put),
+    );
+    try {
+      await me.observer.refetch();
+      const shown = queryClient.getQueryData<Me>(ME_QUERY_KEY);
+      expect(shown?.id).toBe(a.id);
+
+      await expect(
+        save.mutate({ categoryIds: [1, 3], expectedAccountId: a.id }),
+      ).rejects.toBeInstanceOf(ApiError);
+      // Nothing written to either account; the session is asked again, so SessionCacheGuard puts B
+      // on screen; the card's entry keeps A's picks until that reset.
+      expect(server.get(b.id)).toEqual([7]);
+      expect(server.get(a.id)).toEqual([1]);
+      expect(session.count()).toBe(1);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.interestCategoryIds).toEqual([1]);
+
+      // THE HAZARD the card no longer has: it named the session's account, B, and the server took
+      // the picks A's card showed as B's — only the answer, another account's, was kept out of
+      // ['me'].
+      await save.mutate({ categoryIds: [1, 3], expectedAccountId: b.id });
+      expect(server.get(b.id)).toEqual([1, 3]);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.interestCategoryIds).toEqual([1]);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
 describe('the interests step’s two requests (PR #224 Codex review, ADR-0078 7-28)', () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -686,6 +754,95 @@ describe('createInterestsLeaveReport (owner decision 2026-10-21 (2nd) answer 2)'
       expect(third.sent).toEqual([]);
       // Nothing left listening to the cache once 로그아웃 went on.
       expect(queryClient.getMutationCache().hasListeners()).toBe(false);
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('counts only the account’s own answers: another account’s on its way holds back no skip and keeps no 로그아웃 waiting', async () => {
+    // PR #224 Codex review (ADR-0078 7-29): A saved its picks and the answer is slow; the tab then
+    // switched to B, an onboarding account. SessionCacheGuard's `resetQueries` resets the queries,
+    // not the mutations, so A's answer is still on its way in this tab's mutation cache — and it
+    // answers A's step, not B's.
+    vi.useFakeTimers();
+    const queryClient = getQueryClient();
+    /** The step's mutation as a screen holds it, whose answer the test settles. */
+    function stepAnswer() {
+      let settle: (me: Me) => void = () => undefined;
+      const observer = new MutationObserver(
+        queryClient,
+        answerInterestsStepOptions(
+          queryClient,
+          () => undefined,
+          () =>
+            new Promise<Me>((resolve) => {
+              settle = resolve;
+            }),
+        ),
+      );
+      return { observer, settle: (me: Me) => settle(me) };
+    }
+    const answering = () => queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY });
+    try {
+      const slow = stepAnswer();
+      const picked = slow.observer.mutate({ categoryIds: [3], expectedAccountId: 'user-1' });
+      await queryClient.resetQueries();
+      expect(answering()).toBe(1);
+
+      // B leaves the notice (a link, Back, the page going): not 'answering' — its skip goes.
+      const left = recordingPost();
+      const leaving = createInterestsLeaveReport(queryClient, left.post);
+      leaving.show('notice', 'user-2');
+      leaving.leave();
+      expect(left.sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-2' }]);
+
+      // B signs out on the interests: the skip leaves at once — no wait on A's answer first — and
+      // 로그아웃 goes on as soon as the skip's answer came, long before the two seconds.
+      const out = recordingPost();
+      const signingOut = createInterestsLeaveReport(queryClient, out.post);
+      signingOut.show('interests', 'user-2');
+      let signedOut = false;
+      const before = signingOut.beforeSignOut().then(() => {
+        signedOut = true;
+      });
+      expect(out.sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-2' }]);
+      out.settle();
+      await vi.advanceTimersByTimeAsync(0);
+      await before;
+      expect(signedOut).toBe(true);
+      expect(answering()).toBe(1);
+      expect(queryClient.getMutationCache().hasListeners()).toBe(false);
+
+      // The tab switched once more, to C, which saves its picks and signs out at once: 로그아웃
+      // waits for C's answer, and goes on as soon as it came — A's still on its way — with no skip.
+      const third = recordingPost();
+      const saved = stepAnswer();
+      const cScreen = createInterestsLeaveReport(queryClient, third.post);
+      cScreen.show('interests', 'user-3');
+      const picksC = saved.observer.mutate({ categoryIds: [5], expectedAccountId: 'user-3' });
+      let cSignedOut = false;
+      const cBefore = cScreen.beforeSignOut().then(() => {
+        cSignedOut = true;
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(cSignedOut).toBe(false);
+      saved.settle({ ...named, id: 'user-3' });
+      await picksC;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cSignedOut).toBe(true);
+      await cBefore;
+      expect(third.sent).toEqual([]);
+      expect(answering()).toBe(1);
+
+      // A's own screen still sees its answer on its way: no skip races the picks.
+      const own = recordingPost();
+      const aScreen = createInterestsLeaveReport(queryClient, own.post);
+      aScreen.show('interests', 'user-1');
+      aScreen.leave();
+      expect(own.sent).toEqual([]);
+      slow.settle(named);
+      await picked;
+      expect(answering()).toBe(0);
     } finally {
       queryClient.clear();
     }

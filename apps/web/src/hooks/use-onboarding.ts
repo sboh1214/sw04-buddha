@@ -1,6 +1,11 @@
 'use client';
 
-import { useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQueryClient,
+  type MutationFilters,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { useEffect, useState } from 'react';
 import { ME_QUERY_KEY, meBelongsTo, refreshOwnMe } from '@/hooks/use-me';
 import {
@@ -163,8 +168,9 @@ export function setOnboardingNicknameOptions(
 }
 
 /**
- * The interests step's write (`answerInterestsStepOptions`): while one is on its way, or once one
- * came, leaving sends no skip — and 로그아웃 waits for one on its way (`createInterestsLeaveReport`).
+ * The interests step's write (`answerInterestsStepOptions`): while one for the account on screen is
+ * on its way, or once one came, leaving sends no skip — and 로그아웃 waits for one on its way
+ * (`createInterestsLeaveReport`, `stepAnswersOf`).
  */
 export const INTERESTS_STEP_MUTATION_KEY = ['onboarding', 'interests'] as const;
 
@@ -261,10 +267,26 @@ function deadline(ms: number): { elapsed: Promise<void>; clear: () => void } {
 }
 
 /**
- * Where the step's answers sent from this tab stand (`INTERESTS_STEP_MUTATION_KEY`, asked of the
- * mutation cache): one on its way (`answering`), and one for `accountId` that the server answered
- * (`answered` — `['me']` holds it before the mutation says so, `storeOnboardingAnswer`). A cache
- * emptied (after the sign-out, or for another account) forgets both.
+ * The step's answers sent from this tab for `accountId` (`INTERESTS_STEP_MUTATION_KEY`, the body's
+ * `expectedAccountId`), as mutation cache filters. Another account's are not its own: the tab that
+ * switched accounts while one was on its way keeps it in the mutation cache — SessionCacheGuard's
+ * `resetQueries` resets the queries, not the mutations — and its answer, a request with the other
+ * account's body, answers nothing of this account's step (PR #224 Codex review, ADR-0078 7-29).
+ */
+function stepAnswersOf(accountId: string): MutationFilters {
+  return {
+    mutationKey: INTERESTS_STEP_MUTATION_KEY,
+    predicate: (answer) =>
+      (answer.state.variables as AnswerInterestsStepBody | undefined)?.expectedAccountId ===
+      accountId,
+  };
+}
+
+/**
+ * Where the step's answers sent from this tab for `accountId` stand (`stepAnswersOf`, asked of the
+ * mutation cache): one on its way (`answering`), and one the server answered (`answered` —
+ * `['me']` holds it before the mutation says so, `storeOnboardingAnswer`). A cache emptied (after
+ * the sign-out) forgets both; another account's answers count for neither.
  */
 function stepAnswers(
   queryClient: QueryClient,
@@ -272,28 +294,26 @@ function stepAnswers(
 ): { answering: boolean; answered: boolean } {
   let answering = false;
   let answered = false;
-  const answers = queryClient
-    .getMutationCache()
-    .findAll({ mutationKey: INTERESTS_STEP_MUTATION_KEY });
-  for (const answer of answers) {
-    const body = answer.state.variables as AnswerInterestsStepBody | undefined;
+  for (const answer of queryClient.getMutationCache().findAll(stepAnswersOf(accountId))) {
     if (answer.state.status === 'pending') answering = true;
-    else if (answer.state.status === 'success' && body?.expectedAccountId === accountId) {
-      answered = true;
-    }
+    else if (answer.state.status === 'success') answered = true;
   }
   return { answering, answered };
 }
 
 /**
- * Settles once no answer of the step is on its way in this tab — it came, it was refused or lost,
- * or the cache was emptied — or never, after `stop`. Never rejects.
+ * Settles once no answer of the step for `accountId` is on its way in this tab — it came, it was
+ * refused or lost, or the cache was emptied — or never, after `stop`. Never rejects. Another
+ * account's answer on its way is not waited for (`stepAnswersOf`).
  */
-function stepAnswerSettled(queryClient: QueryClient): { settled: Promise<void>; stop: () => void } {
+function stepAnswerSettled(
+  queryClient: QueryClient,
+  accountId: string,
+): { settled: Promise<void>; stop: () => void } {
   let unsubscribe: () => void = () => undefined;
   const settled = new Promise<void>((resolve) => {
     const check = () => {
-      if (queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY }) > 0) return;
+      if (queryClient.isMutating(stepAnswersOf(accountId)) > 0) return;
       unsubscribe();
       resolve();
     };
@@ -310,28 +330,31 @@ export interface InterestsLeaveReport {
   /** The stepper going away inside the app, or the page going (`pagehide`). */
   readonly leave: () => void;
   /**
-   * 로그아웃 about to end the session: the step's answer on its way waited for first, then the skip
-   * sent while the session is there — unless that answer answered the step — and waited for: at
-   * most `waitMs` in all. Nothing to wait for when leaving does not skip.
+   * 로그아웃 about to end the session: the step's answer on its way for the account on screen
+   * waited for first, then the skip sent while the session is there — unless that answer answered
+   * the step — and waited for: at most `waitMs` in all. Nothing to wait for when leaving does not
+   * skip.
    */
   readonly beforeSignOut: () => Promise<void>;
 }
 
 /**
- * The stepper's leave report (owner decision 2026-10-21 (2nd) answer 2, ADR-0078): while the
- * screen is the start-Coin notice or the interests and no answer of the step was sent — none on its
- * way and none answered, asked of the mutation cache as the account leaves (`stepAnswers`,
- * `leavingSkipsInterests`): that answer answers the step itself, and a skip racing it could turn
- * the picks into a change — leaving sends the skip (`reportInterestsLeft`), once, whichever way the
- * account leaves. The screen reached nothing to skip or finished the step (null), or its answer
- * came before the stepper moved on: nothing is sent, then or later. The answer on its way outlives
- * the page (`keepalive`, `postInterestsStep`); 로그아웃, which would end the session it needs,
- * waits for it first (at most `waitMs`, with the skip) and then sends the skip only if it did not
- * answer the step — refused (a category closed meanwhile) or lost — so the server ends with the
- * picks, not a skip (PR #224 Codex review, ADR-0078 7-28). A cache emptied under the stepper (after
- * the sign-out, or for another account) forgets an answer in flight, and the skip then sent is
- * refused (401, 403) — it changes nothing. Plain, not a hook, so the unit tests drive it under
- * `environment: 'node'`.
+ * The stepper's leave report (owner decision 2026-10-21 (2nd) answer 2, ADR-0078): while the screen
+ * is the start-Coin notice or the interests and no answer of the step was sent for the account on
+ * screen — none on its way and none answered, asked of the mutation cache as the account leaves
+ * (`stepAnswers`, `leavingSkipsInterests`): that answer answers the step itself, and a skip racing
+ * it could turn the picks into a change — leaving sends the skip (`reportInterestsLeft`), once,
+ * whichever way the account leaves. Another account's answer still on its way in this tab (the tab
+ * switched accounts meanwhile) neither holds the skip back nor makes 로그아웃 wait: it answers that
+ * other account's step, not this one's (PR #224 Codex review, ADR-0078 7-29). The screen reached
+ * nothing to skip or finished the step (null), or its answer came before the stepper moved on:
+ * nothing is sent, then or later. The answer on its way outlives the page (`keepalive`,
+ * `postInterestsStep`); 로그아웃, which would end the session it needs, waits for it first (at most
+ * `waitMs`, with the skip) and then sends the skip only if it did not answer the step — refused (a
+ * category closed meanwhile) or lost — so the server ends with the picks, not a skip (PR #224 Codex
+ * review, ADR-0078 7-28). A cache emptied under the stepper (after the sign-out) forgets an answer
+ * in flight, and the skip then sent is refused (401) — it changes nothing. Plain, not a hook, so
+ * the unit tests drive it under `environment: 'node'`.
  */
 export function createInterestsLeaveReport(
   queryClient: QueryClient,
@@ -363,9 +386,10 @@ export function createInterestsLeaveReport(
     beforeSignOut: async () => {
       const wait = deadline(waitMs);
       try {
-        if (queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY }) > 0) {
+        const accountId = shown?.accountId;
+        if (accountId !== undefined && queryClient.isMutating(stepAnswersOf(accountId)) > 0) {
           // The answer first: it needs the session, and a skip sent beside it could land first.
-          const answer = stepAnswerSettled(queryClient);
+          const answer = stepAnswerSettled(queryClient, accountId);
           try {
             await Promise.race([answer.settled, wait.elapsed]);
           } finally {
@@ -445,9 +469,16 @@ export function useAnswerInterestsStep() {
   return { ...mutation, accountId, ready: accountId !== undefined };
 }
 
-/** `setInterestCategoriesOptions` as MY 설정's interest categories card's mutation (#41). */
+/**
+ * `setInterestCategoriesOptions` as MY 설정's interest categories card's mutation (#41). The body
+ * names the account the card shows — the `Me` it was drawn from (`InterestsFields`' `accountId`),
+ * as the 소개 and nickname cards do — never the session's: in the render between the session
+ * naming another account and SessionCacheGuard's reset, the session already says B while the card
+ * still shows A's picks, and a save naming B would write A's picks to B (PR #224 Codex review,
+ * ADR-0078 7-29). So the hook offers no account of its own.
+ */
 export function useSetInterestCategories() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(setInterestCategoriesOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const queryClient = useQueryClient();
+  const { refetch } = useSession();
+  return useMutation(setInterestCategoriesOptions(queryClient, () => void refetch()));
 }
