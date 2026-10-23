@@ -797,6 +797,53 @@ describe('a comment’s press while a new 댓글’s read to the end is on its w
     expect(threadIds(again)).toEqual([commentId, OLDER, MINE]);
   });
 
+  it('keeps the count the answer wrote when the read stops short of the new 댓글: the last page held, read again, goes in at the counts held with the 댓글 at its end (ADR-0074 7-14, ADR-0076 7-27)', async () => {
+    const queryClient = seeded();
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, 0)));
+    const page = deferred<unknown>();
+    const get = vi
+      .spyOn(api, 'GET')
+      .mockReturnValueOnce(page.promise as never)
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+    const written = new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+    await vi.waitFor(() => {
+      expect(get).toHaveBeenCalledTimes(1);
+    });
+    const sent = deferred<LikeState>();
+    const done = toggle(queryClient, () => sent.promise).mutate(onComment(true));
+    await settle();
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    sent.resolve({ liked: true, likeCount: 3 });
+    await done;
+    // The last page held, read again at COMMENT's count from before the press, with another
+    // reader's 댓글 after it and more to read; the next page fails — as a read that failed, MINE
+    // goes at the end of that page, whose cursor leaves 더 보기 to bring it into place (#48).
+    page.resolve({
+      data: {
+        data: [
+          ...firstPage(2).items,
+          { comment: published(OLDER, 7), replies: [], repliesNextCursor: null },
+        ],
+        meta: { nextCursor: 'after-older' },
+      },
+      response: new Response(null, { status: 200 }),
+    });
+    await written;
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(
+      queryClient.getQueryData<CommentPages>(postCommentsKey(post))?.pages.at(-1)?.nextCursor,
+    ).toBe('after-older');
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(commentCountOf(queryClient, REPLY)).toBe(0);
+    // A 댓글 the screen did not hold comes at the page's count.
+    expect(commentCountOf(queryClient, OLDER)).toBe(7);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+  });
+
   it('ends on the server’s count when a press whose answer was lost fails while they are on their way: its read again of the pages, cancelled to put them in, is made again (ADR-0076 7-28)', async () => {
     const queryClient = seeded();
     // The post page, watching the pages and the reader's likes: a read of them asked for is made.

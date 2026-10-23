@@ -626,16 +626,17 @@ async function putReadPages(
  * 결정 2026-10-24, `keepPlacedComments`, `writerOnScreen`; ADR-0074 7-14). A read that reaches the
  * end without it — the 댓글 deleted meanwhile, in another tab — is the server's word: the pages
  * read are written as they are, and the answer is not put back. The pages read take the place of
- * the held ones from the last on, each comment held at the like count held (`withHeldLikeCounts`,
- * #49, ADR-0076 7-27): this read calls the query's function itself, so a like pressed while it is
- * out sees no read of the pages on its way and reads none after it — the count it wrote stays. A
- * count held can be one a failed press put back while its read again of the pages, for the
- * server's word, is on its way; putting the pages in cancels that read and makes it again
- * (`putReadPages`, as `writePages`, 7-28), so the screen still ends on the server's count.
- * Either way — the pages read, or the last page held read again — the reader's writes that landed
- * while this read are done again over them as they go in (`putReadPages`, Codex review on PR #220,
- * round 4 — ADR-0074 7-34): an edit or a deletion of a comment on them, a new 대댓글 or '답글 더
- * 보기' of a thread on them, which the pages, read before, would otherwise undo.
+ * the held ones from the last on — the last page held read again alone, when the read failed or
+ * stopped — each comment held at the like count held (`withHeldLikeCounts`, #49, ADR-0076 7-27):
+ * this read calls the query's function itself, so a like pressed while it is out sees no read of
+ * the pages on its way and reads none after it — the count it wrote stays. A count held can be one
+ * a failed press put back while its read again of the pages, for the server's word, is on its way;
+ * putting the pages in cancels that read and makes it again (`putReadPages`, as `writePages`,
+ * 7-28), so the screen still ends on the server's count. Either way — the pages read, or the last
+ * page held read again — the reader's writes that landed while this read are done again over them
+ * as they go in (`putReadPages`, Codex review on PR #220, round 4 — ADR-0074 7-34): an edit or a
+ * deletion of a comment on them, a new 대댓글 or '답글 더 보기' of a thread on them, which the
+ * pages, read before, would otherwise undo.
  */
 async function readOnToTheEnd(
   queryClient: QueryClient,
@@ -673,7 +674,8 @@ async function readOnToTheEnd(
   }
   if (!done) {
     // Failed, or COMMENT_READ_ON_PAGES read and the 댓글 not among them: as a read that failed,
-    // save the last page held as read again — its cursor leaves 더 보기 there (see above).
+    // save the last page held as read again — its cursor leaves 더 보기 there (see above) — at the
+    // like counts held, as the pages of a read that reached the 댓글 (#49, ADR-0076 7-27).
     const [lastReadAgain] = pages;
     await putReadPages(
       queryClient,
@@ -684,7 +686,10 @@ async function readOnToTheEnd(
           current !== undefined && lastReadAgain !== undefined
             ? {
                 ...current,
-                pages: [...current.pages.slice(0, from), lastReadAgain],
+                pages: [
+                  ...current.pages.slice(0, from),
+                  ...withHeldLikeCounts([lastReadAgain], current),
+                ],
                 pageParams: [...current.pageParams.slice(0, from), pageParams[0]],
               }
             : current,
