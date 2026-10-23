@@ -138,15 +138,16 @@ async function afterRefusal(queryClient: QueryClient, error: Error, onSessionCha
  * on the screen, as the gate may have taken the screen away while the write was in flight — and
  * the landing is recorded first (`postDraftLanded`): the mutation counts as succeeded, and the form
  * renders `saved`, only after this has run, and a form the gate takes away meanwhile must not keep
- * the draft again.
+ * the draft again. Both for the account that sent it (`expectedAccountId`) only: the tab may be
+ * another's by the time it lands.
  */
 export function createPostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
     // Documented as a `Post` (the route shares the page's schema); a new post is always published.
     mutationFn: async (body: CreatePostVariables): Promise<Post> =>
       unwrap(await api.POST('/api/v1/posts', { body })).data,
-    onSuccess: async (post: Post, { marketId }: CreatePostVariables) => {
-      postDraftLanded({ kind: 'new', marketId });
+    onSuccess: async (post: Post, { marketId, expectedAccountId }: CreatePostVariables) => {
+      postDraftLanded({ kind: 'new', marketId }, expectedAccountId);
       queryClient.setQueryData<Post>(postKey(post.id), post);
       await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
     },
@@ -156,7 +157,7 @@ export function createPostOptions(queryClient: QueryClient, onSessionChanged: ()
 
 /**
  * `PUT /posts/:postId`: the edited post replaces the held one; the lists' cards follow it, and a
- * kept draft of its edit screen goes, as a new post's does.
+ * kept draft of its edit screen by the account that sent it goes, as a new post's does.
  */
 export function updatePostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
@@ -167,8 +168,8 @@ export function updatePostOptions(queryClient: QueryClient, onSessionChanged: ()
           body,
         }),
       ).data,
-    onSuccess: async (post: Post, { postId }: UpdatePostVariables) => {
-      postDraftLanded({ kind: 'edit', postId });
+    onSuccess: async (post: Post, { postId, expectedAccountId }: UpdatePostVariables) => {
+      postDraftLanded({ kind: 'edit', postId }, expectedAccountId);
       queryClient.setQueryData<Post>(postKey(post.id), post);
       await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
     },

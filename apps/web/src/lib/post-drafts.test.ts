@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { type Onboarding } from './onboarding';
 import {
@@ -9,6 +9,7 @@ import {
   type DraftStorage,
   type PostDraft,
   clearPostDraft,
+  clearPostDraftOf,
   clearPostDrafts,
   hasDraftToKeep,
   keepPostDraft,
@@ -384,17 +385,48 @@ describe('discarding a draft taken back (오너 결정 2026-10-20 3차 답 3)', 
 });
 
 describe('a write that landed', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it('counts for the forms of its screen rendered before it, not after, nor for another screen', () => {
     const before = postDraftMoment();
-    expect(postDraftLandedSince(NEW, before)).toBe(false);
-    postDraftLanded(NEW);
-    expect(postDraftLandedSince(NEW, before)).toBe(true);
-    expect(postDraftLandedSince({ kind: 'new', marketId: MARKET.toLowerCase() }, before)).toBe(
-      true,
-    );
-    expect(postDraftLandedSince(EDIT, before)).toBe(false);
+    expect(postDraftLandedSince(NEW, ACCOUNT, before)).toBe(false);
+    postDraftLanded(NEW, ACCOUNT);
+    expect(postDraftLandedSince(NEW, ACCOUNT, before)).toBe(true);
+    expect(
+      postDraftLandedSince({ kind: 'new', marketId: MARKET.toLowerCase() }, ACCOUNT, before),
+    ).toBe(true);
+    expect(postDraftLandedSince(EDIT, ACCOUNT, before)).toBe(false);
+    // Nor for the same screen's form of another account (Codex review on PR #220): the write was
+    // that account's.
+    expect(postDraftLandedSince(NEW, OTHER_ACCOUNT, before)).toBe(false);
     // A form of that screen drawn afterwards — another post on the same market — keeps again.
-    expect(postDraftLandedSince(NEW, postDraftMoment())).toBe(false);
+    expect(postDraftLandedSince(NEW, ACCOUNT, postDraftMoment())).toBe(false);
+  });
+
+  it('removes from the tab the draft of the account whose write landed, and no other account’s', () => {
+    const storage = new MemoryStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    keepPostDraft(storage, EDIT, OTHER_ACCOUNT, DRAFT, NOW);
+    postDraftLanded(EDIT, ACCOUNT);
+    expect(readPostDraft(storage, EDIT, OTHER_ACCOUNT, NOW)).toEqual(DRAFT);
+    postDraftLanded(EDIT, OTHER_ACCOUNT);
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('clears what one account kept for a screen, and only that', () => {
+    const storage = new MemoryStorage();
+    keepPostDraft(storage, NEW, OTHER_ACCOUNT, DRAFT, NOW);
+    clearPostDraftOf(storage, NEW, ACCOUNT);
+    expect(readPostDraft(storage, NEW, OTHER_ACCOUNT, NOW)).toEqual(DRAFT);
+    clearPostDraftOf(storage, NEW, OTHER_ACCOUNT);
+    expect(storage.items.size).toBe(0);
+    // What is no draft goes, as a read would remove it; a storage the browser refuses is left.
+    storage.setItem(postDraftStorageKey(NEW), 'not json');
+    clearPostDraftOf(storage, NEW, ACCOUNT);
+    expect(storage.items.size).toBe(0);
+    expect(() => clearPostDraftOf(refusing, NEW, ACCOUNT)).not.toThrow();
   });
 });
 

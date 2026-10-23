@@ -20,10 +20,12 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  *   for the account that wrote it — another account signed in on the tab never reads it.
  * - Gone: once taken back (the form holds it again and guards it like any draft — leaving asks,
  *   and the gate keeps it again should it send the account on once more), once a write or an edit
- *   of that screen succeeds (one in flight when the gate took the account away included, and a
- *   form the gate takes away while that success is being handled keeps nothing —
- *   `postDraftLanded`), when the writer discards it (asked first, `nextRestoredDraftState`), when
- *   the account signs out in the tab, and POST_DRAFT_TTL_MS after it was kept.
+ *   of that screen by the same account succeeds (one in flight when the gate took the account
+ *   away included, and a form the gate takes away while that success is being handled keeps
+ *   nothing — `postDraftLanded`; another account's write of the same screen, sent before the tab
+ *   changed hands, leaves it), when the writer discards it (asked first,
+ *   `nextRestoredDraftState`), when the account signs out in the tab, and POST_DRAFT_TTL_MS after
+ *   it was kept.
  * - Only what it can carry: a title or a body changed, or a draft taken back before
  *   (`hasDraftToKeep`). An image still uploading is not in it — the editor inserts the image when
  *   the upload answers, and the gate has taken the editor away by then — so a form whose only
@@ -175,6 +177,17 @@ function parseStored(raw: string): StoredDraft | null {
   };
 }
 
+/** The draft stored under `key`, if it is one this module wrote (null: none, or refused). */
+function readItem(storage: DraftStorage, key: string): StoredDraft | null {
+  let raw: string | null;
+  try {
+    raw = storage.getItem(key);
+  } catch {
+    return null;
+  }
+  return raw === null ? null : parseStored(raw);
+}
+
 function isExpired(stored: StoredDraft, now: number): boolean {
   return now - stored.savedAt > POST_DRAFT_TTL_MS;
 }
@@ -278,6 +291,20 @@ export function readPostDraft(
 /** Removes what was kept for `key`. */
 export function clearPostDraft(storage: DraftStorage, key: PostDraftKey): void {
   tryRemove(storage, postDraftStorageKey(key));
+}
+
+/**
+ * Removes what `accountId` kept for `key`, and only that: another account's draft of the same
+ * screen stays (anything that is no draft goes, as a read would remove it).
+ */
+export function clearPostDraftOf(
+  storage: DraftStorage,
+  key: PostDraftKey,
+  accountId: string,
+): void {
+  const storageKey = postDraftStorageKey(key);
+  const stored = readItem(storage, storageKey);
+  if (stored === null || stored.accountId === accountId) tryRemove(storage, storageKey);
 }
 
 /** Removes every kept draft (signing out). */
@@ -395,17 +422,28 @@ export function clearSessionPostDrafts(): void {
 // ---- the writes that landed in this tab ------------------------------------------------------
 
 /**
- * When a write or an edit of each screen last landed in this tab, by the screen's storage key, as
- * a `postDraftMoment`. TanStack Query runs a mutation's `onSuccess` before it marks the mutation
- * succeeded, and the form renders `saved` later still; a form the gate takes away in between holds
- * `saved: false` from its last render, and would keep — after the success cleared it — a draft the
- * post already holds, which its screen would then "restore" for a second post. So the success
- * records its moment here, and the form going away counts a write landed after its last render as
- * saved (`postDraftLandedSince`). The form is locked while it sends, so that render held what was
- * sent. In memory, as the forms are: this tab's, gone with the page.
+ * When a write or an edit of each screen last landed in this tab, by the account that sent it and
+ * the screen's storage key, as a `postDraftMoment`. TanStack Query runs a mutation's `onSuccess`
+ * before it marks the mutation succeeded, and the form renders `saved` later still; a form the
+ * gate takes away in between holds `saved: false` from its last render, and would keep — after
+ * the success cleared it — a draft the post already holds, which its screen would then "restore"
+ * for a second post. So the success records its moment here, and the form going away counts a
+ * write landed after its last render as saved (`postDraftLandedSince`). The form is locked while
+ * it sends, so that render held what was sent. In memory, as the forms are: this tab's, gone with
+ * the page.
+ *
+ * By account (ADR-0073 9-48 — the gap Codex's review of #48 found in the comment drafts, PR #220):
+ * a write sent by account A can land after the tab changed to account B, and B can have the same
+ * screen open meanwhile — its own draft, kept for B across an onboarding step. A's landing says nothing of B's
+ * form: it neither removes B's kept draft nor counts B's form as saved, which would let B's draft
+ * go unkept as the gate takes the form away.
  */
 const landedAt = new Map<string, number>();
 let moments = 0;
+
+function landedKey(key: PostDraftKey, accountId: string): string {
+  return `${accountId}\n${postDraftStorageKey(key)}`;
+}
 
 /** A moment in this tab's order of draft events: each call answers a larger number. */
 export function postDraftMoment(): number {
@@ -414,15 +452,25 @@ export function postDraftMoment(): number {
 }
 
 /**
- * A write or an edit of `key`'s screen landed: its kept draft goes, and a form of that screen
- * rendered before now keeps nothing when it goes (`postDraftLandedSince`).
+ * A write or an edit of `key`'s screen sent by `accountId` (its `expectedAccountId`) landed: that
+ * account's kept draft of the screen goes, and a form of it that account rendered before now keeps
+ * nothing when it goes (`postDraftLandedSince`). Another account's draft and form of the same
+ * screen are left as they are.
  */
-export function postDraftLanded(key: PostDraftKey): void {
-  landedAt.set(postDraftStorageKey(key), postDraftMoment());
-  clearSessionPostDraft(key);
+export function postDraftLanded(key: PostDraftKey, accountId: string): void {
+  landedAt.set(landedKey(key, accountId), postDraftMoment());
+  const storage = sessionDrafts();
+  if (storage !== null) clearPostDraftOf(storage, key, accountId);
 }
 
-/** Whether a write or an edit of `key`'s screen landed after `moment` (a `postDraftMoment`). */
-export function postDraftLandedSince(key: PostDraftKey, moment: number): boolean {
-  return (landedAt.get(postDraftStorageKey(key)) ?? 0) > moment;
+/**
+ * Whether a write or an edit of `key`'s screen by `accountId` — the account a form rendered for —
+ * landed after `moment` (a `postDraftMoment`).
+ */
+export function postDraftLandedSince(
+  key: PostDraftKey,
+  accountId: string,
+  moment: number,
+): boolean {
+  return (landedAt.get(landedKey(key, accountId)) ?? 0) > moment;
 }

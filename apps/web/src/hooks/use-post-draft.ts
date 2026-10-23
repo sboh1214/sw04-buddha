@@ -43,13 +43,13 @@ const held = new Map<symbol, HeldPostDraftAt>();
 /**
  * What a form going away does with `last`, its draft as of its last render, given `me` — `GET /me`
  * as the cache holds it now: keeps it in this tab when the gate is taking its writer to a step left
- * (`shouldKeepPostDraft`), for that account only. A write of the screen that landed after that
- * render counts as saved (`postDraftLandedSince`): its success is being handled and has not reached
- * the form yet. Whether it kept it.
+ * (`shouldKeepPostDraft`), for that account only. A write of the screen that account sent and that
+ * landed after that render counts as saved (`postDraftLandedSince`): its success is being handled
+ * and has not reached the form yet. Whether it kept it.
  */
 export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): boolean {
   if (last.accountId === undefined || me?.id !== last.accountId) return false;
-  const saved = last.saved || postDraftLandedSince(last.key, last.moment);
+  const saved = last.saved || postDraftLandedSince(last.key, last.accountId, last.moment);
   if (!shouldKeepPostDraft({ hasDraft: last.hasDraft, saved, onboarding: me.onboarding })) {
     return false;
   }

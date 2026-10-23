@@ -295,6 +295,74 @@ describe('the writes', () => {
     }
   });
 
+  it('a write that lands for account A leaves what B kept and B’s form: the tab changed from A to B with A’s write in flight (Codex review on PR #220, ADR-0073 9-48)', async () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const stepLeft = { nextStep: 'consent' } as Me['onboarding'];
+    const b = { id: 'user-2', onboarding: stepLeft } as Me;
+    const screens: {
+      key: PostDraftKey;
+      send: (
+        queryClient: ReturnType<typeof getQueryClient>,
+        expectedAccountId: string,
+      ) => Promise<unknown>;
+    }[] = [
+      {
+        key: { kind: 'new', marketId: MARKET },
+        send: (queryClient, expectedAccountId) => {
+          vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(published));
+          const write = new MutationObserver(
+            queryClient,
+            createPostOptions(queryClient, () => undefined),
+          );
+          return write.mutate({ marketId: MARKET, title: null, body: {}, expectedAccountId });
+        },
+      },
+      {
+        key: { kind: 'edit', postId: post },
+        send: (queryClient, expectedAccountId) => {
+          vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer(published));
+          const edit = new MutationObserver(
+            queryClient,
+            updatePostOptions(queryClient, () => undefined),
+          );
+          return edit.mutate({ postId: POST, title: null, body: {}, expectedAccountId });
+        },
+      },
+    ];
+    for (const { key, send } of screens) {
+      const queryClient = getQueryClient();
+      // A sent the write; the tab changed to B, who opened the same screen and was taken to a
+      // step, which kept B's draft; B's form of the screen is drawn again (taken back, say).
+      const theirs: HeldPostDraftAt = {
+        key,
+        accountId: 'user-2',
+        hasDraft: true,
+        saved: false,
+        title: 'B가 쓰던 제목',
+        body: { type: 'doc', content: [] },
+        previews: new Map(),
+        moment: postDraftMoment(),
+      };
+      expect(keepHeldPostDraft(theirs, b)).toBe(true);
+      const kept = readPostDraft(storage, key, 'user-2', Date.now());
+      expect(kept?.title).toBe('B가 쓰던 제목');
+
+      // A's write lands now. It is A's landing: B's kept draft stays, and B's form — rendered
+      // before it — is not counted as saved, so the gate taking it away keeps it again.
+      await send(queryClient, 'user-1');
+      expect(readPostDraft(storage, key, 'user-2', Date.now())).toEqual(kept);
+      expect(keepHeldPostDraft(theirs, b)).toBe(true);
+      expect(readPostDraft(storage, key, 'user-2', Date.now())?.title).toBe('B가 쓰던 제목');
+
+      // B's own write of the screen does count, and removes B's draft.
+      await send(queryClient, 'user-2');
+      expect(readPostDraft(storage, key, 'user-2', Date.now())).toBeNull();
+      expect(keepHeldPostDraft(theirs, b)).toBe(false);
+      expect(readPostDraft(storage, key, 'user-2', Date.now())).toBeNull();
+    }
+  });
+
   it('a form going away keeps nothing for another account, nor with no step left', () => {
     const storage = tabStorage();
     vi.stubGlobal('window', { sessionStorage: storage });
