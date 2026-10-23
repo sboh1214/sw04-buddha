@@ -16,6 +16,7 @@ import {
   withoutCommentDrafts,
 } from '@/lib/comment-drafts';
 import {
+  COMMENT_READ_ON_PAGES,
   REPLIES_KEPT_ON_READ,
   REPLY_READ_ON_PAGES,
   REPLY_READ_ON_PAGES_IN_ALL,
@@ -1622,6 +1623,111 @@ describe('a new 댓글', () => {
     await expect(write(queryClient)).resolves.toEqual(published(MINE));
     expect(threadIds(queryClient)).toEqual([commentId, MINE]);
     expect(commentCountOf(queryClient)).toBe(2);
+  });
+
+  describe('five comment pages at most toward its place, the last held among them (오너 결정 2026-10-23 (2차))', () => {
+    // A fake server of older 댓글 one a page (the page's size is the server's; the cap counts
+    // requests): the cursor `c<n>` reads the n-th. The reader holds the first page only.
+    const olderIds = (from: number, to: number) =>
+      Array.from(
+        { length: to - from },
+        (_, index) => `20000000-0000-4000-8000-${String(from + index).padStart(12, '0')}`,
+      );
+    /** `total` older 댓글, MINE after them, and `after` after it (others' 댓글 written meanwhile). */
+    const serving = (total: number, after: readonly string[] = []) => {
+      const all = [...olderIds(0, total), MINE, ...after];
+      return getComments(({ params }) => {
+        const from = params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1));
+        const to = Math.min(from + 1, all.length);
+        return {
+          items: all.slice(from, to).map((id) => thread(published(id))),
+          nextCursor: to < all.length ? `c${String(to)}` : null,
+        };
+      });
+    };
+    /** The client holding the first page of the fake server, and an observer of the pages. */
+    const holdingFirst = () => {
+      const queryClient = seeded();
+      queryClient.setQueryData<CommentPages>(postCommentsKey(post), {
+        pages: [{ items: [thread(published(olderIds(0, 1)[0]!))], nextCursor: 'c1' }],
+        pageParams: [undefined],
+      });
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      return { queryClient, comments, unsubscribe: comments.subscribe(() => undefined) };
+    };
+    /** The comment pages asked, as their cursors ('' the first). */
+    const cursorsAsked = (asked: { cursor?: string }[]) => asked.map((one) => one.cursor ?? '');
+    /** How many times the pages held carry MINE, drawn once or not. */
+    const mineHeld = (queryClient: QueryClient) =>
+      queryClient
+        .getQueryData<CommentPages>(postCommentsKey(post))!
+        .pages.flatMap((page) => page.items)
+        .filter((one) => one.comment.id === MINE).length;
+
+    it('past them goes at the end of the pages held, and 더 보기 brings it into place, drawn once', async () => {
+      const { queryClient, comments, unsubscribe } = holdingFirst();
+      const asked = serving(8);
+      await write(queryClient);
+      // The last page held and four after it, MINE on none: as a read that failed — the pages
+      // read dropped, MINE at the end of the page held, 더 보기 where it was.
+      expect(cursorsAsked(asked)).toEqual(['', 'c1', 'c2', 'c3', 'c4']);
+      expect(cursorsAsked(asked)).toHaveLength(COMMENT_READ_ON_PAGES);
+      expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+      expect(comments.getCurrentResult().hasNextPage).toBe(true);
+      expect(commentCountOf(queryClient)).toBe(2);
+      // 더 보기 to the end: MINE's page puts it after every older 댓글. The pages carry it twice —
+      // at the end of the first and on its own — and the thread draws it once, where its page is.
+      asked.length = 0;
+      while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
+      expect(cursorsAsked(asked)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8']);
+      expect(mineHeld(queryClient)).toBe(2);
+      expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+      unsubscribe();
+    });
+
+    it('stops at the page that holds it — on the fifth too, though others wrote after it — and keeps the pages read', async () => {
+      const LATER_ROOTS = olderIds(100, 102);
+      const fifth = holdingFirst();
+      const asked = serving(4, LATER_ROOTS);
+      await write(fifth.queryClient);
+      // MINE is on the fifth page read (the last held and four after it), with a page after it:
+      // within the five, so in its place; the 댓글 written after it stay behind 더 보기.
+      expect(cursorsAsked(asked)).toEqual(['', 'c1', 'c2', 'c3', 'c4']);
+      expect(threadIds(fifth.queryClient)).toEqual([...olderIds(0, 4), MINE]);
+      expect(fifth.comments.getCurrentResult().hasNextPage).toBe(true);
+      await fifth.comments.fetchNextPage();
+      await fifth.comments.fetchNextPage();
+      expect(threadIds(fifth.queryClient)).toEqual([...olderIds(0, 4), MINE, ...LATER_ROOTS]);
+      expect(fifth.comments.getCurrentResult().hasNextPage).toBe(false);
+      fifth.unsubscribe();
+
+      // Reached on the second page: no third is asked for, though others wrote after it.
+      const second = holdingFirst();
+      const askedAgain = serving(1, LATER_ROOTS);
+      await write(second.queryClient);
+      expect(cursorsAsked(askedAgain)).toEqual(['', 'c1']);
+      expect(threadIds(second.queryClient)).toEqual([...olderIds(0, 1), MINE]);
+      expect(second.comments.getCurrentResult().hasNextPage).toBe(true);
+      second.unsubscribe();
+    });
+
+    it('a read that fails on the way asks for no page after: MINE goes at the end of the pages held', async () => {
+      const { queryClient, unsubscribe } = holdingFirst();
+      const all = [...olderIds(0, 8), MINE];
+      const asked = getComments(({ params }) => {
+        if (params.query.cursor === 'c2') throw new TypeError('Failed to fetch');
+        const from = params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1));
+        return {
+          items: [thread(published(all[from]!))],
+          nextCursor: `c${String(from + 1)}`,
+        };
+      });
+      await write(queryClient);
+      expect(cursorsAsked(asked)).toEqual(['', 'c1', 'c2']);
+      expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+      expect(commentCountOf(queryClient)).toBe(2);
+      unsubscribe();
+    });
   });
 });
 

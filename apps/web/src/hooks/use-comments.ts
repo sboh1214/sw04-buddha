@@ -19,6 +19,7 @@ import {
 } from '@/lib/api';
 import { commentDraftLanded } from '@/lib/comment-drafts';
 import {
+  COMMENT_READ_ON_PAGES,
   REPLY_READ_ON_PAGES,
   type CommentPage,
   type CommentPages,
@@ -60,7 +61,9 @@ import { afterRefusal } from './use-posts';
  * as its placeholder or out (`withoutComment`), a 대댓글 at the end of its 댓글 (`withNewComment`).
  * A new 댓글 is the newest of the post (#45-2: 작성 순), so its page is read rather than guessed
  * (`readOnToTheEnd`): put at the end of the pages held, it would stand before older 댓글 still
- * unread, and a later read of as many pages as were held would leave it out. A new 대댓글 is the
+ * unread, and a later read of as many pages as were held would leave it out — five comment pages
+ * at most (COMMENT_READ_ON_PAGES, 오너 결정 2026-10-23 (2차)); past them it stands at the end of
+ * the pages held until 더 보기 brings it into place. A new 대댓글 is the
  * newest of its thread: while 대댓글 of the thread are unread, they are read to the end first
  * (`readOnReplies`), for the same reason — five reply pages at most; past them it stands at the end
  * of the 대댓글 held until '답글 더 보기' brings it into place.
@@ -412,16 +415,23 @@ async function writePages(
 }
 
 /**
- * A new 댓글 where 작성 순 puts it (#45-2): the last page held is read again, and every page after
- * it, so the 댓글 arrives in the page the server keeps it in — after every older 댓글, read or
- * not, and kept by any later read of as many pages. Costs a read of the last page, and on a post
- * whose older 댓글 the reader had not all opened, the reads 더 보기 would have made — one per 20
- * 댓글, with no cap, in the reader's address limit — with the reply pages of the threads read on
- * (`threadsReadOn`), 30 at most for them all: one read of the pages, one budget
- * (REPLY_READ_ON_PAGES_IN_ALL, 오너 결정 2026-10-23; ADR-0074 7-14·7-28). Nothing held
- * (the first read failed, or is on its way and may have left before the write): the pages are read
- * afresh. A read that fails puts the answer at the end of the pages held instead — the 댓글 is
- * written, and saying otherwise would invite a second.
+ * A new 댓글 where 작성 순 puts it (#45-2): the last page held is read again, and the pages after
+ * it up to the one that holds the 댓글, so it arrives in the page the server keeps it in — after
+ * every older 댓글, read or not, and kept by any later read of as many pages. That page is usually
+ * the last; when others wrote meanwhile it is not, and the reading stops there all the same: what
+ * came after stays behind 더 보기. Costs a read of the last page, and on a post whose older 댓글
+ * the reader had not all opened, the reads 더 보기 would have made — one per 20 댓글, in the
+ * reader's address limit — COMMENT_READ_ON_PAGES at most, the last page held among them (오너 결정
+ * 2026-10-23 (2차)), with the reply pages of the threads read on (`threadsReadOn`), 30 at most for
+ * them all: one read of the pages, one budget (REPLY_READ_ON_PAGES_IN_ALL, 오너 결정 2026-10-23;
+ * ADR-0074 7-14·7-28). Nothing held (the first read failed, or is on its way and may have left
+ * before the write): the pages are read afresh. A read that fails — the limit's 429 among them —
+ * or reads COMMENT_READ_ON_PAGES without reaching the 댓글 puts the answer at the end of the pages
+ * held instead (`withNewComment`) — the 댓글 is written, and saying otherwise would invite a second
+ * — and 더 보기 brings it into its place with the page that holds it; the pages read are dropped
+ * then, the screen left as the reader had it. A read that reaches the end without it — the 댓글
+ * deleted meanwhile, in another tab — is the server's word: the pages read are written as they
+ * are, and the answer is not put back.
  */
 async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment: PublishedComment) {
   const key = postCommentsKey(postId);
@@ -436,15 +446,22 @@ async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment:
   const pageParams: unknown[] = [];
   const budget = replyReadOnBudget();
   let cursor = held.pageParams[from] as string | undefined;
+  // Whether the read came to the 댓글's page, or to the end of the 댓글: either is the server's.
+  let done = false;
   try {
-    for (;;) {
-      const page = await queryFn({ pageParam: cursor, client: queryClient, budget });
+    while (!done && pages.length < COMMENT_READ_ON_PAGES) {
+      const page: CommentPage = await queryFn({ pageParam: cursor, client: queryClient, budget });
       pages.push(page);
       pageParams.push(cursor);
-      if (page.nextCursor === null) break;
-      cursor = page.nextCursor;
+      done =
+        page.nextCursor === null || page.items.some((thread) => thread.comment.id === comment.id);
+      cursor = page.nextCursor ?? undefined;
     }
   } catch {
+    done = false;
+  }
+  if (!done) {
+    // Failed, or COMMENT_READ_ON_PAGES read and the 댓글 not among them: as a read that failed.
     await writePages(queryClient, postId, (current) => withNewComment(current, comment));
     return;
   }

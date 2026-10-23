@@ -154,6 +154,20 @@ export function withMoreReplies(
 export const REPLY_READ_ON_PAGES = 5;
 
 /**
+ * The comment pages a new 댓글's read toward its place reads at most (오너 결정 2026-10-23 (2차): 5
+ * pages, 100 댓글): `readOnToTheEnd` in hooks/use-comments.ts reads the last page held again and the
+ * pages after it until the one that holds the new 댓글 — the last page held counts as one. Each is
+ * one request in the reader's address limit (100 a minute with every other request of the page),
+ * and the read had no bound before: on a post whose older 댓글 the reader had not opened, some
+ * 2,000 of them, it asked for every page between and reached the limit's 429 — spending the
+ * address's other requests with it — before falling back (Codex review on PR #220, ADR-0074
+ * 7-14). Past it, as after a read that failed: the new 댓글 stands at the end of the pages held,
+ * and 더 보기 brings it into its place with the page that holds it. Apart from the reply pages the
+ * threads of those pages read on (REPLY_READ_ON_PAGES_IN_ALL below, one budget for the read).
+ */
+export const COMMENT_READ_ON_PAGES = 5;
+
+/**
  * The reply pages one read of the comment pages reads on in all, its threads together (오너 결정
  * 2026-10-23: 스레드마다 다섯 페이지는 그대로, 다시 읽기 한 번은 모두 합쳐 30페이지까지): a
  * refetch — the window's focus after 30 seconds, a reconnection, a write's read, a refusal that
@@ -271,9 +285,10 @@ function mapThreads(
  * instead (`readOnReplies`, use-comments.ts) and come here only once they are read up to it (then
  * held: nothing to add) or that read fails or stops short of it — before 대댓글 still unread, then,
  * until their page brings it to its place. A 댓글 goes last of the pages read: the hooks read its
- * page instead (`readOnToTheEnd`) and come here only when that read fails — before 댓글 still
- * unread, and out of the pages at the next read of as many pages, until 더 보기 brings it. Nothing
- * is added twice.
+ * page instead (`readOnToTheEnd`) and come here only when that read fails or stops short of it,
+ * COMMENT_READ_ON_PAGES read — before 댓글 still unread, and out of the pages at the next read of
+ * as many pages, until 더 보기 brings it. Nothing is added twice, and a comment its page brings
+ * later is drawn once, where that page puts it (`commentThreadsOf`, `repliesWith`).
  */
 export function withNewComment(
   pages: CommentPages | undefined,
