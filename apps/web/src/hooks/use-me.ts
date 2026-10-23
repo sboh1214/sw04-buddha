@@ -22,6 +22,7 @@ import {
   type UpdateTimeZoneBody,
 } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { AUTHORED_KEY, MY_AUTHORED_KEY, authoredPagesWithAuthorImage } from '@/lib/authored';
 import { logWriteForEveryPost } from '@/lib/comment-writes';
 import { COMMENT_PAGES_KEY, commentPagesWithAuthorImage } from '@/lib/comments';
 import { applyBalanceEvent } from '@/lib/market-live';
@@ -225,8 +226,10 @@ export async function storeMe(
  * The reads that carry members' faces (ADR-0069 decision 5: public id, nickname, image, 운영자), by
  * prefix, each with what puts a member's new profile image on what it holds (ADR-0079 7-21): the
  * community list's and every market's 토론's cards (`POST_LIST_KEY`), the post pages and their
- * comment pages — the 대댓글 '답글 더 보기' read among them. Every one is under the posts' root; a read
- * that comes to carry faces elsewhere joins here. `['me']` is not one: `storeMe` writes it.
+ * comment pages (the 대댓글 '답글 더 보기' read among them), all under the posts' root; and a
+ * member's lists (#51, ADR-0080 7-24), under roots of their own: a profile's 글 and 댓글 tabs
+ * (`AUTHORED_KEY`) and MY '내 글''s with the summary's preview (`MY_AUTHORED_KEY`). A read that
+ * comes to carry faces elsewhere joins here. `['me']` is not one: `storeMe` writes it.
  */
 const AUTHOR_FACE_READS: readonly {
   queryKey: QueryKey;
@@ -235,6 +238,8 @@ const AUTHOR_FACE_READS: readonly {
   { queryKey: POST_LIST_KEY, withImage: postPagesWithAuthorImage },
   { queryKey: POST_PAGE_KEY, withImage: postWithAuthorImage },
   { queryKey: COMMENT_PAGES_KEY, withImage: commentPagesWithAuthorImage },
+  { queryKey: AUTHORED_KEY, withImage: authoredPagesWithAuthorImage },
+  { queryKey: MY_AUTHORED_KEY, withImage: authoredPagesWithAuthorImage },
 ];
 
 /**
@@ -243,7 +248,8 @@ const AUTHOR_FACE_READS: readonly {
  * 7-21). Without it a card, a post or a comment read before the change kept the old address until
  * its next read (30 seconds, a focus): Back to it showed the image just replaced — or, its file
  * removed at once (decision 4 #141), a broken one — and the deleted image instead of the
- * nickname's first letter.
+ * nickname's first letter. A member's list (#51), read again whenever it is shown, drew the old one
+ * until that read answered (ADR-0080 7-24).
  *
  * Each entry is patched where it is, not read again: it changes nothing but the faces, so its
  * time, its stale mark and a failed read's error stay as they were — what was due to be read is

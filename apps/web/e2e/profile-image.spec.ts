@@ -417,6 +417,44 @@ test.describe('프로필 이미지', () => {
     const commentFace = page.getByTestId(`comment-${commentId}`).getByTestId('post-author-image');
     const replyFace = page.getByTestId(`comment-${replyId}`).getByTestId('post-author-image');
     const discussionCard = page.getByTestId('market-discussion').getByTestId(`post-card-${postId}`);
+    // And the member's lists on their profile (#51): the 글 tab's card, the 댓글 tab's 댓글 and 대댓글.
+    const profilePostCard = page
+      .getByTestId('profile-posts-list')
+      .getByTestId(`post-card-${postId}`);
+    const profilePostFace = profilePostCard.getByTestId('post-author-image');
+    const profileComments = page.getByTestId('profile-comments-list');
+    const profileCommentFace = profileComments
+      .getByTestId(`authored-comment-${commentId}`)
+      .getByTestId('post-author-image');
+    const profileReplyFace = profileComments
+      .getByTestId(`authored-comment-${replyId}`)
+      .getByTestId('post-author-image');
+    // The profile's lists are read again whenever they are shown (ADR-0080 7-11). Held back here,
+    // so what the profile draws on Back is what the tab held — patched (ADR-0080 7-24) — and not
+    // the answer of a read made after the change.
+    const isProfileListRead = (url: URL) =>
+      /^\/api\/v1\/profiles\/[^/]+\/(posts|comments)$/.test(url.pathname);
+    let release = () => {};
+    let held = 0;
+    let answered = 0;
+    const holdListReads = async () => {
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      held = 0;
+      answered = 0;
+      await page.route(isProfileListRead, async (route) => {
+        held += 1;
+        await gate;
+        await route.continue();
+        answered += 1;
+      });
+    };
+    const answerListReads = async () => {
+      release();
+      await expect.poll(() => answered).toBe(held);
+      await page.unroute(isProfileListRead);
+    };
 
     await page.goto('/my/settings');
     const first = await upload(bandsPng([RED], 64));
@@ -432,6 +470,10 @@ test.describe('프로필 이미지', () => {
     await expectImage(discussionCard.getByTestId('post-author-image'), first);
     await discussionCard.getByTestId('post-author-link').click();
     await expect(page).toHaveURL(`/u/${me.profile.publicId}`);
+    await expectImage(profilePostFace, first);
+    await page.getByTestId('profile-authored-tab-comments').click();
+    await expectImage(profileCommentFace, first);
+    await expectImage(profileReplyFace, first);
     await page.getByTestId('profile-edit').click();
     await expect(page).toHaveURL('/my/settings');
 
@@ -440,7 +482,17 @@ test.describe('프로필 이미지', () => {
     // them again before they are drawn (ADR-0079 7-21; the earlier file is already gone).
     const second = await upload(bandsPng([BLUE], 64));
     expect(second).not.toBe(first);
+    // The profile, on the tab it was left on, its lists' reads held: the new image on what it held.
+    await holdListReads();
     await page.goBack();
+    await expect(page).toHaveURL(`/u/${me.profile.publicId}?tab=comments`);
+    await expect.poll(() => held).toBeGreaterThan(0);
+    await expectImage(profileCommentFace, second);
+    await expectImage(profileReplyFace, second);
+    await page.getByTestId('profile-authored-tab-posts').click();
+    await expectImage(profilePostFace, second);
+    await answerListReads();
+    await expectImage(profilePostFace, second);
     await page.goBack();
     await expect(page).toHaveURL(`/markets/${market.slug}`);
     await expectImage(discussionCard.getByTestId('post-author-image'), second);
@@ -454,12 +506,25 @@ test.describe('프로필 이미지', () => {
     await page.getByTestId('post-market-link').click();
     await expect(page).toHaveURL(`/markets/${market.slug}`);
     await discussionCard.getByTestId('post-author-link').click();
+    await expect(page).toHaveURL(`/u/${me.profile.publicId}`);
+    await expectImage(profilePostFace, second);
     await page.getByTestId('profile-edit').click();
     await expect(page).toHaveURL('/my/settings');
     await card.getByTestId('profile-image-delete').click();
     await page.getByTestId('profile-image-delete-confirm').click();
     await expect(page.getByText(copy.profileImageDeleted)).toBeVisible();
+    await holdListReads();
     await page.goBack();
+    await expect(page).toHaveURL(`/u/${me.profile.publicId}`);
+    await expect.poll(() => held).toBeGreaterThan(0);
+    await expect(profilePostCard.getByTestId('post-byline')).toContainText(initial);
+    await expect(profilePostFace).toHaveCount(0);
+    await page.getByTestId('profile-authored-tab-comments').click();
+    await expect(
+      profileComments.getByTestId(`authored-comment-${replyId}`).getByTestId('post-byline'),
+    ).toContainText(initial);
+    await expect(profileComments.getByTestId('post-author-image')).toHaveCount(0);
+    await answerListReads();
     await page.goBack();
     await expect(page).toHaveURL(`/markets/${market.slug}`);
     await expect(discussionCard.getByTestId('post-byline')).toContainText(initial);

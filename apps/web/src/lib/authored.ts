@@ -1,7 +1,8 @@
 import { POST_EXCERPT_MAX_LENGTH, codePointLength } from '@buddha/shared';
+import type { InfiniteData } from '@tanstack/react-query';
 import { copy } from '@/copy';
-import type { CommentedPost, HiddenNotice, ReportReason } from './api';
-import { postFirstLine } from './posts';
+import type { CommentedPost, HiddenNotice, PostAuthor, ReportReason } from './api';
+import { mapKept, postFirstLine, withAuthorImage } from './posts';
 
 /**
  * 작성자별 글·댓글 목록 (#51, ADR-0080): what a member wrote, on their public profile
@@ -263,6 +264,31 @@ export function withoutAuthoredItem<Page extends { items: readonly { id: string 
       items: page.items.filter((item) => item.id !== id),
     })),
   };
+}
+
+// ---- a member's new image on the lists held --------------------------------------------------
+
+/**
+ * A member's lists as the tab holds them — a profile's 글 and 댓글 tabs (`profileAuthoredKey`) and
+ * MY '내 글''s, its summary's preview among them (`myAuthoredKey`) — with the profile image the
+ * member `publicId` has now on every row of theirs (#141's `withAuthorImage`, ADR-0080 7-24): the
+ * 글 tabs' cards and the 댓글 tabs' 댓글 and 대댓글 each carry their author's face. The pages
+ * themselves when no row is the member's or each already shows it — another member's profile, for
+ * one — so a cache write that changes nothing writes nothing (`mapKept`).
+ */
+export function authoredPagesWithAuthorImage<Row extends { author: PostAuthor }>(
+  held: InfiniteData<AuthoredPage<Row>>,
+  publicId: string,
+  imageUrl: string | null,
+): InfiniteData<AuthoredPage<Row>> {
+  const pages = mapKept(held.pages, (page) => {
+    const items = mapKept(page.items, (row) => {
+      const author = withAuthorImage(row.author, publicId, imageUrl);
+      return author === row.author ? row : { ...row, author };
+    });
+    return items === page.items ? page : { ...page, items };
+  });
+  return pages === held.pages ? held : { ...held, pages };
 }
 
 // ---- a profile returned to -------------------------------------------------------------------

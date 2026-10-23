@@ -2,11 +2,13 @@ import { POST_EXCERPT_MAX_LENGTH, REPORT_REASONS } from '@buddha/shared';
 import { hashKey, partialMatchKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
+import type { PostAuthor } from './api';
 import {
   AUTHORED_KEY,
   AUTHORED_TABS,
   MY_AUTHORED_KEY,
   authoredEmptyMessage,
+  authoredPagesWithAuthorImage,
   authoredRows,
   authoredTabOf,
   authoredTabSearch,
@@ -289,6 +291,66 @@ describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
     ] as const) {
       expect(hiddenDeleteName(item).startsWith(`${hiddenItemName(item)} `)).toBe(true);
     }
+  });
+});
+
+describe('a member’s new profile image on the lists held (#141; ADR-0080 7-24)', () => {
+  const OWN = 'k7m2p9q4r1';
+  const face = (publicId: string, imageUrl: string | null): PostAuthor => ({
+    kind: 'member',
+    publicId,
+    nickname: publicId === OWN ? '근거왕' : '반론왕',
+    imageUrl,
+    isAdmin: false,
+  });
+  const OLD = '/api/v1/media/3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+  const NEW = '/api/v1/media/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
+
+  it('goes on every row of the member’s, a card or a comment alike, the rest of each row, page and cursor as they were', () => {
+    const other = { id: 'c', author: face('a2b3c4d5e6', NEW), hidden: null };
+    const held = {
+      pages: [
+        {
+          items: [
+            { id: 'a', author: face(OWN, OLD), hidden: null },
+            { id: 'b', author: face(OWN, OLD), parentId: 'a', hidden: { reason: null } },
+          ],
+          nextCursor: 'c1',
+        },
+        { items: [other], nextCursor: null },
+      ],
+      pageParams: [undefined, 'c1'],
+    };
+    const next = authoredPagesWithAuthorImage(held, OWN, NEW);
+    expect(next.pages[0]?.items).toEqual([
+      { id: 'a', author: face(OWN, NEW), hidden: null },
+      { id: 'b', author: face(OWN, NEW), parentId: 'a', hidden: { reason: null } },
+    ]);
+    expect(next.pages[0]?.nextCursor).toBe('c1');
+    expect(next.pageParams).toEqual([undefined, 'c1']);
+    // A page with none of the member's rows is the very page held.
+    expect(next.pages[1]).toBe(held.pages[1]);
+    // Deleted: null, the nickname's first letter.
+    expect(
+      authoredPagesWithAuthorImage(next, OWN, null).pages[0]?.items.map((row) => row.author),
+    ).toEqual([face(OWN, null), face(OWN, null)]);
+  });
+
+  it('is the pages held when nothing changes: another member’s list, a withdrawn author, a face already there', () => {
+    const held = {
+      pages: [
+        {
+          items: [
+            { id: 'a', author: face('a2b3c4d5e6', OLD) },
+            { id: 'b', author: { kind: 'former_member' } as PostAuthor },
+            { id: 'c', author: face(OWN, NEW) },
+          ],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    };
+    expect(authoredPagesWithAuthorImage(held, OWN, NEW)).toBe(held);
   });
 });
 
