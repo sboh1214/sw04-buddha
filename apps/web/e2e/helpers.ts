@@ -442,6 +442,20 @@ export async function agreeOnScreen(page: Page): Promise<void> {
 }
 
 /**
+ * The small '탈퇴하기' link at the very bottom of the onboarding screen now shown (오너 결정
+ * 2026-10-23 (4차) 1, ADR-0086 7-35): under 로그아웃, to the 탈퇴 screen.
+ */
+export async function expectOnboardingClosureLink(page: Page): Promise<void> {
+  const link = page.getByTestId('onboarding-closure');
+  await expect(link).toBeVisible();
+  await expect(link).toHaveText(copy.onboardingClosureLink);
+  await expect(link).toHaveAttribute('href', '/my/settings/closure');
+  const logout = await page.getByTestId('onboarding-logout').boundingBox();
+  const box = await link.boundingBox();
+  expect(box!.y).toBeGreaterThan(logout!.y + logout!.height - 1);
+}
+
+/**
  * The first half of a sign-up (ADR-0024): the form takes the email only, and the link in the
  * mail signs the user in and lands on /set-password. The account is signed in from here on
  * but has neither a password nor any onboarding step done — which is also the state the

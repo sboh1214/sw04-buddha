@@ -1,9 +1,13 @@
 import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
+import { copy } from '@/copy';
+import { MY_CLOSURE_PATH } from './account-closure';
 import { type Me } from './api';
 import {
+  ONBOARDING_CLOSURE_LINK,
   ONBOARDING_EXEMPT_PAGES,
   ONBOARDING_EXEMPT_PATHS,
+  ONBOARDING_PATH,
   ONBOARDING_SCREENS,
   afterVerification,
   gatedPagePath,
@@ -351,7 +355,8 @@ describe('needsOnboarding', () => {
       expect(needsOnboarding('/my/settings/closure', onboarding), String(onboarding.nextStep)).toBe(
         false,
       );
-      // MY 설정, where its card is, stays gated: the screen is reached by its address.
+      // MY 설정, where its card is, stays gated: the screen is reached by the link at the bottom
+      // of every onboarding screen ((4차) 1, below) or by its address.
       expect(needsOnboarding('/my/settings', onboarding)).toBe(true);
     }
   });
@@ -372,6 +377,27 @@ describe('needsOnboarding', () => {
     // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the onboarding is
     // unknown.
     expect(needsOnboarding('/', undefined)).toBe(false);
+  });
+});
+
+describe('the 탈퇴 link at the very bottom of every onboarding screen (오너 결정 2026-10-23 (4차) 1)', () => {
+  it('goes to the 탈퇴 screen, which the gate never sends back here, whatever step is left', () => {
+    expect(ONBOARDING_CLOSURE_LINK).toBe(MY_CLOSURE_PATH);
+    // Every screen that shows it: a first consent, a re-consent, the 본인확인, the nickname, and
+    // the notice and the interests once the three are done.
+    for (const onboarding of [FRESH, RECONSENT, CONSENTED, VERIFIED, COMPLETED]) {
+      expect(
+        needsOnboarding(ONBOARDING_CLOSURE_LINK, onboarding),
+        String(onboarding.nextStep),
+      ).toBe(false);
+    }
+    // Leaving for it is leaving the onboarding: never a path under /onboarding itself.
+    expect(ONBOARDING_CLOSURE_LINK.startsWith(ONBOARDING_PATH)).toBe(false);
+  });
+
+  it("says '탈퇴하기', the words of MY 설정's card that opens the same screen", () => {
+    expect(copy.onboardingClosureLink).toBe('탈퇴하기');
+    expect(copy.onboardingClosureLink).toBe(copy.closureOpen);
   });
 });
 

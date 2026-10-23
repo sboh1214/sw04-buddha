@@ -48,8 +48,11 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  * 7 and 9) and says that the closure is immediate and cannot be undone (#57-17). While something
  * refuses it, the field and the button are off and the screen says why. The onboarding gate leaves
  * this screen to an account that has not finished its onboarding (owner decision 2026-10-23 (2차)
- * 3). The button waits for '탈퇴' typed exactly (`isClosureConfirmed`, the
- * API's own rule) and for the session to say which account the screen shows.
+ * 3), which comes here by the small link at the bottom of every onboarding screen ((4차) 1); its
+ * way back to MY 설정, and to 조치·신고 내역, sends such an account through the steps it has
+ * left as every MY screen does ((4차) 2). The button waits for '탈퇴' typed exactly
+ * (`isClosureConfirmed`, the API's own rule) and for the session to say which account the screen
+ * shows.
  *
  * Closed, the screen says so at once (the session is gone, so MY's signed-out rung must not take
  * its place), then the cookie is cleared — which tells the other tabs (`afterClosureInOrder`) —

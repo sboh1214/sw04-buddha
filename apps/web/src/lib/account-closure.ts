@@ -22,7 +22,8 @@ import { type Refusal, refusalOf, restrictedMessage, restrictionSentence } from 
  * the 설정 tab stays the current one (`isMyTabCurrent` covers a tab's subtree). No cash-out word
  * in it (#113): 탈퇴 closes an account, it never takes Coin out. The onboarding gate leaves it to
  * an account that has not finished its onboarding, a re-consent left included
- * (`ONBOARDING_EXEMPT_PATHS`, owner decision 2026-10-23 (2차) 3).
+ * (`ONBOARDING_EXEMPT_PATHS`, owner decision 2026-10-23 (2차) 3), and every onboarding screen links
+ * to it at its very bottom (`ONBOARDING_CLOSURE_LINK`, (4차) 1).
  */
 export const MY_CLOSURE_PATH = '/my/settings/closure';
 

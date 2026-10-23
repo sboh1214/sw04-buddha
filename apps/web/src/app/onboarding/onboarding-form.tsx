@@ -14,7 +14,15 @@ import {
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
@@ -23,6 +31,7 @@ import { useInterestsLeaveReport } from '@/hooks/use-onboarding';
 import { type Me } from '@/lib/api';
 import { consentStepItems } from '@/lib/consent';
 import {
+  ONBOARDING_CLOSURE_LINK,
   ONBOARDING_SCREENS,
   isStepBack,
   onboardingPath,
@@ -77,6 +86,9 @@ export function OnboardingForm({ next }: { next: string }) {
   const holdLeaveReport = useCallback((report: (() => Promise<void>) | null) => {
     leaveReport.current = report;
   }, []);
+  // Whether the stepper shows a step now — told before the screen is painted (`onStepShown`), so
+  // the link to 탈퇴 below is painted with every step and with nothing else.
+  const [stepShown, setStepShown] = useState(false);
   // The four states MY's screens read (`profileView`), for the same reason: the page's
   // session check is server-side and runs only on navigation, so a session that ends under this
   // form (it expired, another tab signed out) left it offering a retry that can only 401.
@@ -123,12 +135,25 @@ export function OnboardingForm({ next }: { next: string }) {
     // Keyed on the account, so a session switched under this screen (SessionCacheGuard) mounts a
     // fresh stepper — and fresh steps — for the new one instead of keeping the previous account's
     // inputs, countdowns and the notice it read.
-    body = <Stepper key={me.id} me={me} next={next} onLeaveReport={holdLeaveReport} />;
+    body = (
+      <Stepper
+        key={me.id}
+        me={me}
+        next={next}
+        onLeaveReport={holdLeaveReport}
+        onStepShown={setStepShown}
+      />
+    );
   }
 
   // 로그아웃 under every rung of an account held here (owner decision 2026-10-13, #16): the header
   // has no profile menu and MY is gated, so without it an account that does not want to go on —
-  // or cannot, while `/me` fails or no text arrives — could not sign out at all.
+  // or cannot, while `/me` fails or no text arrives — could not sign out at all. Under it, at the
+  // very bottom of every step's screen, the small link to 탈퇴 (오너 결정 2026-10-23 (4차) 1,
+  // ADR-0086 7-35): the way an account that would rather leave than finish — a re-consent it
+  // refuses included — reaches the one MY screen the gate leaves it. Only beside a step: not under
+  // the profile being read or that could not be, nor under the stepper's own placeholder while it
+  // sends an account with nothing left on to `next` — a link there would race that navigation.
   return (
     <Stack gap="4">
       {body}
@@ -137,6 +162,15 @@ export function OnboardingForm({ next }: { next: string }) {
         data-testid="onboarding-logout"
         beforeSignOut={() => leaveReport.current?.() ?? Promise.resolve()}
       />
+      {me !== undefined && stepShown && (
+        <Text fontSize="xs" textAlign="center">
+          <ChakraLink asChild color="fg.muted">
+            <NextLink href={ONBOARDING_CLOSURE_LINK} data-testid="onboarding-closure">
+              {copy.onboardingClosureLink}
+            </NextLink>
+          </ChakraLink>
+        </Text>
+      )}
     </Stack>
   );
 }
@@ -166,11 +200,14 @@ function Stepper({
   me,
   next,
   onLeaveReport,
+  onStepShown,
 }: {
   me: Me;
   next: string;
   /** Takes what 로그아웃 calls before it ends the session, and null as the stepper goes. */
   onLeaveReport: (report: (() => Promise<void>) | null) => void;
+  /** Takes whether a step is on screen (false as the stepper goes), before the screen is painted. */
+  onStepShown: (shown: boolean) => void;
 }) {
   const router = useRouter();
   const [noticeRead, setNoticeRead] = useState(false);
@@ -195,6 +232,14 @@ function Stepper({
     return () => onLeaveReport(null);
   }, [onLeaveReport, reportBeforeSignOut]);
 
+  // A layout effect, so the form's link to 탈퇴 follows the step before anything is painted: never
+  // a frame without it beside a step, nor one with it under the placeholder below.
+  const stepShown = screen !== null;
+  useLayoutEffect(() => {
+    onStepShown(stepShown);
+    return () => onStepShown(false);
+  }, [onStepShown, stepShown]);
+
   useEffect(() => {
     if (screen === null) router.replace(next as Route);
   }, [screen, next, router]);
@@ -204,7 +249,7 @@ function Stepper({
     lastScreen.current = screen;
   }, [screen]);
 
-  // On its way to `next` (the effect above), so not held here.
+  // On its way to `next` (the effect above), so not held here — and no step, so no link to 탈퇴.
   if (screen === null) return <Skeleton height="64" />;
 
   const position = ONBOARDING_SCREENS.indexOf(screen);

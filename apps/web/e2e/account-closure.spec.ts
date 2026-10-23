@@ -7,6 +7,7 @@ import {
   completeOnboardingThroughApi,
   createOpenMarket,
   expect,
+  expectOnboardingClosureLink,
   freshEmail,
   freshTag,
   meOf,
@@ -39,9 +40,10 @@ import {
  *   the closure, reason '탈퇴', no admin named (owner decisions 2026-10-23 (2차) 1 and 5) — the
  *   screen having said what goes, that the 본인확인 record is kept for the retention period, what
  *   stays, and nothing of the start Coin, which was still waiting ((3차) 7 and 9);
- * - an account that has not finished its onboarding opens the screen by its address — the gate
- *   leaves it alone, while MY 설정 stays gated — and closes itself (owner decision 2026-10-23 (2차)
- *   3; no screen it can reach links there yet: whether one should is asked in ADR-0086 결과 4);
+ * - an account that has not finished its onboarding follows the small '탈퇴하기' link at the very
+ *   bottom of its consent step to the screen — the gate leaves it alone, while MY 설정 stays gated
+ *   and the screen's way back to it goes through the steps left — and closes itself (owner decisions
+ *   2026-10-23 (2차) 3 and (4차) 1·2);
  * - an account whose start Coin was paid reads, right under what stays, that the same number gets
  *   no start Coin again ((3차) 9) — the check's answer rewritten in the browser, as this database
  *   pays none;
@@ -95,16 +97,21 @@ async function commentThroughApi(
 }
 
 /**
- * Opens the closure screen and waits until its read (`GET /me/closure`, in the browser once the
- * session is known) has answered: before it, the button is off for no reason the test means.
+ * Opens the closure screen — by its address, or by `open` (a link followed) — and waits until its
+ * read (`GET /me/closure`, in the browser once the session is known) has answered: before it, the
+ * button is off for no reason the test means.
  */
-async function openClosure(page: Page): Promise<void> {
+async function openClosure(
+  page: Page,
+  open: () => Promise<unknown> = () => page.goto('/my/settings/closure'),
+): Promise<void> {
   const read = page.waitForResponse(
     (response) =>
       response.request().method() === 'GET' &&
       new URL(response.url()).pathname === '/api/v1/me/closure',
   );
-  await page.goto('/my/settings/closure');
+  await open();
+  await expect(page).toHaveURL('/my/settings/closure');
   const response = await read;
   expect(response.status(), await response.text()).toBe(200);
   await expect(page.getByTestId('closure-coin')).toBeVisible();
@@ -347,7 +354,7 @@ test.describe('탈퇴', () => {
     }
   });
 
-  test('온보딩을 마치지 않은 계정도 탈퇴 화면을 열어 탈퇴하고, MY의 다른 화면은 그대로 온보딩으로 보낸다', async ({
+  test("온보딩을 마치지 않은 계정도 온보딩 단계 맨 아래의 '탈퇴하기'로 탈퇴 화면을 열어 탈퇴하고, MY의 다른 화면은 그대로 온보딩으로 보낸다", async ({
     page,
   }) => {
     // Signed up and signed in, with every onboarding step left (the consent first).
@@ -361,10 +368,20 @@ test.describe('탈퇴', () => {
     // MY 설정 stays behind the gate…
     await page.goto('/my/settings');
     await expect(page).toHaveURL(/^[^?]*\/onboarding/);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
 
-    // …and the 탈퇴 screen does not (owner decision 2026-10-23 (2차) 3): opened by its address,
-    // it reads the check — no Coin, nothing refusing, nothing said of a start Coin never asked for.
-    await openClosure(page);
+    // …and the 탈퇴 screen does not (owner decision 2026-10-23 (2차) 3): the consent step's small
+    // '탈퇴하기' at the very bottom, under 로그아웃, goes there ((4차) 1)…
+    await expectOnboardingClosureLink(page);
+    await openClosure(page, () => page.getByTestId('onboarding-closure').click());
+    // …whose way back to MY 설정 goes through the steps left, as built ((4차) 2) — and on the
+    // step, the link again.
+    await page.getByTestId('closure-back').click();
+    await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent('/my/settings')}`);
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+    await openClosure(page, () => page.getByTestId('onboarding-closure').click());
+
+    // The check, read: no Coin, nothing refusing, nothing said of a start Coin never asked for.
     await expect(page.getByTestId('closure-coin')).toHaveText('0 Coin');
     await expect(page.getByTestId('closure-blocked')).toHaveCount(0);
     await expect(page.getByTestId('closure-start-grant')).toHaveCount(0);
