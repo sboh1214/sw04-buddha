@@ -29,6 +29,7 @@ import {
   createPost,
 } from '@buddha/db/test';
 import {
+  WRITE_LIMITS,
   WRITING_RESTRICTION_DAYS,
   adminModerationActionSchema,
   adminUserModerationSchema,
@@ -43,6 +44,7 @@ import {
 import { and, asc, count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { PhoneHasher } from '../identity/phone-hash.js';
 import { PUBLIC_ROUTES } from '../surface/registry.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { pngOf } from '../test/png.js';
@@ -266,6 +268,49 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       // Somebody else writes as before (the restriction is the member's).
       const others = await send(`/posts/${othersPost.id}/comments`, { body: '남의 댓글' }, other);
       expect(others.statusCode, others.body).toBe(201);
+    });
+
+    it('refuses a post image as RESTRICTED before the write limits ask: past the day’s uploads, the restriction is what the member hears (#187, ADR-0083 7-14)', async () => {
+      // The member's number has used the day's uploads already (WRITE_LIMITS' uploads_24h, a
+      // post's image and a profile image together): unrestricted, the next is WRITE_LIMITED.
+      const [verified] = await t.db
+        .select({ phone: schema.phoneVerifications.phone })
+        .from(schema.phoneVerifications)
+        .where(eq(schema.phoneVerifications.userId, member.id));
+      const phoneHash = t.app.get(PhoneHasher).hash(verified!.phone);
+      const [day] = WRITE_LIMITS.upload;
+      await t.db.insert(schema.writeLimitEvents).values(
+        Array.from({ length: day!.limit }, (_, index) => ({
+          phoneHash,
+          action: 'upload' as const,
+          createdAt: new Date(Date.now() - HOUR_MS - index * 60_000),
+        })),
+      );
+      const events = async () =>
+        (await t.db.select().from(schema.writeLimitEvents)).filter(
+          (row) => row.phoneHash === phoneHash && row.action === 'upload',
+        ).length;
+      // A real image, so that nothing but the two checks keeps it from being stored.
+      const upload = () =>
+        t.app.inject({
+          method: 'POST',
+          url: `/api/v1/media/images?expectedAccountId=${encodeURIComponent(member.id)}`,
+          headers: { origin: TRUSTED_ORIGIN, 'content-type': 'image/png', cookie: member.cookie },
+          payload: pngOf(8, 8),
+        });
+      const limited = await upload();
+      expect(limited.statusCode, limited.body).toBe(429);
+      expect(limited.json<{ error: { code: string } }>().error.code).toBe('WRITE_LIMITED');
+      const stored = t.storage.objects.size;
+      // Restricted, the same upload is RESTRICTED with its end — the restriction asked before the
+      // limits' check ahead of the conversion (MediaService.uploadPostImage): the member hears the
+      // sanction, not a time to try again that would be refused anyway.
+      const { endsAt } = await restrict(1);
+      expect(restrictedOf(await upload())).toEqual({ kind: 'writing', endsAt });
+      // Nothing stored, recorded or counted.
+      expect(t.storage.objects.size).toBe(stored);
+      expect(await t.db.select().from(schema.mediaObjects)).toEqual([]);
+      expect(await events()).toBe(day!.limit);
     });
 
     it('leaves deleting one’s own, likes, reports, the 관심 등록 and reading open (#45-12)', async () => {

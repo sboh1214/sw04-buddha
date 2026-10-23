@@ -29,7 +29,9 @@ import {
  * the marks' every shape — a reason with and without the operator's explanation, and none — from
  * the API's own answers changed in the browser (`page.route`, as start-grant.spec.ts does: the rows
  * stay published, so its 삭제 goes through the real delete route and the lists after it are the
- * server's). A list longer than a page takes a smaller `limit` on the browser's requests. The
+ * server's). A list longer than a page takes a smaller `limit` on the browser's requests, and MY's
+ * summary is shown cutting the 글 list with a fourth, older row added to the server's answer the
+ * same way — a member writes at most three posts in ten minutes (#187, ADR-0083 결정 4). The
  * exclusions on the profile against MY are the API's (authored.controller.test.ts,
  * private-data.test.ts). A restricted member's items staying listed is the API's too, the lists
  * reading no sanction: restrictions.controller.test.ts for a writing restriction (#185, ADR-0082),
@@ -394,10 +396,12 @@ test.describe('작성자별 글·댓글', () => {
     await signUp(page, freshEmail());
     const me = await meOf(page.request);
     const profileUrl = `/u/${me.profile.publicId}`;
-    // Four posts and four comments, one after another, so each is newer than the one before it:
-    // three 댓글 under the first post and a 대댓글 under the first 댓글.
+    // Three posts and four comments, one after another, so each is newer than the one before it:
+    // three 댓글 under the first post and a 대댓글 under the first 댓글. Three posts, not four: a
+    // member writes at most three in ten minutes (#187, WRITE_LIMITED, ADR-0083 결정 4), so the
+    // summary is shown cutting the 글 list to three below with a fourth row the browser adds.
     const posts: string[] = [];
-    for (let i = 1; i <= 4; i += 1) {
+    for (let i = 1; i <= 3; i += 1) {
       posts.push(await postThroughApi(page.request, market.id, `글 ${String(i)} ${tag}`, tag));
     }
     const [firstPost] = posts as [string];
@@ -411,20 +415,42 @@ test.describe('작성자별 글·댓글', () => {
     const newestComments = [...comments].reverse();
 
     // --- MY's summary: the newest three of each (MY_PREVIEW_ROWS) and no 더 보기 — 전체 보기 is
-    // the way on — each list named by its label.
+    // the way on — each list named by its label. The 글 list's read answers a fourth, older row
+    // than the server has — the oldest post again under an id of its own — as a fourth post
+    // written ten minutes on would be: the summary leaves it out, as it leaves out the oldest 댓글.
+    const isMyPostsFirstRead = (url: URL) =>
+      url.pathname === '/api/v1/me/posts' && !url.searchParams.has('cursor');
+    const olderThanAll = crypto.randomUUID();
+    let answeredWithFour = 0;
+    await page.route(isMyPostsFirstRead, async (route) => {
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: { id: string; createdAt: string }[] };
+      const oldest = body.data.at(-1);
+      if (oldest !== undefined) {
+        const createdAt = new Date(new Date(oldest.createdAt).getTime() - 60_000).toISOString();
+        body.data.push({ ...oldest, id: olderThanAll, createdAt });
+      }
+      if (body.data.length === 4) answeredWithFour += 1;
+      await route.fulfill({ response, json: body });
+    });
     await page.goto('/my');
     const preview = page.getByTestId('my-preview-posts');
     const previewPosts = preview.getByTestId('my-preview-posts-list');
     const previewComments = preview.getByTestId('my-preview-comments-list');
     await expectPosts(previewPosts, newestPosts.slice(0, 3));
+    expect(answeredWithFour).toBeGreaterThan(0);
+    await expect(previewPosts.getByTestId(`post-card-${olderThanAll}`)).toHaveCount(0);
     await expectComments(previewComments, newestComments.slice(0, 3));
     await expect(preview.getByTestId('my-preview-posts-list-more')).toHaveCount(0);
     await expect(preview.getByTestId('my-preview-comments-list-more')).toHaveCount(0);
     await expect(previewPosts.getByRole('list')).toHaveAccessibleName(copy.authoredTabPosts);
     await expect(previewComments.getByRole('list')).toHaveAccessibleName(copy.authoredTabComments);
-    // The tab: all four, one page of them.
+    // The tab: all three, one page of them — read again, the summary's first page (the added row
+    // in it) being the tab's too for the cache's 30 seconds.
+    await page.unroute(isMyPostsFirstRead);
     await preview.getByRole('link', { name: `${copy.myPosts} ${copy.myViewAll}` }).click();
     await expect(page).toHaveURL('/my/posts');
+    await page.reload();
     await expectPosts(page.getByTestId('my-posts-list'), newestPosts);
     await expect(page.getByTestId('my-posts-list-more')).toHaveCount(0);
 
