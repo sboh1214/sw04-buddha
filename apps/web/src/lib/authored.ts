@@ -219,7 +219,9 @@ function cutAtCharacter(text: string, max: number): string {
  * break that reaches the cap is a first line cut there, and ends in '…' — as does a first line of
  * exactly 300 code points, which the excerpt cannot tell apart — and it ends where the server cut
  * it (never inside a surrogate pair, but maybe inside an emoji's ZWJ sequence). A title is never
- * cut: it is at most 100 characters (POST_TITLE_MAX_LENGTH).
+ * cut: it is at most 100 characters (POST_TITLE_MAX_LENGTH). The report dialog names a post or a
+ * comment by this same rule (`reportItemName`, lib/moderation.ts — one rule since the restack of
+ * #50, ADR-0081 결과 5).
  */
 export function hiddenItemName(item: HiddenItem): string {
   if (item.tab === 'posts') {

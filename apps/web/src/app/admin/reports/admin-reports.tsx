@@ -14,6 +14,7 @@ import {
 import { type AdminReportQueue } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminReportQueue } from '@/hooks/use-admin-moderation';
 import { type AdminReportGroup } from '@/lib/api';
@@ -105,16 +106,25 @@ export function AdminReports({ queue }: { queue: AdminReportQueue }) {
             ))}
           </Stack>
           {list.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-              data-testid="admin-reports-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              {/* A 더 보기 that failed: the entries stay, and this says so above the button that
+                  asks again (owner decision 2026-10-20 7, as every 더 보기 list). */}
+              <LoadMoreFailed
+                list={list}
+                message={copy.errUnknown}
+                data-testid="admin-reports-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+                data-testid="admin-reports-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

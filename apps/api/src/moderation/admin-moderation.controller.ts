@@ -1,3 +1,4 @@
+import { type Readable } from 'node:stream';
 import {
   Body,
   Controller,
@@ -6,6 +7,7 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -47,17 +49,17 @@ import {
   type ParsedModerationActionBody,
   type ParsedWarningBody,
 } from '@buddha/shared';
-import { type FastifyReply } from 'fastify';
+import { type FastifyReply, type FastifyRequest } from 'fastify';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { RawResponse } from '../common/decorators/raw-response.decorator.js';
-import { AppError } from '../common/errors/app-error.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
+import { IMAGE_BINARY, answerImage } from '../media/image-response.js';
 import { MediaService } from '../media/media.service.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
@@ -379,7 +381,12 @@ export class AdminModerationController {
 /**
  * `/api/v1/admin/media/:mediaId` (#50): any stored image for operators — a deleted or hidden post's,
  * an earlier version's, a profile image an operator removed and keeps (#37-10) — which the public
- * `GET /media/:mediaId` serves to nobody. Never cached by anything but the operator's browser.
+ * `GET /media/:mediaId` serves to nobody. `Cache-Control: private, no-cache` with the media id as
+ * its ETag (`answerImage`): kept by the operator's browser alone, asked again on every use. The
+ * same hold on the process's image-read budget and on the API's memory as every image read
+ * (`imageReads` and `memoryAdmission`, ADR-0073 decisions 9-36 and 9-46 — taken at the restack onto
+ * #46's last commits, ADR-0081 결과 5), and a HEAD answered from the row alone, as the admin's
+ * notice images are (#138).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -392,30 +399,24 @@ export class AdminMediaController {
   @RawResponse()
   @ApiOperation({
     operationId: 'adminGetImage',
-    summary: 'Any stored image, whatever shows it, for operators',
+    summary: 'Any stored image, whatever shows it, for operators. Revalidated on every use (ETag)',
   })
   @ApiProduces(...IMAGE_CONTENT_TYPES)
   @ApiResponse({
     status: 200,
     description: 'The image',
-    content: Object.fromEntries(
-      IMAGE_CONTENT_TYPES.map((type) => [type, { schema: { type: 'string', format: 'binary' } }]),
-    ),
+    content: Object.fromEntries(IMAGE_CONTENT_TYPES.map((type) => [type, IMAGE_BINARY])),
   })
+  @ApiResponse({ status: 304, description: 'Not modified (If-None-Match)' })
+  // RATE_LIMITED (every route documents it) is also the answer while the images being sent hold
+  // the process's budget (image-reads.ts) or the API's memory has no room for the image.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   async read(
     @Param('mediaId', { schema: uuidParamSchema }) mediaId: string,
+    @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
-  ): Promise<Buffer> {
+  ): Promise<Buffer | Readable | undefined> {
     const image = await this.media.findStored(mediaId);
-    const body = image === null ? null : await this.media.bytesOf(image);
-    if (image === null || body === null) {
-      throw new AppError('NOT_FOUND', { message: 'Image not found' });
-    }
-    void reply
-      .header('content-type', image.contentType)
-      .header('cache-control', 'private, no-store')
-      .header('content-disposition', 'inline');
-    return Buffer.from(body);
+    return answerImage(this.media, image, mediaId, 'private', request, reply);
   }
 }

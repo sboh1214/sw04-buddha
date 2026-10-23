@@ -16,6 +16,7 @@ import NextLink from 'next/link';
 import { type ReactNode } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useMyModerationActions, useMyReports } from '@/hooks/use-reports';
 import { type MyModerationAction, type MyReport } from '@/lib/api';
@@ -36,6 +37,7 @@ import {
   reportTargetView,
 } from '@/lib/moderation';
 import { postReadErrorMessage } from '@/lib/posts';
+import { listSection } from '@/lib/query-client';
 import { Section, SessionEnded, useSessionEnded } from '../portfolio';
 
 /**
@@ -81,12 +83,18 @@ export function MyModeration() {
   );
 }
 
-/** What a list body reads of its `useInfiniteQuery`. */
+/**
+ * What a list body reads of its `useInfiniteQuery`. `isFetchNextPageError`, `isFetchingNextPage` and
+ * `failureReason` are what the failed-더 보기 notice reads (`LoadMoreFailed`, owner decision
+ * 2026-10-20 7 — every 더 보기 list, MY's too).
+ */
 interface ListQuery<Row> {
   data: { pages: ModerationPage<Row>[] } | undefined;
   error: unknown;
+  failureReason: unknown;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
+  isFetchNextPageError: boolean;
   isPending: boolean;
   isLoadingError: boolean;
   isRefetchError: boolean;
@@ -95,9 +103,11 @@ interface ListQuery<Row> {
 }
 
 /**
- * One list's ladder, the other MY lists' (`AuthoredListBody`): a skeleton while the first page
- * loads, a first read that failed with 다시 시도, the empty line, the rows with 더 보기, and a
- * refresh that failed over rows that are kept.
+ * One list's ladder, the other MY lists' (`AuthoredListBody`, `listSection`): a skeleton while the
+ * first page loads, a first read that failed with 다시 시도, the empty line, the rows with 더 보기,
+ * a 더 보기 that failed said right above the button with the first read's words (`LoadMoreFailed`,
+ * owner decision 2026-10-20 7), and a refresh that failed over rows that are kept — never a 더 보기
+ * that failed taken for one (`refreshFailed`, lib/query-client.ts).
  */
 function ListBody<Row extends { id: string }>({
   list,
@@ -110,8 +120,12 @@ function ListBody<Row extends { id: string }>({
   testId: string;
   renderRow: (row: Row) => ReactNode;
 }) {
-  if (list.isPending) return <Skeleton height="24" data-testid={`${testId}-pending`} />;
-  if (list.isLoadingError) {
+  const rows = moderationRows(list.data?.pages);
+  const section = listSection(list, rows.length);
+  if (section.body === 'pending') {
+    return <Skeleton height="24" data-testid={`${testId}-pending`} />;
+  }
+  if (section.body === 'failed') {
     return (
       <Stack gap="2" align="flex-start" data-testid={`${testId}-error`}>
         <Alert.Root status="error" role="alert">
@@ -126,11 +140,9 @@ function ListBody<Row extends { id: string }>({
       </Stack>
     );
   }
-  const rows = moderationRows(list.data?.pages);
-  if (rows.length === 0) return <EmptyState message={empty} data-testid={`${testId}-empty`} />;
   return (
     <Stack gap="3">
-      {list.isRefetchError && (
+      {section.stale && (
         <Alert.Root status="warning" role="status">
           <Alert.Indicator />
           <Alert.Content>
@@ -138,22 +150,36 @@ function ListBody<Row extends { id: string }>({
           </Alert.Content>
         </Alert.Root>
       )}
-      <Stack as="ul" gap="3" listStyleType="none" data-testid={testId}>
-        {rows.map((row) => (
-          <li key={row.id}>{renderRow(row)}</li>
-        ))}
-      </Stack>
+      {section.body === 'empty' ? (
+        <EmptyState message={empty} data-testid={`${testId}-empty`} />
+      ) : (
+        <Stack as="ul" gap="3" listStyleType="none" data-testid={testId}>
+          {rows.map((row) => (
+            <li key={row.id}>{renderRow(row)}</li>
+          ))}
+        </Stack>
+      )}
       {list.hasNextPage && (
-        <Button
-          alignSelf="center"
-          size="sm"
-          variant="ghost"
-          loading={list.isFetchingNextPage}
-          onClick={() => void list.fetchNextPage()}
-          data-testid={`${testId}-more`}
-        >
-          {copy.loadMore}
-        </Button>
+        <>
+          {/* A 더 보기 that failed: the rows stay, and this says why nothing came — an unreachable
+              server told apart, as the first read's failure is — above the button that asks
+              again (owner decision 2026-10-20 7, as every 더 보기 list). */}
+          <LoadMoreFailed
+            list={list}
+            message={postReadErrorMessage(list.error)}
+            data-testid={`${testId}-more-failed`}
+          />
+          <Button
+            alignSelf="center"
+            size="sm"
+            variant="ghost"
+            loading={list.isFetchingNextPage}
+            onClick={() => void list.fetchNextPage()}
+            data-testid={`${testId}-more`}
+          >
+            {copy.loadMore}
+          </Button>
+        </>
       )}
     </Stack>
   );

@@ -12479,6 +12479,9 @@
               }
             }
           },
+          "304": {
+            "description": "Not modified (If-None-Match)"
+          },
           "400": {
             "description": "VALIDATION_ERROR",
             "content": {
@@ -12620,7 +12623,7 @@
             "session": []
           }
         ],
-        "summary": "Any stored image, whatever shows it, for operators",
+        "summary": "Any stored image, whatever shows it, for operators. Revalidated on every use (ETag)",
         "tags": [
           "admin"
         ]

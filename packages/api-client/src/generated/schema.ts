@@ -272,7 +272,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Any stored image, whatever shows it, for operators */
+        /** Any stored image, whatever shows it, for operators. Revalidated on every use (ETag) */
         get: operations["adminGetImage"];
         put?: never;
         post?: never;
@@ -5047,6 +5047,13 @@ export interface operations {
                     "image/png": string;
                     "image/webp": string;
                 };
+            };
+            /** @description Not modified (If-None-Match) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description VALIDATION_ERROR */
             400: {

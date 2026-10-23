@@ -32,9 +32,10 @@ import {
  *   not restored by a cancellation), and an operator's own post offering no action — its report
  *   read without the reporter and the description, and the hiding another operator gives it read
  *   without who gave it (owner decision 2026-10-21);
- * - 신고 on the cards of the community list and of a profile's 글·댓글 tabs, named by its item, which
- *   reports without opening the post and sits outside the card's link, none on one's own (the list
- *   and both tabs) and a visitor's press back to the list; the operator's '운영' links on the post,
+ * - 신고 on the cards of the community list, of a market detail's 토론 (#47's cards, at the restack)
+ *   and of a profile's 글·댓글 tabs, named by its item, which reports without opening the post and
+ *   sits outside the card's link, none on one's own (the list, the 토론 and both tabs) and a
+ *   visitor's press back to the list or the detail; the operator's '운영' links on the post,
  *   its comment and the profile, shown to no one else; a warning given from the profile's link
  *   shows its banner on the member's MY summary — not the write page — until it is cancelled
  *   (owner decisions 2026-10-21);
@@ -658,6 +659,10 @@ test.describe('신고와 운영 처리', () => {
     const commentId = await commentThroughApi(page.request, postId, `카드에서 신고될 댓글 ${tag}`);
     const listPath = `/community?market=${market.id}`;
     const profileUrl = `/u/${author.profile.publicId}`;
+    // The market detail's 토론 (#47) draws the community list's cards, 신고 and all (ADR-0081 결과 5).
+    const detailPath = `/markets/${market.slug}`;
+    const discussionCard = (on: Page) =>
+      on.getByTestId('market-discussion-list').getByTestId(`post-card-${postId}`);
 
     const reporterContext = await browser.newContext();
     const visitorContext = await browser.newContext();
@@ -680,6 +685,9 @@ test.describe('신고와 운영 처리', () => {
       const ownCommentCard = page.getByTestId(`authored-comment-${commentId}`);
       await expect(ownCommentCard).toBeVisible();
       await expect(ownCommentCard.getByTestId('report-open')).toHaveCount(0);
+      await page.goto(detailPath);
+      await expect(discussionCard(page).getByTestId('post-card-likes')).toBeVisible();
+      await expect(discussionCard(page).getByTestId('report-open')).toHaveCount(0);
       // Nor 운영 for a member, anywhere.
       await page.goto(`/community/posts/${postId}`);
       await expect(page.getByTestId('post-edit')).toBeVisible();
@@ -691,11 +699,28 @@ test.describe('신고와 운영 처리', () => {
       await visitor.goto(listPath);
       await visitor.getByTestId(`post-card-${postId}`).getByTestId('report-open').click();
       await expect(visitor).toHaveURL(`/login?next=${encodeURIComponent(listPath)}`);
+      // And on the market detail's 토론, back to that detail.
+      await visitor.goto(detailPath);
+      await discussionCard(visitor).getByTestId('report-open').click();
+      await expect(visitor).toHaveURL(`/login?next=${encodeURIComponent(detailPath)}`);
 
       // Another member reports the post from its card: the dialog opens over the list — the
       // press opens no post — and the button is no part of the card's link.
       const reporter = await reporterContext.newPage();
       await signUp(reporter, freshEmail());
+      // The 토론's card first: the same 신고, named by its post, whose dialog opens over the
+      // detail and is closed unsent here.
+      await reporter.goto(detailPath);
+      const detailReport = discussionCard(reporter).getByTestId('report-open');
+      await expect(detailReport).toHaveAccessibleName(`${postTitle} ${copy.reportAction}`);
+      await expect(
+        discussionCard(reporter).getByTestId('post-card-link').getByTestId('report-open'),
+      ).toHaveCount(0);
+      await detailReport.click();
+      await expectReportItem(reporter, copy.reportPostTitle, postTitle);
+      await expect(reporter).toHaveURL(detailPath);
+      await reporter.getByTestId('report-cancel').click();
+      await expect(reporter.getByTestId('report-dialog')).toHaveCount(0);
       await reporter.goto(listPath);
       const card = reporter.getByTestId(`post-card-${postId}`);
       const cardReport = card.getByTestId('report-open');

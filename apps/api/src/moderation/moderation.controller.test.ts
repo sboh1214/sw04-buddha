@@ -53,6 +53,12 @@ import {
 import { and, eq, gt, isNull } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import {
+  IMAGE_READ_BUDGET_BYTES,
+  IMAGE_READ_BUSY_RETRY_SECONDS,
+  imageReads,
+} from '../media/image-reads.js';
+import { memoryAdmission, memoryWaits } from '../media/memory-admission.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
@@ -1645,7 +1651,10 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
       const kept = await read(`/admin/media/${image.id}`, other);
       expect(kept.statusCode).toBe(200);
       expect(kept.headers['content-type']).toBe('image/png');
-      expect(kept.headers['cache-control']).toBe('private, no-store');
+      // A copy for this operator's browser alone, asked again on every use (`answerImage`, as the
+      // admin's notice images — ADR-0081 결과 5).
+      expect(kept.headers['cache-control']).toBe('private, no-cache');
+      expect(kept.headers.etag).toBe(`"${image.id}"`);
       expect((await read(`/admin/media/${image.id}`, author)).statusCode).toBe(403);
       // Nothing left to remove.
       expect(
@@ -1657,6 +1666,68 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
           ),
         ),
       ).toBe('nothing_to_remove');
+    });
+
+    it('serves an operator the kept image as every image read is served: revalidated, within the reads’ budget and the API’s memory, a HEAD from the row (ADR-0073 9-36 and 9-46)', async () => {
+      // The restack onto #46's last commits (ADR-0081 결과 5): `GET /admin/media/:mediaId` answers
+      // through `answerImage`, as `GET /media/:mediaId` and the admin's notice images do — it took
+      // no share of either before, so an operator's reads could hold the API's memory past both.
+      const MiB = 1024 * 1024;
+      const image = await createProfileImage(t.db, { userId: author.id, contentType: 'image/png' });
+      await t.storage.put(image.storageKey, new Uint8Array([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+      const url = `/api/v1/admin/media/${image.id}`;
+      const revalidated = await t.app.inject({
+        method: 'GET',
+        url,
+        headers: { cookie: other.cookie, 'if-none-match': `"${image.id}"` },
+      });
+      expect(revalidated.statusCode).toBe(304);
+      // Other reads hold the whole budget: refused unread, with Retry-After; given back once sent.
+      const others = imageReads.take(IMAGE_READ_BUDGET_BYTES);
+      expect(others).not.toBeNull();
+      try {
+        const busy = await read(`/admin/media/${image.id}`, other);
+        expect(busy.statusCode).toBe(429);
+        expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+        expect(busy.json<{ error: { code: string } }>().error.code).toBe('RATE_LIMITED');
+      } finally {
+        others?.();
+      }
+      expect((await read(`/admin/media/${image.id}`, other)).statusCode).toBe(200);
+      await vi.waitFor(() => {
+        expect(imageReads.size).toBe(0);
+      });
+      const get = vi.spyOn(t.storage, 'get');
+      const readMs = memoryWaits.readMs;
+      try {
+        // The headers a GET would carry, the length the row's, and no store read nor share.
+        const head = await t.app.inject({ method: 'HEAD', url, headers: { cookie: other.cookie } });
+        expect(head.statusCode).toBe(200);
+        expect(head.rawPayload.length).toBe(0);
+        expect(head.headers).toMatchObject({
+          'content-type': 'image/png',
+          'content-length': String(image.byteSize),
+          'cache-control': 'private, no-cache',
+          etag: `"${image.id}"`,
+        });
+        expect((await t.app.inject({ method: 'HEAD', url })).statusCode).toBe(401);
+        // The API's memory full for the whole wait: refused unread with Retry-After.
+        memoryAdmission.configure({ ceilingBytes: 416 * MiB, resident: () => 416 * MiB });
+        memoryWaits.readMs = 100;
+        const busy = await read(`/admin/media/${image.id}`, other);
+        expect(busy.statusCode).toBe(429);
+        expect(busy.headers['retry-after']).toBe(String(IMAGE_READ_BUSY_RETRY_SECONDS));
+        expect(get).not.toHaveBeenCalled();
+        expect(imageReads.size).toBe(0);
+        expect(memoryAdmission.heldBytes).toBe(0);
+      } finally {
+        memoryAdmission.configure({ ceilingBytes: null });
+        memoryWaits.readMs = readMs;
+        get.mockRestore();
+      }
+      expect((await read(`/admin/media/${image.id}`, other)).statusCode).toBe(200);
+      // An unknown id, as an image that is not there.
+      expect((await read(`/admin/media/${crypto.randomUUID()}`, other)).statusCode).toBe(404);
     });
   });
 

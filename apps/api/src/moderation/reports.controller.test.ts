@@ -18,6 +18,7 @@ import {
   completeOnboarding,
   createComment,
   createMarket,
+  createNotice,
   createPhoneVerification,
   createPost,
   createReport,
@@ -311,6 +312,30 @@ describe.skipIf(!hasTestInfra)('/api/v1 reports (integration)', () => {
     const closed = await createMarket(t.db, { status: 'settled' });
     const old = await createPost(t.db, { marketId: closed.id, authorId: author.id });
     reported(await report(`/posts/${old.id}`));
+  });
+
+  it('takes no report on a notice: a pinned or unpinned notice is no post, comment or profile (#45-8, ADR-0081 결과 5)', async () => {
+    // #138 keeps the notices in their own table (ADR-0077): a notice's id reaches none of the
+    // report routes — as a post or a comment it is not there — and the notice screens draw no 신고.
+    // The operator who wrote it is still a member whose profile takes reports.
+    const admin = await onboarded();
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, admin.id));
+    for (const pinSlot of [1, undefined]) {
+      const notice = await createNotice(t.db, pinSlot === undefined ? {} : { pinSlot });
+      for (const path of [`/posts/${notice.id}`, `/comments/${notice.id}`]) {
+        const res = await report(path);
+        expect({ path, status: res.statusCode, code: errorOf(res).code }).toEqual({
+          path,
+          status: 404,
+          code: 'NOT_FOUND',
+        });
+      }
+    }
+    expect(await rows()).toEqual([]);
+    reported(await report(`/profiles/${(await profileOf(admin.id)).publicId}`));
   });
 
   it('holds one pending report per person and target, and takes another once it was processed (decision 7)', async () => {

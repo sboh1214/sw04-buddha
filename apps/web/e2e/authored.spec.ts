@@ -892,8 +892,14 @@ test.describe('작성자별 글·댓글', () => {
     const publicPost = await page.request.get(`/api/v1/posts/${postId}`);
     expect(((await publicPost.json()) as { data: { state: string } }).data.state).toBe('hidden');
 
-    // 삭제 beside the line: the author's delete route takes the hidden post, which leaves MY.
-    await hiddenPost.getByTestId('authored-hidden-delete').click();
+    // 삭제 beside the line, named by the post it deletes (#51's dialog, ADR-0080 7-19): the author's
+    // delete route takes the hidden post, which leaves MY.
+    const deletePost = hiddenPost.getByTestId('authored-hidden-delete');
+    await expect(deletePost).toHaveAccessibleName(`숨겨질 글 ${tag} ${copy.postDelete}`);
+    await deletePost.click();
+    await expect(
+      page.getByTestId('authored-hidden-delete-dialog').getByTestId('authored-hidden-delete-item'),
+    ).toHaveText(`숨겨질 글 ${tag}`);
     const deletedPost = page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&
@@ -914,7 +920,12 @@ test.describe('작성자별 글·댓글', () => {
       `${copy.authoredHiddenReason}: ${copy.reportReasonOffTopic}`,
     );
     await expect(hiddenComment.getByTestId('authored-hidden-note')).toHaveCount(0);
-    await hiddenComment.getByTestId('authored-hidden-delete').click();
+    const deleteComment = hiddenComment.getByTestId('authored-hidden-delete');
+    await expect(deleteComment).toHaveAccessibleName(`숨겨질 댓글 ${tag} ${copy.commentDelete}`);
+    await deleteComment.click();
+    await expect(
+      page.getByTestId('authored-hidden-delete-dialog').getByTestId('authored-hidden-delete-item'),
+    ).toHaveText(`숨겨질 댓글 ${tag}`);
     const deletedComment = page.waitForResponse(
       (response) =>
         response.request().method() === 'POST' &&

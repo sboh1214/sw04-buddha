@@ -3,6 +3,7 @@
 import { Alert, Button, HStack, Heading, Skeleton, Stack, Text } from '@chakra-ui/react';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { usePathname } from 'next/navigation';
 import { PostCard } from '@/components/post/post-card';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
@@ -24,7 +25,10 @@ const SKELETON_ROWS = [0, 1];
  * many there are beside the heading ('글 N'), as ADR-0069 decision 4 #47 has it. Each post is the
  * community list's preview card (`PostCard`, owner decision 2026-10-18) without its market line —
  * every card here is this market's (owner decision 2026-10-20 6) — whose title opens the post page
- * with its whole text and its comments. The count is the first page's, the list the 더 보기 walk
+ * with its whole text and its comments, and which carries 신고 for every reader but its author as
+ * the community list's does (#50, ADR-0081 — owner decision 2026-10-21 답 12 «시장 토론»: a press
+ * opens the report dialog over this section and never the post; a visitor's goes to the login page
+ * and back to this market's detail, `usePathname`). The count is the first page's, the list the 더 보기 walk
  * continues (`discussionView`); a post someone else writes meanwhile appears at the next refresh
  * (owner decision 2026-10-20 8).
  *
@@ -57,6 +61,8 @@ const SKELETON_ROWS = [0, 1];
 export function MarketDiscussion({ marketId }: { marketId: string }) {
   const list = useMarketPosts(marketId);
   const view = discussionView(list);
+  // The market's detail, where a visitor's 신고 comes back to after the login it sends them to.
+  const pathname = usePathname();
   return (
     <Stack gap="4" minW="0" data-testid="market-discussion">
       <HStack justify="space-between" gap="3" flexWrap="wrap">
@@ -122,7 +128,14 @@ export function MarketDiscussion({ marketId }: { marketId: string }) {
           {view.posts.map((post) => (
             // `h3`: one below the section's heading, as the community list's cards are under its.
             // No market line: it would name this market on every card (owner decision 2026-10-20 6).
-            <PostCard key={post.id} post={post} titleAs="h3" showMarket={false} />
+            // 신고 as on the community list's cards (#50, owner decision 2026-10-21 답 12).
+            <PostCard
+              key={post.id}
+              post={post}
+              titleAs="h3"
+              showMarket={false}
+              report={{ backPath: pathname }}
+            />
           ))}
         </Stack>
       )}

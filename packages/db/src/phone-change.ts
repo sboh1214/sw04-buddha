@@ -50,14 +50,15 @@
  *    `updated_at` to `now()`, the time this transaction began, kept to the millisecond as the
  *    column keeps it (`timestamptz(3)`), which another transaction's write would have to hit — the
  *    block raises (`refused: the account does not hold old_phone`). The transaction is aborted and
- *    a COMMIT answers ROLLBACK, as for every other refusal: nothing of the INSERT or of step 4 is
- *    kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for an
- *    account with no grant, which step 2 has no row to refuse with (owner decision 2026-10-19 3차,
- *    answer 4): it raises when the account has a 본인확인 record and a waiting grant of another account
- *    holds the new number. psql writes no variable into a dollar-quoted body, so the SET LOCAL
- *    lines hand it `user_id` and `new_hash` (and the likes' block `old_hash` too) for this
- *    transaction only. It reads what is committed: a cancellation or payment of that grant still in
- *    flight is not waited for, and the change is refused until asked again (ADR-0071 7-26).
+ *    a COMMIT answers ROLLBACK, as for every other refusal: nothing of the INSERT or of steps 4
+ *    and 5 is kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for
+ *    an account with no grant, which step 2 has no row to refuse with (owner decision 2026-10-19
+ *    3차, answer 4): it raises when the account has a 본인확인 record and a waiting grant of another
+ *    account holds the new number. psql writes no variable into a dollar-quoted body, so the SET
+ *    LOCAL lines hand it `user_id` and `new_hash` (and the likes' and the reports' blocks
+ *    `old_hash` too) for this transaction only. It reads what is committed: a cancellation or
+ *    payment of that grant still in flight is not waited for, and the change is refused until asked
+ *    again (ADR-0071 7-26).
  * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한 번»
  *    counts per verified number (ADR-0069 decision 7), so the likes that are the account's go over
  *    to the new number's hash and no longer hold the old number — its own `post_likes` and
@@ -86,21 +87,24 @@
  * 5. The account's reports (#50, owner decision 2026-10-21, ADR-0081): «the same person» of a
  *    report — one pending report per target, REPORTS_PER_DAY in the last 24 hours — counts per
  *    verified number too (ADR-0069 decision 7), so the reports those rules read go over to the new
- *    number's hash: the account's pending ones and those of the last 24 hours, processed or not.
- *    The rest keep the hash they were sent with; no rule reads it again. Only the hash changes —
- *    what was reported and how it was processed stay as they are — and the reports' keep-record
- *    trigger takes that change from this transaction alone: to the hash its SET LOCAL names, for a
- *    report of the account it names (`reports_keep_record`, migration 0038). With the old number's
- *    hash in the transaction too (`phone_change.old_hash`, which #49's final procedure sets beside
- *    its check of the old number, ADR-0076) the reports the account inherited from a withdrawn
- *    account on that number go with them; without it — this procedure sets none — that clause
- *    matches nothing (`current_setting(…, true)` is NULL, or '' after an earlier run in the
- *    session) and they stay under the old hash. The rows are locked in id order first, the order an
- *    operator's action and a dismissal take reports in (ModerationService), so the two never wait
- *    on each other crosswise. A third DO block with the same SET LOCAL values; it answers `DO` and
- *    nothing to read. After step 1 as the likes are: a report of the account's in flight holds its
- *    본인확인 row FOR KEY SHARE (ReportsService), commits first and is moved, and a later one waits
- *    for the COMMIT and is sent under the new hash. Run again, it moves nothing.
+ *    number's hash: the account's pending ones and those of the last 24 hours, processed or not,
+ *    and those it inherited from a withdrawn account on the old number (rows under `old_hash`
+ *    whose reporter has no 본인확인 record left), as the likes are (step 4). The rest keep the hash
+ *    they were sent with; no rule reads it again. Only the hash changes — what was reported and
+ *    how it was processed stay as they are — and the reports' keep-record trigger takes that
+ *    change from this transaction alone: to the hash its SET LOCAL names, for a report of the
+ *    account it names or one under the old number's hash whose reporter has withdrawn
+ *    (`reports_keep_record`, migration 0039). No report of another live account is ever moved,
+ *    and none is deleted or given way (the rule the Codex review on PR #222 set the likes,
+ *    ADR-0076 7-26): no rule holds one report per number, so the reports coming with the account
+ *    meet nothing under the new hash — a withdrawn or a live account's reports there stay as they
+ *    are, and a live account's under the old hash too. The rows are locked in id order first, the
+ *    order an operator's action and a dismissal take reports in (ModerationService), so the two
+ *    never wait on each other crosswise. A third DO block with the same SET LOCAL values; it
+ *    answers `DO` and nothing to read. After step 1 as the likes are: a report of the account's in
+ *    flight holds its 본인확인 row FOR KEY SHARE (ReportsService), commits first and is moved, and a
+ *    later one waits for the COMMIT and is sent under the new hash. Run again — the old number read
+ *    again is the new one — it moves nothing.
  * 6. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
@@ -199,14 +203,14 @@ DO $$BEGIN
     WHERE r.reporter_phone_hash <> current_setting('phone_change.new_hash')
       AND (r.status = 'pending' OR r.created_at > now() - interval '24 hours')
       AND (r.reporter_id = current_setting('phone_change.user_id')
-        OR (r.reporter_phone_hash = current_setting('phone_change.old_hash', true)
+        OR (r.reporter_phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = r.reporter_id)))
     ORDER BY r.id FOR UPDATE;
   UPDATE reports r SET reporter_phone_hash = current_setting('phone_change.new_hash')
     WHERE r.reporter_phone_hash <> current_setting('phone_change.new_hash')
       AND (r.status = 'pending' OR r.created_at > now() - interval '24 hours')
       AND (r.reporter_id = current_setting('phone_change.user_id')
-        OR (r.reporter_phone_hash = current_setting('phone_change.old_hash', true)
+        OR (r.reporter_phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = r.reporter_id)));
 END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,

@@ -25,7 +25,7 @@ import {
   type PublishedPost,
   type ReportTarget,
 } from './api';
-import { reportReasonLabel } from './authored';
+import { hiddenItemName, reportReasonLabel } from './authored';
 import { isPrivateQueryKey } from './market-keys';
 import {
   ADMIN_ACTIONS_KEY,
@@ -322,6 +322,39 @@ describe('names', () => {
     expect(reportItemName({ type: 'comment', body: `${'a'.repeat(299)}😀😀` })).toBe(
       `${'a'.repeat(299)}😀…`,
     );
+  });
+
+  it('names a post or a comment by the one rule MY’s dialog for a hidden item names it by (ADR-0081 결과 5)', () => {
+    // #51's `hiddenItemName` (ADR-0080, owner decisions 2026-10-22 3rd and 4th) and the report
+    // dialog's name were two copies of one rule until the restack; the report's now asks it. Every
+    // shape the two tests above and authored.test.ts walk names an item alike in both.
+    const family = '👨‍👩‍👧‍👦';
+    const posts = [
+      { title: '금리 전망', excerpt: 'a'.repeat(300) },
+      { title: null, excerpt: 'a'.repeat(300) },
+      { title: null, excerpt: 'a'.repeat(299) },
+      { title: null, excerpt: `${'a'.repeat(200)}\n${'b'.repeat(99)}` },
+      { title: null, excerpt: '\n  첫 줄  \n둘째 줄' },
+    ];
+    for (const post of posts) {
+      expect(reportItemName({ type: 'post', ...post })).toBe(
+        hiddenItemName({ tab: 'posts', ...post }),
+      );
+    }
+    const comments = [
+      '첫 댓글',
+      `${'가'.repeat(150)}${'a'.repeat(850)}\n둘째 줄`,
+      `${'a'.repeat(300)}\n${'b'.repeat(900)}`,
+      `${'a'.repeat(299)} ${'b'.repeat(9)}`,
+      '😀'.repeat(400),
+      `${'a'.repeat(298)}${family}${'b'.repeat(10)}`,
+      `${'a'.repeat(299)}🇰🇷b`,
+    ];
+    for (const body of comments) {
+      expect(reportItemName({ type: 'comment', body })).toBe(
+        hiddenItemName({ tab: 'comments', body }),
+      );
+    }
   });
 
   it('names a card’s 신고 by the item it reports, ending with the word on screen', () => {

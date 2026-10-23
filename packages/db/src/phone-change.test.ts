@@ -5,8 +5,8 @@
  * the COMMIT or ROLLBACK the doc's result table gives for what they returned, with psql's variables
  * written in — and what it carries along: the account's likes, its own and those it inherited on
  * its old number, onto the new number (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076),
- * and the hash of its pending reports and those of the last 24 hours (#50, owner decision
- * 2026-10-21, ADR-0081).
+ * and the hash of its pending reports and those of the last 24 hours, its own and those it
+ * inherited on its old number (#50, owner decision 2026-10-21, ADR-0081).
  * The account lookup and the pre-check of the new number that come before any confirmation SMS
  * (step 1), and the read of the old number (step 3), are run the same way. The keyed hashes of
  * the new and the old number and the confirmation code come from the API's phone-hash CLI there
@@ -294,8 +294,8 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(oldNumber).toBeGreaterThan(changedHere);
     expect(DO_BODY.indexOf(`RAISE EXCEPTION '${DO_REFUSAL}'`)).toBeGreaterThan(oldNumber);
     // The likes' block (owner decisions 2026-10-20 and 2026-10-21, ADR-0076) raises nothing of its
-    // own: it gives no result to read, so the result table is the same with it. It alone reads the
-    // old number's hash.
+    // own: it gives no result to read, so the result table is the same with it. It and the
+    // reports' block read the old number's hash.
     expect(LIKES_BODY).toContain('post_likes');
     expect(LIKES_BODY).toContain('comment_likes');
     expect(LIKES_BODY).not.toContain('RAISE');
@@ -304,8 +304,8 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
       new Set([...LIKES_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])),
     ).toEqual(new Set(['phone_change.new_hash', 'phone_change.old_hash', 'phone_change.user_id']));
     // The reports' block (owner decision 2026-10-21, ADR-0081) raises nothing either, and reads the
-    // two values — and the old number's hash only where it may be missing (`, true`: NULL when no
-    // SET LOCAL named it, which this procedure does not; #49's final one does, ADR-0076).
+    // three values the likes' block reads: the old number's hash too, which the third SET LOCAL
+    // line names (merged into #49's final procedure at the restack, ADR-0081 결과 5).
     expect(REPORTS_BODY).toContain('UPDATE reports r SET reporter_phone_hash');
     expect(REPORTS_BODY).toContain('ORDER BY r.id FOR UPDATE');
     // The window is the one the API's daily limit counts in (REPORT_WINDOW_HOURS, ReportsService),
@@ -324,9 +324,14 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
       new Set([
         "current_setting('phone_change.new_hash')",
         "current_setting('phone_change.user_id')",
-        "current_setting('phone_change.old_hash', true)",
+        "current_setting('phone_change.old_hash')",
       ]),
     );
+    // It moves rows and never deletes one: no rule holds one report per number, so the reports
+    // coming with the account meet nothing under the new hash, and no other account's report —
+    // a live one's least of all — is taken away (the likes' rule, ADR-0076 7-26).
+    expect(REPORTS_BODY).not.toContain('DELETE');
+    expect(REPORTS_BODY).not.toContain('INSERT');
     const statements = statementsIn(OPERATOR_PHONE_CHANGE_SQL);
     expect(statements.map((s) => /^\w+/.exec(s)![0].toLowerCase())).toEqual([...STATEMENTS]);
     expect(statements.slice(2, 5)).toEqual([
@@ -778,14 +783,27 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(changes).toContain('옮기는 것은 번호의 해시뿐이다');
     expect(changes).toContain('5단계의 셋째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
     expect(changes).toContain('앱의 어떤 쓰기도 신고의 해시를 바꾸지 못한다');
-    // What the first commit said — the reports stay where they are, and it is asked — is gone.
+    // The ones inherited on the old number go too, found by step 3's hash as the likes are, and a
+    // live account's are never touched (ADR-0081 결과 5, the likes' rule of ADR-0076 7-26).
+    expect(changes).toContain(
+      '그 계정이 같은 번호의 탈퇴한 계정에게서 이어받아 자기 것으로 세던 신고(옛 번호의 해시를 싣고 신고한 계정에 본인확인 기록이 없는 신고)',
+    );
+    expect(changes).toContain(
+      '살아 있는(본인확인 기록이 있는) 다른 계정의 신고는 옛 번호의 해시에 있든 새 번호의 해시에 있든 옮기지도 지우지도 않는다',
+    );
+    expect(sectionOf('**3. 새 번호와 옛 번호의 해시.**', '**4. psql.**')).toContain(
+      '이어받은 좋아요와 신고도 새 번호로 옮기고',
+    );
+    // What the first commit said — the reports stay where they are, and it is asked — is gone, and
+    // so is what said the inherited ones stay for want of the old number's hash.
     expect(OPERATIONS).not.toContain('그 계정의 신고(`reports`, #50)는 옮기지 않는다');
     expect(OPERATIONS).not.toContain('신고도 그래야 하는지는 오너에게 묻는 중이다');
+    expect(OPERATIONS).not.toContain('이어받은 신고는 이 절차로는 옮기지 않는다');
     expect(OPERATIONS).toContain('셋째 `DO`는 그 계정의 처리 전 신고와 지난 24시간의 신고를');
     expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain('신고를 옮기는 셋째 `DO`를 빼면');
   });
 
-  it('is recorded on the status line of ADR-0071, which owns it, as eight statements now', () => {
+  it('is recorded on the status line of ADR-0071, which owns it, as nine statements now', () => {
     // ADR-0071 says step 5 is six statements (7-20, decision 8). ADR-0076 added the likes' DO
     // block, the old number's SET LOCAL line, the UPDATE's check of the old number and the first DO
     // block's refusal of an `UPDATE 0`, and ADR-0081 the reports' one, and each records so on
@@ -794,7 +812,7 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     const start = DECISIONS.indexOf('\n## ADR-0071 ');
     const adr = DECISIONS.slice(start, DECISIONS.indexOf('\n## ADR-0072 ', start));
     const status = /^- 상태: (.+)$/m.exec(adr)?.[1] ?? '';
-    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(8);
+    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(9);
     expect(status).toContain('일부 대체됨(ADR-0076: 결정 7-20의 5단계 한 트랜잭션');
     expect(status).toContain('둘째 `DO`');
     expect(status).toContain("'여섯 문장'은 여덟 문장이다");
@@ -807,7 +825,8 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     );
     expect(status).toContain('일부 대체됨(ADR-0081: 결정 7-20의 5단계 한 트랜잭션');
     expect(status).toContain('셋째 `DO`');
-    expect(status).toContain("'일곱 문장'은 여덟 문장이다");
+    expect(status).toContain("ADR-0076이 고친 '여덟 문장'은 아홉 문장이다");
+    expect(status).not.toContain("'일곱 문장'은 여덟 문장이다");
   });
 
   it('turns psql’s ON_ERROR_ROLLBACK off just before it, so a refusal aborts it all', () => {
@@ -2080,8 +2099,9 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
       reportedUserId: author.id,
       createdAt: daysAgo(1.5),
     });
-    // Others': a live account's, and a withdrawn account's under the old number — inherited by A,
-    // and kept there: this procedure names no old number (ADR-0081 결과 5).
+    // Others': a live account's; and a withdrawn account's under the old number — A saw it as its
+    // own (the same person, ADR-0069 decision 7), so it goes with A's, pending, as the inherited
+    // likes do (ADR-0081 결과 5); its processed one of three days ago stays, as A's own does.
     const other = await liker(randomPhoneHash());
     const othersReport = await createReport(t.db, {
       reporterId: other.user.id,
@@ -2095,26 +2115,44 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
       reportedUserId: author.id,
       postId: (await post()).id,
     });
+    const inheritedSettled = await createReport(t.db, {
+      reporterId: withdrawn.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: (await post()).id,
+      createdAt: daysAgo(3),
+      status: 'dismissed',
+      resolvedBy: admin.id,
+      dismissalReason: '위반 아님',
+    });
     const before = await reportRows();
 
-    const vars = { user_id: a.user.id, new_phone: randomPhone(), new_hash: newHash };
+    // Step 3's two lines for the number A holds: its digits as read, its hash as the CLI prints it.
+    const vars = {
+      user_id: a.user.id,
+      new_phone: randomPhone(),
+      new_hash: newHash,
+      old_phone: (await phoneOf(a.user.id))!,
+      old_hash: oldHash,
+    };
     // The reports give the result table nothing to read: the same row, the same COMMIT.
     expect(await change(vars)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
-    const moved = new Set([waiting.id, recent.id, inside.id, older.id]);
+    const moved = new Set([waiting.id, recent.id, inside.id, older.id, inherited.id]);
     const expected = before.map((row) =>
       moved.has(row.id) ? { ...row, reporterPhoneHash: newHash } : row,
     );
-    // The settled reports, the other account's and the inherited one are among those left as they
-    // were.
+    // The settled reports, inherited or not, and the other account's are those left as they were.
     expect(
       expected
         .filter((row) => !moved.has(row.id))
         .map((row) => row.id)
         .sort(),
-    ).toEqual([settled.id, outside.id, othersReport.id, inherited.id].sort());
+    ).toEqual([settled.id, outside.id, othersReport.id, inheritedSettled.id].sort());
     expect(await reportRows()).toEqual(expected);
-    // Run again (a retried session): nothing more moves.
-    expect(await change(vars)).toMatchObject({ updated: 1, next: 'COMMIT' });
+    // Run again (a retried session — step 3 reads the new number then): nothing more moves.
+    expect(
+      await change({ user_id: a.user.id, new_phone: vars.new_phone, new_hash: newHash }),
+    ).toMatchObject({ updated: 1, next: 'COMMIT' });
     expect(await reportRows()).toEqual(expected);
   });
 
@@ -2177,50 +2215,87 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     ]);
   });
 
-  it('moves the reports inherited on the old number too once the transaction names that number’s hash', async () => {
-    // #49's final procedure names the old number's hash (`phone_change.old_hash`, beside its check
-    // that the account holds that number, ADR-0076); the reports' block and the keep-record trigger
-    // then take the reports of a withdrawn account on it as the account's, as the likes are taken
-    // (ADR-0081 결과 5). Here the line is written in after the two SET LOCAL lines.
+  it('never moves, rewrites or deletes a live account’s report, under the old number or the new (the likes’ rule, ADR-0076 7-26)', async () => {
+    // Codex review on PR #222 (ADR-0076 7-26): a change moves what is the account's — its own and
+    // what it inherited from a withdrawn account on the old number — and nothing of another live
+    // account's, whose rows are that account's own. A live account can hold a report under either
+    // hash only when its number changed outside this procedure (ADR-0076 7-19). Under the new hash
+    // the reports coming with the account meet the ones there and give way to nothing: no rule
+    // holds one report per number, so nothing is deleted or left behind (ADR-0081 결과 5).
     const { author, post } = await reportFixture();
     const oldHash = randomPhoneHash();
     const newHash = randomPhoneHash();
     const a = await liker(oldHash);
+    const target = await post();
+    const mine = await createReport(t.db, {
+      reporterId: a.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: target.id,
+    });
+    // A live account's under the old number, and another's under the new one — both on the same
+    // target as A's.
+    const liveOld = await liker(randomPhoneHash());
+    const liveOnOld = await createReport(t.db, {
+      reporterId: liveOld.user.id,
+      reporterPhoneHash: oldHash,
+      reportedUserId: author.id,
+      postId: target.id,
+    });
+    const liveNew = await liker(randomPhoneHash());
+    const liveOnNew = await createReport(t.db, {
+      reporterId: liveNew.user.id,
+      reporterPhoneHash: newHash,
+      reportedUserId: author.id,
+      postId: target.id,
+    });
+    // A withdrawn account's under the new number: it held that number; it stays, and A — the
+    // same person on it from now on — counts it, as an account signing up on it again would.
     const { user: withdrawn } = await createUser(t.db);
-    const inherited = await createReport(t.db, {
+    const withdrawnOnNew = await createReport(t.db, {
       reporterId: withdrawn.id,
-      reporterPhoneHash: oldHash,
+      reporterPhoneHash: newHash,
       reportedUserId: author.id,
-      postId: (await post()).id,
+      postId: target.id,
     });
-    // A live account's report under the old number (it held that number before an operator moved
-    // it): that account's, never A's.
-    const live = await liker(randomPhoneHash());
-    const livesReport = await createReport(t.db, {
-      reporterId: live.user.id,
-      reporterPhoneHash: oldHash,
-      reportedUserId: author.id,
-      postId: (await post()).id,
-    });
-    const statements = statementsIn(
-      withVariables(OPERATOR_PHONE_CHANGE_SQL, {
+    const before = await reportRows();
+    expect(
+      await change({
         user_id: a.user.id,
         new_phone: randomPhone(),
         new_hash: newHash,
+        old_phone: (await phoneOf(a.user.id))!,
+        old_hash: oldHash,
       }),
+    ).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    const after = await reportRows();
+    expect(after).toHaveLength(before.length);
+    expect(after).toEqual(
+      before.map((row) => (row.id === mine.id ? { ...row, reporterPhoneHash: newHash } : row)),
     );
-    statements.splice(4, 0, `SET LOCAL phone_change.old_hash = '${oldHash}'`);
+    const hashes = new Map(after.map((row) => [row.id, row.reporterPhoneHash]));
+    expect(hashes.get(liveOnOld.id)).toBe(oldHash);
+    expect(hashes.get(liveOnNew.id)).toBe(newHash);
+    expect(hashes.get(withdrawnOnNew.id)).toBe(newHash);
+    // Nor can anything else move a live account's report: the keep-record trigger takes a hash
+    // change only for the account the transaction names, or a withdrawn reporter on its old hash.
     const client = new Client({ connectionString: testDbUrls()!.appUrl });
     await client.connect();
     try {
       await client.query('BEGIN');
-      for (const statement of statements) await client.query(statement);
-      await client.query('COMMIT');
+      await client.query(`SET LOCAL phone_change.user_id = '${a.user.id}'`);
+      await client.query(`SET LOCAL phone_change.new_hash = '${newHash}'`);
+      await client.query(`SET LOCAL phone_change.old_hash = '${oldHash}'`);
+      await expect(
+        client.query('UPDATE reports SET reporter_phone_hash = $1 WHERE id = $2', [
+          newHash,
+          liveOnOld.id,
+        ]),
+      ).rejects.toMatchObject({ code: '23000' });
     } finally {
+      await client.query('ROLLBACK');
       await client.end();
     }
-    const hashes = new Map((await reportRows()).map((row) => [row.id, row.reporterPhoneHash]));
-    expect(hashes.get(inherited.id)).toBe(newHash);
-    expect(hashes.get(livesReport.id)).toBe(oldHash);
+    expect(await reportRows()).toEqual(after);
   });
 });

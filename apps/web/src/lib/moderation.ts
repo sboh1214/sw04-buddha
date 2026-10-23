@@ -3,7 +3,6 @@ import {
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
   OTHER_NEEDS_TEXT_MESSAGE,
-  POST_EXCERPT_MAX_LENGTH,
   REPORT_DESCRIPTION_MAX_LENGTH,
   REPORT_REASONS,
   appealDeadlineOf,
@@ -43,7 +42,7 @@ import {
   validationField,
   validationMessage,
 } from './api';
-import { reportReasonLabel } from './authored';
+import { hiddenItemName, reportReasonLabel } from './authored';
 import { formatKst } from './datetime';
 import { formatWait } from './phone-verification';
 import { postFirstLine, postPath } from './posts';
@@ -321,69 +320,28 @@ export function postReportItem(post: Pick<PublishedPost, 'title' | 'body'>): Rep
   };
 }
 
-/** What ends an item's name that was cut (owner decision 2026-10-22: «'…'», as #51's dialog). */
-const ITEM_NAME_CUT = '…';
-
-/** The first non-empty line of a text, trimmed, whole. */
-function firstLineOf(text: string): string {
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed !== '') return trimmed;
-  }
-  return '';
-}
-
-/**
- * The longest start of `text` of at most `max` code points that ends between two characters as
- * they are seen (grapheme clusters, `Intl.Segmenter`): a cut never leaves part of an emoji's ZWJ
- * sequence, a flag's pair of letters or a letter's combining mark. Where `Intl.Segmenter` is
- * missing, the first `max` code points — never half of a surrogate pair.
- */
-function cutAtCharacter(text: string, max: number): string {
-  if (typeof Intl.Segmenter !== 'function') return Array.from(text).slice(0, max).join('');
-  let out = '';
-  let count = 0;
-  for (const { segment } of new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(
-    text,
-  )) {
-    count += codePointLength(segment);
-    if (count > max) break;
-    out += segment;
-  }
-  return out;
-}
-
 /**
  * What is reported, on one line (owner decision 2026-10-22 답 4: «카드·글 화면·댓글에서 연 신고 창 →
  * 그 글·댓글의 제목이나 첫 줄을 한 줄로 보임»; (2차) 4: the profile's dialog shows the member's current
  * nickname on one line, as the post's and the comment's): a profile by the nickname it shows (at
- * most NICKNAME_MAX_LENGTH, 20 — never cut), a post by its title, or the first line of its text
- * when it has none — as its card's heading and the post page's name it — and a 댓글 or 대댓글 by
- * the first line of its own text: its post's would name every comment under one post alike. The
- * rule of #51's dialog for a hidden item (ADR-0080, owner decisions 2026-10-22 3rd and 4th —
- * `hiddenItemName` on #51's branch, one rule at the restack): a first line is at most
- * POST_EXCERPT_MAX_LENGTH (300) code points, as a card's preview is, and one cut there ends in '…'
- * to say so; a line within the cap is whole and has none. A comment's line comes whole and is cut
- * here, between two characters as they are seen (`cutAtCharacter`), the spaces before the cut
- * dropped. A post's `excerpt` comes cut at the cap already (`postExcerpt`, the card's), and nothing
- * past it is seen: an excerpt with no line break that reaches the cap is a first line cut there and
- * ends in '…' — as does a first line of exactly 300, which it cannot tell apart. A title is never
- * cut (at most POST_TITLE_MAX_LENGTH, 100). The dialog draws it on one line and cuts what does not
- * fit the width with an ellipsis of its own (CSS); a screen reader hears the whole of it.
+ * most NICKNAME_MAX_LENGTH, 20 — never cut), a post or a comment as MY's dialog for a hidden item
+ * names it — one rule, `hiddenItemName` (lib/authored.ts, ADR-0080, owner decisions 2026-10-22 3rd
+ * and 4th; merged at the restack, ADR-0081 결과 5): a post by its title, or the first line of its
+ * text when it has none — as its card's heading and the post page's name it — and a 댓글 or 대댓글
+ * by the first line of its own text, its post's would name every comment under one post alike; a
+ * first line is at most POST_EXCERPT_MAX_LENGTH (300) code points, as a card's preview is, and one
+ * cut there ends in '…'. The dialog draws it on one line and cuts what does not fit the width with
+ * an ellipsis of its own (CSS); a screen reader hears the whole of it.
  */
 export function reportItemName(item: ReportItem): string {
-  if (item.type === 'profile') return item.nickname;
-  if (item.type === 'post') {
-    if (item.title !== null) return item.title;
-    const line = postFirstLine(item.excerpt);
-    const cut =
-      !item.excerpt.includes('\n') && codePointLength(item.excerpt) >= POST_EXCERPT_MAX_LENGTH;
-    return cut ? `${line}${ITEM_NAME_CUT}` : line;
+  switch (item.type) {
+    case 'profile':
+      return item.nickname;
+    case 'post':
+      return hiddenItemName({ tab: 'posts', title: item.title, excerpt: item.excerpt });
+    case 'comment':
+      return hiddenItemName({ tab: 'comments', body: item.body });
   }
-  const line = firstLineOf(item.body);
-  return codePointLength(line) > POST_EXCERPT_MAX_LENGTH
-    ? `${cutAtCharacter(line, POST_EXCERPT_MAX_LENGTH).trimEnd()}${ITEM_NAME_CUT}`
-    : line;
 }
 
 /**

@@ -367,12 +367,14 @@ describe('the 토론 cards (#47, owner decision 2026-10-20 6)', () => {
       path.join(SRC, 'app/markets/[slug]/market-discussion.tsx'),
       'utf8',
     );
-    expect(section).toContain(
-      '<PostCard key={post.id} post={post} titleAs="h3" showMarket={false} />',
+    expect(section).toMatch(
+      /<PostCard\s+key=\{post\.id\}\s+post=\{post\}\s+titleAs="h3"\s+showMarket=\{false\}\s+report=\{\{ backPath: pathname \}\}\s+\/>/,
     );
     expect(section).not.toContain('useMarket(');
     const community = readFileSync(path.join(SRC, 'app/community/community-screen.tsx'), 'utf8');
-    expect(community).toContain('<PostCard key={post.id} post={post} />');
+    expect(community).toContain(
+      '<PostCard key={post.id} post={post} report={{ backPath: communityPath(filters) }} />',
+    );
     const card = readFileSync(path.join(SRC, 'components/post/post-card.tsx'), 'utf8');
     expect(card).toContain('showMarket = true');
     expect(card).toMatch(/\{showMarket && \(\s*<HStack[\s\S]*?data-testid="post-card-market"/);
