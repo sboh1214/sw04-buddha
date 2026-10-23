@@ -38,6 +38,7 @@ import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { PostsService } from '../posts/posts.service.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
 import { CommentCursors } from './comment-cursor.js';
@@ -1208,6 +1209,76 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     // Another post's comments are its own.
     const elsewhere = await createPost(t.db, { marketId: market.id, authorId: other.id });
     expect((await card(elsewhere.id))?.commentCount).toBe(0);
+  });
+
+  it('reads a post’s count from its counter: neither the list nor the post page walks its comments to count them, however many (Codex review on PR #220, ADR-0074 7-33)', async () => {
+    // 3,000 comments in view on the post and as many on another, the tables measured as autovacuum
+    // would. Every statement the list and the post page run is explained as it runs: the list
+    // reads no comment at all — each card's count is its post's row of `post_comment_counts` —
+    // and the post page reads the comments only to ask whether any hangs under it, the first row
+    // of two indexes (7-31). Before the counter, both counted every comment in view, the list once
+    // per card.
+    const MANY = 3_000;
+    const elsewhere = await createPost(t.db, { marketId: market.id, authorId: author.id });
+    for (const target of [post.id, elsewhere.id]) {
+      await t.db.execute(sql`
+        INSERT INTO post_comments (post_id, author_id, body)
+        SELECT ${target}::uuid, ${other.id}::text, '댓글 ' || n FROM generate_series(1, ${MANY}) AS n`);
+    }
+    const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+    try {
+      await owner.execute(sql`ANALYZE posts, post_comments, post_comment_counts`);
+    } finally {
+      await closeDb(owner);
+    }
+    const statements: { text: string; values: unknown[] }[] = [];
+    const recording: Db = drizzle({
+      client: t.db.$client,
+      schema,
+      casing: 'snake_case',
+      logger: { logQuery: (text, values) => statements.push({ text, values }) },
+    });
+    const service = new PostsService(recording);
+    /** The relations the statements `run` sends scan, and the rows of `post_comments` they read. */
+    const readBy = async (run: () => Promise<unknown>) => {
+      statements.length = 0;
+      await run();
+      const relations = new Set<string>();
+      let commentRows = 0;
+      const walk = (plan: ExplainedPlan) => {
+        const relation = plan['Relation Name'];
+        if (relation !== undefined) relations.add(relation);
+        if (relation === 'post_comments') {
+          commentRows +=
+            (plan['Actual Rows'] + (plan['Rows Removed by Filter'] ?? 0)) * plan['Actual Loops'];
+        }
+        for (const child of plan.Plans ?? []) walk(child);
+      };
+      for (const { text, values } of statements) {
+        const explained = await t.db.$client.query<{ 'QUERY PLAN': [{ Plan: ExplainedPlan }] }>(
+          `EXPLAIN (ANALYZE, FORMAT JSON) ${text}`,
+          values,
+        );
+        walk(explained.rows[0]!['QUERY PLAN'][0].Plan);
+      }
+      return { relations: [...relations].sort(), commentRows };
+    };
+
+    const listed = await service.list({ limit: 20 });
+    expect(listed.items.map(({ id, commentCount }) => [id, commentCount]).sort()).toEqual(
+      [
+        [post.id, MANY],
+        [elsewhere.id, MANY],
+      ].sort(),
+    );
+    const listing = await readBy(() => service.list({ limit: 20 }));
+    expect(listing.relations).toContain('post_comment_counts');
+    expect(listing.relations).not.toContain('post_comments');
+    const shown = await service.get(post.id);
+    expect(shown.state === 'published' && shown.commentCount).toBe(MANY);
+    const reading = await readBy(() => service.get(post.id));
+    expect(reading.relations).toContain('post_comment_counts');
+    expect(reading.commentRows).toBeLessThanOrEqual(2);
   });
 
   // ---- editing --------------------------------------------------------------------------------

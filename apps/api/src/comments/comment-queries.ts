@@ -10,7 +10,7 @@ type Executor = Db | Tx;
  * What the post and comment reads ask of `post_comments` (#48, ADR-0074), in one place so the
  * rules below read the same everywhere: whether something hangs under a post or a 댓글 — which
  * keeps a deleted one as the placeholder '삭제된 글입니다' (#45-5) — which 댓글 a page of a post's
- * comments holds, and how many comments a post shows.
+ * comments holds, and how many comments a post shows (kept apart, `visibleCommentCountSql`).
  *
  * None of them walks a deleted comment that left every view (Codex review on PR #220): each reads
  * the partial indexes of the comments not deleted (`post_comments_live_*`, migration 0034), so a
@@ -167,10 +167,14 @@ export function commentPageIdsSql(postId: string, after: Keyset | undefined, lim
 /**
  * A post's comment count (#45-7: «댓글 수» on its card; ADR-0074 picked which): the comments the
  * public reads as comments, 댓글 and 대댓글 alike — never a deleted one, nor a hidden one, which shows
- * only as its placeholder. A 대댓글 under a deleted or hidden 댓글 counts: it is read in full. One
- * walk of `post_comments_visible_post_id_idx`, which holds exactly these rows. `postId` is the
- * outer post's id.
+ * only as its placeholder. A 대댓글 under a deleted or hidden 댓글 counts: it is read in full.
+ * Read from `post_comment_counts`, which the trigger of migration 0034 keeps in every write's
+ * transaction (ADR-0074 7-33): one row by its primary key, 0 when the post never had a comment in
+ * view — no comment is walked to count them. Before it (Codex review on PR #220) this counted the
+ * post's comments in view on every read — every one, for a post page and for each card of a list,
+ * however many one account had written. `postId` is the outer post's id.
  */
 export function visibleCommentCountSql(postId: SQLWrapper): SQL<number> {
-  return sql<number>`(SELECT count(*)::int FROM ${schema.postComments} AS ${under} WHERE ${under.postId} = ${postId} AND ${under.deletedAt} IS NULL AND ${under.hiddenAt} IS NULL)`;
+  const { postCommentCounts } = schema;
+  return sql<number>`COALESCE((SELECT ${postCommentCounts.count} FROM ${postCommentCounts} WHERE ${postCommentCounts.postId} = ${postId}), 0)`;
 }

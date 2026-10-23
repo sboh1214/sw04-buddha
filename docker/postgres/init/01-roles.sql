@@ -12,7 +12,8 @@
 --                   market_watch_events: INSERT/SELECT only; release_settings,
 --                   approval_requests, start_grants, start_grant_numbers: no DELETE;
 --                   market_searches, phone_verification_refused_sends, consent_records,
---                   post_revisions, post_comment_revisions: no UPDATE) are applied later by
+--                   post_revisions, post_comment_revisions: no UPDATE; post_comment_counts:
+--                   SELECT only, written by its trigger) are applied later by
 --                   migrations with REVOKE (0001, 0015, 0020, 0021, 0023, 0026, 0030, 0031, 0032,
 --                   0033, 0034), see bottom.
 
@@ -50,5 +51,6 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO buddha_app;
 -- (approval_requests: DELETE), 0023 (market_watch_events: UPDATE, DELETE), 0026
 -- (market_searches: UPDATE), 0030 (phone_verification_refused_sends: UPDATE), 0031
 -- (start_grants, start_grant_numbers: DELETE), 0032 (consent_records: UPDATE), 0033
--- (post_revisions: UPDATE) and 0034 (post_comment_revisions: UPDATE).
+-- (post_revisions: UPDATE) and 0034 (post_comment_revisions: UPDATE; post_comment_counts: INSERT,
+-- UPDATE, DELETE — its SECURITY DEFINER trigger writes it as the owner).
 -- Default privileges are applied at CREATE time, so a REVOKE afterwards sticks.

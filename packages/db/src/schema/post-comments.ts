@@ -5,6 +5,7 @@ import {
   check,
   foreignKey,
   index,
+  integer,
   pgTable,
   text,
   unique,
@@ -41,7 +42,8 @@ import { posts } from './posts.js';
  * - `is_reply` and `parent_is_reply`: generated, for the parent's foreign key only.
  *
  * The post and the author are RESTRICT, as a post's market and author are: nothing here is ever
- * deleted by the app (a withdrawn author is anonymised, #37-17 and #140).
+ * deleted by the app (a withdrawn author is anonymised, #37-17 and #140). How many of a post's
+ * comments the public reads is kept apart, by a trigger (`postCommentCounts` below).
  */
 export const postComments = pgTable(
   'post_comments',
@@ -127,13 +129,6 @@ export const postComments = pgTable(
     index('post_comments_live_parent_id_created_at_id_idx')
       .on(t.parentId, t.createdAt, t.id)
       .where(sql`${t.parentId} IS NOT NULL AND ${t.deletedAt} IS NULL`),
-    /**
-     * A post's comment count on its card (#45-7): the comments the public reads, 댓글 and 대댓글
-     * alike, never a deleted or a hidden one — exactly what this partial index holds.
-     */
-    index('post_comments_visible_post_id_idx')
-      .on(t.postId)
-      .where(sql`${t.deletedAt} IS NULL AND ${t.hiddenAt} IS NULL`),
     /** An account's comments: MY 내 글 (#51), the profile (#41), a withdrawal (#140). */
     index('post_comments_author_id_created_at_idx').on(t.authorId, desc(t.createdAt)),
   ],
@@ -163,4 +158,30 @@ export const postCommentRevisions = pgTable(
     /** A comment's history in order. */
     index('post_comment_revisions_comment_id_id_idx').on(t.commentId, t.id),
   ],
+);
+
+/**
+ * A post's comment count (#45-7 '댓글 N' on its card and its page; ADR-0074 7-9 and 7-33): how many
+ * of its comments the public reads as comments, 댓글 and 대댓글 alike — those neither deleted nor
+ * hidden (a 대댓글 under a deleted or hidden 댓글 counts: it is read in full). Kept as the comments
+ * change, in the transaction that changes them, rather than counted on every read (Codex review on
+ * PR #220: a post's read and every card of the list walked all of its comments in view, without
+ * bound). A row per post that ever had a comment in view; a post with none has no row and reads 0.
+ *
+ * The trigger of migration 0034 on `post_comments` writes it — inserts, deletions and the changes
+ * of `deleted_at`, `hidden_at` or `post_id` (#50's hiding and #184's removals included), and a
+ * TRUNCATE — and nothing else does: buddha_app may only read it (the trigger runs as the table's
+ * owner). `count` never goes below 0, and a comment that leaves the count of a post with no row is
+ * refused, so a count that drifted would show at once. The post CASCADEs: a post has no comments
+ * left when it can be removed (`post_comments` RESTRICTs), and its row goes with it.
+ */
+export const postCommentCounts = pgTable(
+  'post_comment_counts',
+  {
+    postId: uuid()
+      .primaryKey()
+      .references(() => posts.id, { onDelete: 'cascade' }),
+    count: integer().notNull().default(0),
+  },
+  (t) => [check('post_comment_counts_count_check', sql`${t.count} >= 0`)],
 );
