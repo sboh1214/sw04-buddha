@@ -36,6 +36,7 @@ import {
   repliesOnScreenOf,
   resolveCommentDrafts,
 } from '@/lib/comments';
+import { withCommentLikeCount } from '@/lib/likes';
 import { communityPostsKey, marketPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
@@ -2160,6 +2161,61 @@ describe('a new 댓글', () => {
         expect(threadIds(reached.queryClient)).toEqual([...olderIds(0, 1), MINE, ...LATER_ROOTS]);
         expect(placedHeld(reached.queryClient)).toEqual([]);
         reached.unsubscribe();
+      });
+
+      it('a later 댓글’s read that reaches it puts it in its place, placed no more, at the like count held — the pages that read takes at the counts held are still the read’s (#49, ADR-0076 7-27)', async () => {
+        const NEXT = LATER_ROOTS[0]!;
+        /** The pages held after NEXT is written, as the account on screen. */
+        const writeNext = async (queryClient: QueryClient) => {
+          vi.spyOn(api, 'POST').mockResolvedValue(answer(published(NEXT)));
+          await new MutationObserver(
+            onScreen(queryClient),
+            createCommentOptions(queryClient, POST, () => undefined),
+          ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+        };
+        const likesOf = (queryClient: QueryClient) =>
+          commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).map(({ comment }) =>
+            comment.state === 'published' ? comment.likeCount : null,
+          );
+        // MINE past the five pages: placed at the end; a like on it pressed meanwhile (the
+        // toggle's count, held), and five of the older 댓글 deleted in another tab since.
+        const all = [...olderIds(0, 8), MINE];
+        const reached = holdingFirst();
+        servingList(() => all);
+        await write(reached.queryClient);
+        expect(placedHeld(reached.queryClient)).toEqual([`-:${MINE}`]);
+        reached.queryClient.setQueryData<CommentPages>(postCommentsKey(post), (pages) =>
+          withCommentLikeCount(pages, MINE, 1),
+        );
+        all.splice(3, 5);
+        all.push(NEXT);
+        // NEXT's read reaches MINE's page and then NEXT's, within the five: both in their place,
+        // MINE at the count held and no longer placed — not taken off its page to the end again.
+        await writeNext(reached.queryClient);
+        expect(threadIds(reached.queryClient)).toEqual([...olderIds(0, 3), MINE, NEXT]);
+        expect(likesOf(reached.queryClient)).toEqual([0, 0, 0, 1, 0]);
+        expect(placedHeld(reached.queryClient)).toEqual([]);
+        await reached.comments.refetch();
+        expect(threadIds(reached.queryClient)).toEqual([...olderIds(0, 3), MINE, NEXT]);
+        reached.unsubscribe();
+
+        // NEXT's read failing after the last page held read again, which holds MINE now: that
+        // page in place of the held one, MINE in its place on it — placed no more — and NEXT
+        // placed at the end of it.
+        const failed = holdingFirst();
+        servingList(() => [...olderIds(0, 8), MINE]);
+        await write(failed.queryClient);
+        getComments(({ params }) => {
+          if (params.query.cursor !== undefined) throw new TypeError('Failed to fetch');
+          return {
+            items: [thread(published(olderIds(0, 1)[0]!)), thread(published(MINE))],
+            nextCursor: 'c2',
+          };
+        });
+        await writeNext(failed.queryClient);
+        expect(threadIds(failed.queryClient)).toEqual([...olderIds(0, 1), MINE, NEXT]);
+        expect(placedHeld(failed.queryClient)).toEqual([`-:${NEXT}`]);
+        failed.unsubscribe();
       });
 
       it('comes back with what was written under it and its edit — as a placeholder once deleted with a 답글 under it — and not once nothing of it is left', async () => {

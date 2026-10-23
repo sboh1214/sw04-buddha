@@ -167,6 +167,9 @@ function withHeldLikeCount(comment: PostComment, counts: ReadonlyMap<string, num
  * place) is the page's. The count held may be one a failed press put back while its read again of
  * the pages was on its way — a press whose answer was lost after it committed; putting these pages
  * in cancels that read and makes it again (`writePages`, ADR-0076 7-28), which ends on the server's.
+ * Each page is still the read's (`samePageRead`): the query client reads the server's word on the
+ * writer's own comments placed at the end of what is held from the pages a read brought
+ * (`keepPlacedComments`, 오너 결정 2026-10-24), and these are such pages until they land.
  */
 export function withHeldLikeCounts(
   pages: readonly CommentPage[],
@@ -175,14 +178,16 @@ export function withHeldLikeCounts(
   const counts = likeCountsOf(
     commentThreadsOf(held).flatMap((thread) => [thread.comment, ...thread.replies]),
   );
-  return pages.map((page) => ({
-    ...page,
-    items: page.items.map((thread) => ({
-      ...thread,
-      comment: withHeldLikeCount(thread.comment, counts),
-      replies: thread.replies.map((reply) => withHeldLikeCount(reply, counts)),
-    })),
-  }));
+  return pages.map((page) =>
+    samePageRead(page, {
+      ...page,
+      items: page.items.map((thread) => ({
+        ...thread,
+        comment: withHeldLikeCount(thread.comment, counts),
+        replies: thread.replies.map((reply) => withHeldLikeCount(reply, counts)),
+      })),
+    }),
+  );
 }
 
 /**
