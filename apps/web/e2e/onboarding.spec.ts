@@ -1025,8 +1025,12 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(
       page.getByRole('link', { name: copy.onboardingReconsentSettingsLink }),
     ).toHaveAttribute('href', '/my/settings');
-    // A member who would rather leave than agree again has the way to 탈퇴 here too ((4차) 1).
+    // A member who would rather leave than agree again has the way to 탈퇴 here too ((4차) 1) —
+    // at the very bottom, under the line of the way to MY 설정 as well (ADR-0086 결과 5 (9)).
     await expectOnboardingClosureLink(page);
+    const settingsLine = await page.getByTestId('onboarding-settings-link').boundingBox();
+    const closureLink = await page.getByTestId('onboarding-closure').boundingBox();
+    expect(closureLink!.y).toBeGreaterThan(settingsLine!.y + settingsLine!.height - 1);
     await expect(consent.getByTestId('consent-terms').getByRole('checkbox')).not.toBeChecked();
     await page.getByTestId('consent-submit').click();
     await expect(page.getByTestId('consent-required-error')).toBeVisible();

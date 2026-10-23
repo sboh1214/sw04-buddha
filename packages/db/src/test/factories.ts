@@ -8,11 +8,13 @@ import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   AUTH_USER_NAME,
   CONSENT_ITEMS,
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PRICE_MAX,
   PRICE_MIN,
   currentConsentVersion,
   SETTLEMENT_STEPS,
   closedAccountEmail,
+  orphanMediaRetryHours,
   readPostDocument,
   relatedMarketPair,
   type ImageContentType,
@@ -50,6 +52,7 @@ import {
   marketWatchEvents,
   marketWatches,
   markets,
+  mediaDeletions,
   mediaObjects,
   moderationActions,
   nicknameHolds,
@@ -1374,12 +1377,12 @@ export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
  * (a read, an audit): a waiting start grant cancelled (its numbers freed by migration 0031's
  * trigger), the Coin left forfeited by a CLOSURE_FORFEIT entry, the nickname held unlinked and the
  * holds naming the account unlinked, the profile closed without its public items, the interest
- * categories, the profile image's row (its object is the test's store's), the time zone, the
- * 본인확인 record, the watchlist (each watch's unwatch event written), the search history, the
- * sessions, sign-in methods and reset tokens gone, the address replaced and the name and photo
- * emptied, and the account restriction requests about the member still waiting rejected by no
- * admin, '탈퇴'. Returns the closure's instant. Throws where migration 0043 would refuse the
- * commit (Coin reserved, say).
+ * categories, the profile image's row with its object's key queued for removal (`media_deletions`;
+ * the object is the test's store's), the time zone, the 본인확인 record, the watchlist (each
+ * watch's unwatch event written), the search history, the sessions, sign-in methods and reset
+ * tokens gone, the address replaced and the name and photo emptied, and the account restriction
+ * requests about the member still waiting rejected by no admin, '탈퇴'. Returns the closure's
+ * instant. Throws where migration 0043 would refuse the commit (Coin reserved, say).
  */
 export async function closeAccount(db: Db, userId: string): Promise<Date> {
   return db.transaction(async (tx) => {
@@ -1428,7 +1431,20 @@ export async function closeAccount(db: Db, userId: string): Promise<Date> {
       .where(eq(profiles.userId, userId));
     await tx.delete(profileInterestCategories).where(eq(profileInterestCategories.userId, userId));
     if (profile.imageId !== null) {
-      await tx.delete(mediaObjects).where(eq(mediaObjects.id, profile.imageId));
+      const [image] = await tx
+        .delete(mediaObjects)
+        .where(eq(mediaObjects.id, profile.imageId))
+        .returning({ storageKey: mediaObjects.storageKey });
+      // Its object's key queued with the row's deletion (#46's queue), as the API's closure does.
+      if (image) {
+        await tx
+          .insert(mediaDeletions)
+          .values({
+            storageKey: image.storageKey,
+            nextAttemptAt: sql`now() + make_interval(hours => ${orphanMediaRetryHours(1)}, mins => ${-ORPHAN_MEDIA_RETRY_SLACK_MINUTES})`,
+          })
+          .onConflictDoNothing({ target: mediaDeletions.storageKey });
+      }
     }
     await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
     const unwatched = await tx

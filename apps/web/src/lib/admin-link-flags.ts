@@ -11,6 +11,7 @@ import {
   type AdminLinkFlagReviewBody,
   isApiError,
 } from './api';
+import { nicknameShown } from './account-closure';
 import { formatKst } from './datetime';
 import { adminTargetPath } from './moderation';
 
@@ -145,9 +146,21 @@ export function linkFlagGroupLatest(group: AdminLinkFlagGroup): string {
   return labelledTime(copy.adminLinkFlagLatest, group.latestFlaggedAt);
 }
 
-/** Who marked the group and when: '확인 2026. 10. 21. 오후 3:00 · 운영자 닉네임'. */
+/**
+ * Who marked the group and when: '확인 2026. 10. 21. 오후 3:00 · 운영자 닉네임' — '탈퇴한 사용자' for
+ * an operator who closed the account since (#140, after the admin role was revoked).
+ */
 export function linkFlagReviewedBy(review: NonNullable<AdminLinkFlagGroup['review']>): string {
-  return `${labelledTime(copy.adminLinkFlagReviewedAt, review.reviewedAt)} · ${copy.adminLinkFlagReviewer} ${review.admin.nickname}`;
+  return `${labelledTime(copy.adminLinkFlagReviewedAt, review.reviewedAt)} · ${copy.adminLinkFlagReviewer} ${nicknameShown(review.admin.nickname)}`;
+}
+
+/**
+ * The item's author as the entry names it: the nickname, or '탈퇴한 사용자' once the member closed
+ * the account (#140, ADR-0086 — the item stays on the list, and the link to the member's page with
+ * it, as on every operator screen).
+ */
+export function linkFlagAuthorName(flag: AdminLinkFlag): string {
+  return nicknameShown(flag.target.author.nickname);
 }
 
 /** When the item was written. */

@@ -18,6 +18,7 @@ import { AppError } from '../common/errors/app-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
 import { OBJECT_STORAGE } from '../media/object-storage.provider.js';
+import { queueRemoval, removeQueuedObject } from '../media/queued-removal.js';
 import { assertNotRestricted, restrictionInForce } from '../moderation/restrictions.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -51,7 +52,10 @@ const CHANGE_KINDS = [
 interface Closed {
   closedAt: Date;
   forfeitedCoin: bigint;
-  /** The profile image's object, its row deleted in the transaction; null when there was none. */
+  /**
+   * The profile image's object, its row deleted and its key queued for removal in the transaction;
+   * null when there was none.
+   */
   imageKey: string | null;
 }
 
@@ -88,7 +92,8 @@ interface Closed {
  *    whole balance, never an overwrite (N01 §9), so the ledger still sums to the balance.
  * 4. The public face goes (#37-16): the nickname — held from every account for NICKNAME_HOLD_DAYS
  *    with no link to this one (#57-6, #57-18), and every hold naming the account loses that link —
- *    the 소개, the image (row now, object after the commit), the interest categories; the profile is
+ *    the 소개, the image (row now with its object's key queued for removal — #46's
+ *    `media_deletions` — and the object after the commit), the interest categories; the profile is
  *    marked closed, so every byline is '탈퇴한 사용자' and the profile and its lists answer 404
  *    (`postAuthorOf`). Posts, comments and likes stay as they are (#37-17).
  * 5. The current watchlist goes, each watch ended by its unwatch event in the watch history, which
@@ -342,7 +347,11 @@ export class AccountClosureService {
    * (one UPDATE, profiles_closed_check) and no time zone either — the private setting of MY 설정
    * goes with the rest (owner decision 2026-10-23 (3차) 6: NULL, "follow the browser", as for an
    * account that never picked one) — the interest categories are deleted, and the profile image's
-   * row with them — its object after the commit. Returns that object's key, or null.
+   * row with them, its object's key queued for removal in this transaction (`queueRemoval`, #46's
+   * `media_deletions`, as ProfileImageService queues a replaced one's): once the closure commits,
+   * nothing names the object but that key, which stays until the store has let the object go — a
+   * commit whose removal after it never runs, or that the store refuses, leaves it to the worker.
+   * The object itself goes after the commit (`removeObject`). Returns that object's key, or null.
    */
   private async anonymise(
     tx: Tx,
@@ -367,7 +376,9 @@ export class AccountClosureService {
       .delete(schema.mediaObjects)
       .where(eq(schema.mediaObjects.id, imageId))
       .returning({ storageKey: schema.mediaObjects.storageKey });
-    return image?.storageKey ?? null;
+    if (image === undefined) return null;
+    await queueRemoval(tx, image.storageKey);
+    return image.storageKey;
   }
 
   /**
@@ -468,16 +479,21 @@ export class AccountClosureService {
   }
 
   /**
-   * Removes the profile image's object after the commit that deleted its row, as ProfileImageService
-   * does a replaced one: never inside the transaction (a slow store would hold the profile's lock),
-   * and a commit lost after the object went can never leave a profile naming an image without
-   * bytes. Best effort: a store that will not remove it leaves bytes nothing names, which no reader
-   * can reach — logged with the key for an operator. Queueing the retry (#46's `media_deletions`)
-   * comes with the restack onto #46's last commit (ADR-0086).
+   * Removes the profile image's object after the commit that deleted its row and queued its key,
+   * as ProfileImageService does a replaced one (`removeQueuedObject`): never inside the transaction
+   * (a slow store would hold the profile's lock), and a commit lost after the object went can never
+   * leave a profile naming an image without bytes. The key leaves the queue once the object is gone;
+   * a store that will not remove it now leaves the key queued, this refusal counted and logged, and
+   * the worker's `media.orphan_cleanup` tries it again until the store lets it go (#46's
+   * `media_deletions`, ADR-0086 7-14). The closure stands either way: the bytes are named by no row
+   * and reachable by no reader meanwhile.
    */
   private async removeObject(storageKey: string): Promise<void> {
-    await this.storage.delete(storageKey).catch((error: unknown) => {
-      this.logger.error({ err: error, storageKey }, 'could not remove a closed account’s image');
-    });
+    const { db, storage, logger } = this;
+    await removeQueuedObject(
+      { db, storage, logger },
+      storageKey,
+      'a closed account’s profile image',
+    );
   }
 }

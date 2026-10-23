@@ -21932,6 +21932,7 @@
                 "type": "string"
               },
               "nickname": {
+                "nullable": true,
                 "type": "string"
               }
             },
@@ -22031,6 +22032,7 @@
                     "type": "string"
                   },
                   "nickname": {
+                    "nullable": true,
                     "type": "string"
                   }
                 },

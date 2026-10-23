@@ -57,8 +57,12 @@ export const ONBOARDING_PATH = '/onboarding';
  * - The 탈퇴 screen, /my/settings/closure (#140, owner decision 2026-10-23 (2차) 3, ADR-0086): an
  *   account that has not finished its onboarding — a re-consent left included — may still close
  *   itself, as it may delete its own items with sign-in only (#46, #77); the API's closure is
- *   sign-in only too (`SessionGuard`, no `OnboardedGuard`). Only that screen: the rest of MY, its
- *   설정 tab included, stays gated. Every onboarding screen links to it (`ONBOARDING_CLOSURE_LINK`).
+ *   sign-in only too (`SessionGuard`, no `OnboardedGuard`). Only that screen, for every account
+ *   with a step left: the rest of MY stays gated — its 설정 tab too, but for an account facing a
+ *   re-consent alone, which ONBOARDING_EXEMPT_PAGES opens it to (#41), so that one also reaches the
+ *   screen from MY 설정's card (and the re-consent step's link to MY 설정, `settingsLinkOnStep`). It
+ *   stays here, not there: moved to the pages a re-consent alone opens, a first onboarding would
+ *   lose it. Every onboarding screen links to it (`ONBOARDING_CLOSURE_LINK`).
  * - /api: never a page — the layout the gate lives in does not render for it — but the list is
  *   total so the decision could move into `proxy.ts` without ever answering an API call (the
  *   auth routes included) with a redirect to an HTML form.

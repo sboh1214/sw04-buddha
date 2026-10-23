@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
   LINK_FLAG_NOTE_MAX_LENGTH,
+  linkFlagAuthorName,
   linkFlagFlaggedAt,
   linkFlagGroupActionLabel,
   linkFlagGroupCount,
@@ -151,6 +152,20 @@ describe('the review list’s groups and marks (owner decision 2026-10-22)', () 
   it('names the two outcomes as the owner did, and who marked a group and when', () => {
     expect(LINK_FLAG_REVIEW_OUTCOMES.map(linkFlagOutcomeLabel)).toEqual(['문제 없음', '조치함']);
     expect(linkFlagReviewedBy(REVIEW)).toBe('확인 2026. 10. 21. 오후 4:30 · 운영자 운영팀장');
+    // An operator who closed the account since (#140, once the role was revoked) has no nickname.
+    expect(linkFlagReviewedBy({ ...REVIEW, admin: { userId: 'a1', nickname: null } })).toBe(
+      `확인 2026. 10. 21. 오후 4:30 · 운영자 ${copy.postAuthorFormer}`,
+    );
+  });
+
+  it('names an entry’s author, and a member who closed the account as every byline does (#140)', () => {
+    expect(linkFlagAuthorName(flag())).toBe('근거왕');
+    expect(
+      linkFlagAuthorName(
+        flag({ author: { userId: 'u1', publicId: 'k7m2p9qx4z', nickname: null } }),
+      ),
+    ).toBe(copy.postAuthorFormer);
+    expect(copy.postAuthorFormer).toBe('탈퇴한 사용자');
   });
 
   it('sends the row’s link, rule and latest time with the outcome, and the note only when written', () => {

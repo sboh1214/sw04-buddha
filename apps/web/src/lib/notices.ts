@@ -6,6 +6,7 @@ import {
   type PostDocument,
 } from '@buddha/shared';
 import { copy } from '@/copy';
+import { nicknameShown } from './account-closure';
 import { isApiError, isApiUnreachable, validationField } from './api';
 import { postBodyErrorMessage } from './posts';
 
@@ -251,10 +252,13 @@ export function noticeActionLabel(type: NoticeActionType): string {
 
 /**
  * The operator a record or an earlier version names, by nickname; '기록 없음' where no record
- * names one (a row written past the API).
+ * names one (a row written past the API), and '탈퇴한 사용자' for an operator who closed the account
+ * since (#140, after the admin role was revoked: the nickname went with the closure, ADR-0086).
  */
-export function noticeActorName(actor: { nickname: string } | null): string {
-  return actor === null || actor.nickname === '' ? copy.adminNoticeActorUnknown : actor.nickname;
+export function noticeActorName(actor: { nickname: string | null } | null): string {
+  return actor === null || actor.nickname === ''
+    ? copy.adminNoticeActorUnknown
+    : nicknameShown(actor.nickname);
 }
 
 // ---- refusals ------------------------------------------------------------------------------

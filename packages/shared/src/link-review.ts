@@ -311,7 +311,11 @@ export const adminLinkFlagReviewSchema = z
     outcome: z.enum(LINK_FLAG_REVIEW_OUTCOMES),
     note: z.string().nullable(),
     reviewedAt: z.iso.datetime(),
-    admin: z.object({ userId: z.string(), nickname: z.string() }),
+    /**
+     * The operator who marked it; the nickname is null once that account was closed by its member
+     * (#140 — after its admin role was revoked, #57-17), and the screen names it '탈퇴한 사용자'.
+     */
+    admin: z.object({ userId: z.string(), nickname: z.string().nullable() }),
   })
   .meta({ id: 'AdminLinkFlagReview' });
 export type AdminLinkFlagReview = z.infer<typeof adminLinkFlagReviewSchema>;
@@ -404,10 +408,14 @@ export const adminLinkFlagSchema = z
       editedAt: z.iso.datetime().nullable(),
       deletedAt: z.iso.datetime().nullable(),
       hiddenAt: z.iso.datetime().nullable(),
+      /**
+       * The item's author; the nickname is null once the member closed the account (#140, #37-16:
+       * the public items went with it) — the item stays, and the screen names it '탈퇴한 사용자'.
+       */
       author: z.object({
         userId: z.string(),
         publicId: z.string(),
-        nickname: z.string(),
+        nickname: z.string().nullable(),
       }),
       market: z.object({ id: z.uuid(), slug: z.string(), title: z.string() }),
     }),

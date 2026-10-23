@@ -2235,7 +2235,7 @@ export type components = {
             reason: "same_account" | "many_accounts";
             target: {
                 author: {
-                    nickname: string;
+                    nickname: string | null;
                     publicId: string;
                     userId: string;
                 };
@@ -2274,7 +2274,7 @@ export type components = {
         };
         AdminLinkFlagReview: {
             admin: {
-                nickname: string;
+                nickname: string | null;
                 userId: string;
             };
             /** Format: uuid */

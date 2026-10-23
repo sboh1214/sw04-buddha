@@ -355,10 +355,20 @@ describe('needsOnboarding', () => {
       expect(needsOnboarding('/my/settings/closure', onboarding), String(onboarding.nextStep)).toBe(
         false,
       );
-      // MY 설정, where its card is, stays gated: the screen is reached by the link at the bottom
-      // of every onboarding screen ((4차) 1, below) or by its address.
-      expect(needsOnboarding('/my/settings', onboarding)).toBe(true);
     }
+    // MY 설정, where its card is, stays gated for an account that has not finished: the screen is
+    // reached by the link at the bottom of every onboarding screen ((4차) 1, below) or by its
+    // address.
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED]) {
+      expect(needsOnboarding('/my/settings', onboarding), String(onboarding.nextStep)).toBe(true);
+    }
+    // An account facing a re-consent alone keeps MY 설정 (#41, ADR-0078 — ONBOARDING_EXEMPT_PAGES),
+    // so it reaches the screen from the card there too; the rest of MY stays gated for it.
+    expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
+    expect(needsOnboarding('/my', RECONSENT)).toBe(true);
+    // The screen is every such account's, never a page only a re-consent opens (ADR-0086 결과 5 (9)).
+    expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_CLOSURE_PATH);
+    expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_CLOSURE_PATH);
   });
 
   it('never redirects while the answer is unknown, or once nothing is left', () => {

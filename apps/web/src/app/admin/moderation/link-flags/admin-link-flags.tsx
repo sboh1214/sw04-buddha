@@ -30,6 +30,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
   LINK_FLAG_NOTE_MAX_LENGTH,
+  linkFlagAuthorName,
   linkFlagFlaggedAt,
   linkFlagGroupActionLabel,
   linkFlagGroupCount,
@@ -388,7 +389,7 @@ function LinkFlagEntry({ flag }: { flag: AdminLinkFlag }) {
               href={adminUserModerationPath(target.author.userId) as Route}
               data-testid="admin-link-flag-author"
             >
-              {target.author.nickname}
+              {linkFlagAuthorName(flag)}
             </NextLink>
           </ChakraLink>
         </Text>

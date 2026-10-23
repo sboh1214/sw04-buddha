@@ -38,11 +38,13 @@ import {
   createWatch,
 } from '@buddha/db/test';
 import {
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   START_COIN_SETTING,
   accountClosureCheckSchema,
   accountClosureResultSchema,
   accountRestrictionRequestSchema,
   closedAccountEmail,
+  orphanMediaRetryHours,
   type AccountClosureCheck,
   type AccountClosureResult,
   type AccountRestrictionRequest,
@@ -51,8 +53,9 @@ import {
   type PostSummary,
   type PublishedPost,
 } from '@buddha/shared';
+import { Logger } from '@nestjs/common';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { PhoneHasher } from '../identity/phone-hash.js';
 import { PhoneVerificationService } from '../phone-verification/phone-verification.service.js';
@@ -392,6 +395,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         image: 0,
       });
       expect(t.storage.objects.has(image.storageKey)).toBe(false);
+      // Its key was queued with the closure (#46's `media_deletions`) and left the queue once the
+      // object was gone.
+      expect(await t.db.select().from(schema.mediaDeletions)).toEqual([]);
       const [account] = await t.db.select().from(schema.user).where(eq(schema.user.id, member.id));
       expect(account).toMatchObject({
         email: closedAccountEmail(member.id),
@@ -840,6 +846,76 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       });
     });
 
+    it('keeps the counted writes and the repeated links of the closed account, and the number’s limits go on with a new account (#187, ADR-0086 결과 5)', async () => {
+      const phone = '01033334444';
+      const closing = await onboarded(phone);
+      const linkDoc = (text: string) => ({
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text,
+                marks: [{ type: 'link', attrs: { href: 'https://spam.example/a' } }],
+              },
+            ],
+          },
+        ],
+      });
+      // Three posts with one link in ten minutes: the number's posts_10m is full, and the link is
+      // on the operators' review list (same_account).
+      for (let index = 0; index < 3; index += 1) {
+        dataOf(
+          await post('/posts', { marketId: market.id, body: linkDoc(`근거 ${index}`) }, closing),
+          201,
+        );
+      }
+      const hash = t.app.get(PhoneHasher).hash(phone);
+      const counts = async () => ({
+        counted: (
+          await t.db
+            .select()
+            .from(schema.writeLimitEvents)
+            .where(eq(schema.writeLimitEvents.phoneHash, hash))
+        ).length,
+        used: (await t.db.select().from(schema.linkUses).where(eq(schema.linkUses.phoneHash, hash)))
+          .length,
+        flagged: (await t.db.select().from(schema.linkFlags)).length,
+      });
+      const before = await counts();
+      expect(before).toMatchObject({ counted: 3, used: 3 });
+      expect(before.flagged).toBeGreaterThan(0);
+      await closed(closing);
+
+      // Kept: the counts and the link uses are the number's, and the review list's entries stay
+      // with the items (#184's retention deletes them, not the closure).
+      expect(await counts()).toEqual(before);
+      // The review list names the author as a closed account: no nickname — '탈퇴한 사용자' on the
+      // screen (`linkFlagAuthorName`), the link to the member's page kept.
+      const [flag] = await t.db.select().from(schema.linkFlags).limit(1);
+      const items = dataOf<{ target: { author: { userId: string; nickname: string | null } } }[]>(
+        await read(
+          `/admin/link-flags/items?url=${encodeURIComponent(flag!.url)}&reason=${flag!.reason}`,
+          admin,
+        ),
+      );
+      expect(items.length).toBeGreaterThan(0);
+      for (const item of items) {
+        expect(item.target.author).toMatchObject({ userId: closing.id, nickname: null });
+      }
+      // A new account of the same number carries on (decision 7): posts_10m is still full.
+      const again = await onboarded(phone);
+      expect(
+        errorOf(
+          await post('/posts', { marketId: market.id, body: linkDoc('다시') }, again),
+          429,
+          'WRITE_LIMITED',
+        ),
+      ).toMatchObject({ reason: 'posts_10m' });
+    });
+
     it('closes an account that never finished the onboarding, with sign-in only', async () => {
       const fresh = await signUpTestUser(t);
       expect(await checkOf(fresh)).toEqual({
@@ -982,6 +1058,81 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
           .from(schema.nicknameHolds)
           .where(sql`${schema.nicknameHolds.userId} IS NULL`),
       ).toHaveLength(1);
+    });
+
+    it('queues the profile image’s key with the closure and removes its object after the commit: a slow store holds no lock (#46’s media_deletions, ADR-0086 7-14)', async () => {
+      const image = await createProfileImage(t.db, { userId: member.id });
+      await t.storage.put(image.storageKey, randomBytes(16), image.contentType);
+      let finish!: () => void;
+      const stalled = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const remove = t.storage.delete.bind(t.storage);
+      const del = vi.spyOn(t.storage, 'delete').mockImplementationOnce(async (key) => {
+        await stalled;
+        await remove(key);
+      });
+      try {
+        const pending = close(member);
+        await vi.waitFor(() => {
+          expect(del).toHaveBeenCalledWith(image.storageKey);
+        });
+        // While the store is still removing the object, the closure has committed: the profile is
+        // closed and the image's row gone — and its key is queued, so were the API to stop now
+        // (the removal after the commit lost), the worker would remove the object.
+        expect((await profileOf(member.id)).closedAt).not.toBeNull();
+        expect(
+          await t.db.select().from(schema.mediaObjects).where(eq(schema.mediaObjects.id, image.id)),
+        ).toEqual([]);
+        expect(
+          (await t.db.select().from(schema.mediaDeletions)).map((row) => row.storageKey),
+        ).toEqual([image.storageKey]);
+        finish();
+        dataOf(await pending);
+      } finally {
+        finish();
+        del.mockRestore();
+      }
+      expect(t.storage.objects.has(image.storageKey)).toBe(false);
+      // Removed: its key has left the queue.
+      expect(await t.db.select().from(schema.mediaDeletions)).toEqual([]);
+    });
+
+    it('closes the account when the store will not remove the profile image: its key stays queued for the worker, the refusal counted and logged (ADR-0086 7-14)', async () => {
+      const image = await createProfileImage(t.db, { userId: member.id });
+      await t.storage.put(image.storageKey, randomBytes(16), image.contentType);
+      const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const del = vi.spyOn(t.storage, 'delete').mockRejectedValue(new Error('store down'));
+      try {
+        await closed(member);
+        expect((await profileOf(member.id)).closedAt).not.toBeNull();
+        // The object stays in the store, named by no row and reachable by no reader — its key
+        // queued, this refusal counted as the first, due after the queue's first wait (55 minutes):
+        // the worker's runs try it again (1, 2, 4 … hours, then daily) until the store lets it go.
+        expect(t.storage.objects.has(image.storageKey)).toBe(true);
+        const [queued] = await t.db
+          .select({
+            attempts: schema.mediaDeletions.attempts,
+            lastError: schema.mediaDeletions.lastError,
+            dueInMinutes: sql<number>`round(extract(epoch from (${schema.mediaDeletions.nextAttemptAt} - now())) / 60)::int`,
+          })
+          .from(schema.mediaDeletions)
+          .where(eq(schema.mediaDeletions.storageKey, image.storageKey));
+        expect(queued).toEqual({
+          attempts: 1,
+          lastError: 'store down',
+          dueInMinutes: orphanMediaRetryHours(1) * 60 - ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
+        });
+        // One string, the refusal's words in it (an object would lose an Error's message).
+        expect(error).toHaveBeenCalledWith(
+          `could not remove a closed account’s profile image; its key stays queued for the worker ${JSON.stringify(
+            { storageKey: image.storageKey, refusal: 'store down' },
+          )}`,
+        );
+      } finally {
+        del.mockRestore();
+        error.mockRestore();
+      }
     });
   });
 
@@ -1175,6 +1326,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         ['warn', { reason: 'spam', note: null, subject: null }],
         ['warn', { reason: 'spam', note: null, subject: { type: 'post', postId: own.id } }],
         ['writing-restriction', { reason: 'spam', note: null, days: 7, subject: null }],
+        // #185's other forms: 무기한, and from the report queue with a subject of theirs.
+        ['writing-restriction', { reason: 'spam', note: null, days: null, subject: null }],
+        [
+          'writing-restriction',
+          { reason: 'spam', note: null, days: 3, subject: { type: 'post', postId: own.id } },
+        ],
         [
           'account-restriction',
           { reason: 'multi_account', note: '설명', days: 7, subject: null, memo: null },
