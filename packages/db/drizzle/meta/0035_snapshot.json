@@ -4080,6 +4080,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "parent_created_at": {
+          "name": "parent_created_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "author_id": {
           "name": "author_id",
           "type": "text",
@@ -4139,8 +4145,8 @@
         }
       },
       "indexes": {
-        "post_comments_post_id_created_at_id_idx": {
-          "name": "post_comments_post_id_created_at_id_idx",
+        "post_comments_live_post_id_created_at_id_idx": {
+          "name": "post_comments_live_post_id_created_at_id_idx",
           "columns": [
             {
               "expression": "post_id",
@@ -4162,13 +4168,41 @@
             }
           ],
           "isUnique": false,
-          "where": "\"post_comments\".\"parent_id\" IS NULL",
+          "where": "\"post_comments\".\"parent_id\" IS NULL AND \"post_comments\".\"deleted_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
         },
-        "post_comments_parent_id_created_at_id_idx": {
-          "name": "post_comments_parent_id_created_at_id_idx",
+        "post_comments_live_post_id_parent_created_at_parent_id_idx": {
+          "name": "post_comments_live_post_id_parent_created_at_parent_id_idx",
+          "columns": [
+            {
+              "expression": "post_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "parent_created_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            },
+            {
+              "expression": "parent_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "where": "\"post_comments\".\"parent_id\" IS NOT NULL AND \"post_comments\".\"deleted_at\" IS NULL",
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "post_comments_live_parent_id_created_at_id_idx": {
+          "name": "post_comments_live_parent_id_created_at_id_idx",
           "columns": [
             {
               "expression": "parent_id",
@@ -4190,7 +4224,7 @@
             }
           ],
           "isUnique": false,
-          "where": "\"post_comments\".\"parent_id\" IS NOT NULL",
+          "where": "\"post_comments\".\"parent_id\" IS NOT NULL AND \"post_comments\".\"deleted_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
@@ -4267,11 +4301,13 @@
           "columnsFrom": [
             "post_id",
             "parent_id",
+            "parent_created_at",
             "parent_is_reply"
           ],
           "columnsTo": [
             "post_id",
             "id",
+            "created_at",
             "is_reply"
           ],
           "onDelete": "restrict",
@@ -4280,12 +4316,13 @@
       },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {
-        "post_comments_post_id_id_is_reply_unique": {
-          "name": "post_comments_post_id_id_is_reply_unique",
+        "post_comments_post_id_id_created_at_is_reply_unique": {
+          "name": "post_comments_post_id_id_created_at_is_reply_unique",
           "nullsNotDistinct": false,
           "columns": [
             "post_id",
             "id",
+            "created_at",
             "is_reply"
           ]
         }
@@ -4295,6 +4332,10 @@
         "post_comments_body_check": {
           "name": "post_comments_body_check",
           "value": "btrim(\"post_comments\".\"body\") <> ''"
+        },
+        "post_comments_parent_created_at_check": {
+          "name": "post_comments_parent_created_at_check",
+          "value": "(\"post_comments\".\"parent_id\" IS NULL) = (\"post_comments\".\"parent_created_at\" IS NULL)"
         }
       },
       "isRLSEnabled": false
