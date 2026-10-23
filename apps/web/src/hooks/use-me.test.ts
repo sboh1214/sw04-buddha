@@ -18,7 +18,12 @@ import {
   type UpdateBioBody,
   type UpdateTimeZoneBody,
 } from '@/lib/api';
-import { type CommentPage, type CommentPages, postCommentsKey } from '@/lib/comments';
+import {
+  type CommentPage,
+  type CommentPages,
+  commentPageRead,
+  postCommentsKey,
+} from '@/lib/comments';
 import {
   type CountedPostPage,
   type PostPage,
@@ -1323,6 +1328,109 @@ describe('the member’s faces the tab holds, after a profile image change (#141
       expect(post.getCurrentResult().isFetching).toBe(false);
     } finally {
       for (const stop of unsubscribe) stop();
+      queryClient.clear();
+    }
+  });
+
+  it('puts it on the member’s own 댓글 and 대댓글 placed at the end of what is held too, and every read of the pages after puts them back with it (#48, 오너 결정 2026-10-24)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(ME_QUERY_KEY, {
+      ...following,
+      profile: { ...following.profile, imageUrl: OLD },
+    });
+    // The server's first page: someone else's 댓글 C3, its first 대댓글 R1 and more after it, and
+    // more 댓글 after the page — neither the member's C1 nor their R2 is on it.
+    const firstPage = (): CommentPage => ({
+      items: [
+        {
+          comment: comment(C3, face(OTHER, null)),
+          replies: [comment(R1, face(OTHER, OTHER_IMAGE), C3)],
+          repliesNextCursor: 'r1',
+        },
+      ],
+      nextCursor: 'c1',
+    });
+    // What the member's writes left: C1 placed at the end of the pages, R2 at the end of C3's
+    // 대댓글 (their reads toward their place stopped short of them).
+    const held: CommentPages = {
+      pages: [
+        {
+          items: [
+            {
+              ...firstPage().items[0]!,
+              replies: [...firstPage().items[0]!.replies, comment(R2, face(OWN, OLD), C3)],
+            },
+            { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId: following.id },
+        { id: R2, threadId: C3, accountId: following.id },
+      ],
+    };
+    queryClient.setQueryData(postCommentsKey(POST), held);
+    const comments = new InfiniteQueryObserver<
+      CommentPage,
+      Error,
+      CommentPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: postCommentsKey(POST),
+      // Marked as a read's, as the browser's `queryFn` does (`commentPageRead`).
+      queryFn: () => Promise.resolve(commentPageRead(firstPage())),
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = comments.subscribe(() => undefined);
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve({ ...following, profile: { ...following.profile, imageUrl: NEW } }),
+      ),
+    );
+    const view = () => {
+      const pages = queryClient.getQueryData<CommentPages>(postCommentsKey(POST))!;
+      return {
+        threads: pages.pages.flatMap((page) =>
+          page.items.map((thread) => [thread.comment.id, thread.replies.map((reply) => reply.id)]),
+        ),
+        placed: (pages.placed ?? []).map((entry) => entry.id),
+      };
+    };
+    try {
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      await settle();
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual([NEW, NEW]);
+      expect(view().placed).toEqual([C1, R2]);
+      // Read again (a focus, 30 seconds on), the page brings neither: both are put back at the end
+      // of what is held — the copies held, with the new address, not the one they were written
+      // with (the file deleted at once).
+      for (let reads = 0; reads < 2; reads += 1) {
+        await comments.refetch();
+        expect(view()).toEqual({
+          threads: [
+            [C3, [R1, R2]],
+            [C1, []],
+          ],
+          placed: [C1, R2],
+        });
+        expect(ownFaces(queryClient)).toEqual([
+          [JSON.stringify(postCommentsKey(POST)) + ` ${R2}`, NEW],
+          [JSON.stringify(postCommentsKey(POST)) + ` ${C1}`, NEW],
+        ]);
+      }
+    } finally {
+      unsubscribe();
       queryClient.clear();
     }
   });
