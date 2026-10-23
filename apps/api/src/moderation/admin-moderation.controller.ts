@@ -188,8 +188,8 @@ export class AdminModerationController {
       'days from the reset, and while that hold stands the member picks that nickname, exactly ' +
       'as it was taken away, with no change interval, even after a pick since the reset, once ' +
       '(taken back and given up again, it keeps the interval, as any other nickname does). One ' +
-      'cancelled already is `cancelled`; one on the ' +
-      'acting admin is `own`',
+      'cancelled already is `cancelled`; one on the acting admin is `own`; an account ' +
+      'restriction is cancelled only by an approved request (`approval_required`)',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)
@@ -210,8 +210,9 @@ export class AdminModerationController {
       'Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason ' +
       '(recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) ' +
       'and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing ' +
-      'restriction is `not_restriction`, a cancelled one `cancelled`, one ended `ended`, one on ' +
-      'the acting admin `own`. The member reads the new end',
+      'restriction is `not_restriction` — an account restriction `approval_required`, its end ' +
+      'moving only by an approved request — a cancelled one `cancelled`, one ended `ended`, one ' +
+      'on the acting admin `own`. The member reads the new end',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)
@@ -236,7 +237,7 @@ export class AdminModerationController {
     summary:
       'Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators ' +
       'only): it ends now and stays on the record as given. Refused as a shortening is ' +
-      '(`not_restriction`, `cancelled`, `ended`, `own`)',
+      '(`not_restriction`, `approval_required`, `cancelled`, `ended`, `own`)',
   })
   @ApiData(adminModerationActionSchema)
   @ApiErrors(...ACTION_ERRORS)

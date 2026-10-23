@@ -1,5 +1,8 @@
 import {
+  ACCOUNT_RESTRICTION_DAYS,
+  ACCOUNT_RESTRICTION_REASONS,
   APPEAL_WINDOW_DAYS,
+  APPROVAL_REASON_MAX_LENGTH,
   DISMISS_REPORTS_MAX,
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
@@ -27,6 +30,7 @@ import { templateKeys } from '@/legal/template';
 import { SRC } from '../test/screen-text';
 import {
   ApiError,
+  type AccountRestrictionRequest,
   type AdminModerationAction,
   type AdminReport,
   type MyModerationAction,
@@ -95,12 +99,30 @@ import {
   reportTargetTypeLabel,
   reportTargetView,
   RESTRICTION_TERM_OPTIONS,
+  ACCOUNT_RESTRICTION_REASON_OPTIONS,
+  ACCOUNT_RESTRICTION_TERM_OPTIONS,
+  ADMIN_ACCOUNT_REQUESTS_PATH,
+  accountRequestChangeLabel,
+  accountRequestMootNotice,
+  accountRequestMootText,
+  accountRestrictionDraft,
+  accountRestrictionReasonOf,
+  adminAccountRequestQueueKey,
+  adminAccountRequestQueueOf,
+  adminAccountRequestQueuePath,
   adminRestrictionEndText,
+  adminActionAnchor,
+  adminActionPath,
+  accountRequestTargetText,
+  approvalStatusLabel,
   endChangeLabel,
   endChangeText,
+  isAccountRestriction,
   isRestriction,
   myEndChangeView,
+  requestStanding,
   restrictionStanding,
+  restrictionTermLabel,
   restrictionTermOf,
   shortenEndDraft,
   warningInWindow,
@@ -823,8 +845,40 @@ describe('a standing restriction (#185)', () => {
     expect(copy.moderationEndShortened).toBe('감경됨');
   });
 
+  it('reads an account restriction as a writing one: its end, 진행 중, 조기 해제됨·감경됨 and the end it was given (#139, ADR-0069 decision 4 #139 «제한 사실·사유·종료 시각·이의 경로»)', () => {
+    const account = (overrides: Partial<MyModerationAction>) =>
+      action({
+        type: 'account_restriction',
+        reason: { code: 'multi_account', note: '설명' },
+        ...overrides,
+      });
+    expect(isRestriction('account_restriction')).toBe(true);
+    expect(restrictionStanding(account({ endsAt: null }), NOW)).toBe(true);
+    expect(restrictionStanding(account({ endsAt: new Date(NOW + 1).toISOString() }), NOW)).toBe(
+      true,
+    );
+    expect(restrictionStanding(account({ endsAt: new Date(NOW).toISOString() }), NOW)).toBe(false);
+    expect(
+      restrictionStanding(account({ endsAt: null, cancelledAt: '2026-10-21T00:00:00.000Z' }), NOW),
+    ).toBe(false);
+    expect(
+      myEndChangeView(
+        account({
+          endsAt: '2026-10-21T09:00:00.000Z',
+          endChange: { kind: 'lift', originalEndsAt: null },
+        }),
+      ),
+    ).toEqual({ label: '조기 해제됨', originalEndsAt: null });
+    // Its reason is the owner's words, 다계정 and 이상 거래 among them.
+    expect(reportReasonLabel('multi_account')).toBe('다계정');
+    expect(reportReasonLabel('abnormal_trading')).toBe('이상 거래');
+    expect(moderationActionLabel('account_restriction')).toBe('계정 제한');
+  });
+
   it('takes no other type for a restriction, whatever its end', () => {
     expect(isRestriction('writing_restriction')).toBe(true);
+    expect(isAccountRestriction('account_restriction')).toBe(true);
+    expect(isAccountRestriction('writing_restriction')).toBe(false);
     for (const type of [
       'hide',
       'warning',
@@ -1318,9 +1372,11 @@ describe('operators', () => {
         '30일',
         '무기한',
       ]);
-      expect(restrictionTermOf('7')).toEqual({ days: 7 });
-      expect(restrictionTermOf('none')).toEqual({ days: null });
-      for (const value of ['', '2', '14', 'null']) expect(restrictionTermOf(value)).toBeUndefined();
+      expect(restrictionTermOf('7', RESTRICTION_TERM_OPTIONS)).toEqual({ days: 7 });
+      expect(restrictionTermOf('none', RESTRICTION_TERM_OPTIONS)).toEqual({ days: null });
+      for (const value of ['', '2', '14', 'null']) {
+        expect(restrictionTermOf(value, RESTRICTION_TERM_OPTIONS)).toBeUndefined();
+      }
     });
 
     it('writes an end in Korean time, 무기한 for none, and each change of it', () => {
@@ -1369,6 +1425,225 @@ describe('operators', () => {
       expect(shortenEndDraft('2026-10-22T15:00', end, NOW).error).toBe(
         copy.errModerationNotEarlier,
       );
+    });
+  });
+
+  describe('the account restriction (#139, ADR-0085)', () => {
+    const NOW = Date.parse('2026-10-23T03:00:00.000Z');
+    const at = (ms: number) => new Date(ms).toISOString();
+    const REQUEST = '44444444-4444-4444-8444-444444444444';
+    const request = (overrides: Partial<AccountRestrictionRequest>): AccountRestrictionRequest => ({
+      id: REQUEST,
+      change: 'apply',
+      user: { id: USER, nickname: '회원', publicId: 'p1', role: 'user' },
+      actionId: null,
+      target: null,
+      apply: { reason: { code: 'multi_account', note: '설명' }, days: 7, subject: null },
+      endsAt: null,
+      requestReason: '설명',
+      requestedBy: { id: 'admin-a', nickname: '운영자A' },
+      requestedAt: '2026-10-23T02:00:00.000Z',
+      status: 'pending',
+      decidedBy: null,
+      decisionReason: null,
+      decidedAt: null,
+      moot: null,
+      aboutViewer: false,
+      ...overrides,
+    });
+
+    it('lists its own requests’ page in the area and keeps it under admin', () => {
+      expect(ADMIN_ACCOUNT_REQUESTS_PATH).toBe('/admin/moderation/account-restriction-requests');
+      expect(adminAccountRequestQueueOf('decided')).toBe('decided');
+      for (const param of ['pending', undefined, null, 'x', ['decided']]) {
+        expect(adminAccountRequestQueueOf(param)).toBe('pending');
+      }
+      expect(adminAccountRequestQueuePath('pending')).toBe(ADMIN_ACCOUNT_REQUESTS_PATH);
+      expect(adminAccountRequestQueuePath('decided')).toBe(
+        `${ADMIN_ACCOUNT_REQUESTS_PATH}?status=decided`,
+      );
+      // Under the area's key: every action and decision re-reads it.
+      expect(adminAccountRequestQueueKey('pending').slice(0, 2)).toEqual([...ADMIN_MODERATION_KEY]);
+      expect(isPrivateQueryKey(adminAccountRequestQueueKey('decided'))).toBe(true);
+    });
+
+    it('offers the owner’s eight reasons in order, and the terms with none picked (ADR-0069 decision 1 #57-12)', () => {
+      expect(ACCOUNT_RESTRICTION_REASON_OPTIONS.map((option) => option.label)).toEqual([
+        '스팸',
+        '괴롭힘',
+        '개인정보 노출',
+        '사칭',
+        '공모·조작 유도',
+        '이상 거래',
+        '다계정',
+        '기타',
+      ]);
+      expect(ACCOUNT_RESTRICTION_REASON_OPTIONS.map((option) => option.code)).toEqual([
+        ...ACCOUNT_RESTRICTION_REASONS,
+      ]);
+      // Not a report reason the owner's list leaves out.
+      expect(accountRestrictionReasonOf('off_topic')).toBeNull();
+      expect(accountRestrictionReasonOf('rights_infringement')).toBeNull();
+      expect(accountRestrictionReasonOf('')).toBeNull();
+      expect(accountRestrictionReasonOf('multi_account')).toBe('multi_account');
+      expect(ACCOUNT_RESTRICTION_TERM_OPTIONS.map((option) => option.days)).toEqual([
+        ...ACCOUNT_RESTRICTION_DAYS,
+        null,
+      ]);
+      expect(ACCOUNT_RESTRICTION_TERM_OPTIONS.map((option) => option.label)).toEqual([
+        '1일',
+        '3일',
+        '7일',
+        '30일',
+        '무기한',
+      ]);
+      expect(restrictionTermOf('', ACCOUNT_RESTRICTION_TERM_OPTIONS)).toBeUndefined();
+      expect(restrictionTermOf('none', ACCOUNT_RESTRICTION_TERM_OPTIONS)).toEqual({ days: null });
+      expect(restrictionTermLabel(30)).toBe('30일');
+      expect(restrictionTermLabel(null)).toBe('무기한');
+    });
+
+    it('needs a reason and the explanation whatever the reason, in both length counts the server keeps', () => {
+      expect(accountRestrictionDraft({ reason: null, note: '설명' })).toMatchObject({
+        reasonError: copy.errModerationReasonRequired,
+        noteError: null,
+      });
+      // Required with any reason, not only 기타 (#57-12 «필수 설명»).
+      expect(accountRestrictionDraft({ reason: 'spam', note: '  ' })).toMatchObject({
+        noteError: copy.errModerationAccountNoteRequired,
+      });
+      expect(accountRestrictionDraft({ reason: 'abnormal_trading', note: ' 설명 ' })).toEqual({
+        reason: 'abnormal_trading',
+        note: '설명',
+        reasonError: null,
+        noteError: null,
+      });
+      expect(
+        accountRestrictionDraft({
+          reason: 'spam',
+          note: '가'.repeat(MODERATION_NOTE_MAX_LENGTH + 1),
+        }).noteError,
+      ).toBe(copy.errModerationNoteTooLong);
+      // 300 emoji are 300 code points but 600 UTF-16 units — over what the request keeps.
+      expect(accountRestrictionDraft({ reason: 'spam', note: '😀'.repeat(300) }).noteError).toBe(
+        copy.errModerationNoteTooLong,
+      );
+      // An approval request's reason is held to the same units; a cancellation's is not.
+      const emoji = '😀'.repeat(APPROVAL_REASON_MAX_LENGTH / 2 + 1);
+      expect(recordReasonDraft(emoji).error).toBeNull();
+      expect(recordReasonDraft(emoji, true).error).toBe(copy.errModerationRecordRequired);
+      expect(recordReasonDraft(' 소명 확인 ', true)).toEqual({ reason: '소명 확인', error: null });
+    });
+
+    it('says in a cancellation request that another admin approves it, standing or ended (ADR-0085 7-4)', () => {
+      const action = (endsAt: string | null) => ({
+        type: 'account_restriction' as const,
+        createdAt: at(NOW - 60_000),
+        endsAt,
+        cancelledAt: null,
+      });
+      for (const endsAt of [at(NOW + 1), null]) {
+        expect(cancelDialogBody(action(endsAt), NOW)).toBe(copy.adminModerationAccountCancelBody);
+      }
+      for (const endsAt of [at(NOW), at(NOW - 1)]) {
+        expect(cancelDialogBody(action(endsAt), NOW)).toBe(
+          copy.adminModerationAccountCancelEndedBody,
+        );
+      }
+      expect(copy.adminModerationAccountCancelBody).toContain('다른 운영자가 승인하면');
+      expect(copy.adminModerationAccountCancelEndedBody).toContain('다른 운영자가 승인하면');
+    });
+
+    it('names each request and its status, and why a moot one is closed by a rejection', () => {
+      expect(accountRequestChangeLabel('apply')).toBe('계정 제한');
+      expect(accountRequestChangeLabel('shorten')).toBe('계정 제한 감경');
+      expect(accountRequestChangeLabel('lift')).toBe('계정 제한 조기 해제');
+      expect(accountRequestChangeLabel('cancel')).toBe('계정 제한 취소');
+      expect(approvalStatusLabel('pending')).toBe('승인 대기');
+      expect(approvalStatusLabel('approved')).toBe('승인됨');
+      expect(approvalStatusLabel('rejected')).toBe('거절됨');
+      expect(accountRequestMootText(null)).toBeNull();
+      for (const moot of ['cancelled', 'ended', 'not_earlier', 'end_passed'] as const) {
+        expect(accountRequestMootText(moot)).toContain('승인할 수 없습니다');
+        expect(accountRequestMootText(moot)).toContain('거절');
+      }
+    });
+
+    it('says which restriction a change request changes, as it stands, and links to its row (ADR-0085 7-12)', () => {
+      const ACTION = '55555555-5555-4555-8555-555555555555';
+      const given = '2026-10-20T03:00:00.000Z';
+      const ends = '2026-10-27T03:00:00.000Z';
+      expect(accountRequestTargetText({ createdAt: given, endsAt: ends, cancelledAt: null })).toBe(
+        `${formatKst(given)} · 끝나는 때 ${formatKst(ends)}`,
+      );
+      expect(accountRequestTargetText({ createdAt: given, endsAt: null, cancelledAt: null })).toBe(
+        `${formatKst(given)} · 끝나는 때 무기한`,
+      );
+      expect(accountRequestTargetText({ createdAt: given, endsAt: ends, cancelledAt: ends })).toBe(
+        `${formatKst(given)} · 끝나는 때 ${formatKst(ends)} · 취소됨`,
+      );
+      // Its row on the member's page, by the id the row carries there.
+      expect(adminActionAnchor(ACTION.toUpperCase())).toBe(`moderation-action-${ACTION}`);
+      expect(adminActionPath(USER, ACTION)).toBe(
+        `${adminUserModerationPath(USER)}#moderation-action-${ACTION}`,
+      );
+      expect(copy.adminAccountRequestTarget).toBe('대상 계정 제한');
+      expect(copy.adminAccountRequestTargetReason).toBe('대상 제한의 사유');
+    });
+
+    it('says to an admin a request is about that they decide nothing on it, nor see who asked or decided', () => {
+      expect(copy.adminAccountRequestAboutMe).toContain('나에 관한 요청');
+      expect(copy.adminAccountRequestAboutMe).toContain('승인하거나 거절할 수 없고');
+      expect(copy.adminAccountRequestAboutMe).not.toContain('내게 온');
+    });
+
+    it('lets an admin who neither asked nor is the member decide (ADR-0056 decision 1-7)', () => {
+      expect(requestStanding(request({}), undefined)).toBeUndefined();
+      expect(requestStanding(request({}), 'admin-b')).toBe('decide');
+      // The one who asked: another admin decides, in every environment.
+      expect(requestStanding(request({}), 'admin-a')).toBe('requester');
+      // About the reader: their asking and deciding admins withheld, decided by another.
+      expect(requestStanding(request({ aboutViewer: true, requestedBy: null }), USER)).toBe('own');
+      expect(requestStanding(request({}), USER)).toBe('own');
+      for (const status of ['approved', 'rejected'] as const) {
+        expect(requestStanding(request({ status }), 'admin-b')).toBe('decided');
+      }
+    });
+
+    it('asks only the admin who can reject a moot request to reject it (ADR-0085 7-3)', () => {
+      const moot = request({ change: 'lift', apply: null, moot: 'ended' });
+      expect(accountRequestMootNotice(moot, 'decide')).toBe(copy.adminAccountRequestMootEnded);
+      // The one who asked and the admin it is about decide nothing: no notice asks them to.
+      for (const standing of ['requester', 'own', 'decided', undefined] as const) {
+        expect(accountRequestMootNotice(moot, standing)).toBeNull();
+      }
+      expect(accountRequestMootNotice(request({}), 'decide')).toBeNull();
+    });
+
+    it('says the two-person rule’s refusals and the direct routes’ refusal of an account restriction', () => {
+      const approval = (message: string) =>
+        refused(409, 'APPROVAL_NOT_ALLOWED', [{ path: ['request'], message }]);
+      expect(moderationFailure(approval('requester'))).toEqual({
+        kind: 'alert',
+        message: copy.errApprovalRequester,
+      });
+      expect(moderationFailure(approval('decided'))).toEqual({
+        kind: 'alert',
+        message: copy.errApprovalDecided,
+      });
+      expect(moderationFailure(approval('something new'))).toEqual({
+        kind: 'alert',
+        message: copy.errUnknown,
+      });
+      const notAllowed = (reason: string) => refused(409, 'MODERATION_NOT_ALLOWED', { reason });
+      expect(moderationFailure(notAllowed('approval_required'))).toEqual({
+        kind: 'alert',
+        message: copy.errModerationApprovalRequired,
+      });
+      expect(moderationFailure(notAllowed('not_account_restriction'))).toEqual({
+        kind: 'alert',
+        message: copy.errModerationNotAccountRestriction,
+      });
     });
   });
 

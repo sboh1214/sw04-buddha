@@ -1,8 +1,9 @@
 /**
  * The one check point of public profile item writes (#41, ADR-0069 decision 3 #37-9 and decision
- * 7), with the sanction lookup stubbed: the writing restriction (#185) answers it from its records
- * (`writingRestrictionOf`, proven against the database in restrictions.controller.test.ts and
- * public-items-sanctioned.test.ts) and #139's account restriction will; the stub stands for them.
+ * 7), with the sanction lookup stubbed: the writing restriction (#185) and the account restriction
+ * (#139) answer it from their records (`restrictionInForce`, proven against the database in
+ * restrictions.controller.test.ts, account-restrictions.controller.test.ts and
+ * public-items-sanctioned.test.ts); the stub stands for them.
  * The refusal is RESTRICTED carrying the sanction's kind and end (owner decision 2026-10-21 answer
  * 8 on #41, ADR-0082). And the onboarding those writes need (owner decision 2026-10-21 answer 2),
  * with its check stubbed. Pure: no database.
@@ -11,7 +12,7 @@ import { type Db } from '@buddha/db';
 import { type RestrictedDetails } from '@buddha/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
-import { writingRestrictionOf } from '../moderation/restrictions.js';
+import { restrictionInForce } from '../moderation/restrictions.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import {
   assertPublicItemEdit,
@@ -70,8 +71,8 @@ describe('assertPublicItemEdit', () => {
     expect(sanctioned).toHaveBeenCalledOnce();
   });
 
-  it('asks the writing restriction by default (#185)', () => {
-    expect(sanctionInForce).toBe(writingRestrictionOf);
+  it('asks the writing and the account restriction by default, the later of the two (#185, #139)', () => {
+    expect(sanctionInForce).toBe(restrictionInForce);
   });
 });
 

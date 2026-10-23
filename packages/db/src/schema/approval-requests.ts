@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
+import { check, index, jsonb, pgTable, text, uuid, varchar } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { timestampTz } from './columns.js';
 import { approvalStatusEnum } from './enums.js';
@@ -17,6 +17,12 @@ import { approvalStatusEnum } from './enums.js';
  * decision columns to the status and refuse a decision by the requester — whatever the writer, in
  * every environment. buddha_app cannot DELETE a row, so the table is the record of who requested,
  * who decided, when and why. Only the API's ApprovalService writes it.
+ *
+ * Consumers: the account restriction (#139, ADR-0085) — `kind` `account_restriction` (target
+ * `user`, the member), `account_restriction_shorten`, `account_restriction_lift` and
+ * `account_restriction_cancel` (target `moderation_action`, the restriction); the action rows its
+ * approvals bring in name them (`moderation_actions.approval_id`, `cancel_approval_id`,
+ * `restriction_end_changes.approval_id`, migration 0040).
  */
 export const approvalRequests = pgTable(
   'approval_requests',
@@ -51,5 +57,15 @@ export const approvalRequests = pgTable(
       'approval_requests_reasons_check',
       sql`btrim(${t.requestReason}) <> '' AND btrim(${t.decisionReason}) IS DISTINCT FROM ''`,
     ),
+    /**
+     * A target's requests (#139, migration 0040): a member's account restriction requests on their
+     * moderation page, and a restriction's own — `target_id` is text, the member's account id or
+     * the action's uuid.
+     */
+    index('approval_requests_target_idx').on(t.targetType, t.targetId),
+    /** The requests waiting for a decision, the oldest first (#139's queue of requests). */
+    index('approval_requests_pending_requested_at_idx')
+      .on(t.requestedAt, t.id)
+      .where(sql`${t.status} = 'pending'`),
   ],
 );

@@ -552,18 +552,24 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
     it('answers the member, and only the member, the restriction that governs: its kind and end as a refusal names them', async () => {
       const mine = async (who: TestUser = member) =>
         myRestrictionSchema.parse(dataOf(await read('/me/moderation/restriction', who)));
-      expect(await mine()).toEqual({ restriction: null });
+      expect(await mine()).toEqual({ restriction: null, accountRestriction: null });
       const week = await restrict(7);
       await restrict(1);
-      expect(await mine()).toEqual({ restriction: { kind: 'writing', endsAt: week.endsAt } });
+      expect(await mine()).toEqual({
+        restriction: { kind: 'writing', endsAt: week.endsAt },
+        accountRestriction: null,
+      });
       expect(restrictedOf(await newPost())).toEqual({ kind: 'writing', endsAt: week.endsAt });
       const indefinite = await restrict(null);
-      expect(await mine()).toEqual({ restriction: { kind: 'writing', endsAt: null } });
+      expect(await mine()).toEqual({
+        restriction: { kind: 'writing', endsAt: null },
+        accountRestriction: null,
+      });
       // Nothing of who gave it or why (#45-13); another member reads their own — none.
       const body = (await read('/me/moderation/restriction', member)).body;
       expect(body).not.toContain(admin.id);
       expect(body).not.toContain('같은 링크 반복');
-      expect(await mine(other)).toEqual({ restriction: null });
+      expect(await mine(other)).toEqual({ restriction: null, accountRestriction: null });
       expect((await read('/me/moderation/restriction')).statusCode).toBe(401);
       // However many actions come after it: the banner's read is not the actions' first page.
       for (let i = 0; i < 21; i += 1) {
@@ -572,12 +578,18 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
         );
       }
       expect((await myActions()).map((action) => action.id)).not.toContain(indefinite.id);
-      expect(await mine()).toEqual({ restriction: { kind: 'writing', endsAt: null } });
+      expect(await mine()).toEqual({
+        restriction: { kind: 'writing', endsAt: null },
+        accountRestriction: null,
+      });
       // Lifted, the week governs again; cancelled, none.
       actionOf(
         await send(`/admin/moderation/actions/${indefinite.id}/lift`, { reason: '해제' }, admin),
       );
-      expect(await mine()).toEqual({ restriction: { kind: 'writing', endsAt: week.endsAt } });
+      expect(await mine()).toEqual({
+        restriction: { kind: 'writing', endsAt: week.endsAt },
+        accountRestriction: null,
+      });
       for (const action of await t.db
         .select({ id: schema.moderationActions.id })
         .from(schema.moderationActions)
@@ -592,7 +604,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
           await send(`/admin/moderation/actions/${action.id}/cancel`, { reason: '취소' }, admin),
         );
       }
-      expect(await mine()).toEqual({ restriction: null });
+      expect(await mine()).toEqual({ restriction: null, accountRestriction: null });
     });
 
     it('leaves trading as it was: the balance, the ledger, the orders and the holdings read as before, untouched by restricting, 감경, lifting and cancelling (#185 acceptance; orders are placed from M9)', async () => {

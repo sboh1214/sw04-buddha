@@ -1,7 +1,7 @@
 import { POST_EXCERPT_MAX_LENGTH, codePointLength } from '@buddha/shared';
 import type { InfiniteData } from '@tanstack/react-query';
 import { copy } from '@/copy';
-import type { CommentedPost, HiddenNotice, PostAuthor, ReportReason } from './api';
+import type { CommentedPost, HiddenNotice, ModerationReason, PostAuthor } from './api';
 import { mapKept, postFirstLine, withAuthorImage } from './posts';
 
 /**
@@ -128,8 +128,11 @@ export function commentedPostText(post: CommentedPost): string {
   }
 }
 
-/** The words of each report reason (#45-10), in the owner's order — a hiding's reason is one. */
-const REPORT_REASON_LABELS: Readonly<Record<ReportReason, string>> = {
+/**
+ * The words of each report reason (#45-10), in the owner's order — a hiding's reason is one — and
+ * of the two only an account restriction takes (#139).
+ */
+const REPORT_REASON_LABELS: Readonly<Record<ModerationReason, string>> = {
   spam: copy.reportReasonSpam,
   harassment: copy.reportReasonHarassment,
   personal_info: copy.reportReasonPersonalInfo,
@@ -138,10 +141,12 @@ const REPORT_REASON_LABELS: Readonly<Record<ReportReason, string>> = {
   off_topic: copy.reportReasonOffTopic,
   rights_infringement: copy.reportReasonRightsInfringement,
   other: copy.reportReasonOther,
+  abnormal_trading: copy.reportReasonAbnormalTrading,
+  multi_account: copy.reportReasonMultiAccount,
 };
 
-/** A report reason as the screen names it ('스팸', '시장과 무관', …). */
-export function reportReasonLabel(code: ReportReason): string {
+/** A report or an action's reason as the screen names it ('스팸', '시장과 무관', '다계정', …). */
+export function reportReasonLabel(code: ModerationReason): string {
   return REPORT_REASON_LABELS[code];
 }
 

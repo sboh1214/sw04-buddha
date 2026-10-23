@@ -163,9 +163,9 @@ export class ProfileReportsController {
 
 /**
  * `/api/v1/me/reports` and `/me/moderation/actions` (#50, ADR-0069 decision 4 #50: the MY page of
- * the actions received and the reports filed), and `/me/moderation/restriction` (#185, ADR-0082:
- * the restriction the banner speaks of). Owner-only: the session decides whose records are read,
- * and nothing here takes another account. Signed in is enough.
+ * the actions received and the reports filed), and `/me/moderation/restriction` (#185, ADR-0082;
+ * #139, ADR-0085: the restrictions the banners speak of). Owner-only: the session decides whose
+ * records are read, and nothing here takes another account. Signed in is enough.
  */
 @ApiTags('me')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -203,10 +203,12 @@ export class MyModerationController {
     operationId: 'listMyModerationActions',
     summary:
       'The actions operators took on the account, newest first: the type, the reason (a report ' +
-      'reason and the operator’s explanation), what it was about (the account’s own item, ' +
-      'nothing of it once deleted), its end when it has one — for a writing restriction an ' +
-      'operator lifted early or shortened, that kind and the end it was given — and its ' +
-      'cancellation. Never the operator, a report, a reporter, nor why an end changed',
+      'reason — or an account restriction’s own — and the operator’s explanation), what it was ' +
+      'about (the account’s own item, nothing of it once deleted), its end when it has one — for ' +
+      'a writing or an account restriction an operator lifted early or shortened, that kind and ' +
+      'the end it was given — and its cancellation. An account restriction is here once another ' +
+      'admin approved it. Never the operator, the approving admin, a report, a reporter, nor why ' +
+      'an end changed',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
@@ -224,14 +226,16 @@ export class MyModerationController {
   @ApiOperation({
     operationId: 'getMyRestriction',
     summary:
-      'The writing restriction that governs the account now, as a refused write names it: its ' +
-      'kind and its end (null: none, until an operator lifts it) — the latest end of those ' +
-      'standing, one with no end over any. Null when none stands. Never the operator, the reason ' +
-      'nor a report',
+      'The restrictions that govern the account now, each as a refusal names it: the writing ' +
+      'restriction (`restriction`, what a refused post, comment or edit names) and the account ' +
+      'restriction (`accountRestriction`, what a refused order names) — its kind and its end ' +
+      '(null: none, until it is lifted), the latest end of those standing, one with no end over ' +
+      'any. Null when none of that kind stands; an account restriction not yet approved is none. ' +
+      'Never the operator, the reason nor a report',
   })
   @ApiData(myRestrictionSchema)
   @ApiErrors('UNAUTHENTICATED')
-  async restriction(@CurrentUser() user: SessionUser): Promise<MyRestriction> {
-    return { restriction: await this.reads.myRestriction(user.id) };
+  restriction(@CurrentUser() user: SessionUser): Promise<MyRestriction> {
+    return this.reads.myRestrictions(user.id);
   }
 }

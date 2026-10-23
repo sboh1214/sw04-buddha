@@ -94,10 +94,10 @@ export function myModerationActionsInfiniteQueryOptions(session?: SessionLike) {
 }
 
 /**
- * `GET /me/moderation/restriction`: the writing restriction that governs the member now, or none
- * (#185) — what the banner says (`SanctionBanner`), read apart from the paged actions so that no
- * number of later actions keeps it off. Once the session is known, and again on every mount and
- * after any write a restriction refused (query-client.ts).
+ * `GET /me/moderation/restriction`: the writing restriction (#185) and the account restriction
+ * (#139) that govern the member now, each or none — what the banner says (`SanctionBanner`), read
+ * apart from the paged actions so that no number of later actions keeps one off. Once the session
+ * is known, and again on every mount and after any write a restriction refused (query-client.ts).
  */
 export function myRestrictionQueryOptions(session?: SessionLike) {
   return {

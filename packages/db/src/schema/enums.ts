@@ -15,8 +15,8 @@ import {
   OUTCOMES,
   PAYMENT_STATUSES,
   PRICE_TICK_TRIGGERS,
+  MODERATION_REASONS,
   RELEASE_SETTING_STATUSES,
-  REPORT_REASONS,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
   ROLES,
@@ -38,7 +38,12 @@ export const counterpartyTypeEnum = pgEnum('counterparty_type', COUNTERPARTY_TYP
 export const priceTickTriggerEnum = pgEnum('price_tick_trigger', PRICE_TICK_TRIGGERS);
 export const releaseSettingStatusEnum = pgEnum('release_setting_status', RELEASE_SETTING_STATUSES);
 export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES);
-/** 신고 사유 (#45-10): a report's reason, and the reason every moderation action carries (#50). */
-export const reportReasonEnum = pgEnum('report_reason', REPORT_REASONS);
+/**
+ * 신고 사유 (#45-10): a report's reason, and the reason every moderation action carries (#50) —
+ * with the two only an account restriction takes (#139, ADR-0069 decision 1 #57-12: 이상 거래 and
+ * 다계정), added by migration 0040 at the end (MODERATION_REASONS). The tables' CHECKs hold a
+ * report and every other action to REPORT_REASONS (migration 0040).
+ */
+export const reportReasonEnum = pgEnum('report_reason', MODERATION_REASONS);
 export const reportTargetTypeEnum = pgEnum('report_target_type', REPORT_TARGET_TYPES);
 export const reportStatusEnum = pgEnum('report_status', REPORT_STATUSES);

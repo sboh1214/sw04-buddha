@@ -13,7 +13,9 @@ import { ActionRows, type DialogSpec, ModerationDialog, ModerationNav } from '..
  * without a report (decision 4 #50) — with its reason, operator, time and cancellation, and 조치
  * 취소 on one that stands (with the operators' reason; a hidden item shows again, a profile item is
  * not restored) — and a standing writing restriction's 조기 해제 and 감경 with the changes of its
- * end (#185, ADR-0082). Every admin reads it (ADR-0056 1-2).
+ * end (#185, ADR-0082); an account restriction's (#139, ADR-0085) with who asked and who approved
+ * each step, and its 감경, 조기 해제 and 취소 as requests another admin approves. Every admin reads
+ * it (ADR-0056 1-2).
  */
 export function AdminModerationActions() {
   const list = useAdminModerationActions();

@@ -1290,6 +1290,9 @@ export const copy = {
   reportReasonOffTopic: '시장과 무관',
   reportReasonRightsInfringement: '권리 침해',
   reportReasonOther: '기타',
+  // 계정 제한(#139, ADR-0069 결정 1 #57-12)만의 사유 둘. 신고 사유는 아니다.
+  reportReasonAbnormalTrading: '이상 거래',
+  reportReasonMultiAccount: '다계정',
 
   // --- 신고와 운영 처리 (#50, ADR-0081) ---
   // 신고(ADR-0069 결정 2 #45-10, 결정 3 #37-10, 결정 7): 근거 글·댓글·대댓글과 공개 프로필. 사유는 위의
@@ -1340,6 +1343,7 @@ export const copy = {
   moderationActionBioClear: '소개 비우기',
   moderationActionImageRemove: '프로필 이미지 삭제',
   moderationActionWritingRestriction: '작성 제한',
+  moderationActionAccountRestriction: '계정 제한',
   moderationReason: '사유',
   moderationTakenAt: '조치한 때',
   moderationEndsAt: '끝나는 때',
@@ -1389,8 +1393,8 @@ export const copy = {
   // 글·댓글 고치기, 공개 프로필 항목(닉네임·소개·이미지·관심 카테고리)의 새 값이다. 내 글·댓글 지우기·좋아요·
   // 신고·관심 등록·읽기와 비공개 설정(시간대)은 그대로다. #50의 조치(숨김·경고·프로필 항목)는 제재가 아니다
   // (#45-11). 띠는 이 제목과 끝나는 때, 조치·신고 내역 링크뿐이다(오너 결정 2026-10-22 저녁, #186 경유: «경고·
-  // 제재 띠 → 이의 안내를 빼고 … 끝나는 시각(제한)과 조치·신고 내역 링크만»). 계정 제한(#139)은 다시 쌓을 때
-  // 제 문장을 더한다.
+  // 제재 띠 → 이의 안내를 빼고 … 끝나는 시각(제한)과 조치·신고 내역 링크만»). 계정 제한(#139)의 문장은 아래
+  // restrictionAccountTitle부터다(ADR-0085).
   restrictionWritingTitle: '작성 제한 중입니다.',
   // 끝나는 때: 회원의 시간대로 쓴 시각 뒤에 붙어 '2026. 10. 23. 오후 3:00까지', 운영자가 풀 때까지면
   // '무기한'(#45-12의 기간).
@@ -1416,9 +1420,19 @@ export const copy = {
   // 소개·이미지·관심 카테고리는 제한 중에도 비우거나 지울 수 있다(ADR-0069 결정 7). MY 설정의 거절만 —
   // 온보딩의 관심 카테고리 단계에는 비우거나 지울 것이 없다.
   errRestrictedClearAllowed: '비우거나 지우는 것은 할 수 있습니다.',
-  // 온보딩의 관심 카테고리 단계에서 24시간이 지난 고르기가 작성 제한으로 거절될 때만(오너 결정 2026-10-23
-  // 답 9 — 그 화면에서 열려 있는 것은 건너뛰기다).
+  // 온보딩의 관심 카테고리 단계에서 24시간이 지난 고르기가 제한으로 거절될 때만 — 작성 제한이든 계정
+  // 제한이든(오너 결정 2026-10-23 답 9 — 그 화면에서 열려 있는 것은 건너뛰기다, ADR-0085 7-11).
   errRestrictedSkipAllowed: '건너뛰기는 할 수 있습니다.',
+  // 계정 제한(#139, ADR-0085; ADR-0069 결정 1 #57-12·#57-13, 결정 3 #37-9, 결정 4 #139·#140 행). 다른 운영자가
+  // 승인한 때부터 효력이 있다(ADR-0056 결정 1-7). 막는 것은 거래(새 주문 — #119가 서버의 확인을 부른다)·시장 제안
+  // (#77)·공개 프로필 항목의 새 값·탈퇴(#140)이고, 글·댓글 쓰기·좋아요·신고·관심 등록과 잔액·기록은 그대로다
+  // (#57-12 — 커뮤니티 작성은 작성 제한으로 따로 건다). 띠는 작성 제한의 띠와 같은 자리에서 이 제목과 끝나는 때,
+  // 조치·신고 내역 링크뿐이다(오너 결정 2026-10-22 저녁). 거절은 작성 제한의 문장과 같은 꼴에 이 제한의 이름이다 —
+  // 뒤에 '(…까지).'나 '(무기한).'과 열려 있는 것(errRestrictedClearAllowed·errRestrictedSkipAllowed)이 붙는다.
+  // 요청하거나 승인한 운영자는 회원에게 보이지 않는다(#139 «건 운영자는 보이지 않는다»).
+  restrictionAccountTitle: '계정 제한 중입니다.',
+  errRestrictedAccountProfile: '계정 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다',
+  errRestrictedAccountNickname: '계정 제한 중에는 닉네임을 바꿀 수 없습니다',
   // 경고의 안내 띠(오너 결정 2026-10-21): 경고한 때부터 이의 기한 14일 동안 MY 요약에만 보이고(글쓰기
   // 화면은 제한만), 조치·신고 내역으로 잇는다. 취소된 경고에는 없다. 이 문장과 링크뿐이고 이의의 안내는
   // 없다(오너 결정 2026-10-22 답 3, #186).
@@ -1588,6 +1602,105 @@ export const copy = {
   adminModerationChangedAt: '바꾼 때',
   errModerationTermRequired: '기간을 골라 주세요.',
   errModerationEndRequired: '새로 끝나는 때를 입력해 주세요.',
+  // 계정 제한(#139, ADR-0085; ADR-0069 결정 1 #57-12, 결정 2 #45-11·#45-14, 결정 4 #50·#139 행; ADR-0056 결정
+  // 1-7): 한 운영자가 회원 화면이나 신고 목록의 대상 화면에서 요청하고, 요청하지 않은 다른 운영자가 승인해야 효력이
+  // 있다 — 걸기·감경·조기 해제·취소 모두. 기간은 승인한 때부터 센다. 사유는 정한 목록(스팸·괴롭힘·개인정보 노출·
+  // 사칭·공모·조작 유도·이상 거래·다계정·기타)에서 하나와 필수 설명이다. 요청에는 기한이 없고 요청한 운영자가
+  // 거둘 수 없다 — 원치 않는 요청은 다른 운영자가 사유와 함께 거절한다(ADR-0085 7-3). 운영자에 관한 요청은
+  // 셋째 운영자만 승인하거나 거절해, 관리자가 둘뿐이면 결정되지 않고 남는다 — 이 문구들은 그 경우를 따로 말하지
+  // 않는다(7-15, 오너에게 물었다 — 결과 4의 13).
+  adminModerationAccountRestrict: '계정 제한 요청',
+  adminModerationAccountRestrictTitle: '회원의 계정 제한을 요청합니다',
+  adminModerationAccountRestrictBody:
+    '다른 운영자가 승인하면 그때부터 고른 기간 동안 거래(새 주문)와 시장 제안, 공개 프로필의 새 값, 탈퇴를 막습니다. 글·댓글 쓰기·좋아요·신고·관심 등록과 잔액·기록은 그대로입니다. 이미 계정 제한 중이면 더 늦게 끝나는 쪽이 적용됩니다. 대상을 고르면 승인될 때 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다.',
+  adminModerationAccountNoteHint:
+    '꼭 적어야 합니다. 500자까지 쓸 수 있고, 승인하는 운영자도 이 설명을 요청 사유로 읽습니다.',
+  adminModerationAccountRequested: '계정 제한을 요청했습니다. 다른 운영자가 승인하면 적용됩니다.',
+  adminModerationAccountLift: '조기 해제 요청',
+  adminModerationAccountLiftTitle: '계정 제한의 조기 해제를 요청합니다',
+  adminModerationAccountLiftBody:
+    '다른 운영자가 승인하면 그때 끝나고 조치는 기록에 그대로 남습니다. 사유는 회원에게 보이지 않습니다. 같은 회원의 다른 계정 제한은 그대로입니다.',
+  adminModerationAccountLiftRequested:
+    '조기 해제를 요청했습니다. 다른 운영자가 승인하면 적용됩니다.',
+  adminModerationAccountShorten: '감경 요청',
+  adminModerationAccountShortenTitle: '계정 제한의 감경을 요청합니다',
+  adminModerationAccountShortenBody:
+    '지금 끝나는 때보다 앞이고 아직 오지 않은 때를 한국 시간으로 넣습니다. 무기한이면 오지 않은 어느 때든 됩니다. 승인할 때 그 때가 이미 지났거나 지금 끝나는 때보다 앞이 아니면 승인되지 않습니다. 사유는 회원에게 보이지 않습니다.',
+  adminModerationAccountShortenRequested: '감경을 요청했습니다. 다른 운영자가 승인하면 적용됩니다.',
+  adminModerationAccountCancel: '취소 요청',
+  adminModerationAccountCancelTitle: '계정 제한의 취소를 요청합니다',
+  // 서 있는 계정 제한과 이미 끝난(기간이 지났거나 조기 해제된) 계정 제한의 취소 요청 — 작성 제한의 두 창(답 11)과
+  // 같은 구분이다. 이미 끝난 것의 취소도 승인을 받는다(ADR-0085 7-4).
+  adminModerationAccountCancelBody:
+    '다른 운영자가 승인하면 곧바로 끝나고 회원의 조치 내역에 취소됨으로 보입니다. 조치는 그대로 두고 지금 끝내려면 조기 해제를 요청합니다.',
+  adminModerationAccountCancelEndedBody:
+    '이미 끝난 계정 제한입니다. 다른 운영자가 승인하면 회원의 조치 내역에 취소됨으로 보입니다.',
+  adminModerationAccountCancelRequested: '취소를 요청했습니다. 다른 운영자가 승인하면 적용됩니다.',
+  // 계정 제한의 줄: 요청한 운영자가 그 조치의 운영자이고(ADR-0085 7-1), 승인한 운영자·사유·시각이 따로 있다.
+  // 자기에 관한 기록이면 운영자 없이 시각만(오너 결정 2026-10-21).
+  adminModerationRequestedBy: '요청한 운영자',
+  adminModerationApprovedBy: '승인한 운영자',
+  adminModerationApprovedAt: '승인한 때',
+  adminModerationApprovalReason: '승인 사유',
+  adminModerationCancelRequestedBy: '취소를 요청한 운영자',
+  adminModerationCancelApprovedBy: '취소를 승인한 운영자',
+  adminModerationCancelApprovedAt: '취소를 승인한 때',
+  adminModerationCancelApprovalReason: '취소 승인 사유',
+  errModerationAccountNoteRequired: '회원에게 보일 설명을 적어 주세요.',
+  // 계정 제한 요청의 목록(관리자 신고·조치 영역의 '계정 제한 요청')과 회원 화면의 승인 대기 요청.
+  adminAccountRequests: '계정 제한 요청',
+  adminAccountRequestsIntro:
+    '계정 제한과 그 감경·조기 해제·취소는 한 운영자가 요청하고 요청하지 않은 다른 운영자가 승인해야 적용됩니다. 요청에는 기한이 없습니다. 더는 필요 없는 요청은 다른 운영자가 사유와 함께 거절합니다.',
+  adminAccountRequestsPending: '승인 대기',
+  adminAccountRequestsDecided: '결정함',
+  adminAccountRequestsEmptyPending: '승인을 기다리는 요청이 없습니다.',
+  adminAccountRequestsEmptyDecided: '결정한 요청이 없습니다.',
+  adminAccountRequestsMember: '승인을 기다리는 계정 제한 요청',
+  adminAccountRequestsMemberEmpty: '승인을 기다리는 요청이 없습니다.',
+  adminAccountRequestChangeApply: '계정 제한',
+  adminAccountRequestChangeShorten: '계정 제한 감경',
+  adminAccountRequestChangeLift: '계정 제한 조기 해제',
+  adminAccountRequestChangeCancel: '계정 제한 취소',
+  approvalStatusPending: '승인 대기',
+  approvalStatusApproved: '승인됨',
+  approvalStatusRejected: '거절됨',
+  adminAccountRequestReason: '요청 사유',
+  adminAccountRequestEndsAt: '요청한 끝나는 때',
+  // 감경·조기 해제·취소 요청이 바꿀 계정 제한(지금 모습): 건 때·지금 끝나는 때와 그 사유. 회원에게 계정 제한이
+  // 여럿일 수 있어 승인하는 운영자가 어느 것인지 읽는다. 줄은 회원 화면의 그 조치로 잇는다.
+  adminAccountRequestTarget: '대상 계정 제한',
+  adminAccountRequestTargetReason: '대상 제한의 사유',
+  adminAccountRequestRequestedAt: '요청한 때',
+  adminAccountRequestDecidedBy: '결정한 운영자',
+  adminAccountRequestDecidedAt: '결정한 때',
+  adminAccountRequestDecisionReason: '결정 사유',
+  adminAccountRequestOwn: '내가 한 요청이라 다른 운영자가 승인하거나 거절합니다.',
+  adminAccountRequestAboutMe:
+    '나에 관한 요청이라 내가 승인하거나 거절할 수 없고, 요청하거나 결정한 운영자는 보이지 않습니다.',
+  // 요청 뒤 제한이 바뀌어 승인이 거절될 요청(`moot`): 승인 단추 없이 까닭과 거절만 둔다(ADR-0085 7-3).
+  adminAccountRequestMootCancelled:
+    '그 계정 제한이 요청 뒤에 취소되어 승인할 수 없습니다. 거절로 닫아 주세요.',
+  adminAccountRequestMootEnded:
+    '그 계정 제한이 요청 뒤에 끝나 승인할 수 없습니다. 거절로 닫아 주세요.',
+  adminAccountRequestMootNotEarlier:
+    '요청한 끝나는 때가 지금 끝나는 때보다 앞이 아니라 승인할 수 없습니다. 거절로 닫아 주세요.',
+  adminAccountRequestMootEndPassed:
+    '요청한 끝나는 때가 이미 지나 승인할 수 없습니다. 거절로 닫아 주세요.',
+  adminAccountRequestApprove: '승인',
+  adminAccountRequestReject: '거절',
+  adminAccountRequestApproveTitle: '요청을 승인합니다',
+  adminAccountRequestApproveBody:
+    '승인하면 요청한 일이 곧바로 적용되고, 승인한 운영자·사유·시각이 기록에 남습니다.',
+  adminAccountRequestApproveApplyBody:
+    '승인하면 그때부터 계정 제한이 적용되고 기간도 그때부터 셉니다. 대상을 정한 요청이면 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다. 승인한 운영자·사유·시각이 기록에 남습니다.',
+  adminAccountRequestRejectTitle: '요청을 거절합니다',
+  adminAccountRequestRejectBody:
+    '거절하면 아무것도 바뀌지 않고 요청은 거절됨으로 닫힙니다. 거절한 운영자·사유·시각이 기록에 남습니다.',
+  adminAccountRequestApproved: '승인했습니다.',
+  adminAccountRequestRejected: '거절했습니다.',
+  // 2인 통제의 거절(APPROVAL_NOT_ALLOWED, ADR-0056 결정 4): 요청한 운영자의 결정, 이미 결정된 요청.
+  errApprovalRequester: '요청한 운영자는 승인하거나 거절할 수 없습니다. 다른 운영자가 결정합니다.',
+  errApprovalDecided: '이미 결정된 요청입니다. 화면을 새로 고쳐 주세요.',
   adminModerationReasonLabel: '사유',
   adminModerationReasonPlaceholder: '사유 고르기',
   adminModerationNoteLabel: '회원에게 보일 설명',
@@ -1617,6 +1730,10 @@ export const copy = {
   errModerationEnded: '이미 끝난 제한입니다. 화면을 새로 고쳐 주세요.',
   errModerationNotEarlier: '새로 끝나는 때는 지금 끝나는 때보다 앞이어야 합니다.',
   errModerationEndPassed: '이미 지난 시각입니다. 지금 끝내려면 해제해 주세요.',
+  // 계정 제한(#139)은 다른 운영자의 승인으로만 바뀐다(ADR-0056 결정 1-7).
+  errModerationApprovalRequired:
+    '계정 제한은 다른 운영자의 승인을 받아 바꾸거나 취소합니다. 화면을 새로 고쳐 주세요.',
+  errModerationNotAccountRestriction: '계정 제한이 아닌 조치입니다. 화면을 새로 고쳐 주세요.',
   errModerationReportIds: '한 번에 기각할 수 있는 신고는 100건까지입니다. 화면을 새로 고쳐 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.

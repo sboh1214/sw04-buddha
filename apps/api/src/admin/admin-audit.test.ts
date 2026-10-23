@@ -71,6 +71,18 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/moderation/actions/:actionId/shorten': 'moderation_restriction_shorten',
   'POST /admin/moderation/actions/:actionId/lift': 'moderation_restriction_lift',
   'POST /admin/link-flags/reviews': 'link_flag_review',
+  // #139: every account restriction step is a request, then another admin's decision.
+  'POST /admin/moderation/users/:userId/account-restriction': 'account_restriction_request',
+  'POST /admin/moderation/actions/:actionId/account-restriction/shorten':
+    'account_restriction_shorten_request',
+  'POST /admin/moderation/actions/:actionId/account-restriction/lift':
+    'account_restriction_lift_request',
+  'POST /admin/moderation/actions/:actionId/account-restriction/cancel':
+    'account_restriction_cancel_request',
+  'POST /admin/moderation/account-restriction-requests/:requestId/approve':
+    'account_restriction_approve',
+  'POST /admin/moderation/account-restriction-requests/:requestId/reject':
+    'account_restriction_reject',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

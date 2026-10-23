@@ -1,6 +1,6 @@
 'use client';
 
-import { type AdminReportQueue } from '@buddha/shared';
+import { type AccountRestrictionRequestQueue, type AdminReportQueue } from '@buddha/shared';
 import {
   type QueryClient,
   useInfiniteQuery,
@@ -9,11 +9,15 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
+  type AccountRestrictionBody,
+  type AccountRestrictionDecision,
+  type AccountRestrictionRequest,
   type AdminCommentModeration,
   type AdminModerationAction,
   type AdminPostModeration,
   type AdminReportGroup,
   type AdminUserModeration,
+  type ApprovalDecisionBody,
   type CancelModerationBody,
   type DismissReportsBody,
   type DismissedReports,
@@ -31,6 +35,7 @@ import {
   ADMIN_ACTIONS_KEY,
   ADMIN_MODERATION_KEY,
   type ModerationPage,
+  adminAccountRequestQueueKey,
   adminCommentModerationKey,
   adminPostModerationKey,
   adminProfileModerationKey,
@@ -42,7 +47,8 @@ import { useSession } from '@/lib/use-session';
 /**
  * 신고·조치 (#50, ADR-0081), the operators' side: the report queue (grouped by target, its two
  * halves), every action, the moderation pages of a post, a comment and a member, and the actions
- * themselves — the writing restriction, its lift and its 감경 among them (#185, ADR-0082). Every
+ * themselves — the writing restriction, its lift and its 감경 among them (#185, ADR-0082) — and the
+ * account restriction's requests and their decisions by another admin (#139, ADR-0085). Every
  * admin reads all of it (ADR-0056 1-2). Under the `admin` root (`PRIVATE_QUERY_ROOTS`,
  * `ADMIN_MODERATION_KEY`): an action answered — or refused, since another
  * operator may have acted first — re-reads the whole area, so the queue, the log and every page
@@ -104,6 +110,37 @@ export function adminActionsInfiniteQueryOptions() {
 
 export function useAdminModerationActions() {
   return useInfiniteQuery(adminActionsInfiniteQueryOptions());
+}
+
+/**
+ * `GET /admin/moderation/account-restriction-requests?status=` (#139): one half of the account
+ * restriction requests — `pending`, the one waiting longest first, or `decided`, the latest
+ * decision first — 20 a page with 더 보기.
+ */
+export function adminAccountRequestsInfiniteQueryOptions(queue: AccountRestrictionRequestQueue) {
+  return {
+    queryKey: adminAccountRequestQueueKey(queue),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<ModerationPage<AccountRestrictionRequest>> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/moderation/account-restriction-requests', {
+          params: { query: { status: queue, ...cursorQuery(pageParam) } },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: ModerationPage<AccountRestrictionRequest>) =>
+      last.nextCursor ?? undefined,
+    refetchOnMount: 'always' as const,
+  };
+}
+
+export function useAdminAccountRequests(queue: AccountRestrictionRequestQueue) {
+  return useInfiniteQuery(adminAccountRequestsInfiniteQueryOptions(queue));
 }
 
 /** `GET /admin/moderation/posts/:postId`: the post whatever its state, its reports and actions. */
@@ -187,7 +224,9 @@ export function useAdminProfileModeration(publicId: string) {
 /**
  * One operator action, as the dialogs send it: hiding a post or a comment, a warning, one of the
  * three profile items (#37-10), a writing restriction and its early lift or 감경 (#185, ADR-0082),
- * a cancellation, a dismissal. Each body names the admin on screen (`expectedAccountId`).
+ * a cancellation, a dismissal — and the account restriction's requests (to restrict, to shorten,
+ * to lift early, to cancel) and the decisions on them (#139, ADR-0085). Each body names the admin
+ * on screen (`expectedAccountId`).
  */
 export type ModerationVariables =
   | { kind: 'hide-post'; postId: string; body: ModerationActionBody }
@@ -202,11 +241,18 @@ export type ModerationVariables =
       body: ModerationActionBody;
     }
   | { kind: 'cancel'; actionId: string; body: CancelModerationBody }
-  | { kind: 'dismiss'; body: DismissReportsBody };
+  | { kind: 'dismiss'; body: DismissReportsBody }
+  | { kind: 'account-restrict'; userId: string; body: AccountRestrictionBody }
+  | { kind: 'account-shorten'; actionId: string; body: ShortenRestrictionBody }
+  | { kind: 'account-lift'; actionId: string; body: LiftRestrictionBody }
+  | { kind: 'account-cancel'; actionId: string; body: CancelModerationBody }
+  | { kind: 'approve' | 'reject'; requestId: string; body: ApprovalDecisionBody };
 
 async function moderate(
   variables: ModerationVariables,
-): Promise<AdminModerationAction | DismissedReports> {
+): Promise<
+  AdminModerationAction | DismissedReports | AccountRestrictionRequest | AccountRestrictionDecision
+> {
   switch (variables.kind) {
     case 'hide-post':
       return unwrap(
@@ -280,16 +326,61 @@ async function moderate(
       ).data;
     case 'dismiss':
       return unwrap(await api.POST('/api/v1/admin/reports/dismiss', { body: variables.body })).data;
+    case 'account-restrict':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/users/{userId}/account-restriction', {
+          params: { path: { userId: variables.userId } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'account-shorten':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/actions/{actionId}/account-restriction/shorten', {
+          params: { path: { actionId: variables.actionId.toLowerCase() } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'account-lift':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/actions/{actionId}/account-restriction/lift', {
+          params: { path: { actionId: variables.actionId.toLowerCase() } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'account-cancel':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/actions/{actionId}/account-restriction/cancel', {
+          params: { path: { actionId: variables.actionId.toLowerCase() } },
+          body: variables.body,
+        }),
+      ).data;
+    case 'approve':
+      return unwrap(
+        await api.POST(
+          '/api/v1/admin/moderation/account-restriction-requests/{requestId}/approve',
+          {
+            params: { path: { requestId: variables.requestId.toLowerCase() } },
+            body: variables.body,
+          },
+        ),
+      ).data;
+    case 'reject':
+      return unwrap(
+        await api.POST('/api/v1/admin/moderation/account-restriction-requests/{requestId}/reject', {
+          params: { path: { requestId: variables.requestId.toLowerCase() } },
+          body: variables.body,
+        }),
+      ).data;
   }
 }
 
 /**
  * The mutation options of every operator action. An answer re-reads the whole moderation area
- * (`ADMIN_MODERATION_KEY`) — and so does a refusal the API gave, since another operator may have
- * hidden, cancelled or processed it first and the page should show what is so. The cookie of
- * another account (`isForAnotherAccount`) asks for the session again instead, so SessionCacheGuard
- * empties the cache and the screen shows who is really signed in. Toasts and dialogs are the
- * caller's.
+ * (`ADMIN_MODERATION_KEY`, the account restriction requests among it) — and so does a refusal the
+ * API gave, since another operator may have hidden, cancelled, processed or decided it first and
+ * the page should show what is so. The cookie of another account (`isForAnotherAccount`) asks for
+ * the session again instead, so SessionCacheGuard empties the cache and the screen shows who is
+ * really signed in. Toasts and dialogs are the caller's.
  */
 export function moderationOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   const refresh = () => queryClient.invalidateQueries({ queryKey: ADMIN_MODERATION_KEY });

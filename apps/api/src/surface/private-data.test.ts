@@ -11,7 +11,9 @@
  * version kept for operators, and a notice A wrote and never pinned, which is not public (#138),
  * a 소개 and an interest category on A's public profile (#41), an operator's hiding of A's post
  * with its reason (#50), a report A filed and a report another member filed on A's post (#50), a
- * writing restriction A was given and an operator lifted, with the lift's reason (#185). Then:
+ * writing restriction A was given and an operator lifted, with the lift's reason (#185), an
+ * account restriction A was given and lifted, each step approved by another admin, and a request
+ * to restrict A again that waits for its approval (#139). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -41,6 +43,7 @@ import { randomInt, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
 import {
   completeOnboarding,
+  createApprovalRequest,
   createCategory,
   createConsents,
   createMarket,
@@ -374,6 +377,14 @@ const NEVER_SHOWN: readonly string[] = [
   // A reads the end as it stands, that it was lifted early or shortened and the end it was given
   // (owner decision 2026-10-23 answer 4), nothing of who changed it or why (ADR-0082).
   'lift reason',
+  // #139: who approved A's account restriction and its lift and why, why it was lifted, and a
+  // request to restrict A that no admin approved yet — the operators' record; A reads the
+  // restriction, its reason, its end and that it was lifted, never who asked or approved (#139
+  // «건 운영자는 보이지 않는다»), and nothing that is not in force (ADR-0085).
+  'approver id',
+  'approval reason',
+  'account lift reason',
+  'pending restriction request',
 ];
 
 interface OwnerCase {
@@ -678,9 +689,11 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     query: { cursor: (fixture) => fixture.cursors.actions, limit: LIMIT },
     status: 200,
     // #185: a writing restriction's explanation too — never the reason an operator lifted it for.
-    own: ['moderation note', 'restriction note'],
+    // #139: an account restriction's explanation — never who approved it, nor why it was lifted.
+    own: ['moderation note', 'restriction note', 'account restriction note'],
   },
-  // B's restriction now (#185): B has none — A's restriction (lifted) never answers for B.
+  // B's restrictions now (#185, #139): B has none — A's (lifted) never answer for B, nor the
+  // request to restrict A that waits for its approval.
   'GET /me/moderation/restriction': {
     status: 200,
   },
@@ -1248,6 +1261,61 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       createdBy: admin.id,
       createdAt: liftedAt,
     });
+    // An account restriction A was given before that (#139, ADR-0085) — 7 days, lifted early two
+    // days in — each step asked for by the admin and approved by another (ADR-0056 1-7), with the
+    // explanation A reads on MY's record of actions: A's alone, never anywhere public (#37-8). Who
+    // approved, why, and why it was lifted are the operators' record only, A's own answers
+    // included (`NEVER_SHOWN`); so is a request to restrict A again, pending: not in force.
+    const { user: approver } = await createUser(t.db, { role: 'admin' });
+    const approvalReason = `leak-approval-reason-${tag}`;
+    const accountNote = `leak-account-restriction-note-${tag}`;
+    const accountAt = new Date(hiding.createdAt.getTime() - 5 * 24 * 60 * 60 * 1_000);
+    const accountLiftedAt = new Date(accountAt.getTime() + 2 * 24 * 60 * 60 * 1_000);
+    const accountRestriction = await createModerationAction(t.db, {
+      userId: a.id,
+      createdBy: admin.id,
+      approvedBy: approver.id,
+      type: 'account_restriction',
+      reason: 'multi_account',
+      note: accountNote,
+      createdAt: accountAt,
+      endsAt: accountLiftedAt,
+    });
+    const accountLiftReason = `leak-account-lift-reason-${tag}`;
+    const accountLift = await createApprovalRequest(t.db, {
+      kind: 'account_restriction_lift',
+      targetType: 'moderation_action',
+      targetId: accountRestriction.id,
+      payload: { userId: a.id, actionId: accountRestriction.id },
+      requestedBy: admin.id,
+      reason: accountLiftReason,
+      requestedAt: new Date(accountLiftedAt.getTime() - 60_000),
+      decision: {
+        status: 'approved',
+        by: approver.id,
+        reason: approvalReason,
+        at: accountLiftedAt,
+      },
+    });
+    await t.db.insert(schema.restrictionEndChanges).values({
+      actionId: accountRestriction.id,
+      kind: 'lift',
+      previousEndsAt: new Date(accountAt.getTime() + 7 * 24 * 60 * 60 * 1_000),
+      endsAt: accountLiftedAt,
+      reason: accountLiftReason,
+      createdBy: admin.id,
+      createdAt: accountLiftedAt,
+      approvalId: accountLift.id,
+    });
+    const pendingRestriction = `leak-pending-restriction-${tag}`;
+    await createApprovalRequest(t.db, {
+      kind: 'account_restriction',
+      targetType: 'user',
+      targetId: a.id,
+      payload: { userId: a.id, reason: 'spam', note: pendingRestriction, days: 7, subject: null },
+      requestedBy: admin.id,
+      reason: pendingRestriction,
+    });
     // A report A filed on another member's profile (#50), with A's description: A's own record,
     // nobody else's. And a report the admin filed on A's post, pending: nobody but operators reads
     // it, A included (`NEVER_SHOWN`, #45-13).
@@ -1398,6 +1466,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('moderation note', moderationNote),
         text('restriction note', restrictionNote),
         text('lift reason', liftReason),
+        text('account restriction note', accountNote),
+        text('approver id', approver.id),
+        text('approval reason', approvalReason),
+        text('account lift reason', accountLiftReason),
+        text('pending restriction request', pendingRestriction),
         text('report description', reportText),
         text('report on A', reportOnA),
         text('moderator id', admin.id),

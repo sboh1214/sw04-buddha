@@ -1,12 +1,16 @@
 import {
+  ACCOUNT_RESTRICTION_REASONS,
   MODERATION_ACTION_TYPES,
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
   REPORT_DESCRIPTION_MAX_LENGTH,
+  REPORT_REASONS,
   RESTRICTION_END_CHANGE_KINDS,
+  type ReportReason,
 } from '@buddha/shared';
 import { desc, sql } from 'drizzle-orm';
 import { check, index, pgTable, text, uniqueIndex, uuid, varchar } from 'drizzle-orm/pg-core';
+import { approvalRequests } from './approval-requests.js';
 import { user } from './auth.js';
 import { createdAt, timestampTz } from './columns.js';
 import { reportReasonEnum, reportStatusEnum, reportTargetTypeEnum } from './enums.js';
@@ -23,6 +27,16 @@ const END_CHANGE_KINDS_SQL = sql.raw(
 );
 
 /**
+ * REPORT_REASONS and ACCOUNT_RESTRICTION_REASONS as SQL text lists. The CHECKs compare the enum's
+ * text (`reason::text`), never an enum literal: migration 0040 adds two values to `report_reason`
+ * in the same batch, and a value an `ADD VALUE` added may not be named as the enum there (55P04).
+ */
+const REPORT_REASONS_SQL = sql.raw(REPORT_REASONS.map((reason) => `'${reason}'`).join(', '));
+const ACCOUNT_RESTRICTION_REASONS_SQL = sql.raw(
+  ACCOUNT_RESTRICTION_REASONS.map((reason) => `'${reason}'`).join(', '),
+);
+
+/**
  * 운영 조치 (#50, ADR-0081; ADR-0069 decision 2 #45-5, #45-11…#45-14, decision 3 #37-10, decision 4
  * #50 rows): one row per action an operator took on a member — from the report queue or directly,
  * without a report (decision 4 #50) — chosen by the violation's weight, never step by step and
@@ -33,28 +47,38 @@ const END_CHANGE_KINDS_SQL = sql.raw(
  *   `post_comments.hidden_at` set in the same transaction), `warning` (a record and the member's
  *   notice only, #45-11), `nickname_reset`, `bio_clear`, `image_remove` (#37-10; what was taken
  *   away is kept in `profile_item_removals`), `writing_restriction` (작성 제한, #185, ADR-0082 —
- *   migration 0040). A varchar the CHECK below holds to the list, so #139's account restriction
- *   adds its type by replacing the CHECK in the migration that uses it, as 0040 did (a Postgres
- *   enum's new value cannot be used in that batch).
+ *   migration 0040) and `account_restriction` (계정 제한, #139, ADR-0085 — migration 0042: trading,
+ *   market proposals, public profile items' new values and 탈퇴 closed until it ends). A varchar
+ *   the CHECK below holds to the list, so a type is added by replacing the CHECK in the migration
+ *   that uses it, as 0040 and 0042 did (a Postgres enum's new value cannot be used in that batch).
  * - `user_id`: the member acted on — a hidden item's author, a profile's member, the member
  *   restricted. Never the acting operator (decision 4 #50 «다른 운영자만 처리한다»: the CHECK holds
  *   it whoever writes).
- * - `post_id`, `comment_id`: what a hiding hid (one of them), what a warning or a writing
- *   restriction is about (at most one, or none — the item whose pending reports it resolved),
- *   nothing for the profile items.
+ * - `post_id`, `comment_id`: what a hiding hid (one of them), what a warning or a writing or an
+ *   account restriction is about (at most one, or none — the item whose pending reports it
+ *   resolved), nothing for the profile items.
  * - `reason`, `note`: one of the report reasons and the operator's explanation the member reads
- *   (owner decision 2026-10-22, ADR-0080: «사유 목록 중 하나 + 운영자 설명»); '기타' needs a note.
- * - `ends_at`: a writing restriction's end (#185): its own time and the term picked (1, 3, 7 or 30
- *   days), or null for 무기한 — and brought forward, never back, when an operator lifts it early or
- *   shortens it (감경, each a `restriction_end_changes` row). It stands while not cancelled and the
- *   clock is before the end: nothing runs when it ends. Null for every other type (the CHECK); #139
- *   adds the account restriction's.
+ *   (owner decision 2026-10-22, ADR-0080: «사유 목록 중 하나 + 운영자 설명»); '기타' needs a note. An
+ *   account restriction's reason is one of ACCOUNT_RESTRICTION_REASONS (#57-12: 이상 거래 and 다계정
+ *   among them, 시장과 무관 and 권리 침해 not) and its note is required (the CHECKs).
+ * - `ends_at`: a writing or an account restriction's end (#185, #139): its own time and the term
+ *   picked (1, 3, 7 or 30 days), or null for 무기한 — and brought forward, never back, when an
+ *   operator lifts it early or shortens it (감경, each a `restriction_end_changes` row). It stands
+ *   while not cancelled and the clock is before the end: nothing runs when it ends. Null for every
+ *   other type (the CHECK).
+ * - `approval_id`: the approval that put an account restriction in force (#139, ADR-0056 decision
+ *   1-7) — a request of the kind `account_restriction` for this member, asked for by `created_by`
+ *   and approved by another admin who is not the member (migration 0040's trigger); its time is the
+ *   action's. Exactly an account restriction has one (the CHECK).
+ * - `cancel_approval_id`: the approval its cancellation came in by — kind
+ *   `account_restriction_cancel`, for this action, asked for by `cancelled_by` (the trigger).
+ *   Exactly a cancelled account restriction has one (the CHECK).
  * - `cancelled_*`: an operator's cancellation, with a reason (decision 4 #50 «사유를 남기고 취소»),
  *   once. A hiding's cancellation shows the item again; a profile item is never restored (#37-10);
  *   a restriction's ends at once. The cancelling operator is not the member either.
  *
- * Only the cancellation ever changes, once, and a writing restriction's end, earlier each time and
- * only while it stands (trigger `moderation_actions_keep_record`, migrations 0039 and 0040). DELETE
+ * Only the cancellation ever changes, once, and a restriction's end, earlier each time and only
+ * while it stands (trigger `moderation_actions_keep_record`, migrations 0039, 0040 and 0042). DELETE
  * stays for #184: the actions are kept for the retention period (#57-18 «신고·제재·이의 기록»). Rows
  * of a withdrawn member stay with the account (RESTRICT, as every record #140 anonymises around).
  */
@@ -78,16 +102,30 @@ export const moderationActions = pgTable(
     cancelledAt: timestampTz(),
     cancelledBy: text().references(() => user.id, { onDelete: 'restrict' }),
     cancelReason: varchar({ length: MODERATION_REASON_MAX_LENGTH }),
+    approvalId: uuid()
+      .unique('moderation_actions_approval_id_unique')
+      .references(() => approvalRequests.id, { onDelete: 'restrict' }),
+    cancelApprovalId: uuid()
+      .unique('moderation_actions_cancel_approval_id_unique')
+      .references(() => approvalRequests.id, { onDelete: 'restrict' }),
   },
   (t) => [
     check('moderation_actions_type_check', sql`${t.type} IN (${ACTION_TYPES_SQL})`),
     /**
-     * A hiding hides one item; a warning and a writing restriction are about one at most; the rest
-     * about none.
+     * A hiding hides one item; a warning and a writing or an account restriction are about one at
+     * most; the rest about none.
      */
     check(
       'moderation_actions_subject_check',
-      sql`CASE ${t.type} WHEN 'hide' THEN num_nonnulls(${t.postId}, ${t.commentId}) = 1 WHEN 'warning' THEN num_nonnulls(${t.postId}, ${t.commentId}) <= 1 WHEN 'writing_restriction' THEN num_nonnulls(${t.postId}, ${t.commentId}) <= 1 ELSE num_nonnulls(${t.postId}, ${t.commentId}) = 0 END`,
+      sql`CASE ${t.type} WHEN 'hide' THEN num_nonnulls(${t.postId}, ${t.commentId}) = 1 WHEN 'warning' THEN num_nonnulls(${t.postId}, ${t.commentId}) <= 1 WHEN 'writing_restriction' THEN num_nonnulls(${t.postId}, ${t.commentId}) <= 1 WHEN 'account_restriction' THEN num_nonnulls(${t.postId}, ${t.commentId}) <= 1 ELSE num_nonnulls(${t.postId}, ${t.commentId}) = 0 END`,
+    ),
+    /**
+     * An account restriction's reason is one of the owner's list for it (#57-12), and it always
+     * has its explanation; every other action's is a report reason (#45-10).
+     */
+    check(
+      'moderation_actions_reason_check',
+      sql`CASE WHEN ${t.type} = 'account_restriction' THEN ${t.reason}::text IN (${ACCOUNT_RESTRICTION_REASONS_SQL}) AND ${t.note} IS NOT NULL ELSE ${t.reason}::text IN (${REPORT_REASONS_SQL}) END`,
     ),
     check('moderation_actions_note_check', sql`${t.note} IS NULL OR btrim(${t.note}) <> ''`),
     check(
@@ -95,12 +133,20 @@ export const moderationActions = pgTable(
       sql`${t.reason} <> 'other' OR ${t.note} IS NOT NULL`,
     ),
     /**
-     * Only a writing restriction has an end (null for 무기한), never before its own time — a lift
-     * brings it to the lift's time; #139 adds the account restriction's.
+     * Only a writing or an account restriction has an end (null for 무기한), never before its own
+     * time — a lift brings it to the lift's time.
      */
     check(
       'moderation_actions_ends_at_check',
-      sql`${t.endsAt} IS NULL OR (${t.type} = 'writing_restriction' AND ${t.endsAt} >= ${t.createdAt})`,
+      sql`${t.endsAt} IS NULL OR (${t.type} IN ('writing_restriction', 'account_restriction') AND ${t.endsAt} >= ${t.createdAt})`,
+    ),
+    /**
+     * An account restriction comes into force by another admin's approval, and is cancelled by one
+     * (#139, ADR-0056 decision 1-7); nothing else names an approval.
+     */
+    check(
+      'moderation_actions_approval_check',
+      sql`(${t.type} = 'account_restriction') = (${t.approvalId} IS NOT NULL) AND (${t.type} = 'account_restriction' AND ${t.cancelledAt} IS NOT NULL) = (${t.cancelApprovalId} IS NOT NULL)`,
     ),
     check(
       'moderation_actions_cancellation_check',
@@ -144,14 +190,22 @@ export const moderationActions = pgTable(
     index('moderation_actions_standing_restriction_idx')
       .on(t.userId, t.endsAt)
       .where(sql`${t.type} = 'writing_restriction' AND ${t.cancelledAt} IS NULL`),
+    /**
+     * A member's account restrictions not cancelled (#139): what an order (#119), a market proposal
+     * (#77), 탈퇴 (#140) and every new value of a public profile item asks.
+     */
+    index('moderation_actions_standing_account_restriction_idx')
+      .on(t.userId, t.endsAt)
+      .where(sql`${t.type} = 'account_restriction' AND ${t.cancelledAt} IS NULL`),
   ],
 );
 
 /**
- * A writing restriction's end brought forward (#185, ADR-0082): one row per change an operator made
- * — `shorten` (감경, ADR-0069 decision 2 #45-14: «종료 시각을 앞당기는 기능», 무기한 to a term included,
- * no approval for a writing restriction) or `lift` (조기 해제, #45-12: «운영자가 일찍 풀 수 있다»,
- * the end set to the lift's time). The end before (`previous_ends_at`, null for 무기한) and after,
+ * A writing or an account restriction's end brought forward (#185, ADR-0082; #139, ADR-0085 — an
+ * account restriction's change comes in by another admin's approval, `approval_id`): one row per
+ * change an operator made — `shorten` (감경, ADR-0069 decision 2 #45-14: «종료 시각을 앞당기는 기능»,
+ * 무기한 to a term included, no approval for a writing restriction) or `lift` (조기 해제, #45-12:
+ * «운영자가 일찍 풀 수 있다», the end set to the lift's time). The end before (`previous_ends_at`, null for 무기한) and after,
  * the operator's reason (operators only, as a cancellation's) and who and when. Written in the
  * transaction that moves `moderation_actions.ends_at`, with the `admin_actions` row; operators read
  * it with the action. The member reads the end as it stands (`moderation_actions.ends_at`) and,
@@ -163,6 +217,11 @@ export const moderationActions = pgTable(
  * An action's changes are ordered by their ends, never by `created_at`: each brings the end
  * strictly forward (the CHECK below and the trigger of migration 0040, under the action's lock),
  * while two made one behind the other can share a millisecond of the clock.
+ *
+ * `approval_id`: an account restriction's change came in by another admin's approval of a request
+ * of the kind `account_restriction_shorten` or `account_restriction_lift` for the action, asked for
+ * by `created_by` (#139, ADR-0056 decision 1-7); a writing restriction's change has none (both held
+ * by migration 0042's trigger, which reads the action's type).
  *
  * Never rewritten: buddha_app loses UPDATE (migration 0040); DELETE stays for #184, which removes
  * these rows before their action (RESTRICT).
@@ -182,6 +241,9 @@ export const restrictionEndChanges = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),
     createdAt: createdAt(),
+    approvalId: uuid()
+      .unique('restriction_end_changes_approval_id_unique')
+      .references(() => approvalRequests.id, { onDelete: 'restrict' }),
   },
   (t) => [
     check('restriction_end_changes_kind_check', sql`${t.kind} IN (${END_CHANGE_KINDS_SQL})`),
@@ -244,7 +306,8 @@ export const reports = pgTable(
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),
     reporterPhoneHash: varchar({ length: 64 }).notNull(),
-    reason: reportReasonEnum().notNull(),
+    /** One of REPORT_REASONS (the CHECK): the enum also holds an account restriction's two. */
+    reason: reportReasonEnum().notNull().$type<ReportReason>(),
     description: varchar({ length: REPORT_DESCRIPTION_MAX_LENGTH }),
     status: reportStatusEnum().notNull().default('pending'),
     createdAt: createdAt(),
@@ -259,6 +322,8 @@ export const reports = pgTable(
       sql`(${t.targetType} = 'post') = (${t.postId} IS NOT NULL) AND (${t.targetType} = 'comment') = (${t.commentId} IS NOT NULL)`,
     ),
     check('reports_phone_hash_check', sql`${t.reporterPhoneHash} ~ '^[0-9a-f]{64}$'`),
+    /** A report's reason is a report reason (#45-10), never one only an account restriction has. */
+    check('reports_reason_check', sql`${t.reason}::text IN (${REPORT_REASONS_SQL})`),
     check(
       'reports_description_check',
       sql`${t.description} IS NULL OR btrim(${t.description}) <> ''`,

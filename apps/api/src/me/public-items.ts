@@ -1,6 +1,6 @@
 import { type Db } from '@buddha/db';
 import { type RestrictedDetails } from '@buddha/shared';
-import { restrictedError, writingRestrictionOf } from '../moderation/restrictions.js';
+import { restrictedError, restrictionInForce } from '../moderation/restrictions.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -39,13 +39,13 @@ export type SanctionCheck = (
 ) => Promise<RestrictedDetails | null>;
 
 /**
- * The writing restriction in force (#185, ADR-0082: `writingRestrictionOf`, the same answer every
- * post, comment and edit reads) — the one place a sanction answers for every public-item write
- * (#41's scope: «두 이슈 가운데 이 이슈보다 늦게 끝나는 쪽은 제한 중 프로필 수정 차단 … 의 적용도
- * 맡는다»). #139's account restriction answers here too once it is stacked: the later of the two
- * ends, the one the member waits for.
+ * The writing restriction (#185, ADR-0082) or the account restriction (#139, ADR-0085) in force —
+ * the one place a sanction answers for every public-item write (#41's scope: «두 이슈 가운데 이 이슈보다
+ * 늦게 끝나는 쪽은 제한 중 프로필 수정 차단 … 의 적용도 맡는다»): of the two, the one that ends later,
+ * the one the member waits for (`restrictionInForce`; the account restriction when they end
+ * together). Its kind tells the screen which restriction to name.
  */
-export const sanctionInForce: SanctionCheck = writingRestrictionOf;
+export const sanctionInForce: SanctionCheck = restrictionInForce;
 
 /**
  * The one check point of every public profile item write (#37-9, decision 7): under a writing or

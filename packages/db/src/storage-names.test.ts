@@ -1,4 +1,5 @@
 import {
+  ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   ADMIN_ACTION_TYPES,
   ALL_CATEGORY_SLUGS,
   AUDIT_FAILURE_KINDS,
@@ -63,9 +64,8 @@ const ENUMS = EXPORTS.filter(isPgEnum);
 
 /**
  * The fixed value lists varchar columns hold (a Postgres enum's values come with the enum). A
- * varchar column that takes its values from a new list adds the list here. Left out: each
- * consumer's `approval_requests.kind` (no list yet, #171) and `admin_actions.target_type`, the
- * name of the target's table.
+ * varchar column that takes its values from a new list adds the list here. Left out:
+ * `admin_actions.target_type`, the name of the target's table.
  */
 const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'ledger_entries.ref_type': LEDGER_REF_TYPES,
@@ -87,13 +87,16 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   // Generated (#141): the profile image's kind its foreign key requires, NULL without an image.
   'profiles.image_kind': MEDIA_KINDS.filter((kind) => kind === 'profile_image'),
   // #50: what an operator did to a member, held by a CHECK that a type's migration replaces —
-  // #185's writing restriction did (0040), #139's account restriction will.
+  // #185's writing restriction did (0040), #139's account restriction (0042).
   'moderation_actions.type': MODERATION_ACTION_TYPES,
   // #185: how an operator brought a writing restriction's end forward (감경, 조기 해제).
   'restriction_end_changes.kind': RESTRICTION_END_CHANGE_KINDS,
   // #187 (ADR-0083): what a write limit counts, and why a link is on the review list.
   'write_limit_events.action': WRITE_LIMIT_ACTIONS,
   'link_flags.reason': LINK_FLAG_REASONS,
+  // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
+  // first; #130's bot control and the rest add theirs here.
+  'approval_requests.kind': Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
 };
 
 /**

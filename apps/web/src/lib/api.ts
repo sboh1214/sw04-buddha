@@ -134,6 +134,11 @@ export type CommentedPost = components['schemas']['CommentedPost'];
 export type HiddenNotice = components['schemas']['HiddenNotice'];
 export type HiddenReason = components['schemas']['HiddenReason'];
 export type ReportReason = components['schemas']['ReportReason'];
+/**
+ * The reason an action carries (#139): a report reason, or one of the two only an account
+ * restriction takes (이상 거래, 다계정).
+ */
+export type ModerationReason = components['schemas']['ModerationReason'];
 export type MyPost = components['schemas']['MyPost'];
 export type MyComment = components['schemas']['MyComment'];
 /**
@@ -183,6 +188,19 @@ export type WritingRestrictionBody = components['schemas']['WritingRestrictionBo
 export type ShortenRestrictionBody = components['schemas']['ShortenRestrictionBody'];
 export type LiftRestrictionBody = components['schemas']['LiftRestrictionBody'];
 export type RestrictionEndChange = components['schemas']['RestrictionEndChange'];
+/**
+ * 계정 제한 (#139, ADR-0085): the body of a request to restrict a member's account (one of the
+ * owner's eight reasons, the explanation the member reads — required — the term, and what it is
+ * about), one request as operators read it (what it asks, who asked, its decision, and what would
+ * refuse its approval now — `moot`), the answer of a decision (the request and the restriction as
+ * it stands), the body of a decision (the deciding admin's reason), and another admin's approval
+ * as a restriction, its cancellation and each change of its end carry it.
+ */
+export type AccountRestrictionBody = components['schemas']['AccountRestrictionBody'];
+export type AccountRestrictionRequest = components['schemas']['AccountRestrictionRequest'];
+export type AccountRestrictionDecision = components['schemas']['AccountRestrictionDecision'];
+export type ApprovalDecisionBody = components['schemas']['ApprovalDecisionBody'];
+export type ModerationApproval = components['schemas']['ModerationApproval'];
 export type DismissReportsBody = components['schemas']['DismissReportsBody'];
 export type DismissedReports = components['schemas']['DismissedReports'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */

@@ -34,8 +34,10 @@ import {
   ModerationDialog,
   OwnNotice,
   ReportRows,
+  RequestRows,
   type SubjectOption,
   UserName,
+  accountRestrictDialog,
   dismissDialog,
   restrictDialog,
   useOperatorId,
@@ -52,6 +54,11 @@ import {
  * operator's own account (decision 4 #50). And 작성 제한 (#185, ADR-0082 — decision 4 #185
  * «운영자가 사용자를 골라 직접 걸 수 있다»): a term and a reason, about the profile (its pending
  * reports resolved) or nothing in particular, as a warning; its 조기 해제 and 감경 in the list.
+ * And the request of 계정 제한 (#139, ADR-0085 — directly on the member, the brief's «admin user
+ * detail»): the owner's eight reasons with a required explanation and a term, about the profile or
+ * nothing in particular, in force once another admin approves it — the member's requests waiting
+ * for a decision are listed here with 승인 and 거절 for an admin who did not ask (ADR-0056 decision
+ * 1-7), and each standing account restriction's 감경, 조기 해제 and 취소 are requests too.
  */
 export function UserModeration({ userId }: { userId: string }) {
   return <MemberModeration query={useAdminUserModeration(userId)} />;
@@ -188,6 +195,15 @@ function UserView({
           >
             {copy.adminModerationRestrict}
           </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            colorPalette="no"
+            onClick={() => onOpen(accountRestrictDialog(member.user, subjects))}
+            data-testid="moderation-account-restrict"
+          >
+            {copy.adminModerationAccountRestrict}
+          </Button>
           {!isAutoNickname(member.user.nickname) && (
             <Button
               size="sm"
@@ -261,8 +277,15 @@ function UserView({
       >
         <ReportRows reports={member.reports} />
       </Block>
+      <Block title={copy.adminAccountRequestsMember} testId="moderation-account-requests">
+        <RequestRows
+          requests={member.accountRestrictionRequests}
+          onOpen={onOpen}
+          empty={copy.adminAccountRequestsMemberEmpty}
+        />
+      </Block>
       <Block title={copy.adminModerationMemberActions} testId="moderation-author-actions">
-        <ActionRows actions={member.actions} onOpen={onOpen} />
+        <ActionRows actions={member.actions} anchors onOpen={onOpen} />
       </Block>
     </Stack>
   );

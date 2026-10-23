@@ -34,7 +34,9 @@ import { useSession } from '@/lib/use-session';
  * the screen goes to its page. Above either, for a member under a writing restriction in force
  * (#185, ADR-0082), its banner (`SanctionBanner`, ADR-0069 decision 4 #50) — the form stays, and
  * sending it is refused with the restriction's end and the way to 조치·신고 내역
- * (`postWriteErrorMessage`, `isRestricted`).
+ * (`postWriteErrorMessage`, `isRestricted`). An account restriction (#139, ADR-0085) shows on the
+ * same banner — #50's «진행 중인 제재가 있으면 … 글쓰기 화면의 안내 띠» — though it refuses no post
+ * (ADR-0069 decision 1 #57-12; ADR-0085 7-10, asked).
  *
  * The market the form shows is the screen's own (`writeScreenMarket`, lib/posts.ts, where every
  * step of it is tested): the page's read (`lookup`) settles it as it comes, and a market picked

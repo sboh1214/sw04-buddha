@@ -11,11 +11,11 @@ import {
   type AdminReport,
   type ModerationActionType,
   type ModerationNotAllowedDetails,
+  type ModerationReason,
   type ModerationRefusal,
   type ParsedModerationActionBody,
   type ParsedWarningBody,
   type ParsedWritingRestrictionBody,
-  type ReportReason,
   type ReportTargetType,
   type RestrictionEndChangeKind,
   type WarningSubject,
@@ -31,9 +31,12 @@ import { ModerationReadsService } from './moderation-reads.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-/** The reason every action carries: a report reason and the explanation the member reads. */
+/**
+ * The reason every action carries: a report reason — an account restriction's own list (#139) —
+ * and the explanation the member reads.
+ */
 interface ActionReason {
-  reason: ReportReason;
+  reason: ModerationReason;
   note: string | null;
 }
 
@@ -47,8 +50,8 @@ interface ActionRow {
   endsAt?: Date | null;
 }
 
-/** What a warning or a writing restriction is about, resolved against the member's items. */
-interface ResolvedSubject {
+/** What a warning or a restriction is about, resolved against the member's items. */
+export interface ResolvedSubject {
   postId: string | null;
   commentId: string | null;
   /** The target whose pending reports the action resolves; null for none. */
@@ -56,7 +59,7 @@ interface ResolvedSubject {
 }
 
 /** A target whose pending reports an action resolves. */
-interface ReportTarget {
+export interface ReportTarget {
   targetType: ReportTargetType;
   targetKey: string;
 }
@@ -410,7 +413,8 @@ export class ModerationService {
    * that nickname's lock (`lockNicknames`), the lock a pick of it takes: a pick in flight is
    * answered before the hold changes hands, and one that comes while this runs waits for it and
    * reads the hold as handed. The reports it resolved stay resolved (조치함 is what was done).
-   * Refused: an action on the acting operator (`own`) and one cancelled already (`cancelled`).
+   * Refused: an action on the acting operator (`own`), one cancelled already (`cancelled`) and an
+   * account restriction, which only an approved request cancels (`approval_required`, #139).
    */
   async cancel(adminId: string, actionId: string, reason: string): Promise<AdminModerationAction> {
     await this.db.transaction(async (tx) => {
@@ -423,6 +427,9 @@ export class ModerationService {
       if (!action) throw notFound('Action');
       if (action.userId === adminId) throw refused('own');
       if (action.cancelledAt !== null) throw refused('cancelled');
+      // An account restriction is cancelled only by another admin's approval of a request
+      // (#139, ADR-0056 decision 1-7): AccountRestrictionService.
+      if (action.type === 'account_restriction') throw refused('approval_required');
       if (action.type === 'hide') {
         // The item's row after the action's. A hiding of the same item meanwhile holds the item
         // first and finds it hidden (`hidden`) before it reaches the action: no lock is waited for
@@ -566,7 +573,7 @@ export class ModerationService {
    * (a deadlock, 40P01 — a 500 to one operator). After a wait the lock reads the row again, so a
    * report a dismissal closed meanwhile is no longer pending and is left as it was.
    */
-  private async resolveReports(
+  async resolveReports(
     tx: Tx,
     adminId: string,
     target: ReportTarget,
@@ -603,12 +610,12 @@ export class ModerationService {
   }
 
   /**
-   * What a warning or a writing restriction is about (`subject`, optional): the member's post or
-   * comment, locked for the write after the member's profile (the order an edit of it takes them
-   * in, `assertWriter`), or their profile — the target whose pending reports the action resolves.
-   * One not the member's is `not_theirs`; one unknown NOT_FOUND.
+   * What a warning or a restriction is about (`subject`, optional): the member's post or comment,
+   * locked for the write after the member's profile (the order an edit of it takes them in,
+   * `assertWriter`), or their profile — the target whose pending reports the action resolves. One
+   * not the member's is `not_theirs`; one unknown NOT_FOUND. Also AccountRestrictionService's.
    */
-  private async subjectOf(
+  async subjectOf(
     tx: Tx,
     userId: string,
     subject: WarningSubject | null,
@@ -655,7 +662,8 @@ export class ModerationService {
    * A writing restriction's end brought forward (`shortenRestriction`, `liftRestriction`), in one
    * transaction: the action locked, the rules, the new end, its `restriction_end_changes` row and
    * the audit row. Refused: an action on the acting operator (`own` — another operator lifts an
-   * operator's, as they cancel it, decision 4 #50), another type (`not_restriction`), a cancelled
+   * operator's, as they cancel it, decision 4 #50), an account restriction (`approval_required` —
+   * #139's approved requests move its end), another type (`not_restriction`), a cancelled
    * one (`cancelled`), one ended already (`ended` — by the database clock, read after the lock),
    * and for a shortening an end not to come (`end_passed`) or not earlier than the end now
    * (`not_earlier`; any is, for 무기한). The trigger of migration 0040 holds the same: earlier only,
@@ -683,6 +691,8 @@ export class ModerationService {
         .for('update');
       if (!action) throw notFound('Action');
       if (action.userId === adminId) throw refused('own');
+      // An account restriction's end moves only by an approved request (#139).
+      if (action.type === 'account_restriction') throw refused('approval_required');
       if (action.type !== 'writing_restriction') throw refused('not_restriction');
       if (action.cancelledAt !== null) throw refused('cancelled');
       const now = await clockTimestamp(tx);
@@ -724,7 +734,7 @@ export class ModerationService {
   }
 
   /** The `admin_actions` row of a write (admin-audit.test.ts), in its transaction. */
-  private async audit(
+  async audit(
     tx: Tx,
     adminId: string,
     type: AdminActionType,
@@ -754,8 +764,11 @@ export class ModerationService {
     await tx.update(nicknameHolds).set({ userId }).where(eq(nicknameHolds.id, hold.id));
   }
 
-  /** The member's profile row, locked for the write (a report on the profile holds it shared). */
-  private async lockProfile(tx: Tx, userId: string) {
+  /**
+   * The member's profile row, locked for the write (a report on the profile holds it shared).
+   * Also AccountRestrictionService's, before an approved account restriction is written.
+   */
+  async lockProfile(tx: Tx, userId: string) {
     const { profiles } = schema;
     const [profile] = await tx
       .select({ nickname: profiles.nickname, bio: profiles.bio, imageId: profiles.imageId })
@@ -818,11 +831,11 @@ export class ModerationService {
   }
 }
 
-function refused(reason: ModerationRefusal): AppError {
+export function refused(reason: ModerationRefusal): AppError {
   const details: ModerationNotAllowedDetails = { reason };
   return new AppError('MODERATION_NOT_ALLOWED', { message: `Not allowed: ${reason}`, details });
 }
 
-function notFound(what: 'Post' | 'Comment' | 'User' | 'Action'): AppError {
+export function notFound(what: 'Post' | 'Comment' | 'User' | 'Action'): AppError {
   return new AppError('NOT_FOUND', { message: `${what} not found` });
 }

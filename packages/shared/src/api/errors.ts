@@ -149,8 +149,11 @@ export const ERROR_CODES = [
    * An operator restriction on the account refuses the action until it ends: a writing
    * restriction keeps the account from new posts, comments and replies, from editing its own and
    * from new values of its public profile items, while deleting its own, likes and reports stay
-   * open. Details carry the kind and the end, null for one with no end,
-   * restrictedDetailsSchema — the end the account also reads at GET /me/moderation/restriction.
+   * open; an account restriction keeps it from new orders, market proposals, new values of its
+   * public profile items and closing the account, while writing, likes, reports and the watchlist
+   * stay open. Details carry the kind and the end, null for one with no end — the later of the two
+   * when both refuse — restrictedDetailsSchema: the end the account also reads at
+   * GET /me/moderation/restriction.
    */
   'RESTRICTED',
   /**
