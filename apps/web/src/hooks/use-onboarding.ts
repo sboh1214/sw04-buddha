@@ -40,8 +40,14 @@ import { useSession } from '@/lib/use-session';
  *
  * Every write names the account the screen shows (`expectedAccountId`, A-PG-24): a window still
  * showing account A after another one signed in as B would otherwise record A's answers as B's
- * consent, or spend B's nickname step and start Coin. A refusal as another account asks for the
- * session again, so SessionCacheGuard puts the real account on screen, as every owner write does.
+ * consent, or spend B's nickname step and start Coin. That account is the one of the `Me` the
+ * screen was drawn from — the stepper's `me.id` for its steps, the `Me` of MY 설정's marketing
+ * switch and interest categories card — which each screen passes in, never the session's: in the
+ * render between the session naming B and SessionCacheGuard's reset (an effect) the session
+ * already says B while the screen still shows A's, and a body naming B would be taken with B's
+ * cookie (PR #224 Codex review, ADR-0078 7-29). So the hooks here offer no account of their own. A
+ * refusal as another account asks for the session again, so SessionCacheGuard puts the real
+ * account on screen, as every owner write does.
  *
  * The cache writer and the mutations' options are exported apart from their hooks: apps/web runs
  * vitest under `environment: 'node'` (use-onboarding.test.ts).
@@ -268,10 +274,11 @@ function deadline(ms: number): { elapsed: Promise<void>; clear: () => void } {
 
 /**
  * The step's answers sent from this tab for `accountId` (`INTERESTS_STEP_MUTATION_KEY`, the body's
- * `expectedAccountId`), as mutation cache filters. Another account's are not its own: the tab that
- * switched accounts while one was on its way keeps it in the mutation cache — SessionCacheGuard's
- * `resetQueries` resets the queries, not the mutations — and its answer, a request with the other
- * account's body, answers nothing of this account's step (PR #224 Codex review, ADR-0078 7-29).
+ * `expectedAccountId` — the stepper's `me.id`, the account it reports with), as mutation cache
+ * filters. Another account's are not its own: the tab that switched accounts while one was on its
+ * way keeps it in the mutation cache — SessionCacheGuard's `resetQueries` resets the queries, not
+ * the mutations — and its answer, a request with the other account's body, answers nothing of this
+ * account's step (PR #224 Codex review, ADR-0078 7-29).
  */
 function stepAnswersOf(accountId: string): MutationFilters {
   return {
@@ -437,36 +444,39 @@ export function useInterestsLeaveReport(
 }
 
 /**
- * The account the screen shows (`accountId`, the session's user id — the `useCharge` source),
- * which every step sends as `expectedAccountId`, and `ready`, false until better-auth has said
- * whose session this is; the steps keep their submit disabled until then.
+ * What every write here is built with: the tab's query client, and the session asked for again —
+ * what a refusal as another account calls. No account: the body names the one of the `Me` the
+ * screen was drawn from, which the screen passes in (the file's header says why).
  */
-function useScreenAccount() {
+function useWriteParts() {
   const queryClient = useQueryClient();
-  const { data: session, refetch } = useSession();
-  const accountId = session?.user.id;
-  return { queryClient, accountId, refetchSession: () => void refetch() };
+  const { refetch } = useSession();
+  return { queryClient, refetchSession: () => void refetch() };
 }
 
-/** `recordConsentsOptions` as the consent step's mutation, and MY 설정's marketing switch's. */
+/**
+ * `recordConsentsOptions` as the consent step's mutation (the stepper's `me.id` in its body), and
+ * MY 설정's marketing switch's (its `Me`'s).
+ */
 export function useRecordConsents() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(recordConsentsOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(recordConsentsOptions(queryClient, refetchSession));
 }
 
-/** `setOnboardingNicknameOptions` as the nickname step's mutation. */
+/** `setOnboardingNicknameOptions` as the nickname step's mutation (the stepper's `me.id`). */
 export function useSetOnboardingNickname() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(setOnboardingNicknameOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(setOnboardingNicknameOptions(queryClient, refetchSession));
 }
 
-/** `answerInterestsStepOptions` as the interests step's mutation. */
+/**
+ * `answerInterestsStepOptions` as the interests step's mutation. Its body names the stepper's
+ * `me.id` — the account the leave report counts the answer for (`stepAnswersOf`), so the two agree
+ * in the render between the session naming another account and SessionCacheGuard's reset too.
+ */
 export function useAnswerInterestsStep() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(answerInterestsStepOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(answerInterestsStepOptions(queryClient, refetchSession));
 }
 
 /**
@@ -475,10 +485,9 @@ export function useAnswerInterestsStep() {
  * as the 소개 and nickname cards do — never the session's: in the render between the session
  * naming another account and SessionCacheGuard's reset, the session already says B while the card
  * still shows A's picks, and a save naming B would write A's picks to B (PR #224 Codex review,
- * ADR-0078 7-29). So the hook offers no account of its own.
+ * ADR-0078 7-29).
  */
 export function useSetInterestCategories() {
-  const queryClient = useQueryClient();
-  const { refetch } = useSession();
-  return useMutation(setInterestCategoriesOptions(queryClient, () => void refetch()));
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(setInterestCategoriesOptions(queryClient, refetchSession));
 }

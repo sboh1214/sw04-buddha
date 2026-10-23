@@ -61,9 +61,16 @@ const LINKS: Partial<Record<ConsentItem, { href: '/terms' | '/privacy'; label: s
  * with a required item unchecked is refused here — an alert under the boxes, read out, and the
  * cursor on the first unchecked one — as the server would refuse the body. The answer of
  * `POST /me/consents` goes into `['me']` before the mutation settles (use-onboarding.ts), and the
- * stepper moves on with it.
+ * stepper moves on with it. The body names `accountId`, the account the stepper shows (its `me.id`)
+ * — never the session's (use-onboarding.ts, ADR-0078 7-29).
  */
-export function ConsentStep({ items }: { items: readonly ConsentItem[] }) {
+export function ConsentStep({
+  items,
+  accountId,
+}: {
+  items: readonly ConsentItem[];
+  accountId: string;
+}) {
   const record = useRecordConsents();
   const [choices, setChoices] = useState<ConsentChoices>(NO_CONSENTS);
   const [triedWithMissing, setTriedWithMissing] = useState(false);
@@ -91,9 +98,6 @@ export function ConsentStep({ items }: { items: readonly ConsentItem[] }) {
   };
 
   const onSubmit = async () => {
-    // Unreachable while the button honours `ready`.
-    const accountId = record.accountId;
-    if (accountId === undefined) return;
     const body = consentBody(choices, items, accountId);
     if (body === null) {
       setTriedWithMissing(true);
@@ -216,7 +220,6 @@ export function ConsentStep({ items }: { items: readonly ConsentItem[] }) {
         size="lg"
         onClick={() => void onSubmit()}
         loading={record.isPending}
-        disabled={!record.ready}
         data-testid="consent-submit"
       >
         {copy.consentSubmit}

@@ -45,13 +45,24 @@ export function MarketingSection() {
         <ProfileUnavailable />
       ) : (
         // Keyed by account: a tab that switched accounts starts from the new one's answer.
-        <MarketingSwitch key={me.id} consents={me.onboarding.consents} />
+        <MarketingSwitch key={me.id} consents={me.onboarding.consents} accountId={me.id} />
       )}
     </SettingsSection>
   );
 }
 
-function MarketingSwitch({ consents }: { consents: Me['onboarding']['consents'] }) {
+/**
+ * The switch of the account drawn (`accountId`, its `Me`'s id), which the record names
+ * (`expectedAccountId`) — never the session's, which already says another account in the render
+ * before SessionCacheGuard's reset (use-onboarding.ts, ADR-0078 7-29).
+ */
+function MarketingSwitch({
+  consents,
+  accountId,
+}: {
+  consents: Me['onboarding']['consents'];
+  accountId: string;
+}) {
   const record = useRecordConsents();
   const step = useSettingsStep();
   const formatDate = useFormatDateTime();
@@ -61,9 +72,6 @@ function MarketingSwitch({ consents }: { consents: Me['onboarding']['consents'] 
   const newest = consents.find((answer) => answer.item === 'marketing');
 
   const onChange = async (agreed: boolean) => {
-    // Unreachable while the switch honours `ready`.
-    const accountId = record.accountId;
-    if (accountId === undefined) return;
     if (step.stepLeft) {
       step.toStep();
       return;
@@ -85,7 +93,7 @@ function MarketingSwitch({ consents }: { consents: Me['onboarding']['consents'] 
     <Stack gap="3" align="flex-start">
       <Switch.Root
         checked={on}
-        disabled={!record.ready || record.isPending}
+        disabled={record.isPending}
         onCheckedChange={(details) => void onChange(details.checked)}
         colorPalette="brand"
         data-testid="settings-marketing-switch"

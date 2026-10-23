@@ -429,12 +429,15 @@ describe('the onboarding mutations', () => {
   });
 });
 
-describe('MY 설정’s interest categories card (PR #224 Codex review, ADR-0078 7-29)', () => {
-  it('names the account the card shows: with the session already on B, A’s picks are refused, not written to B', async () => {
-    // The render between the session naming B and SessionCacheGuard's reset (an effect): ['me'] —
-    // the card — still holds A's picks while the session already says B. The card's save names the
-    // account of the `Me` it was drawn from (its `accountId`, as the 소개 and nickname cards do), so
-    // the server, whose cookie is now B's, refuses it (A-PG-24) and writes nothing.
+describe('MY 설정’s interest categories write with another account’s cookie (PR #224 Codex review, ADR-0078 7-29)', () => {
+  it('a body naming the account shown is refused and leaves the session to be read again; one naming the cookie’s account would be taken', async () => {
+    // The render between the session naming B and SessionCacheGuard's reset (an effect): ['me']
+    // still holds A's picks while the cookie is already B's. What this documents is the server's
+    // rule (A-PG-24, mimicked by `put`) and the write's options (`setInterestCategoriesOptions`):
+    // a body naming A is refused, nothing is written, the session is asked again and ['me'] keeps
+    // A's entry; a body naming B is taken with B's cookie. Both bodies are built here — which
+    // account the card itself names (its `Me`'s, not the session's) is guarded by profile.spec.ts
+    // ('탭의 계정이 다른 회원으로 바뀐 뒤 …'), which drives the card in a browser.
     const queryClient = getQueryClient();
     const session = sessionRefetches();
     const a: Me = { ...named, profile: { ...named.profile, interestCategoryIds: [1] } };

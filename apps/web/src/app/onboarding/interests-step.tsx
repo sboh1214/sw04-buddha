@@ -31,8 +31,13 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  * while the screen was open is refused by the server (VALIDATION_ERROR naming it); the list is
  * loaded again and the member picks again from what is there. If the list cannot be loaded at all,
  * 건너뛰기 still works — the step must never hold an account that only wants the market.
+ *
+ * `accountId` is the account the stepper shows (its `me.id`), which the answer names
+ * (`expectedAccountId`) — never the session's, which already says another account in the render
+ * before SessionCacheGuard's reset (use-onboarding.ts, ADR-0078 7-29) — and the one the stepper's
+ * leave report counts the answer for.
  */
-export function InterestsStep() {
+export function InterestsStep({ accountId }: { accountId: string }) {
   const categories = useCategories();
   const save = useAnswerInterestsStep();
   const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
@@ -43,8 +48,6 @@ export function InterestsStep() {
   const skipping = save.isPending && save.variables?.categoryIds.length === 0;
 
   const send = async (categoryIds: number[]) => {
-    const accountId = save.accountId;
-    if (accountId === undefined) return;
     setNotice(null);
     try {
       await save.mutateAsync({ categoryIds, expectedAccountId: accountId });
@@ -108,7 +111,7 @@ export function InterestsStep() {
           variant="ghost"
           onClick={() => void send([])}
           loading={skipping}
-          disabled={!save.ready || save.isPending}
+          disabled={save.isPending}
           data-testid="interests-skip"
         >
           {copy.interestsSkip}
@@ -116,7 +119,7 @@ export function InterestsStep() {
         <Button
           onClick={() => void send(chosen)}
           loading={save.isPending && !skipping}
-          disabled={!save.ready || chosen.length === 0 || save.isPending}
+          disabled={chosen.length === 0 || save.isPending}
           data-testid="interests-save"
         >
           {copy.interestsSave}

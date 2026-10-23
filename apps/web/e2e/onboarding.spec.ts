@@ -17,6 +17,7 @@ import {
   setFirstPassword,
   signIn,
   signUp,
+  switchAccountUnderScreen,
   test,
   verificationLink,
   verifyPhone,
@@ -796,6 +797,98 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     me = await meOf(page.request);
     expect(me.onboarding).toMatchObject({ completed: true, interests: true, nextStep: null });
     expect(stepWrites).toEqual([{ categoryIds: [category.id], expectedAccountId: reloaded.id }]);
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 단계가 화면에 남아 있으면 닉네임·관심 카테고리 단계의 답은 그 화면의 계정을 대어 거절되고, 바뀐 계정에는 아무것도 쓰이지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // PR #224 Codex review (ADR-0078 7-29): in the render between the session naming B and
+    // SessionCacheGuard's reset the stepper still shows A's step while the session already says B,
+    // and an answer naming the session's account would be taken with B's cookie — A's picks written
+    // to B. The steps name the stepper's account (`me.id`), so the server refuses them as another
+    // account's. That render is held here: B's cookie in this tab and the session read again, while
+    // `GET /me` still answers as A (`switchAccountUnderScreen`) — B, an onboarded account whose
+    // interests step was answered, would have taken A's picks as a change.
+    const categories = await dataOf<Category[]>(await page.request.get('/api/v1/categories'));
+    const category = categories.find((row) => row.parentId === null);
+    if (category === undefined)
+      throw new Error('the seeded categories are missing: run `pnpm db:seed`');
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      const a = await atNicknameStep(page);
+      await shownContext.addCookies(await page.context().cookies());
+      // A's nickname answer goes as A once `nicknameAsShown` says so: the way on to A's interests.
+      let nicknameAsShown = false;
+      await switchAccountUnderScreen(
+        page,
+        shownContext.request,
+        { id: b.id, cookies: await otherContext.cookies() },
+        (request) =>
+          nicknameAsShown && new URL(request.url()).pathname === '/api/v1/me/onboarding/nickname',
+      );
+      // The stepper drawn again from A's `Me` after the guard's reset: A's nickname step.
+      await expect(page.getByTestId('nickname-step')).toBeVisible();
+
+      const writes: { path: string; body: unknown }[] = [];
+      page.on('request', (request) => {
+        const path = new URL(request.url()).pathname;
+        if (request.method() === 'POST' && path.startsWith('/api/v1/me/onboarding/')) {
+          writes.push({ path, body: request.postDataJSON() });
+        }
+      });
+      const answerOf = (path: string) =>
+        page.waitForResponse(
+          (response) =>
+            new URL(response.url()).pathname === path && response.request().method() === 'POST',
+        );
+
+      // The nickname step names A: refused with B's cookie.
+      let answered = answerOf('/api/v1/me/onboarding/nickname');
+      await page.getByTestId('nickname-step-submit').click();
+      expect((await answered).status()).toBe(403);
+      await expect(page.getByTestId('nickname-step-notice')).toHaveText(copy.sessionChanged);
+
+      // A's own answer reaching A, as before the switch: on to the notice and the interests.
+      nicknameAsShown = true;
+      answered = answerOf('/api/v1/me/onboarding/nickname');
+      await page.getByTestId('nickname-step-submit').click();
+      expect((await answered).status()).toBe(200);
+      await page.getByTestId('notice-next').click();
+      await expect(page.getByTestId('interests-step')).toBeVisible();
+
+      // The interests step names A: refused with B's cookie, nothing written to B.
+      await page.getByTestId('interests-step').getByTestId(`interest-${category.slug}`).click();
+      answered = answerOf('/api/v1/me/onboarding/interests');
+      await page.getByTestId('interests-save').click();
+      expect((await answered).status()).toBe(403);
+      await expect(page.getByTestId('interests-notice')).toHaveText(copy.sessionChanged);
+
+      const nickname = { nickname: a.profile.nickname, expectedAccountId: a.id };
+      expect(writes).toEqual([
+        { path: '/api/v1/me/onboarding/nickname', body: nickname },
+        { path: '/api/v1/me/onboarding/nickname', body: nickname },
+        {
+          path: '/api/v1/me/onboarding/interests',
+          body: { categoryIds: [category.id], expectedAccountId: a.id },
+        },
+      ]);
+      const bAfter = await meOf(other.request);
+      expect(bAfter.profile.nickname).toBe(b.profile.nickname);
+      expect(bAfter.profile.interestCategoryIds).toEqual(b.profile.interestCategoryIds);
+      expect(bAfter.onboarding).toEqual(b.onboarding);
+      const aAfter = await meOf(shownContext.request);
+      expect(aAfter.onboarding).toMatchObject({ nickname: true, interests: false });
+      expect(aAfter.profile.interestCategoryIds).toEqual([]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 
   /**

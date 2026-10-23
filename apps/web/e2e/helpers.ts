@@ -3,8 +3,11 @@ import {
   test as base,
   type APIRequestContext,
   type APIResponse,
+  type Cookie,
   type Locator,
   type Page,
+  type Request,
+  type Response,
 } from '@playwright/test';
 import type { AdminMarket, Category, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -618,6 +621,69 @@ export async function logOut(page: Page): Promise<void> {
   await page.getByTestId('my-logout').click();
   await expect(page).toHaveURL('/');
   await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+}
+
+/**
+ * The tab's account switched under its screen (A-PG-24, ADR-0078 7-29): the page's cookie becomes
+ * `to`'s — what another tab signing in as `to` leaves it with — and the session is read again (on
+ * the `visibilitychange` better-auth refetches it on), so the session, and SessionCacheGuard with
+ * it, says `to`. `GET /me`, and each request `held` picks, still go as the account the screen
+ * showed — through `shown`, a request context holding that account's cookie — so the guard's reset
+ * draws the screen again from that account's `Me`: the render between the session naming another
+ * account and the guard's reset, held for as long as the spec needs it. Every other request goes
+ * with `to`'s cookie. Resolves once the session said `to` and `['me']` was read again after it.
+ */
+export async function switchAccountUnderScreen(
+  page: Page,
+  shown: APIRequestContext,
+  to: { id: string; cookies: Cookie[] },
+  held: (request: Request) => boolean = () => false,
+): Promise<void> {
+  const shownMe = await meOf(shown);
+  const isMeRead = (request: Request) =>
+    request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/me';
+  await page.route(
+    (url) => url.pathname.startsWith('/api/v1/me'),
+    async (route) => {
+      const request = route.request();
+      if (!isMeRead(request) && !held(request)) return route.fallback();
+      // The page's own headers but its cookie — `shown`'s jar supplies the shown account's — and
+      // those the request context sets itself.
+      const headers = Object.fromEntries(
+        Object.entries(await request.allHeaders()).filter(
+          ([name]) => !['cookie', 'content-length', 'host', 'connection'].includes(name),
+        ),
+      );
+      const response = await shown.fetch(request.url(), {
+        method: request.method(),
+        headers,
+        data: request.postDataBuffer() ?? undefined,
+      });
+      await route.fulfill({ response });
+    },
+  );
+  let sessionAnswered = false;
+  const onSession = (response: Response) => {
+    if (new URL(response.url()).pathname === '/api/auth/get-session') sessionAnswered = true;
+  };
+  page.on('response', onSession);
+  try {
+    const sessionRead = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === '/api/auth/get-session',
+    );
+    const meRead = page.waitForResponse(
+      (response) => sessionAnswered && isMeRead(response.request()),
+    );
+    await page.context().clearCookies();
+    await page.context().addCookies(to.cookies);
+    await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+    const session = (await (await sessionRead).json()) as { user?: { id?: string } } | null;
+    expect(session?.user?.id).toBe(to.id);
+    const drawn = (await (await meRead).json()) as { data: Me };
+    expect(drawn.data.id).toBe(shownMe.id);
+  } finally {
+    page.off('response', onSession);
+  }
 }
 
 /** The first seed admin, for a spec that needs a second signed-in browser without a second mailbox. */

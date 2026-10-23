@@ -10,6 +10,7 @@ import {
   logOut,
   meOf,
   signUp,
+  switchAccountUnderScreen,
   test,
 } from './helpers';
 
@@ -843,5 +844,80 @@ test.describe('공개 프로필', () => {
       interestCategoryIds: [],
     });
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 MY 설정이 남아 있으면 관심 카테고리 저장과 마케팅 정보 수신은 그 화면의 계정을 대어 거절되고, 어느 계정에도 쓰이지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // PR #224 Codex review (ADR-0078 7-29): in the render between the session naming B and
+    // SessionCacheGuard's reset the cards still show A's `Me` while the session already says B, and
+    // a body naming the session's account would be taken with B's cookie — A's picks written to B,
+    // A's marketing answer recorded as B's. The cards name the account of the `Me` they were drawn
+    // from, so the server refuses both as another account's. That render is held here: B's cookie
+    // in this tab and the session read again, while `GET /me` still answers as A
+    // (`switchAccountUnderScreen`).
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      const { top } = await topAndSub(page.request);
+      await page.goto('/my/settings');
+      const interests = page.getByTestId('settings-interests');
+      await expect(interests.getByTestId(`interest-${top.slug}`)).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes: unknown[] = [];
+      page.on('request', (request) => {
+        const path = new URL(request.url()).pathname;
+        if (path === '/api/v1/me/interest-categories' || path === '/api/v1/me/consents') {
+          writes.push(request.postDataJSON());
+        }
+      });
+      // A's card, drawn again from A's `Me` after the guard's reset.
+      const box = interests.getByTestId(`interest-${top.slug}`);
+      await expect(box).toBeVisible();
+      await box.click();
+      const savedInterests = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/v1/me/interest-categories',
+      );
+      await interests.getByTestId('interests-settings-save').click();
+      expect((await savedInterests).status()).toBe(403);
+      await expect(interests.getByTestId('interests-notice')).toHaveText(copy.sessionChanged);
+
+      const marketing = page.getByTestId('settings-marketing');
+      const recorded = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/v1/me/consents',
+      );
+      await marketing.getByTestId('settings-marketing-switch').click();
+      expect((await recorded).status()).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+
+      expect(writes).toEqual([
+        { categoryIds: [top.id], expectedAccountId: a.id },
+        expect.objectContaining({ expectedAccountId: a.id }),
+      ]);
+      // Nothing written, to B or to A.
+      const bAfter = await meOf(other.request);
+      expect(bAfter.profile.interestCategoryIds).toEqual(b.profile.interestCategoryIds);
+      expect(bAfter.onboarding.consents).toEqual(b.onboarding.consents);
+      const aAfter = await meOf(shownContext.request);
+      expect(aAfter.profile.interestCategoryIds).toEqual(a.profile.interestCategoryIds);
+      expect(aAfter.onboarding.consents).toEqual(a.onboarding.consents);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 });

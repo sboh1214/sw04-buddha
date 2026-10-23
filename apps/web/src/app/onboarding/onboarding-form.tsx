@@ -211,7 +211,7 @@ function Stepper({
   let step: ReactNode;
   switch (screen) {
     case 'consent':
-      step = <ConsentStep items={consentStepItems(me.onboarding.consents)} />;
+      step = <ConsentStep items={consentStepItems(me.onboarding.consents)} accountId={me.id} />;
       break;
     case 'verification':
       step = (
@@ -222,13 +222,13 @@ function Stepper({
       );
       break;
     case 'nickname':
-      step = <NicknameStep nickname={me.profile.nickname} />;
+      step = <NicknameStep nickname={me.profile.nickname} accountId={me.id} />;
       break;
     case 'notice':
       step = <NoticeStep startGrant={me.startGrant} onNext={() => setNoticeRead(true)} />;
       break;
     case 'interests':
-      step = <InterestsStep />;
+      step = <InterestsStep accountId={me.id} />;
       break;
   }
 
