@@ -1214,6 +1214,29 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
       expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), 'r4']);
       unsubscribe();
     });
+
+    it('for the account on screen as it is put in: the tab changing hands during the read of its thread — the cache reset, `GET /me` naming nobody yet — it is placed for none, and the next read of the pages leaves it out (the review of the commit of 오너 결정 2026-10-24)', async () => {
+      const { queryClient, comments, unsubscribe } = holdingTwo();
+      const replies = fakeReplies(20, MINE);
+      let handedOver = false;
+      getThreads(firstPage, async (request) => {
+        // Sent as user-1, on screen as it was sent; on the first reply page another account
+        // signs in: SessionCacheGuard resets the cache, and `GET /me` has not answered yet.
+        if (!handedOver) {
+          handedOver = true;
+          await queryClient.resetQueries();
+        }
+        return replies(request);
+      });
+      await answerIt(queryClient);
+      expect(handedOver).toBe(true);
+      expect(queryClient.getQueryData(ME_QUERY_KEY)).toBeUndefined();
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+      expect(placedHeld(queryClient)).toEqual([]);
+      await comments.refetch();
+      expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), 'r4']);
+      unsubscribe();
+    });
   });
 });
 
@@ -2199,6 +2222,33 @@ describe('a new 댓글', () => {
         expect(placedHeld(queryClient)).toEqual([]);
         await comments.refetch();
         expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+        unsubscribe();
+      });
+
+      it('for the account on screen as it is put in: the tab changing hands during the read toward its page — the cache reset, `GET /me` naming another — it is placed for none, and the next read of the pages leaves it out (the review of the commit of 오너 결정 2026-10-24)', async () => {
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        const all = [...olderIds(0, 8), MINE];
+        let handedOver = false;
+        const asked = getComments(async ({ params }) => {
+          // Sent as user-1, on screen as it was sent; on the read's first page user-2 signs in:
+          // SessionCacheGuard resets the cache (the page on screen read again), `GET /me` names
+          // user-2.
+          if (!handedOver) {
+            handedOver = true;
+            await queryClient.resetQueries();
+            onScreen(queryClient, 'user-2');
+          }
+          const from = params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1));
+          return { items: [thread(published(all[from]!))], nextCursor: `c${String(from + 1)}` };
+        });
+        await write(queryClient);
+        // The read's five, and the page on screen read again by the reset among them.
+        expect(cursorsAsked(asked)).toEqual(['', '', 'c1', 'c2', 'c3', 'c4']);
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(placedHeld(queryClient)).toEqual([]);
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+        expect(placedHeld(queryClient)).toEqual([]);
         unsubscribe();
       });
     });
