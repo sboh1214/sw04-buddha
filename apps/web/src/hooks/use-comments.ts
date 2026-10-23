@@ -23,11 +23,13 @@ import {
   type CommentPage,
   type CommentPages,
   type ReplyPage,
+  type ReplyReadOnBudget,
   commentPageQuery,
   commentThreadsOf,
   isCursorRefusal,
   isStaleThreadRefusal,
   postCommentsKey,
+  replyReadOnBudget,
   threadOf,
   threadReadsOn,
   threadWithReplies,
@@ -51,7 +53,8 @@ import { afterRefusal } from './use-posts';
  * thread held (`readMoreReplies`, 오너 결정 2026-10-21), and every later read of the pages reads a
  * thread on as far as the screen had it (`threadsReadOn`) — so a refresh does not take away 대댓글
  * on screen, nor a box open on one — five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정
- * 2026-10-21 (2차) 답 1).
+ * 2026-10-21 (2차) 답 1), and 30 for the read in all, the threads at the top first
+ * (REPLY_READ_ON_PAGES_IN_ALL, 오너 결정 2026-10-23).
  *
  * A write's answer goes into the pages held: an edit in place (`withEditedComment`), a deletion
  * as its placeholder or out (`withoutComment`), a 대댓글 at the end of its 댓글 (`withNewComment`).
@@ -85,10 +88,30 @@ import { afterRefusal } from './use-posts';
  */
 
 /**
+ * What each read of the comment pages has left to read on through their threads
+ * (REPLY_READ_ON_PAGES_IN_ALL, 오너 결정 2026-10-23), by the signal TanStack Query hands every page
+ * of that read: a refetch reads the pages held one after another, the first first, under one
+ * signal — its retries too (a 5xx or a lost connection, query-client.ts) — so its threads spend
+ * one budget in the order they are on screen, and a retry has what its failed attempts left.
+ */
+const readOnBudgets = new WeakMap<AbortSignal, ReplyReadOnBudget>();
+
+function readOnBudgetOf(signal: AbortSignal | undefined): ReplyReadOnBudget {
+  if (signal === undefined) return replyReadOnBudget();
+  let budget = readOnBudgets.get(signal);
+  if (budget === undefined) {
+    budget = replyReadOnBudget();
+    readOnBudgets.set(signal, budget);
+  }
+  return budget;
+}
+
+/**
  * `GET /posts/:postId/comments`, oldest first, one page of 댓글 per 더 보기. Given the client
  * (the query's own context hands it over), a page read again keeps each thread as far as the
- * screen read it (`threadsReadOn`). Given the query's signal, a read cancelled or left stops: its
- * request is aborted and no reply page is asked for after.
+ * screen read it (`threadsReadOn`), out of the read's budget (`budget`, or the one of its signal —
+ * `readOnBudgetOf`). Given the query's signal, a read cancelled or left stops: its request is
+ * aborted and no reply page is asked for after.
  */
 export function commentsInfiniteQueryOptions(postId: string) {
   const id = postId.toLowerCase();
@@ -98,10 +121,13 @@ export function commentsInfiniteQueryOptions(postId: string) {
       pageParam,
       client,
       signal,
+      budget,
     }: {
       pageParam: string | undefined;
       client?: QueryClient;
       signal?: AbortSignal;
+      /** The read's REPLY_READ_ON_PAGES_IN_ALL, when one read reads pages without a signal. */
+      budget?: ReplyReadOnBudget;
     }): Promise<CommentPage> => {
       const { data, meta } = unwrap(
         await api.GET('/api/v1/posts/{postId}/comments', {
@@ -110,7 +136,9 @@ export function commentsInfiniteQueryOptions(postId: string) {
         }),
       );
       const page = { items: data, nextCursor: meta.nextCursor };
-      return client === undefined ? page : threadsReadOn(client, id, page, signal);
+      return client === undefined
+        ? page
+        : threadsReadOn(client, id, page, signal, budget ?? readOnBudgetOf(signal));
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: CommentPage) => last.nextCursor ?? undefined,
@@ -140,16 +168,21 @@ export async function fetchReplyPage(
  * many as the pages held now do (`threadReadsOn`): what '답글 더 보기' brought stays on screen — and
  * an edit or a reply box open on it, which would otherwise go as its comment left the pages — up
  * to REPLY_READ_ON_PAGES reply pages a thread (오너 결정 2026-10-21 (2차) 답 1): a thread opened further
- * than its first 50 and 250 more comes back to that, the rest behind '답글 더 보기' again. A reply
- * page that fails fails the page, so the read keeps what is held; a read cancelled (`signal`) asks
- * for no reply page after. Costs, per thread read on, the reply pages the reader had opened, five
- * at most — one request per 50 대댓글 on every later read of the pages (ADR-0074 7-28).
+ * than its first 50 and 250 more comes back to that, the rest behind '답글 더 보기' again. And out
+ * of `budget`, the read's REPLY_READ_ON_PAGES_IN_ALL for all its pages (오너 결정 2026-10-23): the
+ * threads spend it in their order, a page's top first and the pages in theirs; once it is spent,
+ * the thread it ran out in keeps the pages it read and every thread after comes back to its first
+ * 50, the rest behind '답글 더 보기'. A reply page that fails fails the page, so the read keeps
+ * what is held; a read cancelled (`signal`) asks for no reply page after. Costs, per thread read
+ * on, the reply pages the reader had opened, five at most, and 30 for the read — one request per 50
+ * 대댓글 on every later read of the pages (ADR-0074 7-28).
  */
 async function threadsReadOn(
   client: QueryClient,
   postId: string,
   page: CommentPage,
   signal: AbortSignal | undefined,
+  budget: ReplyReadOnBudget,
 ): Promise<CommentPage> {
   const held = new Map(
     commentThreadsOf(client.getQueryData<CommentPages>(postCommentsKey(postId))).map((thread) => [
@@ -161,10 +194,16 @@ async function threadsReadOn(
   for (const fresh of page.items) {
     let thread = fresh;
     const before = held.get(thread.comment.id);
-    for (let pagesRead = 0; threadReadsOn(thread, before, pagesRead); pagesRead += 1) {
+    for (
+      let pagesRead = 0;
+      budget.left > 0 && threadReadsOn(thread, before, pagesRead);
+      pagesRead += 1
+    ) {
       const cursor = thread.repliesNextCursor;
       if (cursor === null) break;
       signal?.throwIfAborted();
+      // Spent when asked: a page that fails was a request all the same.
+      budget.left -= 1;
       const more = await fetchReplyPage(thread.comment.id, cursor, signal);
       if (more.items.length === 0) break;
       thread = threadWithReplies(thread, more);
@@ -377,8 +416,9 @@ async function writePages(
  * it, so the 댓글 arrives in the page the server keeps it in — after every older 댓글, read or
  * not, and kept by any later read of as many pages. Costs a read of the last page, and on a post
  * whose older 댓글 the reader had not all opened, the reads 더 보기 would have made — one per 20
- * 댓글, with no cap, in the reader's address limit, each with the reply pages of the threads read
- * on (`threadsReadOn`; ADR-0074 7-14). Nothing held
+ * 댓글, with no cap, in the reader's address limit — with the reply pages of the threads read on
+ * (`threadsReadOn`), 30 at most for them all: one read of the pages, one budget
+ * (REPLY_READ_ON_PAGES_IN_ALL, 오너 결정 2026-10-23; ADR-0074 7-14·7-28). Nothing held
  * (the first read failed, or is on its way and may have left before the write): the pages are read
  * afresh. A read that fails puts the answer at the end of the pages held instead — the 댓글 is
  * written, and saying otherwise would invite a second.
@@ -394,10 +434,11 @@ async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment:
   const from = held.pages.length - 1;
   const pages: CommentPage[] = [];
   const pageParams: unknown[] = [];
+  const budget = replyReadOnBudget();
   let cursor = held.pageParams[from] as string | undefined;
   try {
     for (;;) {
-      const page = await queryFn({ pageParam: cursor, client: queryClient });
+      const page = await queryFn({ pageParam: cursor, client: queryClient, budget });
       pages.push(page);
       pageParams.push(cursor);
       if (page.nextCursor === null) break;

@@ -22,7 +22,9 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * opens its edit with it (오너 결정 2026-10-22 (2차)·(3차)), unless 답글 더 보기 pressed meanwhile let
  * the box take it; past five unread reply pages a new 답글
  * stands last of those held until '답글 더 보기' brings it into place, and a read of the pages
- * reads a thread on five reply pages at most, the requests counted (오너 결정 2026-10-21 (2차));
+ * reads a thread on five reply pages at most, the requests counted (오너 결정 2026-10-21 (2차)) —
+ * and 30 in all, the threads at the top first, those past them back to their first 50 behind
+ * '답글 더 보기' (오너 결정 2026-10-23);
  * the read on for such an edit reads no further than the 300 a read of the pages keeps, nothing at
  * all when the thread holds them already — one on the fifth page opens its box, one past them is
  * shown apart with why; 답글 더 보기 bringing its 답글 past them opens no box either, the text under
@@ -1513,6 +1515,103 @@ test.describe('댓글·대댓글', () => {
     await heldUnderNext.getByTestId('comment-held-close').click();
     await expect(held).toHaveCount(0);
     expect(asked).toHaveLength(1);
+  });
+
+  test('답글을 연 스레드가 많으면 다시 읽기 한 번은 답글 페이지를 모두 합쳐 30번까지 읽는다: 위의 스레드부터 다섯 페이지씩, 그 밖의 스레드는 처음 50개와 답글 더 보기로 돌아오고, 다음 다시 읽기도 그 30번이다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-23 (ADR-0074 7-28): five reply pages a thread as before, and 30 in all for
+    // one read of the pages, the threads at the top first — six threads opened to their 300 spend
+    // them, and the seventh, opened to its 100, comes back to its first 50 behind 답글 더 보기.
+    // Before it, one read of a page of threads opened past 300 asked for five reply pages each — 20
+    // such threads, 100 requests, past the reader's address limit (Codex review on PR #220).
+    test.slow();
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `답글을 연 스레드 ${tag}`, tag);
+    const sizes = [300, 300, 300, 300, 300, 300, 100];
+    const tops: string[] = [];
+    for (let index = 0; index < sizes.length; index += 1) {
+      tops.push(await commentThroughApi(admin, postId, null, `스레드 ${String(index + 1)} ${tag}`));
+    }
+    // The 답글 straight at the API, the threads side by side and ten at a time in each (their order
+    // is the server's, which this test does not read).
+    const { id: adminId } = await meOf(admin);
+    await Promise.all(
+      tops.map(async (top, index) => {
+        const size = sizes[index]!;
+        for (let start = 1; start <= size; start += 10) {
+          await Promise.all(
+            Array.from({ length: Math.min(10, size - start + 1) }, async (_, offset) => {
+              const res = await admin.post(`/api/v1/posts/${postId}/comments`, {
+                data: {
+                  parentId: top,
+                  body: `답글 ${String(start + offset)} ${tag}`,
+                  expectedAccountId: adminId,
+                },
+              });
+              expect(res.status(), await res.text()).toBe(201);
+            }),
+          );
+        }
+      }),
+    );
+    const replyRequests: string[] = [];
+    page.on('request', (request) => {
+      if (/^\/api\/v1\/comments\/[0-9a-f-]{36}\/replies$/.test(new URL(request.url()).pathname)) {
+        replyRequests.push(request.url());
+      }
+    });
+    await page.goto(`/community/posts/${postId}`);
+    const shownIn = (top: string) =>
+      page.getByTestId(`comment-thread-${top}`).getByTestId('comment-replies').locator('article');
+    const moreIn = (top: string) =>
+      page.getByTestId(`comment-thread-${top}`).getByTestId('comment-replies-more');
+    // Every thread opened to its end with 답글 더 보기: five presses each for the six, one for the
+    // seventh.
+    for (const [index, top] of tops.entries()) {
+      const size = sizes[index]!;
+      await expect(shownIn(top)).toHaveCount(50);
+      for (let shown = 50; shown < size; shown += 50) {
+        await expect(moreIn(top)).toBeEnabled();
+        await moreIn(top).click();
+        await expect(shownIn(top)).toHaveCount(Math.min(shown + 50, size));
+      }
+      await expect(moreIn(top)).toHaveCount(0);
+    }
+    expect(replyRequests).toHaveLength(6 * 5 + 1);
+
+    // A read of the pages — a new 댓글's: the six threads at the top read on to their 300, five
+    // reply pages each, 30 in all; nothing is left for the seventh, back to its first 50.
+    const box = page.getByTestId('comment-composer');
+    const readAgain = async (text: string) => {
+      replyRequests.length = 0;
+      await box.getByTestId('comment-input').fill(text);
+      await box.getByTestId('comment-submit').click();
+      await expect(page.getByTestId('comments-list').getByText(text)).toBeVisible();
+    };
+    await readAgain(`새 댓글 ${tag}`);
+    await expect(shownIn(tops[6]!)).toHaveCount(50);
+    await expect(moreIn(tops[6]!)).toBeVisible();
+    for (const top of tops.slice(0, 6)) {
+      await expect(shownIn(top)).toHaveCount(300);
+      await expect(moreIn(top)).toHaveCount(0);
+    }
+    expect(replyRequests).toHaveLength(30);
+
+    // 답글 더 보기 opens it again; the next read of the pages has its own 30, the same way.
+    replyRequests.length = 0;
+    await moreIn(tops[6]!).click();
+    await expect(shownIn(tops[6]!)).toHaveCount(100);
+    await expect(moreIn(tops[6]!)).toHaveCount(0);
+    expect(replyRequests).toHaveLength(1);
+    await readAgain(`또 새 댓글 ${tag}`);
+    await expect(shownIn(tops[6]!)).toHaveCount(50);
+    await expect(moreIn(tops[6]!)).toBeVisible();
+    await expect(shownIn(tops[5]!)).toHaveCount(300);
+    expect(replyRequests).toHaveLength(30);
   });
 
   test('쓰는 사이 그 댓글이 지워져 답글과 수정이 거절되면 상자가 사라져도 거절의 까닭과 쓰던 글자가 닫을 때까지 남는다', async ({

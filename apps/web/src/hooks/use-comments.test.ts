@@ -18,6 +18,7 @@ import {
 import {
   REPLIES_KEPT_ON_READ,
   REPLY_READ_ON_PAGES,
+  REPLY_READ_ON_PAGES_IN_ALL,
   type CommentPage,
   type CommentPages,
   type HeldEditsBrought,
@@ -696,6 +697,196 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
       [OLDER, replies[OLDER]!.slice(0, 12), 'r12'],
     ]);
     unsubscribe();
+  });
+
+  describe('30 reply pages in all for one read of the pages, the threads at the top first (오너 결정 2026-10-23)', () => {
+    // A fake server of 40 대댓글 under each 댓글, two a page (the page's size is the server's; the
+    // budget counts requests). Each 댓글 the screen opened to `held` of them.
+    const threadIdOf = (index: number) =>
+      `10000000-0000-4000-8000-${String(index).padStart(12, '0')}`;
+    const repliesOf = (index: number) => replyIds(index * 100, index * 100 + 40);
+    const threadHolding = (index: number, count: number): CommentThread => ({
+      comment: published(threadIdOf(index)),
+      replies: repliesOf(index)
+        .slice(0, count)
+        .map((reply) => published(reply, threadIdOf(index))),
+      repliesNextCursor: `r${String(count)}`,
+    });
+    /** The pages of 댓글 as `layout` says: per page, how many 대댓글 each thread held. */
+    const pagesHolding = (layout: number[][]): CommentPages => {
+      let index = 0;
+      return {
+        pages: layout.map((page, at) => ({
+          items: page.map((count) => threadHolding((index += 1), count)),
+          nextCursor: at < layout.length - 1 ? `c${String(at + 1)}` : null,
+        })),
+        pageParams: layout.map((_, at) => (at === 0 ? undefined : `c${String(at)}`)),
+      };
+    };
+    /** A reply page of the fake server: two of the 40 대댓글 of the thread asked, from its cursor. */
+    const replyPageOf = ({ params }: RepliesRequest): ReplyPage => {
+      const all = repliesOf(Number(params.path.commentId.slice(-12)));
+      const from = Number(params.query.cursor.slice(1));
+      const to = Math.min(from + 2, all.length);
+      return {
+        items: all.slice(from, to).map((reply) => published(reply, params.path.commentId)),
+        nextCursor: to < all.length ? `r${String(to)}` : null,
+      };
+    };
+    /** `replyPageOf` answered as `getThreads` answers it, and recorded the same way. */
+    const serveReplies = (asked: string[], request: never) => {
+      const { params } = request as RepliesRequest;
+      asked.push(`replies:${params.path.commentId}:${params.query.cursor}`);
+      const page = replyPageOf(request);
+      return answer(page.items, { nextCursor: page.nextCursor });
+    };
+    /** The server: every page of 댓글 as `layout` lays them out, each thread with its first two. */
+    const serving = (layout: number[][]) => {
+      const fresh = pagesHolding(layout.map((page) => page.map(() => 2)));
+      return getThreads(
+        ({ params }) =>
+          fresh.pages[
+            params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1))
+          ]!,
+        replyPageOf,
+      );
+    };
+    /** Each thread held: its index, how many 대댓글 it holds and its cursor. */
+    const threadsHeld = (queryClient: QueryClient) =>
+      commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).map((one) => [
+        Number(one.comment.id.slice(-12)),
+        one.replies.length,
+        one.repliesNextCursor,
+      ]);
+    /** The reply pages asked, as `<thread index>:<cursor>`, in the order asked. */
+    const replyReads = (asked: string[]) =>
+      asked
+        .filter((one) => one.startsWith('replies:'))
+        .map((one) => {
+          const [, id, cursor] = one.split(':');
+          return `${String(Number(id!.slice(-12)))}:${cursor!}`;
+        });
+
+    it('spends them top first: five a thread while any is left, the thread they run out in keeps what it read, those after it come back to their first page — and every read has its own 30', async () => {
+      // Seven 댓글 on one page, the first opened to 8 (three pages to read on), the other six past
+      // the five pages a thread reads: 3 + 5 × 5 = 28, so the sixth thread reads two pages, the
+      // seventh none.
+      const layout = [[8, 14, 14, 14, 14, 14, 14]];
+      const queryClient = seeded();
+      queryClient.setQueryData<CommentPages>(postCommentsKey(post), pagesHolding(layout));
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      const unsubscribe = comments.subscribe(() => undefined);
+      const asked = serving(layout);
+      await comments.refetch();
+      const pages = (index: number, count: number) =>
+        Array.from({ length: count }, (_, page) => `${String(index)}:r${String(2 + page * 2)}`);
+      expect(replyReads(asked)).toEqual([
+        ...pages(1, 3),
+        ...pages(2, 5),
+        ...pages(3, 5),
+        ...pages(4, 5),
+        ...pages(5, 5),
+        ...pages(6, 5),
+        ...pages(7, 2),
+      ]);
+      expect(replyReads(asked)).toHaveLength(REPLY_READ_ON_PAGES_IN_ALL);
+      expect(threadsHeld(queryClient)).toEqual([
+        [1, 8, 'r8'],
+        [2, 12, 'r12'],
+        [3, 12, 'r12'],
+        [4, 12, 'r12'],
+        [5, 12, 'r12'],
+        [6, 12, 'r12'],
+        [7, 6, 'r6'],
+      ]);
+      // The next read has its own 30: the seventh thread, held at 6 now, reads on to it.
+      asked.length = 0;
+      await comments.refetch();
+      expect(replyReads(asked)).toEqual([
+        ...pages(1, 3),
+        ...pages(2, 5),
+        ...pages(3, 5),
+        ...pages(4, 5),
+        ...pages(5, 5),
+        ...pages(6, 5),
+        ...pages(7, 2),
+      ]);
+      expect(threadsHeld(queryClient).at(-1)).toEqual([7, 6, 'r6']);
+      unsubscribe();
+    });
+
+    it('spends one budget over every page of 댓글 the read reads again, in their order: the threads of a later page get what those above left', async () => {
+      // Two pages of 댓글: four threads past five pages on the first (20), three on the second —
+      // two get their five (30), the last comes back to its first page.
+      const layout = [
+        [14, 14, 14, 14],
+        [14, 14, 14],
+      ];
+      const queryClient = seeded();
+      queryClient.setQueryData<CommentPages>(postCommentsKey(post), pagesHolding(layout));
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      const unsubscribe = comments.subscribe(() => undefined);
+      const asked = serving(layout);
+      await comments.refetch();
+      expect(asked.filter((one) => one.startsWith('comments:'))).toEqual([
+        'comments:',
+        'comments:c1',
+      ]);
+      expect(replyReads(asked)).toHaveLength(REPLY_READ_ON_PAGES_IN_ALL);
+      expect(threadsHeld(queryClient)).toEqual([
+        [1, 12, 'r12'],
+        [2, 12, 'r12'],
+        [3, 12, 'r12'],
+        [4, 12, 'r12'],
+        [5, 12, 'r12'],
+        [6, 12, 'r12'],
+        [7, 2, 'r2'],
+      ]);
+      unsubscribe();
+    });
+
+    it('spends one budget on a new 댓글’s read of the pages too, which reads them with no signal', async () => {
+      // The last page held — seven threads opened past five pages — read again for the new 댓글,
+      // and the page after it that holds MINE: 30 reply pages, the seventh thread back to its first.
+      const layout = [[14, 14, 14, 14, 14, 14, 14]];
+      const queryClient = seeded();
+      queryClient.setQueryData<CommentPages>(postCommentsKey(post), pagesHolding(layout));
+      const fresh = pagesHolding([[2, 2, 2, 2, 2, 2, 2]]);
+      const asked = serving(layout);
+      vi.mocked(api.GET).mockImplementation((path: string, request: never) => {
+        const { params } = request as CommentsRequest;
+        if (path !== '/api/v1/posts/{postId}/comments') {
+          return Promise.resolve(serveReplies(asked, request));
+        }
+        const last = params.query.cursor === 'c1';
+        asked.push(last ? 'comments:c1' : 'comments:');
+        return Promise.resolve(
+          last
+            ? answer([thread(published(MINE))], { nextCursor: null })
+            : answer(fresh.pages[0]!.items, { nextCursor: 'c1' }),
+        );
+      });
+      vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE)));
+      await new MutationObserver(
+        queryClient,
+        createCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+      expect(asked.filter((one) => one.startsWith('comments:'))).toEqual([
+        'comments:',
+        'comments:c1',
+      ]);
+      expect(replyReads(asked)).toHaveLength(REPLY_READ_ON_PAGES_IN_ALL);
+      expect(threadsHeld(queryClient)).toEqual([
+        [1, 12, 'r12'],
+        [2, 12, 'r12'],
+        [3, 12, 'r12'],
+        [4, 12, 'r12'],
+        [5, 12, 'r12'],
+        [6, 12, 'r12'],
+        [7, 2, 'r2'],
+        [Number(MINE.slice(-12)), 0, null],
+      ]);
+    });
   });
 
   it('read the pages again when the thread’s cursor no longer opens (ADR-0074 7-29), and the next page from the fresh cursor', async () => {

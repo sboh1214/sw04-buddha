@@ -154,12 +154,40 @@ export function withMoreReplies(
 export const REPLY_READ_ON_PAGES = 5;
 
 /**
+ * The reply pages one read of the comment pages reads on in all, its threads together (오너 결정
+ * 2026-10-23: 스레드마다 다섯 페이지는 그대로, 다시 읽기 한 번은 모두 합쳐 30페이지까지): a
+ * refetch — the window's focus after 30 seconds, a reconnection, a write's read, a refusal that
+ * says the thread is old — and a new 댓글's read of the pages from the last held on. Spent in the
+ * order the threads are on screen, the top first (`threadsReadOn` in hooks/use-comments.ts): each
+ * thread reads on up to its REPLY_READ_ON_PAGES while any is left; the thread the budget runs out
+ * in keeps the pages read so far, and every thread after it comes back to its first 50, the rest
+ * behind '답글 더 보기' again. Before it, a page of 20 threads each opened past 300 spent 100 reply
+ * requests on one refetch — with the page's own, more than the reader's address limit (100 a
+ * minute), so its last was refused and the whole refetch with it (Codex review on PR #220). 30
+ * and the comment page leave the limit room for the page's other requests (ADR-0074 7-28).
+ */
+export const REPLY_READ_ON_PAGES_IN_ALL = 30;
+
+/** What is left of REPLY_READ_ON_PAGES_IN_ALL for one read of the comment pages. */
+export interface ReplyReadOnBudget {
+  left: number;
+}
+
+/** A read of the comment pages' whole REPLY_READ_ON_PAGES_IN_ALL, none spent yet. */
+export function replyReadOnBudget(): ReplyReadOnBudget {
+  return { left: REPLY_READ_ON_PAGES_IN_ALL };
+}
+
+/**
  * The 대댓글 a read of the comment pages keeps of a thread at most (`threadReadsOn`): the first page's
  * (COMMENT_REPLIES_PAGE_SIZE, 50) and REPLY_READ_ON_PAGES pages after them (250) — 300. The read on
  * for an edit draft taken back after an onboarding step never reads past them (오너 결정 2026-10-22
  * (2차) 답 1, `editDraftsReadOn`), and an edit's text held apart opens in its edit only for a 대댓글
  * a read brought within them (2026-10-22 (3차) 답 1, `heldEditsBrought`): a box opened past them
- * would go with the next read of the pages (ADR-0074 7-30).
+ * would go with the next read of the pages (ADR-0074 7-30). At most: a thread below those the
+ * read's REPLY_READ_ON_PAGES_IN_ALL was spent on keeps less (오너 결정 2026-10-23) — its first 50
+ * and what the budget had left — and a box on a 대댓글 past that goes with the read as one past 300
+ * does, its text held apart until a read brings it back (ADR-0074 7-28).
  */
 export const REPLIES_KEPT_ON_READ = COMMENT_REPLIES_PAGE_SIZE * (1 + REPLY_READ_ON_PAGES);
 
