@@ -992,6 +992,24 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 7), MINE, ...LATER], null]);
   });
 
+  it('a new 대댓글 the read of its thread does not meet before the thread’s end was deleted meanwhile (in another tab): it is not put back (Codex review on PR #220)', async () => {
+    // Its author deleted it in another tab while this tab read the thread: the read reaches the
+    // thread's end (no cursor after the second page) without it. That is the server's word, not a
+    // read that failed — the pages read are kept, and no 대댓글 shows whose edit and deletion could
+    // only be answered NOT_FOUND.
+    const queryClient = seededThread(replyIds(0, 2), 'r2');
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+    const asked = getThreads(() => ({ items: [], nextCursor: null }), fakeReplies(5));
+    await new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+    expect(asked).toEqual([`replies:${commentId}:r2`, `replies:${commentId}:r4`]);
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 5), null]);
+    // The post is read again for its count, as after every write.
+    expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(true);
+  });
+
   it('a new 대댓글 whose thread’s unread 대댓글 cannot be read goes last of those held: it is written', async () => {
     const queryClient = seededThread(replyIds(0, 2), 'r2');
     vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
@@ -1623,6 +1641,21 @@ describe('a new 댓글', () => {
     await expect(write(queryClient)).resolves.toEqual(published(MINE));
     expect(threadIds(queryClient)).toEqual([commentId, MINE]);
     expect(commentCountOf(queryClient)).toBe(2);
+  });
+
+  it('is not put back when the read reaches the end without it: deleted meanwhile, in another tab', async () => {
+    const queryClient = seeded('c2');
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    const asked = getComments(({ params }) =>
+      params.query.cursor === undefined
+        ? { items: [thread(published(commentId))], nextCursor: 'c2' }
+        : { items: [thread(published(OLDER))], nextCursor: null },
+    );
+    await write(queryClient);
+    expect(asked).toEqual([{}, { cursor: 'c2' }]);
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER]);
+    unsubscribe();
   });
 
   describe('five comment pages at most toward its place, the last held among them (오너 결정 2026-10-23 (2차))', () => {

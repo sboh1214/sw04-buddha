@@ -284,7 +284,8 @@ function mapThreads(
  * oldest first): while 대댓글 of the thread are still unread ('답글 더 보기'), the hooks read them
  * instead (`readOnReplies`, use-comments.ts) and come here only once they are read up to it (then
  * held: nothing to add) or that read fails or stops short of it — before 대댓글 still unread, then,
- * until their page brings it to its place. A 댓글 goes last of the pages read: the hooks read its
+ * until their page brings it to its place; a read that ends the thread without it (deleted
+ * meanwhile) does not come here. A 댓글 goes last of the pages read: the hooks read its
  * page instead (`readOnToTheEnd`) and come here only when that read fails or stops short of it,
  * COMMENT_READ_ON_PAGES read — before 댓글 still unread, and out of the pages at the next read of
  * as many pages, until 더 보기 brings it. Nothing is added twice, and a comment its page brings

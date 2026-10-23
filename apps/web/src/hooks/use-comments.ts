@@ -326,7 +326,11 @@ export function useMoreReplies(postId: string, threadId: string) {
  * of the replies held instead (`withNewComment`) — it is written, and saying otherwise would invite
  * a second — and '답글 더 보기' brings it into its place with the page that holds it. The pages read
  * are dropped then, not kept: the screen stays as the reader left it, with the new 대댓글 under what
- * they were reading, and a later read of the pages has less to read on (`threadsReadOn`).
+ * they were reading, and a later read of the pages has less to read on (`threadsReadOn`). A read
+ * that goes through the thread to its end without meeting the answer is the server's word, not a
+ * fallback: the 대댓글 was deleted meanwhile — by its author in another tab — so the pages read are
+ * written as they are and the answer is not put back (Codex review on PR #220): put back, it would
+ * show again, with an edit and a deletion the server can only answer NOT_FOUND, until a later read.
  */
 async function readOnReplies(queryClient: QueryClient, postId: string, reply: PublishedComment) {
   const threadId = reply.parentId;
@@ -336,18 +340,22 @@ async function readOnReplies(queryClient: QueryClient, postId: string, reply: Pu
   ).find((held) => held.comment.id === threadId);
   const from = thread?.repliesNextCursor ?? null;
   const pages: ReplyPage[] = [];
+  // The thread read to its end, the answer on none of its pages: gone since it was written.
+  let gone = false;
   if (from !== null) {
     try {
       let cursor: string | null = from;
+      let reached = false;
       while (cursor !== null && pages.length < REPLY_READ_ON_PAGES) {
         const page: ReplyPage = await fetchReplyPage(threadId, cursor);
         pages.push(page);
         // Reached: the answer is in its place, and what came after it stays behind the cursor.
-        const reached = page.items.some((item) => item.id === reply.id);
+        reached = page.items.some((item) => item.id === reply.id);
         cursor = page.items.length === 0 || reached ? null : page.nextCursor;
       }
       // Five pages read and the answer not among them: as a read that failed.
       if (cursor !== null) pages.length = 0;
+      else gone = !reached;
     } catch {
       pages.length = 0;
     }
@@ -360,7 +368,7 @@ async function readOnReplies(queryClient: QueryClient, postId: string, reply: Pu
       next = withMoreReplies(next, threadId, cursor, page);
       cursor = page.nextCursor;
     }
-    return withNewComment(next, reply);
+    return gone ? next : withNewComment(next, reply);
   });
 }
 
