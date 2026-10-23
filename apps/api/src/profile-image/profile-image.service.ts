@@ -9,6 +9,12 @@ import { DB } from '../infra/db/db.provider.js';
 import { assertPublicItemEdit, assertPublicItemOnboarding } from '../me/public-items.js';
 import { IMAGE_EXTENSION, processProfileImage } from '../media/image.js';
 import { OBJECT_STORAGE } from '../media/object-storage.provider.js';
+import {
+  LAST_ERROR_MAX_LENGTH,
+  logLine,
+  reasonOf,
+  removeUnrecordedUpload,
+} from '../media/unrecorded-upload.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -61,8 +67,11 @@ export class ProfileImageService {
    * flight is held until it has settled.
    *
    * The object is written before its row, as a post's upload is (MediaService): a row never names
-   * an object that is not there, and when the transaction fails the object is removed again (a
-   * removal that fails too leaves bytes nothing names, which no reader can reach — logged).
+   * an object that is not there, and when the transaction fails the object is removed again —
+   * after it has ended, by `removeUnrecordedUpload` (ADR-0073 9-45): a removal the store refuses
+   * queues the object's key for the worker in a transaction of its own, which the failed one
+   * cannot take back, and only a queueing that fails too leaves the key to the error log, with both
+   * reasons. The request fails with the transaction's error either way.
    *
    * #187's daily upload limit (50 a day per verified number's keyed hash, ADR-0069 decision 7)
    * plugs in before the conversion, beside MediaService.uploadPostImage's, and counts a profile
@@ -100,10 +109,10 @@ export class ProfileImageService {
         return earlier === null ? null : this.removeRow(tx, earlier);
       });
     } catch (error) {
-      // Only a write that did not commit: the new object is nobody's.
-      await this.storage.delete(storageKey).catch((cleanup: unknown) => {
-        this.logger.error({ err: cleanup, storageKey }, 'could not remove an unrecorded upload');
-      });
+      // Only a write that did not commit: the new object is nobody's, and nothing but this key names
+      // it — removed, or its key queued when the store refuses (Codex review on #219).
+      const { db, storage, logger } = this;
+      await removeUnrecordedUpload({ db, storage, logger }, storageKey);
       throw error;
     }
     if (replaced !== null) await this.removeObject(replaced);
@@ -179,24 +188,38 @@ export class ProfileImageService {
    * logged; the worker's `media.orphan_cleanup` tries it again then, and on every later refusal
    * twice as late, at most daily, until the store lets it go (owner decision 2026-10-22, ADR-0079
    * 7-5). The member's change stands either way: its bytes are named by no row and reachable by no
-   * reader meanwhile.
+   * reader meanwhile. Each line logs its words and fields as one string, the reasons as plain text
+   * (`logLine`·`reasonOf`, as `removeUnrecordedUpload` does): Nest's `Logger` loses an Error's
+   * message given as an object.
    */
   private async removeObject(storageKey: string): Promise<void> {
     try {
       await this.storage.delete(storageKey);
     } catch (error) {
+      const refusal = reasonOf(error);
       this.logger.error(
-        { err: error, storageKey },
-        'could not remove a replaced or deleted profile image; its key stays queued for the worker',
+        logLine(
+          'could not remove a replaced or deleted profile image; its key stays queued for the worker',
+          { storageKey, refusal },
+        ),
       );
-      const message = error instanceof Error ? error.message : String(error);
       await this.db
         .update(schema.mediaDeletions)
-        .set({ attempts: 1, lastError: message.slice(0, 1_000), nextAttemptAt: firstRetryAt() })
+        .set({
+          attempts: 1,
+          lastError: refusal.slice(0, LAST_ERROR_MAX_LENGTH),
+          nextAttemptAt: firstRetryAt(),
+        })
         .where(eq(schema.mediaDeletions.storageKey, storageKey))
         .catch((queue: unknown) => {
           // The key is queued either way (the write's transaction); only the count is lost.
-          this.logger.error({ err: queue, storageKey }, 'could not count a refused removal');
+          this.logger.error(
+            logLine('could not count a refused removal', {
+              storageKey,
+              refusal,
+              counting: reasonOf(queue),
+            }),
+          );
         });
       return;
     }
@@ -205,7 +228,12 @@ export class ProfileImageService {
       .where(eq(schema.mediaDeletions.storageKey, storageKey))
       .catch((queue: unknown) => {
         // Left queued, the worker removes it again: the store answers a removal of nothing as done.
-        this.logger.error({ err: queue, storageKey }, 'could not unqueue a removed profile image');
+        this.logger.error(
+          logLine('could not unqueue a removed profile image', {
+            storageKey,
+            unqueueing: reasonOf(queue),
+          }),
+        );
       });
   }
 }

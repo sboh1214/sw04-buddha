@@ -28,6 +28,7 @@ import sharp from 'sharp';
 import { Logger } from '@nestjs/common';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { failInserts } from '../test/fail-inserts.js';
 import { SESSION_COOKIE } from '../openapi/document.js';
 import { pngOf } from '../test/png.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -1041,45 +1042,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     expect((await upload(image)).statusCode).toBe(201);
   });
 
-  /**
-   * From now on until `restore`, the upload's row cannot be written (`media_objects`) — nor, with
-   * `queueFails`, a key queued for removal (`media_deletions`), whether in a transaction or not.
-   */
-  function failInserts(queueFails = false): { restore: () => void } {
-    const failure = (table: unknown) =>
-      table === schema.mediaObjects
-        ? new Error('row insert failed')
-        : queueFails && table === schema.mediaDeletions
-          ? new Error('queue insert failed')
-          : null;
-    const insert = t.db.insert.bind(t.db);
-    const inserts = vi.spyOn(t.db, 'insert').mockImplementation((table) => {
-      const error = failure(table);
-      if (error) throw error;
-      return insert(table);
-    });
-    const transaction = t.db.transaction.bind(t.db);
-    const transactions = vi.spyOn(t.db, 'transaction').mockImplementation((work, config) =>
-      transaction((tx) => {
-        const txInsert = tx.insert.bind(tx);
-        vi.spyOn(tx, 'insert').mockImplementation((table) => {
-          const error = failure(table);
-          if (error) throw error;
-          return txInsert(table);
-        });
-        return work(tx);
-      }, config),
-    );
-    return {
-      restore: () => {
-        inserts.mockRestore();
-        transactions.mockRestore();
-      },
-    };
-  }
-
   it('removes the stored object when its row cannot be written', async () => {
-    const failing = failInserts();
+    const failing = failInserts(t.db);
     try {
       const res = await upload(await photo());
       expect(res.statusCode).toBe(500);
@@ -1093,7 +1057,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   });
 
   it('queues the stored object’s key for the worker when its row cannot be written and the store refuses to remove it (Codex 4th review, #219)', async () => {
-    const failing = failInserts();
+    const failing = failInserts(t.db);
     const remove = vi
       .spyOn(t.storage, 'delete')
       .mockRejectedValueOnce(new Error('store unavailable'));
@@ -1135,7 +1099,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   });
 
   it('logs the stored object’s key with both failures when the store refuses to remove it and the key cannot be queued either (Codex 4th review, #219)', async () => {
-    const failing = failInserts(true);
+    const failing = failInserts(t.db, true);
     const remove = vi
       .spyOn(t.storage, 'delete')
       .mockRejectedValueOnce(new Error('store unavailable'));

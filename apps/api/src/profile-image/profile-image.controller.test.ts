@@ -71,6 +71,7 @@ import { memoryAdmission, memoryWaits } from '../media/memory-admission.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_COOKIE } from '../openapi/document.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { failInserts } from '../test/fail-inserts.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { waitForLockWaiter } from '../test/wait.js';
 import { ProfileImageService } from './profile-image.service.js';
@@ -583,9 +584,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
         lastError: 'store down',
         dueInMinutes: firstWait,
       });
+      // One string, the refusal's words in it (an object would lose an Error's message).
       expect(error).toHaveBeenCalledWith(
-        expect.objectContaining({ storageKey: before!.storageKey }),
-        'could not remove a replaced or deleted profile image; its key stays queued for the worker',
+        `could not remove a replaced or deleted profile image; its key stays queued for the worker ${JSON.stringify(
+          { storageKey: before!.storageKey, refusal: 'store down' },
+        )}`,
       );
       // Deleted: the same.
       expect(meOf(await remove()).profile.imageUrl).toBeNull();
@@ -664,6 +667,80 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/profile-image (integration)', () => {
     expect([...t.storage.objects.keys()]).toEqual([before!.storageKey]);
     // Nothing removed, nothing queued: the image it has is still the profile's.
     expect(await deletions()).toEqual([]);
+  });
+
+  it('queues the new object’s key for the worker when its row cannot be written and the store refuses to remove it, and keeps the image it has (Codex 4th review on #219, ADR-0073 9-45)', async () => {
+    meOf(await upload(await photo()));
+    const [before] = await mediaRows();
+    const failing = failInserts(t.db);
+    const del = vi.spyOn(t.storage, 'delete').mockRejectedValueOnce(new Error('store unavailable'));
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const res = await upload(await png(), { type: 'image/png' });
+      // The write's failure is the answer, the queueing changes nothing of it.
+      expect(res.statusCode).toBe(500);
+      // The profile keeps its image; the object the upload stored is still there, named by no row …
+      expect(await mediaRows()).toEqual([before]);
+      expect(await imageIdOf()).toBe(before!.id);
+      const [storageKey] = [...t.storage.objects.keys()].filter(
+        (key) => key !== before!.storageKey,
+      );
+      expect(storageKey).toMatch(/^profile-images\/[0-9a-f-]{36}\.png$/);
+      expect(t.storage.objects.size).toBe(2);
+      expect(del).toHaveBeenCalledExactlyOnceWith(storageKey);
+      // … and its key is queued, the store's refusal counted as the first, due at the next run
+      // (not after the first wait, as a replaced image's key: no try of the API's comes first).
+      const queued = await deletions();
+      expect(queued).toEqual([
+        expect.objectContaining({ storageKey, attempts: 1, lastError: 'store unavailable' }),
+      ]);
+      const { rows } = await t.db.execute<{ now: Date | string }>(sql`select now() as now`);
+      expect(queued[0]!.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+        new Date(rows[0]!.now).getTime(),
+      );
+      // A warning names the key and the refusal; nothing went unrecorded.
+      expect(warn).toHaveBeenCalledWith(
+        `could not remove an unrecorded upload; queued its key ${JSON.stringify({
+          storageKey,
+          refusal: 'store unavailable',
+        })}`,
+      );
+      expect(error.mock.calls.filter(([line]) => String(line).includes(storageKey!))).toEqual([]);
+    } finally {
+      failing.restore();
+      del.mockRestore();
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('logs the new object’s key with both failures when its row cannot be written, the store refuses to remove it and the key cannot be queued either (Codex 4th review on #219)', async () => {
+    const failing = failInserts(t.db, true);
+    const del = vi.spyOn(t.storage, 'delete').mockRejectedValueOnce(new Error('store unavailable'));
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const res = await upload(await photo());
+      expect(res.statusCode).toBe(500);
+      expect(await mediaRows()).toEqual([]);
+      expect(await imageIdOf()).toBeNull();
+      expect(await deletions()).toEqual([]);
+      expect(t.storage.objects.size).toBe(1);
+      const [storageKey] = [...t.storage.objects.keys()];
+      expect(del).toHaveBeenCalledExactlyOnceWith(storageKey);
+      // The one place the key is left: an error line, with why it is there, for an operator.
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        `could not remove an unrecorded upload, nor queue its key ${JSON.stringify({
+          storageKey,
+          refusal: 'store unavailable',
+          queueing: 'queue insert failed',
+        })}`,
+      );
+    } finally {
+      failing.restore();
+      del.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it('is not a post’s image: a post refuses the profile image in its body', async () => {
