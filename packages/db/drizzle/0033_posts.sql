@@ -11,7 +11,8 @@
 -- - media_objects: the images the API received, checked, converted and stored in object storage;
 --   post_images: which post an image belongs to (one post per image).
 -- - media_deletions: the key of every object still in the store after its upload's row went (the
---   orphan clean-up), until the store has removed it — retried on later runs, never dropped.
+--   orphan clean-up) or that the API stored for an upload whose row it could not write and could
+--   not remove right away, until the store has removed it — retried on later runs, never dropped.
 -- - profiles.public_id: the account's public id, what public answers name a person by instead of
 --   the account id — drawn by gen_public_id() for every existing and every new profile.
 CREATE TABLE "media_deletions" (

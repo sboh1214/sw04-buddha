@@ -23,7 +23,7 @@ import { finished } from 'node:stream';
 import { schema } from '@buddha/db';
 import { completeOnboarding, createMarket, createMedia, createPost } from '@buddha/db/test';
 import { IMAGE_MAX_BYTES, uploadedImageSchema, type UploadedImage } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import sharp from 'sharp';
 import { Logger } from '@nestjs/common';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -244,6 +244,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
   }
 
   const mediaRows = () => t.db.select().from(schema.mediaObjects);
+  /** The object keys queued for the worker's removal (`media_deletions`). */
+  const queuedRemovals = () => t.db.select().from(schema.mediaDeletions);
 
   /**
    * The API's own side of every upload sent over a socket from now on (`rawUpload`), as its HTTP
@@ -1039,20 +1041,126 @@ describe.skipIf(!hasTestInfra)('/api/v1/media (integration)', () => {
     expect((await upload(image)).statusCode).toBe(201);
   });
 
-  it('removes the stored object when its row cannot be written', async () => {
+  /**
+   * From now on until `restore`, the upload's row cannot be written (`media_objects`) — nor, with
+   * `queueFails`, a key queued for removal (`media_deletions`), whether in a transaction or not.
+   */
+  function failInserts(queueFails = false): { restore: () => void } {
+    const failure = (table: unknown) =>
+      table === schema.mediaObjects
+        ? new Error('row insert failed')
+        : queueFails && table === schema.mediaDeletions
+          ? new Error('queue insert failed')
+          : null;
     const insert = t.db.insert.bind(t.db);
-    const spy = vi.spyOn(t.db, 'insert').mockImplementation((table) => {
-      if (table === schema.mediaObjects) throw new Error('insert failed');
+    const inserts = vi.spyOn(t.db, 'insert').mockImplementation((table) => {
+      const error = failure(table);
+      if (error) throw error;
       return insert(table);
     });
+    const transaction = t.db.transaction.bind(t.db);
+    const transactions = vi.spyOn(t.db, 'transaction').mockImplementation((work, config) =>
+      transaction((tx) => {
+        const txInsert = tx.insert.bind(tx);
+        vi.spyOn(tx, 'insert').mockImplementation((table) => {
+          const error = failure(table);
+          if (error) throw error;
+          return txInsert(table);
+        });
+        return work(tx);
+      }, config),
+    );
+    return {
+      restore: () => {
+        inserts.mockRestore();
+        transactions.mockRestore();
+      },
+    };
+  }
+
+  it('removes the stored object when its row cannot be written', async () => {
+    const failing = failInserts();
     try {
       const res = await upload(await photo());
       expect(res.statusCode).toBe(500);
     } finally {
-      spy.mockRestore();
+      failing.restore();
     }
     expect(await mediaRows()).toEqual([]);
     expect(t.storage.objects.size).toBe(0);
+    // Gone from the store: nothing is left for the worker.
+    expect(await queuedRemovals()).toEqual([]);
+  });
+
+  it('queues the stored object’s key for the worker when its row cannot be written and the store refuses to remove it (Codex 4th review, #219)', async () => {
+    const failing = failInserts();
+    const remove = vi
+      .spyOn(t.storage, 'delete')
+      .mockRejectedValueOnce(new Error('store unavailable'));
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const res = await upload(await photo());
+      // The row's failure is the answer, the queueing changes nothing of it.
+      expect(res.statusCode).toBe(500);
+      // The object the upload stored is still there, named by no row …
+      expect(await mediaRows()).toEqual([]);
+      expect(t.storage.objects.size).toBe(1);
+      const [storageKey] = [...t.storage.objects.keys()];
+      expect(storageKey).toMatch(/^post-images\/[0-9a-f-]{36}\.jpg$/);
+      expect(remove).toHaveBeenCalledExactlyOnceWith(storageKey);
+      // … and its key is queued, the store's refusal counted as the first, due at the next run.
+      const queued = await queuedRemovals();
+      expect(queued).toEqual([
+        expect.objectContaining({ storageKey, attempts: 1, lastError: 'store unavailable' }),
+      ]);
+      const { rows } = await t.db.execute<{ now: Date | string }>(sql`select now() as now`);
+      expect(queued[0]!.nextAttemptAt.getTime()).toBeLessThanOrEqual(
+        new Date(rows[0]!.now).getTime(),
+      );
+      // A warning names the key and the refusal; nothing went unrecorded.
+      expect(warn).toHaveBeenCalledWith(
+        `could not remove an unrecorded upload; queued its key ${JSON.stringify({
+          storageKey,
+          refusal: 'store unavailable',
+        })}`,
+      );
+      expect(error.mock.calls.filter(([line]) => String(line).includes(storageKey!))).toEqual([]);
+    } finally {
+      failing.restore();
+      remove.mockRestore();
+      warn.mockRestore();
+      error.mockRestore();
+    }
+  });
+
+  it('logs the stored object’s key with both failures when the store refuses to remove it and the key cannot be queued either (Codex 4th review, #219)', async () => {
+    const failing = failInserts(true);
+    const remove = vi
+      .spyOn(t.storage, 'delete')
+      .mockRejectedValueOnce(new Error('store unavailable'));
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    try {
+      const res = await upload(await photo());
+      expect(res.statusCode).toBe(500);
+      expect(await mediaRows()).toEqual([]);
+      expect(await queuedRemovals()).toEqual([]);
+      expect(t.storage.objects.size).toBe(1);
+      const [storageKey] = [...t.storage.objects.keys()];
+      expect(remove).toHaveBeenCalledExactlyOnceWith(storageKey);
+      // The one place the key is left: an error line, with why it is there, for an operator.
+      expect(error).toHaveBeenCalledExactlyOnceWith(
+        `could not remove an unrecorded upload, nor queue its key ${JSON.stringify({
+          storageKey,
+          refusal: 'store unavailable',
+          queueing: 'queue insert failed',
+        })}`,
+      );
+    } finally {
+      failing.restore();
+      remove.mockRestore();
+      error.mockRestore();
+    }
   });
 
   it('waits with an upload’s body unread while the API’s memory has no room for it, and takes it once there is (owner decision 2026-10-22 answer 3)', async () => {
