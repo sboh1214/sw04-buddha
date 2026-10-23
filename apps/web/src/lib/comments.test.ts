@@ -14,8 +14,11 @@ import {
   type PublishedComment,
 } from './api';
 import {
+  PLACED_COMMENTS_KEPT,
+  PLACED_REPLIES_KEPT,
   REPLIES_KEPT_ON_READ,
   REPLY_READ_ON_PAGES,
+  type CommentPage,
   type CommentPages,
   type RepliesOnScreen,
   type ReplyPage,
@@ -23,6 +26,7 @@ import {
   commentDraft,
   commentLengthText,
   commentPageQuery,
+  commentPageRead,
   commentPlaceholderMessage,
   commentThreadsOf,
   commentTextChanged,
@@ -36,7 +40,9 @@ import {
   heldEditsReadToTheirEnd,
   isCursorRefusal,
   isStaleThreadRefusal,
+  keepPlacedComments,
   placeHeldTexts,
+  placedReplyIds,
   postCommentsKey,
   repliesOnScreenOf,
   resolveCommentDrafts,
@@ -240,6 +246,183 @@ describe('a new comment', () => {
     ]);
     expect(shape(withNewComment(next, comment('a2', 'a')))).toEqual(shape(next));
     expect(shape(withNewComment(held, comment('z1', 'z')))).toEqual(shape(held));
+  });
+});
+
+describe('the writer’s own new comment placed at the end of what is held (오너 결정 2026-10-24)', () => {
+  const page = (nextCursor: string | null, ...items: ReplyPage['items']): ReplyPage => ({
+    items,
+    nextCursor,
+  });
+  /** What `pages` keeps placed, as `<threadId|->:<id>`. */
+  const placedIn = (pages: CommentPages | undefined) =>
+    (pages?.placed ?? []).map((entry) => `${entry.threadId ?? '-'}:${entry.id}`);
+  /** A page of 댓글 as a read has just brought it (`commentPageRead`). */
+  const read = (nextCursor: string | null, ...items: CommentThread[]): CommentPage =>
+    commentPageRead({ items, nextCursor });
+
+  it('is placed for its writer by `withNewComment`: a 댓글 always, a 대댓글 while its thread has 대댓글 unread — and nothing without a writer', () => {
+    const held = pagesOf(
+      [[threadWithMore('a-2', comment('a'), comment('a1', 'a')), thread(comment('b'))]],
+      'more',
+    );
+    expect(placedIn(withNewComment(held, comment('n')))).toEqual([]);
+    const one = withNewComment(held, comment('n'), 'user-1');
+    expect(placedIn(one)).toEqual(['-:n']);
+    const two = withNewComment(one, comment('n1', 'a'), 'user-1');
+    expect(placedIn(two)).toEqual(['-:n', 'a:n1']);
+    expect(placedReplyIds(two)).toEqual(new Set(['n1']));
+    // Under a thread with nothing unread, a 대댓글 is in its place: nothing is placed.
+    expect(placedIn(withNewComment(two, comment('b1', 'b'), 'user-1'))).toEqual(['-:n', 'a:n1']);
+    // Written again (held already), nothing changes.
+    expect(withNewComment(two, comment('n'), 'user-1')).toBe(two);
+  });
+
+  it('is its writer’s only, and within its bounds: another account’s go as one is placed, and the oldest past PLACED_COMMENTS_KEPT 댓글 or PLACED_REPLIES_KEPT 대댓글', () => {
+    const held = pagesOf([[threadWithMore('a-2', comment('a'), comment('a1', 'a'))]], 'more');
+    const theirs = withNewComment(
+      withNewComment(held, comment('t'), 'user-2'),
+      comment('t1', 'a'),
+      'user-2',
+    );
+    expect(placedIn(withNewComment(theirs, comment('n'), 'user-1'))).toEqual(['-:n']);
+    let pages: CommentPages | undefined = held;
+    for (let index = 0; index <= PLACED_COMMENTS_KEPT; index += 1) {
+      pages = withNewComment(pages, comment(`n${String(index)}`), 'user-1');
+    }
+    for (let index = 0; index <= PLACED_REPLIES_KEPT; index += 1) {
+      pages = withNewComment(pages, comment(`r${String(index)}`, 'a'), 'user-1');
+    }
+    const placed = placedIn(pages);
+    expect(placed.filter((one) => one.startsWith('-:'))).toHaveLength(PLACED_COMMENTS_KEPT);
+    expect(placed.filter((one) => one.startsWith('a:'))).toHaveLength(PLACED_REPLIES_KEPT);
+    expect(placed).not.toContain('-:n0');
+    expect(placed).not.toContain('a:r0');
+    expect(placed).toContain(`-:n${String(PLACED_COMMENTS_KEPT)}`);
+    // The oldest stays where it stood — drawn still, until the next read leaves it out.
+    expect(commentThreadsOf(pages).map((one) => one.comment.id)).toContain('n0');
+  });
+
+  it('a read’s pages come without it: it is carried over and put back at the end — a 댓글 at the end of the last page, a 대댓글 at the end of its thread — as held, with what was written under it', () => {
+    const held = withNewComment(
+      withNewComment(
+        pagesOf([[threadWithMore('a-2', comment('a'), comment('a1', 'a'))]], 'more'),
+        comment('n'),
+        'user-1',
+      ),
+      comment('a9', 'a'),
+      'user-1',
+    )!;
+    const withReply = withNewComment(held, comment('n1', 'n'))!;
+    const fresh: CommentPages = {
+      pages: [
+        read('more', threadWithMore('a-2', comment('a'), comment('a1', 'a')), thread(comment('b'))),
+      ],
+      pageParams: [undefined],
+    };
+    const next = keepPlacedComments(withReply, fresh);
+    expect(shape(next)).toEqual([
+      ['a', ['a1', 'a9']],
+      ['b', []],
+      ['n', ['n1']],
+    ]);
+    expect(placedIn(next)).toEqual(['-:n', 'a:a9']);
+    // A write that carries those pages later is no read: what it holds stays as the write left it.
+    const again = keepPlacedComments(next, { ...next, pages: [...fresh.pages] });
+    expect(shape(again)).toEqual([
+      ['a', ['a1']],
+      ['b', []],
+    ]);
+    expect(placedIn(again)).toEqual([]);
+  });
+
+  it('a read that brings its page puts it in place, drawn there only; a read that ends the list — or its thread — without it drops it', () => {
+    const held = withNewComment(
+      withNewComment(
+        pagesOf([[threadWithMore('a-2', comment('a'), comment('a1', 'a'))]], 'c1'),
+        comment('n'),
+        'user-1',
+      ),
+      comment('a9', 'a'),
+      'user-1',
+    )!;
+    // 더 보기's page holds the 댓글: the held pages keep theirs, the copy at the end goes.
+    const brought = keepPlacedComments(held, {
+      ...held,
+      pages: [...held.pages, read('c2', thread(comment('m')), thread(comment('n')))],
+      pageParams: [...held.pageParams, 'c1'],
+    });
+    expect(shape(brought).map(([id]) => id)).toEqual(['a', 'm', 'n']);
+    expect(brought.pages[0]?.items.map((one) => one.comment.id)).toEqual(['a']);
+    expect(placedIn(brought)).toEqual(['a:a9']);
+    // 더 보기 to the end of the list without it: gone.
+    const ended = keepPlacedComments(held, {
+      ...held,
+      pages: [...held.pages, read(null, thread(comment('m')))],
+      pageParams: [...held.pageParams, 'c1'],
+    });
+    expect(shape(ended).map(([id]) => id)).toEqual(['a', 'm']);
+    expect(placedIn(ended)).toEqual(['a:a9']);
+    // A read of the pages whose thread is read to its end without the 대댓글: gone too; one whose
+    // thread holds it: in place.
+    const threadEnded = keepPlacedComments(held, {
+      pages: [read('c1', thread(comment('a'), comment('a1', 'a'), comment('a2', 'a')))],
+      pageParams: [undefined],
+    });
+    expect(shape(threadEnded)).toEqual([
+      ['a', ['a1', 'a2']],
+      ['n', []],
+    ]);
+    expect(placedIn(threadEnded)).toEqual(['-:n']);
+    const threadBrought = keepPlacedComments(held, {
+      pages: [
+        read('c1', threadWithMore('a-4', comment('a'), comment('a1', 'a'), comment('a9', 'a'))),
+      ],
+      pageParams: [undefined],
+    });
+    expect(shape(threadBrought)[0]).toEqual(['a', ['a1', 'a9']]);
+    expect(placedIn(threadBrought)).toEqual(['-:n']);
+  });
+
+  it('what the write itself placed stands where it put it, on a page just read too (a new 댓글’s read stopped at five pages); what was placed before goes back after it in the order placed', () => {
+    const held = withNewComment(pagesOf([[thread(comment('a'))]], 'c1'), comment('p'), 'user-1')!;
+    // The last page held as read again, a new 댓글 put at its end: what `readOnToTheEnd` writes.
+    const readAgain = read('c1', thread(comment('a')), thread(comment('b')));
+    const written = withNewComment({ ...held, pages: [readAgain] }, comment('n'), 'user-1')!;
+    const next = keepPlacedComments(held, written);
+    expect(shape(next).map(([id]) => id)).toEqual(['a', 'b', 'p', 'n']);
+    expect(placedIn(next)).toEqual(['-:p', '-:n']);
+  });
+
+  it('is no longer placed once the writer’s own deletion took it off', () => {
+    const held = withNewComment(pagesOf([[thread(comment('a'))]], 'c1'), comment('n'), 'user-1')!;
+    const next = keepPlacedComments(held, withoutComment(held, { id: 'n', placeholder: false })!);
+    expect(shape(next).map(([id]) => id)).toEqual(['a']);
+    expect(placedIn(next)).toEqual([]);
+  });
+
+  it('‘답글 더 보기’ leaves it last of what is held until its page brings it into place, and drops it once the thread ends without it', () => {
+    const held = withNewComment(
+      pagesOf([[threadWithMore('a-2', comment('a'), comment('a1', 'a'))]]),
+      comment('mine', 'a'),
+      'user-1',
+    );
+    const short = withMoreReplies(held, 'a', 'a-2', page('a-3', comment('a2', 'a')));
+    expect(shape(short)[0]).toEqual(['a', ['a1', 'a2', 'mine']]);
+    expect(placedIn(short)).toEqual(['a:mine']);
+    const brought = withMoreReplies(
+      short,
+      'a',
+      'a-3',
+      page('a-5', comment('a3', 'a'), comment('mine', 'a')),
+    );
+    expect(shape(brought)[0]).toEqual(['a', ['a1', 'a2', 'a3', 'mine']]);
+    expect(placedIn(brought)).toEqual([]);
+    const ended = withMoreReplies(short, 'a', 'a-3', page(null, comment('a3', 'a')));
+    expect(shape(ended)[0]).toEqual(['a', ['a1', 'a2', 'a3']]);
+    expect(placedIn(ended)).toEqual([]);
+    // From a cursor the thread no longer holds, nothing changes: it stays placed.
+    expect(placedIn(withMoreReplies(short, 'a', 'stale', page(null)))).toEqual(['a:mine']);
   });
 });
 

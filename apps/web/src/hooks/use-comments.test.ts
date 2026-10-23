@@ -30,6 +30,7 @@ import {
   draftsHeldOnReadFailure,
   editDraftReadOnMark,
   editDraftsReadOn,
+  goneBoxReason,
   heldEditsBrought,
   postCommentsKey,
   repliesOnScreenOf,
@@ -171,6 +172,22 @@ function getThreads(
   });
   return asked;
 }
+
+/**
+ * `GET /me` in the client naming `accountId` (`user-1` by default, the account the tests' writes
+ * send): the account on screen, whom a new comment put at the end of what is held is placed for
+ * (오너 결정 2026-10-24, `writerOnScreen`).
+ */
+const onScreen = (queryClient: QueryClient, accountId = 'user-1') => {
+  queryClient.setQueryData(ME_QUERY_KEY, { id: accountId });
+  return queryClient;
+};
+
+/** What the pages of the post keep placed at the end of what is held, as `<threadId|->:<id>`. */
+const placedHeld = (queryClient: QueryClient) =>
+  (queryClient.getQueryData<CommentPages>(postCommentsKey(post))?.placed ?? []).map(
+    (entry) => `${entry.threadId ?? '-'}:${entry.id}`,
+  );
 
 /** The thread of `commentId` as the pages hold it. */
 const threadHeld = (queryClient: QueryClient) =>
@@ -891,6 +908,44 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
         [Number(MINE.slice(-12)), 0, null],
       ]);
     });
+
+    it('put the writer’s own 대댓글 placed at the end of a thread back at the end of its first page when the 30 ran out above it, reading nothing more for it (오너 결정 2026-10-24)', async () => {
+      // Eight 댓글: the 30 run out in the seventh (3 + 5 × 5 + 2), the eighth comes back to its
+      // first two. MINE, answered in the eighth while it held 14, stopped at five unread pages
+      // and stands placed at the end of the 14.
+      const layout = [[8, 14, 14, 14, 14, 14, 14, 14]];
+      const queryClient = onScreen(seeded());
+      queryClient.setQueryData<CommentPages>(postCommentsKey(post), pagesHolding(layout));
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      const unsubscribe = comments.subscribe(() => undefined);
+      const asked = serving(layout);
+      const eighth = threadIdOf(8);
+      vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, eighth, '답글')));
+      await new MutationObserver(
+        queryClient,
+        createCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ parentId: eighth, body: '답글', expectedAccountId: 'user-1' });
+      expect(replyReads(asked)).toEqual([14, 16, 18, 20, 22].map((from) => `8:r${String(from)}`));
+      expect(threadsHeld(queryClient).at(-1)).toEqual([8, 15, 'r14']);
+      expect(placedHeld(queryClient)).toEqual([`${eighth}:${MINE}`]);
+      asked.length = 0;
+      await comments.refetch();
+      // The reads of every thread as they would be without it — none for the eighth.
+      expect(replyReads(asked)).toEqual([
+        ...readOn(1, 3),
+        ...readOn(2, 5),
+        ...readOn(3, 5),
+        ...readOn(4, 5),
+        ...readOn(5, 5),
+        ...readOn(6, 5),
+        ...readOn(7, 2),
+      ]);
+      const last = commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).at(-1);
+      expect(last?.replies.map((reply) => reply.id)).toEqual([...repliesOf(8).slice(0, 2), MINE]);
+      expect(last?.repliesNextCursor).toBe('r2');
+      expect(placedHeld(queryClient)).toEqual([`${eighth}:${MINE}`]);
+      unsubscribe();
+    });
   });
 
   it('read the pages again when the thread’s cursor no longer opens (ADR-0074 7-29), and the next page from the fresh cursor', async () => {
@@ -1029,6 +1084,136 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
     );
     await readMoreReplies(queryClient, POST, commentId);
     expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 3), MINE], null]);
+  });
+
+  describe('a new 대댓글 placed at the end of those held, until ‘답글 더 보기’ brings its page (오너 결정 2026-10-24: «대댓글도 같은 규칙»)', () => {
+    /** Answers the 댓글 above with MINE, as the account on screen (`user-1`). */
+    const answerIt = (queryClient: QueryClient) => {
+      vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+      return new MutationObserver(
+        onScreen(queryClient),
+        createCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+    };
+    /** The client holding the 댓글 above with its first two 대댓글, and an observer of the pages. */
+    const holdingTwo = () => {
+      const queryClient = seededThread(replyIds(0, 2), 'r2');
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      return { queryClient, comments, unsubscribe: comments.subscribe(() => undefined) };
+    };
+    /** The comment page: the 댓글 above as the server answers it, its first two and their cursor. */
+    const firstPage = () => ({ items: [threadAnswered(replyIds(0, 2), 'r2')], nextCursor: null });
+    /** Whether a 수정 box on MINE keeps its place as the threads now read (undefined: it does). */
+    const editOnMine = (queryClient: QueryClient) =>
+      goneBoxReason(
+        { kind: 'comment', commentId: MINE, threadId: commentId },
+        {
+          postState: 'published',
+          threads: commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))),
+        },
+      );
+
+    it('every read of the pages puts it back at the end of its thread, reading no reply page for it; each ‘답글 더 보기’ short of it leaves it last; the one that brings it puts it in place, before what was answered after it', async () => {
+      const { queryClient, comments, unsubscribe } = holdingTwo();
+      const asked = getThreads(firstPage, fakeReplies(20, MINE, LATER));
+      await answerIt(queryClient);
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+      expect(placedHeld(queryClient)).toEqual([`${commentId}:${MINE}`]);
+      asked.length = 0;
+      await comments.refetch();
+      expect(asked).toEqual(['comments:']);
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+      expect(editOnMine(queryClient)).toBeUndefined();
+      await readMoreReplies(queryClient, POST, commentId);
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 4), MINE], 'r4']);
+      // Read again, the thread is read on as far as the rest of it: one reply page, not two.
+      asked.length = 0;
+      await comments.refetch();
+      expect(asked).toEqual(['comments:', `replies:${commentId}:r2`]);
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 4), MINE], 'r4']);
+      expect(editOnMine(queryClient)).toBeUndefined();
+      // '답글 더 보기' on: MINE last of what is held until its page — r20, with LATER[0] — brings it.
+      for (let to = 6; to <= 20; to += 2) {
+        await readMoreReplies(queryClient, POST, commentId);
+        expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, to), MINE], `r${String(to)}`]);
+      }
+      await readMoreReplies(queryClient, POST, commentId);
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 20), MINE, LATER[0]], 'r22']);
+      expect(placedHeld(queryClient)).toEqual([]);
+      await readMoreReplies(queryClient, POST, commentId);
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 20), MINE, ...LATER], null]);
+      unsubscribe();
+    });
+
+    it('deleted meanwhile — in another tab — it stays until a read reaches the end of its thread without it: ‘답글 더 보기’, or a read of the pages', async () => {
+      const queryClient = onScreen(seededThread(replyIds(0, 2), 'r2'));
+      getThreads(firstPage, fakeReplies(20, MINE));
+      await answerIt(queryClient);
+      getThreads(firstPage, fakeReplies(20));
+      for (let to = 4; to < 20; to += 2) {
+        await readMoreReplies(queryClient, POST, commentId);
+        expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, to), MINE], `r${String(to)}`]);
+        expect(editOnMine(queryClient)).toBeUndefined();
+      }
+      // The thread's last page, MINE on none: the server's word — it goes, and its box with it.
+      await readMoreReplies(queryClient, POST, commentId);
+      expect(repliesHeld(queryClient)).toEqual([replyIds(0, 20), null]);
+      expect(placedHeld(queryClient)).toEqual([]);
+      expect(editOnMine(queryClient)).toBe(copy.errCommentGone);
+
+      // Placed after a read that failed: a read of the pages short of its page keeps it last; one
+      // that reads the thread to its end without it drops it.
+      const { queryClient: failed, comments, unsubscribe } = holdingTwo();
+      getThreads(firstPage, () => Promise.reject(new TypeError('Failed to fetch')));
+      await answerIt(failed);
+      expect(repliesHeld(failed)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+      getThreads(firstPage, fakeReplies(3, MINE));
+      await comments.refetch();
+      expect(repliesHeld(failed)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+      expect(placedHeld(failed)).toEqual([`${commentId}:${MINE}`]);
+      getThreads(
+        () => ({ items: [threadAnswered(replyIds(0, 3), null)], nextCursor: null }),
+        fakeReplies(3),
+      );
+      await comments.refetch();
+      expect(repliesHeld(failed)).toEqual([replyIds(0, 3), null]);
+      expect(placedHeld(failed)).toEqual([]);
+      unsubscribe();
+    });
+
+    it('a read of the pages whose thread’s first page holds it puts it in place: placed no more', async () => {
+      const { queryClient, comments, unsubscribe } = holdingTwo();
+      getThreads(firstPage, () => Promise.reject(new TypeError('Failed to fetch')));
+      await answerIt(queryClient);
+      getThreads(
+        () => ({
+          items: [threadAnswered([...replyIds(0, 2), MINE, ...LATER.slice(0, 1)], 'r4')],
+          nextCursor: null,
+        }),
+        fakeReplies(2, MINE, LATER),
+      );
+      await comments.refetch();
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), MINE, LATER[0]], 'r4']);
+      expect(placedHeld(queryClient)).toEqual([]);
+      unsubscribe();
+    });
+
+    it('for the account on screen only: written as one account and landing on another’s screen, it stands at the end but is placed for none, and the next read of the pages leaves it out', async () => {
+      const { queryClient, comments, unsubscribe } = holdingTwo();
+      getThreads(firstPage, () => Promise.reject(new TypeError('Failed to fetch')));
+      vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, commentId, '답글')));
+      // Sent as user-1; the tab changed hands on its way, `GET /me` naming user-2 now.
+      await new MutationObserver(
+        onScreen(queryClient, 'user-2'),
+        createCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ parentId: commentId, body: '답글', expectedAccountId: 'user-1' });
+      expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), MINE], 'r2']);
+      expect(placedHeld(queryClient)).toEqual([]);
+      getThreads(firstPage, fakeReplies(20, MINE));
+      await comments.refetch();
+      expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), 'r4']);
+      unsubscribe();
+    });
   });
 });
 
@@ -1567,11 +1752,11 @@ describe('an edit draft taken back on a thread’s unread 대댓글 (오너 결�
 });
 
 describe('a new 댓글', () => {
-  /** Writes MINE as a 댓글 through the hook's options. */
+  /** Writes MINE as a 댓글 through the hook's options, as the account on screen (`user-1`). */
   const write = (queryClient: QueryClient) => {
     vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE)));
     return new MutationObserver(
-      queryClient,
+      onScreen(queryClient),
       createCommentOptions(queryClient, POST, () => undefined),
     ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
   };
@@ -1711,13 +1896,14 @@ describe('a new 댓글', () => {
       expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
       expect(comments.getCurrentResult().hasNextPage).toBe(true);
       expect(commentCountOf(queryClient)).toBe(2);
-      // 더 보기 to the end: MINE's page puts it after every older 댓글. The pages carry it twice —
-      // at the end of the first and on its own — and the thread draws it once, where its page is.
+      // 더 보기 to the end: MINE's page puts it after every older 댓글, once — no longer at the end
+      // of the first page too (오너 결정 2026-10-24: placed until its page is read).
       asked.length = 0;
       while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
       expect(cursorsAsked(asked)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8']);
-      expect(mineHeld(queryClient)).toBe(2);
+      expect(mineHeld(queryClient)).toBe(1);
       expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+      expect(placedHeld(queryClient)).toEqual([]);
       unsubscribe();
     });
 
@@ -1732,9 +1918,10 @@ describe('a new 댓글', () => {
       expect(cursorsAsked(asked)).toEqual(['', 'c1', 'c2', 'c3', 'c4']);
       expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
       expect(comments.getCurrentResult().hasNextPage).toBe(true);
-      // Until 더 보기 brings it, a read of as many pages as are held leaves it out (ADR-0074 결과 4).
+      // Until 더 보기 brings it, a read of as many pages as are held puts it back at their end
+      // (오너 결정 2026-10-24).
       await comments.refetch();
-      expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+      expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
       expect(comments.getCurrentResult().hasNextPage).toBe(true);
       while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
       expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
@@ -1796,6 +1983,224 @@ describe('a new 댓글', () => {
       expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
       expect(commentCountOf(queryClient)).toBe(2);
       unsubscribe();
+    });
+
+    describe('placed at the end of the pages held until 더 보기 brings its page (오너 결정 2026-10-24)', () => {
+      // «제자리가 읽힐 때까지 끝에 남김: 다시 읽을 때마다 그 댓글을 열린 목록의 끝에 다시 넣고 그 위의
+      // 상자도 남김(요청은 늘지 않음). 다른 탭에서 지웠다면 '더 보기'로 끝까지 읽을 때 사라짐»
+      const LATER_ROOTS = olderIds(100, 102);
+      /**
+       * A fake server of the 댓글 `list()` names — asked each time, so a test deletes from it —
+       * `size` a page: the cursor `c<n>` reads from the n-th.
+       */
+      const servingList = (list: () => readonly string[], size = 1) =>
+        getComments(({ params }) => {
+          const all = list();
+          const from = params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1));
+          const to = Math.min(from + size, all.length);
+          return {
+            items: all.slice(from, to).map((id) => thread(published(id))),
+            nextCursor: to < all.length ? `c${String(to)}` : null,
+          };
+        });
+      /** Where a box on MINE stands as the threads now read: its place, or why it is gone. */
+      const boxesOnMine = (queryClient: QueryClient) => {
+        const view = {
+          postState: 'published' as const,
+          threads: commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))),
+        };
+        return [
+          goneBoxReason({ kind: 'thread', threadId: MINE }, view),
+          goneBoxReason({ kind: 'comment', commentId: MINE, threadId: MINE }, view),
+        ];
+      };
+
+      it('every read of the pages puts it back at their end, asking for nothing more, and a 답글 or 수정 box on it stays', async () => {
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        const asked = serving(8, LATER_ROOTS);
+        await write(queryClient);
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        for (let reads = 0; reads < 3; reads += 1) {
+          asked.length = 0;
+          await comments.refetch();
+          // The one page held, read again: nothing is read for MINE.
+          expect(cursorsAsked(asked)).toEqual(['']);
+          expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+          expect(mineHeld(queryClient)).toBe(1);
+          expect(comments.getCurrentResult().hasNextPage).toBe(true);
+        }
+        // Its boxes keep their place: neither goes as from a 댓글 deleted.
+        expect(boxesOnMine(queryClient)).toEqual([undefined, undefined]);
+        // A stale thread's read again (`readThreadsAgain`) is one more read of the pages.
+        vi.spyOn(api, 'PUT').mockRejectedValue(
+          new ApiError(404, { code: 'NOT_FOUND', message: 'x' } as never),
+        );
+        await expect(
+          new MutationObserver(
+            queryClient,
+            updateCommentOptions(queryClient, POST, () => undefined),
+          ).mutate({ commentId: OLDER, body: '고친 댓글', expectedAccountId: 'user-1' }),
+        ).rejects.toBeInstanceOf(ApiError);
+        await vi.waitFor(() => expect(comments.getCurrentResult().isFetching).toBe(false));
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        unsubscribe();
+      });
+
+      it('stays at the end through each 더 보기 that does not bring it; the one that does puts it in its place, before the 댓글 written after it, drawn and held once and placed no more', async () => {
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        const asked = serving(8, LATER_ROOTS);
+        await write(queryClient);
+        asked.length = 0;
+        for (let page = 1; page < 8; page += 1) {
+          await comments.fetchNextPage();
+          expect(threadIds(queryClient)).toEqual([...olderIds(0, page + 1), MINE]);
+          expect(mineHeld(queryClient)).toBe(1);
+        }
+        // c8 holds MINE: in its place now, the 댓글 written after it behind 더 보기.
+        await comments.fetchNextPage();
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+        expect(placedHeld(queryClient)).toEqual([]);
+        while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE, ...LATER_ROOTS]);
+        expect(mineHeld(queryClient)).toBe(1);
+        // One request a page, as 더 보기 always asks.
+        expect(cursorsAsked(asked)).toEqual(
+          Array.from({ length: 10 }, (_, index) => `c${String(index + 1)}`),
+        );
+        // Read again, the pages hold it in its place: nothing puts it anywhere else.
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE, ...LATER_ROOTS]);
+        expect(mineHeld(queryClient)).toBe(1);
+        unsubscribe();
+      });
+
+      it('deleted meanwhile — in another tab — it stays until 더 보기 reads to the end of the list without it, then goes', async () => {
+        const all = [...olderIds(0, 8), MINE];
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        servingList(() => all);
+        await write(queryClient);
+        all.pop();
+        // Not the end of the list: the reads say nothing of MINE yet, and it stays.
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        for (let page = 1; page < 7; page += 1) {
+          await comments.fetchNextPage();
+          expect(threadIds(queryClient)).toEqual([...olderIds(0, page + 1), MINE]);
+          expect(boxesOnMine(queryClient)).toEqual([undefined, undefined]);
+        }
+        // The last page, MINE on none: the server's word — it goes, and a box on it with it.
+        await comments.fetchNextPage();
+        expect(comments.getCurrentResult().hasNextPage).toBe(false);
+        expect(threadIds(queryClient)).toEqual(olderIds(0, 8));
+        expect(placedHeld(queryClient)).toEqual([]);
+        expect(boxesOnMine(queryClient)).toEqual([copy.errCommentParentGone, copy.errCommentGone]);
+        unsubscribe();
+      });
+
+      it('placed after a read that failed too: a read of the pages that ends the list without it drops it, one that reaches its page puts it in place', async () => {
+        // The reader held the whole list, one page; MINE's read failed, so MINE stands at its end.
+        const ended = holdingFirst(null);
+        vi.spyOn(api, 'GET').mockRejectedValue(new TypeError('Failed to fetch'));
+        await write(ended.queryClient);
+        expect(threadIds(ended.queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(placedHeld(ended.queryClient)).toEqual([`-:${MINE}`]);
+        // Read again, the page held does not reach it (it is on the next): back at the end.
+        const all = [...olderIds(0, 1), MINE];
+        servingList(() => all);
+        await ended.comments.refetch();
+        expect(threadIds(ended.queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(ended.comments.getCurrentResult().hasNextPage).toBe(true);
+        // Deleted elsewhere since: the page read again ends the list without it.
+        all.pop();
+        await ended.comments.refetch();
+        expect(threadIds(ended.queryClient)).toEqual(olderIds(0, 1));
+        expect(placedHeld(ended.queryClient)).toEqual([]);
+        ended.unsubscribe();
+
+        // Not deleted: the page read again holds it — in its place, placed no more.
+        const reached = holdingFirst(null);
+        vi.spyOn(api, 'GET').mockRejectedValue(new TypeError('Failed to fetch'));
+        await write(reached.queryClient);
+        servingList(() => [...olderIds(0, 1), MINE, ...LATER_ROOTS], 20);
+        await reached.comments.refetch();
+        expect(threadIds(reached.queryClient)).toEqual([...olderIds(0, 1), MINE, ...LATER_ROOTS]);
+        expect(placedHeld(reached.queryClient)).toEqual([]);
+        reached.unsubscribe();
+      });
+
+      it('comes back with what was written under it and its edit — as a placeholder once deleted with a 답글 under it — and not once nothing of it is left', async () => {
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        serving(8);
+        await write(queryClient);
+        // A 답글 under it: its thread has nothing unread, so the 답글 is in its place.
+        const REPLY = LATER[0]!;
+        vi.spyOn(api, 'POST').mockResolvedValue(answer(published(REPLY, MINE, '답글')));
+        await new MutationObserver(
+          queryClient,
+          createCommentOptions(queryClient, POST, () => undefined),
+        ).mutate({ parentId: MINE, body: '답글', expectedAccountId: 'user-1' });
+        vi.spyOn(api, 'PUT').mockResolvedValue(
+          answer({ ...published(MINE, null, '고친 댓글'), editedAt: '2026-10-24T00:00:00.000Z' }),
+        );
+        await new MutationObserver(
+          queryClient,
+          updateCommentOptions(queryClient, POST, () => undefined),
+        ).mutate({ commentId: MINE, body: '고친 댓글', expectedAccountId: 'user-1' });
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        await comments.refetch();
+        const mine = () => commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).at(-1);
+        expect(mine()?.comment).toMatchObject({ id: MINE, body: '고친 댓글' });
+        expect(mine()?.replies.map((reply) => reply.id)).toEqual([REPLY]);
+        // Deleted by its writer, its 답글 under it: '삭제된 글입니다', still at the end.
+        const remove = (commentId: string, placeholder: boolean) => {
+          vi.spyOn(api, 'POST').mockResolvedValue(answer({ id: commentId, placeholder }));
+          return new MutationObserver(
+            queryClient,
+            deleteCommentOptions(queryClient, POST, () => undefined),
+          ).mutate({ commentId, expectedAccountId: 'user-1' });
+        };
+        await remove(MINE, true);
+        await comments.refetch();
+        expect(mine()?.comment).toEqual({ state: 'deleted', id: MINE });
+        expect(mine()?.replies.map((reply) => reply.id)).toEqual([REPLY]);
+        // Its 답글 deleted too, nothing of it is left: no read brings it back.
+        await remove(REPLY, false);
+        expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+        expect(placedHeld(queryClient)).toEqual([]);
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+        unsubscribe();
+      });
+
+      it('for the account on screen only: written as one account and landing on another’s screen, it is placed for none — and a reset of the cache as the session changes drops what was placed', async () => {
+        // Sent as user-1; the tab changed hands on its way, `GET /me` naming user-2 now.
+        const other = holdingFirst();
+        serving(8);
+        vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE)));
+        await new MutationObserver(
+          onScreen(other.queryClient, 'user-2'),
+          createCommentOptions(other.queryClient, POST, () => undefined),
+        ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+        expect(threadIds(other.queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(placedHeld(other.queryClient)).toEqual([]);
+        await other.comments.refetch();
+        expect(threadIds(other.queryClient)).toEqual(olderIds(0, 1));
+        other.unsubscribe();
+
+        // Placed for user-1, then another account signs in: SessionCacheGuard resets the cache.
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        serving(8);
+        await write(queryClient);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        await queryClient.resetQueries();
+        expect(comments.getCurrentResult().isFetching).toBe(false);
+        expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+        expect(placedHeld(queryClient)).toEqual([]);
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+        unsubscribe();
+      });
     });
   });
 });

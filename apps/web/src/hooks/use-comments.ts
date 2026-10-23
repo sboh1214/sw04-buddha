@@ -10,6 +10,7 @@ import {
   type CommentDeletion,
   type CommentThread,
   type CreateCommentBody,
+  type Me,
   type Post,
   type PublishedComment,
   type UpdateCommentBody,
@@ -26,9 +27,11 @@ import {
   type ReplyPage,
   type ReplyReadOnBudget,
   commentPageQuery,
+  commentPageRead,
   commentThreadsOf,
   isCursorRefusal,
   isStaleThreadRefusal,
+  placedReplyIds,
   postCommentsKey,
   replyReadOnBudget,
   threadOf,
@@ -40,6 +43,7 @@ import {
   withoutComment,
 } from '@/lib/comments';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
+import { ME_QUERY_KEY } from './use-me';
 import { afterRefusal } from './use-posts';
 
 /**
@@ -63,11 +67,13 @@ import { afterRefusal } from './use-posts';
  * (`readOnToTheEnd`): put at the end of the pages held, it would stand before older 댓글 still
  * unread, and a later read of as many pages as were held would leave it out — five comment pages
  * at most (COMMENT_READ_ON_PAGES, 오너 결정 2026-10-23 (2차)); past them it stands at the end of
- * the pages held until 더 보기 brings it into place — and a read of the pages meanwhile leaves it
- * out until then (ADR-0074 결과 4). A new 대댓글 is the newest of its thread: while 대댓글 of the
- * thread are unread, they are read to the end first (`readOnReplies`), for the same reason — five
- * reply pages at most; past them it stands at the end of the 대댓글 held until '답글 더 보기' brings
- * it into place.
+ * the pages held until 더 보기 brings it into place. A new 대댓글 is the newest of its thread: while
+ * 대댓글 of the thread are unread, they are read to the end first (`readOnReplies`), for the same
+ * reason — five reply pages at most; past them it stands at the end of the 대댓글 held until '답글
+ * 더 보기' brings it into place. Until then, either is put back there by every read of the pages
+ * (or of its thread), a box on it staying, and dropped once a read ends the list (or the thread)
+ * without it — deleted meanwhile, in another tab (`keepPlacedComments`, lib/comments.ts, through
+ * the query client: 오너 결정 2026-10-24).
  *
  * Before an answer is written — a write's, or the page of 대댓글 '답글 더 보기' read — a read of the
  * pages still on its way is cancelled (`writePages`, A-M5-18, the disputes' seed): it left before,
@@ -140,9 +146,12 @@ export function commentsInfiniteQueryOptions(postId: string) {
         }),
       );
       const page = { items: data, nextCursor: meta.nextCursor };
-      return client === undefined
-        ? page
-        : threadsReadOn(client, id, page, signal, budget ?? readOnBudgetOf(signal));
+      // The server's word on these 댓글, for the writer's own placed at the end (`keepPlacedComments`).
+      return commentPageRead(
+        client === undefined
+          ? page
+          : await threadsReadOn(client, id, page, signal, budget ?? readOnBudgetOf(signal)),
+      );
     },
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: CommentPage) => last.nextCursor ?? undefined,
@@ -188,10 +197,16 @@ async function threadsReadOn(
   signal: AbortSignal | undefined,
   budget: ReplyReadOnBudget,
 ): Promise<CommentPage> {
+  const pages = client.getQueryData<CommentPages>(postCommentsKey(postId));
+  // The writer's own 대댓글 placed at the end of a thread are put back after the read, not read
+  // for (오너 결정 2026-10-24: 요청은 늘지 않음): the thread is read on as far as the rest of it.
+  const placed = placedReplyIds(pages);
   const held = new Map(
-    commentThreadsOf(client.getQueryData<CommentPages>(postCommentsKey(postId))).map((thread) => [
+    commentThreadsOf(pages).map((thread) => [
       thread.comment.id,
-      thread,
+      placed.size === 0
+        ? thread
+        : { ...thread, replies: thread.replies.filter((reply) => !placed.has(reply.id)) },
     ]),
   );
   const items: CommentThread[] = [];
@@ -325,15 +340,23 @@ export function useMoreReplies(postId: string, threadId: string) {
  * every other request of the page. A thread whose answer is not within that many pages, a read that
  * fails — the limit's 429 among them — or a thread read again meanwhile, puts the answer at the end
  * of the replies held instead (`withNewComment`) — it is written, and saying otherwise would invite
- * a second — and '답글 더 보기' brings it into its place with the page that holds it. The pages read
- * are dropped then, not kept: the screen stays as the reader left it, with the new 대댓글 under what
- * they were reading, and a later read of the pages has less to read on (`threadsReadOn`). A read
- * that goes through the thread to its end without meeting the answer is the server's word, not a
- * fallback: the 대댓글 was deleted meanwhile — by its author in another tab — so the pages read are
- * written as they are and the answer is not put back (Codex review on PR #220): put back, it would
- * show again, with an edit and a deletion the server can only answer NOT_FOUND, until a later read.
+ * a second — and '답글 더 보기' brings it into its place with the page that holds it; until then
+ * every read of the thread puts it back there, a box on it staying — placed for `writer`, the
+ * account that wrote it while it is the one on screen (오너 결정 2026-10-24, `keepPlacedComments`).
+ * The pages read are dropped then, not kept: the screen stays as the reader left it, with the new
+ * 대댓글 under what they were reading, and a later read of the pages has less to read on
+ * (`threadsReadOn`). A read that goes through the thread to its end without meeting the answer is
+ * the server's word, not a fallback: the 대댓글 was deleted meanwhile — by its author in another tab
+ * — so the pages read are written as they are and the answer is not put back (Codex review on PR
+ * #220): put back, it would show again, with an edit and a deletion the server can only answer
+ * NOT_FOUND, until a later read.
  */
-async function readOnReplies(queryClient: QueryClient, postId: string, reply: PublishedComment) {
+async function readOnReplies(
+  queryClient: QueryClient,
+  postId: string,
+  reply: PublishedComment,
+  writer: string | undefined,
+) {
   const threadId = reply.parentId;
   if (threadId === null) return;
   const thread = commentThreadsOf(
@@ -369,7 +392,7 @@ async function readOnReplies(queryClient: QueryClient, postId: string, reply: Pu
       next = withMoreReplies(next, threadId, cursor, page);
       cursor = page.nextCursor;
     }
-    return gone ? next : withNewComment(next, reply);
+    return gone ? next : withNewComment(next, reply, writer);
   });
 }
 
@@ -442,12 +465,19 @@ async function writePages(
  * came back): its cursor goes on where the read did, while the one held may say there is nothing
  * after it — read when the reader had the whole list open, before others wrote past the five
  * pages — and leave no 더 보기 to bring the 댓글 into place (Codex review on PR #220). Until 더 보기
- * brings it, a read of as many pages as are held (a focus 30 seconds on, a reconnect) leaves it
- * out, and a box open on it then goes as from a 댓글 deleted (`goneBoxReason`) — ADR-0074 7-14,
- * 결과 4. A read that reaches the end without it — the 댓글 deleted meanwhile, in another tab — is
- * the server's word: the pages read are written as they are, and the answer is not put back.
+ * brings it, every read of the pages (a focus 30 seconds on, a reconnect, a stale thread's read
+ * again) puts it back at the end of them, and a box open on it stays — placed for `writer`, the
+ * account that wrote it while it is the one on screen (오너 결정 2026-10-24, `keepPlacedComments`;
+ * ADR-0074 7-14). A read that reaches the end without it — the 댓글 deleted meanwhile, in another
+ * tab — is the server's word: the pages read are written as they are, and the answer is not put
+ * back.
  */
-async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment: PublishedComment) {
+async function readOnToTheEnd(
+  queryClient: QueryClient,
+  postId: string,
+  comment: PublishedComment,
+  writer: string | undefined,
+) {
   const key = postCommentsKey(postId);
   const held = queryClient.getQueryData<CommentPages>(key);
   if (held === undefined || held.pages.length === 0) {
@@ -482,11 +512,13 @@ async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment:
       withNewComment(
         current !== undefined && lastReadAgain !== undefined
           ? {
+              ...current,
               pages: [...current.pages.slice(0, from), lastReadAgain],
               pageParams: [...current.pageParams.slice(0, from), pageParams[0]],
             }
           : current,
         comment,
+        writer,
       ),
     );
     return;
@@ -496,10 +528,21 @@ async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment:
     postId,
     (current) =>
       current && {
+        ...current,
         pages: [...current.pages.slice(0, from), ...pages],
         pageParams: [...current.pageParams.slice(0, from), ...pageParams],
       },
   );
+}
+
+/**
+ * The account that sent a write (`expectedAccountId`) while `GET /me` in this tab still names it —
+ * the one its new comment is placed for (`withNewComment`) — or nothing: the tab changed hands
+ * while the write was on its way (SessionCacheGuard reset the cache, `['me']` reads the other
+ * account or nothing yet), and another account's screen keeps nothing placed for it.
+ */
+function writerOnScreen(queryClient: QueryClient, accountId: string): string | undefined {
+  return queryClient.getQueryData<Me>(ME_QUERY_KEY)?.id === accountId ? accountId : undefined;
 }
 
 /** A refusal's side effects: the session or `['me']` (use-posts.ts), and a stale thread read again. */
@@ -521,7 +564,9 @@ async function afterCommentRefusal(
  * the landing recorded first (`commentDraftLanded`, lib/comment-drafts.ts) — here, as the post
  * writes do it (use-posts.ts), since the page may have gone to the step with the write in flight,
  * and a box going before it hears of the success must not keep it again. Both for the account
- * that sent it (`expectedAccountId`) only: the tab may be another's by the time it lands.
+ * that sent it (`expectedAccountId`) only: the tab may be another's by the time it lands — and so
+ * is a comment put at the end of what is held, placed there for every later read (`withNewComment`,
+ * 오너 결정 2026-10-24) only while `GET /me` in this tab still names that account (`writerOnScreen`).
  */
 export function createCommentOptions(
   queryClient: QueryClient,
@@ -547,8 +592,9 @@ export function createCommentOptions(
           : { kind: 'reply', postId: id, parentId: parentId.toLowerCase() },
         expectedAccountId,
       );
-      if (comment.parentId === null) await readOnToTheEnd(queryClient, id, comment);
-      else await readOnReplies(queryClient, id, comment);
+      const writer = writerOnScreen(queryClient, expectedAccountId);
+      if (comment.parentId === null) await readOnToTheEnd(queryClient, id, comment, writer);
+      else await readOnReplies(queryClient, id, comment, writer);
       moveCommentCount(queryClient, id, 1);
       await afterCountChange(queryClient, id);
     },

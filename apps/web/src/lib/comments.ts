@@ -1,6 +1,7 @@
 import {
   COMMENT_BODY_MAX_LENGTH,
   COMMENT_NOT_ALLOWED_REASONS,
+  COMMENT_PAGE_LIMIT,
   COMMENT_REPLIES_PAGE_SIZE,
   codePointLength,
   commentBodyRefusalOf,
@@ -43,6 +44,13 @@ import { POSTS_KEY, isOwnPost } from './posts';
 // ---- cache key and request ------------------------------------------------------------------
 
 /**
+ * Every post's comment pages, by prefix (`postCommentsKey`): under it the query client keeps the
+ * writer's own comments placed at the end of what is held through every read
+ * (`keepPlacedComments`, lib/query-client.ts — 오너 결정 2026-10-24).
+ */
+export const COMMENT_PAGES_KEY = [...POSTS_KEY, 'comments'] as const;
+
+/**
  * A post's comment threads, under the posts' root: public like the post (N05 §2), but read in the
  * browser only — the post page does not read them on the server (오너 결정 2026-10-21, ADR-0074:
  * the web's own requests are not held to the per-address limit, so a page drawn for anyone must
@@ -50,7 +58,7 @@ import { POSTS_KEY, isOwnPost } from './posts';
  * invalidates the other by prefix.
  */
 export const postCommentsKey = (postId: string) =>
-  [...POSTS_KEY, 'comments', postId.toLowerCase()] as const;
+  [...COMMENT_PAGES_KEY, postId.toLowerCase()] as const;
 
 /**
  * One page of `GET /posts/:postId/comments`: up to 20 댓글, each with its first 50 대댓글 and the
@@ -69,8 +77,15 @@ export interface ReplyPage {
   nextCursor: string | null;
 }
 
-/** The pages as `useInfiniteQuery` holds them (the page params are its own business). */
-export type CommentPages = InfiniteData<CommentPage>;
+/**
+ * The pages as `useInfiniteQuery` holds them (the page params are its own business), and the
+ * writer's own comments a read toward their place left at the end of what is held (`placed`,
+ * 오너 결정 2026-10-24 — `keepPlacedComments`). A write spreads what it was given, so `placed`
+ * goes with it; a read's pages come without it, and the query client brings it over.
+ */
+export type CommentPages = InfiniteData<CommentPage> & {
+  readonly placed?: readonly PlacedComment[];
+};
 
 /**
  * The query of one page, as the browser's `queryFn` sends it (and through it `readOnToTheEnd`):
@@ -125,15 +140,52 @@ export function withMoreReplies(
   from: string,
   page: ReplyPage,
 ): CommentPages | undefined {
-  return mapThreads(pages, (thread) =>
-    thread.comment.id !== threadId || thread.repliesNextCursor !== from
-      ? thread
-      : {
-          ...thread,
-          replies: repliesWith(thread.replies, page.items),
-          repliesNextCursor: page.nextCursor,
-        },
+  // The writer's own 대댓글 placed at the end of this thread (오너 결정 2026-10-24): the page that
+  // holds one brings it into its place; one the thread ends without was deleted meanwhile (in
+  // another tab) and goes; any other stays placed, at the end of what is held — after this page.
+  const placed = (pages?.placed ?? []).filter((entry) => entry.threadId === threadId);
+  const brought = new Set(page.items.map((reply) => reply.id));
+  const settled = new Set(
+    placed
+      .filter((entry) => brought.has(entry.id) || page.nextCursor === null)
+      .map((entry) => entry.id),
   );
+  const staying = placed.filter((entry) => !settled.has(entry.id)).map((entry) => entry.id);
+  let took = false;
+  const next = mapThreads(pages, (thread) => {
+    if (thread.comment.id !== threadId || thread.repliesNextCursor !== from) return thread;
+    took = true;
+    const replies = repliesWith(thread.replies, page.items).filter(
+      (reply) => brought.has(reply.id) || !settled.has(reply.id),
+    );
+    return {
+      ...thread,
+      replies: atTheEnd(replies, staying, (reply) => reply.id),
+      repliesNextCursor: page.nextCursor,
+    };
+  });
+  // The thread read again meanwhile took nothing, and what is placed in it stays as it was.
+  if (next === undefined || !took || settled.size === 0) return next;
+  return {
+    ...next,
+    placed: (next.placed ?? []).filter(
+      (entry) => entry.threadId !== threadId || !settled.has(entry.id),
+    ),
+  };
+}
+
+/** `items` with those whose ids are `last` moved after the rest, in the order `last` names them. */
+function atTheEnd<T>(items: readonly T[], last: readonly string[], idOf: (item: T) => string): T[] {
+  if (last.length === 0) return [...items];
+  const moving = new Set(last);
+  const byId = new Map(items.filter((item) => moving.has(idOf(item))).map((i) => [idOf(i), i]));
+  return [
+    ...items.filter((item) => !moving.has(idOf(item))),
+    ...last.flatMap((id) => {
+      const item = byId.get(id);
+      return item === undefined ? [] : [item];
+    }),
+  ];
 }
 
 /**
@@ -146,10 +198,11 @@ export function withMoreReplies(
  * is one request in the reader's address limit (100 a minute with every other request of the page),
  * and none of these reads had a bound before: a thread of thousands could spend the limit — and the
  * address's other requests with it — on one reply, one focus of the window or one draft (ADR-0074
- * 7-28). Past it: a new 대댓글 not reached within it stands at the end of the 대댓글 held, and a
- * thread read again holds its first 50 and the 250 after them — '답글 더 보기' brings the rest, and
- * the new 대댓글 into its place, as after a read that failed; an edit draft not found within them is
- * shown apart, with why (`copy.errCommentEditNotRead`).
+ * 7-28). Past it: a new 대댓글 not reached within it stands at the end of the 대댓글 held — put back
+ * there by every read of the thread until '답글 더 보기' brings its page (오너 결정 2026-10-24,
+ * `keepPlacedComments`) — and a thread read again holds its first 50 and the 250 after them —
+ * '답글 더 보기' brings the rest, and the new 대댓글 into its place, as after a read that failed; an
+ * edit draft not found within them is shown apart, with why (`copy.errCommentEditNotRead`).
  */
 export const REPLY_READ_ON_PAGES = 5;
 
@@ -163,10 +216,10 @@ export const REPLY_READ_ON_PAGES = 5;
  * address's other requests with it — before falling back (Codex review on PR #220, ADR-0074
  * 7-14). Past it, as after a read that failed: the new 댓글 stands at the end of the pages held —
  * their last page as read again, whose cursor leaves 더 보기 there — and 더 보기 brings it into its
- * place with the page that holds it. Until then a read of as many pages as are held (a focus 30
- * seconds on, a reconnect) leaves it out, and a box open on it goes as from a 댓글 deleted
- * (`goneBoxReason` — ADR-0074 결과 4 asks the owner). Apart from the reply pages the threads of
- * those pages read on (REPLY_READ_ON_PAGES_IN_ALL below, one budget for the read).
+ * place with the page that holds it. Until then every read of the pages puts it back at the end of
+ * them, and a box open on it stays (오너 결정 2026-10-24, `keepPlacedComments`). Apart from the
+ * reply pages the threads of those pages read on (REPLY_READ_ON_PAGES_IN_ALL below, one budget for
+ * the read).
  */
 export const COMMENT_READ_ON_PAGES = 5;
 
@@ -269,13 +322,15 @@ function mapThreads(
   if (pages === undefined) return undefined;
   return {
     ...pages,
-    pages: pages.pages.map((page) => ({
-      ...page,
-      items: page.items.flatMap((thread) => {
-        const next = map(thread);
-        return next === undefined ? [] : [next];
+    pages: pages.pages.map((page) =>
+      samePageRead(page, {
+        ...page,
+        items: page.items.flatMap((thread) => {
+          const next = map(thread);
+          return next === undefined ? [] : [next];
+        }),
       }),
-    })),
+    ),
   };
 }
 
@@ -290,14 +345,24 @@ function mapThreads(
  * until their page brings it to its place; a read that ends the thread without it (deleted
  * meanwhile) does not come here. A 댓글 goes last of the pages read: the hooks read its
  * page instead (`readOnToTheEnd`) and come here only when that read fails or stops short of it,
- * COMMENT_READ_ON_PAGES read — before 댓글 still unread, and out of the pages at the next read of
- * as many pages, until 더 보기 brings it (a box open on it then goes as from a 댓글 deleted,
- * `goneBoxReason`; ADR-0074 7-14, 결과 4). Nothing is added twice, and a comment its page brings
- * later is drawn once, where that page puts it (`commentThreadsOf`, `repliesWith`).
+ * COMMENT_READ_ON_PAGES read — before 댓글 still unread, until 더 보기 brings it (ADR-0074 7-14).
+ * Nothing is added twice, and a comment its page brings later is drawn once, where that page puts
+ * it (`commentThreadsOf`, `repliesWith`).
+ *
+ * Given its writer (`writer`, the account that sent it — the hooks give it while that account is
+ * the one on screen), a comment put before others still unread is placed (오너 결정 2026-10-24):
+ * a 댓글 here always, a 대댓글 while its thread has 대댓글 unread after it. Every read of the pages
+ * — or of the thread — puts it back at the end of what is held until a read brings the page that
+ * holds it, and drops it once a read ends the list — or the thread — without it
+ * (`keepPlacedComments`, `withMoreReplies`). For that account only: one placed by another account
+ * goes (the tab changed hands), as do the oldest past PLACED_COMMENTS_KEPT 댓글 or
+ * PLACED_REPLIES_KEPT 대댓글 — left where they stand, as before the owner's answer, until the next
+ * read.
  */
 export function withNewComment(
   pages: CommentPages | undefined,
   comment: PublishedComment,
+  writer?: string,
 ): CommentPages | undefined {
   if (pages === undefined) return undefined;
   const parentId = comment.parentId;
@@ -306,18 +371,28 @@ export function withNewComment(
     const lastIndex = pages.pages.length - 1;
     if (lastIndex < 0) return pages;
     const thread: CommentThread = { comment, replies: [], repliesNextCursor: null };
-    return {
+    const next: CommentPages = {
       ...pages,
       pages: pages.pages.map((page, index) =>
-        index === lastIndex ? { ...page, items: [...page.items, thread] } : page,
+        index === lastIndex
+          ? samePageRead(page, { ...page, items: [...page.items, thread] })
+          : page,
       ),
     };
+    return writer === undefined
+      ? next
+      : withPlaced(next, { id: comment.id, threadId: null }, writer);
   }
-  return mapThreads(pages, (thread) =>
+  const target = threadOf(pages, parentId);
+  if (target === undefined || target.replies.some((reply) => reply.id === comment.id)) return pages;
+  const next = mapThreads(pages, (thread) =>
     thread.comment.id !== parentId || thread.replies.some((reply) => reply.id === comment.id)
       ? thread
       : { ...thread, replies: [...thread.replies, comment] },
   );
+  return writer === undefined || target.repliesNextCursor === null || next === undefined
+    ? next
+    : withPlaced(next, { id: comment.id, threadId: parentId }, writer);
 }
 
 /** An edit's answer (`PUT /comments/:commentId`) in place of the comment it replaces. */
@@ -358,6 +433,192 @@ export function withoutComment(
       ? undefined
       : { ...thread, replies };
   });
+}
+
+// ---- the writer's own comments placed at the end of what is held --------------------------------
+
+/**
+ * One of the writer's own new comments that its read toward its place left at the end of what is
+ * held (`withNewComment`): its read stopped at five pages (COMMENT_READ_ON_PAGES for a 댓글,
+ * REPLY_READ_ON_PAGES for a 대댓글) or failed, so older comments are still unread before it — 오너
+ * 결정 2026-10-24 (ADR-0074 결정 1의 열두째 표): «제자리가 읽힐 때까지 끝에 남김». Kept with the
+ * pages of its post (`CommentPages.placed`), so it is this tab's — the query client's — and goes
+ * with them: when the cache drops them, and when SessionCacheGuard resets it as another account
+ * signs in.
+ */
+export interface PlacedComment {
+  id: string;
+  /** The 댓글 whose thread holds it, for a 대댓글; null for a 댓글. */
+  threadId: string | null;
+  /** The account that wrote it: placed for that account only. */
+  accountId: string;
+}
+
+/**
+ * The 댓글 one post keeps placed at most (a page's, COMMENT_PAGE_LIMIT) and the 대댓글
+ * (a reply page's, COMMENT_REPLIES_PAGE_SIZE): each new one past them drops the oldest, left where
+ * it stands until the next read — as every such comment was before the owner's answer. A reader
+ * writes them one at a time; the bound keeps what every read of the pages carries over small.
+ */
+export const PLACED_COMMENTS_KEPT = COMMENT_PAGE_LIMIT;
+export const PLACED_REPLIES_KEPT = COMMENT_REPLIES_PAGE_SIZE;
+
+/** `pages` with `entry` placed for `accountId` (`withNewComment`), within the bounds above. */
+function withPlaced(
+  pages: CommentPages,
+  entry: Omit<PlacedComment, 'accountId'>,
+  accountId: string,
+): CommentPages {
+  const kind = (one: Pick<PlacedComment, 'threadId'>) => one.threadId === null;
+  const bound = kind(entry) ? PLACED_COMMENTS_KEPT : PLACED_REPLIES_KEPT;
+  const mine = (pages.placed ?? []).filter(
+    (one) => one.accountId === accountId && one.id !== entry.id,
+  );
+  const sameKind = mine.filter((one) => kind(one) === kind(entry));
+  const dropped = new Set(sameKind.slice(0, Math.max(0, sameKind.length - bound + 1)));
+  return {
+    ...pages,
+    placed: [...mine.filter((one) => !dropped.has(one)), { ...entry, accountId }],
+  };
+}
+
+/**
+ * The comment pages a read has just brought, as their read (the browser's `queryFn`) returned them:
+ * what `keepPlacedComments` reads the server's word from. Each is that read's until its landing —
+ * the first write that carries it, which forgets it — and a write that rebuilds one before it lands
+ * (`withNewComment` after a new 댓글's read) keeps the mark (`samePageRead`). In memory, and only
+ * the objects: a page drawn from the cache is never one.
+ */
+const pagesRead = new WeakSet<CommentPage>();
+
+/** `page` marked as a read's (`pagesRead`): the browser's `queryFn` returns what this returns. */
+export function commentPageRead(page: CommentPage): CommentPage {
+  pagesRead.add(page);
+  return page;
+}
+
+/** `to`, rebuilt from `from` before it landed: a read's as `from` is. */
+function samePageRead(from: CommentPage, to: CommentPage): CommentPage {
+  if (pagesRead.has(from)) pagesRead.add(to);
+  return to;
+}
+
+/** The ids of the 대댓글 placed in `pages` (`PlacedComment`). */
+export function placedReplyIds(pages: CommentPages | undefined): ReadonlySet<string> {
+  return new Set(
+    (pages?.placed ?? []).filter((entry) => entry.threadId !== null).map((entry) => entry.id),
+  );
+}
+
+/** The thread of each 댓글 in `pages`, where it last appears. */
+function threadsById(pages: readonly CommentPage[]): Map<string, CommentThread> {
+  const byId = new Map<string, CommentThread>();
+  for (const page of pages) for (const thread of page.items) byId.set(thread.comment.id, thread);
+  return byId;
+}
+
+/**
+ * Every write of a post's comment pages, through the query client (lib/query-client.ts, its
+ * `structuralSharing` under COMMENT_PAGES_KEY — a read's landing and `setQueryData` alike): the
+ * writer's own comments placed at the end of what is held (`PlacedComment`, 오너 결정 2026-10-24 —
+ * «다시 읽을 때마다 그 댓글을 열린 목록의 끝에 다시 넣고 그 위의 상자도 남김(요청은 늘지 않음). 다른
+ * 탭에서 지웠다면 '더 보기'로 끝까지 읽을 때 사라짐», and «대댓글도 같은 규칙»), carried over from
+ * `held` — what the cache holds — into `incoming` when it comes without them (a read's pages), and
+ * put right against the pages a read has just brought (`pagesRead`):
+ *
+ * - A 댓글: on a page read, it is in its place — 더 보기 brought it, or a read of the pages reached
+ *   it (comments before it deleted, or its own read had failed) — and is no longer placed, nor
+ *   drawn anywhere else. Not on them, and the read ended the list (its last page read, no cursor
+ *   after it), it was deleted meanwhile — in another tab — and goes: a read that reaches the end
+ *   without it is the server's word. Otherwise it is put back at the end of the last page, as the
+ *   pages held it — with what was written or edited under it — and stays placed: so after every
+ *   read of the pages (the window's focus 30 seconds on, a reconnection, a stale thread's read
+ *   again, a new 댓글's read) and every 더 보기 that does not bring it, and a 답글 or 수정 box open
+ *   on it stays (`goneBoxReason` sees it). No request is added: nothing is read for it.
+ * - A 대댓글, in a thread a read brought (that thread's first 50 and what the read read on — a
+ *   thread back to its first 50 included, the read's REPLY_READ_ON_PAGES_IN_ALL spent above it):
+ *   among them, it is in its place; not, and the thread read to its end (no cursor), it was
+ *   deleted meanwhile and goes; otherwise it is put back at the end of the thread's replies, as
+ *   held. '답글 더 보기' brings it into place, or ends the thread without it, the same way
+ *   (`withMoreReplies`). A thread that left the view takes its own with it.
+ * - Anything placed that no longer stands where a write left it — deleted by the writer
+ *   (`withoutComment`) — is no longer placed.
+ */
+export function keepPlacedComments(
+  held: CommentPages | undefined,
+  incoming: CommentPages,
+): CommentPages {
+  const read = new Set(incoming.pages.filter((page) => pagesRead.has(page)));
+  for (const page of read) pagesRead.delete(page);
+  const placed = incoming.placed ?? held?.placed ?? [];
+  const last = incoming.pages.at(-1);
+  if (placed.length === 0 || last === undefined) return incoming;
+  // Placed by this very write (`withNewComment`): where it put them, whatever it read.
+  const placedBefore = new Set((held?.placed ?? []).map((entry) => entry.id));
+  const readThreads = threadsById(incoming.pages.filter((page) => read.has(page)));
+  const heldThreads = threadsById(held?.pages ?? []);
+  const incomingThreads = threadsById(incoming.pages);
+  const listEnded = read.has(last) && last.nextCursor === null;
+  const kept = new Set<PlacedComment>();
+  // 대댓글 put back at the end of the thread a read brought, by the thread.
+  const putBack = new Map<string, PostComment[]>();
+  // 댓글 in their place: drawn there only. 댓글 placed still, or gone: taken off every page, and
+  // those placed still put back at the end of the last.
+  const inPlace = new Set<string>();
+  const taken = new Set<string>();
+  const atEnd: CommentThread[] = [];
+
+  for (const entry of placed) {
+    const isNew = !placedBefore.has(entry.id);
+    if (entry.threadId !== null) {
+      const thread = isNew ? undefined : readThreads.get(entry.threadId);
+      if (thread === undefined) {
+        // Not read now: as the write left it, while it is there.
+        const now = incomingThreads.get(entry.threadId);
+        if (now?.replies.some((reply) => reply.id === entry.id)) kept.add(entry);
+        continue;
+      }
+      if (thread.replies.some((reply) => reply.id === entry.id)) continue;
+      if (thread.repliesNextCursor === null) continue;
+      const copy = heldThreads.get(entry.threadId)?.replies.find((reply) => reply.id === entry.id);
+      if (copy === undefined) continue;
+      putBack.set(entry.threadId, [...(putBack.get(entry.threadId) ?? []), copy]);
+      kept.add(entry);
+      continue;
+    }
+    if (!isNew && readThreads.has(entry.id)) {
+      inPlace.add(entry.id);
+      continue;
+    }
+    taken.add(entry.id);
+    if (!isNew && listEnded) continue;
+    const copy =
+      incomingThreads.get(entry.id) ??
+      (!isNew && read.size > 0 ? heldThreads.get(entry.id) : undefined);
+    if (copy === undefined) continue;
+    atEnd.push(copy);
+    kept.add(entry);
+  }
+
+  const lastIndex = incoming.pages.length - 1;
+  const pages = incoming.pages.map((page, index) => {
+    const items = page.items
+      .filter(
+        (thread) =>
+          !taken.has(thread.comment.id) && (read.has(page) || !inPlace.has(thread.comment.id)),
+      )
+      .map((thread) => {
+        const replies = read.has(page) ? putBack.get(thread.comment.id) : undefined;
+        return replies === undefined
+          ? thread
+          : { ...thread, replies: [...thread.replies, ...replies] };
+      });
+    return { ...page, items: index === lastIndex ? [...items, ...atEnd] : items };
+  });
+  const stillPlaced = placed.filter((entry) => kept.has(entry));
+  return stillPlaced.length === 0
+    ? { pages, pageParams: incoming.pageParams }
+    : { pages, pageParams: incoming.pageParams, placed: stillPlaced };
 }
 
 // ---- drafts -------------------------------------------------------------------------------------
@@ -657,11 +918,12 @@ export type CommentsPostState = Post['state'] | 'gone';
  * 대댓글 whose thread now holds fewer than the screen did, 대댓글 still unread after them: a read of
  * the pages reads a thread on five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정 2026-10-21
  * (2차) 답 1), so the 대댓글 may be past them as well as deleted, and the words — the owner's
- * (오너 결정 2026-10-22 답 3) — say it may be either (ADR-0074 7-30). Nor is one on the writer's
- * new 댓글 that its read left at the end of the pages held (`withNewComment` — the read failed, or
- * stopped at COMMENT_READ_ON_PAGES): a read of as many pages leaves it out until 더 보기 brings it,
- * so a box on it — an answer to it, its edit — is said gone as from a 댓글 deleted although it is
- * not (ADR-0074 7-14; 결과 4 asks the owner). What a held text says for a box with no write that
+ * (오너 결정 2026-10-22 답 3) — say it may be either (ADR-0074 7-30). The writer's own new 댓글 or
+ * 대댓글 that its read left at the end of what is held (`withNewComment` — the read failed, or
+ * stopped at five pages) is never among those: every read puts it back there until its page is
+ * read (`keepPlacedComments`, 오너 결정 2026-10-24), so a box on it — an answer to it, its edit —
+ * stays, and goes only once a read ends the list or the thread without it, as from a comment
+ * deleted (it was, in another tab). What a held text says for a box with no write that
  * went because its place changed (오너 결정 2026-10-21 답 2), and when the refusal its box heard was
  * about something else — a network failure, say — and the box went later because its thread
  * changed (`heldTextsOf`).
