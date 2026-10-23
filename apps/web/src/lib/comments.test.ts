@@ -52,6 +52,7 @@ import {
   threadWithReplies,
   type HeldText,
   withEditedComment,
+  withHeldLikeCounts,
   withMoreReplies,
   withNewComment,
   withoutComment,
@@ -233,6 +234,67 @@ describe('the 대댓글 after the first 50 (오너 결정 2026-10-21: 답글 더
       { state: 'deleted', id: 'gone' },
     ]);
     expect(thread?.repliesNextCursor).toBeNull();
+  });
+
+  it('keep the like counts held of the comments a new 댓글’s read to the end brings again (#49, ADR-0076 7-27)', () => {
+    // 'a' and its 'a1' were liked while the read of the last page held was on its way: the pages
+    // read carry the counts from before. 'b' is new to the screen, 'mine' the reader's new 댓글.
+    const held = pagesOf(
+      [
+        [thread(comment('first'))],
+        [
+          thread(
+            { ...comment('a'), likeCount: 3 },
+            { ...comment('a1', 'a'), likeCount: 1 },
+            { ...comment('gone', 'a'), likeCount: 4 },
+          ),
+          thread({ state: 'hidden', id: 'h' }),
+        ],
+      ],
+      'after-1',
+    );
+    const read = [
+      {
+        items: [
+          thread(
+            { ...comment('a', null, 'edited'), likeCount: 2 },
+            { ...comment('a1', 'a'), likeCount: 0 },
+            { state: 'deleted', id: 'gone' },
+            { ...comment('a2', 'a'), likeCount: 6 },
+          ),
+          thread({ ...comment('h'), likeCount: 5 }),
+        ],
+        nextCursor: 'after-2',
+      },
+      {
+        items: [thread({ ...comment('b'), likeCount: 7 }), thread(comment('mine'))],
+        nextCursor: null,
+      },
+    ];
+    expect(withHeldLikeCounts(read, held)).toEqual([
+      {
+        items: [
+          thread(
+            // The page's text, the count held.
+            { ...comment('a', null, 'edited'), likeCount: 3 },
+            { ...comment('a1', 'a'), likeCount: 1 },
+            // A placeholder now: no count.
+            { state: 'deleted', id: 'gone' },
+            // Not held: the page's count.
+            { ...comment('a2', 'a'), likeCount: 6 },
+          ),
+          // Held as a placeholder, with no count to keep: the page's.
+          thread({ ...comment('h'), likeCount: 5 }),
+        ],
+        nextCursor: 'after-2',
+      },
+      {
+        items: [thread({ ...comment('b'), likeCount: 7 }), thread(comment('mine'))],
+        nextCursor: null,
+      },
+    ]);
+    // Nothing held: every count is the page's.
+    expect(withHeldLikeCounts(read, undefined)).toEqual(read);
   });
 
   it('are read on when a page read again holds fewer than the screen did', () => {

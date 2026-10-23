@@ -39,6 +39,7 @@ import {
   threadReadsOn,
   threadWithReplies,
   withEditedComment,
+  withHeldLikeCounts,
   withMoreReplies,
   withNewComment,
   withoutComment,
@@ -594,11 +595,14 @@ async function putReadPages(
  * account that wrote it, while it is the one on screen as the 댓글 is put in, the read done (오너
  * 결정 2026-10-24, `keepPlacedComments`, `writerOnScreen`; ADR-0074 7-14). A read that reaches the
  * end without it — the 댓글 deleted meanwhile, in another tab — is the server's word: the pages
- * read are written as they are, and the answer is not put back. Either way — the pages read, or
- * the last page held read again — the reader's writes that landed while this read are done again
- * over them as they go in (`putReadPages`, Codex review on PR #220, round 4 — ADR-0074 7-34): an
- * edit or a deletion of a comment on them, a new 대댓글 or '답글 더 보기' of a thread on them, which
- * the pages, read before, would otherwise undo.
+ * read are written as they are, and the answer is not put back. The pages read take the place of
+ * the held ones from the last on, each comment held at the like count held (`withHeldLikeCounts`,
+ * #49, ADR-0076 7-27): this read calls the query's function itself, so a like pressed while it is
+ * out sees no read of the pages on its way and reads none after it — the count it wrote stays.
+ * Either way — the pages read, or the last page held read again — the reader's writes that landed
+ * while this read are done again over them as they go in (`putReadPages`, Codex review on PR #220,
+ * round 4 — ADR-0074 7-34): an edit or a deletion of a comment on them, a new 대댓글 or '답글 더
+ * 보기' of a thread on them, which the pages, read before, would otherwise undo.
  */
 async function readOnToTheEnd(
   queryClient: QueryClient,
@@ -665,7 +669,7 @@ async function readOnToTheEnd(
     (current) =>
       current && {
         ...current,
-        pages: [...current.pages.slice(0, from), ...pages],
+        pages: [...current.pages.slice(0, from), ...withHeldLikeCounts(pages, current)],
         pageParams: [...current.pageParams.slice(0, from), ...pageParams],
       },
     false,

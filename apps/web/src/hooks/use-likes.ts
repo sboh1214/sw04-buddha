@@ -129,10 +129,11 @@ function loadingMore(queryClient: QueryClient, key: QueryKey): Promise<unknown> 
  * answered, since it was asked for (a refocus, another press's failure). A 더 보기 of the comment
  * pages is let be instead: cancelling it would drop the page the reader asked for — likes are
  * pressed far more often than comments are written (use-comments.ts cancels it for a write) — so
- * `more` is its read, after which the count is written again (`showCount`). '답글 더 보기' and a
- * new 대댓글's read on (use-comments.ts) are not reads of the query but reply pages written into it,
- * which nothing here sees: a page of them that brings a 대댓글 already held keeps the count held
- * (`repliesWith`, lib/comments.ts, ADR-0076 7-17), so it cannot take a press back either.
+ * `more` is its read, after which the count is written again (`showCount`). '답글 더 보기', a new
+ * 대댓글's read on and a new 댓글's read to the end (use-comments.ts) are not reads of the query but
+ * pages written into it, which nothing here sees: a page of them that brings a comment already
+ * held keeps the count held (`repliesWith`, `withHeldLikeCounts`, lib/comments.ts, ADR-0076 7-17
+ * and 7-27), so it cannot take a press back either.
  */
 async function holdReads(
   queryClient: QueryClient,

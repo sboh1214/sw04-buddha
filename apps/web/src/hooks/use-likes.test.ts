@@ -23,7 +23,7 @@ import {
 import { commentLikeCount, myPostLikesKey, postLikeCount } from '@/lib/likes';
 import { communityPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
-import { readMoreReplies } from './use-comments';
+import { createCommentOptions, readMoreReplies } from './use-comments';
 import { type LikeVariables, myPostLikesQueryOptions, updateLikeOptions } from './use-likes';
 import { ME_QUERY_KEY } from './use-me';
 
@@ -254,7 +254,7 @@ describe('a press', () => {
     await settle();
     const done = pending.mutate(onComment(true, REPLY));
     await settle();
-    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId, REPLY.toLowerCase()]);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId, REPLY]);
 
     first.reject(refusal(503, 'INTERNAL'));
     expect(await failed).toBeInstanceOf(ApiError);
@@ -685,5 +685,111 @@ describe('a 대댓글’s press while 답글 더 보기 is on its way', () => {
     expect(await failed).toBeInstanceOf(ApiError);
     expect(commentCountOf(again, REPLY)).toBe(0);
     expect(repliesHeld(again)).toEqual([[EARLIER, BETWEEN, REPLY], null]);
+  });
+});
+
+describe('a comment’s press while a new 댓글’s read to the end is on its way', () => {
+  const MINE = 'f0e1d2c3-b4a5-4968-8776-655443322110';
+  const OLDER = '0c4e9a7b-3f21-4d6a-8b5e-9a1f2c3d4e5f';
+
+  /**
+   * The reader's new 댓글 MINE written through the comment section's options: its answer lands at
+   * once, and its read of the last page held and every page after it (`readOnToTheEnd`) — the
+   * query's function called by the write itself, no read of the query the press could see —
+   * answers when the test says: COMMENT and its 대댓글 REPLY at the counts from when the page was
+   * read (2 and 0), OLDER (another reader's 댓글, new to the screen, '좋아요 7') and MINE.
+   */
+  async function newCommentOnItsWay(queryClient: QueryClient) {
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, 0)));
+    const page = deferred<unknown>();
+    const get = vi.spyOn(api, 'GET').mockReturnValue(page.promise as never);
+    const written = new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+    await vi.waitFor(() => {
+      expect(get).toHaveBeenCalledTimes(1);
+    });
+    const arrive = () =>
+      page.resolve({
+        data: {
+          data: [
+            ...firstPage(2).items,
+            { comment: published(OLDER, 7), replies: [], repliesNextCursor: null },
+            { comment: published(MINE, 0), replies: [], repliesNextCursor: null },
+          ],
+          meta: { nextCursor: null },
+        },
+        response: new Response(null, { status: 200 }),
+      });
+    return { written, arrive, get };
+  }
+
+  const threadIds = (queryClient: QueryClient) =>
+    commentThreadsOf(queryClient.getQueryData<CommentPages>(postCommentsKey(post))).map(
+      (thread) => thread.comment.id,
+    );
+
+  it('keeps the counts the answers wrote when the pages land after them (ADR-0076 7-27)', async () => {
+    const queryClient = seeded();
+    const write = await newCommentOnItsWay(queryClient);
+    // The read is the write's own: the query is not fetching, so the press cancels nothing and
+    // reads nothing after its answer.
+    expect(queryClient.getQueryState(postCommentsKey(post))?.fetchStatus).toBe('idle');
+    const onTop = deferred<LikeState>();
+    const onReply = deferred<LikeState>();
+    const top = toggle(queryClient, () => onTop.promise).mutate(onComment(true));
+    const reply = toggle(queryClient, () => onReply.promise).mutate(onComment(true, REPLY));
+    await settle();
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(commentCountOf(queryClient, REPLY)).toBe(1);
+    onTop.resolve({ liked: true, likeCount: 3 });
+    onReply.resolve({ liked: true, likeCount: 1 });
+    await Promise.all([top, reply]);
+    // The pages arrive with MINE in its place — COMMENT and REPLY at the counts from before the
+    // presses, which must not take them back off the screen beside the pressed toggles.
+    write.arrive();
+    await write.written;
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(commentCountOf(queryClient, REPLY)).toBe(1);
+    // A 댓글 the screen did not hold comes at the page's count.
+    expect(commentCountOf(queryClient, OLDER)).toBe(7);
+    expect(commentCountOf(queryClient, MINE)).toBe(0);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId, REPLY]);
+    // Nothing more was read for it: the one page read of the write.
+    expect(write.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the press’s count when the pages land before the answer, and when the press fails', async () => {
+    const queryClient = seeded();
+    const write = await newCommentOnItsWay(queryClient);
+    const sent = deferred<LikeState>();
+    const done = toggle(queryClient, () => sent.promise).mutate(onComment(true));
+    await settle();
+    write.arrive();
+    await write.written;
+    // Landed first: MINE in its place, COMMENT still at the count the press moved.
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    sent.resolve({ liked: true, likeCount: 5 });
+    await done;
+    expect(commentCountOf(queryClient, commentId)).toBe(5);
+
+    // A press that fails after the pages landed puts back the count from before it.
+    const again = seeded();
+    const other = await newCommentOnItsWay(again);
+    const failing = deferred<LikeState>();
+    const failed = toggle(again, () => failing.promise)
+      .mutate(onComment(true))
+      .catch((error: unknown) => error);
+    await settle();
+    other.arrive();
+    await other.written;
+    expect(commentCountOf(again, commentId)).toBe(3);
+    failing.reject(refusal(503, 'INTERNAL'));
+    expect(await failed).toBeInstanceOf(ApiError);
+    expect(commentCountOf(again, commentId)).toBe(2);
+    expect(threadIds(again)).toEqual([commentId, OLDER, MINE]);
   });
 });
