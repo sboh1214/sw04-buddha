@@ -371,7 +371,8 @@ const NEVER_SHOWN: readonly string[] = [
   'report on A',
   'moderator id',
   // #185: why an operator lifted or shortened A's writing restriction — the operators' record;
-  // A reads the end as it stands, nothing of who changed it or why (ADR-0082).
+  // A reads the end as it stands, that it was lifted early or shortened and the end it was given
+  // (owner decision 2026-10-23 answer 4), nothing of who changed it or why (ADR-0082).
   'lift reason',
 ];
 

@@ -29,7 +29,8 @@ export type RestrictedWrite =
   | 'profile'
   /**
    * A late pick on the onboarding's interests step (ADR-0078 3rd answer 1): a public profile
-   * item's refusal, but that screen has nothing to clear — 건너뛰기 is what stays open there.
+   * item's refusal, but that screen has nothing to clear — 건너뛰기 is what stays open there, and
+   * the refusal says so (owner decision 2026-10-23 answer 9).
    */
   | 'onboardingInterests'
   /** A new nickname (MY 설정): nothing to clear. */
@@ -102,11 +103,24 @@ export function restrictionEndText(
 }
 
 /**
+ * What stays open, said after the end: clearing a public profile item in MY 설정 (ADR-0069 decision
+ * 7, kept by owner decision 2026-10-23 answer 8) and 건너뛰기 on the onboarding's interests step
+ * (owner decision 2026-10-23 answer 9). Nothing for a post's writing nor for a nickname.
+ */
+const STILL_OPEN: Readonly<Record<RestrictedWrite, string | undefined>> = {
+  writing: undefined,
+  profile: copy.errRestrictedClearAllowed,
+  onboardingInterests: copy.errRestrictedSkipAllowed,
+  nickname: undefined,
+};
+
+/**
  * What a refused write says under a writing restriction, or undefined when the answer is not
- * RESTRICTED: what is closed (`write`), until when — '(…까지).' or '(무기한).' — and, for a public
- * profile item in MY 설정, that clearing it stays open (ADR-0069 decision 7). No appeal sentence and
- * no deadline: the way to 조치·신고 내역 goes under it (`isRestricted`). A RESTRICTED whose details
- * do not read says the rest without the end.
+ * RESTRICTED: what is closed (`write`), until when — '(…까지).' or '(무기한).' — and what stays open
+ * (`STILL_OPEN`): for a public profile item in MY 설정, that clearing it does; on the onboarding's
+ * interests step, that 건너뛰기 does. No appeal sentence and no deadline: the way to 조치·신고 내역
+ * goes under it (`isRestricted`). A RESTRICTED whose details do not read says the rest without the
+ * end.
  */
 export function restrictedMessage(
   error: unknown,
@@ -119,8 +133,8 @@ export function restrictedMessage(
     restriction.endsAt === undefined
       ? '.'
       : `(${restrictionTermText(restriction.endsAt, formatDate)}).`;
-  const clear = write === 'profile' ? ` ${copy.errRestrictedClearAllowed}` : '';
-  return `${LEAD[write]}${term}${clear}`;
+  const open = STILL_OPEN[write];
+  return `${LEAD[write]}${term}${open === undefined ? '' : ` ${open}`}`;
 }
 
 /**

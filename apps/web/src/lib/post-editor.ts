@@ -182,20 +182,21 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * by its length before the route (413, twice the limit) is the size; the cookie as another account
  * is a stale screen; a writing restriction (RESTRICTED, #185, ADR-0082 — refused before the image
  * is looked at) says what it closes and until when in the member's zone (`formatDate`) or 무기한
- * (`restrictedMessage` — the toast adds the way to 조치·신고 내역, `isRestricted`): a post's image as
- * the post's writing (`restricted: 'writing'`, the default), the profile image as a public profile
- * item (`'profile'`, whose deletion stays open); a refusal for the onboarding says nothing while
- * the onboarding gate takes the account to its step (`gateMoves` — `['me']`, read again after the
- * refusal, names a step left) and the form keeps its draft in the tab, as for a refused send (owner
- * decision 2026-10-21), and when the gate stays — that read failed — says what a refused send says
- * (owner decision 2026-10-21 answer 6); an upload given up while it waited to be sent again, the
- * editor gone meanwhile (`UploadAbandoned`), says nothing, as the files a batch never sends once
- * the editor sends no more; anything else is a failed upload, said apart from an unreachable
- * server — the API busy (a 429: the uploads it receives, the account's three in flight, its memory,
- * the conversion queue) still after the editor sent it again (`sendRetrying`, owner decision
- * 2026-10-22 (2차) answer 3), and a body cut for idling or for its deadline (408), included: that
- * file failed, the batch goes on. `refusalMessage` words a reason: a post image's by default, the
- * profile image's (#141, lib/profile.ts) names its own three types.
+ * (`restrictedMessage`): a post's image as the post's writing (`restricted: 'writing'`, the default
+ * — its toast says that alone, `imageUploadToast`), the profile image as a public profile item
+ * (`'profile'`, whose deletion stays open — its card adds the way to 조치·신고 내역, `isRestricted`);
+ * a refusal for the onboarding says nothing while the onboarding gate takes the account to its
+ * step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and the form keeps
+ * its draft in the tab, as for a refused send (owner decision 2026-10-21), and when the gate stays
+ * — that read failed — says what a refused send says (owner decision 2026-10-21 answer 6); an
+ * upload given up while it waited to be sent again, the editor gone meanwhile (`UploadAbandoned`),
+ * says nothing, as the files a batch never sends once the editor sends no more; anything else is
+ * a failed upload, said apart from an unreachable server — the API busy (a 429: the uploads it
+ * receives, the account's three in flight, its memory, the conversion queue) still after the
+ * editor sent it again (`sendRetrying`, owner decision 2026-10-22 (2차) answer 3), and a body cut
+ * for idling or for its deadline (408), included: that file failed, the batch goes on.
+ * `refusalMessage` words a reason: a post image's by default, the profile image's (#141,
+ * lib/profile.ts) names its own three types.
  */
 export function imageUploadErrorMessage(
   error: unknown,
@@ -217,6 +218,22 @@ export function imageUploadErrorMessage(
     return gateMoves ? undefined : copy.errPostOnboarding;
   }
   return isApiUnreachable(error) ? copy.errNetwork : copy.errImageUpload;
+}
+
+/**
+ * The toast a refused post image shows (PostEditor), or none: `imageUploadErrorMessage`'s sentence
+ * and nothing more — none where that says nothing (the onboarding gate moving, an upload given up).
+ * A writing restriction's (#185) says what it closes and its end, with no button to 조치·신고 내역 —
+ * owner decision 2026-10-23 answer 12 «글 이미지 업로드 거절 토스트 → 단추 없이 끝나는 때만» (the write
+ * page's banner has that way; ADR-0082 7-16).
+ */
+export function imageUploadToast(
+  error: unknown,
+  gateMoves: boolean,
+  formatDate: (iso: string) => string,
+): { type: 'error'; title: string } | undefined {
+  const title = imageUploadErrorMessage(error, gateMoves, formatDate);
+  return title === undefined ? undefined : { type: 'error', title };
 }
 
 /**

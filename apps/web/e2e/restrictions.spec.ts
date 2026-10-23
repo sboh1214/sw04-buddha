@@ -21,20 +21,29 @@ import {
  *   default, with a reason); the member's write page and MY summary show the banner with the end
  *   and the way to 조치·신고 내역 — no reason, no appeal (owner decision 2026-10-22 evening); a new
  *   post, an edit of their own, a 댓글 and a new 소개 are refused with the end and that way, no
- *   appeal sentence; a like and deleting their own stay open; 조치·신고 내역 lists it '진행 중';
- *   the operator lifts it early with a reason of their own — the banner goes and the member writes
- *   again (the brief: «admin restricts a user for 1 day → write button shows restriction message,
- *   likes still work, admin lifts → can write»);
+ *   appeal sentence; a post image is refused in a toast with the end and no button (owner
+ *   decision 2026-10-23 answer 12); a like and deleting their own stay open; 조치·신고 내역 lists it
+ *   '진행 중'; the operator lifts it early with a reason of their own — the banner goes, the member
+ *   writes again, and 조치·신고 내역 says '조기 해제됨', the changed end and the end it was given,
+ *   not the reason (owner decision 2026-10-23 answer 4; the brief: «admin restricts a user for 1
+ *   day → write button shows restriction message, likes still work, admin lifts → can write»);
  * - from a reported post's page the operator restricts its author 무기한 about that post — its
  *   pending report is resolved (조치함) — the member's banner and refusal say 무기한, clearing the
  *   소개 stays open, and the operator's 감경 brings the end forward to a time, which the member
- *   reads as the new end.
+ *   reads as the new end with '감경됨' and the end it was given (무기한) — and, lifted after,
+ *   '조기 해제됨' with that same original end.
  *
  * Every rule's branch (each blocked and open write, the end by the clock, the later end governing,
  * the refusals of a 감경 and a lift, the audit rows, the profile lock) is the API's test
  * (restrictions.controller.test.ts); the wording's is the web's unit tests (lib/restriction.test.ts).
  * Every report a test files is processed before it ends.
  */
+
+/** A 1×1 PNG, as posts.spec.ts sends: refused here before it is looked at. */
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 /** A post straight at the API with the context's cookie. */
 async function postThroughApi(
@@ -156,7 +165,7 @@ async function sendRestriction(adminPage: Page, userId: string): Promise<Restric
 }
 
 test.describe('작성 제한', () => {
-  test('운영자가 회원 화면에서 1일 작성 제한을 걸면 회원의 글쓰기 화면과 MY 요약에 끝나는 때와 조치·신고 내역 링크의 안내 띠가 보이고, 글·수정·댓글·소개의 새 값은 끝나는 때와 조치·신고 내역 링크로 거절되며 좋아요와 지우기는 그대로이고, 운영자가 조기 해제하면 띠가 사라지고 다시 쓴다', async ({
+  test('운영자가 회원 화면에서 1일 작성 제한을 걸면 회원의 글쓰기 화면과 MY 요약에 끝나는 때와 조치·신고 내역 링크의 안내 띠가 보이고, 글·수정·댓글·소개의 새 값은 끝나는 때와 조치·신고 내역 링크로, 글 이미지는 단추 없는 토스트로 거절되며 좋아요와 지우기는 그대로이고, 운영자가 조기 해제하면 띠가 사라지고 다시 쓰며 조치·신고 내역에 조기 해제됨과 원래 끝나는 때가 보인다', async ({
     admin,
     page,
     browser,
@@ -234,6 +243,21 @@ test.describe('작성 제한', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      // A post image: refused in a toast that says the end and has no button — the banner above
+      // has the way to 내역 (owner decision 2026-10-23 answer 12). Nothing goes into the editor.
+      await page
+        .getByTestId('post-editor-file')
+        .setInputFiles({ name: 'evidence.png', mimeType: 'image/png', buffer: PNG });
+      const toast = page.locator('[data-scope="toast"][data-part="root"]').filter({
+        hasText: writing,
+      });
+      await expect(toast).toBeVisible();
+      await expect(toast.locator('[data-part="action-trigger"]')).toHaveCount(0);
+      await expect(toast.getByRole('button', { name: copy.myModerationOpen })).toHaveCount(0);
+      await expect(toast).not.toContainText(copy.myModerationOpen);
+      await expect(
+        page.getByTestId('post-editor-content').locator('img[data-media-id]'),
+      ).toHaveCount(0);
 
       // An edit of their own post: refused the same way.
       await page.goto(`/community/posts/${ownPost}/edit`);
@@ -294,6 +318,9 @@ test.describe('작성 제한', () => {
       await expect(item.getByTestId('my-action-appeal')).toBeVisible();
       // Given about nothing in particular: no subject — not '내 프로필'.
       await expect(item.getByTestId('my-action-subject')).toHaveCount(0);
+      // Its end never changed: no 조기 해제됨·감경됨, no original end.
+      await expect(item.getByTestId('my-action-end-change')).toHaveCount(0);
+      await expect(item.getByTestId('my-action-original-ends')).toHaveCount(0);
 
       // --- the operator lifts it early, with a reason of their own.
       await adminPage.reload();
@@ -305,7 +332,16 @@ test.describe('작성 제한', () => {
         copy.errModerationRecordRequired,
       );
       await adminPage.getByTestId('moderation-record').fill(`소명을 받아들였습니다 ${tag}`);
+      const liftAnswer = adminPage.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname ===
+            `/api/v1/admin/moderation/actions/${restriction.id}/lift`,
+      );
       await adminPage.getByTestId('moderation-submit').click();
+      const liftResponse = await liftAnswer;
+      expect(liftResponse.status(), await liftResponse.text()).toBe(200);
+      const liftedEnd = ((await liftResponse.json()) as { data: Restriction }).data.endsAt!;
       await expect(adminPage.getByText(copy.adminModerationLifted)).toBeVisible();
       await expect(row.getByTestId('moderation-action-standing')).toHaveCount(0);
       await expect(row.getByTestId('moderation-action-lift')).toHaveCount(0);
@@ -324,15 +360,25 @@ test.describe('작성 제한', () => {
       await page.getByTestId('post-submit').click();
       await expect(page).toHaveURL(/\/community\/posts\/[0-9a-f-]{36}$/);
       await expect(page.getByTestId('post-title')).toHaveText(`해제 뒤 글 ${tag}`);
+      // 조치·신고 내역: 조기 해제됨, the changed end and the end it was given — not the reason
+      // (owner decision 2026-10-23 answer 4).
       await page.goto('/my/moderation');
       await expect(item.getByTestId('my-action-standing')).toHaveCount(0);
       await expect(item.getByTestId('my-action-cancelled')).toHaveCount(0);
+      await expect(item.getByTestId('my-action-end-change')).toHaveText(copy.moderationEndLifted);
+      await expect(item.getByTestId('my-action-ends')).toContainText(kst(liftedEnd));
+      const originalEnds = item.getByTestId('my-action-original-ends');
+      await expect(originalEnds).toContainText(copy.moderationOriginalEndsAt);
+      await expect(originalEnds).toContainText(kst(endsAt));
+      await expect(page.getByTestId('my-moderation')).not.toContainText(
+        `소명을 받아들였습니다 ${tag}`,
+      );
     } finally {
       await adminContext.close();
     }
   });
 
-  test('신고된 글의 운영 화면에서 그 작성자에게 무기한 작성 제한을 걸면 그 글의 신고가 조치함으로 닫히고, 회원은 무기한의 띠와 거절을 보며 소개는 비울 수 있고, 운영자가 감경하면 회원은 앞당긴 끝나는 때를 본다', async ({
+  test('신고된 글의 운영 화면에서 그 작성자에게 무기한 작성 제한을 걸면 그 글의 신고가 조치함으로 닫히고, 회원은 무기한의 띠와 거절을 보며 소개는 비울 수 있고, 운영자가 감경하면 회원은 앞당긴 끝나는 때와 감경됨·원래 끝나는 때(무기한)를 본다', async ({
     admin,
     secondAdmin,
     page,
@@ -427,14 +473,22 @@ test.describe('작성 제한', () => {
         copy.restrictionStanding,
       );
 
-      // --- the member reads the new end; nothing says who changed it or why.
+      // --- the member reads the new end, 감경됨 and the end it was given (무기한); nothing says
+      // who changed it or why (owner decision 2026-10-23 answer 4).
       await gotoWithRestrictionRead(page, '/my');
       await expect(page.getByTestId('my-sanction-banner-ends')).toHaveText(
         `${copy.moderationEndsAt} ${kst(newEnd)}`,
       );
       await page.goto('/my/moderation');
       const item = page.getByTestId(`my-action-${restriction.id}`);
+      await expect(item.getByTestId('my-action-standing')).toHaveText(copy.restrictionStanding);
+      await expect(item.getByTestId('my-action-end-change')).toHaveText(
+        copy.moderationEndShortened,
+      );
       await expect(item.getByTestId('my-action-ends')).toContainText(kst(newEnd));
+      await expect(item.getByTestId('my-action-original-ends')).toContainText(
+        copy.restrictionIndefinite,
+      );
       await expect(item.getByTestId('my-action-subject')).toHaveText(postTitle);
       await expect(page.getByTestId('my-moderation')).not.toContainText(
         `이의를 일부 받아들였습니다 ${tag}`,
@@ -445,6 +499,13 @@ test.describe('작성 제한', () => {
       await adminPage.getByTestId('moderation-record').fill(`시험 정리 ${tag}`);
       await adminPage.getByTestId('moderation-submit').click();
       await expect(adminPage.getByText(copy.adminModerationLifted)).toBeVisible();
+      // Lifted after its 감경: 조기 해제됨, the end it was given still 무기한.
+      await page.reload();
+      await expect(item.getByTestId('my-action-end-change')).toHaveText(copy.moderationEndLifted);
+      await expect(item.getByTestId('my-action-standing')).toHaveCount(0);
+      await expect(item.getByTestId('my-action-original-ends')).toContainText(
+        copy.restrictionIndefinite,
+      );
     } finally {
       await adminContext.close();
     }

@@ -154,7 +154,15 @@ export const moderationActions = pgTable(
  * the end set to the lift's time). The end before (`previous_ends_at`, null for 무기한) and after,
  * the operator's reason (operators only, as a cancellation's) and who and when. Written in the
  * transaction that moves `moderation_actions.ends_at`, with the `admin_actions` row; operators read
- * it with the action. The member reads only the end as it stands now.
+ * it with the action. The member reads the end as it stands (`moderation_actions.ends_at`) and,
+ * from these rows, the latest change's `kind` ('조기 해제됨'·'감경됨') and the first change's
+ * `previous_ends_at` as the end it was given (owner decision 2026-10-23 answer 4) — never the
+ * reason, the operator or the time — for a cancelled restriction too (the web hides it, ADR-0082
+ * 7-17). So the rows go with their action: the member's 조치·신고 내역 reads them.
+ *
+ * An action's changes are ordered by their ends, never by `created_at`: each brings the end
+ * strictly forward (the CHECK below and the trigger of migration 0039, under the action's lock),
+ * while two made one behind the other can share a millisecond of the clock.
  *
  * Never rewritten: buddha_app loses UPDATE (migration 0039); DELETE stays for #184, which removes
  * these rows before their action (RESTRICT).
@@ -183,7 +191,7 @@ export const restrictionEndChanges = pgTable(
       'restriction_end_changes_earlier_check',
       sql`${t.previousEndsAt} IS NULL OR ${t.endsAt} < ${t.previousEndsAt}`,
     ),
-    /** An action's changes in order, read with it. */
+    /** An action's changes, read with it (ordered by their ends — above). */
     index('restriction_end_changes_action_id_created_at_idx').on(t.actionId, t.createdAt),
   ],
 );

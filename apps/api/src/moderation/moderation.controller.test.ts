@@ -305,6 +305,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         subject: { type: 'post', id: post.id, title: '근거 글', excerpt: '본문 첫 줄' },
         createdAt: action.createdAt,
         endsAt: null,
+        endChange: null,
         cancelledAt: null,
       });
       const body = (await read('/me/moderation/actions', author)).body;

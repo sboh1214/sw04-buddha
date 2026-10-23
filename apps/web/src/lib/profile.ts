@@ -373,9 +373,9 @@ export function profileImageRefusalMessage(reason: ImageRefusal): string {
  *   asked `['me']` again and the stepper follows it; the line stays only when `['me']` did not move;
  * - RESTRICTED: a late pick — past the 24 hours after the nickname step, a change as MY 설정's is
  *   (ADR-0078 3rd answer 1) — under a writing restriction (#185, ADR-0082): until when in the
- *   member's zone (`formatDate`) or 무기한, and the way to 조치·신고 내역 under it (`restricted`).
- *   Not MY 설정's sentence that clearing stays open: this screen has nothing to clear, 건너뛰기 is
- *   what stays open (`onboardingInterests`);
+ *   member's zone (`formatDate`) or 무기한, that 건너뛰기 stays open (owner decision 2026-10-23
+ *   answer 9), and the way to 조치·신고 내역 under it (`restricted`). Not MY 설정's sentence that
+ *   clearing stays open: this screen has nothing to clear (`onboardingInterests`);
  * - the cookie of another account, and anything else.
  */
 export function interestsStepFailure(

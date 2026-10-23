@@ -317,13 +317,13 @@ describe('MY 설정 for an account facing a re-consent (owner decision 2026-10-2
 });
 
 describe('the onboarding’s interests step: a refused answer', () => {
-  it('says a writing restriction on a late pick with its end, or 무기한, and the way to 조치·신고 내역 — nothing to clear on that screen (#185)', () => {
+  it('says a writing restriction on a late pick with its end, or 무기한, that 건너뛰기 stays open, and the way to 조치·신고 내역 — nothing to clear on that screen (#185)', () => {
     // A pick past the 24 hours after the nickname step is a change (ADR-0078 3rd answer 1).
     const endsAt = '2026-10-23T06:00:00.000Z';
     expect(
       interestsStepFailure(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt }), formatKst),
     ).toEqual({
-      message: `${copy.errRestrictedProfile}(${formatKst(endsAt)}까지).`,
+      message: `${copy.errRestrictedProfile}(${formatKst(endsAt)}까지). ${copy.errRestrictedSkipAllowed}`,
       restricted: true,
       refetchCategories: false,
     });
@@ -331,8 +331,10 @@ describe('the onboarding’s interests step: a refused answer', () => {
       refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }),
       formatKst,
     );
+    // Owner decision 2026-10-23 answer 9: '건너뛰기는 할 수 있습니다.' after the end.
     expect(indefinite).toEqual({
-      message: `${copy.errRestrictedProfile}(무기한).`,
+      message:
+        '작성 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다(무기한). 건너뛰기는 할 수 있습니다.',
       restricted: true,
       refetchCategories: false,
     });

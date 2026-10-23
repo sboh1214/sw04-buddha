@@ -78,6 +78,41 @@ export function itemStateOf(
   return publicStateOf(item, hasReplies);
 }
 
+/** A writing restriction's end changes, read with it (#185). */
+const changeRows = schema.restrictionEndChanges;
+
+/**
+ * How a writing restriction was brought forward, as its member reads it (#185, owner decision
+ * 2026-10-23 answer 4: '조기 해제됨'·'감경됨', the changed end and the original end — the reason is
+ * the operators'), as two columns of the member's actions' own statement (`myActions`): the kind of
+ * the latest change (`endChangeKind` — null when the end never changed, and for every other type)
+ * — a lift ends the restriction, so nothing follows one — and the end it was given, the first
+ * change's `previous_ends_at` (`originalEndsAt`, null for 무기한). Nothing more is read: neither the
+ * reason nor the operator nor the time reaches the member.
+ *
+ * The changes are ordered by the end each gave, never by their time (`endChanges` the same): every
+ * change brings the end strictly forward — `restriction_end_changes_earlier_check` and the trigger
+ * of migration 0039, under the action's lock, each change's `previous_ends_at` the end the one
+ * before gave — so the latest change gives the earliest end and the first the latest. Their times
+ * do not order them: a change right behind another can read the same millisecond of the clock, or
+ * an earlier one should the clock step back (`strictlyAfter`, infra/db/clock.ts), and the random
+ * ids order nothing — a lift could then read as made before the 감경 it followed.
+ *
+ * Only for a select that joins another table, as `myActions` does: in a one-table select drizzle
+ * writes a field's columns without their table, and the subqueries' `id` would then be their own
+ * row's — every action read as never changed.
+ */
+const memberEndChange = {
+  endChangeKind: sql<string | null>`(
+    SELECT ${changeRows.kind} FROM ${changeRows}
+     WHERE ${changeRows.actionId} = ${schema.moderationActions.id}
+     ORDER BY ${changeRows.endsAt} ASC LIMIT 1)`,
+  originalEndsAt: sql<Date | null>`(
+    SELECT ${changeRows.previousEndsAt} FROM ${changeRows}
+     WHERE ${changeRows.actionId} = ${schema.moderationActions.id}
+     ORDER BY ${changeRows.endsAt} DESC LIMIT 1)`.mapWith(changeRows.previousEndsAt),
+};
+
 /** The report queue's group: the target type and its key, one text (`post:<id>`). */
 const GROUP_KEY = sql<string>`${schema.reports.targetType}::text || ':' || ${schema.reports.targetKey}`;
 
@@ -113,7 +148,12 @@ export class ModerationReadsService {
   /**
    * `GET /me/moderation/actions`: the actions taken on the member, newest first, each with what it
    * was about — their own item, the title and start of its text, or nothing of it once they
-   * deleted it (MY shows no deleted item, #45-5).
+   * deleted it (MY shows no deleted item, #45-5) — and, for a writing restriction an operator
+   * lifted early or shortened, how its end was brought forward (`memberEndChange`).
+   *
+   * One statement: the end a restriction has now and how it was brought forward are read from one
+   * snapshot. Read apart, a lift committed between the two would pair the end before it with
+   * '조기 해제됨' — '진행 중' and lifted on one card, a state that never was.
    */
   async myActions(userId: string, query: CursorQuery): Promise<Page<MyModerationAction>> {
     const { moderationActions, posts, postComments } = schema;
@@ -129,6 +169,7 @@ export class ModerationReadsService {
         createdAt: moderationActions.createdAt,
         endsAt: moderationActions.endsAt,
         cancelledAt: moderationActions.cancelledAt,
+        ...memberEndChange,
         postTitle: posts.title,
         postText: cardText(posts.bodyText),
         postDeletedAt: posts.deletedAt,
@@ -184,6 +225,13 @@ export class ModerationReadsService {
           subject,
           createdAt: row.createdAt.toISOString(),
           endsAt: row.endsAt?.toISOString() ?? null,
+          endChange:
+            row.endChangeKind === null
+              ? null
+              : {
+                  kind: row.endChangeKind as RestrictionEndChangeKind,
+                  originalEndsAt: row.originalEndsAt?.toISOString() ?? null,
+                },
           cancelledAt: row.cancelledAt?.toISOString() ?? null,
         };
       }),
@@ -783,7 +831,8 @@ export class ModerationReadsService {
 
   /**
    * The changes of the writing restrictions `actionIds` (#185: shortenings and lifts), oldest first
-   * per action, with the operator who made each.
+   * per action — by the end each gave, the latest first, as `memberEndChange` orders them, never by
+   * their time — with the operator who made each.
    */
   private async endChanges(executor: Executor, actionIds: string[]) {
     const byAction = new Map<
@@ -814,7 +863,7 @@ export class ModerationReadsService {
       .from(restrictionEndChanges)
       .leftJoin(changerProfile, eq(changerProfile.userId, restrictionEndChanges.createdBy))
       .where(inArray(restrictionEndChanges.actionId, actionIds))
-      .orderBy(asc(restrictionEndChanges.createdAt), asc(restrictionEndChanges.id));
+      .orderBy(desc(restrictionEndChanges.endsAt));
     for (const { actionId, ...change } of rows) {
       const list = byAction.get(actionId) ?? [];
       list.push(change);

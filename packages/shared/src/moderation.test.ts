@@ -33,6 +33,7 @@ import {
   moderationActionBodySchema,
   myModerationActionSchema,
   myReportSchema,
+  myRestrictionEndChangeSchema,
   myRestrictionSchema,
   nicknameHoldEndOf,
   reportTargetSchema,
@@ -219,9 +220,46 @@ describe('the writing restriction (#185)', () => {
     }
   });
 
-  it('shows operators every change of an end, the member none', () => {
+  it('shows operators every change of an end, the member its kind and the end it was given only', () => {
     expect(Object.keys(adminModerationActionSchema.shape)).toContain('endChanges');
     expect(Object.keys(myModerationActionSchema.shape)).not.toContain('endChanges');
+    // Owner decision 2026-10-23 answer 4: '조기 해제됨'·'감경됨', the changed end (`endsAt`) and the
+    // original end — never the reason, the operator or when it changed.
+    const given = {
+      id: ID,
+      type: 'writing_restriction',
+      reason: { code: 'spam', note: null },
+      subject: null,
+      createdAt: AT,
+      endsAt: AT,
+      cancelledAt: null,
+    };
+    const lifted = myModerationActionSchema.parse({
+      ...given,
+      endChange: {
+        kind: 'lift',
+        originalEndsAt: '2026-10-30T00:00:00.000Z',
+        previousEndsAt: '2026-10-29T00:00:00.000Z',
+        reason: '소명 확인',
+        createdBy: { id: 'admin-1', nickname: '운영자' },
+        createdAt: AT,
+      },
+    });
+    expect(lifted.endChange).toEqual({ kind: 'lift', originalEndsAt: '2026-10-30T00:00:00.000Z' });
+    expect(
+      myModerationActionSchema.parse({
+        ...given,
+        endChange: { kind: 'shorten', originalEndsAt: null },
+      }).endChange,
+    ).toEqual({ kind: 'shorten', originalEndsAt: null });
+    expect(myModerationActionSchema.parse({ ...given, endChange: null }).endChange).toBeNull();
+    expect(
+      myModerationActionSchema.safeParse({
+        ...given,
+        endChange: { kind: 'cancel', originalEndsAt: null },
+      }).success,
+    ).toBe(false);
+    expect(myModerationActionSchema.safeParse(given).success).toBe(false);
   });
 });
 
@@ -442,12 +480,13 @@ describe('what a member reads', () => {
       subject: { type: 'post', id: OTHER, title: null, excerpt: '본문' },
       createdAt: AT,
       endsAt: null,
+      endChange: null,
       cancelledAt: null,
       createdBy: 'admin-1',
       reportCount: 3,
     });
     expect(Object.keys(action).sort()).toEqual(
-      ['cancelledAt', 'createdAt', 'endsAt', 'id', 'reason', 'subject', 'type'].sort(),
+      ['cancelledAt', 'createdAt', 'endChange', 'endsAt', 'id', 'reason', 'subject', 'type'].sort(),
     );
     const report = myReportSchema.parse({
       id: ID,
@@ -468,9 +507,11 @@ describe('what a member reads', () => {
   it('names no excluded feature: counts for operators, never a score (N04 §4)', () => {
     for (const name of [
       ...Object.keys(myModerationActionSchema.shape),
+      ...Object.keys(myRestrictionEndChangeSchema.shape),
       ...Object.keys(myReportSchema.shape),
       ...Object.keys(adminReportGroupSchema.shape),
       'MyModerationAction',
+      'MyRestrictionEndChange',
       'MyReport',
       'ReportTarget',
       'AdminReportGroup',

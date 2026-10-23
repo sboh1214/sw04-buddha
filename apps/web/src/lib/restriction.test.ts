@@ -76,9 +76,22 @@ describe('RESTRICTED', () => {
     expect(restrictedMessage(restricted(END), 'profile', formatKst)).toBe(
       `작성 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다(${formatKst(END)}까지). 비우거나 지우는 것은 할 수 있습니다.`,
     );
-    // The onboarding's interests step: nothing on that screen to clear.
+    // The onboarding's interests step: nothing on that screen to clear — 건너뛰기 stays open
+    // (owner decision 2026-10-23 answer 9).
     expect(restrictedMessage(restricted(END), 'onboardingInterests', formatKst)).toBe(
-      `작성 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다(${formatKst(END)}까지).`,
+      `작성 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다(${formatKst(END)}까지). 건너뛰기는 할 수 있습니다.`,
+    );
+    expect(restrictedMessage(restricted(null), 'onboardingInterests', formatKst)).toBe(
+      '작성 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다(무기한). 건너뛰기는 할 수 있습니다.',
+    );
+    // Each sentence of what stays open on its own screen only.
+    for (const write of ['writing', 'nickname'] as const) {
+      const message = restrictedMessage(restricted(END), write, formatKst) ?? '';
+      expect(message).not.toContain(copy.errRestrictedClearAllowed);
+      expect(message).not.toContain(copy.errRestrictedSkipAllowed);
+    }
+    expect(restrictedMessage(restricted(END), 'profile', formatKst)).not.toContain(
+      copy.errRestrictedSkipAllowed,
     );
     expect(restrictedMessage(restricted(null), 'nickname', formatKst)).toBe(
       '작성 제한 중에는 닉네임을 바꿀 수 없습니다(무기한).',

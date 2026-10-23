@@ -1227,7 +1227,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one and its cancellation. Never the operator, a report or a reporter */
+        /** The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. Never the operator, a report, a reporter, nor why an end changed */
         get: operations["listMyModerationActions"];
         put?: never;
         post?: never;
@@ -2734,6 +2734,7 @@ export type components = {
             cancelledAt: string | null;
             /** Format: date-time */
             createdAt: string;
+            endChange: components["schemas"]["MyRestrictionEndChange"] | null;
             /** Format: date-time */
             endsAt: string | null;
             /** Format: uuid */
@@ -2776,6 +2777,11 @@ export type components = {
         };
         MyRestriction: {
             restriction: components["schemas"]["RestrictedDetails"] | null;
+        };
+        MyRestrictionEndChange: {
+            kind: components["schemas"]["RestrictionEndChangeKind"];
+            /** Format: date-time */
+            originalEndsAt: string | null;
         };
         NextPath: string;
         Nickname: string;

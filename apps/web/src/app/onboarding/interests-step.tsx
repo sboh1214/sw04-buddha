@@ -24,10 +24,10 @@ import { type Refusal } from '@/lib/restriction';
  * (2nd) answer 2, ADR-0078). This screen's first answer is the account's first choice, which a
  * writing or an account restriction lets through (owner decision 2026-10-21 answer 4) — within 24
  * hours of the nickname step only (3rd answer 1): a screen left open past them sends a change, which
- * a writing restriction refuses (RESTRICTED, #185 — said with its end and the way to 조치·신고
- * 내역, `interestsStepFailure`; #139's account restriction joins it), while 건너뛰기 still answers
- * the step. MY 설정's card (#41) changes them later, a first pick there included, under the
- * restriction's rule.
+ * a writing restriction refuses (RESTRICTED, #185 — said with its end, that 건너뛰기 stays open
+ * (owner decision 2026-10-23 answer 9) and the way to 조치·신고 내역, `interestsStepFailure`; #139's
+ * account restriction joins it), while 건너뛰기 still answers the step. MY 설정's card (#41)
+ * changes them later, a first pick there included, under the restriction's rule.
  *
  * The categories are grouped as the header groups them (`groupCategories`): each top-level category
  * with its sub-categories under it, each a checkbox of its own (`InterestChecklist`, the list MY

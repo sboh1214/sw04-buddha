@@ -88,6 +88,7 @@ import {
   endChangeLabel,
   endChangeText,
   isRestriction,
+  myEndChangeView,
   restrictionStanding,
   restrictionTermOf,
   shortenEndDraft,
@@ -696,6 +697,7 @@ describe('the nickname reset’s hold on 조치·신고 내역 (owner decision 2
     subject: { type: 'profile' },
     createdAt: new Date(NOW - DAY_MS).toISOString(),
     endsAt: null,
+    endChange: null,
     cancelledAt: null,
     ...overrides,
   });
@@ -736,6 +738,7 @@ describe('a standing restriction (#185)', () => {
     subject: null,
     createdAt: '2026-10-20T00:00:00.000Z',
     endsAt: null,
+    endChange: null,
     cancelledAt: null,
     ...overrides,
   });
@@ -770,6 +773,45 @@ describe('a standing restriction (#185)', () => {
     ).toBe(true);
   });
 
+  it('tells the member a lifted or shortened one — 조기 해제됨 or 감경됨 and the end it was given — but not a cancelled one (owner decision 2026-10-23 answers 4 and 10)', () => {
+    const original = '2026-10-27T00:00:00.000Z';
+    expect(
+      myEndChangeView(
+        restriction({
+          endsAt: '2026-10-21T09:00:00.000Z',
+          endChange: { kind: 'lift', originalEndsAt: original },
+        }),
+      ),
+    ).toEqual({ label: '조기 해제됨', originalEndsAt: original });
+    // 무기한 brought to a term: the end it was given is 무기한 (null).
+    expect(
+      myEndChangeView(
+        restriction({
+          endsAt: '2026-10-23T00:00:00.000Z',
+          endChange: { kind: 'shorten', originalEndsAt: null },
+        }),
+      ),
+    ).toEqual({ label: '감경됨', originalEndsAt: null });
+    // Its end never changed: nothing more than '끝나는 때'.
+    expect(myEndChangeView(restriction({ endsAt: original }))).toBeNull();
+    // Cancelled: '취소됨' and when alone.
+    expect(
+      myEndChangeView(
+        restriction({
+          endsAt: '2026-10-21T09:00:00.000Z',
+          endChange: { kind: 'lift', originalEndsAt: original },
+          cancelledAt: '2026-10-21T10:00:00.000Z',
+        }),
+      ),
+    ).toBeNull();
+    // Another type has no end to change.
+    expect(
+      myEndChangeView(action({ endChange: { kind: 'shorten', originalEndsAt: original } })),
+    ).toBeNull();
+    expect(copy.moderationEndLifted).toBe('조기 해제됨');
+    expect(copy.moderationEndShortened).toBe('감경됨');
+  });
+
   it('takes no other type for a restriction, whatever its end', () => {
     expect(isRestriction('writing_restriction')).toBe(true);
     for (const type of [
@@ -795,6 +837,7 @@ describe('the warning banner (owner decision 2026-10-21)', () => {
     subject: null,
     createdAt: new Date(NOW - DAY_MS).toISOString(),
     endsAt: null,
+    endChange: null,
     cancelledAt: null,
     ...overrides,
   });

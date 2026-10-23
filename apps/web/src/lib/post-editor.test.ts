@@ -37,6 +37,7 @@ import {
   imagePrecheck,
   imageRefusalMessage,
   imageUploadErrorMessage,
+  imageUploadToast,
   insertHeldImage,
   isPostTextColor,
   landedDraftStart,
@@ -273,6 +274,49 @@ describe('a picked image', () => {
     expect(imageUploadErrorMessage(new UploadAbandoned(busy), false, formatKst)).toBeUndefined();
     expect(imageUploadErrorMessage(new UploadAbandoned(busy), true, formatKst)).toBeUndefined();
     expect(refusesImageBatch(new UploadAbandoned(busy))).toBe(false);
+  });
+
+  it('shows the refusal in a toast with no button, a writing restriction’s with its end alone (owner decision 2026-10-23 answer 12)', () => {
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    const restricted = (end: string | null) =>
+      new ApiError(403, {
+        code: 'RESTRICTED',
+        message: 'x',
+        details: { kind: 'writing', endsAt: end },
+      });
+    expect(imageUploadToast(restricted(endsAt), true, formatKst)).toStrictEqual({
+      type: 'error',
+      title: `${copy.errRestrictedWriting}(${formatKst(endsAt)}까지).`,
+    });
+    expect(imageUploadToast(restricted(null), true, formatKst)).toStrictEqual({
+      type: 'error',
+      title: `${copy.errRestrictedWriting}(무기한).`,
+    });
+    // No action, nor the way to 조치·신고 내역 in its words: the write page's banner has that way.
+    expect(imageUploadToast(restricted(endsAt), true, formatKst)).not.toHaveProperty('action');
+    expect(imageUploadToast(restricted(endsAt), true, formatKst)?.title).not.toContain(
+      copy.myModerationOpen,
+    );
+    const other = new ApiError(422, {
+      code: 'IMAGE_NOT_ALLOWED',
+      message: 'x',
+      details: { reason: 'size' },
+    } as never);
+    expect(imageUploadToast(other, true, formatKst)).toStrictEqual({
+      type: 'error',
+      title: copy.errImageSize,
+    });
+    // Nothing to say, nothing shown: the onboarding gate taking the account to its step.
+    const onboarding = new ApiError(409, {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'x',
+      details: { steps: ['consent'] },
+    } as never);
+    expect(imageUploadToast(onboarding, true, formatKst)).toBeUndefined();
+    expect(imageUploadToast(onboarding, false, formatKst)).toStrictEqual({
+      type: 'error',
+      title: copy.errPostOnboarding,
+    });
   });
 });
 

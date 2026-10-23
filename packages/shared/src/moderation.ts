@@ -348,13 +348,30 @@ export const myActionSubjectSchema = z
 export type MyActionSubject = z.infer<typeof myActionSubjectSchema>;
 
 /**
+ * How an operator brought a writing restriction's end forward, as the member reads it (#185, owner
+ * decision 2026-10-23 answer 4: «조기 해제·감경 → 회원의 조치·신고 내역에 '조기 해제됨'·'감경됨'과 바뀐
+ * 끝, 원래 끝을 보임(사유는 운영자만)»): the kind of the latest change — `lift` (조기 해제됨, which
+ * ends it: nothing changes it after) or `shorten` (감경됨) — and the end it was given
+ * (`originalEndsAt`, null for 무기한). The changed end is the action's `endsAt`. Never the reason,
+ * the operator, nor when or how many times it changed (operators' record, `RestrictionEndChange`).
+ */
+export const myRestrictionEndChangeSchema = z
+  .object({
+    kind: restrictionEndChangeKindSchema,
+    originalEndsAt: z.iso.datetime().nullable(),
+  })
+  .meta({ id: 'MyRestrictionEndChange' });
+export type MyRestrictionEndChange = z.infer<typeof myRestrictionEndChangeSchema>;
+
+/**
  * One action an operator took on the member (`GET /me/moderation/actions`, #45-13: «조치 종류·사유·
  * 기간·이의 방법»): its type, the reason — the report reason the operator picked and the explanation
  * they wrote (`HiddenReason`'s shape, ADR-0080) — when, its end (`endsAt`: a writing restriction's
  * as it stands now — brought forward when an operator lifted it or shortened it (#185) — and null
- * for 무기한; null for every type #50 takes, which have no end) and whether it was cancelled since.
- * The appeal deadline is `appealDeadlineOf(createdAt)`. Never the operator, nor a report or its
- * reporter, nor who changed the end or why (operators' record, ADR-0082).
+ * for 무기한; null for every type #50 takes, which have no end), how it was brought forward
+ * (`endChange`, #185) and whether it was cancelled since. The appeal deadline is
+ * `appealDeadlineOf(createdAt)`. Never the operator, nor a report or its reporter, nor who changed
+ * the end or why (operators' record, ADR-0082).
  */
 export const myModerationActionSchema = z
   .object({
@@ -364,6 +381,11 @@ export const myModerationActionSchema = z
     subject: myActionSubjectSchema.nullable(),
     createdAt: z.iso.datetime(),
     endsAt: z.iso.datetime().nullable(),
+    /**
+     * A writing restriction an operator lifted early or shortened: the latest change's kind and the
+     * end it was given. Null when its end never changed, and for every type #50 takes.
+     */
+    endChange: myRestrictionEndChangeSchema.nullable(),
     /** When an operator cancelled it; null while it stands. */
     cancelledAt: z.iso.datetime().nullable(),
   })

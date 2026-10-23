@@ -41,6 +41,7 @@ const action: MyModerationAction = {
   subject: { type: 'post', id: POST, title: '제목', excerpt: '본문' },
   createdAt: '2026-10-21T00:00:00.000Z',
   endsAt: null,
+  endChange: null,
   cancelledAt: null,
 };
 

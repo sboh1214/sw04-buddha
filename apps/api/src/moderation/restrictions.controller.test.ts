@@ -8,9 +8,12 @@
  * own, likes, reports, the 관심 등록, clearing a public item, the time zone and every read stay
  * open; a term ends by itself at its end (compared, nothing runs); restricted again, the one that
  * ends later governs; an operator lifts it early or brings its end forward (감경, 무기한 to a term
- * included) with a reason, each change recorded, and cancels it; never on themselves. A write in
- * flight holds the member's profile until it commits, so a restriction committed before it is
- * read and none slips past. Nothing of it is public. Skips when TEST_* are unset.
+ * included) with a reason, each change recorded, and cancels it; never on themselves. The member
+ * reads the end as it stands, '조기 해제됨' or '감경됨' and the end it was given, never the reason nor
+ * the operator (owner decision 2026-10-23 answer 4); the operator's member page lists every
+ * restriction standing (answer 1). A write in flight holds the member's profile until it commits,
+ * so a restriction committed before it is read and none slips past. Nothing of it is public. Skips
+ * when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -585,10 +588,44 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       const indefinite = await restrict(null);
       expect(indefinite.endsAt).toBeNull();
       expect(restrictedOf(await newPost())).toEqual({ kind: 'writing', endsAt: null });
-      // Lifting the one with no end leaves the month's.
+      // The member's page lists every one standing, each to lift, shorten or cancel on its own
+      // (owner decision 2026-10-23 answer 1) — all of the member's actions, not a page of them:
+      // twenty-one warnings after the four leave every one on it (a page of twenty, as the record
+      // of every action reads, would drop them).
+      for (let i = 0; i < 21; i += 1) {
+        actionOf(
+          await send(`/admin/moderation/users/${member.id}/warn`, { reason: 'spam' }, admin),
+        );
+      }
+      const { actions: listed } = adminUserModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/users/${member.id}`, admin)),
+      );
+      expect(listed).toHaveLength(25);
+      const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
+      expect(
+        listed
+          .filter((action) => action.type === 'writing_restriction')
+          .map((action) => ({
+            id: action.id,
+            endsAt: action.endsAt,
+            cancelledAt: action.cancelledAt,
+          }))
+          .sort(byId),
+      ).toEqual(
+        [indefinite, month, day, week]
+          .map((action) => ({ id: action.id, endsAt: action.endsAt, cancelledAt: null }))
+          .sort(byId),
+      );
+      // Lifting the one with no end leaves the month's; the oldest, under all those warnings, is
+      // lifted as well.
       actionOf(
         await send(`/admin/moderation/actions/${indefinite.id}/lift`, { reason: '해제' }, admin),
       );
+      expect(restrictedOf(await newPost())).toEqual({ kind: 'writing', endsAt: month.endsAt });
+      const weekLifted = actionOf(
+        await send(`/admin/moderation/actions/${week.id}/lift`, { reason: '해제' }, admin),
+      );
+      expect(weekLifted.endChanges.map((change) => change.kind)).toEqual(['lift']);
       expect(restrictedOf(await newPost())).toEqual({ kind: 'writing', endsAt: month.endsAt });
     });
 
@@ -644,9 +681,15 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
         createdAt: lifted.endsAt,
       });
       expect((await newPost()).statusCode).toBe(201);
-      // The member reads the end it has now, never who changed it or why.
+      // The member reads the end it has now, that it was lifted early and the end it was given
+      // (owner decision 2026-10-23 answer 4) — never who changed it or why.
       const [mine] = await myActions();
-      expect(mine).toMatchObject({ id: action.id, endsAt: lifted.endsAt, cancelledAt: null });
+      expect(mine).toMatchObject({
+        id: action.id,
+        endsAt: lifted.endsAt,
+        endChange: { kind: 'lift', originalEndsAt: action.endsAt },
+        cancelledAt: null,
+      });
       // Given about nothing in particular: about nothing, as a warning — not '내 프로필'.
       expect(mine?.subject).toBeNull();
       const body = (await read('/me/moderation/actions', member)).body;
@@ -721,8 +764,15 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
         },
       ]);
       expect(await audits('moderation_restriction_shorten')).toHaveLength(2);
+      // The member: the end now, 감경됨 and the end it was given (무기한) — not the end between,
+      // nor how many times (owner decision 2026-10-23 answer 4).
       const [mine] = await myActions();
       expect(mine?.endsAt).toBe(inAnHour.toISOString());
+      expect(mine?.endChange).toEqual({ kind: 'shorten', originalEndsAt: null });
+      const memberBody = (await read('/me/moderation/actions', member)).body;
+      expect(memberBody).not.toContain('이의 일부 인정');
+      expect(memberBody).not.toContain(inThreeDays.toISOString());
+      expect(memberBody).not.toContain(second.id);
       const rejected = await send(
         `/admin/moderation/actions/${indefinite.id}/shorten`,
         { endsAt: 'tomorrow', reason: '이의' },
@@ -735,6 +785,15 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
         admin,
       );
       expect(noReason.statusCode).toBe(400);
+      // Lifted after its 감경: 조기 해제됨, the end it was given still 무기한.
+      const lifted = actionOf(
+        await send(`/admin/moderation/actions/${indefinite.id}/lift`, { reason: '해제' }, admin),
+      );
+      const [after] = await myActions();
+      expect(after).toMatchObject({
+        endsAt: lifted.endsAt,
+        endChange: { kind: 'lift', originalEndsAt: null },
+      });
     });
 
     it('refuses another type, a cancelled one and the acting operator’s own', async () => {
@@ -814,8 +873,129 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       expect(cancelled).toMatchObject({ endsAt: action.endsAt, cancelReason: '이의 인정' });
       expect((await newPost()).statusCode).toBe(201);
       const [mine] = await myActions();
-      expect(mine).toMatchObject({ id: action.id, endsAt: action.endsAt });
+      expect(mine).toMatchObject({ id: action.id, endsAt: action.endsAt, endChange: null });
       expect(mine?.cancelledAt).not.toBeNull();
+      // Lifted, then cancelled: the member's answer still says how its end was brought forward —
+      // it was; only the screen draws none of it for a cancelled one (7-17, `myEndChangeView`).
+      const week = await restrict(7);
+      const lifted = actionOf(
+        await send(`/admin/moderation/actions/${week.id}/lift`, { reason: '해제' }, admin),
+      );
+      actionOf(
+        await send(`/admin/moderation/actions/${week.id}/cancel`, { reason: '이의 인정' }, admin),
+      );
+      const [liftedMine] = await myActions();
+      expect(liftedMine).toMatchObject({
+        id: week.id,
+        endsAt: lifted.endsAt,
+        endChange: { kind: 'lift', originalEndsAt: week.endsAt },
+      });
+      expect(liftedMine?.cancelledAt).not.toBeNull();
+    });
+
+    it('orders a restriction’s changes by the end each gave, not by their time: changes in one millisecond read as made (answer 4)', async () => {
+      // Two operators one behind the other on the action's lock can read one millisecond of the
+      // clock (or an earlier one, should it step back), and the ids are random. 무기한 → 3 days →
+      // lifted, and 무기한 → 7 days → 3 days, each change made through the API.
+      const inSevenDays = new Date(Date.now() + 7 * DAY_MS);
+      const inThreeDays = new Date(Date.now() + 3 * DAY_MS);
+      const shorten = async (actionId: string, endsAt: Date) =>
+        actionOf(
+          await send(
+            `/admin/moderation/actions/${actionId}/shorten`,
+            { endsAt: endsAt.toISOString(), reason: '이의 일부 인정' },
+            admin,
+          ),
+        );
+      const lifted = await restrict(null);
+      await shorten(lifted.id, inThreeDays);
+      const liftedEnd = actionOf(
+        await send(`/admin/moderation/actions/${lifted.id}/lift`, { reason: '해제' }, admin),
+      ).endsAt;
+      const twice = await restrict(null);
+      await shorten(twice.id, inSevenDays);
+      await shorten(twice.id, inThreeDays);
+      // Rewritten to one time, each later change's id before the first's: an order by time and id
+      // reads them backwards. (buddha_app deletes and inserts them; it never updates one.)
+      const { restrictionEndChanges } = schema;
+      const written = await t.db.select().from(restrictionEndChanges);
+      expect(written).toHaveLength(4);
+      const at = new Date(Math.max(...written.map((row) => row.createdAt.getTime())));
+      await t.db.delete(restrictionEndChanges);
+      await t.db.insert(restrictionEndChanges).values(
+        written.map((row) => ({
+          ...row,
+          id: `${row.previousEndsAt === null ? 'ffffffff' : '00000000'}-0000-4000-8000-00000000000${row.actionId === lifted.id ? '1' : '2'}`,
+          createdAt: at,
+        })),
+      );
+      // The member: 조기 해제됨 after its 감경, and twice 감경됨 — the end each was given 무기한.
+      const mine = new Map((await myActions()).map((action) => [action.id, action]));
+      expect(mine.get(lifted.id)).toMatchObject({
+        endsAt: liftedEnd,
+        endChange: { kind: 'lift', originalEndsAt: null },
+      });
+      expect(mine.get(twice.id)).toMatchObject({
+        endsAt: inThreeDays.toISOString(),
+        endChange: { kind: 'shorten', originalEndsAt: null },
+      });
+      // The operators: each restriction's changes in the order they were made.
+      const { actions } = adminUserModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/users/${member.id}`, admin)),
+      );
+      const changesOf = (actionId: string) =>
+        actions
+          .find((action) => action.id === actionId)
+          ?.endChanges.map((change) => [change.kind, change.previousEndsAt, change.endsAt]);
+      expect(changesOf(lifted.id)).toEqual([
+        ['shorten', null, inThreeDays.toISOString()],
+        ['lift', inThreeDays.toISOString(), liftedEnd],
+      ]);
+      expect(changesOf(twice.id)).toEqual([
+        ['shorten', null, inSevenDays.toISOString()],
+        ['shorten', inSevenDays.toISOString(), inThreeDays.toISOString()],
+      ]);
+    });
+
+    it('reads a restriction’s end and how it was brought forward at one instant: a lift committed while the member’s read waits is read whole', async () => {
+      const action = await restrict(7);
+      // Another connection holds the end changes' table, so a read of it waits, and meanwhile
+      // lifts the restriction as `changeEnd` does — the end and its change row — and commits.
+      // Read in two statements, the end before it would come with '조기 해제됨': '진행 중' and
+      // lifted on one card.
+      const holder = await t.db.$client.connect();
+      let open = true;
+      try {
+        await holder.query('BEGIN');
+        await holder.query('LOCK TABLE restriction_end_changes IN ACCESS EXCLUSIVE MODE');
+        const pending = read('/me/moderation/actions', member);
+        await waitForLockWaiter(holder, 'the member’s actions on the end changes');
+        const { rows } = await holder.query<{ ends_at: Date }>(
+          `UPDATE moderation_actions SET ends_at = date_trunc('milliseconds', now())
+            WHERE id = $1 RETURNING ends_at`,
+          [action.id],
+        );
+        const liftedAt = rows[0]!.ends_at;
+        await holder.query(
+          `INSERT INTO restriction_end_changes
+             (action_id, kind, previous_ends_at, ends_at, reason, created_by, created_at)
+           VALUES ($1, 'lift', $2, $3, '해제', $4, $3)`,
+          [action.id, action.endsAt, liftedAt, second.id],
+        );
+        await holder.query('COMMIT');
+        open = false;
+        const [mine] = dataOf<unknown[]>(await pending).map((item) =>
+          myModerationActionSchema.parse(item),
+        );
+        expect(mine).toMatchObject({
+          id: action.id,
+          endsAt: liftedAt.toISOString(),
+          endChange: { kind: 'lift', originalEndsAt: action.endsAt },
+        });
+      } finally {
+        if (open) await holder.query('ROLLBACK');
+        holder.release();
+      }
     });
   });
 
@@ -863,6 +1043,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
         subject: { type: 'post', id: post.id, title: '근거 글', excerpt: '본문 첫 줄' },
         createdAt: action.createdAt,
         endsAt: action.endsAt,
+        endChange: null,
         cancelledAt: null,
       });
       // Another member's item is not theirs; an unknown member is NOT_FOUND.

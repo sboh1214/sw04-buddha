@@ -1,7 +1,6 @@
 'use client';
 
 import { Link as ChakraLink } from '@chakra-ui/react';
-import { type Route } from 'next';
 import NextLink from 'next/link';
 import { copy } from '@/copy';
 import { MY_MODERATION_PATH } from '@/lib/moderation';
@@ -26,12 +25,4 @@ export function RefusalText({ message, restricted }: { message: string; restrict
       )}
     </>
   );
-}
-
-/**
- * The same way for a refusal said in a toast (a post's image, PostEditor): the toast's action,
- * which the toaster draws as its button — a toast carries no link of its own.
- */
-export function restrictedToastAction(navigate: (href: Route) => void) {
-  return { label: copy.myModerationOpen, onClick: () => navigate(MY_MODERATION_PATH) };
 }

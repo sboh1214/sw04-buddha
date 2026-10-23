@@ -567,6 +567,27 @@ export function restrictionStanding(
 }
 
 /**
+ * How the member's 조치·신고 내역 tells a writing restriction an operator brought forward (#185,
+ * owner decision 2026-10-23 answer 4: «조기 해제·감경 → 회원의 조치·신고 내역에 '조기 해제됨'·'감경됨'과
+ * 바뀐 끝, 원래 끝을 보임(사유는 운영자만)»): '조기 해제됨' or '감경됨' — the latest change's kind (a
+ * lift ends it, so one shortened and lifted after reads '조기 해제됨') — and the end it was given
+ * (`originalEndsAt`, null for 무기한), said under the changed end ('끝나는 때', the action's
+ * `endsAt`). Null when its end never changed, for another type, and for a cancelled one: that says
+ * '취소됨' and when alone (owner decision 2026-10-23 answer 10). The API sends neither the reason
+ * nor the operator (ADR-0082 7-8).
+ */
+export function myEndChangeView(
+  action: Pick<MyModerationAction, 'type' | 'endChange' | 'cancelledAt'>,
+): { label: string; originalEndsAt: string | null } | null {
+  const change = action.endChange;
+  if (!isRestriction(action.type) || action.cancelledAt !== null || change === null) return null;
+  return {
+    label: change.kind === 'lift' ? copy.moderationEndLifted : copy.moderationEndShortened,
+    originalEndsAt: change.originalEndsAt,
+  };
+}
+
+/**
  * The warning the MY summary's banner speaks of (owner decision 2026-10-21: «경고 → 이의 기한 14일
  * 동안 MY 요약에만 안내 띠»), or null: the newest warning not cancelled whose appeal window —
  * APPEAL_WINDOW_DAYS from it (`appealDeadlineOf`) — is still open at `now`. A cancelled one is

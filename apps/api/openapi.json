@@ -10832,7 +10832,7 @@
             "session": []
           }
         ],
-        "summary": "The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one and its cancellation. Never the operator, a report or a reporter",
+        "summary": "The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. Never the operator, a report, a reporter, nor why an end changed",
         "tags": [
           "me"
         ]
@@ -18541,6 +18541,14 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
+          "endChange": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MyRestrictionEndChange"
+              }
+            ]
+          },
           "cancelledAt": {
             "nullable": true,
             "type": "string",
@@ -18555,6 +18563,7 @@
           "subject",
           "createdAt",
           "endsAt",
+          "endChange",
           "cancelledAt"
         ],
         "additionalProperties": false
@@ -18660,6 +18669,32 @@
           "type"
         ],
         "additionalProperties": false
+      },
+      "MyRestrictionEndChange": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/RestrictionEndChangeKind"
+          },
+          "originalEndsAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "kind",
+          "originalEndsAt"
+        ],
+        "additionalProperties": false
+      },
+      "RestrictionEndChangeKind": {
+        "type": "string",
+        "enum": [
+          "shorten",
+          "lift"
+        ]
       },
       "MyRestriction": {
         "type": "object",
@@ -19244,13 +19279,6 @@
           "createdAt"
         ],
         "additionalProperties": false
-      },
-      "RestrictionEndChangeKind": {
-        "type": "string",
-        "enum": [
-          "shorten",
-          "lift"
-        ]
       },
       "CancelModerationBody": {
         "type": "object",
