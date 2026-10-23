@@ -551,10 +551,12 @@ describe('a write that landed', () => {
 
   it('counts for a notice’s screen the same way, and for that screen alone (#138)', () => {
     const before = postDraftMoment();
-    postDraftLanded({ kind: 'notice-edit', noticeId: NOTICE.toLowerCase() });
-    expect(postDraftLandedSince(NOTICE_EDIT, before)).toBe(true);
-    expect(postDraftLandedSince(NOTICE_NEW, before)).toBe(false);
-    expect(postDraftLandedSince({ kind: 'edit', postId: NOTICE }, before)).toBe(false);
+    postDraftLanded({ kind: 'notice-edit', noticeId: NOTICE.toLowerCase() }, ACCOUNT);
+    expect(postDraftLandedSince(NOTICE_EDIT, ACCOUNT, before)).toBe(true);
+    expect(postDraftLandedSince(NOTICE_NEW, ACCOUNT, before)).toBe(false);
+    expect(postDraftLandedSince({ kind: 'edit', postId: NOTICE }, ACCOUNT, before)).toBe(false);
+    // The admin's who sent it, as a post's (ADR-0073 9-48).
+    expect(postDraftLandedSince(NOTICE_EDIT, OTHER_ACCOUNT, before)).toBe(false);
   });
 });
 

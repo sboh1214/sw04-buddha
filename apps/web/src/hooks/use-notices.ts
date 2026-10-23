@@ -252,17 +252,37 @@ async function afterNoticeRefusal(
 }
 
 /**
+ * The admin whose form sends a write — `NoticeWriterGate`'s `accountId`, the account the form was
+ * drawn for — held by the client only: the request's body is the notice's (`CreateNoticeBody`,
+ * `UpdateNoticeBody`), and `mutationFn` takes it out before it sends. A landing is that account's
+ * (`postDraftLanded`, ADR-0073 9-48): the tab may be another's by the time it lands. Not the
+ * account read as the success lands — the tab's by then, maybe another's, the gap 9-48 closes —
+ * nor one added to the API's body, whose contract the landing has no part in (ADR-0077 8-20).
+ */
+interface NoticeWriter {
+  accountId: string;
+}
+
+/** A new notice: its title and body, and the admin whose form sends it. */
+export interface CreateNoticeVariables extends CreateNoticeBody, NoticeWriter {}
+
+/**
  * `POST /admin/notices`: a new notice, not pinned (pinning is its own action and record). A draft
- * of the write screen the onboarding gate kept in this tab is the notice now and is removed — here,
- * not on the screen, and recorded first (`postDraftLanded`), as a post's write does (use-posts.ts):
- * the gate may take the screen away while the write is in flight or its success is handled.
+ * of the write screen the onboarding gate kept in this tab for the admin who sent it is the notice
+ * now and is removed — here, not on the screen, and recorded first (`postDraftLanded`), as a
+ * post's write does (use-posts.ts): the gate may take the screen away while the write is in
+ * flight or its success is handled. Both for that admin only (`accountId`): another account's
+ * draft and form of the screen, the tab changed hands meanwhile, are left as they are.
  */
 export function createNoticeOptions(queryClient: QueryClient) {
   return {
-    mutationFn: async (body: CreateNoticeBody): Promise<AdminNotice> =>
+    mutationFn: async ({
+      accountId: _accountId,
+      ...body
+    }: CreateNoticeVariables): Promise<AdminNotice> =>
       unwrap(await api.POST('/api/v1/admin/notices', { body })).data,
-    onSuccess: (notice: AdminNotice) => {
-      postDraftLanded({ kind: 'notice-new' });
+    onSuccess: (notice: AdminNotice, { accountId }: CreateNoticeVariables) => {
+      postDraftLanded({ kind: 'notice-new' }, accountId);
       return afterNoticeWrite(queryClient, notice);
     },
     onError: (error: Error) => afterNoticeRefusal(queryClient, error),
@@ -270,10 +290,11 @@ export function createNoticeOptions(queryClient: QueryClient) {
 }
 
 /**
- * An edit: the notice, the title and body that replace its own, and the version the edit screen
- * was opened from (`expectedEditedAt`, the notice's `editedAt` then — null when never edited).
+ * An edit: the notice, the title and body that replace its own, the version the edit screen was
+ * opened from (`expectedEditedAt`, the notice's `editedAt` then — null when never edited), and the
+ * admin whose form sends it.
  */
-export interface UpdateNoticeVariables extends UpdateNoticeBody {
+export interface UpdateNoticeVariables extends UpdateNoticeBody, NoticeWriter {
   noticeId: string;
 }
 
@@ -284,12 +305,15 @@ export interface UpdateNoticeVariables extends UpdateNoticeBody {
  * a version a save has replaced since — another admin's, or the same admin's from another tab — is
  * refused (NOTICE_EDIT_CONFLICT, owner decisions 2026-10-21) and nothing is written: the notice is
  * read again (`afterNoticeRefusal`). A save that lands removes a draft of that notice's edit screen
- * the gate kept, as a new notice's write does.
+ * the gate kept for the admin who sent it, as a new notice's write does — the more so as this
+ * screen stays on the form after a save: a landing counted for the wrong account would leave its
+ * draft unkept, or keep the one just saved.
  */
 export function updateNoticeOptions(queryClient: QueryClient) {
   return {
     mutationFn: async ({
       noticeId,
+      accountId: _accountId,
       ...body
     }: UpdateNoticeVariables): Promise<AdminNoticeUpdateResult> =>
       unwrap(
@@ -298,8 +322,11 @@ export function updateNoticeOptions(queryClient: QueryClient) {
           body,
         }),
       ).data,
-    onSuccess: (result: AdminNoticeUpdateResult, { noticeId }: UpdateNoticeVariables) => {
-      postDraftLanded({ kind: 'notice-edit', noticeId });
+    onSuccess: (
+      result: AdminNoticeUpdateResult,
+      { noticeId, accountId }: UpdateNoticeVariables,
+    ) => {
+      postDraftLanded({ kind: 'notice-edit', noticeId }, accountId);
       return afterNoticeWrite(queryClient, result.notice);
     },
     onError: (error: Error, variables: UpdateNoticeVariables) =>

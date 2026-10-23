@@ -672,7 +672,6 @@ describe('the writes', () => {
         key,
         accountId: 'user-2',
         hasDraft: true,
-        saved: false,
         title: 'B가 쓰던 제목',
         body: { type: 'doc', content: [] },
         previews: new Map(),

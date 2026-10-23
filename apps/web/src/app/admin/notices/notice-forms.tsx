@@ -136,7 +136,8 @@ export function AdminNoticeNew() {
               if (title === null) return; // the form sends nothing without a title
               setRefusal(undefined);
               create.mutate(
-                { title, body },
+                // The admin the form is drawn for, whose landing the write's is (not sent).
+                { title, body, accountId },
                 {
                   onSuccess: () => {
                     toaster.create({ type: 'success', title: copy.adminNoticeCreated });
@@ -425,6 +426,8 @@ function EditForm({
             title,
             body,
             expectedEditedAt: version === undefined ? opened : version,
+            // The admin the form is drawn for, whose landing the save's is (not sent).
+            accountId,
           },
           {
             onSuccess: (result) => {

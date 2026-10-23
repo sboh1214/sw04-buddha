@@ -412,7 +412,9 @@ describe('the writes', () => {
     await new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
       title: '점검 안내',
       body: { type: 'doc', content: [] },
+      accountId: 'admin-1',
     });
+    // The admin whose form sent it is the client's, for its landing (ADR-0073 9-48): not sent.
     expect(send).toHaveBeenCalledWith('/api/v1/admin/notices', {
       body: { title: '점검 안내', body: { type: 'doc', content: [] } },
     });
@@ -426,8 +428,15 @@ describe('the writes', () => {
     const edited = { ...adminNotice, title: '고친 안내', editedAt: '2026-10-20T01:00:00.000Z' };
     const put = vi.spyOn(api, 'PUT').mockResolvedValue(answer({ notice: edited, changed: true }));
     const result = await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate(
-      { noticeId: NOTICE, title: '고친 안내', body: {}, expectedEditedAt: null },
+      {
+        noticeId: NOTICE,
+        title: '고친 안내',
+        body: {},
+        expectedEditedAt: null,
+        accountId: 'admin-1',
+      },
     );
+    // Nor is it in an edit's body.
     expect(put).toHaveBeenCalledWith('/api/v1/admin/notices/{noticeId}', {
       params: { path: { noticeId: notice } },
       body: { title: '고친 안내', body: {}, expectedEditedAt: null },
@@ -444,7 +453,13 @@ describe('the writes', () => {
     queryClient.setQueryData(adminNoticeKey(notice), adminNotice);
     vi.spyOn(api, 'PUT').mockResolvedValue(answer({ notice: adminNotice, changed: false }));
     const result = await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate(
-      { noticeId: NOTICE, title: adminNotice.title, body: {}, expectedEditedAt: null },
+      {
+        noticeId: NOTICE,
+        title: adminNotice.title,
+        body: {},
+        expectedEditedAt: null,
+        accountId: 'admin-1',
+      },
     );
     expect(result.changed).toBe(false);
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
@@ -470,6 +485,7 @@ describe('the writes', () => {
         title: '내 수정',
         body: {},
         expectedEditedAt: null,
+        accountId: 'admin-1',
       }),
     ).rejects.toBeInstanceOf(ApiError);
     expect(queryClient.getQueryState(adminNoticeKey(notice))?.isInvalidated).toBe(true);
@@ -556,7 +572,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
       .spyOn(api, 'POST')
       .mockRejectedValueOnce(new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' }));
     const write = new MutationObserver(queryClient, createNoticeOptions(queryClient));
-    const body = { title: '쓰던 공지', body: {} };
+    const body = { title: '쓰던 공지', body: {}, accountId: 'admin-1' };
     await expect(write.mutate(body)).rejects.toBeInstanceOf(ApiError);
     expect(readPostDraft(storage, newKey, 'admin-1', now)).toEqual(draft);
 
@@ -576,7 +592,13 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
       }),
     );
     const edit = new MutationObserver(queryClient, updateNoticeOptions(queryClient));
-    const variables = { noticeId: NOTICE, title: '쓰던 공지', body: {}, expectedEditedAt: null };
+    const variables = {
+      noticeId: NOTICE,
+      title: '쓰던 공지',
+      body: {},
+      expectedEditedAt: null,
+      accountId: 'admin-1',
+    };
     await expect(edit.mutate(variables)).rejects.toBeInstanceOf(ApiError);
     expect(readPostDraft(storage, editKey, 'admin-1', now)).not.toBeNull();
     put.mockResolvedValueOnce(
@@ -609,6 +631,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
             title: '쓰던 공지',
             body: {},
+            accountId: 'admin-1',
           });
         },
       },
@@ -626,6 +649,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
             title: '쓰던 공지',
             body: {},
             expectedEditedAt: EDITED_AT,
+            accountId: 'admin-1',
           });
         },
       },
@@ -711,6 +735,83 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         expect(keepHeldPostDraft(heldPostDraftAt(undefined, typed, false), me)).toBe(true);
       }
       clearPostDraft(storage, key);
+    }
+  });
+
+  it('a write or an edit that lands for admin A leaves what B kept and B’s form: the tab changed from A to B with A’s write in flight (ADR-0073 9-48, 결과 5)', async () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    // `GET /me` as the tab holds it now: B, with a step left (a re-consent just shipped).
+    const b = { id: 'admin-2', onboarding: { nextStep: 'consent' } } as Me;
+    const screens: {
+      key: PostDraftKey;
+      version?: string | null;
+      send: (queryClient: ReturnType<typeof getQueryClient>, accountId: string) => Promise<unknown>;
+    }[] = [
+      {
+        key: newKey,
+        send: (queryClient, accountId) => {
+          vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(adminNotice));
+          return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+            title: '쓰던 공지',
+            body: {},
+            accountId,
+          });
+        },
+      },
+      {
+        key: editKey,
+        version: EDITED_AT,
+        send: (queryClient, accountId) => {
+          vi.spyOn(api, 'PUT').mockResolvedValueOnce(
+            answer({ notice: { ...adminNotice, editedAt: EDITED_AT }, changed: true }),
+          );
+          return new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+            noticeId: NOTICE,
+            title: '쓰던 공지',
+            body: {},
+            expectedEditedAt: null,
+            accountId,
+          });
+        },
+      },
+    ];
+    for (const { key, version, send } of screens) {
+      const queryClient = getQueryClient();
+      // A sent the write; the tab changed to B (its `GET /me` in the cache), who opened the same
+      // screen and was taken to a step, which kept B's draft; B's form of the screen is drawn again
+      // (taken back, say).
+      queryClient.setQueryData(ME_QUERY_KEY, b);
+      const theirs: HeldPostDraftAt = heldPostDraftAt(
+        undefined,
+        {
+          key,
+          accountId: 'admin-2',
+          hasDraft: true,
+          title: 'B가 쓰던 공지',
+          body: { type: 'doc', content: [] },
+          previews: new Map(),
+          ...(version === undefined ? {} : { version }),
+        },
+        false,
+      );
+      expect(keepHeldPostDraft(theirs, b)).toBe(true);
+      const kept = readPostDraft(storage, key, 'admin-2', Date.now());
+      expect(kept?.title).toBe('B가 쓰던 공지');
+
+      // A's write lands now — the form's account, not the tab's as it lands: B's kept draft stays,
+      // and B's form, rendered before it, is not counted as saved — the gate taking it away keeps
+      // it again.
+      await send(queryClient, 'admin-1');
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toEqual(kept);
+      expect(keepHeldPostDraft(theirs, b)).toBe(true);
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())?.title).toBe('B가 쓰던 공지');
+
+      // B's own write of the screen does count, and removes B's draft.
+      await send(queryClient, 'admin-2');
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      expect(keepHeldPostDraft(theirs, b)).toBe(false);
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
     }
   });
 });
