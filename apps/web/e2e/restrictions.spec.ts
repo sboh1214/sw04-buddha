@@ -1,5 +1,7 @@
 import { type APIRequestContext, type Locator, type Page, type Request } from '@playwright/test';
 import { copy } from '../src/copy';
+import { fillBusinessInfo } from '../src/legal/business-info';
+import { deadlineOnCard, expectDeadlineLine } from './appeal';
 import {
   adminAccount,
   createOpenMarket,
@@ -26,16 +28,19 @@ import {
  *   not read for it: not the held form of a post taken from under it (#46·#48·#50); two post images
  *   picked at once are refused in one toast with the end and no button, the second never sent
  *   (owner decision 2026-10-23 answer 12; the refusal ends the batch); a like and deleting their
- *   own stay open; 조치·신고 내역 lists it '진행 중'; the operator lifts it early with a reason of
- *   their own — the banner goes, the member writes again, and 조치·신고 내역 says '조기 해제됨',
- *   the changed end and the end it was given, not the reason (owner decision 2026-10-23 answer 4;
- *   the brief: «admin restricts a user for 1 day → write button shows restriction message, likes
- *   still work, admin lifts → can write»);
+ *   own stay open; 조치·신고 내역 lists it '진행 중' under the page's appeal guidance, with its
+ *   '이의 기한' 14 days from it (#186, ADR-0084); the operator lifts it early with a reason of their
+ *   own — the banner goes, the member writes again, and 조치·신고 내역 says '조기 해제됨', the
+ *   changed end and the end it was given, not the reason (owner decision 2026-10-23 answer 4; the
+ *   brief: «admin restricts a user for 1 day → write button shows restriction message, likes still
+ *   work, admin lifts → can write») — and still its '이의 기한', which a lift does not move
+ *   (ADR-0084 결과 5);
  * - from a reported post's page the operator restricts its author 무기한 about that post — its
- *   pending report is resolved (조치함) — the member's banner and refusal say 무기한, clearing the
- *   소개 stays open, and the operator's 감경 brings the end forward to a time, which the member
- *   reads as the new end with '감경됨' and the end it was given (무기한) — and, lifted after,
- *   '조기 해제됨' with that same original end;
+ *   pending report is resolved (조치함) — the member's banners (MY 요약, MY 설정) and refusal say
+ *   무기한 with no appeal words, clearing the 소개 stays open, and the operator's 감경 brings the
+ *   end forward to a time, which the member reads as the new end with '감경됨' and the end it was
+ *   given (무기한), the '이의 기한' unmoved — and, lifted after, '조기 해제됨' with that same
+ *   original end;
  * - an operator another operator restricted still writes a notice with an image (owner decision
  *   2026-10-23 answer 13): the notice editor uploads it as a notice's (`purpose=notice`), while the
  *   operator's post image stays refused at the upload.
@@ -129,10 +134,11 @@ function kstLocal(ms: number): string {
 }
 
 /**
- * The appeal's guidance as 조치·신고 내역 words it, up to its email: never on a banner nor in a
- * refusal (owner decision 2026-10-22 evening, via #186 — the end and the way there only).
+ * The appeal's guidance as 조치·신고 내역 words it, once above the actions (`copy.appealGuidance`,
+ * #186, ADR-0084), up to its email: never on a banner nor in a refusal (owner decision 2026-10-22
+ * evening, via #186 — ADR-0084 답 3·8: the end and the way there only).
  */
-const APPEAL_START = copy.myModerationAppeal.slice(0, copy.myModerationAppeal.indexOf('{{'));
+const APPEAL_START = copy.appealGuidance.slice(0, copy.appealGuidance.indexOf('{{'));
 
 /**
  * A refusal's way to 조치·신고 내역 (`RefusalText`): the link under the end, and no appeal sentence
@@ -382,6 +388,7 @@ test.describe('작성 제한', () => {
         `${copy.moderationEndsAt} ${kst(endsAt)}`,
       );
       await expect(page.getByTestId('my-sanction-banner')).not.toContainText(note);
+      await expect(page.getByTestId('my-sanction-banner')).not.toContainText('이의');
       await page.getByTestId('my-sanction-banner-link').click();
       await expect(page).toHaveURL('/my/moderation');
       const item = page.getByTestId(`my-action-${restriction.id}`);
@@ -391,7 +398,13 @@ test.describe('작성 제한', () => {
       await expect(item.getByTestId('my-action-standing')).toHaveText(copy.restrictionStanding);
       await expect(item.getByTestId('my-action-ends')).toContainText(kst(endsAt));
       await expect(item.getByTestId('my-action-reason')).toContainText(copy.reportReasonSpam);
-      await expect(item.getByTestId('my-action-appeal')).toBeVisible();
+      // How to appeal it: once above the list, and on its card its deadline alone — 14 days from
+      // when it was taken, not from its end (#186, ADR-0084 답 1·4).
+      await expect(page.getByTestId('my-moderation-appeal')).toHaveText(
+        fillBusinessInfo(copy.appealGuidance),
+      );
+      const deadline = await deadlineOnCard(item);
+      await expectDeadlineLine(item, deadline, false);
       // Given about nothing in particular: no subject — not '내 프로필'.
       await expect(item.getByTestId('my-action-subject')).toHaveCount(0);
       // Its end never changed: no 조기 해제됨·감경됨, no original end.
@@ -446,6 +459,9 @@ test.describe('작성 제한', () => {
       const originalEnds = item.getByTestId('my-action-original-ends');
       await expect(originalEnds).toContainText(copy.moderationOriginalEndsAt);
       await expect(originalEnds).toContainText(kst(endsAt));
+      // Lifted, not cancelled: the action stands, so its appeal deadline stays as it was — a lift
+      // moves its end, never when it was taken (ADR-0084 결과 5).
+      await expectDeadlineLine(item, deadline, false);
       await expect(page.getByTestId('my-moderation')).not.toContainText(
         `소명을 받아들였습니다 ${tag}`,
       );
@@ -510,11 +526,21 @@ test.describe('작성 제한', () => {
       await expect(page.getByTestId('my-sanction-banner')).not.toContainText(
         copy.reportReasonHarassment,
       );
-      // MY 설정 says it above the public items (ADR-0078 결과 5).
+      await expect(page.getByTestId('my-sanction-banner')).not.toContainText('이의');
+      // MY 설정 says it above the public items (ADR-0078 결과 5): the same banner — its title, end
+      // and the way to 조치·신고 내역, no appeal words (owner decision 2026-10-23 답 6, ADR-0084).
       await gotoWithRestrictionRead(page, '/my/settings');
+      const settingsBanner = page.getByTestId('settings-sanction-banner');
+      await expect(settingsBanner).toContainText(copy.restrictionWritingTitle);
       await expect(page.getByTestId('settings-sanction-banner-ends')).toHaveText(
         `${copy.moderationEndsAt} ${copy.restrictionIndefinite}`,
       );
+      await expect(page.getByTestId('settings-sanction-banner-link')).toHaveAttribute(
+        'href',
+        '/my/moderation',
+      );
+      await expect(settingsBanner).not.toContainText(APPEAL_START);
+      await expect(settingsBanner).not.toContainText('이의');
       const bioInput = page.getByTestId('bio-input');
       await expect(bioInput).toHaveValue(`제한 전 소개 ${tag}`);
       await bioInput.fill(`다른 소개 ${tag}`);
@@ -566,6 +592,10 @@ test.describe('작성 제한', () => {
         copy.restrictionIndefinite,
       );
       await expect(item.getByTestId('my-action-subject')).toHaveText(postTitle);
+      // A 감경 brings its end forward, not when it was taken: the '이의 기한' is still 14 days from
+      // the restriction (ADR-0084 결과 5).
+      const deadline = await deadlineOnCard(item);
+      await expectDeadlineLine(item, deadline, false);
       await expect(page.getByTestId('my-moderation')).not.toContainText(
         `이의를 일부 받아들였습니다 ${tag}`,
       );
@@ -582,6 +612,7 @@ test.describe('작성 제한', () => {
       await expect(item.getByTestId('my-action-original-ends')).toContainText(
         copy.restrictionIndefinite,
       );
+      await expectDeadlineLine(item, deadline, false);
     } finally {
       await adminContext.close();
     }

@@ -561,7 +561,7 @@ export function appealDeadline(action: Pick<MyModerationAction, 'createdAt' | 'c
  */
 export function appealWindowOpen(
   action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
-  // Read in render through this default, as `sanctionInForce`'s is: never on the server.
+  // Read in render through this default, as `warningInWindow`'s is: never on the server.
   now: number = Date.now(),
 ): boolean {
   return action.cancelledAt === null && appealWindowEndOf(action.createdAt).getTime() > now;

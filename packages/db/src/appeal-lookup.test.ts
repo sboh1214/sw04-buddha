@@ -17,12 +17,15 @@ import {
   adminUserQuerySchema,
   APPEAL_WINDOW_DAYS,
   appealWindowEndOf,
+  MODERATION_ACTION_TYPES,
   PAGE_LIMIT_DEFAULT,
 } from '@buddha/shared';
+import { eq } from 'drizzle-orm';
 import { Client } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OPERATOR_APPEAL_LOOKUP_SQL } from './appeal-lookup.js';
 import { OPERATOR_ACCOUNT_LOOKUP_SQL } from './phone-change.js';
+import { moderationActions, restrictionEndChanges } from './schema/index.js';
 import { createModerationAction, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import { splitPsqlStatements, writePsqlVariables } from './test/operator.js';
@@ -132,6 +135,17 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(adminUserQuerySchema.safeParse({ q: 'x'.repeat(101) }).success).toBe(false);
     // No step looks the account up there.
     expect(appealSection()).not.toMatch(/`\/admin\/users`에서[^.]*찾는다/);
+  });
+
+  it('names every type of action the lookup returns, the writing restriction too', () => {
+    // The lookup filters no type (ADR-0084 결과 5): step 2 reads each one the operator may see —
+    // #185's `writing_restriction` joined at the restack, and a type #139 adds must join it here.
+    const text = step2();
+    const list = text.slice(text.indexOf('`type`은 조치의 종류('));
+    const named = list.slice(0, list.indexOf('), `acted_kst`'));
+    for (const type of MODERATION_ACTION_TYPES) expect(named).toContain(`\`${type}\``);
+    // Lifted early or shortened, a writing restriction stands: not `cancelled`, its deadline kept.
+    expect(text).toContain('조기 해제하거나 감경한 작성 제한은 취소가 아니라 `f`다(1)');
   });
 
   it('keeps an appeal in time to the end of the minute its deadline shows, by the lookup’s deadline', () => {
@@ -1032,6 +1046,46 @@ describe.skipIf(!hasTestDb())('the operator appeal lookup (integration)', () => 
     const after = await lookup('late@example.com');
     expect(after.filter((row) => row.deadline_kst === '2026-10-22 12:00:59')).toHaveLength(2);
     expect(isLate(after, mailAt, askedAt)).toBe(true);
+  });
+
+  it('gives a writing restriction shortened since as the action it is: taken when it was, not cancelled', async () => {
+    // A 감경 or an early lift brings a writing restriction's end forward and keeps the action
+    // (ADR-0082 7-3): its appeal deadline runs from when it was taken, as the member's card keeps
+    // it, and the lookup does not read it as cancelled (docs/OPERATIONS.md steps 1, 2 and 5).
+    const { user: operator } = await createUser(t.db, { role: 'admin' });
+    const { user: member } = await createUser(t.db, { email: 'restricted@example.com' });
+    const DAY = 24 * 60 * 60 * 1_000;
+    const takenAt = new Date(Date.now() - 2 * DAY);
+    const restriction = await createModerationAction(t.db, {
+      userId: member.id,
+      createdBy: operator.id,
+      type: 'writing_restriction',
+      createdAt: takenAt,
+      endsAt: new Date(takenAt.getTime() + 7 * DAY),
+    });
+    const shortenedTo = new Date(takenAt.getTime() + 3 * DAY);
+    await t.db
+      .update(moderationActions)
+      .set({ endsAt: shortenedTo })
+      .where(eq(moderationActions.id, restriction.id));
+    await t.db.insert(restrictionEndChanges).values({
+      actionId: restriction.id,
+      kind: 'shorten',
+      previousEndsAt: restriction.endsAt,
+      endsAt: shortenedTo,
+      reason: '이의를 일부 받아들임',
+      createdBy: operator.id,
+    });
+    expect(await lookup('restricted@example.com')).toEqual([
+      {
+        user_id: member.id,
+        action_id: restriction.id,
+        type: 'writing_restriction',
+        acted_kst: kstToSecond(takenAt),
+        deadline_kst: lastSecondBefore(appealWindowEndOf(takenAt)),
+        cancelled: false,
+      },
+    ]);
   });
 
   it('leaves out of a late ask-back an action taken after the asked-back mail came', async () => {
