@@ -7,6 +7,7 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  secondAdminAccount,
   signIn,
   signUp,
   test,
@@ -31,7 +32,10 @@ import {
  *   pending report is resolved (조치함) — the member's banner and refusal say 무기한, clearing the
  *   소개 stays open, and the operator's 감경 brings the end forward to a time, which the member
  *   reads as the new end with '감경됨' and the end it was given (무기한) — and, lifted after,
- *   '조기 해제됨' with that same original end.
+ *   '조기 해제됨' with that same original end;
+ * - an operator another operator restricted still writes a notice with an image (owner decision
+ *   2026-10-23 answer 13): the notice editor uploads it as a notice's (`purpose=notice`), while the
+ *   operator's post image stays refused at the upload.
  *
  * Every rule's branch (each blocked and open write, the end by the clock, the later end governing,
  * the refusals of a 감경 and a lift, the audit rows, the profile lock) is the API's test
@@ -508,6 +512,72 @@ test.describe('작성 제한', () => {
       );
     } finally {
       await adminContext.close();
+    }
+  });
+
+  test('작성 제한 중인 운영자도 공지 편집기에서 이미지를 공지의 것으로 올려 공지를 쓰고, 그 운영자의 글 이미지 올리기는 그대로 거절된다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    // Owner decision 2026-10-23 answer 13: a writing restriction does not block notices (#138),
+    // the notice editor's image upload included — the editor says its images are a notice's
+    // (`purpose=notice`, an admin's upload alone), and a post's image stays refused at the
+    // upload (answer 2), an operator's too (answer 5, ADR-0082 7-9). The first seed admin
+    // restricts the second for a day, and cancels it at the end: the seed admin is every spec's,
+    // and none of theirs writes a post or a comment as it (a notice, a report and a moderation
+    // action stay open under a restriction).
+    const tag = freshTag();
+    const operator = await meOf(admin);
+    const second = await meOf(secondAdmin);
+    const given = await admin.post(
+      `/api/v1/admin/moderation/users/${second.id}/writing-restriction`,
+      {
+        data: { reason: 'spam', note: `공지 시험 ${tag}`, days: 1, expectedAccountId: operator.id },
+      },
+    );
+    expect(given.status(), await given.text()).toBe(200);
+    const restriction = ((await given.json()) as { data: Restriction }).data;
+    try {
+      const postImage = await secondAdmin.post(
+        `/api/v1/media/images?expectedAccountId=${second.id}`,
+        { data: PNG, headers: { 'content-type': 'image/png' } },
+      );
+      expect(postImage.status(), await postImage.text()).toBe(403);
+      expect(((await postImage.json()) as { error: { code: string } }).error.code).toBe(
+        'RESTRICTED',
+      );
+
+      await signIn(page, secondAdminAccount.email, secondAdminAccount.password);
+      await page.goto('/admin/notices/new');
+      const editor = page.getByTestId('post-editor-content');
+      await editor.click();
+      await page.keyboard.type(`점검 안내 ${tag}`);
+      const upload = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/media/images',
+      );
+      await page
+        .getByTestId('post-editor-file')
+        .setInputFiles({ name: 'notice.png', mimeType: 'image/png', buffer: PNG });
+      const uploaded = await upload;
+      expect(uploaded.status(), await uploaded.text()).toBe(201);
+      expect(new URL(uploaded.url()).searchParams.get('purpose')).toBe('notice');
+      await expect(editor.locator('img[data-media-id]')).toHaveCount(1);
+      await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+      const title = `제한 중에 쓴 공지 ${tag}`;
+      await page.getByTestId('post-title-input').fill(title);
+      await page.getByTestId('post-submit').click();
+      await expect(page.getByText(copy.adminNoticeCreated)).toBeVisible();
+      await expect(page).toHaveURL('/admin/notices');
+      await expect(page.getByRole('link', { name: title, exact: true })).toBeVisible();
+    } finally {
+      const cancelled = await admin.post(
+        `/api/v1/admin/moderation/actions/${restriction.id}/cancel`,
+        { data: { reason: `시험 정리 ${tag}`, expectedAccountId: operator.id } },
+      );
+      expect(cancelled.status(), await cancelled.text()).toBe(200);
     }
   });
 });

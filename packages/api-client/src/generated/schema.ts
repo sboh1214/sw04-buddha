@@ -1622,7 +1622,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours. Refused under a writing restriction (RESTRICTED, with its end), which no post of the account gets past */
+        /** An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours. Refused under a writing restriction (RESTRICTED, with its end), which no post of the account gets past — but for an admin’s notice (`purpose=notice`, an admin’s alone): a writing restriction refuses no notice, its images included */
         post: operations["uploadImage"];
         delete?: never;
         options?: never;
@@ -10902,6 +10902,7 @@ export interface operations {
         parameters: {
             query: {
                 expectedAccountId: string;
+                purpose?: "post" | "notice";
             };
             header?: never;
             path?: never;

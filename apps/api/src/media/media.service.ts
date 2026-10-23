@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
-import { type ImageContentType, type UploadedImage } from '@buddha/shared';
+import { type ImageContentType, type PostImagePurpose, type UploadedImage } from '@buddha/shared';
 import { type ObjectStorage } from '@buddha/storage';
 import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
+import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { assertNotWritingRestricted } from '../moderation/restrictions.js';
 import { IMAGE_EXTENSION, processImage } from './image.js';
@@ -47,12 +48,23 @@ export class MediaService {
    * the row then fails, the object is removed again (`removeUnrecordedUpload` — a removal the
    * store refuses queues its key for the worker), and the row's error is what the request fails
    * with.
+   *
+   * `purpose` is what the upload says it is for (`POST /media/images?purpose=`, #185): a post's
+   * image by default, refused under a writing restriction before anything is decoded or stored
+   * (RESTRICTED, with its end — the post's own write asks again under its lock, `assertWriter`); or
+   * a notice's (#138), which only an admin's upload may say (FORBIDDEN naming `purpose`, nothing
+   * stored) and which a writing restriction does not refuse — owner decision 2026-10-23 answer 13
+   * «운영 공지(#138)는 작성 제한이 막지 않음(공지 편집기의 이미지 업로드 포함)», an operator being one
+   * another operator may restrict (ADR-0082 7-9). Both are the same upload (`post_image`), and a
+   * post that takes a notice's image is refused under a restriction all the same.
    */
-  async uploadPostImage(ownerId: string, bytes: Uint8Array): Promise<UploadedImage> {
-    // A post's image is for a post the account writes or edits, which a writing restriction
-    // refuses (#185): refused here too, before anything is decoded or stored (RESTRICTED, with its
-    // end). The post's own write asks again under its lock (`assertWriter`).
-    await assertNotWritingRestricted(this.db, ownerId);
+  async uploadPostImage(
+    ownerId: string,
+    bytes: Uint8Array,
+    purpose: PostImagePurpose = 'post',
+  ): Promise<UploadedImage> {
+    if (purpose === 'notice') await this.assertNoticeUploader(ownerId);
+    else await assertNotWritingRestricted(this.db, ownerId);
     // #187 plugs in here: the daily upload limit (50 a day, counted per verified number's keyed
     // hash, ADR-0069 decision 7) is checked before anything is decoded or stored.
     const image = await processImage(bytes);
@@ -82,6 +94,24 @@ export class MediaService {
       height: image.height,
       byteSize: image.body.length,
     };
+  }
+
+  /**
+   * A notice's image is an admin's (#138: the notice screens are AdminGuard's): `purpose=notice`
+   * from any other account is refused before the image is looked at, naming the field. Read from
+   * the profile row, as AdminGuard reads an admin (never from its cache): a revoked admin is
+   * refused at once.
+   */
+  private async assertNoticeUploader(ownerId: string): Promise<void> {
+    const [profile] = await this.db
+      .select({ role: schema.profiles.role })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, ownerId));
+    if (profile?.role === 'admin') return;
+    throw new AppError('FORBIDDEN', {
+      message: 'Only an admin uploads an image for a notice',
+      details: [{ path: ['purpose'], message: 'a notice’s image is an admin’s' }],
+    });
   }
 
   /**

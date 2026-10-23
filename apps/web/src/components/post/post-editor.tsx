@@ -17,6 +17,7 @@ import {
   mediaPath,
   type PostDocument,
   type PostHeadingLevel,
+  type PostImagePurpose,
   type PostTextColor,
 } from '@buddha/shared';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
@@ -289,6 +290,12 @@ export interface PostEditorProps {
    * public one serves a pinned notice's current images only. Read when the editor is made.
    */
   imageSrc?: (mediaId: string) => string;
+  /**
+   * What an upload says its image is for (`POST /media/images?purpose=`): a post's by default; a
+   * notice's editor (#138) says `notice`, which a writing restriction does not refuse — owner
+   * decision 2026-10-23 answer 13 (ADR-0082).
+   */
+  imagePurpose?: PostImagePurpose;
 }
 
 export function PostEditor({
@@ -307,6 +314,7 @@ export function PostEditor({
   refusedImageIds = [],
   placeholder = copy.postWriteBodyPlaceholder,
   imageSrc = mediaPath,
+  imagePurpose = 'post',
 }: PostEditorProps) {
   /**
    * Previews of this session's uploads, by media id; read by the image node's `srcOf` whenever
@@ -485,7 +493,7 @@ export function PostEditor({
           const { uploaded, preview } = await uploadWithPreview(
             file,
             (picked) =>
-              sendRetrying(() => upload(picked, accountId), {
+              sendRetrying(() => upload(picked, accountId, imagePurpose), {
                 sleep: pause,
                 alive,
               }),

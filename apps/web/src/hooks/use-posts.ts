@@ -8,6 +8,7 @@ import {
   useQueryClient,
   type QueryClient,
 } from '@tanstack/react-query';
+import { type PostImagePurpose } from '@buddha/shared';
 import { ME_QUERY_KEY, useMe } from '@/hooks/use-me';
 import {
   type CreatePostBody,
@@ -272,14 +273,22 @@ export function useDeletePost(onSessionChanged: () => void) {
  * type or `application/octet-stream` (`uploadContentType`), with the account on screen in the
  * query — the body is the file, so it cannot ride there. The server checks the bytes, strips the
  * metadata and stores the result; the answer's id goes into the editor's image node.
+ *
+ * `purpose` is what the image is for: a post's (the default, said by saying nothing — the query
+ * of every post's upload is what it was), or an admin's notice's (#138), said as `purpose=notice`,
+ * which a writing restriction does not refuse (owner decision 2026-10-23 answer 13, ADR-0082) and
+ * the server takes from an admin's upload alone.
  */
 export async function uploadPostImage(
   file: Blob & { type: string },
   expectedAccountId: string,
+  purpose: PostImagePurpose = 'post',
 ): Promise<UploadedImage> {
   return unwrap(
     await api.POST('/api/v1/media/images', {
-      params: { query: { expectedAccountId } },
+      params: {
+        query: purpose === 'post' ? { expectedAccountId } : { expectedAccountId, purpose },
+      },
       // openapi-fetch would JSON-encode the body: the file goes as it is.
       body: file as unknown as string,
       bodySerializer: (body: unknown) => body as BodyInit,
@@ -297,12 +306,18 @@ export async function uploadPostImage(
  * image before converting it) reads the member's restriction and actions again, so the write
  * page's banner says it (`afterRestricted`, query-client.ts — what the app's MutationCache does for
  * every mutation's refusal; the upload is a plain call, so it asks here) — and is then the editor's
- * to show.
+ * to show. Each call is one attempt: the editor sends a 429's file again around it (`sendRetrying`,
+ * lib/post-editor.ts), and each attempt refused runs these. A notice's editor (#138) uploads with
+ * `purpose` `notice`, which no writing restriction refuses (owner decision 2026-10-23 answer 13).
  */
 export function postImageUploader(queryClient: QueryClient, onSessionChanged: () => void) {
-  return async (file: Blob & { type: string }, expectedAccountId: string) => {
+  return async (
+    file: Blob & { type: string },
+    expectedAccountId: string,
+    purpose: PostImagePurpose = 'post',
+  ) => {
     try {
-      return await uploadPostImage(file, expectedAccountId);
+      return await uploadPostImage(file, expectedAccountId, purpose);
     } catch (error) {
       afterRestricted(queryClient, error);
       await afterRefusal(queryClient, error as Error, onSessionChanged);

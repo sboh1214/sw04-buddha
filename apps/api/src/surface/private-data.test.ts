@@ -686,9 +686,10 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   },
   // The file is the body, so the account rides in the query: B naming A is refused before the
   // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
-  // (415 before any check of the account — image-body.ts).
+  // (415 before any check of the account — image-body.ts). Said to be a notice's (#185 owner
+  // decision 2026-10-23 answer 13: an admin's alone), it is refused the same, before that.
   'POST /media/images': {
-    query: { expectedAccountId: (fixture) => fixture.a.id },
+    query: { expectedAccountId: (fixture) => fixture.a.id, purpose: () => 'notice' },
     body: () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
     contentType: 'image/jpeg',
     status: 403,

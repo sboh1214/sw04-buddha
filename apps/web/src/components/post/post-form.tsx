@@ -125,7 +125,11 @@ export interface PostFormProps {
    * changes, and false as the form goes: what the edit screen keeps should its post go (`gone`).
    */
   onHoldingChange?: (holding: boolean) => void;
-  /** A notice's form (#138): a required title; absent, a post's, whose title is optional. */
+  /**
+   * A notice's form (#138): a required title, and its images uploaded as a notice's
+   * (`purpose=notice` — no writing restriction refuses them, owner decision 2026-10-23 answer 13);
+   * absent, a post's, whose title is optional.
+   */
   notice?: NoticeFormOptions;
   /**
    * What the refusal offers beside its message, if anything: a notice's edit refused because the
@@ -547,6 +551,7 @@ function PostFormFields({
           refusedImageIds={refusedImageIds}
           placeholder={notice?.bodyPlaceholder}
           imageSrc={imageSrc}
+          imagePurpose={notice === undefined ? 'post' : 'notice'}
         />
         <HStack gap="3" justify="flex-end" textStyle="bodyXs" color="fg.muted">
           <Text

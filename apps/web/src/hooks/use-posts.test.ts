@@ -854,6 +854,27 @@ describe('an image upload', () => {
     expect(init.headers).toEqual({ 'Content-Type': 'image/png' });
   });
 
+  it('says a notice’s image is a notice’s, and a post’s nothing (owner decision 2026-10-23 answer 13)', async () => {
+    const send = vi
+      .spyOn(api, 'POST')
+      .mockResolvedValue(
+        answer({ id: MARKET, contentType: 'image/png', width: 1, height: 1, byteSize: 68 }),
+      );
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    const queryOf = (call: number) =>
+      (send.mock.calls[call] as unknown as [string, { params: unknown }])[1].params;
+    await uploadPostImage(file, 'user-1', 'notice');
+    expect(queryOf(0)).toEqual({ query: { expectedAccountId: 'user-1', purpose: 'notice' } });
+    await uploadPostImage(file, 'user-1', 'post');
+    expect(queryOf(1)).toEqual({ query: { expectedAccountId: 'user-1' } });
+    // The editor's uploader passes it on.
+    const upload = postImageUploader(getQueryClient(), () => undefined);
+    await upload(file, 'user-1', 'notice');
+    expect(queryOf(2)).toEqual({ query: { expectedAccountId: 'user-1', purpose: 'notice' } });
+    await upload(file, 'user-1');
+    expect(queryOf(3)).toEqual({ query: { expectedAccountId: 'user-1' } });
+  });
+
   it('refused as another account or for the onboarding, does what a refused write does', async () => {
     const queryClient = getQueryClient();
     const me = new QueryObserver(queryClient, {

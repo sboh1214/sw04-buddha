@@ -8,6 +8,7 @@ import {
   imageNotAllowedDetailsSchema,
   mediaPath,
   uploadImageQuerySchema,
+  uploadPostImageQuerySchema,
   uploadedImageSchema,
 } from './media.js';
 import {
@@ -227,6 +228,18 @@ describe('uploaded images', () => {
       }).success,
     ).toBe(true);
     expect(uploadImageQuerySchema.safeParse({}).success).toBe(false);
+    // A post's image unless it says it is a notice's (#138 — an admin's, which a writing
+    // restriction does not refuse: owner decision 2026-10-23 answer 13, ADR-0082).
+    expect(uploadPostImageQuerySchema.parse({ expectedAccountId: 'u1' })).toEqual({
+      expectedAccountId: 'u1',
+      purpose: 'post',
+    });
+    expect(
+      uploadPostImageQuerySchema.parse({ expectedAccountId: 'u1', purpose: 'notice' }).purpose,
+    ).toBe('notice');
+    expect(
+      uploadPostImageQuerySchema.safeParse({ expectedAccountId: 'u1', purpose: 'profile' }).success,
+    ).toBe(false);
     expect(imageNotAllowedDetailsSchema.parse({ reason: 'type' })).toEqual({ reason: 'type' });
   });
 });

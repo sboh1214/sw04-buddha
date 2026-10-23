@@ -44,6 +44,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { PUBLIC_ROUTES } from '../surface/registry.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { pngOf } from '../test/png.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter } from '../test/wait.js';
 import { writingRestrictionOf } from './restrictions.js';
@@ -282,6 +283,76 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       expect(deletedComment.statusCode, deletedComment.body).toBe(200);
       const deletedPost = await send(`/posts/${post.id}/delete`, {}, member);
       expect(deletedPost.statusCode, deletedPost.body).toBe(200);
+    });
+
+    it('refuses no notice of a restricted operator, its images included; `purpose=notice` is an admin’s alone (owner decision 2026-10-23 answer 13)', async () => {
+      // An operator another operator restricted (7-9): their posts, comments and post images stay
+      // refused, as a member's.
+      const { endsAt } = await restrict(7, second);
+      const png = pngOf(8, 8);
+      const uploadAs = (who: TestUser, purpose?: string) =>
+        t.app.inject({
+          method: 'POST',
+          url:
+            `/api/v1/media/images?expectedAccountId=${encodeURIComponent(who.id)}` +
+            (purpose === undefined ? '' : `&purpose=${purpose}`),
+          headers: { origin: TRUSTED_ORIGIN, 'content-type': 'image/png', cookie: who.cookie },
+          payload: png,
+        });
+      const stored = async () =>
+        (await t.db.select({ n: count() }).from(schema.mediaObjects))[0]!.n;
+      expect(restrictedOf(await uploadAs(second))).toEqual({ kind: 'writing', endsAt });
+      expect(restrictedOf(await uploadAs(second, 'post'))).toEqual({ kind: 'writing', endsAt });
+      restrictedOf(await newPost(second));
+      restrictedOf(await newComment(second));
+      expect(await stored()).toBe(0);
+      // A notice's image goes up, and the notice that holds it is written, edited and pinned.
+      const image = dataOf<{ id: string }>(await uploadAs(second, 'notice'), 201);
+      const admin2 = (method: 'POST' | 'PUT', url: string, payload?: unknown) =>
+        t.app.inject({
+          method,
+          url: `/api/v1${url}`,
+          headers: {
+            origin: TRUSTED_ORIGIN,
+            cookie: second.cookie,
+            ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+          },
+          ...(payload === undefined ? {} : { payload: JSON.stringify(payload) }),
+        });
+      const withImage = {
+        type: 'doc',
+        content: [...doc('점검 사진').content, { type: 'image', attrs: { mediaId: image.id } }],
+      };
+      const notice = dataOf<{ id: string }>(
+        await admin2('POST', '/admin/notices', { title: '점검 안내', body: withImage }),
+        201,
+      );
+      const edited = await admin2('PUT', `/admin/notices/${notice.id}`, {
+        title: '점검 안내(고침)',
+        body: withImage,
+        expectedEditedAt: null,
+      });
+      expect(edited.statusCode, edited.body).toBe(200);
+      const pinned = await admin2('POST', `/admin/notices/${notice.id}/pin`);
+      expect(pinned.statusCode, pinned.body).toBe(200);
+      expect((await read(`/notices/${notice.id}`)).statusCode).toBe(200);
+      expect((await read(`/media/${image.id}`)).statusCode).toBe(200);
+      // The notice's image is no way past the restriction into a post.
+      restrictedOf(await send('/posts', { marketId: market.id, body: withImage }, second));
+      // Only an admin says an image is a notice's — a restricted member (`member`) or not (`other`);
+      // nothing stored.
+      await restrict(1);
+      for (const who of [member, other]) {
+        const refused = await uploadAs(who, 'notice');
+        expect(refused.statusCode, refused.body).toBe(403);
+        expect(refused.json<{ error: { code: string; details: unknown } }>().error).toMatchObject({
+          code: 'FORBIDDEN',
+          details: [{ path: ['purpose'] }],
+        });
+      }
+      expect(await stored()).toBe(1);
+      // An operator not restricted uploads a post's image as before.
+      expect((await uploadAs(admin)).statusCode).toBe(201);
     });
 
     it('keeps public profile items from new values and lets them be cleared; the time zone stays (#37-9, decision 7)', async () => {
