@@ -1,13 +1,31 @@
-import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
+import {
+  InfiniteQueryObserver,
+  MutationObserver,
+  QueryObserver,
+  type InfiniteData,
+  type QueryClient,
+} from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   api,
   type DeleteProfileImageBody,
   type Me,
+  type Post,
+  type PostAuthor,
+  type PostComment,
+  type PostSummary,
   type UpdateBioBody,
   type UpdateTimeZoneBody,
 } from '@/lib/api';
+import { type CommentPage, type CommentPages, postCommentsKey } from '@/lib/comments';
+import {
+  type CountedPostPage,
+  type PostPage,
+  communityPostsKey,
+  marketPostsKey,
+  postKey,
+} from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
   ME_QUERY_KEY,
@@ -951,6 +969,360 @@ describe('the profile image (#141)', () => {
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
     } finally {
       me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+/**
+ * The faces of the member a card, a post or a comment the tab holds carries, after the member's
+ * profile image changed (Codex review on PR #225, ADR-0079 7-21): every one of them shows the new
+ * address — or none, once deleted — at once, the rest of each entry as it was.
+ */
+describe('the member’s faces the tab holds, after a profile image change (#141, ADR-0079 7-21)', () => {
+  const OWN = following.profile.publicId;
+  const OTHER = 'a2b3c4d5e6';
+  const POST = 'b7c9a1d2-6f34-4e58-9b0a-2d1e5f8c7a46';
+  const OTHER_POST = '6f9619ff-8b86-d011-b42d-00c04fc964ff';
+  const FORMER_POST = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+  const MARKET = 'd3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11';
+  const OLD = `/api/v1/media/${IMAGE}`;
+  const NEW = `/api/v1/media/${NEXT_IMAGE}`;
+  const OTHER_IMAGE = '/api/v1/media/5a1d2f3e-6b7c-4d8e-9f0a-1b2c3d4e5f60';
+  const market = {
+    id: MARKET,
+    slug: 'rate-cut',
+    title: '금리 인하?',
+    status: 'open',
+    category: { slug: 'economy', nameKo: '경제' },
+  } as const;
+
+  const face = (publicId: string, imageUrl: string | null): PostAuthor => ({
+    kind: 'member',
+    publicId,
+    nickname: publicId === OWN ? following.profile.nickname : '근거왕',
+    imageUrl,
+    isAdmin: false,
+  });
+  const card = (id: string, author: PostAuthor): PostSummary => ({
+    id,
+    title: '제목',
+    excerpt: '본문',
+    thumbnailUrl: null,
+    author,
+    market,
+    createdAt: '2026-10-18T00:00:00.000Z',
+    editedAt: null,
+    commentCount: 2,
+    likeCount: 1,
+  });
+  const postOf = (id: string, author: PostAuthor): Post => ({
+    state: 'published',
+    id,
+    title: '제목',
+    body: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '본문' }] }],
+    },
+    author,
+    market,
+    createdAt: '2026-10-18T00:00:00.000Z',
+    editedAt: null,
+    commentCount: 2,
+    likeCount: 1,
+  });
+  const comment = (
+    id: string,
+    author: PostAuthor,
+    parentId: string | null = null,
+  ): PostComment => ({
+    state: 'published',
+    id,
+    parentId,
+    body: '댓글',
+    author,
+    createdAt: '2026-10-19T00:00:00.000Z',
+    editedAt: null,
+    likeCount: 0,
+  });
+  const C1 = '11111111-1111-4111-8111-111111111111';
+  const C2 = '22222222-2222-4222-8222-222222222222';
+  const C3 = '33333333-3333-4333-8333-333333333333';
+  const R1 = '44444444-4444-4444-8444-444444444444';
+  const R2 = '55555555-5555-4555-8555-555555555555';
+  const R3 = '66666666-6666-4666-8666-666666666666';
+  const R4 = '77777777-7777-4777-8777-777777777777';
+
+  /** The member's own 댓글 C1 (a 대댓글 of someone else's, one of theirs and a hidden one under it,
+   * more to read by '답글 더 보기'), a deleted 댓글 with their 대댓글, and someone else's 댓글. */
+  const commentPage = (image: string | null, nextCursor: string | null = null): CommentPage => ({
+    items: [
+      {
+        comment: comment(C1, face(OWN, image)),
+        replies: [
+          comment(R1, face(OTHER, OTHER_IMAGE), C1),
+          comment(R2, face(OWN, image), C1),
+          { state: 'hidden', id: R3 },
+        ],
+        repliesNextCursor: 'r1',
+      },
+      {
+        comment: { state: 'deleted', id: C2 },
+        replies: [comment(R4, face(OWN, image), C2)],
+        repliesNextCursor: null,
+      },
+      { comment: comment(C3, face(OTHER, null)), replies: [], repliesNextCursor: null },
+    ],
+    nextCursor,
+  });
+
+  /** Every face of the member's the entries hold, as `[where, imageUrl]`. */
+  function ownFaces(queryClient: QueryClient): [string, string | null][] {
+    const faces: [string, string | null][] = [];
+    const add = (where: string, author: PostAuthor) => {
+      if (author.kind === 'member' && author.publicId === OWN) faces.push([where, author.imageUrl]);
+    };
+    for (const [key, held] of queryClient.getQueriesData<
+      InfiniteData<PostPage> | Post | CommentPages
+    >({ queryKey: ['posts'] })) {
+      const where = JSON.stringify(key);
+      if (held === undefined) continue;
+      if ('state' in held) {
+        if (held.state === 'published') add(where, held.author);
+      } else if (key[1] === 'comments') {
+        for (const page of (held as CommentPages).pages)
+          for (const thread of page.items)
+            for (const each of [thread.comment, ...thread.replies])
+              if (each.state === 'published') add(`${where} ${each.id}`, each.author);
+      } else {
+        for (const page of (held as InfiniteData<PostPage>).pages)
+          for (const item of page.items) add(`${where} ${item.id}`, item.author);
+      }
+    }
+    return faces;
+  }
+
+  it('puts the new address on every one of the member’s faces — the cards, a market’s 토론, the post page, its 댓글 and 대댓글 — and null once deleted, everyone else’s and each entry’s time, stale mark and failed read as they were, with no read', async () => {
+    const queryClient = getQueryClient();
+    const withOld: Me = { ...following, profile: { ...following.profile, imageUrl: OLD } };
+    queryClient.setQueryData(ME_QUERY_KEY, withOld);
+    // Read a minute ago: stale by time, which the patch must not change.
+    const readAt = Date.now() - 60_000;
+    const seed = (key: readonly unknown[], data: unknown) =>
+      queryClient.setQueryData(key, data, { updatedAt: readAt });
+    const list: InfiniteData<PostPage> = {
+      pages: [
+        {
+          items: [card(POST, face(OWN, OLD)), card(OTHER_POST, face(OTHER, OTHER_IMAGE))],
+          nextCursor: 'c1',
+        },
+        { items: [card(FORMER_POST, { kind: 'former_member' })], nextCursor: null },
+      ],
+      pageParams: [undefined, 'c1'],
+    };
+    const searched: InfiniteData<PostPage> = {
+      pages: [{ items: [card(OTHER_POST, face(OTHER, OTHER_IMAGE))], nextCursor: null }],
+      pageParams: [undefined],
+    };
+    const discussion: InfiniteData<CountedPostPage> = {
+      pages: [{ items: [card(POST, face(OWN, OLD))], nextCursor: null, total: 1 }],
+      pageParams: [undefined],
+    };
+    const otherPost = postOf(OTHER_POST, face(OTHER, OTHER_IMAGE));
+    const otherComments: CommentPages = {
+      pages: [
+        {
+          items: [
+            { comment: comment(C3, face(OTHER, null)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    };
+    seed(communityPostsKey({}), list);
+    seed(communityPostsKey({ q: '금리' }), searched);
+    seed(marketPostsKey(MARKET), discussion);
+    seed(postKey(POST), postOf(POST, face(OWN, OLD)));
+    seed(postKey(OTHER_POST), otherPost);
+    seed(postKey(FORMER_POST), { state: 'hidden', id: FORMER_POST, market, commentCount: 0 });
+    seed(postCommentsKey(POST), { pages: [commentPage(OLD)], pageParams: [undefined] });
+    seed(postCommentsKey(OTHER_POST), otherComments);
+    // A write elsewhere marked the comment pages to be read again: they stay so.
+    await queryClient.invalidateQueries({
+      queryKey: postCommentsKey(POST),
+      exact: true,
+      refetchType: 'none',
+    });
+    // The post's last read failed — deleted in another tab: its NOT_FOUND, which the post page
+    // draws as its 404 (post-screen.tsx), stays with the post held.
+    const gone = new ApiError(404, { code: 'NOT_FOUND', message: 'gone' });
+    await queryClient
+      .fetchQuery({ queryKey: postKey(POST), queryFn: () => Promise.reject(gone), retry: false })
+      .catch(() => undefined);
+    expect(queryClient.getQueryState(postKey(POST))?.status).toBe('error');
+    expect(ownFaces(queryClient).map(([, image]) => image)).toEqual(Array(6).fill(OLD));
+
+    const answers: Me[] = [{ ...following, profile: { ...following.profile, imageUrl: NEW } }];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve(answers.shift() ?? following),
+      ),
+    );
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve(following),
+      ),
+    );
+    try {
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      // Six faces: a community card, a 토론 card, the post's byline, 댓글 C1, 대댓글 R2 and R4.
+      const faces = ownFaces(queryClient);
+      expect(faces).toHaveLength(6);
+      expect(faces.filter(([, image]) => image !== NEW)).toEqual([]);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.imageUrl).toBe(NEW);
+      // Everyone else's, untouched — the very objects held.
+      const listHeld = queryClient.getQueryData<InfiniteData<PostPage>>(communityPostsKey({}));
+      expect(listHeld?.pages[0]?.items[1]).toBe(list.pages[0]?.items[1]);
+      expect(listHeld?.pages[1]).toBe(list.pages[1]);
+      expect(queryClient.getQueryData(communityPostsKey({ q: '금리' }))).toBe(searched);
+      expect(queryClient.getQueryData(postKey(OTHER_POST))).toBe(otherPost);
+      expect(queryClient.getQueryData(postCommentsKey(OTHER_POST))).toBe(otherComments);
+      const thread = queryClient.getQueryData<CommentPages>(postCommentsKey(POST))?.pages[0]
+        ?.items[0];
+      expect(thread?.replies[0]).toEqual(comment(R1, face(OTHER, OTHER_IMAGE), C1));
+      expect(thread?.replies[2]).toEqual({ state: 'hidden', id: R3 });
+      expect(thread?.repliesNextCursor).toBe('r1');
+      expect(
+        queryClient.getQueryData<InfiniteData<CountedPostPage>>(marketPostsKey(MARKET))?.pages[0]
+          ?.total,
+      ).toBe(1);
+      // Each entry's time and stale mark as they were, and nothing read.
+      for (const key of [
+        communityPostsKey({}),
+        marketPostsKey(MARKET),
+        postKey(POST),
+        postCommentsKey(POST),
+      ]) {
+        expect(queryClient.getQueryState(key)?.dataUpdatedAt).toBe(readAt);
+      }
+      expect(queryClient.getQueryState(postCommentsKey(POST))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(marketPostsKey(MARKET))?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(postKey(POST))).toMatchObject({
+        status: 'error',
+        error: gone,
+      });
+      expect(queryClient.isFetching()).toBe(0);
+
+      // Deleted: no image on any of them — the nickname's first letter is drawn.
+      await remove.mutate({ expectedAccountId: following.id });
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual(Array(6).fill(null));
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.imageUrl).toBeNull();
+      expect(queryClient.getQueryState(postCommentsKey(POST))?.dataUpdatedAt).toBe(readAt);
+      expect(queryClient.isFetching()).toBe(0);
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('cancels a read on its way, which may have left before the change, and makes it again; a 더 보기 on its way is cancelled and left to press again', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(ME_QUERY_KEY, {
+      ...following,
+      profile: { ...following.profile, imageUrl: OLD },
+    });
+    const postReads: ReturnType<typeof deferred<Post>>[] = [];
+    const post = new QueryObserver<Post>(queryClient, {
+      queryKey: postKey(POST),
+      queryFn: () => {
+        const read = deferred<Post>();
+        postReads.push(read);
+        return read.promise;
+      },
+      retry: false,
+    });
+    const pageReads: ReturnType<typeof deferred<CommentPage>>[] = [];
+    const comments = new InfiniteQueryObserver<
+      CommentPage,
+      Error,
+      CommentPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: postCommentsKey(POST),
+      queryFn: () => {
+        const read = deferred<CommentPage>();
+        pageReads.push(read);
+        return read.promise;
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = [post.subscribe(() => undefined), comments.subscribe(() => undefined)];
+    const postImage = () => {
+      const held = post.getCurrentResult().data;
+      return held?.state === 'published' && held.author.kind === 'member'
+        ? held.author.imageUrl
+        : 'none';
+    };
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve({ ...following, profile: { ...following.profile, imageUrl: NEW } }),
+      ),
+    );
+    try {
+      postReads[0]?.resolve(postOf(POST, face(OWN, OLD)));
+      pageReads[0]?.resolve(commentPage(OLD, 'c1'));
+      await settle();
+      // A read of the post (a focus) and a 더 보기 of the comments leave before the write commits.
+      void post.refetch();
+      void comments.fetchNextPage();
+      await settle();
+      expect(postReads).toHaveLength(2);
+      expect(pageReads).toHaveLength(2);
+
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      await settle();
+      expect(postImage()).toBe(NEW);
+      // The post's read was made again; the 더 보기 was not — its button is there to press.
+      expect(postReads).toHaveLength(3);
+      expect(pageReads).toHaveLength(2);
+      // The reads that left before land late, and change nothing.
+      postReads[1]?.resolve(postOf(POST, face(OWN, OLD)));
+      pageReads[1]?.resolve({
+        items: [{ comment: comment(C2, face(OWN, OLD)), replies: [], repliesNextCursor: null }],
+        nextCursor: null,
+      });
+      await settle();
+      expect(postImage()).toBe(NEW);
+      const pages = comments.getCurrentResult();
+      expect(pages.data?.pages).toHaveLength(1);
+      expect(pages.hasNextPage).toBe(true);
+      expect(pages.isFetchingNextPage).toBe(false);
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual(Array(4).fill(NEW));
+      // The read made again reads the change.
+      postReads[2]?.resolve(postOf(POST, face(OWN, NEW)));
+      await settle();
+      expect(postImage()).toBe(NEW);
+      expect(post.getCurrentResult().isFetching).toBe(false);
+    } finally {
+      for (const stop of unsubscribe) stop();
       queryClient.clear();
     }
   });

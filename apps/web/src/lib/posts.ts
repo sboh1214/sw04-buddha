@@ -6,6 +6,7 @@ import {
   type MarketStatus,
   type PostState,
 } from '@buddha/shared';
+import { type InfiniteData } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
 import {
@@ -283,8 +284,11 @@ export const communityPostsKey = (filters: CommunityFilters) =>
 export const marketPostsKey = (marketId: string) =>
   [...POST_LIST_KEY, 'market', marketId.toLowerCase()] as const;
 
+/** Every post page's entry, by prefix (`storeAuthorImage`, hooks/use-me.ts). */
+export const POST_PAGE_KEY = [...POSTS_KEY, 'post'] as const;
+
 /** One post page, by the canonical lower-cased uuid (the id the API answers with). */
-export const postKey = (postId: string) => [...POSTS_KEY, 'post', postId.toLowerCase()] as const;
+export const postKey = (postId: string) => [...POST_PAGE_KEY, postId.toLowerCase()] as const;
 
 /** One page of the list as `useInfiniteQuery` holds it (the home list's page shape). */
 export interface PostPage {
@@ -371,6 +375,67 @@ export function authorView(author: PostAuthor): AuthorView {
     isAdmin: author.isAdmin,
     href: profilePath(author.publicId),
   };
+}
+
+// ---- a member's new image on what is held ---------------------------------------------------
+
+/**
+ * `items` with `map` applied to each, or `items` itself when `map` changed none of them (returned
+ * each as it was): a cache write that changed nothing writes nothing.
+ */
+export function mapKept<T>(items: T[], map: (item: T) => T): T[] {
+  let changed = false;
+  const mapped = items.map((item) => {
+    const next = map(item);
+    if (next !== item) changed = true;
+    return next;
+  });
+  return changed ? mapped : items;
+}
+
+/**
+ * `author` with the profile image the member `publicId` has now (#141, ADR-0079 7-21): its
+ * address, or null once deleted. Any other author — another member, a withdrawn one — and a face
+ * already at that address is returned as it is, the same object.
+ */
+export function withAuthorImage(
+  author: PostAuthor,
+  publicId: string,
+  imageUrl: string | null,
+): PostAuthor {
+  return author.kind === 'member' && author.publicId === publicId && author.imageUrl !== imageUrl
+    ? { ...author, imageUrl }
+    : author;
+}
+
+/**
+ * A post page (`postKey`) with the member's new image on its byline (`withAuthorImage`); a
+ * placeholder names no author, and is returned as it is.
+ */
+export function postWithAuthorImage(post: Post, publicId: string, imageUrl: string | null): Post {
+  if (post.state !== 'published') return post;
+  const author = withAuthorImage(post.author, publicId, imageUrl);
+  return author === post.author ? post : { ...post, author };
+}
+
+/**
+ * The cards' pages — the community list's (`communityPostsKey`) and a market's 토론
+ * (`marketPostsKey`, with its `total`) — with the member's new image on every card of theirs
+ * (`withAuthorImage`); the pages themselves, when no card is theirs or each already shows it.
+ */
+export function postPagesWithAuthorImage<P extends PostPage>(
+  held: InfiniteData<P>,
+  publicId: string,
+  imageUrl: string | null,
+): InfiniteData<P> {
+  const pages = mapKept(held.pages, (page) => {
+    const items = mapKept(page.items, (card) => {
+      const author = withAuthorImage(card.author, publicId, imageUrl);
+      return author === card.author ? card : { ...card, author };
+    });
+    return items === page.items ? page : { ...page, items };
+  });
+  return pages === held.pages ? held : { ...held, pages };
 }
 
 /**

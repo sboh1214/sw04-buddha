@@ -23,7 +23,7 @@ import {
   validationField,
   validationMessage,
 } from './api';
-import { POSTS_KEY, isOwnPost } from './posts';
+import { POSTS_KEY, isOwnPost, mapKept, withAuthorImage } from './posts';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
@@ -46,7 +46,9 @@ import { POSTS_KEY, isOwnPost } from './posts';
 /**
  * Every post's comment pages, by prefix (`postCommentsKey`): under it the query client keeps the
  * writer's own comments placed at the end of what is held through every read
- * (`keepPlacedComments`, lib/query-client.ts — 오너 결정 2026-10-24).
+ * (`keepPlacedComments`, lib/query-client.ts — 오너 결정 2026-10-24), and a member's new
+ * profile image goes onto every face of theirs the pages hold (`storeAuthorImage`,
+ * hooks/use-me.ts).
  */
 export const COMMENT_PAGES_KEY = [...POSTS_KEY, 'comments'] as const;
 
@@ -374,6 +376,45 @@ export function threadWithReplies(thread: CommentThread, page: ReplyPage): Comme
     replies: repliesWith(thread.replies, page.items),
     repliesNextCursor: page.nextCursor,
   };
+}
+
+// ---- a member's new image on the pages held ------------------------------------------------
+
+/** A comment with the member's new image (`withAuthorImage`); a placeholder names nobody. */
+function commentWithAuthorImage(
+  comment: PostComment,
+  publicId: string,
+  imageUrl: string | null,
+): PostComment {
+  if (comment.state !== 'published') return comment;
+  const author = withAuthorImage(comment.author, publicId, imageUrl);
+  return author === comment.author ? comment : { ...comment, author };
+}
+
+/**
+ * A post's comment pages (`postCommentsKey`) with the profile image the member `publicId` has now
+ * (#141, ADR-0079 7-21) on every 댓글 and 대댓글 of theirs they hold — the 대댓글 '답글 더 보기'
+ * brought among them, which sit in their thread (`withMoreReplies`). The pages themselves when none
+ * is theirs or each already shows it; nothing else of a thread changes (its cursor, the like
+ * counts, a placeholder).
+ */
+export function commentPagesWithAuthorImage(
+  held: CommentPages,
+  publicId: string,
+  imageUrl: string | null,
+): CommentPages {
+  const withImage = (comment: PostComment) => commentWithAuthorImage(comment, publicId, imageUrl);
+  const pages = mapKept(held.pages, (page) => {
+    const items = mapKept(page.items, (thread) => {
+      const comment = withImage(thread.comment);
+      const replies = mapKept(thread.replies, withImage);
+      return comment === thread.comment && replies === thread.replies
+        ? thread
+        : { ...thread, comment, replies };
+    });
+    return items === page.items ? page : { ...page, items };
+  });
+  return pages === held.pages ? held : { ...held, pages };
 }
 
 // ---- what the author's own writes do to the pages held -------------------------------------

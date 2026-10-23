@@ -72,9 +72,11 @@ export function ProfileImageSection() {
  *   for the onboarding — sent before `GET /me` said a step is left — goes there too, without a word
  *   (`afterRefusal`).
  *
- * Each answer is the whole profile, whose image address goes into `['me']` (the hooks), and the
- * router drops the pages it kept for Back and Forward (`router.refresh()`, bio-section.tsx says
- * why): Back to the profile, or to a post with the member's byline, shows the change. A refusal is
+ * Each answer is the whole profile, whose image address goes into `['me']` and onto every byline
+ * of the member the tab holds — a card, a post, a 댓글 or 대댓글 (the hooks, `storeProfileImage`,
+ * ADR-0079 7-21) — and the router drops the pages it kept for Back and Forward (`router.refresh()`,
+ * bio-section.tsx says why): Back to the profile, or to a post with the member's byline, shows the
+ * change. A refusal is
  * said in the card, where the member is looking — each one a new alert, so the same sentence twice
  * (a second GIF picked) is announced twice; a success is a toast, as the other cards do.
  */

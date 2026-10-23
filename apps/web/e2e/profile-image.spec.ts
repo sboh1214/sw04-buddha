@@ -85,15 +85,16 @@ async function postThroughApi(
   return ((await res.json()) as { data: { id: string } }).data.id;
 }
 
-/** A 댓글 straight at the API with the context's cookie. */
+/** A 댓글 — or, under `parentId`, a 대댓글 — straight at the API with the context's cookie. */
 async function commentThroughApi(
   context: APIRequestContext,
   postId: string,
   body: string,
+  parentId: string | null = null,
 ): Promise<string> {
   const me = await meOf(context);
   const res = await context.post(`/api/v1/posts/${postId}/comments`, {
-    data: { parentId: null, body, expectedAccountId: me.id },
+    data: { parentId, body, expectedAccountId: me.id },
   });
   expect(res.status(), await res.text()).toBe(201);
   return ((await res.json()) as { data: { id: string } }).data.id;
@@ -378,6 +379,95 @@ test.describe('프로필 이미지', () => {
     await page.goto(`/community/posts/${postId}`);
     await expect(page.getByTestId(`comment-${commentId}`).getByTestId('post-byline')).toContainText(
       me.profile.nickname,
+    );
+    await expect(page.getByTestId('post-author-image')).toHaveCount(0);
+    expect(hydration).toEqual([]);
+  });
+
+  test('바꾸거나 지운 뒤 뒤로 가면 이 탭이 읽어 둔 글·댓글·대댓글과 시장 토론의 카드도 곧바로 새 이미지를, 지우면 닉네임 첫 글자를 보인다(다시 읽기 전에도)', async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const me = await meOf(page.request);
+    const initial = (Array.from(me.profile.nickname.trim())[0] ?? '').toLocaleUpperCase('ko-KR');
+    const postId = await postThroughApi(page.request, market.id, `얼굴 글 ${tag}`, tag);
+    const commentId = await commentThroughApi(page.request, postId, `얼굴 댓글 ${tag}`);
+    const replyId = await commentThroughApi(page.request, postId, `얼굴 답글 ${tag}`, commentId);
+    const hydration = hydrationErrors(page);
+    const card = page.getByTestId('settings-profile-image');
+    const file = card.getByTestId('profile-image-file');
+    const upload = async (buffer: Buffer): Promise<string> => {
+      const saved = page.waitForResponse(isUpload);
+      await file.setInputFiles({ name: 'face.png', mimeType: 'image/png', buffer });
+      expect((await saved).status()).toBe(200);
+      const address = (await meOf(page.request)).profile.imageUrl;
+      if (address === null) throw new Error('the upload left no image');
+      await expectImage(card.getByTestId('profile-image-preview-image'), address);
+      return address;
+    };
+    // The bylines the tab holds: the post's, its 댓글's and 대댓글's, and the 토론's card.
+    const postFace = page
+      .getByTestId('post-screen')
+      .getByTestId('post-byline')
+      .first()
+      .getByTestId('post-author-image');
+    const commentFace = page.getByTestId(`comment-${commentId}`).getByTestId('post-author-image');
+    const replyFace = page.getByTestId(`comment-${replyId}`).getByTestId('post-author-image');
+    const discussionCard = page.getByTestId('market-discussion').getByTestId(`post-card-${postId}`);
+
+    await page.goto('/my/settings');
+    const first = await upload(bandsPng([RED], 64));
+
+    // --- read once in this tab: the post and its comments, then the market's 토론 (client-side
+    // moves, so the tab keeps what it read), and on to MY 설정 through the member's own byline.
+    await page.goto(`/community/posts/${postId}`);
+    await expectImage(postFace, first);
+    await expectImage(commentFace, first);
+    await expectImage(replyFace, first);
+    await page.getByTestId('post-market-link').click();
+    await expect(page).toHaveURL(`/markets/${market.slug}`);
+    await expectImage(discussionCard.getByTestId('post-author-image'), first);
+    await discussionCard.getByTestId('post-author-link').click();
+    await expect(page).toHaveURL(`/u/${me.profile.publicId}`);
+    await page.getByTestId('profile-edit').click();
+    await expect(page).toHaveURL('/my/settings');
+
+    // --- replaced: Back to the 토론 and to the post shows the new image at once — the comment
+    // pages and the 토론 are read in the browser only and were read moments ago, so nothing reads
+    // them again before they are drawn (ADR-0079 7-21; the earlier file is already gone).
+    const second = await upload(bandsPng([BLUE], 64));
+    expect(second).not.toBe(first);
+    await page.goBack();
+    await page.goBack();
+    await expect(page).toHaveURL(`/markets/${market.slug}`);
+    await expectImage(discussionCard.getByTestId('post-author-image'), second);
+    await page.goBack();
+    await expect(page).toHaveURL(`/community/posts/${postId}`);
+    await expectImage(postFace, second);
+    await expectImage(commentFace, second);
+    await expectImage(replyFace, second);
+
+    // --- deleted: the nickname's first letter on every one of them.
+    await page.getByTestId('post-market-link').click();
+    await expect(page).toHaveURL(`/markets/${market.slug}`);
+    await discussionCard.getByTestId('post-author-link').click();
+    await page.getByTestId('profile-edit').click();
+    await expect(page).toHaveURL('/my/settings');
+    await card.getByTestId('profile-image-delete').click();
+    await page.getByTestId('profile-image-delete-confirm').click();
+    await expect(page.getByText(copy.profileImageDeleted)).toBeVisible();
+    await page.goBack();
+    await page.goBack();
+    await expect(page).toHaveURL(`/markets/${market.slug}`);
+    await expect(discussionCard.getByTestId('post-byline')).toContainText(initial);
+    await expect(discussionCard.getByTestId('post-author-image')).toHaveCount(0);
+    await page.goBack();
+    await expect(page).toHaveURL(`/community/posts/${postId}`);
+    await expect(page.getByTestId(`comment-${replyId}`).getByTestId('post-byline')).toContainText(
+      initial,
     );
     await expect(page.getByTestId('post-author-image')).toHaveCount(0);
     expect(hydration).toEqual([]);
