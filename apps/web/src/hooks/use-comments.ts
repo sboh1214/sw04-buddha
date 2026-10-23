@@ -477,7 +477,8 @@ async function afterCommentRefusal(
  * A draft of that box an onboarding step kept in this tab is the comment now and is removed, and
  * the landing recorded first (`commentDraftLanded`, lib/comment-drafts.ts) — here, as the post
  * writes do it (use-posts.ts), since the page may have gone to the step with the write in flight,
- * and a box going before it hears of the success must not keep it again.
+ * and a box going before it hears of the success must not keep it again. Both for the account
+ * that sent it (`expectedAccountId`) only: the tab may be another's by the time it lands.
  */
 export function createCommentOptions(
   queryClient: QueryClient,
@@ -493,11 +494,15 @@ export function createCommentOptions(
           body,
         }),
       ).data,
-    onSuccess: async (comment: PublishedComment, { parentId }: CreateCommentVariables) => {
+    onSuccess: async (
+      comment: PublishedComment,
+      { parentId, expectedAccountId }: CreateCommentVariables,
+    ) => {
       commentDraftLanded(
         parentId === null || parentId === undefined
           ? { kind: 'comment', postId: id }
           : { kind: 'reply', postId: id, parentId: parentId.toLowerCase() },
+        expectedAccountId,
       );
       if (comment.parentId === null) await readOnToTheEnd(queryClient, id, comment);
       else await readOnReplies(queryClient, id, comment);
@@ -510,7 +515,7 @@ export function createCommentOptions(
 
 /**
  * `PUT /comments/:commentId`: the edited comment replaces the held one; no count changes. A kept
- * draft of that edit goes, as a new comment's does.
+ * draft of that edit by the account that sent it goes, as a new comment's does.
  */
 export function updateCommentOptions(
   queryClient: QueryClient,
@@ -526,8 +531,14 @@ export function updateCommentOptions(
           body,
         }),
       ).data,
-    onSuccess: (comment: PublishedComment, { commentId }: UpdateCommentVariables) => {
-      commentDraftLanded({ kind: 'edit', postId: id, commentId: commentId.toLowerCase() });
+    onSuccess: (
+      comment: PublishedComment,
+      { commentId, expectedAccountId }: UpdateCommentVariables,
+    ) => {
+      commentDraftLanded(
+        { kind: 'edit', postId: id, commentId: commentId.toLowerCase() },
+        expectedAccountId,
+      );
       return writePages(queryClient, id, (held) => withEditedComment(held, comment));
     },
     onError: (error: Error) => afterCommentRefusal(queryClient, id, error, onSessionChanged),

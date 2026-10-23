@@ -125,7 +125,7 @@ const held = new Map<string, GoingCommentBox>();
  * `me` — `GET /me` as the cache holds it now: keeps its text in this tab when `me` names a step
  * left (`shouldKeepCommentDraft`), for that account only — the page going to that step, or going
  * any other way while it is left (ADR-0074 7-23·7-24). A write of the box that landed after that
- * render counts as saved (`commentDraftLandedSince`). Whether it kept it. Only for a box whose
+ * render counts as saved (`commentDraftLandedSince` — a write that account sent). Whether it kept it. Only for a box whose
  * place took it still as it went (`commentBoxLeaves`): one the page took away in place is shown
  * apart instead.
  */
@@ -134,7 +134,7 @@ export function keepHeldCommentDraft(
   me: Me | undefined,
 ): boolean {
   if (me?.id !== last.accountId) return false;
-  const saved = commentDraftLandedSince(last.key, last.moment);
+  const saved = commentDraftLandedSince(last.key, last.accountId, last.moment);
   if (
     !shouldKeepCommentDraft({
       hasDraft: commentTextChanged(last.text, last.initial),
@@ -169,7 +169,8 @@ export function commentBoxLeaves(
   me: Me | undefined,
   placeGone: boolean,
 ): 'dropped' | GoingBoxWrite {
-  if (last.closed || commentDraftLandedSince(last.key, last.moment)) return 'dropped';
+  if (last.closed || commentDraftLandedSince(last.key, last.accountId, last.moment))
+    return 'dropped';
   if (!commentTextChanged(last.text, last.initial)) return 'dropped';
   if (!placeGone && keepHeldCommentDraft(last, me)) return 'dropped';
   return last.pending ? 'pending' : last.refused ? 'refused' : 'none';

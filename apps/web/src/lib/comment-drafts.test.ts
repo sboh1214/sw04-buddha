@@ -6,6 +6,7 @@ import {
   type CommentDraftKey,
   clearAllCommentDrafts,
   clearCommentDraft,
+  clearCommentDraftOf,
   clearCommentDrafts,
   commentDraftLanded,
   commentDraftLandedSince,
@@ -73,6 +74,8 @@ const PARENT = '6F9619FF-8B86-D011-B42D-00C04FC964FF';
 const parent = PARENT.toLowerCase();
 const EDITED = 'a0b1c2d3-e4f5-4a6b-8c7d-9e0f1a2b3c4d';
 const ACCOUNT = 'account-a';
+/** Another account the tab may show. */
+const OTHER = 'account-b';
 const NOW = Date.UTC(2026, 9, 20, 3, 0, 0);
 
 const newComment: CommentDraftKey = { kind: 'comment', postId: POST };
@@ -247,11 +250,28 @@ describe('a box going away', () => {
 
   it('counts a write of its box landed after its last render as saved', () => {
     const before = commentDraftMoment();
-    commentDraftLanded(reply);
-    expect(commentDraftLandedSince(reply, before)).toBe(true);
-    expect(commentDraftLandedSince(reply, commentDraftMoment())).toBe(false);
+    commentDraftLanded(reply, ACCOUNT);
+    expect(commentDraftLandedSince(reply, ACCOUNT, before)).toBe(true);
+    expect(commentDraftLandedSince(reply, ACCOUNT, commentDraftMoment())).toBe(false);
     // Another box of the post is not that one.
-    expect(commentDraftLandedSince(edit, before)).toBe(false);
-    expect(commentDraftLandedSince({ ...reply, parentId: parent }, before)).toBe(true);
+    expect(commentDraftLandedSince(edit, ACCOUNT, before)).toBe(false);
+    expect(commentDraftLandedSince({ ...reply, parentId: parent }, ACCOUNT, before)).toBe(true);
+    // Nor is the same box of another account (Codex review on PR #220): the write was A's.
+    expect(commentDraftLandedSince(reply, OTHER, before)).toBe(false);
+  });
+
+  it('removes the kept draft of the account whose write landed, and no other account’s', () => {
+    const storage = new MemoryStorage();
+    keepCommentDraft(storage, reply, OTHER, 'B의 답글', NOW);
+    clearCommentDraftOf(storage, reply, ACCOUNT);
+    expect([...readCommentDrafts(storage, POST, OTHER, NOW).replies.values()]).toEqual([
+      'B의 답글',
+    ]);
+    clearCommentDraftOf(storage, reply, OTHER);
+    expect(storage.items.size).toBe(0);
+    // What is no draft goes, as a read would remove it.
+    storage.setItem(commentDraftStorageKey(reply), 'not json');
+    clearCommentDraftOf(storage, reply, ACCOUNT);
+    expect(storage.items.size).toBe(0);
   });
 });

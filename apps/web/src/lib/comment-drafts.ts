@@ -21,9 +21,10 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  *   each under its post — and held for the account that wrote it: another account signed in on
  *   the tab never reads it.
  * - Gone: once taken back (the box holds it again and guards it like any text — leaving asks, and
- *   going to a step keeps it again), once a write or an edit of that box succeeds
- *   (`commentDraftLanded`, one in flight when the page went included), when the account signs out
- *   in the tab, and COMMENT_DRAFT_TTL_MS after it was kept.
+ *   going to a step keeps it again), once a write or an edit of that box by the same account
+ *   succeeds (`commentDraftLanded`, one in flight when the page went included — another account's
+ *   write of the same box, sent before the tab changed hands, leaves it), when the account signs
+ *   out in the tab, and COMMENT_DRAFT_TTL_MS after it was kept.
  * - Only text: a comment is plain text (#45-3), so a draft is the box's text as it was.
  *
  * Pure functions over a `DraftStorage`, plus the browser's binding to this tab's `sessionStorage`
@@ -318,6 +319,20 @@ export function clearCommentDraft(storage: DraftStorage, key: CommentDraftKey): 
   tryRemove(storage, commentDraftStorageKey(key));
 }
 
+/**
+ * Removes what `accountId` kept for `key`, and only that: another account's draft of the same box
+ * stays (anything that is no draft goes, as a read would remove it).
+ */
+export function clearCommentDraftOf(
+  storage: DraftStorage,
+  key: CommentDraftKey,
+  accountId: string,
+): void {
+  const storageKey = commentDraftStorageKey(key);
+  const stored = readItem(storage, storageKey);
+  if (stored === null || stored.accountId === accountId) tryRemove(storage, storageKey);
+}
+
 /** Removes every kept comment draft (signing out). */
 export function clearAllCommentDrafts(storage: DraftStorage): void {
   for (const key of keysUnder(storage, COMMENT_DRAFT_PREFIX)) tryRemove(storage, key);
@@ -364,14 +379,23 @@ export function clearAllSessionCommentDrafts(): void {
 // ---- the writes that landed in this tab ------------------------------------------------------
 
 /**
- * When a write of each box last landed in this tab, by the box's storage key, as a
- * `commentDraftMoment` — as the post drafts' `landedAt`, and for the same reason: a write's
- * `onSuccess` runs before the box hears of it, and a box the page takes away in between holds its
- * sent text from its last render; counting a write landed after that render as saved
+ * When a write of each box last landed in this tab, by the account that sent it and the box's
+ * storage key, as a `commentDraftMoment` — as the post drafts' `landedAt`, and for the same reason:
+ * a write's `onSuccess` runs before the box hears of it, and a box the page takes away in between
+ * holds its sent text from its last render; counting a write landed after that render as saved
  * (`commentDraftLandedSince`) keeps it from keeping a comment already written.
+ *
+ * By account (Codex review on PR #220): a write sent by account A can land after the tab changed to
+ * account B, and B can have a box of the same post and box open meanwhile — its own text, kept for
+ * B across an onboarding step. A's landing says nothing of B's box: it neither removes B's kept
+ * draft nor counts B's box as saved, which would let B's text go unkept as the page leaves.
  */
 const landedAt = new Map<string, number>();
 let moments = 0;
+
+function landedKey(key: CommentDraftKey, accountId: string): string {
+  return `${accountId}\n${commentDraftStorageKey(key)}`;
+}
 
 /** A moment in this tab's order of comment draft events: each call answers a larger number. */
 export function commentDraftMoment(): number {
@@ -379,14 +403,25 @@ export function commentDraftMoment(): number {
   return moments;
 }
 
-/** A write of `key`'s box landed: its kept draft goes, and a box rendered before now keeps nothing. */
-export function commentDraftLanded(key: CommentDraftKey): void {
-  landedAt.set(commentDraftStorageKey(key), commentDraftMoment());
+/**
+ * A write of `key`'s box sent by `accountId` (its `expectedAccountId`) landed: that account's kept
+ * draft of the box goes, and a box of it that account rendered before now keeps nothing. Another
+ * account's draft and box of the same key are left as they are.
+ */
+export function commentDraftLanded(key: CommentDraftKey, accountId: string): void {
+  landedAt.set(landedKey(key, accountId), commentDraftMoment());
   const storage = sessionDrafts();
-  if (storage !== null) clearCommentDraft(storage, key);
+  if (storage !== null) clearCommentDraftOf(storage, key, accountId);
 }
 
-/** Whether a write of `key`'s box landed after `moment` (a `commentDraftMoment`). */
-export function commentDraftLandedSince(key: CommentDraftKey, moment: number): boolean {
-  return (landedAt.get(commentDraftStorageKey(key)) ?? 0) > moment;
+/**
+ * Whether a write of `key`'s box by `accountId` — the account a box rendered for — landed after
+ * `moment` (a `commentDraftMoment`).
+ */
+export function commentDraftLandedSince(
+  key: CommentDraftKey,
+  accountId: string,
+  moment: number,
+): boolean {
+  return (landedAt.get(landedKey(key, accountId)) ?? 0) > moment;
 }

@@ -102,9 +102,35 @@ describe('a comment box going away', () => {
 
   it('keeps nothing once a write of the box landed after its last render', () => {
     const last = box();
-    commentDraftLanded(last.key);
+    commentDraftLanded(last.key, 'account-a');
     expect(keepHeldCommentDraft(last, me('account-a', 'consent'))).toBe(false);
     expect(storage.getItem(commentDraftStorageKey(last.key))).toBeNull();
+  });
+
+  it('keeps its text when the write that landed was another account’s: the tab changed from A to B with A’s write in flight (Codex review on PR #220)', () => {
+    // A sent a 답글 from this box; the tab changed to B, who opened the same box and went to a
+    // step, which kept B's text; A's write lands now. It is A's landing: B's kept draft stays, and
+    // B's box — rendered before it — is not counted as saved, so it keeps its text as it goes.
+    const theirs = box({ accountId: 'account-b', text: 'B가 쓰던 답글' });
+    expect(keepHeldCommentDraft(theirs, me('account-b', 'consent'))).toBe(true);
+    const kept = storage.getItem(commentDraftStorageKey(theirs.key));
+    expect(kept).not.toBeNull();
+    commentDraftLanded(theirs.key, 'account-a');
+    expect(storage.getItem(commentDraftStorageKey(theirs.key))).toBe(kept);
+    expect([...readCommentDrafts(storage, POST, 'account-b', Date.now()).replies]).toEqual([
+      [PARENT, 'B가 쓰던 답글'],
+    ]);
+    expect(keepHeldCommentDraft(theirs, me('account-b', 'consent'))).toBe(true);
+    expect(commentBoxLeaves({ ...theirs, closed: false }, me('account-b', null), true)).toBe(
+      'none',
+    );
+    // B's own write of the box does count, and removes B's draft.
+    commentDraftLanded(theirs.key, 'account-b');
+    expect(storage.getItem(commentDraftStorageKey(theirs.key))).toBeNull();
+    expect(keepHeldCommentDraft(theirs, me('account-b', 'consent'))).toBe(false);
+    expect(commentBoxLeaves({ ...theirs, closed: false }, me('account-b', null), true)).toBe(
+      'dropped',
+    );
   });
 });
 
@@ -155,7 +181,7 @@ describe('what a comment box going away leaves the section', () => {
 
   it('is nothing once a write of it landed since its last render', () => {
     const last = going({ pending: true });
-    commentDraftLanded(last.key);
+    commentDraftLanded(last.key, last.accountId);
     expect(commentBoxLeaves(last, me('account-a', null), PLACE_GONE)).toBe('dropped');
   });
 

@@ -397,14 +397,16 @@ describe('the writes', () => {
     await expect(
       write.mutate({ parentId: COMMENT, body: '답글', expectedAccountId: 'user-1' }),
     ).rejects.toBeInstanceOf(ApiError);
-    expect(commentDraftLandedSince(replyBox, before)).toBe(false);
+    expect(commentDraftLandedSince(replyBox, 'user-1', before)).toBe(false);
 
     send.mockResolvedValueOnce(
       answer(published('d3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11', commentId)),
     );
     await write.mutate({ parentId: COMMENT, body: '답글', expectedAccountId: 'user-1' });
-    expect(commentDraftLandedSince(replyBox, before)).toBe(true);
-    expect(commentDraftLandedSince(newBox, before)).toBe(false);
+    expect(commentDraftLandedSince(replyBox, 'user-1', before)).toBe(true);
+    expect(commentDraftLandedSince(newBox, 'user-1', before)).toBe(false);
+    // The account that sent it, not another the tab may show by now (Codex review on PR #220).
+    expect(commentDraftLandedSince(replyBox, 'user-2', before)).toBe(false);
 
     vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer(published(commentId, null, '고친 댓글')));
     const edit = new MutationObserver(
@@ -412,7 +414,8 @@ describe('the writes', () => {
       updateCommentOptions(queryClient, POST, () => undefined),
     );
     await edit.mutate({ commentId: COMMENT, body: '고친 댓글', expectedAccountId: 'user-1' });
-    expect(commentDraftLandedSince(editBox, before)).toBe(true);
+    expect(commentDraftLandedSince(editBox, 'user-1', before)).toBe(true);
+    expect(commentDraftLandedSince(editBox, 'user-2', before)).toBe(false);
   });
 
   it('a deletion applies its answer to the pages held, and the count is read again', async () => {
