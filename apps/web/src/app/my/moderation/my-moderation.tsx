@@ -53,22 +53,24 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  * sections `h4` under it). Two sections:
  *
  * - 받은 조치: above the list, once, how to appeal (#186, ADR-0084; owner decision 2026-10-22 답 4)
- *   — by the customer centre's email, saying which action from the sign-up email, once per action
+ *   — by the customer centre's email, saying which action (and, for a post or a comment, its title
+ *   or first line — owner decision 2026-10-23 답 1) from the sign-up email, once per action
  *   within 14 days, the action standing while reviewed and the answer by email (#45-14); under it,
  *   for an account on a Kakao or Naver placeholder address alone, that an appeal needs an email
  *   registered in MY 설정 first, with the way there (owner decision 2026-10-22 (2차) 3) — then
  *   each action an operator took on the member, newest first: its type, what it was about (their
  *   post or comment, or that they deleted it since; their profile), the reason (the report reason
  *   the operator picked and their explanation), when, its end when it has one, its cancellation,
- *   and on each one standing its '이의 기한' — or, once that has passed, '이의 기한이 지났습니다.'
- *   with it (답 1·2, `appealDeadlineView`). A nickname reset not cancelled says, for the 30 days of
- *   its hold, that the nickname taken away cannot be used again (owner decision 2026-10-22,
- *   `nicknameHoldShown`) — never which it was (#37-3). A writing restriction (#185, ADR-0082) says
- *   its end — '무기한' for none — as it stands now, and '진행 중' while it stands
- *   (`restrictionStanding`); one an operator lifted early or shortened says '조기 해제됨' or '감경됨'
- *   and the end it was given under the changed one (`myEndChangeView`, owner decision 2026-10-23
- *   answer 4 — never the reason); a cancelled one says no end, only '취소됨' and when it was
- *   cancelled (answer 10). Never who reported nor which operator acted (#45-13).
+ *   and on each one standing its '이의 기한' — or, once the minute it shows has ended (owner
+ *   decision 2026-10-23 답 5), '이의 기한이 지났습니다.' with it (답 1·2, `appealDeadlineView`).
+ *   A nickname reset not cancelled says, for the 30 days of its hold, that the nickname taken
+ *   away cannot be used again (owner decision 2026-10-22, `nicknameHoldShown`) — never which it
+ *   was (#37-3). A writing restriction (#185, ADR-0082) says its end — '무기한' for none — as it
+ *   stands now, and '진행 중' while it stands (`restrictionStanding`); one an operator lifted early
+ *   or shortened says '조기 해제됨' or '감경됨' and the end it was given under the changed one
+ *   (`myEndChangeView`, owner decision 2026-10-23 answer 4 — never the reason); a cancelled one
+ *   says no end, only '취소됨' and when it was cancelled (answer 10). Never who reported nor which
+ *   operator acted (#45-13).
  * - 내가 한 신고: each of the member's reports, newest first — what it was about as the public sees
  *   it now, the reason and the description sent, when, and 접수 or the result, 조치함 or 기각, with
  *   when (#45-13). Not which action was taken: that is the member acted on's to read.

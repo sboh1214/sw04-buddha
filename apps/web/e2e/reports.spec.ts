@@ -1,4 +1,10 @@
-import { APPEAL_WINDOW_DAYS, NO_EMAIL_DOMAIN, type Me } from '@buddha/shared';
+import {
+  APPEAL_WINDOW_DAYS,
+  NO_EMAIL_DOMAIN,
+  appealWindowEndOf,
+  type Me,
+  type MyModerationAction,
+} from '@buddha/shared';
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import { fillBusinessInfo } from '../src/legal/business-info';
@@ -36,8 +42,9 @@ import {
  * - the author sees the placeholder, '숨김' with the reason and the way to 조치·신고 내역 on MY 내 글
  *   (#186 답 9), and there the action with its reason and its '이의 기한' 14 days on — the guidance
  *   once above the list, nothing more of the appeal on the card (답 1·4) — and, its browser's clock
- *   past that, '이의 기한이 지났습니다.' with the same deadline (답 2); never who reported nor who
- *   acted; the reporter sees 조치함 and 기각;
+ *   at the last instant of the minute that deadline shows, still '이의 기한', then as that minute
+ *   ends '이의 기한이 지났습니다.' with the same deadline (답 2, owner decision 2026-10-23 답 5);
+ *   never who reported nor who acted; the reporter sees 조치함 and 기각;
  * - a profile reported, its 소개 emptied by the operator from the member's page (kept for operators,
  *   not restored by a cancellation), and an operator's own post offering no action — its report
  *   read without the reporter and the description, and the hiding another operator gives it read
@@ -705,8 +712,19 @@ test.describe('신고와 운영 처리', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      // The action as the page reads it, for the exact instant its card's minute ends.
+      const actionsRead = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' &&
+          new URL(response.url()).pathname === '/api/v1/me/moderation/actions',
+      );
       await toModeration.click();
       await expect(page).toHaveURL('/my/moderation');
+      const { data: received } = (await (await actionsRead).json()) as {
+        data: MyModerationAction[];
+      };
+      expect(received).toHaveLength(1);
+      const hidingWindowEnd = appealWindowEndOf(received[0]!.createdAt).getTime();
       const actions = page.getByTestId('my-actions-list');
       await expect(actions.locator('article')).toHaveCount(1);
       await expect(actions.getByTestId('my-action-type')).toHaveText(copy.moderationActionHide);
@@ -744,9 +762,14 @@ test.describe('신고와 운영 처리', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
-      // The author's browser 15 days on, past the 14 (APPEAL_WINDOW_DAYS): the card says the
-      // deadline has passed, with that same deadline and nothing else (답 2); the guidance stays.
-      await page.clock.setFixedTime(Date.now() + (APPEAL_WINDOW_DAYS + 1) * 24 * 60 * 60 * 1_000);
+      // The author's browser at the last instant of the minute the deadline shows, 14 days on
+      // (APPEAL_WINDOW_DAYS) — past the exact deadline inside that minute: still in time (owner
+      // decision 2026-10-23 답 5). As that minute ends, the card says the deadline has passed, with
+      // that same deadline and nothing else (답 2); the guidance stays.
+      await page.clock.setFixedTime(hidingWindowEnd - 1);
+      await page.goto('/my/moderation');
+      await expectDeadlineLine(actions, hidingDeadline, false);
+      await page.clock.setFixedTime(hidingWindowEnd);
       await page.goto('/my/moderation');
       await expectDeadlineLine(actions, hidingDeadline, true);
       await expectAppealGuidance(page);

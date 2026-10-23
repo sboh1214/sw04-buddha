@@ -844,10 +844,12 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
   it('says the four things of #45-14 and the owner’s line, with the window the shared rule counts', () => {
     // By the customer centre's email, once per action, within APPEAL_WINDOW_DAYS of it; the action
     // stands while reviewed and the answer comes by email (ADR-0069 decision 2 #45-14) — and which
-    // action, from the sign-up email (owner decision 2026-10-22 답 6), one sentence of its own.
+    // action, from the sign-up email (owner decision 2026-10-22 답 6), one sentence of its own: the
+    // owner's sentence, its parentheses asking for the post's or comment's title or first line too,
+    // as the ask-back does (owner decision 2026-10-23 답 1).
     expect(copy.appealGuidance).toContain('고객센터 이메일({{email}})');
     expect(copy.appealGuidance).toContain(
-      '어느 조치인지(조치의 종류와 조치한 때)를 적어 가입한 이메일로 보내 주세요.',
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 가입한 이메일로 보내 주세요.',
     );
     expect(copy.appealGuidance).toContain('조치마다 한 번');
     expect(copy.appealGuidance).toContain(`조치한 때부터 ${String(APPEAL_WINDOW_DAYS)}일 안`);
@@ -859,6 +861,17 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
     // The card's line, and the owner's sentence for one whose deadline has passed (답 2).
     expect(copy.moderationAppealDeadline).toBe('이의 기한');
     expect(copy.moderationAppealDeadlinePassed).toBe('이의 기한이 지났습니다.');
+  });
+
+  it('asks for the action in the words the operator’s ask-back uses (owner decision 2026-10-23 답 1)', () => {
+    // docs/OPERATIONS.md's ask-back, the owner's text: the member reads the same 'which action' on
+    // the page as in the mail that asks them again.
+    const operations = readFileSync(path.join(SRC, '../../../docs/OPERATIONS.md'), 'utf8');
+    const askBack =
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 그 조치의 이의 기한 안에 다시 보내 주세요.';
+    expect(operations).toContain(`\n     ${askBack}\n`);
+    const which = /어느 조치인지\([^)]*\)를 적어/;
+    expect(which.exec(copy.appealGuidance)?.[0]).toBe(which.exec(askBack)?.[0]);
   });
 
   it('fills in the business info’s email — 미정 until the owner supplies it', () => {
@@ -885,32 +898,47 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
     expect(appealEmailRequired(undefined)).toBe(false);
   });
 
-  it('holds the window open until the deadline, 14 days on, and never for a cancelled action', () => {
-    const taken = Date.parse(TAKEN);
-    const standing = { createdAt: TAKEN, cancelledAt: null };
+  // 12:00:45.600 KST: the deadline shows as 오후 12:00 fourteen days on, 45.6 seconds into the minute.
+  const MID_MINUTE = '2026-10-21T03:00:45.600Z';
+  const MINUTE_MS = 60 * 1_000;
+
+  it('holds the window open to the end of the minute the deadline shows, 14 days on, and never for a cancelled action', () => {
+    const taken = Date.parse(MID_MINUTE);
+    const deadline = taken + APPEAL_WINDOW_DAYS * DAY_MS;
+    const standing = { createdAt: MID_MINUTE, cancelledAt: null };
+    expect(appealDeadline(standing)).toBe(new Date(deadline).toISOString());
     expect(appealWindowOpen(standing, taken)).toBe(true);
-    expect(appealWindowOpen(standing, taken + APPEAL_WINDOW_DAYS * DAY_MS - 1)).toBe(true);
-    // The deadline's own instant is past it, as `warningInWindow` has always counted.
-    expect(appealWindowOpen(standing, taken + APPEAL_WINDOW_DAYS * DAY_MS)).toBe(false);
-    expect(appealDeadline(standing)).toBe(
-      new Date(taken + APPEAL_WINDOW_DAYS * DAY_MS).toISOString(),
-    );
-    const cancelled = { createdAt: TAKEN, cancelledAt: '2026-10-21T04:00:00.000Z' };
+    // Owner decision 2026-10-23 답 5: in time to the displayed minute's last second (…:59) — past
+    // the exact instant inside it — and late as that minute ends.
+    const minuteEnds = Date.parse('2026-11-04T03:01:00.000Z');
+    expect(appealWindowOpen(standing, deadline)).toBe(true);
+    expect(appealWindowOpen(standing, deadline + 14_000)).toBe(true);
+    expect(appealWindowOpen(standing, minuteEnds - 1)).toBe(true);
+    expect(appealWindowOpen(standing, minuteEnds)).toBe(false);
+    // A deadline on the minute's first instant has that whole minute too.
+    const onTheMinute = { createdAt: TAKEN, cancelledAt: null };
+    const onTheMinuteDeadline = Date.parse(TAKEN) + APPEAL_WINDOW_DAYS * DAY_MS;
+    expect(appealWindowOpen(onTheMinute, onTheMinuteDeadline + MINUTE_MS - 1)).toBe(true);
+    expect(appealWindowOpen(onTheMinute, onTheMinuteDeadline + MINUTE_MS)).toBe(false);
+    const cancelled = { createdAt: MID_MINUTE, cancelledAt: '2026-10-21T04:00:00.000Z' };
     expect(appealWindowOpen(cancelled, taken)).toBe(false);
   });
 
   it('gives a standing action’s card its deadline, then that it has passed with the same deadline, and a cancelled one none', () => {
     // Owner decision 2026-10-22 답 1: the exact instant, 14×24 hours on; 답 2: once passed,
-    // '이의 기한이 지났습니다.' and that deadline only — the line stays, the same instant.
-    const taken = Date.parse(TAKEN);
+    // '이의 기한이 지났습니다.' and that deadline only — the line stays, the same instant. Passed once
+    // the minute it shows has ended (owner decision 2026-10-23 답 5).
+    const taken = Date.parse(MID_MINUTE);
     const deadline = new Date(taken + APPEAL_WINDOW_DAYS * DAY_MS).toISOString();
-    const standing = { createdAt: TAKEN, cancelledAt: null };
+    const minuteEnds = Date.parse('2026-11-04T03:01:00.000Z');
+    const standing = { createdAt: MID_MINUTE, cancelledAt: null };
     expect(appealDeadlineView(standing, taken)).toEqual({ deadline, passed: false });
-    expect(appealDeadlineView(standing, Date.parse(deadline) - 1)).toEqual({
+    expect(appealDeadlineView(standing, Date.parse(deadline))).toEqual({
       deadline,
       passed: false,
     });
-    expect(appealDeadlineView(standing, Date.parse(deadline))).toEqual({ deadline, passed: true });
+    expect(appealDeadlineView(standing, minuteEnds - 1)).toEqual({ deadline, passed: false });
+    expect(appealDeadlineView(standing, minuteEnds)).toEqual({ deadline, passed: true });
     expect(appealDeadlineView(standing, taken + (APPEAL_WINDOW_DAYS + 30) * DAY_MS)).toEqual({
       deadline,
       passed: true,
@@ -999,14 +1027,18 @@ describe('the warning banner (owner decision 2026-10-21)', () => {
     ...overrides,
   });
 
-  it('shows a warning for its appeal window — APPEAL_WINDOW_DAYS from it — and no longer', () => {
+  it('shows a warning for its appeal window — APPEAL_WINDOW_DAYS from it, to its minute’s end — and no longer', () => {
     const warning = action({});
     expect(warningInWindow([warning], NOW)).toBe(warning);
-    const lastInstant = action({
-      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS + 1).toISOString(),
+    // NOW is a minute's first instant. A deadline at it is in its minute's window (owner decision
+    // 2026-10-23 답 5); one a millisecond before it is in the minute that has just ended.
+    const lastMinute = action({
+      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS).toISOString(),
     });
-    expect(warningInWindow([lastInstant], NOW)).toBe(lastInstant);
-    const over = action({ createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS).toISOString() });
+    expect(warningInWindow([lastMinute], NOW)).toBe(lastMinute);
+    const over = action({
+      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS - 1).toISOString(),
+    });
     expect(warningInWindow([over], NOW)).toBeNull();
   });
 

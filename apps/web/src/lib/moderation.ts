@@ -7,6 +7,7 @@ import {
   REPORT_REASONS,
   WRITING_RESTRICTION_DAYS,
   appealDeadlineOf,
+  appealWindowEndOf,
   codePointLength,
   isNoEmailAddress,
   moderationNotAllowedDetailsSchema,
@@ -539,8 +540,9 @@ export function actionSubjectView(subject: MyActionSubject | null): NamedLink | 
 }
 
 /**
- * The last instant the member may appeal the action (`appealDeadlineOf`, #45-14: «조치 뒤 14일
- * 안»), or null for one an operator cancelled since — there is nothing left to appeal.
+ * The member's appeal deadline for the action, as the card writes it (`appealDeadlineOf`, #45-14:
+ * «조치 뒤 14일 안» — in time to the end of the minute it shows, `appealWindowOpen`), or null for one
+ * an operator cancelled since — there is nothing left to appeal.
  */
 export function appealDeadline(action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>) {
   return action.cancelledAt === null ? appealDeadlineOf(action.createdAt).toISOString() : null;
@@ -548,29 +550,31 @@ export function appealDeadline(action: Pick<MyModerationAction, 'createdAt' | 'c
 
 /**
  * Whether the member may still appeal the action at `now` (#45-14: «조치마다 한 번, 조치 뒤 14일
- * 안»): it stands, and its deadline (`appealDeadline`) is still ahead — the deadline's own instant
- * is past it. The one place the window is judged on the web; nothing on the server reads it, as
- * an appeal goes to the customer centre's email and the app takes none (#186, ADR-0084). The
- * operator judges an appeal by when the customer centre's mailbox received it (owner decision
- * 2026-10-22 답 10, docs/OPERATIONS.md). Whether one was sent already the app cannot know, so «한
- * 번» is the notice's to say and the operator's to check.
+ * 안»): it stands, and the minute its deadline (`appealDeadline`) shows in has not ended — mail the
+ * customer centre's mailbox receives up to that minute's last second (…:59) is in time (owner
+ * decision 2026-10-23 답 5, `appealWindowEndOf`), so the window closes as that minute ends, not at
+ * the exact instant inside it. The one place the window is judged on the web; nothing on the
+ * server reads it, as an appeal goes to the customer centre's email and the app takes none (#186,
+ * ADR-0084). The operator judges an appeal by when the customer centre's mailbox received it
+ * (owner decision 2026-10-22 답 10, docs/OPERATIONS.md) against the same minute. Whether one was
+ * sent already the app cannot know, so «한 번» is the notice's to say and the operator's to check.
  */
 export function appealWindowOpen(
   action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
   // Read in render through this default, as `sanctionInForce`'s is: never on the server.
   now: number = Date.now(),
 ): boolean {
-  const deadline = appealDeadline(action);
-  return deadline !== null && Date.parse(deadline) > now;
+  return action.cancelledAt === null && appealWindowEndOf(action.createdAt).getTime() > now;
 }
 
 /**
  * The '이의 기한' line of an action's card on 조치·신고 내역 (#186, ADR-0084), or null when the card
  * has none: an action an operator cancelled since has nothing left to appeal (ADR-0081 7-17). For
  * one that stands, its deadline (`appealDeadline`: APPEAL_WINDOW_DAYS from it, the exact instant —
- * owner decision 2026-10-22 답 1) and whether it has passed at `now` (`appealWindowOpen` — its own
- * instant is past it). A passed one keeps its line, as '이의 기한이 지났습니다.' and that deadline
- * only (답 2); the card says nothing else of the appeal — the sentence is once above the list (답 4).
+ * owner decision 2026-10-22 답 1 — which the card writes to the minute) and whether it has passed
+ * at `now` (`!appealWindowOpen` — once the minute it shows has ended, owner decision 2026-10-23
+ * 답 5). A passed one keeps its line, as '이의 기한이 지났습니다.' and that deadline only (답 2); the
+ * card says nothing else of the appeal — the sentence is once above the list (답 4).
  */
 export function appealDeadlineView(
   action: Pick<MyModerationAction, 'createdAt' | 'cancelledAt'>,
