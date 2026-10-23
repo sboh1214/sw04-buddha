@@ -7,9 +7,10 @@
  * search; each action comes with its time in KST to the second and the last second an appeal of it
  * is in time — the end of the minute its deadline shows in, …:59 (owner decision 2026-10-23 답 5) —
  * which the operator compares with the mailbox's arrival time (답 10): the screens show the minute
- * only (ADR-0084 6-8). The doc's replies, its two ask-backs and what it still leaves to the owner
- * are read here too (오너 결정 2026-10-22 (2차), 2026-10-23, 2026-10-23 (2차)), with the lookup's
- * part in telling a late ask-back. Skips the database part when TEST_* are unset.
+ * only (ADR-0084 6-8). The doc's replies, its two ask-backs and the rare cases it leaves to the
+ * operator's judgement in the member's favour are read here too (오너 결정 2026-10-22 (2차),
+ * 2026-10-23, 2026-10-23 (2차), 2026-10-23 (3차)), with the lookup's part in telling a late
+ * ask-back. Skips the database part when TEST_* are unset.
  */
 import { readFileSync } from 'node:fs';
 import {
@@ -191,8 +192,9 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     );
     expect(text).not.toContain('아래의 글을 보낸다(오너 결정 2026-10-23 답 3)');
     expect(text).not.toContain("'계속'을 두 번째부터로 읽은 것은 ADR-0084 6-8, 결과 4의 12");
-    // The mail resent from the changed address is a new appeal, timed by its own arrival until the
-    // owner answers: two replies can carry an in-time first mail past the deadline (결과 4의 12).
+    // The mail resent from the changed address is a new appeal, timed by its own arrival; when two
+    // replies carried an in-time first mail past the deadline, the rare case is step 7's — the
+    // operator's judgement in the member's favour (owner decision 2026-10-23 (3차)).
     expect(text).toContain(
       '그 뒤 회원이 MY 설정에서 바꾼 이메일로 다시 보낸 메일은 새 이의로 2의 확인부터 보고, 기한 안인지는 3대로 그 메일이 메일함에 도착한 시각으로 본다',
     );
@@ -200,10 +202,10 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
       '처음 메일이 기한 안에 왔어도 위의 두 회신을 거치는 동안 기한이 지날 수 있다',
     );
     expect(text).toContain(
-      '(ADR-0084 결과 4의 12, 그 답 전에는 다시 온 메일이 도착한 시각으로 본다)',
+      '그런 드문 경우에 그 메일을 되묻기의 3일(3)처럼 처음 메일의 도착 시각으로 볼지는 7대로 판단한다(오너 결정 2026-10-23 (3차))',
     );
     expect(step3()).toContain(
-      '2의 발신 인증에 계속 실패한 가입한 이메일의 회원이 바꾼 이메일로 다시 보낸 메일은 그 메일의 도착 시각으로 본다 — ADR-0084 결과 4의 12',
+      '2의 발신 인증에 계속 실패한 가입한 이메일의 회원이 바꾼 이메일로 다시 보낸 메일은 그 메일의 도착 시각으로 보고, 두 회신을 거치는 동안 기한이 지났으면 7대로 판단한다',
     );
     expect(text).toContain(
       '받는 사람은 2의 조회로 정한 그 계정의 지금 이메일을 손으로 적은 것이다',
@@ -258,14 +260,15 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(text).toContain(
       "늦은 되묻기 — 되묻는 메일을 보내는 때에 기한까지 3×24시간보다 적게 남았거나 기한이 지난 되묻기 — 에는 끝이 '3일 안에'인 둘째 것이다(오너 결정 2026-10-23 (2차) 답 1)",
     );
-    // Which deadline, with the action unknown, is this ADR's reading, put to the owner (결과 4의
-    // 15): any action taken by the time the asked-back mail came — it could not speak of a later
-    // one — that the mail came in time for, by the lookup's columns (the integration part runs it).
+    // Which deadline, with the action unknown, is this ADR's reading (6-8), the rare cases it splits
+    // left to step 7: any action taken by the time the asked-back mail came — it could not speak of
+    // a later one — that the mail came in time for, by the lookup's columns (the integration part
+    // runs it).
     expect(text).toContain(
       '2의 조회에서 취소되지 않았고, 그 메일이 온 때까지 받았으며(`acted_kst`가 그 메일이 도착한 시각과 같거나 앞), `deadline_kst`가 그 메일이 그 조치에 기한을 보는 시각(첫 메일이면 그 메일이 도착한 시각, 아래)과 같거나 뒤인 조치',
     );
     expect(text).toContain(
-      '그 가운데 하나라도 `deadline_kst`가 되묻는 메일을 보내는 때부터 3×24시간 뒤보다 앞이면 늦은 되묻기다(ADR-0084 6-8, 결과 4의 15 — 그 답 전에는 이대로)',
+      '그 가운데 하나라도 `deadline_kst`가 되묻는 메일을 보내는 때부터 3×24시간 뒤보다 앞이면 늦은 되묻기다(ADR-0084 6-8 — 드문 경우는 7)',
     );
     expect(text).toContain(
       '그 메일이 온 뒤에 받은 조치는 그 메일이 말할 수 없었으므로 넣지 않는다',
@@ -297,13 +300,14 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     // the 3×24 hours that passes step 2 and matches actions — one action's description, the one
     // written first when a mail names several apart, all it fits when it fits several (2026-10-23
     // (2차) 답 2) — and only actions taken by the time the first mail came. Unconfirmed mail does
-    // not use it; another action in the same mail or a later one keeps that mail's arrival.
-    // Whether it reaches further is the owner's (결과 4의 13), and so is the acted-by reading (15).
+    // not use it; another action in the same mail or a later one keeps that mail's arrival. Several
+    // appeals after one ask-back, and the acted-by reading's rare cases, are step 7's — this reading
+    // the operator's start (owner decision 2026-10-23 (3차)).
     expect(text).toContain(
       '첫 메일의 도착 시각으로 보는 것은 되묻기 하나에 다시 온 이의 하나다 — 그 3×24시간 안에 다시 온 메일 가운데 2의 확인을 마치고 맞는 조치가 정해진 첫 이의(한 메일이 조치 여럿을 따로 적었으면 그 가운데 먼저 적은 것)의 그 조치(그 이의가 여러 조치에 맞으면 그 모두, 아래)뿐이고',
     );
     expect(text).toContain(
-      '그 조치도 첫 메일이 온 때까지 받은 것(`acted_kst`가 첫 메일의 도착 시각과 같거나 앞)이어야 한다 — 그 뒤에 받은 조치는 첫 메일이 말할 수 없었으므로 첫 메일의 도착 시각을 받지 않고 그 조치를 말한 메일이 도착한 시각으로 본다(한 번 더 되물은 뒤는 아래, ADR-0084 6-8, 결과 4의 15)',
+      '그 조치도 첫 메일이 온 때까지 받은 것(`acted_kst`가 첫 메일의 도착 시각과 같거나 앞)이어야 한다 — 그 뒤에 받은 조치는 첫 메일이 말할 수 없었으므로 첫 메일의 도착 시각을 받지 않고 그 조치를 말한 메일이 도착한 시각으로 본다(한 번 더 되물은 뒤는 아래, ADR-0084 6-8 — 드문 경우는 7)',
     );
     expect(text).toContain(
       '2의 확인을 마치지 못한 메일(확인되지 않은 메일)은 그것을 쓰지 않으므로',
@@ -322,7 +326,7 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     );
     expect(text).not.toContain("첫 메일의 도착 시각으로 보았으면 첫 메일의 '되물음'의 표시에");
     expect(text).toContain(
-      '되묻기 하나가 다시 온 이의 여럿 — 한 메일이 따로 적은 조치 여럿이나 메일 여럿 — 에 쓰이는지는 정하지 않았다(ADR-0084 6-8, 결과 4의 13 — 그 답 전에는 이대로 이의 하나, 곧 먼저 적은 조치 하나이고 그 이의가 여러 조치에 맞을 때만 그 모두다)',
+      '되묻기 하나에 다시 온 이의가 여럿인 것 — 한 메일이 따로 적은 조치 여럿이나 메일 여럿 — 은 드문 경우라 7대로 판단한다(이 절차의 읽기로는 위대로 이의 하나, 곧 먼저 적은 조치 하나이고 그 이의가 여러 조치에 맞을 때만 그 모두다, ADR-0084 6-8)',
     );
     expect(text).not.toContain('되묻기 하나가 다시 온 이의 여럿(메일 여럿)');
     expect(appealSection()).not.toContain('되묻기 하나에 조치 하나');
@@ -339,33 +343,33 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
       '맞는 조치 모두를 한 이의로 함께 받아 검토하고, 맞는 조치마다 그 한 번을 쓴다(오너 결정 2026-10-23 (2차) 답 2)',
     );
     // One that left out an item fits several only for what it left out: it is asked back once
-    // more, which uses up no action's one appeal, until the owner says otherwise (결과 4의 16).
+    // more, which uses up no action's one appeal (6-8; the rare case is step 7's).
     expect(text).toContain(
       "적으라고 한 것 가운데 무엇을 빼고 적어 여러 조치에 맞으면 — '숨김 조치에 이의합니다'처럼 — 함께 받지 않고 하나도 맞지 않는 것처럼 한 번 더 되묻는다",
     );
     expect(text).toContain(
-      '되묻는 것은 어느 조치의 한 번도 쓰지 않는다(ADR-0084 6-8, 결과 4의 16 — 그 답 전에는 이대로)',
+      '되묻는 것은 어느 조치의 한 번도 쓰지 않는다(ADR-0084 6-8 — 드문 경우는 7)',
     );
-    // Each action it matches is checked, and marked, as an appeal of its own would be; what the
-    // reply says of those not taken is the owner's (결과 4의 14) — one sentence while their reason
-    // is the same, and the order of one action's reasons only until the owner answers when the
-    // reasons differ; so too whether a cancelled action counts beside a standing one.
+    // Each action it matches is checked, and marked, as an appeal of its own would be; the reply
+    // says one sentence while their reason is the same. When the reasons differ, what it says of
+    // those not taken, and whether a cancelled action counts beside a standing one, are step 7's —
+    // the operator's judgement, this procedure's reading its start (owner decision 2026-10-23 (3차)).
     expect(text).toContain(
       "아래 '받지 않는 것'은 맞는 조치마다 보고, 받는 조치마다 받은 이의의 표시를 단다",
     );
     expect(text).toContain('모두 받지 않는 것이고 그 까닭이 같으면 그 까닭의 한 문장만 회신한다');
     expect(text).toContain(
-      '까닭이 조치마다 다르면 — 하나는 취소되었고 다른 하나는 기한이 지난 것처럼 — 어느 까닭을 회신할지는 정하지 않았다(ADR-0084 결과 4의 14, 그 답 전에는 아래 차례의 앞의 것 하나다',
+      '까닭이 조치마다 다르면 — 하나는 취소되었고 다른 하나는 기한이 지난 것처럼 — 어느 까닭을 회신할지는 드문 경우라 7대로 판단한다(이 절차의 읽기로는 아래 차례의 앞의 것 하나다',
     );
     expect(text).toContain(
-      '서 있는 조치와 함께 맞은 취소된 조치를 맞는 조치로 셀지도 정하지 않았다(같은 결과 4의 14, 그 답 전에는 센다)',
+      '서 있는 조치와 함께 맞은 취소된 조치를 맞는 조치로 셀지도 7대로 판단한다(이 절차의 읽기로는 센다)',
     );
     expect(text).not.toContain(
       '모두 받지 않는 것이면 그 까닭의 한 문장만 회신한다(여럿이면 그 차례의 앞의 것 하나)',
     );
     expect(text).toContain('6의 회신은 그 이의에 하나로 받은 조치마다 결과를 적는다');
     expect(text).toContain(
-      '받지 않은 조치의 까닭을 그 회신에 함께 적을지는 정하지 않았다(ADR-0084 결과 4의 14, 그 답 전에는 적지 않는다)',
+      '받지 않은 조치의 까닭을 그 회신에 함께 적을지도 7대로 판단한다(이 절차의 읽기로는 적지 않는다)',
     );
     // Matching none — a time copied without its '(GMT…)' among them — is asked back once more,
     // late or not by the same rule, and timed as the mail it asks back was for each action: the
@@ -375,12 +379,12 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     );
     expect(text).toContain('그 글도 그때 늦은 되묻기인지로 고르고');
     expect(text).toContain(
-      '한 번 더 되물은 메일이 그 조치에 기한을 보는 시각은, 그 메일이 앞의 늦은 되묻기 뒤 3×24시간 안에 왔고 그 조치가 첫 메일이 온 때까지 받은 것이면 첫 메일의 도착 시각이고, 아니면 그 메일이 도착한 시각이다(ADR-0084 6-8, 결과 4의 15)',
+      '한 번 더 되물은 메일이 그 조치에 기한을 보는 시각은, 그 메일이 앞의 늦은 되묻기 뒤 3×24시간 안에 왔고 그 조치가 첫 메일이 온 때까지 받은 것이면 첫 메일의 도착 시각이고, 아니면 그 메일이 도착한 시각이다(ADR-0084 6-8 — 드문 경우는 7)',
     );
     expect(text).toContain('한 번 더 되물은 것(아래)도 같은 첫 메일의 되묻기로 센다');
-    // After that, the owner's (결과 4의 14): no third ask-back, and 결과 4의 11 is answered.
+    // After that, step 7's: no third ask-back, and 결과 4의 11 is answered.
     expect(text).toContain(
-      '한 번 더 되물은 뒤에도 맞는 조치가 없으면 다시 되묻지 않고 오너에게 묻는다(ADR-0084 결과 4의 14)',
+      '한 번 더 되물은 뒤에도 맞는 조치가 없으면 다시 되묻지 않고 7대로 판단한다',
     );
     expect(appealSection()).not.toContain('결과 4의 11');
     expect(appealSection()).not.toContain('같은 글로 다시 되묻지 않고');
@@ -394,9 +398,7 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(notTaken).toContain(
       '한 조치가 여럿에 해당하면 이 차례에서 앞의 것 하나다 — 그 조치의 카드가 보이는 것',
     );
-    expect(notTaken).toContain(
-      '(함께 맞은 조치마다 까닭이 다른 것은 위의 되묻기, ADR-0084 결과 4의 14)',
-    );
+    expect(notTaken).toContain('(함께 맞은 조치마다 까닭이 다른 것은 위의 되묻기와 7)');
   });
 
   it('answers an appeal it does not take with its reason, one sentence, and counts only the ones taken', () => {
@@ -452,16 +454,16 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(text).toContain('차이가 붙은 시각은 한국 시간으로 바꿔 견준다');
     expect(text).toContain("'2026. 10. 21. 오전 2:00 (GMT-4)'는 한국 시간 2026-10-21 15:00이다");
     // A mail that names several actions apart is several appeals, one for each action — matched
-    // each on its own, never as one description all of them fit (ADR-0084 6-8, asked in 결과 4의
-    // 16).
+    // each on its own, never as one description all of them fit (ADR-0084 6-8, the rare case step
+    // 7's).
     expect(text).toContain(
-      '한 메일이 조치 여럿을 따로 적었으면 회원이 적은 것을 조치마다 따로 보고, 그 하나하나가 따로 된 이의다 — 조치마다 한 번이라서다(ADR-0084 6-8, 결과 4의 16 — 그 답 전에는 이대로)',
+      '한 메일이 조치 여럿을 따로 적었으면 회원이 적은 것을 조치마다 따로 보고, 그 하나하나가 따로 된 이의다 — 조치마다 한 번이라서다(ADR-0084 6-8 — 드문 경우는 7)',
     );
     // An action fits when it fits all the member wrote for that appeal — a matching type and
     // title with a time that fits no action is none (ADR-0084 6-8, the case 2026-10-23 (2차) 답 2
-    // asks back again; asked in 결과 4의 16).
+    // asks back again; the rare case step 7's).
     expect(text).toContain(
-      '맞는 조치는 회원이 그 이의에 적은 것 — 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄 — 에 모두 맞는 조치다(종류와 제목이나 첫 줄이 맞아도 조치한 때가 맞지 않으면 맞지 않는다, ADR-0084 6-8, 결과 4의 16)',
+      '맞는 조치는 회원이 그 이의에 적은 것 — 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄 — 에 모두 맞는 조치다(종류와 제목이나 첫 줄이 맞아도 조치한 때가 맞지 않으면 맞지 않는다, ADR-0084 6-8 — 드문 경우는 7)',
     );
     // What fits no single action is the ask-back, not a guess; the resend that wrote all it was
     // asked for is taken for several; in a mail partly identified, only the rest is asked back.
@@ -495,89 +497,104 @@ function ownerQuestions(): Map<number, string> {
   );
 }
 
-describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', () => {
-  it('asks the owner each question the procedure sends there, under the number it cites', () => {
-    const questions = ownerQuestions();
-    const cited = [...appealSection().matchAll(/ADR-0084 (?:6-8, )?결과 4의 (\d+)/g)].map((m) =>
-      Number(m[1]),
-    );
-    // The open cases: when the mail from the address changed after the own address kept failing
-    // the sender check is due (12), how far one ask-back's first-mail timing reaches (13), the
-    // resend that matches no action after the second ask-back or matches several some of which are
-    // not taken (14), which actions make an ask-back late and get its 3 days (15), and what a
-    // resend matches (16).
-    expect([...new Set(cited)].sort((a, b) => a - b)).toEqual([12, 13, 14, 15, 16]);
-    const about: Record<number, string> = {
-      12: '가입한 이메일에서 발신 인증에 계속 실패한 뒤 바꾼 이메일에서 다시 온 메일의 기한',
-      13: '되묻기 하나가 첫 메일의 도착 시각을 주는 이의의 수',
-      14: '되물은 뒤 다시 온 이의의 남은 경우',
-      15: '늦은 되묻기와 그 3일을 정하는 조치',
-      16: '다시 온 메일이 어느 조치에 맞는지',
-    };
-    for (const n of cited) expect(questions.get(n)).toContain(about[n]);
-    // Each asks the owner rather than settling it, with the case that lost an in-time appeal.
-    expect(questions.get(12)).toContain('15일째에 바꾼 이메일에서 보내면');
-    expect(questions.get(12)).toContain('위조일 수도 있어');
-    // '계속' itself is no question any more: the brief kept the reading as this PR's choice.
-    expect(questions.get(12)).not.toContain("(a) '계속'은");
-    // 13 asks about the bundled list rather than settling it through (2차) 답 2: one mail that
-    // names A, B and C apart is three appeals, the first alone lent the first mail's time for now.
-    expect(questions.get(13)).toContain('조치 A·B·C의 기한이 10·11·12일째인 회원');
-    expect(questions.get(13)).not.toContain('셋 모두에 맞으면 셋 모두 기한 안');
-    expect(questions.get(13)).toContain(
-      'A·B·C를 한 메일에 따로 적어도, 따로 보내도 첫 이의(먼저 적거나 먼저 보낸 것)의 조치만 기한 안이고',
-    );
-    expect(questions.get(13)).toContain('이 읽기가 맞는가');
-    expect(questions.get(13)).toContain(
-      '(a) 한 메일이 따로 적은 조치 여럿: 먼저 적은 조치만 첫 메일의 도착 시각으로 보는가(지금), 그 메일이 적은 조치 모두인가?',
-    );
-    expect(questions.get(13)).toContain(
-      '(b) 3×24시간 안에 그 회원에게서 온 이의 모두(메일 여럿이어도)에 쓰는가?',
-    );
-    expect(questions.get(14)).toContain('(a) 한 번 더 되물은 뒤에도 맞는 조치가 없는 메일');
-    expect(questions.get(14)).toContain('(b) 여러 조치에 맞아 함께 받을 때');
-    expect(questions.get(14)).toContain('모두 받지 않는 것인데 까닭이 조치마다 다르면');
-    expect(questions.get(14)).toContain('(c) 서 있는 조치와 함께 맞은 취소된 조치');
-    expect(questions.get(14)).toContain("차례의 앞의 '이 조치는 이미 취소되었습니다.'를 받는다");
-    expect(questions.get(15)).toContain(
-      "숨김 둘을 받은 회원의 두 기한이 모두 10월 20일이고 흐린 메일('이의합니다')이 21일에 와 22일에 되물으면 첫째 글이고",
-    );
-    expect(questions.get(15)).toContain(
-      '0일째 정오에 흐린 메일이 오고 0.5일째에 숨김 X를 받았으며 운영자가 12일째에 되물으면',
-    );
-    expect(questions.get(15)).toContain('이 읽기가 맞는가');
-    expect(questions.get(16)).toContain('(a) 다시 온 이의가 적으라고 한 것');
-    expect(questions.get(16)).toContain("'숨김 조치에 이의합니다'만 적은 것을 함께 받으면");
-    expect(questions.get(16)).toContain(
-      '(b) 종류와 제목이나 첫 줄로 하나가 정해지는데 조치한 때가 어느 조치와도 맞지 않으면',
-    );
-    expect(questions.get(16)).toContain('(c) 한 메일이 조치 여럿을 따로 적으면');
-    // The counts that name these questions agree.
-    const adr = adr0084();
-    expect(adr).toContain(
-      '남은 것은 12의 나머지와 13, 다섯째 표의 답을 따르며 새로 생긴 14, 이 고침의 검토에서 찾은 — 두 답을 따르며 이 PR이 읽은 것을 묻는 — 15·16의 다섯이다',
-    );
-    expect(adr).toContain('결과 4에는 남은 다섯 질문(');
-    expect(adr).not.toContain('결과 4에는 남은 세 질문(');
-    expect(adr).toContain('오너에게 묻는 경우(결과 4의 12\\~16)');
-    expect(adr).not.toContain('새로 생긴 네 질문(');
-    expect(adr).toContain('어느 조치의 기한으로 보는지는 6-8, 결과 4의 15');
-    // Decision 6-8 keeps '계속' as this PR's, as the brief said, and sends the rest there.
-    expect(adr).toContain(
-      "'계속'의 읽기는 오너에게 묻지 않고 이 PR의 선택으로 둔다(브리프, 다섯째 표의 머리)",
-    );
-    expect(adr).toContain('이 기한은 오너에게 묻는다(결과 4의 12)');
-    expect(adr).not.toContain("'계속'의 읽기와 이 기한은 오너에게 묻는다");
-    expect(adr).toContain('이 PR은 좁게 읽었다 — 되묻기 하나에 다시 온 이의 하나');
-    expect(adr).toContain('이 읽기는 오너에게 묻는다(결과 4의 13)');
-    expect(adr).toContain('그 메일과 일부만 받지 않는 것의 회신은 오너에게 묻는다(결과 4의 14)');
-    expect(adr).toContain(
-      '이 읽기 — 그 메일이 기한 안에 온 조치만, 그 메일이 온 때까지 받은 조치만 보는 것 — 는 오너에게 묻는다(결과 4의 15)',
-    );
-    expect(adr).toContain('이 읽기는 오너에게 묻는다(결과 4의 16)');
+/** The owner's principle for what the procedure's rules leave open (2026-10-23 (3차)). */
+const PRINCIPLE =
+  '이 절차의 규칙이 정하지 않은 드문 경우에는 운영자가 회원에게 유리하게 판단해 처리하고, 그 판단과 까닭을 그 메일의 메일함 메모(3의 표시를 다는 곳)에 적는다(오너 결정 2026-10-23 (3차))';
+
+/** Step 7 of the appeal procedure: its one line. */
+function step7(): string {
+  const text = appealSection();
+  const start = text.indexOf('\n7. **절차가 정하지 않은 경우.** ');
+  expect(start).toBeGreaterThan(-1);
+  const end = text.indexOf('\n', start + 1);
+  return text.slice(start + 1, end === -1 ? undefined : end);
+}
+
+describe('what the appeal procedure leaves to the operator (owner decision 2026-10-23 (3차))', () => {
+  it('states the owner’s principle in a line of its own, with the five cases once asked as its examples', () => {
+    // The rare cases ADR-0084 결과 4의 12~16 asked are the operator's judgement: in a case the
+    // rules don't cover, decide in the member's favour, handle it, and write the decision and why
+    // in the mailbox note. Step 7 says so in one line, after the reply (6).
+    const text = appealSection();
+    const line = step7();
+    expect(text.indexOf('\n6. **회신.**')).toBeGreaterThan(-1);
+    expect(text.indexOf('\n6. **회신.**')).toBeLessThan(text.indexOf(line));
+    expect(line).toContain(PRINCIPLE);
+    // One example for each case, in the order they were asked (12 to 16).
+    const examples = [
+      '발신 인증에 계속 실패해 바꾼 이메일로 다시 보낸 메일이 두 회신 동안 기한을 넘긴 것(2)',
+      '늦은 되묻기 하나에 다시 온 이의가 여럿인 것',
+      '한 번 더 되물은 뒤에도 맞는 조치가 없거나 함께 맞은 조치 가운데 받지 않는 것이 있는 것',
+      '기한이 모두 지난 뒤의 되묻기나 첫 메일 뒤에 받은 조치처럼 늦은 되묻기인지가 갈리는 것',
+      '다시 온 메일이 적으라고 한 것을 빼고 적었거나 조치한 때만 맞지 않아 어느 조치인지 분명하지 않은 것(3',
+    ];
+    const at = examples.map((example) => line.indexOf(example));
+    for (const index of at) expect(index).toBeGreaterThan(line.indexOf(' — 예: '));
+    expect(line.indexOf(' — 예: ')).toBeGreaterThan(line.indexOf(PRINCIPLE));
+    expect([...at].sort((a, b) => a - b)).toEqual(at);
+    // What step 3 wrote as this procedure's reading is where that judgement starts.
+    expect(line).toContain("그 자리에 적은 'ADR-0084 6-8'의 읽기는 이 판단의 출발점이다");
   });
 
-  it('records in decision 6-8 the readings it sends to 결과 4의 13~16', () => {
+  it('sends those cases to step 7, never to the owner any more', () => {
+    const text = appealSection();
+    // No '결과 4의 N' is cited, nothing waits for the owner's answer, and nothing is left undecided.
+    expect([...text.matchAll(/결과 4의 \d+/g)]).toHaveLength(0);
+    for (const old of ['오너에게 묻는다', '그 답 전에는', '정하지 않았다(']) {
+      expect(text).not.toContain(old);
+    }
+    // The readings step 3 keeps point at step 7 for their rare cases, and the cases once left
+    // undecided are judged by it.
+    expect(text).toContain('(ADR-0084 6-8 — 드문 경우는 7)');
+    expect(text).toContain('7대로 판단한다(오너 결정 2026-10-23 (3차))');
+  });
+
+  it('records the owner’s answer as a table of its own, apart from the implementation’s choices', () => {
+    const adr = adr0084();
+    // The tables keep their names; the sixth is the third round of 2026-10-23 — one row, the
+    // owner's answer.
+    const tables = [
+      '**오너 결정 2026-10-22.**',
+      '**오너 결정 2026-10-22 (2차).**',
+      '**오너 결정 2026-10-23.**',
+      '**오너 결정 2026-10-23 (2차).**',
+      '**오너 결정 2026-10-23 (3차).**',
+    ].map((name) => adr.indexOf(name));
+    for (const index of tables) expect(index).toBeGreaterThan(-1);
+    expect([...tables].sort((a, b) => a - b)).toEqual(tables);
+    const third = tables[4]!;
+    const table = adr.slice(third, adr.indexOf('\n\n브리프가 정한 것:', third));
+    expect(table.match(/^\| 오너 결정 2026-10-23 \(3차\) +\|/gm)).toHaveLength(1);
+    expect(table).toContain(
+      '남은 드문 경우(결과 4의 12\\~16)는 운영자의 판단에 맡김 — 규칙이 정하지 않은 경우 운영자가 회원에게 유리하게 판단해 처리하고, 그 판단과 까닭을 메일함 메모에 남김.',
+    );
+    // How the principle went into the procedure is this PR's choice, in 6-8 — not in the table.
+    expect(table).toContain('그 원칙을 절차에 옮긴 방법은 오너의 답이 아니라 구현의 선택이다(6-8)');
+    expect(adr.indexOf('**6. 구현의 선택.**')).toBeGreaterThan(third);
+    expect(adr).toContain('·2026-10-23 (2차)·2026-10-23 (3차))\n');
+  });
+
+  it('asks the owner nothing more: 결과 4 is none, the five once asked answered by the principle', () => {
+    expect(ownerQuestions().size).toBe(0);
+    const adr = adr0084();
+    expect(adr).toContain('**4. 오너에게 물을 것.** 없다.');
+    expect(adr).toContain(
+      '에는 오너가 원칙 하나로 답했다: 규칙이 정하지 않은 드문 경우는 운영자가 회원에게 유리하게 판단해 처리하고 그 판단과 까닭을 메일함 메모에 남긴다(결정 1의 여섯째 표, 오너 결정 2026-10-23 (3차))',
+    );
+    // The words that counted the open questions say there are none left.
+    expect(adr).toContain('결과 4에 남은 질문은 없다 — 남았던 다섯 질문(');
+    expect(adr).not.toContain('결과 4에는 남은 다섯 질문(');
+    expect(adr).toContain(
+      '절차가 정하지 않은 드문 경우의 원칙(7, 오너 결정 2026-10-23 (3차) — 결과 4의 12\\~16이던 다섯 경우를 예로)',
+    );
+    expect(adr).not.toContain('오너에게 묻는 경우(결과 4의 12\\~16)');
+    expect(adr).toContain('어느 조치의 기한으로 보는지는 6-8 — 드문 경우는 여섯째 표');
+    expect(adr).not.toMatch(/오너에게 묻는다\(결과 4의/);
+    expect(adr).not.toMatch(/\(6-8, 결과 4의 1[2-6]/);
+    expect(adr).not.toContain("'계속'의 읽기와 이 기한은 오너에게 묻는다");
+  });
+
+  it('records in decision 6-8 the readings step 7 starts from, and how the principle went in', () => {
     const adr = adr0084();
     const start = adr.indexOf('8. 운영자의 절차에서 오너가 정하지 않은 것.');
     const end = adr.indexOf('\n9. 서버는 바꾸지 않았다.', start);
@@ -585,7 +602,7 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
     expect(end).toBeGreaterThan(start);
     const choices = adr.slice(start, end);
     // Which actions make an ask-back late: those taken by the time the asked-back mail came that
-    // it came in time for — and why a later one is left out (15).
+    // it came in time for — and why a later one is left out.
     expect(choices).toContain(
       '이 PR은 되묻기를 받은 메일이 온 때까지 받았고(`acted_kst`가 그 메일이 도착한 시각과 같거나 앞) 그 메일이 기한 안에 온 그 회원의 조치',
     );
@@ -594,7 +611,8 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
     );
     expect(choices).not.toContain("둘째 글('3일 안에')은 어느 조치의 회원에게도 틀리지 않는다");
     // One appeal is one action's description: a mail naming several apart is several, (2차) 답 2
-    // being the answer for one description that fits several it cannot tell apart (13, 16).
+    // being the answer for one description that fits several it cannot tell apart.
+    expect(choices).toContain('이 PR은 좁게 읽었다 — 되묻기 하나에 다시 온 이의 하나');
     expect(choices).toContain(
       '이의 하나는 회원이 적은 조치 하나의 설명이다 — 한 메일이 조치 여럿을 따로 적었으면 조치마다 따로 된 이의라(조치마다 한 번) 먼저 적은 것이 첫 이의이고',
     );
@@ -604,7 +622,7 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
     expect(choices).toContain('처음 메일의 이의 하나(조치 하나의 설명)가 여럿에 맞으면 되묻는다');
     expect(choices).not.toContain('처음 메일은 여럿에 맞아도 되묻는다');
     // A resend that left out what it was asked for is asked back once more, never taken for all
-    // the actions it then fits (16).
+    // the actions it then fits.
     expect(choices).toContain(
       "다시 온 이의가 되묻는 글이 적으라고 한 것(종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄 — 회원의 카드에 '삭제한 글'·'삭제한 댓글'뿐이면 그것) 가운데 무엇을 빼고 적어 여러 조치에 맞으면 함께 받지 않고 하나도 맞지 않는 것처럼 한 번 더 되묻는다",
     );
@@ -614,13 +632,40 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
     expect(choices).toContain(
       '처음 되묻기는 늦지 않았고 한 번 더 되묻기만 늦으면 한 번 더 되물은 메일이 도착한 시각이다',
     );
-    // The owner's order of reasons is one action's; across bundled actions it is asked (14).
+    // The owner's order of reasons is one action's.
     expect(choices).toContain(
       '오너가 승인한 차례(취소 → 기한 → 이미 받음)는 한 조치의 까닭 여럿에 대한 것이라',
     );
+    // '계속' stays this PR's, as the brief said; what was asked of the owner is the operator's now,
+    // these readings its start.
+    expect(choices).toContain(
+      "'계속'의 읽기는 오너에게 묻지 않고 이 PR의 선택으로 둔다(브리프, 다섯째 표의 머리)",
+    );
+    expect(choices).toContain('이 기한은 오너가 운영자의 판단에 맡겼다');
+    expect(choices).toContain(
+      '셀지는 오너가 운영자의 판단에 맡겼다(오너 결정 2026-10-23 (3차)) — 위의 읽기(차례의 앞의 것 하나, 적지 않음, 취소된 조치도 셈)는 그 판단의 출발점이다',
+    );
+    expect(choices).not.toMatch(/\(결과 4의 1[2-6]\)/);
+    expect(choices).not.toMatch(/오너에게 묻는다\(/);
+    // How the principle went into the procedure: the places that waited for the owner point at
+    // step 7, the readings stay as its start, the note is that mail's own, and 'in the member's
+    // favour' stays the owner's words.
+    const at = choices.indexOf('   - 드문 경우의 판단(오너 결정 2026-10-23 (3차)).');
+    expect(at).toBeGreaterThan(-1);
+    const rare = choices.slice(at);
+    expect(rare).toContain(
+      '운영자 절차에는 그 원칙을 7에 한 줄로 두고 다섯 경우를 짧은 예로 들었다',
+    );
+    expect(rare).toContain(
+      "(1) 2·3에서 그 다섯을 '정하지 않았다'·'오너에게 묻는다'·'그 답 전에는'으로 가리키던 곳은 모두 7을 가리키게 했고",
+    );
+    expect(rare).toContain(
+      "(2) '메일함 메모'는 3의 받은 이의·'되물음'의 표시를 다는 그 메일의 라벨이나 메모로 읽었다",
+    );
+    expect(rare).toContain("(3) '회원에게 유리하게'는 오너의 말 그대로 두고");
   });
 
-  it('says in decision 5 what the procedure does, with the readings it asks the owner', () => {
+  it('says in decision 5 what the procedure does, the rare cases sent to its step 7', () => {
     const adr = adr0084();
     const procedure = adr.indexOf('**5. 운영자의 절차');
     expect(procedure).toBeGreaterThan(-1);
@@ -632,22 +677,22 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
       expect(to).toBeGreaterThan(from);
       return adr.slice(from, to);
     };
-    // Step 2: the deadline after a changed address is asked; '계속' is this PR's, as the brief said.
+    // Step 2: '계속' is this PR's, as the brief said; the deadline after a changed address, when
+    // two replies carried it past, is step 7's.
     const sender = step(2);
     expect(sender).toContain(
-      "이 기한은 오너에게 묻는다(결과 4의 12). '계속'의 읽기는 브리프대로 이 PR의 선택이다(6-8)",
+      "처음 메일이 기한 안에 왔는데 두 회신 동안 기한이 지났으면 7의 판단이다(오너 결정 2026-10-23 (3차)). '계속'의 읽기는 브리프대로 이 PR의 선택이다(6-8)",
     );
     expect(adr).not.toContain("이 읽기와 '계속'의 읽기는 오너에게 묻는다");
     expect(sender).not.toContain("'계속'의 읽기는 오너에게 묻는다");
     // Step 3: the late ask-back's 3 days, one appeal of a description, several taken only when
-    // the resend wrote all asked for, a time that fits nothing as none, the reply when all those
-    // taken together are refused.
+    // the resend wrote all asked for, a time that fits nothing as none — the rare cases step 7's.
     const deadline = step(3);
     expect(deadline).toContain(
       '늦은 되묻기를 보낸 때부터 3×24시간 안에 도착한 메일은 첫 메일이 도착한 시각으로 본다',
     );
     expect(deadline).toContain(
-      '한 메일이 조치 여럿을 따로 적었으면 조치마다 따로 된 이의이고, 회원이 그 이의에 적은 것에 모두 맞는 조치가 하나가 아니면 어느 조치인지 정할 수 없는 이의다(6-8, 결과 4의 16)',
+      '한 메일이 조치 여럿을 따로 적었으면 조치마다 따로 된 이의이고, 회원이 그 이의에 적은 것에 모두 맞는 조치가 하나가 아니면 어느 조치인지 정할 수 없는 이의다(6-8 — 드문 경우는 7)',
     );
     expect(deadline).toContain(
       '첫 이의(한 메일이 따로 적은 조치 여럿이면 먼저 적은 것)의 그 조치(그 설명 하나가 여러 조치에 맞으면 그 모두, 첫 메일이 온 뒤에 받은 조치는 빼고)',
@@ -656,32 +701,45 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
       '같은 메일이나 그 뒤의 메일이 말하는 다른 조치는 그 메일이 도착한 시각으로 보며',
     );
     expect(deadline).toContain(
-      "늦은 되묻기로 빌린 시각(첫 메일의 도착 시각이나, 한 번 더 되물었으면 그 메일이 기한을 보는 시각)을 쓰면 첫 메일의 '되물음'의 표시에 '3일 씀'을 더한다",
+      "늦은 되묻기로 빌린 시각(첫 메일의 도착 시각이나, 한 번 더 되물었으면 그 메일이 기한을 보는 시각)을 쓰면 첫 메일의 '되물음'의 표시에 '3일 씀'을 더한다(이 PR의 읽기, 6-8 — 드문 경우는 7)",
     );
     expect(deadline).toContain(
       '다시 온 이의가 되묻는 글이 적으라고 한 것을 모두 적고도 여러 조치에 맞으면 맞는 조치 모두를 한 이의로 함께 받아 검토하고 조치마다 그 한 번을 쓰며',
     );
     expect(deadline).toContain('하나도 맞지 않으면(조치한 때가 맞지 않는 것도) 한 번 더 되묻는다');
     expect(deadline).toContain(
-      '적으라고 한 것을 빼고 적어 여러 조치에 맞는 이의도 함께 받지 않고 한 번 더 되묻는다(6-8, 결과 4의 16)',
+      '적으라고 한 것을 빼고 적어 여러 조치에 맞는 이의도 함께 받지 않고 한 번 더 되묻는다(6-8 — 드문 경우는 7)',
     );
     expect(deadline).toContain(
-      '일부만이면 그 까닭은 회신에 적지 않으며(모두 받지 않는 것이면 아래의 한 문장 — 까닭이 조치마다 다르면 지금은 차례의 앞의 것 하나, 6-8, 결과 4의 14)',
+      '그 회신 — 일부만이면 그 까닭을 적을지, 모두 받지 않는 것인데 까닭이 조치마다 다르면 어느 까닭인지 — 은 7의 판단이며(이 PR의 읽기로는 일부만이면 적지 않고, 모두 받지 않는 것이면 아래의 한 문장 — 까닭이 다르면 차례의 앞의 것 하나다, 6-8)',
     );
+    expect(deadline).toContain('그 뒤에도 맞는 조치가 없으면 다시 되묻지 않고 7의 판단이다(6-8)');
     expect(deadline).toContain('함께 받은 조치 여럿이면 조치마다');
     expect(deadline).toContain(
-      '되묻기를 받은 메일이 온 때까지 받았고 그 메일이 기한 안에 온 조치 가운데 하나라도 그러면 늦은 되묻기로 보는 것은 6-8, 결과 4의 15',
+      '되묻기를 받은 메일이 온 때까지 받았고 그 메일이 기한 안에 온 조치 가운데 하나라도 그러면 늦은 되묻기로 보는 것은 6-8 — 드문 경우는 7',
     );
-    for (const old of ['되묻기 하나에 조치 하나', '결과 4의 10', '결과 4의 11', '모든 되묻기']) {
+    expect(deadline).not.toMatch(/결과 4의 \d/);
+    for (const old of ['되묻기 하나에 조치 하나', '모든 되묻기', '오너에게 묻는다']) {
       expect(deadline).not.toContain(old);
     }
+    // Step 7: the owner's principle, in the procedure's one line with the five cases as examples.
+    const from = adr.indexOf(
+      '\n7. 절차가 정하지 않은 경우(오너 결정 2026-10-23 (3차), 새): ',
+      procedure,
+    );
+    expect(from).toBeGreaterThan(adr.indexOf('\n6. ', procedure));
+    const rare = adr.slice(from, adr.indexOf('\n\n운영자의 기능 이름은', from));
+    expect(rare).toContain(
+      '규칙이 정하지 않은 드문 경우에는 운영자가 회원에게 유리하게 판단해 처리하고 그 판단과 까닭을 그 메일의 메일함 메모(3의 표시를 다는 곳)에 적는다',
+    );
+    expect(rare).toContain('결과 4에 물었던 다섯 경우(12\\~16)를 예로 든다');
   });
 
   it('records in the settings the late ask-back’s 3 days as the owner’s, one appeal as this ADR’s reading', () => {
     // docs/SETTINGS.md registers fixed values: the 3 days after a late ask-back are the owner's
     // (2026-10-23 답 2), and so, since 2026-10-23 (2차) 답 1, are their 3×24 hours and what makes
-    // an ask-back late. That one ask-back lends them to one appeal is ADR-0084's reading, still
-    // asked (결과 4의 13).
+    // an ask-back late. That one ask-back lends them to one appeal is ADR-0084's reading; its rare
+    // cases are no fixed value but the operator's judgement (2026-10-23 (3차)).
     const line = SETTINGS.split('\n').find((l) =>
       l.startsWith('- 제재 이의의 안내(#186, ADR-0084)'),
     );
@@ -693,24 +751,30 @@ describe('what the appeal procedure leaves to the owner (ADR-0084 결과 4)', ()
       '3일은 오너가 정한 고정값이고(오너 결정 2026-10-23 답 2), 그 3일을 3×24시간으로 세는 것과 늦은 되묻기의 경계도 오너가 정했다(오너 결정 2026-10-23 (2차) 답 1)',
     );
     expect(line).toContain(
-      '되묻기 하나에 다시 온 이의 하나만 그렇게 보는 것은 ADR-0084의 읽기이고 오너에게 묻고 있다(ADR-0084 6-8, 결과 4의 13)',
+      '되묻기 하나에 다시 온 이의 하나만 그렇게 보는 것은 ADR-0084의 읽기다(ADR-0084 6-8)',
     );
     expect(line).toContain(
-      '어느 조치가 늦은 되묻기를 정하고 그 3일을 받는지 — 되묻기를 받은 메일이 온 때까지 받았고 그 메일이 기한 안에 온 조치 — 도 그렇다(결과 4의 15)',
+      '어느 조치가 늦은 되묻기를 정하고 그 3일을 받는지 — 되묻기를 받은 메일이 온 때까지 받았고 그 메일이 기한 안에 온 조치 — 도 그렇다',
+    );
+    expect(line).toContain(
+      '그 읽기가 닿는 드문 경우 — 늦은 되묻기 하나에 다시 온 이의가 여럿이거나 늦은 되묻기인지가 갈리는 것 — 는 고정값이 아니라 운영자가 회원에게 유리하게 판단한다(오너 결정 2026-10-23 (3차), 운영자의 절차 7)',
     );
     expect(line).not.toContain('모든 되묻기');
-    expect(line).not.toContain('결과 4의 10');
+    expect(line).not.toMatch(/결과 4의 \d/);
+    expect(line).not.toContain('오너에게 묻고 있다');
   });
 
-  it('asks nothing the owner answered on 2026-10-23 and 2026-10-23 (2차), and records those answers', () => {
-    // 결과 4의 4~9 were answered (오너 결정 2026-10-23 답 1~6), and 10·11 (2026-10-23 (2차)
-    // 답 1·2): none is asked any more.
+  it('asks nothing the owner answered on 2026-10-23, (2차) and (3차), and records those answers', () => {
+    // 결과 4의 4~9 were answered (오너 결정 2026-10-23 답 1~6), 10·11 (2026-10-23 (2차) 답 1·2)
+    // and 12~16 (2026-10-23 (3차)): none is asked any more.
     const questions = ownerQuestions();
-    for (const n of [4, 5, 6, 7, 8, 9, 10, 11]) expect(questions.has(n)).toBe(false);
+    for (const n of [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
+      expect(questions.has(n)).toBe(false);
     const adr = adr0084();
     for (const n of [1, 2, 3, 4, 5, 6])
       expect(adr).toContain(`| 오너 결정 2026-10-23 답 ${String(n)} `);
     for (const n of [1, 2]) expect(adr).toContain(`| 오너 결정 2026-10-23 (2차) 답 ${String(n)} `);
+    expect(adr).toContain('| 오너 결정 2026-10-23 (3차) ');
     // The fifth table's answers are the owner's words, the late ask-back's ending among them.
     expect(adr).toContain(
       "기한까지 3일보다 적게 남았거나 지난 뒤 되물을 때 → 되묻기 끝을 '…를 적어 3일 안에 다시 보내 주세요.'로(3일 = 되물은 때부터 3×24시간)",
@@ -903,7 +967,7 @@ describe.skipIf(!hasTestDb())('the operator appeal lookup (integration)', () => 
   });
 
   /**
-   * Step 3's ask-back (owner decision 2026-10-23 (2차) 답 1, ADR-0084 6-8, 결과 4의 15): a first
+   * Step 3's ask-back (owner decision 2026-10-23 (2차) 답 1, ADR-0084 6-8 — rare cases, step 7): a first
    * mail's ask-back is late when an action the mail came in time for — not cancelled, taken by the
    * time the mail came (`acted_kst` at or before it), `deadline_kst` at or after it — has its
    * `deadline_kst` before the ask-back's sending + 3×24 hours. The lookup's own columns decide it,
@@ -974,7 +1038,7 @@ describe.skipIf(!hasTestDb())('the operator appeal lookup (integration)', () => 
     // A vague mail at noon on day 0, a hide half a day later, the ask-back on day 12 after a
     // backlog: the hide's deadline (day 14.5) falls inside the ask-back's 3×24 hours, yet the
     // mail could not speak of it — it neither makes the ask-back late nor gets the mail's time
-    // (ADR-0084 6-8, 결과 4의 15).
+    // (ADR-0084 6-8; the rare case is step 7's).
     const { user: operator } = await createUser(t.db, { role: 'admin' });
     const { user: member } = await createUser(t.db, { email: 'after@example.com' });
     const mailAt = new Date('2026-10-01T03:00:00Z'); // 2026-10-01 12:00:00 KST
