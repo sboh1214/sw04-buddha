@@ -173,7 +173,7 @@ export class ApprovalService {
    * `pending` → `rejected` by no admin, because the member the request is about closed the account
    * (#140, owner decision 2026-10-23, ADR-0085 결과 5: «대기 중인 요청은 탈퇴를 막지 않음, 탈퇴 때 그
    * 요청은 저절로 닫음(거절로 기록, 까닭 '탈퇴')»). Called by the closure only, in its transaction,
-   * after it marked the member's profile closed: migration 0041's trigger allows a rejection with no
+   * after it marked the member's profile closed: migration 0043's trigger allows a rejection with no
    * decider for a request about a member closed by then, with ACCOUNT_CLOSURE_DECISION_REASON — the
    * reason passed here — and the closure's instant (strictly after the request, as a decision is).
    * A request decided or retracted meanwhile is left as it is: null then. No admin decides, so

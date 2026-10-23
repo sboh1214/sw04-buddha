@@ -1152,7 +1152,7 @@ export class ModerationReadsService {
             : { id: row.decidedById, nickname: row.decidedByNickname },
         decisionReason: row.decisionReason,
         decidedAt: row.decidedAt?.toISOString() ?? null,
-        // Rejected by no admin is the closure's (#140, migration 0041): read from the row, not
+        // Rejected by no admin is the closure's (#140, migration 0043): read from the row, not
         // from `decidedBy`, which is withheld from the admin the request is about as well.
         closedByAccountClosure: row.status === 'rejected' && row.decidedById === null,
         retractedAt: row.retractedAt?.toISOString() ?? null,

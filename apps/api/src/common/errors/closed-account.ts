@@ -2,7 +2,7 @@ import { AppError } from './app-error.js';
 import { PG_INTEGRITY_CONSTRAINT_VIOLATION, isPgError } from './pg-error.js';
 
 /**
- * The triggers of migration 0041 that refuse a new row of a closed account (#140, ADR-0086) from
+ * The triggers of migration 0043 that refuse a new row of a closed account (#140, ADR-0086) from
  * the writers that take no lock the closure holds: a watch, a recorded search, a 본인확인 record
  * and a code send. They raise with their own name as the constraint.
  */

@@ -183,7 +183,7 @@ export function UserName({ user, link = true }: { user: ModerationUser; link?: b
  * The '탈퇴' marker beside an account its member closed (#140, owner decision 2026-10-23 (2차) 5,
  * ADR-0086): the account stays on the operators' screens — the account list, the member's page —
  * named '탈퇴한 사용자' as every byline names it, and this says apart that it is closed. A closed
- * account is the only one with no nickname (profiles_closed_check, migration 0041).
+ * account is the only one with no nickname (profiles_closed_check, migration 0043).
  */
 export function ClosedBadge() {
   return (

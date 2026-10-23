@@ -58,7 +58,7 @@ export class SearchHistoryService {
   /**
    * Records one search of the caller's, at the database clock, and answers the list after it. The
    * term row follows by the insert trigger (migration 0026). A search of an account closed since
-   * the request passed SessionGuard is refused by the database (migration 0041, #140) and answered
+   * the request passed SessionGuard is refused by the database (migration 0043, #140) and answered
    * as the session that ended (`closedAccountRefusal`).
    */
   async record(userId: string, query: string): Promise<RecentSearch[]> {

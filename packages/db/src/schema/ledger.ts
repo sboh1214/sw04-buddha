@@ -31,7 +31,7 @@ export const ledgerEntries = pgTable(
     /**
      * One forfeiture per closed account (#140, '탈퇴 소멸'): its entry refers to the account itself
      * (`account_closure`), so a second closure — two requests at once — cannot forfeit twice.
-     * Migration 0041's triggers hold the rest: such an entry is the CLOSURE_FORFEIT of the account
+     * Migration 0043's triggers hold the rest: such an entry is the CLOSURE_FORFEIT of the account
      * it names, and nothing is written for a closed account after it.
      */
     uniqueIndex('ledger_entries_account_closure_unique')

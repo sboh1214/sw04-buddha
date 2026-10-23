@@ -49,7 +49,7 @@ export const approvalRequests = pgTable(
      * `retracted` (no one decided it). A request about a member who closed their account while it
      * waited is `rejected` by no admin (#140, owner decision 2026-10-23, ADR-0085 결과 5): the
      * reason '탈퇴' and the instant of the closure, and `decided_by` null — the one rejection without
-     * a decider, which migration 0041's trigger allows for such a request only.
+     * a decider, which migration 0043's trigger allows for such a request only.
      */
     decidedBy: text().references(() => user.id, { onDelete: 'restrict' }),
     decisionReason: text(),
@@ -64,7 +64,7 @@ export const approvalRequests = pgTable(
     /**
      * `status` compared as text: migration 0042 adds `retracted` to the enum in the batch that
      * replaces this CHECK, which cannot name the new value as the enum (55P04, migration 0014).
-     * Migration 0041 lets a rejection go without a decider (#140: the closure's); every other
+     * Migration 0043 lets a rejection go without a decider (#140: the closure's); every other
      * decision names its admin.
      */
     check(

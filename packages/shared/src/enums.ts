@@ -49,7 +49,7 @@ export const LEDGER_ENTRY_TYPES = [
    * forfeited with the closure — the balance taken to 0 by an entry, never overwritten, so the
    * ledger still sums to the balance (PLAN 5.6). Written only by the closure (−amount_coin, ref
    * `account_closure` → the account itself), once per account, and nothing is written for the
-   * account after it (migration 0041). Not trading loss (N02 §8).
+   * account after it (migration 0043). Not trading loss (N02 §8).
    */
   'CLOSURE_FORFEIT',
 ] as const;
@@ -67,7 +67,7 @@ export const LEDGER_REF_TYPES = [
   'start_grant',
   /**
    * A CLOSURE_FORFEIT entry's closed account (#140): `ref_id` is the account's own id, and
-   * `profiles.closed_at` says when it closed — one entry per account (migration 0041).
+   * `profiles.closed_at` says when it closed — one entry per account (migration 0043).
    */
   'account_closure',
 ] as const;

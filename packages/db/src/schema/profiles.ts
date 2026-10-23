@@ -26,7 +26,7 @@ import { mediaObjects } from './media-objects.js';
  * then), no 소개, no image (the interest categories are deleted with it) — so every public face made
  * from it is '탈퇴한 사용자' (`postAuthorOf` in apps/api) and its profile answers as for no account.
  * The public id stays: nothing shows it any more, and it is never handed to another account. A
- * closed row never changes again (migration 0041).
+ * closed row never changes again (migration 0043).
  */
 export const profiles = pgTable(
   'profiles',
@@ -112,7 +112,7 @@ export const profiles = pgTable(
      * database clock; null while it is open. Set once, never cleared (#57-17: no restoration), and
      * at the commit that sets it the closure is whole: the Coin forfeited, the sign-in methods,
      * sessions, verified number, watchlist and search history gone, the address replaced
-     * (migration 0041's `profiles_closed_completely`). What #184's retention of the account's
+     * (migration 0043's `profiles_closed_completely`). What #184's retention of the account's
      * remaining records counts from (decision 4 #184 «탈퇴 시각부터»).
      */
     closedAt: timestampTz(),

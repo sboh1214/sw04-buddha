@@ -135,7 +135,7 @@ function UserView({
   onOpen: (spec: DialogSpec) => void;
 }) {
   const own = concernsOperator(member.user.id, useOperatorId());
-  // Closed by its member (#140): the only account with no nickname (migration 0041).
+  // Closed by its member (#140): the only account with no nickname (migration 0043).
   const closed = member.user.nickname === null;
   const pendingProfileReports = pendingReportIds(member.reports).length > 0;
   // About the profile first while its reports wait, so the warning resolves them by default.

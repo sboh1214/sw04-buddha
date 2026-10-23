@@ -187,7 +187,7 @@ export class AdminService {
         .where(eq(schema.balances.userId, userId))
         .limit(1)
         .for('update');
-      // A closed account takes no ledger entry after its forfeiture (#140, migration 0041): read
+      // A closed account takes no ledger entry after its forfeiture (#140, migration 0043): read
       // after the balance's lock, which a closure holds until it commits, so one in flight is seen.
       const [profile] = await tx
         .select({ closedAt: schema.profiles.closedAt })

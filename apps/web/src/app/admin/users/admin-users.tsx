@@ -156,7 +156,7 @@ function adjustFailureMessage(error: unknown): string {
  * takes, so its card says so instead of offering the form.
  */
 function UserCard({ user }: { user: AdminUser }) {
-  // A closed account is the only one with no nickname (profiles_closed_check, migration 0041).
+  // A closed account is the only one with no nickname (profiles_closed_check, migration 0043).
   const closed = user.nickname === null;
   const queryClient = useQueryClient();
   const {

@@ -1378,7 +1378,7 @@ export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
  * 본인확인 record, the watchlist (each watch's unwatch event written), the search history, the
  * sessions, sign-in methods and reset tokens gone, the address replaced and the name and photo
  * emptied, and the account restriction requests about the member still waiting rejected by no
- * admin, '탈퇴'. Returns the closure's instant. Throws where migration 0041 would refuse the
+ * admin, '탈퇴'. Returns the closure's instant. Throws where migration 0043 would refuse the
  * commit (Coin reserved, say).
  */
 export async function closeAccount(db: Db, userId: string): Promise<Date> {

@@ -1350,7 +1350,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       expect(report.status).toBe('pending');
     });
 
-    it('takes no watch, search, code send or 본인확인 of a request that passed SessionGuard before the closure committed (migration 0041)', async () => {
+    it('takes no watch, search, code send or 본인확인 of a request that passed SessionGuard before the closure committed (migration 0043)', async () => {
       // An account that had a code texted before it closed (the closure is sign-in only).
       const fresh = await signUpTestUser(t);
       await createConsents(t.db, { userId: fresh.id });
@@ -1401,7 +1401,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       expect(await phones.confirm(again.id, t.sms.lastCodeTo(phone))).toMatchObject({ phone });
     });
 
-    it('refuses a session or a sign-in method for the closed account in the database (migration 0041)', async () => {
+    it('refuses a session or a sign-in method for the closed account in the database (migration 0043)', async () => {
       await closed(member);
       await expect(
         t.db.insert(schema.session).values({

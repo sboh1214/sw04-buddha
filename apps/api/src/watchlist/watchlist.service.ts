@@ -128,7 +128,7 @@ export class WatchlistService {
    * Sets the caller's watch of one public market and answers the state it is in now. Idempotent
    * both ways; only a change writes its event (`watch` or `unwatch`). Nothing else is touched:
    * no order, position, balance or market statistic (#89 AC). A watch of an account closed since
-   * the request passed SessionGuard is refused by the database (migration 0041, #140) and answered
+   * the request passed SessionGuard is refused by the database (migration 0043, #140) and answered
    * as the session that ended (`closedAccountRefusal`).
    */
   async set(userId: string, marketId: string, watched: boolean): Promise<WatchState> {

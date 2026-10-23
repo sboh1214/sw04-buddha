@@ -396,7 +396,7 @@ export class PhoneVerificationService {
   /**
    * A transaction whose failures leave without the values it wrote: an AppError as thrown,
    * `known(error)` when it names one, a send or a confirmation of an account closed since the
-   * request passed SessionGuard as the session that ended (migration 0041 refuses the row, #140 —
+   * request passed SessionGuard as the session that ended (migration 0043 refuses the row, #140 —
    * `closedAccountRefusal`), and anything else as `verificationWriteFailure`.
    */
   private async write<T>(

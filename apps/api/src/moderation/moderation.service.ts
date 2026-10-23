@@ -762,7 +762,7 @@ export class ModerationService {
     // every hold's link to it (#57-18 «계정과의 연결을 끊은 채»), and this one stays held from
     // everybody for the rest of its 30 days. FOR KEY SHARE waits for a closure in flight (it holds
     // the profile FOR UPDATE), so its commit is seen; taken before the nickname's lock, the order
-    // the closure takes them in. Migration 0041 refuses a hold naming a closed account anyway.
+    // the closure takes them in. Migration 0043 refuses a hold naming a closed account anyway.
     const [member] = await tx
       .select({ closedAt: profiles.closedAt })
       .from(profiles)

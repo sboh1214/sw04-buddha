@@ -213,7 +213,7 @@ export class AccountRestrictionService {
       // it (FOR UPDATE): a closure in flight holds it FOR UPDATE from its start (#140), so a request
       // about the member made meanwhile waits for it and comes after it. Otherwise one committed
       // between the closure's look for the requests it closes and its commit would make migration
-      // 0041's check at that commit refuse the closure (`profiles_closed_completely`: a request
+      // 0043's check at that commit refuse the closure (`profiles_closed_completely`: a request
       // about it waiting). Before the clock is read (infra/db/clock.ts).
       await tx
         .select({ one: sql`1` })

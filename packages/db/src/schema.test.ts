@@ -2944,7 +2944,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  describe('closed accounts (migration 0041, #140)', () => {
+  describe('closed accounts (migration 0043, #140)', () => {
     type Kept =
       | 'session'
       | 'account'
@@ -3479,7 +3479,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
 
     /**
-     * One new row of each kind migration 0041 refuses for a closed account (#57-18) from the
+     * One new row of each kind migration 0043 refuses for a closed account (#57-18) from the
      * writers that take no lock the closure holds — a watch, a search, a 본인확인 record, a code
      * send, a password-reset token — for `userId`, on a market of its own.
      */

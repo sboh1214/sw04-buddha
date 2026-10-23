@@ -69,7 +69,7 @@ interface Closed {
  * in flight commits first and is seen, and whatever comes later finds the account closed. The
  * writers that take none of these locks — a session or a sign-in method, a nickname hold, a
  * watch, a recorded search, a code send or a 본인확인 record, a password-reset token — meet the
- * same order in migration 0041's insert triggers, which read the profile FOR KEY SHARE and refuse
+ * same order in migration 0043's insert triggers, which read the profile FOR KEY SHARE and refuse
  * a closed account (the API answers that refusal as UNAUTHENTICATED, `closedAccountRefusal`):
  *
  * 1. Refused while the account holds the admin role (`admin`, #57-17), a writing or an account
@@ -96,7 +96,7 @@ interface Closed {
  *    So does the profile's time zone (point 4; owner decision 2026-10-23 (3차) 6).
  * 6. Signing in ends: every session, every sign-in method (password and social links), better-auth's
  *    password-reset tokens for the account; the address is replaced by `closedAccountEmail` (freed
- *    for a new sign-up at once, #57-17), the name and photo emptied (decision 7). Migration 0041
+ *    for a new sign-up at once, #57-17), the name and photo emptied (decision 7). Migration 0043
  *    refuses a session or a sign-in method for a closed account from then on.
  * 7. The account restriction requests about the member still waiting are closed as rejected by no
  *    admin, reason '탈퇴' (owner decision 2026-10-23, ADR-0085 결과 5); those decided or retracted
@@ -106,7 +106,7 @@ interface Closed {
  * What stays (#57-18): the ledger, orders, fills and positions, the watch events, the consent
  * records, posts and comments with their histories, likes, reports filed and received and actions
  * — reports still waiting are processed as any (decision 4 #140 «처리 중인 신고 … 그대로 검토»), the
- * member no longer seeing them. Migration 0041 checks at the commit that nothing of the deletions
+ * member no longer seeing them. Migration 0043 checks at the commit that nothing of the deletions
  * was left (`profiles_closed_completely`).
  *
  * Asked twice at once (two tabs), the second waits for the first and answers what it did: the
@@ -377,7 +377,7 @@ export class AccountClosureService {
    * no watch the closed account no longer has. The watch row's primary key orders this with a
    * watch or an unwatch of the same pair in flight, as WatchlistService's own writes are ordered:
    * one committed first is deleted here with its event, and a later one is refused (migration
-   * 0041's `market_watches_open_account`) or finds nothing to delete. Migration 0041 checks at the
+   * 0043's `market_watches_open_account`) or finds nothing to delete. Migration 0043 checks at the
    * commit that no watch of the account is left without its unwatch.
    */
   private async unwatchAll(tx: Tx, userId: string, closedAt: Date): Promise<void> {
