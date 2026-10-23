@@ -1,6 +1,6 @@
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiError, type AnswerInterestsStepBody, type Me } from '@/lib/api';
+import { ApiError, api, type AnswerInterestsStepBody, type Me } from '@/lib/api';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import {
@@ -423,6 +423,46 @@ describe('the onboarding mutations', () => {
   });
 });
 
+describe('the interests step’s two requests (PR #224 Codex review, ADR-0078 7-28)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('sends the step’s answer with keepalive, as the skip: the page going does not cancel either', async () => {
+    const queryClient = getQueryClient();
+    const answered: Me = {
+      ...named,
+      profile: { ...named.profile, interestCategoryIds: [3] },
+      onboarding: { ...named.onboarding, interests: true },
+    };
+    const sent = vi.spyOn(api, 'POST').mockResolvedValue({
+      data: { data: answered },
+      response: new Response(null, { status: 200 }),
+    });
+    try {
+      // The screen's 저장 (or 건너뛰기), and the skip the stepper sends as the account leaves: the
+      // answer on its way holds the skip back, so the answer itself must outlive the page.
+      const options = answerInterestsStepOptions(queryClient, () => undefined);
+      await expect(
+        options.mutationFn({ categoryIds: [3], expectedAccountId: 'user-1' }),
+      ).resolves.toEqual(answered);
+      await reportInterestsLeft('user-1');
+      expect(sent.mock.calls).toEqual([
+        [
+          '/api/v1/me/onboarding/interests',
+          { body: { categoryIds: [3], expectedAccountId: 'user-1' }, keepalive: true },
+        ],
+        [
+          '/api/v1/me/onboarding/interests',
+          { body: { categoryIds: [], expectedAccountId: 'user-1' }, keepalive: true },
+        ],
+      ]);
+    } finally {
+      queryClient.clear();
+    }
+  });
+});
+
 describe('reportInterestsLeft (owner decision 2026-10-21 (2nd) answer 2)', () => {
   it('sends the step’s skip for the account on screen, and swallows a failure', async () => {
     const sent: unknown[] = [];
@@ -498,7 +538,7 @@ describe('createInterestsLeaveReport (owner decision 2026-10-21 (2nd) answer 2)'
     queryClient.clear();
   });
 
-  it('holds the skip back while the step’s own answer is on its way, but not for MY 설정’s write', async () => {
+  it('holds the skip back while the step’s own answer is on its way and once it came, but not for MY 설정’s write', async () => {
     const queryClient = getQueryClient();
     const { sent, post } = recordingPost();
     let answer: (me: Me) => void = () => undefined;
@@ -513,10 +553,12 @@ describe('createInterestsLeaveReport (owner decision 2026-10-21 (2nd) answer 2)'
         () => answering,
       ),
     );
+    // Another tab's cache: MY 설정's write there knows nothing of this one's step.
+    const elsewhere = getQueryClient();
     const settings = new MutationObserver(
-      queryClient,
+      elsewhere,
       setInterestCategoriesOptions(
-        queryClient,
+        elsewhere,
         () => undefined,
         () => new Promise<Me>(() => undefined),
       ),
@@ -528,17 +570,122 @@ describe('createInterestsLeaveReport (owner decision 2026-10-21 (2nd) answer 2)'
       report.show('interests', 'user-1');
       const picked = step.mutate({ categoryIds: [3], expectedAccountId: 'user-1' });
       report.leave();
-      await report.beforeSignOut();
+      const signingOut = report.beforeSignOut();
       expect(sent).toEqual([]);
       answer(named);
       await picked;
+      await signingOut;
+      // Answered, before the stepper has moved on from the screen (it renders after): no skip —
+      // nor once the sign-out has emptied the cache that remembers the answer, as it goes.
+      report.leave();
+      queryClient.clear();
+      report.leave();
+      expect(sent).toEqual([]);
 
-      // A write of MY 설정 in flight (another tab's) is no answer of the step.
-      const other = createInterestsLeaveReport(queryClient, post);
+      // A write of MY 설정 in flight is no answer of the step.
+      const other = createInterestsLeaveReport(elsewhere, post);
       other.show('notice', 'user-1');
       void settings.mutate({ categoryIds: [3], expectedAccountId: 'user-1' });
       other.leave();
       expect(sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-1' }]);
+    } finally {
+      queryClient.clear();
+      elsewhere.clear();
+    }
+  });
+
+  it('makes 로그아웃 wait for the step’s answer on its way, and send the skip only if it did not answer the step', async () => {
+    // PR #224 Codex review (ADR-0078 7-28): 로그아웃 ends the session the answer on its way still
+    // needs, so it waits for it — within the same wait as the skip — rather than racing it.
+    vi.useFakeTimers();
+    const queryClient = getQueryClient();
+    /** The step's mutation as the screen holds it, whose answer the test settles. */
+    function stepAnswer() {
+      let settle: (outcome: Me | Error) => void = () => undefined;
+      const observer = new MutationObserver(
+        queryClient,
+        answerInterestsStepOptions(
+          queryClient,
+          () => undefined,
+          () =>
+            new Promise<Me>((resolve, reject) => {
+              settle = (outcome) => (outcome instanceof Error ? reject(outcome) : resolve(outcome));
+            }),
+        ),
+      );
+      return { observer, settle: (outcome: Me | Error) => settle(outcome) };
+    }
+    const picks: Me = {
+      ...named,
+      profile: { ...named.profile, interestCategoryIds: [3] },
+      onboarding: { ...named.onboarding, interests: true },
+    };
+    try {
+      // 저장, then 로그아웃 at once: it waits for the picks, which answer the step — no skip, and
+      // the server ends with the picks.
+      const first = recordingPost();
+      const saved = stepAnswer();
+      const report = createInterestsLeaveReport(queryClient, first.post);
+      report.show('interests', 'user-1');
+      const picked = saved.observer.mutate({ categoryIds: [3], expectedAccountId: 'user-1' });
+      let signedOut = false;
+      const before = report.beforeSignOut().then(() => {
+        signedOut = true;
+      });
+      await vi.advanceTimersByTimeAsync(SIGN_OUT_LEAVE_REPORT_WAIT_MS - 1);
+      expect(signedOut).toBe(false);
+      saved.settle(picks);
+      await picked;
+      await before;
+      expect(first.sent).toEqual([]);
+      expect(queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY })).toBe(0);
+
+      // The picks refused (a category closed meanwhile): the screen left unanswered, so the skip
+      // goes after the refusal — never beside the picks — and the wait counts from 로그아웃.
+      const second = recordingPost();
+      const closed = stepAnswer();
+      const refusedReport = createInterestsLeaveReport(queryClient, second.post);
+      refusedReport.show('interests', 'user-2');
+      const refusal = closed.observer
+        .mutate({ categoryIds: [9], expectedAccountId: 'user-2' })
+        .catch(() => undefined);
+      let gaveUp = false;
+      const late = refusedReport.beforeSignOut().then(() => {
+        gaveUp = true;
+      });
+      await vi.advanceTimersByTimeAsync(500);
+      expect(second.sent).toEqual([]);
+      closed.settle(refused(400, 'VALIDATION_ERROR', [{ path: ['categoryIds', 0], message: 'x' }]));
+      await refusal;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(second.sent).toEqual([{ categoryIds: [], expectedAccountId: 'user-2' }]);
+      // Its answer does not come: 로그아웃 goes on once the one wait is over.
+      await vi.advanceTimersByTimeAsync(SIGN_OUT_LEAVE_REPORT_WAIT_MS - 501);
+      expect(gaveUp).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await late;
+      expect(gaveUp).toBe(true);
+
+      // The picks do not come within the wait: 로그아웃 goes on, and no skip races them.
+      const third = recordingPost();
+      const lost = stepAnswer();
+      const stuck = createInterestsLeaveReport(queryClient, third.post);
+      stuck.show('interests', 'user-3');
+      void lost.observer
+        .mutate({ categoryIds: [3], expectedAccountId: 'user-3' })
+        .catch(() => undefined);
+      let left = false;
+      const going = stuck.beforeSignOut().then(() => {
+        left = true;
+      });
+      await vi.advanceTimersByTimeAsync(SIGN_OUT_LEAVE_REPORT_WAIT_MS - 1);
+      expect(left).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await going;
+      expect(left).toBe(true);
+      expect(third.sent).toEqual([]);
+      // Nothing left listening to the cache once 로그아웃 went on.
+      expect(queryClient.getMutationCache().hasListeners()).toBe(false);
     } finally {
       queryClient.clear();
     }

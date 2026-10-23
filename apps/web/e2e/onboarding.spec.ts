@@ -700,6 +700,104 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
+  test('관심 카테고리 단계의 고른 것을 보낸 바로 뒤 로그아웃하거나 페이지를 새로 고쳐도 고른 것이 그 단계의 답으로 남는다', async ({
+    page,
+  }) => {
+    // PR #224 Codex review (ADR-0078 7-28): while the step's answer is on its way leaving sends no
+    // skip, so the answer itself must reach the server. 로그아웃 would end the session it needs, so
+    // it waits for the answer first (and sends no skip after picks that answered the step); a page
+    // that goes cannot wait, so the answer is `keepalive`, as the skip is.
+    const categories = await dataOf<Category[]>(await page.request.get('/api/v1/categories'));
+    const category = categories.find((row) => row.parentId === null);
+    if (category === undefined)
+      throw new Error('the seeded categories are missing: run `pnpm db:seed`');
+    // Whether each of the step's requests left as `keepalive` (openapi-fetch hands `fetch` a Request).
+    await page.addInitScript(() => {
+      const seen: boolean[] = [];
+      (window as unknown as { interestsKeepalive: boolean[] }).interestsKeepalive = seen;
+      const original = window.fetch.bind(window);
+      window.fetch = (input, init) => {
+        if (input instanceof Request && input.url.endsWith('/api/v1/me/onboarding/interests')) {
+          seen.push(input.keepalive);
+        }
+        return original(input, init);
+      };
+    });
+    const keepalives = () =>
+      page.evaluate(
+        () => (window as unknown as { interestsKeepalive: boolean[] }).interestsKeepalive,
+      );
+    const stepWrites: unknown[] = [];
+    const order: string[] = [];
+    page.on('request', (request) => {
+      if (request.url().endsWith('/api/v1/me/onboarding/interests')) {
+        stepWrites.push(request.postDataJSON());
+      }
+      if (request.url().endsWith('/api/auth/sign-out')) order.push('sign-out');
+    });
+    page.on('response', (response) => {
+      if (response.url().endsWith('/api/v1/me/onboarding/interests')) {
+        order.push(`answer ${response.status()}`);
+      }
+    });
+
+    // 저장, then 로그아웃 at once, the picks held on their way: no sign-out until they are answered.
+    const signedOut = await atNicknameStep(page);
+    await page.getByTestId('nickname-step-submit').click();
+    await page.getByTestId('notice-next').click();
+    await expect(page.getByTestId('interests-step')).toBeVisible();
+    let hold: (route: Route) => void = () => undefined;
+    const held = new Promise<Route>((resolve) => {
+      hold = resolve;
+    });
+    let holding = true;
+    await page.route('**/api/v1/me/onboarding/interests', async (route) => {
+      if (holding) {
+        holding = false;
+        hold(route);
+        return;
+      }
+      await route.continue();
+    });
+    await page.getByTestId('interests-step').getByTestId(`interest-${category.slug}`).click();
+    await page.getByTestId('interests-save').click();
+    const answer = await held;
+    await page.getByTestId('onboarding-logout').click();
+    // Well within the wait (SIGN_OUT_LEAVE_REPORT_WAIT_MS, 2s): 로그아웃 is still waiting.
+    await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 500)));
+    expect(order).toEqual([]);
+    await answer.continue();
+    await expect(page).toHaveURL('/');
+    await expect(page.getByRole('link', { name: copy.login })).toBeVisible();
+    expect(order).toEqual(['answer 200', 'sign-out']);
+    expect(stepWrites).toEqual([{ categoryIds: [category.id], expectedAccountId: signedOut.id }]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await signIn(page, signedOut.email, E2E_PASSWORD);
+    let me = await meOf(page.request);
+    expect(me.onboarding).toMatchObject({ completed: true, interests: true, nextStep: null });
+    expect(me.profile.interestCategoryIds).toEqual([category.id]);
+    await logOut(page);
+
+    // 저장, then the page reloaded at once: the picks leave as `keepalive` and outlive it, and the
+    // page that went sends no skip beside them.
+    stepWrites.length = 0;
+    const reloaded = await atNicknameStep(page);
+    await page.getByTestId('nickname-step-submit').click();
+    await page.getByTestId('notice-next').click();
+    await expect(page.getByTestId('interests-step')).toBeVisible();
+    await page.getByTestId('interests-step').getByTestId(`interest-${category.slug}`).click();
+    await page.getByTestId('interests-save').click();
+    expect(await keepalives()).toEqual([true]);
+    await page.reload();
+    await expect(page).toHaveURL('/');
+    await expect
+      .poll(async () => (await meOf(page.request)).profile.interestCategoryIds)
+      .toEqual([category.id]);
+    me = await meOf(page.request);
+    expect(me.onboarding).toMatchObject({ completed: true, interests: true, nextStep: null });
+    expect(stepWrites).toEqual([{ categoryIds: [category.id], expectedAccountId: reloaded.id }]);
+  });
+
   /**
    * `GET /me` with `onboarding` rewritten by `edit` while `active()` says so: what no spec can bring
    * about for real looks like on screen — a revision of the consent texts that changed members'

@@ -50,8 +50,15 @@ async function postNickname(body: SetOnboardingNicknameBody): Promise<Me> {
   return unwrap(await api.POST('/api/v1/me/onboarding/nickname', { body })).data;
 }
 
+/**
+ * The interests step's answer from its screen: `keepalive`, as the skip sent as the account leaves
+ * (`postInterestsLeft`). The page may go right after 저장 or 건너뛰기 — the tab closed or reloaded —
+ * and while the answer is on its way leaving sends no skip (`createInterestsLeaveReport`), so the
+ * answer itself must outlive the page, or neither it nor the skip would reach the server (PR #224
+ * Codex review, ADR-0078 7-28).
+ */
 async function postInterestsStep(body: AnswerInterestsStepBody): Promise<Me> {
-  return unwrap(await api.POST('/api/v1/me/onboarding/interests', { body })).data;
+  return unwrap(await api.POST('/api/v1/me/onboarding/interests', { body, keepalive: true })).data;
 }
 
 async function putInterests(body: SetInterestCategoriesBody): Promise<Me> {
@@ -156,8 +163,8 @@ export function setOnboardingNicknameOptions(
 }
 
 /**
- * The interests step's write (`answerInterestsStepOptions`): while one is on its way, leaving sends
- * no skip (`createInterestsLeaveReport`).
+ * The interests step's write (`answerInterestsStepOptions`): while one is on its way, or once one
+ * came, leaving sends no skip — and 로그아웃 waits for one on its way (`createInterestsLeaveReport`).
  */
 export const INTERESTS_STEP_MUTATION_KEY = ['onboarding', 'interests'] as const;
 
@@ -191,8 +198,9 @@ function interestsWriteOptions<Body extends { expectedAccountId: string }>(
  * `POST /me/onboarding/interests` as mutation options: the interests step's answer from its screen
  * (#57-7), some categories or none (the skip) — for onboarded accounts only, and, as the account's
  * first choice, let through a writing or an account restriction (owner decision 2026-10-21 answer
- * 4, the server's rule). Keyed (`INTERESTS_STEP_MUTATION_KEY`) so the stepper does not report the
- * screen left while its answer is on the way (`createInterestsLeaveReport`).
+ * 4, the server's rule). Sent with `keepalive` (`postInterestsStep`), and keyed
+ * (`INTERESTS_STEP_MUTATION_KEY`) so the stepper does not report the screen left while its answer is
+ * on the way or once it came, and 로그아웃 waits for it (`createInterestsLeaveReport`).
  */
 export function answerInterestsStepOptions(
   queryClient: QueryClient,
@@ -236,20 +244,63 @@ export function reportInterestsLeft(
 }
 
 /**
- * How long 로그아웃 on the start-Coin notice or the interests waits for the skip it sends first
- * (`InterestsLeaveReport.beforeSignOut`) before it ends the session anyway: the skip needs the
- * session, and one that has not come by then is left to race the sign-out (ADR-0078 7-23) rather
- * than keeping the account from signing out.
+ * How long 로그아웃 on the start-Coin notice or the interests waits, in all, for the step's answer
+ * on its way and for the skip it sends first (`InterestsLeaveReport.beforeSignOut`) before it ends
+ * the session anyway: both need the session, and one that has not come by then is left to race the
+ * sign-out (ADR-0078 7-23, 7-28) rather than keeping the account from signing out.
  */
 export const SIGN_OUT_LEAVE_REPORT_WAIT_MS = 2_000;
 
-/** Settles once `promise` has, or `ms` went by — whichever is first. Never rejects. */
-function settledWithin(promise: Promise<void>, ms: number): Promise<void> {
+/** A timer as a promise: `elapsed` settles once `ms` went by, unless `clear` came first. */
+function deadline(ms: number): { elapsed: Promise<void>; clear: () => void } {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const elapsed = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, ms);
   });
-  return Promise.race([promise, elapsed]).finally(() => clearTimeout(timer));
+  return { elapsed, clear: () => clearTimeout(timer) };
+}
+
+/**
+ * Where the step's answers sent from this tab stand (`INTERESTS_STEP_MUTATION_KEY`, asked of the
+ * mutation cache): one on its way (`answering`), and one for `accountId` that the server answered
+ * (`answered` — `['me']` holds it before the mutation says so, `storeOnboardingAnswer`). A cache
+ * emptied (after the sign-out, or for another account) forgets both.
+ */
+function stepAnswers(
+  queryClient: QueryClient,
+  accountId: string,
+): { answering: boolean; answered: boolean } {
+  let answering = false;
+  let answered = false;
+  const answers = queryClient
+    .getMutationCache()
+    .findAll({ mutationKey: INTERESTS_STEP_MUTATION_KEY });
+  for (const answer of answers) {
+    const body = answer.state.variables as AnswerInterestsStepBody | undefined;
+    if (answer.state.status === 'pending') answering = true;
+    else if (answer.state.status === 'success' && body?.expectedAccountId === accountId) {
+      answered = true;
+    }
+  }
+  return { answering, answered };
+}
+
+/**
+ * Settles once no answer of the step is on its way in this tab — it came, it was refused or lost,
+ * or the cache was emptied — or never, after `stop`. Never rejects.
+ */
+function stepAnswerSettled(queryClient: QueryClient): { settled: Promise<void>; stop: () => void } {
+  let unsubscribe: () => void = () => undefined;
+  const settled = new Promise<void>((resolve) => {
+    const check = () => {
+      if (queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY }) > 0) return;
+      unsubscribe();
+      resolve();
+    };
+    unsubscribe = queryClient.getMutationCache().subscribe(check);
+    check();
+  });
+  return { settled, stop: () => unsubscribe() };
 }
 
 /** The stepper's leave report (`createInterestsLeaveReport`). */
@@ -259,22 +310,28 @@ export interface InterestsLeaveReport {
   /** The stepper going away inside the app, or the page going (`pagehide`). */
   readonly leave: () => void;
   /**
-   * 로그아웃 about to end the session: the skip sent now, while the session is there, and waited
-   * for — at most `waitMs`. Nothing to wait for when leaving does not skip.
+   * 로그아웃 about to end the session: the step's answer on its way waited for first, then the skip
+   * sent while the session is there — unless that answer answered the step — and waited for: at
+   * most `waitMs` in all. Nothing to wait for when leaving does not skip.
    */
   readonly beforeSignOut: () => Promise<void>;
 }
 
 /**
  * The stepper's leave report (owner decision 2026-10-21 (2nd) answer 2, ADR-0078): while the
- * screen is the start-Coin notice or the interests and no answer of the step is on its way —
- * asked of the mutation cache as the account leaves (`INTERESTS_STEP_MUTATION_KEY`,
+ * screen is the start-Coin notice or the interests and no answer of the step was sent — none on its
+ * way and none answered, asked of the mutation cache as the account leaves (`stepAnswers`,
  * `leavingSkipsInterests`): that answer answers the step itself, and a skip racing it could turn
  * the picks into a change — leaving sends the skip (`reportInterestsLeft`), once, whichever way the
- * account leaves. The screen reached nothing to skip or finished the step (null): nothing is sent.
- * A cache emptied under the stepper (after the sign-out, or for another account) forgets an answer
- * in flight, and the skip then sent is refused (401, 403) — it changes nothing. Plain, not a hook,
- * so the unit tests drive it under `environment: 'node'`.
+ * account leaves. The screen reached nothing to skip or finished the step (null), or its answer
+ * came before the stepper moved on: nothing is sent, then or later. The answer on its way outlives
+ * the page (`keepalive`, `postInterestsStep`); 로그아웃, which would end the session it needs,
+ * waits for it first (at most `waitMs`, with the skip) and then sends the skip only if it did not
+ * answer the step — refused (a category closed meanwhile) or lost — so the server ends with the
+ * picks, not a skip (PR #224 Codex review, ADR-0078 7-28). A cache emptied under the stepper (after
+ * the sign-out, or for another account) forgets an answer in flight, and the skip then sent is
+ * refused (401, 403) — it changes nothing. Plain, not a hook, so the unit tests drive it under
+ * `environment: 'node'`.
  */
 export function createInterestsLeaveReport(
   queryClient: QueryClient,
@@ -284,11 +341,14 @@ export function createInterestsLeaveReport(
   let shown: { screen: OnboardingScreen | null; accountId: string } | null = null;
   let sent: Promise<void> | null = null;
   const send = (): Promise<void> | null => {
-    if (sent === null && shown !== null) {
-      const answering = queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY }) > 0;
-      if (leavingSkipsInterests(shown.screen, answering)) {
-        sent = reportInterestsLeft(shown.accountId, post);
-      }
+    if (sent !== null || shown === null) return sent;
+    const { answering, answered } = stepAnswers(queryClient, shown.accountId);
+    if (answered) {
+      // The step answered from this screen, before the stepper moved on: leaving is no skip, now or
+      // later — once the sign-out emptied the cache that remembers the answer too.
+      sent = Promise.resolve();
+    } else if (leavingSkipsInterests(shown.screen, answering)) {
+      sent = reportInterestsLeft(shown.accountId, post);
     }
     return sent;
   };
@@ -300,9 +360,24 @@ export function createInterestsLeaveReport(
       // Nobody waits: the page or the stepper is going.
       void send();
     },
-    beforeSignOut: () => {
-      const report = send();
-      return report === null ? Promise.resolve() : settledWithin(report, waitMs);
+    beforeSignOut: async () => {
+      const wait = deadline(waitMs);
+      try {
+        if (queryClient.isMutating({ mutationKey: INTERESTS_STEP_MUTATION_KEY }) > 0) {
+          // The answer first: it needs the session, and a skip sent beside it could land first.
+          const answer = stepAnswerSettled(queryClient);
+          try {
+            await Promise.race([answer.settled, wait.elapsed]);
+          } finally {
+            answer.stop();
+          }
+        }
+        // At once when nothing was on its way: the skip leaves before this returns.
+        const report = send();
+        if (report !== null) await Promise.race([report, wait.elapsed]);
+      } finally {
+        wait.clear();
+      }
     },
   };
 }
@@ -312,11 +387,11 @@ export function createInterestsLeaveReport(
  * going away inside the app (a link, Back, the account's cache emptied), the page going
  * (`pagehide`: the tab closed, reloaded — ADR-0072 7-35 counts a reload as leaving — or another
  * site opened), or 로그아웃, which ends the session before the stepper goes — so the page's
- * 로그아웃 calls what this returns first (`beforeSignOut`), and the stepper going after it sends
- * nothing more. The stepper finishing the step goes on to `next` with nothing left to show, so it
- * sends nothing. What the latest render showed is what the report reads; the stepper never mounts
- * on the notice or the interests (it reaches them after the nickname step on the same visit), so a
- * development remount reports nothing.
+ * 로그아웃 calls what this returns first (`beforeSignOut`: the step's answer on its way, then the
+ * skip), and the stepper going after it sends nothing more. The stepper finishing the step goes on
+ * to `next` with nothing left to show, so it sends nothing. What the latest render showed is what
+ * the report reads; the stepper never mounts on the notice or the interests (it reaches them after
+ * the nickname step on the same visit), so a development remount reports nothing.
  */
 export function useInterestsLeaveReport(
   screen: OnboardingScreen | null,

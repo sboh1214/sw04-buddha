@@ -13,8 +13,8 @@ import { clearSessionProfileDrafts } from '@/lib/profile-drafts';
 export interface SignOutSteps {
   /**
    * What the screen tells the server first, while the session is there — the onboarding's leave
-   * report (`useInterestsLeaveReport`, ADR-0078). Waited for; a failure does not keep the account
-   * signed in.
+   * report (`useInterestsLeaveReport`, ADR-0078: the interests step's answer on its way, then the
+   * skip). Waited for; a failure does not keep the account signed in.
    */
   readonly beforeSignOut?: () => Promise<void>;
   /** better-auth's sign-out: `{ error }` on a failure. */
