@@ -542,6 +542,47 @@ describe.skipIf(!hasTestInfra)('/api/v1 likes (integration)', () => {
     expect((await rows()).posts).toEqual([next.id]);
   });
 
+  it('leaves a live account’s likes under the number another account is moved to: the ones coming with it give way there (ADR-0076 7-26)', async () => {
+    // Codex review on PR #222: the holder's number was changed outside the procedure, so its likes
+    // still carry the hash of the number it held, which the reader is then moved to. They are the
+    // holder's (7-3): the operator's change deletes none of them, and the reader's like of the same
+    // target is the one that goes — one like per number.
+    const number = '01055556666';
+    const holder = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: holder.id, phone: number });
+    stateOf(await likePost(true, holder));
+    stateOf(await likeComment(comment.id, true, holder));
+    stateOf(await likeComment(reply.id, true, holder));
+    await changeNumberOnly(holder, '01055557777');
+    // The reader liked the post and the 댓글 on its own number, not the 대댓글.
+    stateOf(await likePost(true));
+    stateOf(await likeComment(comment.id, true));
+    expect(await counts()).toMatchObject({
+      card: 2,
+      page: 2,
+      comments: { [comment.id]: 2, [reply.id]: 1 },
+    });
+    await changeNumber(reader, number);
+    // The holder's three stay as they were; the reader's two gave way to them.
+    expect(await rows()).toEqual({ posts: [holder.id], comments: [holder.id, holder.id] });
+    expect(await counts()).toMatchObject({
+      card: 1,
+      page: 1,
+      comments: { [comment.id]: 1, [reply.id]: 1 },
+    });
+    expect(await mine(holder)).toEqual({
+      postLiked: true,
+      likedCommentIds: [comment.id, reply.id].sort(),
+    });
+    // None is the reader's, and its like meets the number's primary key: answered as not liked,
+    // nothing written (the guard of 7-3). Once the holder takes its own back, the reader's goes in.
+    expect(await mine(reader)).toEqual({ postLiked: false, likedCommentIds: [] });
+    expect(stateOf(await likePost(true))).toEqual({ liked: false, likeCount: 1 });
+    expect(stateOf(await likePost(false, holder))).toEqual({ liked: false, likeCount: 0 });
+    expect(stateOf(await likePost(true))).toEqual({ liked: true, likeCount: 1 });
+    expect((await rows()).posts).toEqual([reader.id]);
+  });
+
   it('records the liker’s account and the keyed hash of its number, never the number', async () => {
     stateOf(await likePost(true));
     stateOf(await likeComment(reply.id, true));

@@ -58,26 +58,31 @@
  *    lines hand it `user_id` and `new_hash` (and the likes' block `old_hash` too) for this
  *    transaction only. It reads what is committed: a cancellation or payment of that grant still in
  *    flight is not waited for, and the change is refused until asked again (ADR-0071 7-26).
- * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한
- *    번» counts per verified number (ADR-0069 decision 7), so the likes that are the account's go
- *    over to the new number's hash and no longer hold the old number — its own `post_likes` and
+ * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한 번»
+ *    counts per verified number (ADR-0069 decision 7), so the likes that are the account's go over
+ *    to the new number's hash and no longer hold the old number — its own `post_likes` and
  *    `comment_likes` rows (those whose account it is), and the likes it inherited from a withdrawn
- *    account on the old number (rows under `old_hash` whose account has no 본인확인 record left,
- *    which it saw as its own, ADR-0076 7-3): the old number's next holder likes freely. Where the
- *    new number already liked a target one of those likes — a withdrawn account that held it —
- *    one like stays, the one coming with the account: that other row is deleted first (only on
- *    those targets: the new number's likes of any other target stay, and the account sees them as
- *    its own, ADR-0076 7-18; never a row of the account's own). Then the rows are deleted and
- *    inserted again under the new hash with their account, target and time (buddha_app has no
- *    UPDATE on them, migration 0035) — the account's own first, then the inherited ones, which
- *    give way where the account's own like of the same target is there already (only a number
- *    changed outside this procedure leaves the two on different hashes, ADR-0076 7-23). A second
- *    DO block with the SET LOCAL values; it answers `DO` and nothing to read. After step 1, which
- *    holds the account's 본인확인 row: a like of the account's in flight has committed by then (it
- *    holds that row FOR KEY SHARE, LikesService) and is moved too, and a later one waits for the
- *    COMMIT and is made under the new hash; the old number cannot be verified by another account
- *    before the COMMIT either (its UNIQUE entry is the uncommitted UPDATE's). Run again — the old
- *    number read again is the new one — it moves nothing.
+ *    account on the old number (rows under `old_hash` whose account has no 본인확인 record left, which
+ *    it saw as its own, ADR-0076 7-3): the old number's next holder likes freely. Where the new
+ *    number already liked a target one of those likes, one like stays. A withdrawn account's row
+ *    there (one that held the number) gives way to the one coming with the account: it is deleted
+ *    first (only on those targets: the new number's likes of any other target stay, and the account
+ *    sees them as its own, ADR-0076 7-18). A live account's row there stays — only a number changed
+ *    outside this procedure leaves one under another number than the one it holds (ADR-0076 7-19),
+ *    and a live account's like is its own (7-3), never deleted for another's — and the one coming
+ *    with the account gives way to it (ADR-0076 7-26, Codex review on PR #222). Then the rows are
+ *    deleted and inserted again under the new hash with their account, target and time (buddha_app
+ *    has no UPDATE on them, migration 0035) — the account's own first, then the inherited ones,
+ *    which give way where the account's own like of the same target is there already (only a number
+ *    changed outside this procedure leaves the two on different hashes, ADR-0076 7-23). Every one
+ *    of those inserts skips a row whose target the new number's hash still holds a like of — a live
+ *    account's — (`ON CONFLICT DO NOTHING`): that like leaves the old number and is not kept. A
+ *    second DO block with the SET LOCAL values; it answers `DO` and nothing to read. After step 1,
+ *    which holds the account's 본인확인 row: a like of the account's in flight has committed by then
+ *    (it holds that row FOR KEY SHARE, LikesService) and is moved too, and a later one waits for
+ *    the COMMIT and is made under the new hash; the old number cannot be verified by another
+ *    account before the COMMIT either (its UNIQUE entry is the uncommitted UPDATE's). Run again —
+ *    the old number read again is the new one — it moves nothing.
  * 5. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
@@ -128,13 +133,15 @@ END$$;
 DO $$BEGIN
   DELETE FROM post_likes o USING post_likes a
     WHERE o.post_id = a.post_id AND o.phone_hash = current_setting('phone_change.new_hash')
-      AND a.phone_hash <> o.phone_hash AND o.user_id <> current_setting('phone_change.user_id')
+      AND a.phone_hash <> o.phone_hash
+      AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = o.user_id)
       AND (a.user_id = current_setting('phone_change.user_id')
         OR (a.phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = a.user_id)));
   DELETE FROM comment_likes o USING comment_likes a
     WHERE o.comment_id = a.comment_id AND o.phone_hash = current_setting('phone_change.new_hash')
-      AND a.phone_hash <> o.phone_hash AND o.user_id <> current_setting('phone_change.user_id')
+      AND a.phone_hash <> o.phone_hash
+      AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = o.user_id)
       AND (a.user_id = current_setting('phone_change.user_id')
         OR (a.phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = a.user_id)));
@@ -143,13 +150,15 @@ DO $$BEGIN
         AND phone_hash <> current_setting('phone_change.new_hash')
       RETURNING post_id, user_id, created_at)
     INSERT INTO post_likes (post_id, user_id, phone_hash, created_at)
-      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved;
+      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
   WITH moved AS (DELETE FROM comment_likes
       WHERE user_id = current_setting('phone_change.user_id')
         AND phone_hash <> current_setting('phone_change.new_hash')
       RETURNING comment_id, user_id, created_at)
     INSERT INTO comment_likes (comment_id, user_id, phone_hash, created_at)
-      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved;
+      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
   WITH moved AS (DELETE FROM post_likes l
       WHERE l.phone_hash = current_setting('phone_change.old_hash')
         AND l.phone_hash <> current_setting('phone_change.new_hash')

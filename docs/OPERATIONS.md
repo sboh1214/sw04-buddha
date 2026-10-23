@@ -20,7 +20,7 @@
 - 그 계정에 시작 Coin의 지급 기록(`start_grants`, 지급했든 금액을 기다리든)이 있으면, 새 번호의 키 있는 해시를 그 지급의 번호로 기록한다(`start_grant_numbers`, `source` `operator`). 계정의 지급은 여전히 하나이고, 그 지급의 번호가 둘이 된다. 그 지급이 금액을 기다리는 동안 그 계정이 탈퇴하면, 이 번호도 그 지급의 다른 번호와 함께 풀린다(답 2).
 - 지급 기록이 없으면(온보딩 전이거나, 본인확인한 번호가 이미 받은 번호여서 받지 못한 계정) 기록할 것이 없다. 그 계정의 지급은 지급 기능이 불릴 때(#58, 온보딩을 마칠 때) 그때의 번호, 곧 새 번호로 기록된다 — 이미 받은 번호여서 받지 못한 계정은 그 단계를 지났으므로 그 기능이 다시 불릴 때만이다(ADR-0071 결과 4). 새 번호가 그때 다른 지급의 번호이면 그 계정의 지급은 기록되지 않는다(`number_already_used`). 새 번호가 이미 시작 Coin을 받은 번호(지급한 다른 지급의 번호)이면 바꾸고, 회원에게 그 번호로는 이미 시작 Coin을 받아 그 계정은 받지 못한다고 알린다(오너 결정 2026-10-19, 아래 표). 금액을 기다리는 다른 지급이 붙든 번호로는 바꾸지 않는다(다음 항목).
 - 새 번호가 이미 다른 계정의 지급의 번호이면 이 계정의 지급에 기록하지 않는다 — 번호마다 붙든 행은 하나다. 그 지급을 지급했으면(그 번호로 시작 Coin을 받은 계정이 탈퇴했거나, 운영자가 그 계정의 번호를 바꿨다) 이미 받은 번호라 빠진 것이 없다. 그 지급이 아직 금액을 기다리면(운영자가 그 계정의 번호를 바꿨다) 이 계정에 지급 기록이 있든 없든 **번호를 바꾸지 않는다**(오너 결정 2026-10-19와 그 3차). 그 번호는 그 지급이 기다리는 동안만 받은 번호라, 그 계정이 기다리다 탈퇴하면 풀린다(답 2). 지급 기록이 있는 계정을 그 번호로 바꾸면 이 계정이 받은 뒤 탈퇴했을 때 그 번호로 본인확인한 다음 계정이 또 받는다. 그런 번호는 1단계의 사전 확인이 확인 문자를 보내기 전에 거르고, 그 뒤에 그렇게 되었으면 5단계의 SQL이 지급 기록이 있든 없든 오류로 거절한다 — 지급 기록이 있으면 `INSERT`가, 없으면 그 뒤의 `DO`가. 회원에게는 까닭 없이 '지금은 그 번호로 바꿀 수 없습니다'라고만 알리고, 회원이 나중에 다시 요청하면 그 요청을 1단계부터 처리한다(아래 표). 기다리다 탈퇴로 이미 취소된 지급의 번호는 풀려 있어 바꾼다(지급 기록이 있으면 기록된다, 답 2).
-- 그 계정의 좋아요(`post_likes`·`comment_likes`, #49)가 새 번호의 해시로 옮겨진다(오너 결정 2026-10-20·21, ADR-0076). 좋아요는 본인확인한 번호마다 한 번이라(ADR-0069 결정 7) 그 계정의 좋아요가 새 번호의 것이 된다 — 그 계정이 누른 것과, 그 계정이 같은 번호의 탈퇴한 계정에게서 이어받아 자기 것으로 보던 것(옛 번호의 해시를 싣고 행의 계정에 본인확인 기록이 없는 좋아요, ADR-0076 결정 7-3) 모두다. 그래서 뒤에 옛 번호로 본인확인한 다른 계정은 그 글·댓글에 자유롭게 누른다. 옮기는 좋아요의 글·댓글에 새 번호로 이미 누른 좋아요(그 번호를 가졌다가 탈퇴한 계정의 것)가 있으면 하나만 남긴다 — 옮겨 오는 것이고, 다른 행은 지워져 수가 하나 준다. 그 계정이 누르지 않은 글·댓글에 새 번호로 남은 탈퇴한 계정의 좋아요는 그대로이고, 그 계정이 자기 것으로 보고 취소할 수 있다(같은 번호로 다시 가입한 계정과 같다, ADR-0076 결정 7-3). 옮긴 좋아요는 누른 계정·글·댓글·누른 때가 그대로다(이어받은 좋아요의 누른 계정도 그 탈퇴한 계정 그대로다) — `buddha_app`에는 좋아요의 UPDATE가 없어(마이그레이션 0035) 행을 지우고 새 번호의 해시로 다시 넣는다. 5단계의 둘째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다. 이어받은 좋아요는 옛 번호의 해시로 찾으므로 3단계에서 옛 번호의 해시도 센다.
+- 그 계정의 좋아요(`post_likes`·`comment_likes`, #49)가 새 번호의 해시로 옮겨진다(오너 결정 2026-10-20·21, ADR-0076). 좋아요는 본인확인한 번호마다 한 번이라(ADR-0069 결정 7) 그 계정의 좋아요가 새 번호의 것이 된다 — 그 계정이 누른 것과, 그 계정이 같은 번호의 탈퇴한 계정에게서 이어받아 자기 것으로 보던 것(옛 번호의 해시를 싣고 행의 계정에 본인확인 기록이 없는 좋아요, ADR-0076 결정 7-3) 모두다. 그래서 뒤에 옛 번호로 본인확인한 다른 계정은 그 글·댓글에 자유롭게 누른다. 옮기는 좋아요의 글·댓글에 새 번호로 이미 누른 좋아요(그 번호를 가졌다가 탈퇴한 계정의 것)가 있으면 하나만 남긴다 — 옮겨 오는 것이고, 다른 행은 지워져 수가 하나 준다. 새 번호로 이미 누른 좋아요가 살아 있는(본인확인 기록이 있는) 다른 계정의 것이면 — 그 계정의 번호가 이 절차 밖에서 바뀌어 좋아요가 예전 번호의 해시에 남았을 때만 생긴다(ADR-0076 결정 7-19) — 그 좋아요가 남고 옮겨 오는 것이 빠진다. 살아 있는 계정의 좋아요는 그 계정의 것이라 다른 계정의 좋아요를 옮기려고 지우지 않는다(ADR-0076 결정 7-26). 그 계정은 그 글·댓글을 누르지 않은 것으로 보고, 수가 하나 준다. 그 계정이 누르지 않은 글·댓글에 새 번호로 남은 탈퇴한 계정의 좋아요는 그대로이고, 그 계정이 자기 것으로 보고 취소할 수 있다(같은 번호로 다시 가입한 계정과 같다, ADR-0076 결정 7-3). 옮긴 좋아요는 누른 계정·글·댓글·누른 때가 그대로다(이어받은 좋아요의 누른 계정도 그 탈퇴한 계정 그대로다) — `buddha_app`에는 좋아요의 UPDATE가 없어(마이그레이션 0035) 행을 지우고 새 번호의 해시로 다시 넣는다. 5단계의 둘째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다. 이어받은 좋아요는 옛 번호의 해시로 찾으므로 3단계에서 옛 번호의 해시도 센다.
 - 본인확인 발송 기록(`phone_verification_codes`)은 본인확인 기록이라 옛 번호를 그대로 담고 남는다(ADR-0070).
 
 해시는 SQL로 셀 수 없다. 키(`PHONE_HASH_KEY`)가 있어야 하고, 키는 api 컨테이너의 환경에만 있다. 그래서 api 이미지의 해시 CLI(`apps/api/src/identity/phone-hash-cli.ts`)가 그 컨테이너 안에서 API와 같은 키·같은 함수(`phoneHash`)로 센다. CLI는 키를 찍지 않는다. 키를 컨테이너 밖으로 꺼내지 않는다.
@@ -159,13 +159,15 @@ END$$;
 DO $$BEGIN
   DELETE FROM post_likes o USING post_likes a
     WHERE o.post_id = a.post_id AND o.phone_hash = current_setting('phone_change.new_hash')
-      AND a.phone_hash <> o.phone_hash AND o.user_id <> current_setting('phone_change.user_id')
+      AND a.phone_hash <> o.phone_hash
+      AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = o.user_id)
       AND (a.user_id = current_setting('phone_change.user_id')
         OR (a.phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = a.user_id)));
   DELETE FROM comment_likes o USING comment_likes a
     WHERE o.comment_id = a.comment_id AND o.phone_hash = current_setting('phone_change.new_hash')
-      AND a.phone_hash <> o.phone_hash AND o.user_id <> current_setting('phone_change.user_id')
+      AND a.phone_hash <> o.phone_hash
+      AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = o.user_id)
       AND (a.user_id = current_setting('phone_change.user_id')
         OR (a.phone_hash = current_setting('phone_change.old_hash')
           AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = a.user_id)));
@@ -174,13 +176,15 @@ DO $$BEGIN
         AND phone_hash <> current_setting('phone_change.new_hash')
       RETURNING post_id, user_id, created_at)
     INSERT INTO post_likes (post_id, user_id, phone_hash, created_at)
-      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved;
+      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
   WITH moved AS (DELETE FROM comment_likes
       WHERE user_id = current_setting('phone_change.user_id')
         AND phone_hash <> current_setting('phone_change.new_hash')
       RETURNING comment_id, user_id, created_at)
     INSERT INTO comment_likes (comment_id, user_id, phone_hash, created_at)
-      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved;
+      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
   WITH moved AS (DELETE FROM post_likes l
       WHERE l.phone_hash = current_setting('phone_change.old_hash')
         AND l.phone_hash <> current_setting('phone_change.new_hash')

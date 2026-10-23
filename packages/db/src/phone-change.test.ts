@@ -640,6 +640,13 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     );
     expect(changes).toContain('뒤에 옛 번호로 본인확인한 다른 계정은 그 글·댓글에 자유롭게 누른다');
     expect(changes).toContain('하나만 남긴다 — 옮겨 오는 것이고');
+    // A live account's like on the new number stays: never deleted for another's (ADR-0076 7-26,
+    // Codex review on PR #222).
+    expect(changes).toContain(
+      '새 번호로 이미 누른 좋아요가 살아 있는(본인확인 기록이 있는) 다른 계정의 것이면',
+    );
+    expect(changes).toContain('그 좋아요가 남고 옮겨 오는 것이 빠진다');
+    expect(changes).toContain('다른 계정의 좋아요를 옮기려고 지우지 않는다(ADR-0076 결정 7-26)');
     expect(changes).toContain('3단계에서 옛 번호의 해시도 센다');
     expect(changes).toContain('5단계의 둘째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
     expect(OPERATIONS).toContain('표의 줄을 가르지 않으니 표는 그 줄을 빼고 읽는다');
@@ -1701,6 +1708,83 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
         .filter((like) => like.userId === a.user.id)
         .map((like) => ({ ...like, phoneHash: newHash })),
     );
+  });
+
+  it('keeps a live account’s likes on the new number: the ones coming with the account give way to them, and a withdrawn account’s still to those', async () => {
+    // Codex review on PR #222 (ADR-0076 7-26): B's number was changed outside the procedure, so its
+    // likes still carry the hash of the number it held — A's new one (7-19). B is live: its likes
+    // are its own (7-3), and the change deletes none of them. Where B liked a target A's own like
+    // or one A inherited is on, B's stays and the one coming with A gives way — one like per
+    // number. A withdrawn account's like on the new number still gives way to the ones coming with
+    // A (7-18, 7-23).
+    const one = await targets(); // A's own like, and B's
+    const two = await targets(); // inherited from W, and B's
+    const three = await targets(); // A's own like, and V's
+    const four = await targets(); // inherited from W, and V's
+    const five = await targets(); // B's alone
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const oldPhone = (await phoneOf(a.user.id))!;
+    // Live, on a number of its own now; its likes carry the new number's hash.
+    const b = await liker(newHash);
+    // Withdrawn: W held A's old number, V the new one.
+    const { user: w } = await createUser(t.db);
+    const { user: v } = await createUser(t.db);
+    const like = async (userId: string, phoneHash: string, ...on: (typeof one)[]) => {
+      for (const { post, comment } of on) {
+        await createPostLike(t.db, { userId, postId: post.id, phoneHash });
+        await createCommentLike(t.db, { userId, commentId: comment.id, phoneHash });
+      }
+    };
+    await like(a.user.id, oldHash, one, three);
+    await like(w.id, oldHash, two, four);
+    await like(b.user.id, newHash, one, two, five);
+    await like(v.id, newHash, three, four);
+    const before = await likeRows();
+    const at = (userId: string, target: string) =>
+      before.find((row) => row.userId === userId && row.target === target)!.createdAt;
+    const row = (userId: string, target: string) => ({
+      userId,
+      target,
+      phoneHash: newHash,
+      createdAt: at(userId, target),
+    });
+
+    const vars = { user_id: a.user.id, new_phone: randomPhone(), new_hash: newHash };
+    // The pre-check flags nothing: B verified another number.
+    expect(await precheck(vars)).toEqual(FREE);
+    expect(await change({ ...vars, old_phone: oldPhone, old_hash: oldHash })).toEqual({
+      updated: 1,
+      inserted: 0,
+      held: [],
+      next: 'COMMIT',
+    });
+    const expected = [
+      // B's, every one, as they were.
+      ...[one, two, five].flatMap(({ post, comment }) => [
+        row(b.user.id, post.id),
+        row(b.user.id, comment.id),
+      ]),
+      // On `three` and `four` the ones coming with A stay, V's are deleted.
+      row(a.user.id, three.post.id),
+      row(a.user.id, three.comment.id),
+      row(w.id, four.post.id),
+      row(w.id, four.comment.id),
+    ].sort((x, y) => `${x.userId}${x.target}`.localeCompare(`${y.userId}${y.target}`));
+    expect(await likeRows()).toEqual(expected);
+    // A's and W's likes of `one` and `two` gave way to B's: none is left under the old number, so
+    // its next holder likes all four targets.
+    expect(
+      (await likeRows()).filter((like) => like.phoneHash === oldHash || like.userId === v.id),
+    ).toEqual([]);
+    const next = await liker(oldHash);
+    await like(next.user.id, oldHash, one, two, three, four);
+    // Run again with the old number read again — the new one — and nothing more moves.
+    expect(
+      await change({ ...vars, old_phone: (await phoneOf(a.user.id))!, old_hash: newHash }),
+    ).toMatchObject({ updated: 1, next: 'COMMIT' });
+    expect((await likeRows()).filter((like) => like.userId !== next.user.id)).toEqual(expected);
   });
 
   it('reads the number the account holds for step 3: none once it has no 본인확인 record', async () => {
