@@ -65,7 +65,7 @@ describe('the operators’ reads', () => {
     });
   });
 
-  it('ask for each half of the account restriction requests, a page per cursor (#139)', async () => {
+  it('ask for each part of the account restriction requests, a page per cursor (#139)', async () => {
     const get = vi.spyOn(api, 'GET').mockResolvedValue(answer([], { nextCursor: null }));
     const pending = adminAccountRequestsInfiniteQueryOptions('pending');
     expect(pending.queryKey).toEqual(adminAccountRequestQueueKey('pending'));
@@ -76,6 +76,12 @@ describe('the operators’ reads', () => {
     await adminAccountRequestsInfiniteQueryOptions('decided').queryFn({ pageParam: 'c3' });
     expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/account-restriction-requests', {
       params: { query: { status: 'decided', cursor: 'c3' } },
+    });
+    const retracted = adminAccountRequestsInfiniteQueryOptions('retracted');
+    expect(retracted.queryKey).toEqual(adminAccountRequestQueueKey('retracted'));
+    await retracted.queryFn({ pageParam: undefined });
+    expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/account-restriction-requests', {
+      params: { query: { status: 'retracted' } },
     });
   });
 
@@ -190,6 +196,7 @@ describe('the operators’ actions', () => {
         note: '같은 사람의 계정 여럿',
         days,
         subject: null,
+        memo: days === null ? '운영자만 읽는 메모' : null,
         expectedAccountId: 'admin-1',
       };
       await mutationFn({ kind: 'account-restrict', userId: USER, body });
@@ -223,6 +230,13 @@ describe('the operators’ actions', () => {
         { params: { path: { requestId: REQUEST } }, body: record },
       );
     }
+    // The one who asked retracts it (owner decision 2026-10-23): the screen's admin, no reason.
+    const retraction = { expectedAccountId: 'admin-1' };
+    await mutationFn({ kind: 'retract', requestId: REQUEST.toUpperCase(), body: retraction });
+    expect(post).toHaveBeenLastCalledWith(
+      '/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract',
+      { params: { path: { requestId: REQUEST } }, body: retraction },
+    );
   });
 
   it('re-read the whole area on an answer and on a refusal, never on a lost request', async () => {

@@ -75,6 +75,6 @@ describe('two-person rule (#171)', () => {
   it('names kinds like the other varchar types, and the refusals', () => {
     expect(APPROVAL_KIND_PATTERN.test('market_open')).toBe(true);
     expect(APPROVAL_KIND_PATTERN.test('Market Open')).toBe(false);
-    expect(APPROVAL_REFUSALS).toEqual(['requester', 'decided']);
+    expect(APPROVAL_REFUSALS).toEqual(['requester', 'decided', 'retracted', 'not_requester']);
   });
 });

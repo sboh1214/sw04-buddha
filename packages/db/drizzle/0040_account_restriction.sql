@@ -20,11 +20,20 @@
 --   public profile item ask.
 -- - approval_requests_target_idx and approval_requests_pending_requested_at_idx: a member's and a
 --   restriction's requests, and the queue of requests waiting for a decision.
+-- - approval_status: `retracted` (owner decision 2026-10-23, ADR-0085), added at the end with ADD
+--   VALUE: a request its requester retracted before any decision — closed with no decision, decided
+--   by no one, at approval_requests.retracted_at. approval_requests_decision_check is replaced
+--   (compared as text, as above): the decision columns are null exactly while pending and once
+--   retracted, and retracted_at is set exactly when retracted. Migration 0021's triggers already
+--   keep a row no longer pending from any change, and a pending row's request columns as they are.
+ALTER TYPE "public"."approval_status" ADD VALUE 'retracted';--> statement-breakpoint
 ALTER TYPE "public"."report_reason" ADD VALUE 'abnormal_trading';--> statement-breakpoint
 ALTER TYPE "public"."report_reason" ADD VALUE 'multi_account';--> statement-breakpoint
+ALTER TABLE "approval_requests" DROP CONSTRAINT "approval_requests_decision_check";--> statement-breakpoint
 ALTER TABLE "moderation_actions" DROP CONSTRAINT "moderation_actions_type_check";--> statement-breakpoint
 ALTER TABLE "moderation_actions" DROP CONSTRAINT "moderation_actions_subject_check";--> statement-breakpoint
 ALTER TABLE "moderation_actions" DROP CONSTRAINT "moderation_actions_ends_at_check";--> statement-breakpoint
+ALTER TABLE "approval_requests" ADD COLUMN "retracted_at" timestamp (3) with time zone;--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD COLUMN "approval_id" uuid;--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD COLUMN "cancel_approval_id" uuid;--> statement-breakpoint
 ALTER TABLE "restriction_end_changes" ADD COLUMN "approval_id" uuid;--> statement-breakpoint
@@ -37,6 +46,7 @@ CREATE INDEX "moderation_actions_standing_account_restriction_idx" ON "moderatio
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_approval_id_unique" UNIQUE("approval_id");--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_cancel_approval_id_unique" UNIQUE("cancel_approval_id");--> statement-breakpoint
 ALTER TABLE "restriction_end_changes" ADD CONSTRAINT "restriction_end_changes_approval_id_unique" UNIQUE("approval_id");--> statement-breakpoint
+ALTER TABLE "approval_requests" ADD CONSTRAINT "approval_requests_decision_check" CHECK (("approval_requests"."status"::text IN ('pending', 'retracted')) = ("approval_requests"."decided_by" IS NULL) AND ("approval_requests"."decided_by" IS NULL) = ("approval_requests"."decided_at" IS NULL) AND ("approval_requests"."decided_by" IS NULL) = ("approval_requests"."decision_reason" IS NULL) AND ("approval_requests"."status"::text = 'retracted') = ("approval_requests"."retracted_at" IS NOT NULL));--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_reason_check" CHECK (CASE WHEN "moderation_actions"."type" = 'account_restriction' THEN "moderation_actions"."reason"::text IN ('spam', 'harassment', 'personal_info', 'impersonation', 'collusion_manipulation', 'abnormal_trading', 'multi_account', 'other') AND "moderation_actions"."note" IS NOT NULL ELSE "moderation_actions"."reason"::text IN ('spam', 'harassment', 'personal_info', 'impersonation', 'collusion_manipulation', 'off_topic', 'rights_infringement', 'other') END);--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_approval_check" CHECK (("moderation_actions"."type" = 'account_restriction') = ("moderation_actions"."approval_id" IS NOT NULL) AND ("moderation_actions"."type" = 'account_restriction' AND "moderation_actions"."cancelled_at" IS NOT NULL) = ("moderation_actions"."cancel_approval_id" IS NOT NULL));--> statement-breakpoint
 ALTER TABLE "moderation_actions" ADD CONSTRAINT "moderation_actions_type_check" CHECK ("moderation_actions"."type" IN ('hide', 'warning', 'nickname_reset', 'bio_clear', 'image_remove', 'writing_restriction', 'account_restriction'));--> statement-breakpoint

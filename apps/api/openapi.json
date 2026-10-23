@@ -12888,7 +12888,8 @@
               "type": "string",
               "enum": [
                 "pending",
-                "decided"
+                "decided",
+                "retracted"
               ]
             }
           }
@@ -12976,7 +12977,7 @@
             "session": []
           }
         ],
-        "summary": "The account restriction requests: `pending` (default) — those waiting for another admin’s decision, the one waiting longest first, each with what approving it would be refused for now (`moot`) — or `decided` — the latest decision first. No asking or deciding admin on a request about the admin reading it (`aboutViewer`)",
+        "summary": "The account restriction requests: `pending` (default) — those waiting for another admin’s decision, the one waiting longest first, each with what approving it would be refused for now (`moot`) — `decided` — approved or rejected, the latest decision first — or `retracted` — retracted by the admin who asked, the latest first. No asking or deciding admin and no operators’ memo on a request about the admin reading it (`aboutViewer`)",
         "tags": [
           "admin"
         ]
@@ -13093,7 +13094,7 @@
             "session": []
           }
         ],
-        "summary": "Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`",
+        "summary": "Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; with no admin but the acting one and the member to decide it, `no_decider`. An optional `memo` is for the operators (not the admin it is about), never the member",
         "tags": [
           "admin"
         ]
@@ -13210,7 +13211,7 @@
             "session": []
           }
         ],
-        "summary": "Ask for a standing account restriction’s end to be brought forward (감경) to `endsAt`, with a reason (operators only), done once another admin approves: still to come (`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own` — each asked again on approval",
+        "summary": "Ask for a standing account restriction’s end to be brought forward (감경) to `endsAt`, with a reason (operators only), done once another admin approves: still to come (`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own` — each asked again on approval — and with no admin but the acting one and the member to decide it, `no_decider`",
         "tags": [
           "admin"
         ]
@@ -13327,7 +13328,7 @@
             "session": []
           }
         ],
-        "summary": "Ask for a standing account restriction to be lifted early (조기 해제), with a reason (operators only): once another admin approves, it ends then and stays on the record as given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`)",
+        "summary": "Ask for a standing account restriction to be lifted early (조기 해제), with a reason (operators only): once another admin approves, it ends then and stays on the record as given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`, `no_decider`)",
         "tags": [
           "admin"
         ]
@@ -13444,7 +13445,7 @@
             "session": []
           }
         ],
-        "summary": "Ask for an account restriction to be cancelled (취소), with a reason (operators only): once another admin approves, it ends at once and the member reads it cancelled — an ended one too. Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one on the acting admin `own`",
+        "summary": "Ask for an account restriction to be cancelled (취소), with a reason (operators only): once another admin approves, it ends at once and the member reads it cancelled — an ended one too. Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one on the acting admin `own`, and with no admin but the acting one and the member to decide it `no_decider`",
         "tags": [
           "admin"
         ]
@@ -13561,7 +13562,7 @@
             "session": []
           }
         ],
-        "summary": "Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands",
+        "summary": "Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`, a retracted one `retracted`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands",
         "tags": [
           "admin"
         ]
@@ -13678,7 +13679,124 @@
             "session": []
           }
         ],
-        "summary": "Reject an account restriction request, with a reason: nothing is done. The way a request not wanted any more is closed — requests do not expire and the admin who asked cannot take one back. The admin who asked cannot (`requester`), nor the member (`own`); a decided request is `decided`",
+        "summary": "Reject an account restriction request, with a reason: nothing is done. Requests do not expire. The admin who asked cannot (`requester`) — they retract it instead — nor the member (`own`); a decided request is `decided`, a retracted one `retracted`",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract": {
+      "post": {
+        "operationId": "adminRetractAccountRestrictionRequest",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRetractionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionRequest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Retract an account restriction request the acting admin made, before anyone decides it: nothing is done, and it closes as `retracted` with when — decided by no one after. Anyone else is refused (`APPROVAL_NOT_ALLOWED` `not_requester`), and so is one decided (`decided`) or retracted (`retracted`) already. Answers the request",
         "tags": [
           "admin"
         ]
@@ -21159,6 +21277,12 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
+          "retractedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "moot": {
             "nullable": true,
             "allOf": [
@@ -21187,6 +21311,7 @@
           "decidedBy",
           "decisionReason",
           "decidedAt",
+          "retractedAt",
           "moot",
           "aboutViewer"
         ],
@@ -21253,12 +21378,17 @@
                 "$ref": "#/components/schemas/ModerationTarget"
               }
             ]
+          },
+          "memo": {
+            "nullable": true,
+            "type": "string"
           }
         },
         "required": [
           "reason",
           "days",
-          "subject"
+          "subject",
+          "memo"
         ],
         "additionalProperties": false
       },
@@ -21267,7 +21397,8 @@
         "enum": [
           "pending",
           "approved",
-          "rejected"
+          "rejected",
+          "retracted"
         ]
       },
       "AccountRestrictionMoot": {
@@ -21441,6 +21572,11 @@
               }
             ]
           },
+          "memo": {
+            "description": "The operators’ own memo, read by the admins (not one the request is about), plain text, at most 500 characters after trimming; optional, never shown to the member",
+            "nullable": true,
+            "type": "string"
+          },
           "expectedAccountId": {
             "type": "string",
             "minLength": 1,
@@ -21506,6 +21642,19 @@
           "action"
         ],
         "additionalProperties": false
+      },
+      "ApprovalRetractionBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "AdminLinkFlagGroup": {
         "type": "object",

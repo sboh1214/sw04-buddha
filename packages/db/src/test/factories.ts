@@ -1165,12 +1165,17 @@ export interface CreateApprovalRequestInput {
    * millisecond after the request unless `at` is given. Left out: pending.
    */
   decision?: { status: 'approved' | 'rejected'; by: string; reason?: string; at?: Date };
+  /**
+   * Retracted by its requester instead (#139, migration 0040), a millisecond after the request
+   * unless `at` is given. Not with `decision`.
+   */
+  retracted?: { at?: Date };
 }
 
 /**
- * A two-person rule request (#171), pending or decided — inserted pending and decided by the one
- * UPDATE migration 0021 allows, as ApprovalService does. The deciding account must hold the admin
- * role (the trigger reads it).
+ * A two-person rule request (#171), pending, decided or retracted — inserted pending and closed by
+ * the one UPDATE migration 0021 allows, as ApprovalService does. The deciding account must hold
+ * the admin role (the trigger reads it).
  */
 export async function createApprovalRequest(db: Db, input: CreateApprovalRequestInput) {
   const requestedAt =
@@ -1189,6 +1194,20 @@ export async function createApprovalRequest(db: Db, input: CreateApprovalRequest
       requestedAt: at,
     })
     .returning();
+  if (input.retracted !== undefined) {
+    if (input.decision !== undefined) {
+      throw new Error('createApprovalRequest: a request is decided or retracted, not both');
+    }
+    const [retracted] = await db
+      .update(approvalRequests)
+      .set({
+        status: 'retracted',
+        retractedAt: input.retracted.at ?? new Date(at.getTime() + 1),
+      })
+      .where(eq(approvalRequests.id, request!.id))
+      .returning();
+    return retracted!;
+  }
   if (input.decision === undefined) return request!;
   const [decided] = await db
     .update(approvalRequests)

@@ -18,6 +18,7 @@ import {
   type AdminReportGroup,
   type AdminUserModeration,
   type ApprovalDecisionBody,
+  type ApprovalRetractionBody,
   type CancelModerationBody,
   type DismissReportsBody,
   type DismissedReports,
@@ -113,9 +114,9 @@ export function useAdminModerationActions() {
 }
 
 /**
- * `GET /admin/moderation/account-restriction-requests?status=` (#139): one half of the account
- * restriction requests — `pending`, the one waiting longest first, or `decided`, the latest
- * decision first — 20 a page with 더 보기.
+ * `GET /admin/moderation/account-restriction-requests?status=` (#139): one part of the account
+ * restriction requests — `pending`, the one waiting longest first, `decided`, the latest decision
+ * first, or `retracted`, the latest retraction first — 20 a page with 더 보기.
  */
 export function adminAccountRequestsInfiniteQueryOptions(queue: AccountRestrictionRequestQueue) {
   return {
@@ -225,8 +226,9 @@ export function useAdminProfileModeration(publicId: string) {
  * One operator action, as the dialogs send it: hiding a post or a comment, a warning, one of the
  * three profile items (#37-10), a writing restriction and its early lift or 감경 (#185, ADR-0082),
  * a cancellation, a dismissal — and the account restriction's requests (to restrict, to shorten,
- * to lift early, to cancel) and the decisions on them (#139, ADR-0085). Each body names the admin
- * on screen (`expectedAccountId`).
+ * to lift early, to cancel), the decisions on them (#139, ADR-0085) and their retraction by the
+ * one who asked (owner decision 2026-10-23). Each body names the admin on screen
+ * (`expectedAccountId`).
  */
 export type ModerationVariables =
   | { kind: 'hide-post'; postId: string; body: ModerationActionBody }
@@ -246,7 +248,8 @@ export type ModerationVariables =
   | { kind: 'account-shorten'; actionId: string; body: ShortenRestrictionBody }
   | { kind: 'account-lift'; actionId: string; body: LiftRestrictionBody }
   | { kind: 'account-cancel'; actionId: string; body: CancelModerationBody }
-  | { kind: 'approve' | 'reject'; requestId: string; body: ApprovalDecisionBody };
+  | { kind: 'approve' | 'reject'; requestId: string; body: ApprovalDecisionBody }
+  | { kind: 'retract'; requestId: string; body: ApprovalRetractionBody };
 
 async function moderate(
   variables: ModerationVariables,
@@ -370,6 +373,16 @@ async function moderate(
           params: { path: { requestId: variables.requestId.toLowerCase() } },
           body: variables.body,
         }),
+      ).data;
+    case 'retract':
+      return unwrap(
+        await api.POST(
+          '/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract',
+          {
+            params: { path: { requestId: variables.requestId.toLowerCase() } },
+            body: variables.body,
+          },
+        ),
       ).data;
   }
 }

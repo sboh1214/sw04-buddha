@@ -7,6 +7,7 @@ import {
   accountRestrictionRequestSchema,
   adminAccountIdSchema,
   approvalDecisionBodySchema,
+  approvalRetractionBodySchema,
   cancelModerationBodySchema,
   liftRestrictionBodySchema,
   shortenRestrictionBodySchema,
@@ -16,6 +17,7 @@ import {
   type AccountRestrictionRequestQuery,
   type ParsedAccountRestrictionBody,
   type ParsedApprovalDecisionBody,
+  type ParsedApprovalRetractionBody,
   type ParsedCancelModerationBody,
   type ParsedLiftRestrictionBody,
   type ParsedShortenRestrictionBody,
@@ -45,12 +47,23 @@ const REQUEST_ERRORS = [
 /** The errors of a decision: a request's, and the two-person rule's refusal. */
 const DECISION_ERRORS = [...REQUEST_ERRORS, 'APPROVAL_NOT_ALLOWED'] as const;
 
+/** The errors of a retraction: the two-person rule's refusal, no moderation rule. */
+const RETRACTION_ERRORS = [
+  'UNAUTHENTICATED',
+  'FORBIDDEN',
+  'ONBOARDING_REQUIRED',
+  'NOT_FOUND',
+  'VALIDATION_ERROR',
+  'APPROVAL_NOT_ALLOWED',
+] as const;
+
 /**
  * 계정 제한 (#139, ADR-0085): `/api/v1/admin/moderation` — the requests to restrict a member's
  * account, to bring a restriction's end forward (감경), to lift it early (조기 해제) and to cancel
- * it, and their decisions by another admin (ADR-0056 decision 1-7: nothing is done until an admin
- * who neither asked nor is the member approves). Guards as on every admin route: SessionGuard,
- * AdminGuard, OnboardedGuard. A mutation names the admin the screen shows (`expectedAccountId`).
+ * it, their decisions by another admin (ADR-0056 decision 1-7: nothing is done until an admin
+ * who neither asked nor is the member approves) and their retraction by the one who asked (owner
+ * decision 2026-10-23). Guards as on every admin route: SessionGuard, AdminGuard, OnboardedGuard.
+ * A mutation names the admin the screen shows (`expectedAccountId`).
  * The restrictions themselves are read with every other action (`AdminModerationAction`, its
  * `approval` and `cancelApproval`).
  */
@@ -70,8 +83,9 @@ export class AdminAccountRestrictionsController {
     summary:
       'The account restriction requests: `pending` (default) — those waiting for another admin’s ' +
       'decision, the one waiting longest first, each with what approving it would be refused for ' +
-      'now (`moot`) — or `decided` — the latest decision first. No asking or deciding admin on a ' +
-      'request about the admin reading it (`aboutViewer`)',
+      'now (`moot`) — `decided` — approved or rejected, the latest decision first — or ' +
+      '`retracted` — retracted by the admin who asked, the latest first. No asking or deciding ' +
+      'admin and no operators’ memo on a request about the admin reading it (`aboutViewer`)',
   })
   @ApiPageOf(accountRestrictionRequestSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
@@ -95,7 +109,8 @@ export class AdminAccountRestrictionsController {
       'writing, likes, reports and the watchlist stay open, and the term counts from the ' +
       'approval. With a subject (the member’s post, comment or profile) its pending reports are ' +
       'resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is ' +
-      '`own`',
+      '`own`; with no admin but the acting one and the member to decide it, `no_decider`. An ' +
+      'optional `memo` is for the operators (not the admin it is about), never the member',
   })
   @ApiData(accountRestrictionRequestSchema)
   @ApiErrors(...REQUEST_ERRORS)
@@ -117,7 +132,8 @@ export class AdminAccountRestrictionsController {
       'with a reason (operators only), done once another admin approves: still to come ' +
       '(`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). ' +
       'Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ' +
-      'ended `ended`, one on the acting admin `own` — each asked again on approval',
+      'ended `ended`, one on the acting admin `own` — each asked again on approval — and with no ' +
+      'admin but the acting one and the member to decide it, `no_decider`',
   })
   @ApiData(accountRestrictionRequestSchema)
   @ApiErrors(...REQUEST_ERRORS)
@@ -143,7 +159,8 @@ export class AdminAccountRestrictionsController {
     summary:
       'Ask for a standing account restriction to be lifted early (조기 해제), with a reason ' +
       '(operators only): once another admin approves, it ends then and stays on the record as ' +
-      'given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`)',
+      'given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`, ' +
+      '`no_decider`)',
   })
   @ApiData(accountRestrictionRequestSchema)
   @ApiErrors(...REQUEST_ERRORS)
@@ -164,7 +181,8 @@ export class AdminAccountRestrictionsController {
       'Ask for an account restriction to be cancelled (취소), with a reason (operators only): ' +
       'once another admin approves, it ends at once and the member reads it cancelled — an ended ' +
       'one too. Not an account restriction is `not_account_restriction`, a cancelled one ' +
-      '`cancelled`, one on the acting admin `own`',
+      '`cancelled`, one on the acting admin `own`, and with no admin but the acting one and the ' +
+      'member to decide it `no_decider`',
   })
   @ApiData(accountRestrictionRequestSchema)
   @ApiErrors(...REQUEST_ERRORS)
@@ -185,9 +203,10 @@ export class AdminAccountRestrictionsController {
       'Approve an account restriction request, with a reason, and do what it asks in the same ' +
       'transaction: restrict the account from now (its term counted from now), bring its end ' +
       'forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` ' +
-      '`requester`), nor the member (`own`); a decided request is `decided`; what the restriction ' +
-      'outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — ' +
-      'reject it instead. Answers the request and the restriction as it stands',
+      '`requester`), nor the member (`own`); a decided request is `decided`, a retracted one ' +
+      '`retracted`; what the restriction outgrew since the request is refused (`cancelled`, ' +
+      '`ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the ' +
+      'restriction as it stands',
   })
   @ApiData(accountRestrictionDecisionSchema)
   @ApiErrors(...DECISION_ERRORS)
@@ -205,10 +224,9 @@ export class AdminAccountRestrictionsController {
   @ApiOperation({
     operationId: 'adminRejectAccountRestrictionRequest',
     summary:
-      'Reject an account restriction request, with a reason: nothing is done. The way a request ' +
-      'not wanted any more is closed — requests do not expire and the admin who asked cannot ' +
-      'take one back. The admin who asked cannot (`requester`), nor the member (`own`); a ' +
-      'decided request is `decided`',
+      'Reject an account restriction request, with a reason: nothing is done. Requests do not ' +
+      'expire. The admin who asked cannot (`requester`) — they retract it instead — nor the ' +
+      'member (`own`); a decided request is `decided`, a retracted one `retracted`',
   })
   @ApiData(accountRestrictionDecisionSchema)
   @ApiErrors(...DECISION_ERRORS)
@@ -219,5 +237,26 @@ export class AdminAccountRestrictionsController {
   ): Promise<AccountRestrictionDecision> {
     assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.restrictions.reject(admin.id, requestId, body.reason);
+  }
+
+  @Post('account-restriction-requests/:requestId/retract')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminRetractAccountRestrictionRequest',
+    summary:
+      'Retract an account restriction request the acting admin made, before anyone decides it: ' +
+      'nothing is done, and it closes as `retracted` with when — decided by no one after. Anyone ' +
+      'else is refused (`APPROVAL_NOT_ALLOWED` `not_requester`), and so is one decided ' +
+      '(`decided`) or retracted (`retracted`) already. Answers the request',
+  })
+  @ApiData(accountRestrictionRequestSchema)
+  @ApiErrors(...RETRACTION_ERRORS)
+  retract(
+    @CurrentUser() admin: SessionUser,
+    @Param('requestId', { schema: uuidParamSchema }) requestId: string,
+    @Body({ schema: approvalRetractionBodySchema }) body: ParsedApprovalRetractionBody,
+  ): Promise<AccountRestrictionRequest> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
+    return this.restrictions.retract(admin.id, requestId);
   }
 }

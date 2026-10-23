@@ -11,9 +11,11 @@ import * as z from 'zod';
  * The rule is shared; applying it is each consumer's issue — market review (#78), judgement
  * approval (#152), post-settlement compensation (#144), bot control (#130), account restriction
  * (#139) and the rest. So is the rest of a request's life: whether it expires, whether its
- * requester can withdraw it, what a requester who lost the admin role means for it, and which
+ * requester can retract it, what a requester who lost the admin role means for it, and which
  * work runs on approval. A consumer names its `kind` and decides inside the transaction that does
- * the approved work (ApprovalService in apps/api).
+ * the approved work (ApprovalService in apps/api). A retraction, where a consumer allows one (#139
+ * does), is the requester's own and closes the request as `retracted` — no decision, decided by no
+ * one — with its instant (`retracted_at`, migration 0040).
  */
 
 /** Lower-case words joined by `_` (`market_open`); approval_requests.kind is varchar(40). */
@@ -25,9 +27,13 @@ export const APPROVAL_REASON_MAX_LENGTH = 500;
 export const approvalReasonSchema = z.string().trim().min(1).max(APPROVAL_REASON_MAX_LENGTH);
 
 /**
- * Why a decision is refused (APPROVAL_NOT_ALLOWED, `details[0].message`): the decider is the
- * requester, or the request was decided already. A decider who is not an admin now gets
- * FORBIDDEN.
+ * Why a decision or a retraction is refused (APPROVAL_NOT_ALLOWED, `details[0].message`):
+ * - `requester`: the decider is the requester;
+ * - `decided`: the request was decided already;
+ * - `retracted`: its requester retracted it — it is decided by no one, and retracted once (#139,
+ *   ADR-0085: a consumer that lets its requests be retracted);
+ * - `not_requester`: a retraction by anyone but the requester.
+ * A decider (or a retracting requester) who is not an admin now gets FORBIDDEN.
  */
-export const APPROVAL_REFUSALS = ['requester', 'decided'] as const;
+export const APPROVAL_REFUSALS = ['requester', 'decided', 'retracted', 'not_requester'] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];

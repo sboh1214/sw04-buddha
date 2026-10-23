@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   ACCOUNT_RESTRICTION_REASONS,
   ADMIN_ACTION_TYPES,
+  APPROVAL_STATUSES,
   MODERATION_ACTION_TYPES,
   MODERATION_REASONS,
   REPORT_REASONS,
@@ -10,6 +11,7 @@ import {
   RESTRICTION_END_CHANGE_KINDS,
 } from './enums.js';
 import { ERROR_CODES } from './api/errors.js';
+import { APPROVAL_REFUSALS } from './approvals.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { findPrivateField } from './guards/private-data.js';
 import {
@@ -17,10 +19,12 @@ import {
   ACCOUNT_RESTRICTION_CHANGES,
   ACCOUNT_RESTRICTION_DAYS,
   ACCOUNT_RESTRICTION_MOOTS,
+  ACCOUNT_RESTRICTION_REQUEST_QUEUES,
   APPEAL_WINDOW_DAYS,
   DISMISS_REPORTS_MAX,
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
+  MODERATION_REFUSALS,
   OTHER_NEEDS_TEXT_MESSAGE,
   REPORTS_PER_DAY,
   REPORT_DESCRIPTION_MAX_LENGTH,
@@ -30,6 +34,7 @@ import {
   accountRestrictionBodySchema,
   accountRestrictionChangeOf,
   accountRestrictionEndOf,
+  accountRestrictionRequestQuerySchema,
   accountRestrictionRequestSchema,
   accountRestrictionTargetSchema,
   adminMediaPath,
@@ -39,6 +44,7 @@ import {
   appealDeadlineOf,
   appealWindowEndOf,
   approvalDecisionBodySchema,
+  approvalRetractionBodySchema,
   cancelModerationBodySchema,
   createReportBodySchema,
   dismissReportsBodySchema,
@@ -346,7 +352,14 @@ describe('the account restriction (#139)', () => {
       ...body,
       note: '같은 시장의 반대 거래',
       subject: null,
+      memo: null,
     });
+    // The operators' memo (owner decision 2026-10-23): optional, trimmed, blank as none.
+    expect(accountRestrictionBodySchema.parse({ ...body, memo: ' 운영자만 ' }).memo).toBe(
+      '운영자만',
+    );
+    expect(accountRestrictionBodySchema.parse({ ...body, memo: '  ' }).memo).toBeNull();
+    expect(accountRestrictionBodySchema.parse({ ...body, memo: null }).memo).toBeNull();
     for (const days of ACCOUNT_RESTRICTION_DAYS) {
       expect(accountRestrictionBodySchema.safeParse({ ...body, days }).success).toBe(true);
     }
@@ -360,6 +373,7 @@ describe('the account restriction (#139)', () => {
       { note: 'x'.repeat(MODERATION_NOTE_MAX_LENGTH + 1) },
       // The note is the request's reason too: at most 500 UTF-16 units, as the request keeps it.
       { note: '😀'.repeat(300) },
+      { memo: 'x'.repeat(MODERATION_REASON_MAX_LENGTH + 1) },
     ]) {
       expect(
         accountRestrictionBodySchema.safeParse({ ...body, ...bad }).success,
@@ -407,8 +421,25 @@ describe('the account restriction (#139)', () => {
         'account_restriction_cancel_request',
         'account_restriction_approve',
         'account_restriction_reject',
+        'account_restriction_retract',
       ]),
     );
+  });
+
+  it('closes a request by a decision or by its retraction, lists each apart, and refuses a request no admin could decide (owner decision 2026-10-23)', () => {
+    expect(APPROVAL_STATUSES).toEqual(['pending', 'approved', 'rejected', 'retracted']);
+    expect(APPROVAL_REFUSALS).toEqual(['requester', 'decided', 'retracted', 'not_requester']);
+    expect(ACCOUNT_RESTRICTION_REQUEST_QUEUES).toEqual(['pending', 'decided', 'retracted']);
+    expect(accountRestrictionRequestQuerySchema.parse({}).status).toBe('pending');
+    expect(accountRestrictionRequestQuerySchema.parse({ status: 'retracted' }).status).toBe(
+      'retracted',
+    );
+    expect(MODERATION_REFUSALS).toContain('no_decider');
+    // A retraction takes the screen's admin alone: no reason.
+    expect(approvalRetractionBodySchema.parse({ expectedAccountId: ACCOUNT })).toEqual({
+      expectedAccountId: ACCOUNT,
+    });
+    expect(approvalRetractionBodySchema.safeParse({}).success).toBe(false);
   });
 
   it('shows operators a request with who asked and decided, withheld for the admin it is about', () => {
@@ -418,7 +449,12 @@ describe('the account restriction (#139)', () => {
       user: { id: 'member-1', publicId: 'abcdefghjk', nickname: '회원', role: 'user' },
       actionId: null,
       target: null,
-      apply: { reason: { code: 'multi_account', note: '설명' }, days: 7, subject: null },
+      apply: {
+        reason: { code: 'multi_account', note: '설명' },
+        days: 7,
+        subject: null,
+        memo: null,
+      },
       endsAt: null,
       requestReason: '설명',
       requestedBy: null,
@@ -427,10 +463,25 @@ describe('the account restriction (#139)', () => {
       decidedBy: null,
       decisionReason: null,
       decidedAt: null,
+      retractedAt: null,
       moot: null,
       aboutViewer: true,
     });
     expect(request.apply?.reason.code).toBe('multi_account');
+    // Retracted: when, with no decision; the memo is always said (null for none, or withheld).
+    expect(
+      accountRestrictionRequestSchema.parse({ ...request, status: 'retracted', retractedAt: AT })
+        .retractedAt,
+    ).toBe(AT);
+    expect(
+      accountRestrictionRequestSchema.safeParse({ ...request, retractedAt: undefined }).success,
+    ).toBe(false);
+    expect(
+      accountRestrictionRequestSchema.safeParse({
+        ...request,
+        apply: { ...request.apply, memo: undefined },
+      }).success,
+    ).toBe(false);
     // A change names the restriction it is about as it stands, for the approving admin.
     const lift = accountRestrictionRequestSchema.parse({
       ...request,

@@ -166,9 +166,9 @@ export function writingRestrictionEndOf(
 
 /**
  * The terms of an account restriction, in days (#139, ADR-0069 decision 1 #57-12 «기간제와 무기한»);
- * 무기한 is none (`days: null`). The owner did not name the terms: the writing restriction's four
- * (#45-12) are taken until they do (ADR-0085 7-2, asked). A day is 24 hours from the restriction's
- * own time — its approval, when it comes into force.
+ * 무기한 is none (`days: null`). The writing restriction's four (#45-12), as the owner decided
+ * (owner decision 2026-10-23, ADR-0085 decision 1 and 7-2). A day is 24 hours from the
+ * restriction's own time — its approval, when it comes into force.
  */
 export const ACCOUNT_RESTRICTION_DAYS = [1, 3, 7, 30] as const;
 export type AccountRestrictionDays = (typeof ACCOUNT_RESTRICTION_DAYS)[number];
@@ -841,14 +841,17 @@ export function accountRestrictionChangeOf(kind: string): AccountRestrictionChan
 
 /**
  * What an `apply` request asks for: the reason (one of ACCOUNT_RESTRICTION_REASONS and the
- * explanation the member will read), the term (`days`, null for 무기한) and what it is about (the
- * member's post, comment or profile, whose pending reports its approval resolves; null for none).
+ * explanation the member will read), the term (`days`, null for 무기한), what it is about (the
+ * member's post, comment or profile, whose pending reports its approval resolves; null for none)
+ * and the operators' own memo (owner decision 2026-10-23, ADR-0085: optional, for every operator —
+ * the one who asked included — never the member's: null for none, and for the admin it is about).
  */
 export const accountRestrictionApplySchema = z
   .object({
     reason: actionReasonSchema,
     days: z.number().int().positive().nullable(),
     subject: moderationTargetSchema.nullable(),
+    memo: z.string().nullable(),
   })
   .meta({ id: 'AccountRestrictionApply' });
 export type AccountRestrictionApply = z.infer<typeof accountRestrictionApplySchema>;
@@ -885,15 +888,18 @@ export type AccountRestrictionTarget = z.infer<typeof accountRestrictionTargetSc
 
 /**
  * One account restriction request, for operators (#139, ADR-0085): what it asks for, the member it
- * is about, who asked, why and when, and its decision — `pending` until an admin other than the one
- * who asked approves or rejects it, once (`approval_requests`). There is no expiry and no
- * withdrawal by the one who asked: a request that is no longer wanted is rejected by another admin
- * with a reason (ADR-0085 7-3) — one about an operator by a third admin, neither the one who asked
- * nor that operator (7-15). `moot` says what an approval would be refused for now — the
- * restriction cancelled, ended or past the end asked for since the request (MODERATION_NOT_ALLOWED's
- * reason) — so the screen offers only a rejection; null when it can be approved, and once decided.
- * For the admin the request is about (`aboutViewer`) the asking and the deciding admins are
- * withheld (owner decision 2026-10-21, ADR-0081), and they decide nothing about themselves (`own`).
+ * is about, who asked, why and when, and how it closed — `pending` until an admin other than the
+ * one who asked approves or rejects it, once (`approval_requests`), or until the one who asked
+ * retracts it (`retracted`, `retractedAt` — owner decision 2026-10-23: theirs alone, before any
+ * decision, recorded; a retracted request is decided by no one). There is no expiry. One about an
+ * operator is decided by a third admin, neither the one who asked nor that operator (7-15), and is
+ * not taken at all when no such admin exists (MODERATION_NOT_ALLOWED `no_decider`, owner decision
+ * 2026-10-23). `moot` says what an approval would be refused for now — the restriction cancelled,
+ * ended or past the end asked for since the request (MODERATION_NOT_ALLOWED's reason) — so the
+ * screen offers only a rejection; null when it can be approved, and once closed. For the admin the
+ * request is about (`aboutViewer`) the asking and the deciding admins and the operators' memo are
+ * withheld (owner decision 2026-10-21, ADR-0081; 2026-10-23), and they decide nothing about
+ * themselves (`own`).
  */
 export const accountRestrictionRequestSchema = z
   .object({
@@ -920,10 +926,15 @@ export const accountRestrictionRequestSchema = z
     requestedBy: adminAccountActorSchema.nullable(),
     requestedAt: z.iso.datetime(),
     status: approvalStatusSchema,
-    /** Who decided it; null while pending, and for the admin it is about. */
+    /** Who decided it; null while pending, once retracted, and for the admin it is about. */
     decidedBy: adminAccountActorSchema.nullable(),
     decisionReason: z.string().nullable(),
     decidedAt: z.iso.datetime().nullable(),
+    /**
+     * When the one who asked retracted it (`retracted`); null otherwise. Who retracted it is who
+     * asked (`requestedBy`) — no one else can.
+     */
+    retractedAt: z.iso.datetime().nullable(),
     /** What approving it would be refused for now; null when it can be approved, or decided. */
     moot: z.enum(ACCOUNT_RESTRICTION_MOOTS).meta({ id: 'AccountRestrictionMoot' }).nullable(),
     aboutViewer: aboutViewerSchema,
@@ -933,9 +944,10 @@ export type AccountRestrictionRequest = z.infer<typeof accountRestrictionRequest
 
 /**
  * Which requests (`GET /admin/moderation/account-restriction-requests`): `pending` — those waiting
- * for a decision, the one waiting longest first — or `decided` — the latest decision first.
+ * for a decision, the one waiting longest first — `decided` — approved or rejected, the latest
+ * decision first — or `retracted` — retracted by the one who asked, the latest first.
  */
-export const ACCOUNT_RESTRICTION_REQUEST_QUEUES = ['pending', 'decided'] as const;
+export const ACCOUNT_RESTRICTION_REQUEST_QUEUES = ['pending', 'decided', 'retracted'] as const;
 export type AccountRestrictionRequestQueue = (typeof ACCOUNT_RESTRICTION_REQUEST_QUEUES)[number];
 
 /** `GET /admin/moderation/account-restriction-requests` (no `.meta`: a query, expanded per field). */
@@ -1086,9 +1098,10 @@ export type ParsedLiftRestrictionBody = z.output<typeof liftRestrictionBodySchem
  * explanation the member reads, required whatever the reason (ADR-0069 decision 1 #57-12 «정한
  * 목록에서 하나 … 와 필수 설명»), which is also the request's reason the approving admin reads (at
  * most APPROVAL_REASON_MAX_LENGTH UTF-16 units, as the request keeps it); the term — `days` of
- * ACCOUNT_RESTRICTION_DAYS, or null for 무기한, always said — and what it is about (optional, a
+ * ACCOUNT_RESTRICTION_DAYS, or null for 무기한, always said — what it is about (optional, a
  * warning's `subject`: the member's post, comment or profile, whose pending reports the approval
- * resolves — the report queue's way to it).
+ * resolves — the report queue's way to it) and the operators' own memo (optional, for the operators
+ * and never the member — owner decision 2026-10-23, ADR-0085).
  */
 export const accountRestrictionBodySchema = z
   .object({
@@ -1113,6 +1126,11 @@ export const accountRestrictionBodySchema = z
         'The term in days, 24 hours each from the approval that puts it in force; null for 무기한',
       ),
     subject: warningSubjectSchema.nullable().default(null),
+    memo: optionalTextSchema(MODERATION_REASON_MAX_LENGTH).describe(
+      'The operators’ own memo, read by the admins (not one the request is about), plain text, at most ' +
+        `${String(MODERATION_REASON_MAX_LENGTH)} characters after trimming; optional, never ` +
+        'shown to the member',
+    ),
     expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'AccountRestrictionBody' });
@@ -1128,6 +1146,17 @@ export const approvalDecisionBodySchema = z
   .meta({ id: 'ApprovalDecisionBody' });
 export type ApprovalDecisionBody = z.input<typeof approvalDecisionBodySchema>;
 export type ParsedApprovalDecisionBody = z.output<typeof approvalDecisionBodySchema>;
+
+/**
+ * `POST /admin/moderation/account-restriction-requests/:requestId/retract` (owner decision
+ * 2026-10-23, ADR-0085): the account the screen shows, which must be the one who asked. No reason
+ * is asked: the record is who retracted it and when.
+ */
+export const approvalRetractionBodySchema = z
+  .object({ expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'ApprovalRetractionBody' });
+export type ApprovalRetractionBody = z.input<typeof approvalRetractionBodySchema>;
+export type ParsedApprovalRetractionBody = z.output<typeof approvalRetractionBodySchema>;
 
 /** `POST /admin/moderation/actions/:actionId/cancel`: why (required, operators only). */
 export const cancelModerationBodySchema = z
@@ -1182,7 +1211,9 @@ export type DismissedReports = z.infer<typeof dismissedReportsSchema>;
  * - `approval_required`: a direct shortening, lift or cancellation of an account restriction, which
  *   only another admin's approval of a request does (#139, ADR-0056 decision 1-7);
  * - `not_account_restriction`: a request to shorten, lift or cancel an action that is no account
- *   restriction (#139).
+ *   restriction (#139);
+ * - `no_decider`: an account restriction request no admin could decide — there is none but the one
+ *   asking and the member it is about (#139, owner decision 2026-10-23: refused when asked).
  */
 export const MODERATION_REFUSALS = [
   'own',
@@ -1198,6 +1229,7 @@ export const MODERATION_REFUSALS = [
   'end_passed',
   'approval_required',
   'not_account_restriction',
+  'no_decider',
 ] as const;
 export type ModerationRefusal = (typeof MODERATION_REFUSALS)[number];
 export const moderationNotAllowedDetailsSchema = z

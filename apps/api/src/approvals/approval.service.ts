@@ -14,7 +14,7 @@ import { DB } from '../infra/db/db.provider.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
-/** A request as stored: the request, then the decision (null while `pending`). */
+/** A request as stored: the request, then the decision (null while `pending` and once `retracted`). */
 export interface ApprovalRequest {
   id: string;
   kind: string;
@@ -28,6 +28,8 @@ export interface ApprovalRequest {
   decidedBy: string | null;
   decisionReason: string | null;
   decidedAt: Date | null;
+  /** When its requester retracted it (`retracted`); null otherwise. */
+  retractedAt: Date | null;
 }
 
 export interface ApprovalRequestInput {
@@ -46,6 +48,8 @@ export function approvalNotAllowed(reason: ApprovalRefusal): AppError {
   const messages: Record<ApprovalRefusal, string> = {
     requester: 'The requester cannot decide their own request',
     decided: 'The request was decided already',
+    retracted: 'The request was retracted by its requester',
+    not_requester: 'Only the requester can retract the request',
   };
   return new AppError('APPROVAL_NOT_ALLOWED', {
     message: messages[reason],
@@ -70,9 +74,10 @@ function parseReason(reason: string): string {
  * at the database. Every step keeps who, when (the database clock) and why.
  *
  * What the shared rule leaves to each consumer (#78, #152, #144, #130, #139, …): the kinds, what
- * runs on approval, and the rest of a request's life — expiry, withdrawal, a requester who lost
- * the admin role. A consumer passes its own transaction (`executor`) so the approved work and the
- * decision commit together; the methods then run in a savepoint of it.
+ * runs on approval, and the rest of a request's life — expiry, retraction, a requester who lost
+ * the admin role. A consumer that lets its requests be retracted calls `retract` (#139 does,
+ * ADR-0085); the others never do. A consumer passes its own transaction (`executor`) so the
+ * approved work and the decision commit together; the methods then run in a savepoint of it.
  */
 @Injectable()
 export class ApprovalService {
@@ -138,37 +143,53 @@ export class ApprovalService {
   }
 
   /**
+   * `pending` → `retracted` by its requester, before any decision (a consumer's choice — #139's
+   * requests may be, ADR-0085): no decision, no reason — the record is who asked and when it was
+   * retracted, strictly after the request. Under the shared admin-roles lock, as a decision:
+   * FORBIDDEN unless the requester holds the admin role NOW, NOT_FOUND for no such request,
+   * APPROVAL_NOT_ALLOWED `not_requester` for anyone else, `retracted` when retracted already and
+   * `decided` when decided (the row is locked, so of a retraction and a decision at once the second
+   * finds the first).
+   */
+  retract(requesterId: string, id: string, executor: Db | Tx = this.db): Promise<ApprovalRequest> {
+    return executor.transaction(async (tx) => {
+      await this.assertAdmin(tx, requesterId);
+      const request = await this.lockRequest(tx, id);
+      if (request.requestedBy !== requesterId) throw approvalNotAllowed('not_requester');
+      if (request.status === 'retracted') throw approvalNotAllowed('retracted');
+      if (request.status !== 'pending') throw approvalNotAllowed('decided');
+      const retractedAt = strictlyAfter(await clockTimestamp(tx), request.requestedAt);
+      const [row] = await tx
+        .update(schema.approvalRequests)
+        .set({ status: 'retracted', retractedAt })
+        .where(eq(schema.approvalRequests.id, id))
+        .returning();
+      if (!row) throw new AppError('INTERNAL', { message: 'Approval retraction update failed' });
+      return row;
+    });
+  }
+
+  /**
    * The decision, under the shared admin-roles lock so the decider's role cannot be revoked
    * between the check and the commit: FORBIDDEN unless the decider holds the admin role NOW,
-   * NOT_FOUND for no such request, APPROVAL_NOT_ALLOWED `requester` when the decider requested it
-   * and `decided` when it is not pending any more (the row is locked, so of two decisions at once
-   * the second finds the first). The decision is timed strictly after its request.
+   * NOT_FOUND for no such request, APPROVAL_NOT_ALLOWED `requester` when the decider requested it,
+   * `retracted` when its requester retracted it and `decided` when it was decided (the row is
+   * locked, so of two decisions at once the second finds the first). The decision is timed
+   * strictly after its request.
    */
   private async decide(
     deciderId: string,
     id: string,
-    status: Exclude<ApprovalStatus, 'pending'>,
+    status: 'approved' | 'rejected',
     reason: string,
     executor: Db | Tx,
   ): Promise<ApprovalRequest> {
     const decisionReason = parseReason(reason);
     return executor.transaction(async (tx) => {
-      await lockAdminRoles(tx, 'shared');
-      const [decider] = await tx
-        .select({ role: schema.profiles.role })
-        .from(schema.profiles)
-        .where(eq(schema.profiles.userId, deciderId))
-        .limit(1);
-      if (decider?.role !== 'admin') throw new AppError('FORBIDDEN', { message: 'Admin only' });
-
-      const [request] = await tx
-        .select()
-        .from(schema.approvalRequests)
-        .where(eq(schema.approvalRequests.id, id))
-        .limit(1)
-        .for('update');
-      if (!request) throw new AppError('NOT_FOUND', { message: 'Approval request not found' });
+      await this.assertAdmin(tx, deciderId);
+      const request = await this.lockRequest(tx, id);
       if (request.requestedBy === deciderId) throw approvalNotAllowed('requester');
+      if (request.status === 'retracted') throw approvalNotAllowed('retracted');
       if (request.status !== 'pending') throw approvalNotAllowed('decided');
 
       // Strictly after the request, even should the clock have stepped back since it was made.
@@ -181,5 +202,31 @@ export class ApprovalService {
       if (!row) throw new AppError('INTERNAL', { message: 'Approval decision update failed' });
       return row;
     });
+  }
+
+  /**
+   * The shared admin-roles lock, then FORBIDDEN unless `accountId` holds the admin role now — read
+   * under the lock, so no grant or revoke changes it before the commit.
+   */
+  private async assertAdmin(tx: Tx, accountId: string): Promise<void> {
+    await lockAdminRoles(tx, 'shared');
+    const [account] = await tx
+      .select({ role: schema.profiles.role })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, accountId))
+      .limit(1);
+    if (account?.role !== 'admin') throw new AppError('FORBIDDEN', { message: 'Admin only' });
+  }
+
+  /** The request, locked FOR UPDATE, or NOT_FOUND. */
+  private async lockRequest(tx: Tx, id: string): Promise<ApprovalRequest> {
+    const [request] = await tx
+      .select()
+      .from(schema.approvalRequests)
+      .where(eq(schema.approvalRequests.id, id))
+      .limit(1)
+      .for('update');
+    if (!request) throw new AppError('NOT_FOUND', { message: 'Approval request not found' });
+    return request;
   }
 }

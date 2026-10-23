@@ -83,6 +83,9 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
     'account_restriction_approve',
   'POST /admin/moderation/account-restriction-requests/:requestId/reject':
     'account_restriction_reject',
+  // Owner decision 2026-10-23: the one who asked may retract a request before its decision.
+  'POST /admin/moderation/account-restriction-requests/:requestId/retract':
+    'account_restriction_retract',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

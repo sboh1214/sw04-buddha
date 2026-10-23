@@ -55,6 +55,7 @@ import {
   REPORT_STATUS_PALETTE,
   RESTRICTION_TERM_OPTIONS,
   accountRequestChangeLabel,
+  accountRequestMemoDraft,
   accountRequestMootNotice,
   accountRequestTargetText,
   accountRestrictionDraft,
@@ -676,11 +677,12 @@ function ApprovalLines({
  *
  * What the reader may do (`requestStanding`): decide — '승인' and '거절', or '거절' alone while the
  * request is moot (`moot`: the restriction outgrew it since — ADR-0085 7-3, the approval would be
- * refused — said by a notice that asks for the rejection, `accountRequestMootNotice`); nothing on
- * their own request, which another admin decides (ADR-0056 decision 1-7, a line says so); nothing
- * on one about themselves (decision 4 #50 «다른 운영자만»). Neither of those two is asked to reject
- * a moot one: the notice is the deciding admin's. `onOpen` opens a decision's dialog; without it
- * the rows offer nothing.
+ * refused — said by a notice that asks for the rejection, `accountRequestMootNotice`); on their
+ * own request, which another admin decides (ADR-0056 decision 1-7, a line says so), '요청 철회'
+ * while it waits (owner decision 2026-10-23); nothing on one about themselves (decision 4 #50
+ * «다른 운영자만»). Neither of those two is asked to reject a moot one: the notice is the deciding
+ * admin's. A retracted request says when (its asking admin is who retracted it). `onOpen` opens a
+ * decision's or the retraction's dialog; without it the rows offer nothing.
  */
 export function RequestRows({
   requests,
@@ -767,6 +769,16 @@ export function RequestRows({
                   </Button>
                 </HStack>
               )}
+              {onOpen !== undefined && standing === 'requester' && (
+                <Button
+                  size="xs"
+                  variant="outline"
+                  onClick={() => onOpen(retractDialog(request))}
+                  data-testid="account-request-retract"
+                >
+                  {copy.adminAccountRequestRetract}
+                </Button>
+              )}
             </HStack>
             <RequestDetails request={request} />
             {viewer && (
@@ -808,6 +820,14 @@ export function RequestRows({
                 )}
               </>
             )}
+            {request.retractedAt !== null && (
+              <Line
+                label={copy.adminAccountRequestRetractedAt}
+                testId="account-request-retracted-at"
+              >
+                {formatKst(request.retractedAt)}
+              </Line>
+            )}
           </Stack>
         );
       })}
@@ -817,10 +837,11 @@ export function RequestRows({
 
 /**
  * What a request asks for: an `apply`'s term, reason and the explanation the member will read —
- * which is its request's reason too (ADR-0085 7-5), so it is said once — or a change's: the
- * restriction it changes as it stands now (when it was given and its end now, linked to its row on
- * the member's page, and its reason — a member can have several, 7-12), a 감경's end asked for,
- * and the reason (operators only).
+ * which is its request's reason too (ADR-0085 7-5), so it is said once — and the operators' memo
+ * when it has one (owner decision 2026-10-23: for the operators, never the member; withheld from
+ * the admin it is about), or a change's: the restriction it changes as it stands now (when it
+ * was given and its end now, linked to its row on the member's page, and its reason — a member can
+ * have several, 7-12), a 감경's end asked for, and the reason (operators only).
  */
 function RequestDetails({ request }: { request: AccountRestrictionRequest }) {
   if (request.apply !== null) {
@@ -832,6 +853,11 @@ function RequestDetails({ request }: { request: AccountRestrictionRequest }) {
         </Line>
         <Line label={copy.moderationReason}>{reason.reason}</Line>
         {reason.note !== null && <Line label={copy.adminModerationNoteLabel}>{reason.note}</Line>}
+        {request.apply.memo !== null && (
+          <Line label={copy.adminAccountRequestMemo} testId="account-request-memo">
+            {request.apply.memo}
+          </Line>
+        )}
       </>
     );
   }
@@ -907,7 +933,10 @@ interface ActionSpecBase {
  * never shown to the member — a cancellation, a dismissal, a restriction's early lift and its 감경,
  * which also takes the new end (`end`, Korean time, earlier than the end now and still to come) —
  * and an account restriction's requests and decisions, whose reason an approval request keeps
- * (`approval`: held to its length as well, `recordReasonDraft`).
+ * (`approval`: held to its length as well, `recordReasonDraft`). An account restriction's request
+ * also takes the operators' memo (optional, never the member's — owner decision 2026-10-23).
+ * `confirm`: nothing to type — the retraction of a request by the one who asked (owner decision
+ * 2026-10-23: who and when are its record, no reason).
  */
 export type DialogSpec =
   | (ActionSpecBase & {
@@ -917,9 +946,18 @@ export type DialogSpec =
   | (ActionSpecBase & {
       kind: 'account';
       build: (
-        input: ActionInput<AccountRestrictionReason> & { note: string },
+        input: ActionInput<AccountRestrictionReason> & { note: string; memo: string | null },
       ) => ModerationVariables;
     })
+  | {
+      kind: 'confirm';
+      title: string;
+      body: string;
+      success: string;
+      testId: string;
+      details?: ReactNode;
+      build: (input: { expectedAccountId: string }) => ModerationVariables;
+    }
   | {
       kind: 'record';
       title: string;
@@ -949,12 +987,15 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
   const id = useId();
   const moderate = useModerate();
   const operatorId = useOperatorId();
+  // The spec as an action's (a reason the member reads) or as a record's, or neither (`confirm`).
+  const actionSpec = spec.kind === 'action' || spec.kind === 'account' ? spec : undefined;
+  const recordSpec = spec.kind === 'record' ? spec : undefined;
   // The reason's `<select>` as picked ('' for none), read by the dialog's reasons when sent.
   const [reasonValue, setReasonValue] = useState('');
   const [text, setText] = useState('');
-  const [subjectValue, setSubjectValue] = useState(
-    spec.kind === 'record' ? '' : (spec.subjects?.[0]?.value ?? ''),
-  );
+  // An account restriction request's memo for the operators (optional, never the member's).
+  const [memoText, setMemoText] = useState('');
+  const [subjectValue, setSubjectValue] = useState(actionSpec?.subjects?.[0]?.value ?? '');
   // A restriction's term: none picked until the operator picks one (no default term).
   const [termValue, setTermValue] = useState('');
   // A 감경's new end as typed (`datetime-local`, Korean time) and what was wrong with it when sent.
@@ -962,7 +1003,7 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
   const [endError, setEndError] = useState<string | null>(null);
   const [tried, setTried] = useState(false);
   const [fieldError, setFieldError] = useState<{
-    field: 'note' | 'reason' | 'endsAt';
+    field: 'note' | 'reason' | 'endsAt' | 'memo';
     message: string;
   } | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -976,17 +1017,28 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
     note: text,
   });
   const action = account ? accountDraft : reportDraft;
-  const record = recordReasonDraft(text, spec.kind === 'record' && spec.approval === true);
+  const memo = accountRequestMemoDraft(memoText);
+  const record = recordReasonDraft(text, recordSpec?.approval === true);
   const term = restrictionTermOf(termValue, termOptions);
-  const reasonError = spec.kind !== 'record' && tried ? action.reasonError : null;
+  const reasonError = actionSpec !== undefined && tried ? action.reasonError : null;
   const termError =
-    spec.kind !== 'record' && spec.term === true && tried && term === undefined
+    actionSpec?.term === true && tried && term === undefined
       ? copy.errModerationTermRequired
       : null;
   const textError =
-    (fieldError !== null && fieldError.field !== 'endsAt' ? fieldError.message : null) ??
-    (tried ? (spec.kind === 'record' ? record.error : action.noteError) : null);
+    (fieldError !== null && fieldError.field !== 'endsAt' && fieldError.field !== 'memo'
+      ? fieldError.message
+      : null) ??
+    (tried
+      ? recordSpec !== undefined
+        ? record.error
+        : actionSpec !== undefined
+          ? action.noteError
+          : null
+      : null);
   const endFieldError = fieldError?.field === 'endsAt' ? fieldError.message : endError;
+  const memoError =
+    fieldError?.field === 'memo' ? fieldError.message : tried && account ? memo.error : null;
 
   const submit = () => {
     setTried(true);
@@ -995,17 +1047,20 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
     setEndError(null);
     if (operatorId === undefined) return;
     let variables: ModerationVariables;
-    if (spec.kind !== 'record') {
+    if (spec.kind === 'confirm') {
+      variables = spec.build({ expectedAccountId: operatorId });
+    } else if (spec.kind !== 'record') {
       if (action.reasonError !== null || action.noteError !== null) return;
       if (spec.term === true && term === undefined) return;
       const subject =
         spec.subjects?.find((option) => option.value === subjectValue)?.subject ?? null;
       const days = term?.days ?? null;
       if (spec.kind === 'account') {
-        if (accountDraft.reason === null) return;
+        if (accountDraft.reason === null || memo.error !== null) return;
         variables = spec.build({
           reason: accountDraft.reason,
           note: accountDraft.note,
+          memo: memo.memo,
           subject,
           days,
           expectedAccountId: operatorId,
@@ -1074,8 +1129,8 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
               <Dialog.Body>
                 <Stack gap="4">
                   <Dialog.Description color="fg">{spec.body}</Dialog.Description>
-                  {spec.kind === 'record' && spec.details}
-                  {spec.kind !== 'record' && spec.subjects !== undefined && (
+                  {(spec.kind === 'record' || spec.kind === 'confirm') && spec.details}
+                  {actionSpec?.subjects !== undefined && (
                     <RadioGroup.Root
                       name={`${id}-subject`}
                       value={subjectValue}
@@ -1085,10 +1140,10 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
                       size="sm"
                     >
                       <RadioGroup.Label fontWeight="medium" mb="1">
-                        {spec.subjectLabel ?? copy.adminModerationWarnSubject}
+                        {actionSpec.subjectLabel ?? copy.adminModerationWarnSubject}
                       </RadioGroup.Label>
                       <HStack gap="4" flexWrap="wrap">
-                        {spec.subjects.map((option) => (
+                        {actionSpec.subjects.map((option) => (
                           <RadioGroup.Item
                             key={option.value}
                             value={option.value}
@@ -1102,7 +1157,7 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
                       </HStack>
                     </RadioGroup.Root>
                   )}
-                  {spec.kind !== 'record' && spec.term === true && (
+                  {actionSpec?.term === true && (
                     <Field.Root invalid={termError !== null} required>
                       <RadioGroup.Root
                         name={`${id}-term`}
@@ -1157,7 +1212,7 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
                       </Field.ErrorText>
                     </Field.Root>
                   )}
-                  {spec.kind !== 'record' && (
+                  {actionSpec !== undefined && (
                     <Field.Root invalid={reasonError !== null} required>
                       <Field.Label>{copy.adminModerationReasonLabel}</Field.Label>
                       <NativeSelect.Root size="sm" disabled={pending}>
@@ -1178,41 +1233,65 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
                       <Field.ErrorText>{reasonError}</Field.ErrorText>
                     </Field.Root>
                   )}
-                  <Field.Root
-                    invalid={textError !== null}
-                    required={spec.kind === 'record' || account}
-                  >
-                    <Field.Label>
-                      {spec.kind !== 'record'
-                        ? copy.adminModerationNoteLabel
-                        : copy.adminModerationRecordLabel}
-                    </Field.Label>
-                    <Textarea
-                      value={text}
-                      onChange={(event) => {
-                        setText(event.target.value);
-                        setFieldError(null);
-                      }}
-                      rows={3}
-                      maxLength={
-                        (spec.kind !== 'record'
-                          ? MODERATION_NOTE_MAX_LENGTH
-                          : MODERATION_REASON_MAX_LENGTH) * 2
-                      }
-                      disabled={pending}
-                      data-testid={spec.kind === 'record' ? 'moderation-record' : 'moderation-note'}
-                    />
-                    <Field.HelperText>
-                      {spec.kind === 'record'
-                        ? copy.adminModerationRecordHint
-                        : account
-                          ? copy.adminModerationAccountNoteHint
-                          : copy.adminModerationNoteHint}
-                    </Field.HelperText>
-                    <Field.ErrorText data-testid="moderation-text-error">
-                      {textError}
-                    </Field.ErrorText>
-                  </Field.Root>
+                  {spec.kind !== 'confirm' && (
+                    <Field.Root
+                      invalid={textError !== null}
+                      required={spec.kind === 'record' || account}
+                    >
+                      <Field.Label>
+                        {spec.kind !== 'record'
+                          ? copy.adminModerationNoteLabel
+                          : copy.adminModerationRecordLabel}
+                      </Field.Label>
+                      <Textarea
+                        value={text}
+                        onChange={(event) => {
+                          setText(event.target.value);
+                          setFieldError(null);
+                        }}
+                        rows={3}
+                        maxLength={
+                          (spec.kind !== 'record'
+                            ? MODERATION_NOTE_MAX_LENGTH
+                            : MODERATION_REASON_MAX_LENGTH) * 2
+                        }
+                        disabled={pending}
+                        data-testid={
+                          spec.kind === 'record' ? 'moderation-record' : 'moderation-note'
+                        }
+                      />
+                      <Field.HelperText>
+                        {spec.kind === 'record'
+                          ? copy.adminModerationRecordHint
+                          : account
+                            ? copy.adminModerationAccountNoteHint
+                            : copy.adminModerationNoteHint}
+                      </Field.HelperText>
+                      <Field.ErrorText data-testid="moderation-text-error">
+                        {textError}
+                      </Field.ErrorText>
+                    </Field.Root>
+                  )}
+                  {account && (
+                    <Field.Root invalid={memoError !== null}>
+                      <Field.Label>{copy.adminModerationAccountMemoLabel}</Field.Label>
+                      <Textarea
+                        value={memoText}
+                        onChange={(event) => {
+                          setMemoText(event.target.value);
+                          setFieldError(null);
+                        }}
+                        rows={2}
+                        maxLength={MODERATION_REASON_MAX_LENGTH * 2}
+                        disabled={pending}
+                        data-testid="moderation-memo"
+                      />
+                      <Field.HelperText>{copy.adminModerationAccountMemoHint}</Field.HelperText>
+                      <Field.ErrorText data-testid="moderation-memo-error">
+                        {memoError}
+                      </Field.ErrorText>
+                    </Field.Root>
+                  )}
                   {refusal !== null && (
                     <Alert.Root status="error" role="alert" data-testid="moderation-error">
                       <Alert.Indicator />
@@ -1355,7 +1434,8 @@ export function shortenDialog(action: AdminModerationAction): DialogSpec {
  * decision 1 #57-12), the request's reason to the approving admin as well (7-5) — its term (1, 3, 7
  * or 30 days or 무기한, none picked until the operator picks one, 7-2) and what it is about
  * (`subjects`, a warning's choices: the item's pending reports are resolved once it is approved,
- * 7-7). Nothing is in force until another admin approves it.
+ * 7-7), and the operators' memo (optional, for the operators and never the member's — owner
+ * decision 2026-10-23). Nothing is in force until another admin approves it.
  */
 export function accountRestrictDialog(
   user: ModerationUser,
@@ -1370,10 +1450,10 @@ export function accountRestrictDialog(
     subjects,
     subjectLabel: copy.adminModerationRestrictSubject,
     term: true,
-    build: ({ reason, note, subject, days, expectedAccountId }) => ({
+    build: ({ reason, note, memo, subject, days, expectedAccountId }) => ({
       kind: 'account-restrict',
       userId: user.id,
-      body: { reason, note, subject, days, expectedAccountId },
+      body: { reason, note, memo, subject, days, expectedAccountId },
     }),
   };
 }
@@ -1481,8 +1561,8 @@ export function approveDialog(request: AccountRestrictionRequest): DialogSpec {
 }
 
 /**
- * The rejection of `request`, with the deciding admin's reason: nothing is done — the way a
- * request not wanted any more, or one the restriction outgrew, is closed (ADR-0085 7-3).
+ * The rejection of `request`, with the deciding admin's reason: nothing is done — the way another
+ * admin closes a request not wanted, or one the restriction outgrew (ADR-0085 7-3).
  */
 export function rejectDialog(request: AccountRestrictionRequest): DialogSpec {
   return {
@@ -1497,6 +1577,27 @@ export function rejectDialog(request: AccountRestrictionRequest): DialogSpec {
       kind: 'reject',
       requestId: request.id,
       body: { reason, expectedAccountId },
+    }),
+  };
+}
+
+/**
+ * The retraction of `request` by the admin who asked for it, before anyone decides it (owner
+ * decision 2026-10-23, ADR-0085): nothing is done, and it closes as 철회됨 with who and when — no
+ * reason is asked.
+ */
+export function retractDialog(request: AccountRestrictionRequest): DialogSpec {
+  return {
+    kind: 'confirm',
+    title: copy.adminAccountRequestRetractTitle,
+    body: copy.adminAccountRequestRetractBody,
+    success: copy.adminAccountRequestRetracted,
+    testId: 'account-request-retract-dialog',
+    details: <RequestSummary request={request} />,
+    build: ({ expectedAccountId }) => ({
+      kind: 'retract',
+      requestId: request.id,
+      body: { expectedAccountId },
     }),
   };
 }

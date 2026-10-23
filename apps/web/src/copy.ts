@@ -1605,16 +1605,20 @@ export const copy = {
   // 계정 제한(#139, ADR-0085; ADR-0069 결정 1 #57-12, 결정 2 #45-11·#45-14, 결정 4 #50·#139 행; ADR-0056 결정
   // 1-7): 한 운영자가 회원 화면이나 신고 목록의 대상 화면에서 요청하고, 요청하지 않은 다른 운영자가 승인해야 효력이
   // 있다 — 걸기·감경·조기 해제·취소 모두. 기간은 승인한 때부터 센다. 사유는 정한 목록(스팸·괴롭힘·개인정보 노출·
-  // 사칭·공모·조작 유도·이상 거래·다계정·기타)에서 하나와 필수 설명이다. 요청에는 기한이 없고 요청한 운영자가
-  // 거둘 수 없다 — 원치 않는 요청은 다른 운영자가 사유와 함께 거절한다(ADR-0085 7-3). 운영자에 관한 요청은
-  // 셋째 운영자만 승인하거나 거절해, 관리자가 둘뿐이면 결정되지 않고 남는다 — 이 문구들은 그 경우를 따로 말하지
-  // 않는다(7-15, 오너에게 물었다 — 결과 4의 13).
+  // 사칭·공모·조작 유도·이상 거래·다계정·기타)에서 하나와 필수 설명이다. 요청에는 기한이 없고, 결정 전에는 요청한
+  // 운영자가 철회할 수 있다(오너 결정 2026-10-23 — 기록에 남고 철회된 요청은 아무도 결정하지 못한다). 요청한
+  // 운영자와 대상 회원 말고는 결정할 운영자가 없으면 요청을 받지 않는다(같은 결정). 걸기 요청에는 운영자만
+  // 읽는 선택 메모를 둔다(요청한 운영자도 읽고, 회원과 그 요청의 대상인 운영자에게는 보이지 않는다, 같은 결정).
   adminModerationAccountRestrict: '계정 제한 요청',
   adminModerationAccountRestrictTitle: '회원의 계정 제한을 요청합니다',
   adminModerationAccountRestrictBody:
     '다른 운영자가 승인하면 그때부터 고른 기간 동안 거래(새 주문)와 시장 제안, 공개 프로필의 새 값, 탈퇴를 막습니다. 글·댓글 쓰기·좋아요·신고·관심 등록과 잔액·기록은 그대로입니다. 이미 계정 제한 중이면 더 늦게 끝나는 쪽이 적용됩니다. 대상을 고르면 승인될 때 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다.',
   adminModerationAccountNoteHint:
     '꼭 적어야 합니다. 500자까지 쓸 수 있고, 승인하는 운영자도 이 설명을 요청 사유로 읽습니다.',
+  adminModerationAccountMemoLabel: '운영자 메모',
+  adminModerationAccountMemoHint:
+    '적지 않아도 됩니다. 회원에게는 보이지 않고 운영자만 읽습니다. 500자까지 쓸 수 있습니다.',
+  errModerationMemoTooLong: '운영자 메모는 500자 이하로 입력해 주세요.',
   adminModerationAccountRequested: '계정 제한을 요청했습니다. 다른 운영자가 승인하면 적용됩니다.',
   adminModerationAccountLift: '조기 해제 요청',
   adminModerationAccountLiftTitle: '계정 제한의 조기 해제를 요청합니다',
@@ -1650,11 +1654,13 @@ export const copy = {
   // 계정 제한 요청의 목록(관리자 신고·조치 영역의 '계정 제한 요청')과 회원 화면의 승인 대기 요청.
   adminAccountRequests: '계정 제한 요청',
   adminAccountRequestsIntro:
-    '계정 제한과 그 감경·조기 해제·취소는 한 운영자가 요청하고 요청하지 않은 다른 운영자가 승인해야 적용됩니다. 요청에는 기한이 없습니다. 더는 필요 없는 요청은 다른 운영자가 사유와 함께 거절합니다.',
+    '계정 제한과 그 감경·조기 해제·취소는 한 운영자가 요청하고 요청하지 않은 다른 운영자가 승인해야 적용됩니다. 요청에는 기한이 없고, 요청한 운영자는 결정 전에 요청을 철회할 수 있습니다. 요청한 운영자와 대상 회원 말고 결정할 운영자가 없으면 요청할 수 없습니다.',
   adminAccountRequestsPending: '승인 대기',
   adminAccountRequestsDecided: '결정함',
+  adminAccountRequestsRetracted: '철회됨',
   adminAccountRequestsEmptyPending: '승인을 기다리는 요청이 없습니다.',
   adminAccountRequestsEmptyDecided: '결정한 요청이 없습니다.',
+  adminAccountRequestsEmptyRetracted: '철회한 요청이 없습니다.',
   adminAccountRequestsMember: '승인을 기다리는 계정 제한 요청',
   adminAccountRequestsMemberEmpty: '승인을 기다리는 요청이 없습니다.',
   adminAccountRequestChangeApply: '계정 제한',
@@ -1664,6 +1670,7 @@ export const copy = {
   approvalStatusPending: '승인 대기',
   approvalStatusApproved: '승인됨',
   approvalStatusRejected: '거절됨',
+  approvalStatusRetracted: '철회됨',
   adminAccountRequestReason: '요청 사유',
   adminAccountRequestEndsAt: '요청한 끝나는 때',
   // 감경·조기 해제·취소 요청이 바꿀 계정 제한(지금 모습): 건 때·지금 끝나는 때와 그 사유. 회원에게 계정 제한이
@@ -1674,7 +1681,16 @@ export const copy = {
   adminAccountRequestDecidedBy: '결정한 운영자',
   adminAccountRequestDecidedAt: '결정한 때',
   adminAccountRequestDecisionReason: '결정 사유',
-  adminAccountRequestOwn: '내가 한 요청이라 다른 운영자가 승인하거나 거절합니다.',
+  adminAccountRequestOwn:
+    '내가 한 요청이라 다른 운영자가 승인하거나 거절합니다. 결정 전에는 철회할 수 있습니다.',
+  adminAccountRequestMemo: '운영자 메모',
+  adminAccountRequestRetractedAt: '철회한 때',
+  // 요청한 운영자의 철회(오너 결정 2026-10-23): 사유 없이 확인만, 철회한 운영자와 시각이 기록에 남는다.
+  adminAccountRequestRetract: '요청 철회',
+  adminAccountRequestRetractTitle: '요청을 철회합니다',
+  adminAccountRequestRetractBody:
+    '철회하면 아무것도 바뀌지 않고 요청은 철회됨으로 닫혀, 누구도 승인하거나 거절할 수 없습니다. 철회한 운영자와 시각이 기록에 남습니다.',
+  adminAccountRequestRetracted: '요청을 철회했습니다.',
   adminAccountRequestAboutMe:
     '나에 관한 요청이라 내가 승인하거나 거절할 수 없고, 요청하거나 결정한 운영자는 보이지 않습니다.',
   // 요청 뒤 제한이 바뀌어 승인이 거절될 요청(`moot`): 승인 단추 없이 까닭과 거절만 둔다(ADR-0085 7-3).
@@ -1698,9 +1714,12 @@ export const copy = {
     '거절하면 아무것도 바뀌지 않고 요청은 거절됨으로 닫힙니다. 거절한 운영자·사유·시각이 기록에 남습니다.',
   adminAccountRequestApproved: '승인했습니다.',
   adminAccountRequestRejected: '거절했습니다.',
-  // 2인 통제의 거절(APPROVAL_NOT_ALLOWED, ADR-0056 결정 4): 요청한 운영자의 결정, 이미 결정된 요청.
+  // 2인 통제의 거절(APPROVAL_NOT_ALLOWED, ADR-0056 결정 4): 요청한 운영자의 결정, 이미 결정된 요청, 철회된
+  // 요청, 요청하지 않은 운영자의 철회.
   errApprovalRequester: '요청한 운영자는 승인하거나 거절할 수 없습니다. 다른 운영자가 결정합니다.',
   errApprovalDecided: '이미 결정된 요청입니다. 화면을 새로 고쳐 주세요.',
+  errApprovalRetracted: '요청한 운영자가 철회한 요청입니다. 화면을 새로 고쳐 주세요.',
+  errApprovalNotRequester: '요청한 운영자만 철회할 수 있습니다. 화면을 새로 고쳐 주세요.',
   adminModerationReasonLabel: '사유',
   adminModerationReasonPlaceholder: '사유 고르기',
   adminModerationNoteLabel: '회원에게 보일 설명',
@@ -1734,6 +1753,9 @@ export const copy = {
   errModerationApprovalRequired:
     '계정 제한은 다른 운영자의 승인을 받아 바꾸거나 취소합니다. 화면을 새로 고쳐 주세요.',
   errModerationNotAccountRestriction: '계정 제한이 아닌 조치입니다. 화면을 새로 고쳐 주세요.',
+  // 결정할 운영자가 없는 요청(오너 결정 2026-10-23): 요청한 운영자와 대상 회원이 아닌 운영자가 없다.
+  errModerationNoDecider:
+    '이 요청을 결정할 운영자가 없습니다. 요청한 운영자와 대상 회원이 아닌 운영자가 있어야 요청할 수 있습니다.',
   errModerationReportIds: '한 번에 기각할 수 있는 신고는 100건까지입니다. 화면을 새로 고쳐 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.

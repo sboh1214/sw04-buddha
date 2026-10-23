@@ -23,7 +23,7 @@ import {
   writeScreenStart,
   writeScreenView,
 } from '@/lib/posts';
-import { type Refusal, refusalOf } from '@/lib/restriction';
+import { type Refusal, WRITE_PAGE_RESTRICTION_KINDS, refusalOf } from '@/lib/restriction';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -34,9 +34,9 @@ import { useSession } from '@/lib/use-session';
  * the screen goes to its page. Above either, for a member under a writing restriction in force
  * (#185, ADR-0082), its banner (`SanctionBanner`, ADR-0069 decision 4 #50) — the form stays, and
  * sending it is refused with the restriction's end and the way to 조치·신고 내역
- * (`postWriteErrorMessage`, `isRestricted`). An account restriction (#139, ADR-0085) shows on the
- * same banner — #50's «진행 중인 제재가 있으면 … 글쓰기 화면의 안내 띠» — though it refuses no post
- * (ADR-0069 decision 1 #57-12; ADR-0085 7-10, asked).
+ * (`postWriteErrorMessage`, `isRestricted`). An account restriction (#139, ADR-0085) is not on it:
+ * it refuses no post (ADR-0069 decision 1 #57-12), and its banner is MY 요약's and MY 설정's only
+ * (owner decision 2026-10-23, WRITE_PAGE_RESTRICTION_KINDS).
  *
  * The market the form shows is the screen's own (`writeScreenMarket`, lib/posts.ts, where every
  * step of it is tested): the page's read (`lookup`) settles it as it comes, and a market picked
@@ -66,7 +66,10 @@ export function WriteScreen({ lookup }: { lookup: WriteMarketLookup }) {
       <WriteGate back={view.back}>
         {(writer) => (
           <Stack gap="6">
-            <SanctionBanner testId="post-write-sanction-banner" />
+            <SanctionBanner
+              testId="post-write-sanction-banner"
+              kinds={WRITE_PAGE_RESTRICTION_KINDS}
+            />
             {view.kind === 'form' ? (
               <WriteForm market={view.market} accountId={writer.accountId} onRepick={pick} />
             ) : view.kind === 'failed' ? (

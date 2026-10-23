@@ -203,6 +203,12 @@
           "type": "timestamp (3) with time zone",
           "primaryKey": false,
           "notNull": false
+        },
+        "retracted_at": {
+          "name": "retracted_at",
+          "type": "timestamp (3) with time zone",
+          "primaryKey": false,
+          "notNull": false
         }
       },
       "indexes": {},
@@ -240,7 +246,7 @@
       "checkConstraints": {
         "approval_requests_decision_check": {
           "name": "approval_requests_decision_check",
-          "value": "(\"approval_requests\".\"status\" = 'pending') = (\"approval_requests\".\"decided_by\" IS NULL) AND (\"approval_requests\".\"decided_by\" IS NULL) = (\"approval_requests\".\"decided_at\" IS NULL) AND (\"approval_requests\".\"decided_by\" IS NULL) = (\"approval_requests\".\"decision_reason\" IS NULL)"
+          "value": "(\"approval_requests\".\"status\"::text IN ('pending', 'retracted')) = (\"approval_requests\".\"decided_by\" IS NULL) AND (\"approval_requests\".\"decided_by\" IS NULL) = (\"approval_requests\".\"decided_at\" IS NULL) AND (\"approval_requests\".\"decided_by\" IS NULL) = (\"approval_requests\".\"decision_reason\" IS NULL) AND (\"approval_requests\".\"status\"::text = 'retracted') = (\"approval_requests\".\"retracted_at\" IS NOT NULL)"
         },
         "approval_requests_decider_not_requester_check": {
           "name": "approval_requests_decider_not_requester_check",
@@ -6783,7 +6789,8 @@
       "values": [
         "pending",
         "approved",
-        "rejected"
+        "rejected",
+        "retracted"
       ]
     },
     "public.counterparty_type": {

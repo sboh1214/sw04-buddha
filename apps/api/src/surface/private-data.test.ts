@@ -385,6 +385,10 @@ const NEVER_SHOWN: readonly string[] = [
   'approval reason',
   'account lift reason',
   'pending restriction request',
+  // The operators' memo on a request to restrict A (owner decision 2026-10-23: never the
+  // member's), and a request to restrict A its operator retracted: neither is ever A's to read.
+  'account restriction memo',
+  'retracted restriction request',
 ];
 
 interface OwnerCase {
@@ -1265,7 +1269,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // days in — each step asked for by the admin and approved by another (ADR-0056 1-7), with the
     // explanation A reads on MY's record of actions: A's alone, never anywhere public (#37-8). Who
     // approved, why, and why it was lifted are the operators' record only, A's own answers
-    // included (`NEVER_SHOWN`); so is a request to restrict A again, pending: not in force.
+    // included (`NEVER_SHOWN`); so is a request to restrict A again, pending — not in force — with
+    // the operators' memo on it (owner decision 2026-10-23), and one its operator retracted.
     const { user: approver } = await createUser(t.db, { role: 'admin' });
     const approvalReason = `leak-approval-reason-${tag}`;
     const accountNote = `leak-account-restriction-note-${tag}`;
@@ -1308,13 +1313,38 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       approvalId: accountLift.id,
     });
     const pendingRestriction = `leak-pending-restriction-${tag}`;
+    const accountMemo = `leak-account-restriction-memo-${tag}`;
     await createApprovalRequest(t.db, {
       kind: 'account_restriction',
       targetType: 'user',
       targetId: a.id,
-      payload: { userId: a.id, reason: 'spam', note: pendingRestriction, days: 7, subject: null },
+      payload: {
+        userId: a.id,
+        reason: 'spam',
+        note: pendingRestriction,
+        days: 7,
+        subject: null,
+        memo: accountMemo,
+      },
       requestedBy: admin.id,
       reason: pendingRestriction,
+    });
+    const retractedRestriction = `leak-retracted-restriction-${tag}`;
+    await createApprovalRequest(t.db, {
+      kind: 'account_restriction',
+      targetType: 'user',
+      targetId: a.id,
+      payload: {
+        userId: a.id,
+        reason: 'spam',
+        note: retractedRestriction,
+        days: 3,
+        subject: null,
+        memo: null,
+      },
+      requestedBy: admin.id,
+      reason: retractedRestriction,
+      retracted: {},
     });
     // A report A filed on another member's profile (#50), with A's description: A's own record,
     // nobody else's. And a report the admin filed on A's post, pending: nobody but operators reads
@@ -1471,6 +1501,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('approval reason', approvalReason),
         text('account lift reason', accountLiftReason),
         text('pending restriction request', pendingRestriction),
+        text('account restriction memo', accountMemo),
+        text('retracted restriction request', retractedRestriction),
         text('report description', reportText),
         text('report on A', reportOnA),
         text('moderator id', admin.id),

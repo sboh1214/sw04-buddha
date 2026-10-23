@@ -15,7 +15,7 @@ import {
   type ParsedAccountRestrictionBody,
   type WarningSubject,
 } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { and, eq, notInArray } from 'drizzle-orm';
 import * as z from 'zod';
 import {
   type ApprovalRequest,
@@ -42,6 +42,8 @@ const applyPayloadSchema = z.object({
   note: z.string(),
   days: z.literal(ACCOUNT_RESTRICTION_DAYS).nullable(),
   subject: moderationTargetSchema.nullable(),
+  /** The operators' memo (owner decision 2026-10-23), null for none; never the member's. */
+  memo: z.string().nullable().default(null),
 });
 
 /** What a `shorten` request keeps: the end asked for. A lift and a cancellation keep no more. */
@@ -82,16 +84,21 @@ interface LockedAction {
  * when. A restriction's time, and so the start of its term, is its approval's (ADR-0085 7-1): it
  * is in force from then.
  *
- * A request's life (ADR-0056 decision 5 leaves it to the consumer; ADR-0085 7-3): it waits with no
- * expiry; the one who asked cannot withdraw it — another admin rejects it with a reason, as any
- * request not wanted any more; one the restriction outgrew (cancelled, ended, past the end asked
- * for) is refused on approval for what changed (MODERATION_NOT_ALLOWED, the request's `moot`) and
- * waits for that rejection; a requester who lost the admin role since leaves their requests as they
- * are, for another admin to decide. One about an operator is decided — approved or rejected — only
- * by a third admin, so with the seed's two it waits until a third is granted (7-15). Whether it
- * should be refused, withdrawn or expire then is the owner's question, as is what becomes of a
- * pending request once its member closes the account (ADR-0085 결과 4의 12·13). Nothing here
- * touches a balance, an order or a record of trades (N02 §9: «잔액·기록·이의제기 경로는 유지»).
+ * A request's life (ADR-0056 decision 5 leaves it to the consumer; owner decision 2026-10-23,
+ * ADR-0085 decision 1 and 7-3): it waits with no expiry, until another admin approves or rejects
+ * it or the one who asked retracts it — theirs alone, before any decision, recorded with who and
+ * when (`retract`; a retracted request is decided by no one). It is not taken at all when no
+ * admin could decide it — none but the one asking and the member it is about (MODERATION_NOT_ALLOWED
+ * `no_decider`, asked under the admin-roles lock, so a grant or revoke in flight is waited for).
+ * One the restriction outgrew (cancelled, ended, past the end asked for) is refused on approval
+ * for what changed (MODERATION_NOT_ALLOWED, the request's `moot`) and waits for a rejection or its
+ * retraction; a requester who lost the admin role since leaves their requests as they are, for
+ * another admin to decide. One about an operator is decided — approved or rejected — only by a
+ * third admin (7-15). An `apply` carries the operators' own memo, optional and never the member's
+ * (owner decision 2026-10-23). What becomes of a pending request once its member closes the
+ * account is #140's (owner decision 2026-10-23: closed then, rejected for '탈퇴' — ADR-0085 결과 5).
+ * Nothing here touches a balance, an order or a record of trades (N02 §9: «잔액·기록·이의제기
+ * 경로는 유지»).
  */
 @Injectable()
 export class AccountRestrictionService {
@@ -107,10 +114,11 @@ export class AccountRestrictionService {
   /**
    * `POST /admin/moderation/users/:userId/account-restriction`: a request to restrict the member's
    * account for `days` (or 무기한, `null`), with the reason and the explanation the member will read
-   * — the request's reason as well — and what it is about (a post, a comment or the profile of the
-   * member's, from the report queue; checked now and again on approval). Nothing is in force
-   * until another admin approves it. Refused: the acting operator (`own`), an unknown member
-   * (NOT_FOUND), a subject not the member's (`not_theirs`).
+   * — the request's reason as well — what it is about (a post, a comment or the profile of the
+   * member's, from the report queue; checked now and again on approval) and the operators' memo
+   * (optional). Nothing is in force until another admin approves it. Refused: the acting operator
+   * (`own`), an unknown member (NOT_FOUND), a subject not the member's (`not_theirs`), no admin
+   * but the acting one and the member to decide it (`no_decider`).
    */
   async requestApply(
     adminId: string,
@@ -119,15 +127,25 @@ export class AccountRestrictionService {
   ): Promise<AccountRestrictionRequest> {
     const id = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
+      // The role lock before the profile's, as a role grant takes them (see `assertDecider`).
+      await lockAdminRoles(tx, 'shared');
       await this.moderation.lockProfile(tx, userId);
       const { postId, commentId } = await this.moderation.subjectOf(tx, userId, body.subject);
       const subject = await this.targetOf(tx, userId, body.subject, postId, commentId);
+      await this.assertDecider(tx, adminId, userId);
       const request = await this.approvals.request(
         {
           kind: ACCOUNT_RESTRICTION_APPROVAL_KINDS.apply,
           targetType: 'user',
           targetId: userId,
-          payload: { userId, reason: body.reason, note: body.note, days: body.days, subject },
+          payload: {
+            userId,
+            reason: body.reason,
+            note: body.note,
+            days: body.days,
+            subject,
+            memo: body.memo,
+          },
           requestedBy: adminId,
           reason: body.note,
         },
@@ -146,6 +164,7 @@ export class AccountRestrictionService {
           days: body.days,
           reason: body.reason,
           note: body.note,
+          memo: body.memo,
         },
       );
       return request.id;
@@ -160,7 +179,8 @@ export class AccountRestrictionService {
    * (operators only, as #185's). Refused now what its approval would refuse — another type
    * (`not_account_restriction`), one on the acting operator (`own`), a cancelled one, one ended (a
    * cancellation excepted), a 감경 not earlier or not to come — so a request is never made for
-   * nothing; its approval asks again.
+   * nothing; its approval asks again. Refused too with no admin but the acting one and the member
+   * to decide it (`no_decider`).
    */
   async requestChange(
     adminId: string,
@@ -170,6 +190,7 @@ export class AccountRestrictionService {
     endsAt?: Date,
   ): Promise<AccountRestrictionRequest> {
     const id = await this.db.transaction(async (tx) => {
+      await lockAdminRoles(tx, 'shared');
       const { moderationActions } = schema;
       const [action] = await tx
         .select({
@@ -187,6 +208,7 @@ export class AccountRestrictionService {
       if (action.type !== 'account_restriction') throw refused('not_account_restriction');
       const moot = accountRestrictionMoot(action, change, await clockTimestamp(tx), endsAt ?? null);
       if (moot !== null) throw refused(moot);
+      await this.assertDecider(tx, adminId, action.userId);
       const request = await this.approvals.request(
         {
           kind: ACCOUNT_RESTRICTION_APPROVAL_KINDS[change],
@@ -312,9 +334,9 @@ export class AccountRestrictionService {
 
   /**
    * `POST /admin/moderation/account-restriction-requests/:requestId/reject`: another admin rejects
-   * the request, with a reason; nothing is done. The way a request not wanted any more is closed —
-   * the one who asked included, who asks another admin to (ADR-0085 7-3). Refused as an approval
-   * is, but for what the restriction outgrew: a moot request is rejected all the same.
+   * the request, with a reason; nothing is done. Refused as an approval is, but for what the
+   * restriction outgrew: a moot request is rejected all the same (or retracted by the one who
+   * asked).
    */
   async reject(
     deciderId: string,
@@ -348,15 +370,61 @@ export class AccountRestrictionService {
   }
 
   /**
+   * `POST /admin/moderation/account-restriction-requests/:requestId/retract` (owner decision
+   * 2026-10-23, ADR-0085): the one who asked takes their request back before anyone decides it —
+   * nothing is done, and the request is closed as retracted, with when (ApprovalService.retract)
+   * and an audit row naming them. Refused: no such request of #139 (NOT_FOUND), anyone but the one
+   * who asked (APPROVAL_NOT_ALLOWED `not_requester`), one decided (`decided`) or retracted
+   * (`retracted`) already. A moot request is retracted all the same.
+   */
+  async retract(adminId: string, requestId: string): Promise<AccountRestrictionRequest> {
+    await this.db.transaction(async (tx) => {
+      const { request, change, memberId } = await this.ofRestriction(tx, requestId);
+      const retracted = await this.approvals.retract(adminId, request.id, tx);
+      await this.moderation.audit(
+        tx,
+        adminId,
+        'account_restriction_retract',
+        'approval_request',
+        retracted.id,
+        {
+          requestId: retracted.id,
+          change,
+          actionId: change === 'apply' ? null : request.targetId,
+          userId: memberId,
+        },
+      );
+    });
+    return this.reads.request(this.db, requestId, adminId);
+  }
+
+  /**
    * The request a decision is about, if it is #139's (NOT_FOUND otherwise — another consumer's
    * request is not decided here), with the member it is about: never the deciding admin (`own`).
    * The rest of the two-person rule is ApprovalService's, under its locks; it is asked here too,
-   * before an approval queues on the member's or the restriction's row, so the one who asked and a
-   * request decided already are refused as such whatever those rows hold now.
+   * before an approval queues on the member's or the restriction's row, so the one who asked, a
+   * request retracted and one decided already are refused as such whatever those rows hold now.
    */
   private async decidable(
     tx: Tx,
     deciderId: string,
+    requestId: string,
+  ): Promise<{ request: ApprovalRequest; change: AccountRestrictionChange; memberId: string }> {
+    const found = await this.ofRestriction(tx, requestId);
+    const { request, memberId } = found;
+    if (memberId === deciderId) throw refused('own');
+    if (request.requestedBy === deciderId) throw approvalNotAllowed('requester');
+    if (request.status === 'retracted') throw approvalNotAllowed('retracted');
+    if (request.status !== 'pending') throw approvalNotAllowed('decided');
+    return found;
+  }
+
+  /**
+   * A request of #139 (NOT_FOUND otherwise), what it asks and the member it is about — an
+   * `apply`'s target, or the member of the restriction a change names.
+   */
+  private async ofRestriction(
+    tx: Tx,
     requestId: string,
   ): Promise<{ request: ApprovalRequest; change: AccountRestrictionChange; memberId: string }> {
     const request = await this.approvals.get(requestId, tx);
@@ -374,10 +442,30 @@ export class AccountRestrictionService {
       if (!action) throw notFound('Action');
       memberId = action.userId;
     }
-    if (memberId === deciderId) throw refused('own');
-    if (request.requestedBy === deciderId) throw approvalNotAllowed('requester');
-    if (request.status !== 'pending') throw approvalNotAllowed('decided');
     return { request, change, memberId };
+  }
+
+  /**
+   * Whether an admin could decide a request `requesterId` makes about `memberId` (owner decision
+   * 2026-10-23, ADR-0085): one who is neither — the requester decides nothing of theirs
+   * (ADR-0056 decision 4) and the member nothing about themselves (`own`). MODERATION_NOT_ALLOWED
+   * `no_decider` when there is none, so no request waits for a decider who does not exist. Read
+   * under the admin-roles lock the caller took first (shared), so a grant or a revoke in flight is
+   * waited for. A decider revoked after the request leaves it to wait, for the one who asked to
+   * retract or for an admin granted since.
+   */
+  private async assertDecider(tx: Tx, requesterId: string, memberId: string): Promise<void> {
+    const [decider] = await tx
+      .select({ userId: schema.profiles.userId })
+      .from(schema.profiles)
+      .where(
+        and(
+          eq(schema.profiles.role, 'admin'),
+          notInArray(schema.profiles.userId, [requesterId, memberId]),
+        ),
+      )
+      .limit(1);
+    if (!decider) throw refused('no_decider');
   }
 
   /**

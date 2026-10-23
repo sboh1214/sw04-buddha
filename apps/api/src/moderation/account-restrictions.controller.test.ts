@@ -16,7 +16,7 @@
  * are unset.
  */
 import { randomUUID } from 'node:crypto';
-import { clockTimestamp, schema } from '@buddha/db';
+import { clockTimestamp, lockAdminRoles, schema } from '@buddha/db';
 import {
   completeOnboarding,
   createApprovalRequest,
@@ -42,7 +42,7 @@ import {
   type MyModerationAction,
   type RestrictedDetails,
 } from '@buddha/shared';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ApprovalService } from '../approvals/approval.service.js';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -373,6 +373,334 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         ).statusCode,
       ).toBe(400);
       expect((await approve(randomUUID())).statusCode).toBe(404);
+    });
+  });
+
+  describe('a request’s life and memo (owner decision 2026-10-23)', () => {
+    const retract = (requestId: string, by: TestUser = admin) =>
+      send(`/admin/moderation/account-restriction-requests/${requestId}/retract`, {}, by);
+    const queue = async (status: 'pending' | 'decided' | 'retracted', who: TestUser = second) =>
+      dataOf<unknown[]>(
+        await read(`/admin/moderation/account-restriction-requests?status=${status}`, who),
+      ).map((item) => accountRestrictionRequestSchema.parse(item));
+    async function revoke(who: TestUser): Promise<void> {
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'user' })
+        .where(eq(schema.profiles.userId, who.id));
+      await t.app.get(AdminGuard).invalidate(who.id);
+    }
+    const stored = (id: string) =>
+      t.db
+        .select()
+        .from(schema.approvalRequests)
+        .where(eq(schema.approvalRequests.id, id))
+        .then((rows) => rows[0]);
+    /**
+     * `sending()` made while a grant or revoke of `who` is in flight, as AdminAccountsService makes
+     * one — the admin-roles lock held exclusively, the role written, not committed: it must wait on
+     * that lock (an advisory one, seen in pg_stat_activity) until the role change commits, and is
+     * answered after.
+     */
+    async function behindRole(
+      who: TestUser,
+      role: 'admin' | 'user',
+      sending: () => Promise<Res>,
+    ): Promise<Res> {
+      let written = () => {};
+      const writing = new Promise<void>((resolve) => {
+        written = resolve;
+      });
+      let commit = () => {};
+      const committing = new Promise<void>((resolve) => {
+        commit = resolve;
+      });
+      const observer = await t.db.$client.connect();
+      const changing = t.db.transaction(async (tx) => {
+        await lockAdminRoles(tx, 'exclusive');
+        await tx.update(schema.profiles).set({ role }).where(eq(schema.profiles.userId, who.id));
+        written();
+        await committing;
+      });
+      try {
+        await Promise.race([writing, changing]);
+        const pending = sending();
+        try {
+          await waitForLockWaiter(observer, 'the request behind the role change in flight');
+          const { rows } = await observer.query(
+            `SELECT count(*)::int AS n FROM pg_stat_activity
+               WHERE datname = current_database() AND pid <> pg_backend_pid()
+                 AND wait_event_type = 'Lock' AND wait_event = 'advisory'`,
+          );
+          expect((rows[0] as { n: number }).n).toBe(1);
+        } finally {
+          commit();
+          await changing;
+          await t.app.get(AdminGuard).invalidate(who.id);
+        }
+        return await pending;
+      } finally {
+        commit();
+        observer.release();
+      }
+    }
+
+    it('lets the one who asked retract a request before its decision — recorded with who and when, decided by no one after — and no one else', async () => {
+      const request = requestOf(await ask(7));
+      // Another admin, and a member, retract nothing.
+      expect(approvalRefusalOf(await retract(request.id, second))).toBe('not_requester');
+      expect((await retract(request.id, member)).statusCode).toBe(403);
+      expect((await stored(request.id))!.status).toBe('pending');
+
+      const retracted = requestOf(await retract(request.id));
+      expect(retracted).toMatchObject({
+        id: request.id,
+        status: 'retracted',
+        requestedBy: { id: admin.id },
+        decidedBy: null,
+        decisionReason: null,
+        decidedAt: null,
+        moot: null,
+      });
+      expect(Date.parse(retracted.retractedAt!)).toBeGreaterThan(Date.parse(request.requestedAt));
+      expect(await audits('account_restriction_retract')).toEqual([
+        expect.objectContaining({
+          adminId: admin.id,
+          targetType: 'approval_request',
+          targetId: request.id,
+          payload: {
+            requestId: request.id,
+            change: 'apply',
+            actionId: null,
+            userId: member.id,
+          },
+        }),
+      ]);
+      // Closed: decided by no one, retracted once, nothing in force.
+      expect(approvalRefusalOf(await approve(request.id))).toBe('retracted');
+      expect(approvalRefusalOf(await reject(request.id))).toBe('retracted');
+      expect(approvalRefusalOf(await retract(request.id))).toBe('retracted');
+      expect(await accountActions()).toEqual([]);
+      expect(await mine()).toEqual({ restriction: null, accountRestriction: null });
+      // Off the waiting list and the member's page, on its own list — not the decided one.
+      expect((await queue('pending')).map((item) => item.id)).toEqual([]);
+      expect((await queue('decided')).map((item) => item.id)).toEqual([]);
+      expect(await queue('retracted')).toEqual([
+        expect.objectContaining({ id: request.id, retractedAt: retracted.retractedAt }),
+      ]);
+      expect(
+        adminUserModerationSchema.parse(
+          dataOf(await read(`/admin/moderation/users/${member.id}`, second)),
+        ).accountRestrictionRequests,
+      ).toEqual([]);
+
+      // A decided request is not retracted; a change of a restriction is retracted the same way,
+      // a moot one too.
+      const decided = requestOf(await ask(3));
+      const action = decisionOf(await approve(decided.id)).action!;
+      expect(approvalRefusalOf(await retract(decided.id))).toBe('decided');
+      const lift = requestOf(await askChange(action.id, 'lift'));
+      const cancel = requestOf(await askChange(action.id, 'cancel'));
+      decisionOf(await approve(cancel.id));
+      const moot = (await queue('pending')).find((item) => item.id === lift.id);
+      expect(moot?.moot).toBe('cancelled');
+      expect(requestOf(await retract(lift.id))).toMatchObject({
+        status: 'retracted',
+        actionId: action.id,
+      });
+      expect(
+        (await audits('account_restriction_retract')).find((row) => row.targetId === lift.id)
+          ?.payload,
+      ).toEqual({
+        requestId: lift.id,
+        change: 'lift',
+        actionId: action.id,
+        userId: member.id,
+      });
+      // Retracted latest first, a page at a time to the last.
+      const pages: string[][] = [];
+      let cursor: string | null = null;
+      do {
+        const res = await read(
+          `/admin/moderation/account-restriction-requests?status=retracted&limit=1${cursor === null ? '' : `&cursor=${encodeURIComponent(cursor)}`}`,
+          second,
+        );
+        pages.push(dataOf<{ id: string }[]>(res).map((item) => item.id));
+        cursor = res.json<{ meta: { nextCursor: string | null } }>().meta.nextCursor;
+      } while (cursor !== null && pages.length < 5);
+      expect(pages).toEqual([[lift.id], [request.id]]);
+    });
+
+    it('retracts, approves and rejects only a request of #139: another consumer’s is not found and stays pending', async () => {
+      // Requests of another two-person consumer (#78, #144, #152, #130 — none lets its requests be
+      // retracted), asked by the admin: one naming a real moderation action and one naming the
+      // member, so neither a missing target nor the action's lookup refuses them — only the kind.
+      const warning = await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        type: 'warning',
+      });
+      const others = [
+        await createApprovalRequest(t.db, {
+          kind: 'test_kind',
+          targetType: 'moderation_action',
+          targetId: warning.id,
+          payload: null,
+          requestedBy: admin.id,
+        }),
+        await createApprovalRequest(t.db, {
+          kind: 'test_kind',
+          targetType: 'user',
+          targetId: member.id,
+          payload: null,
+          requestedBy: admin.id,
+        }),
+      ];
+      for (const request of others) {
+        errorOf(await retract(request.id), 404, 'NOT_FOUND');
+        errorOf(await approve(request.id), 404, 'NOT_FOUND');
+        errorOf(await reject(request.id), 404, 'NOT_FOUND');
+        expect(await stored(request.id)).toEqual(request);
+        expect(request).toMatchObject({ status: 'pending', retractedAt: null, decidedBy: null });
+      }
+      for (const type of [
+        'account_restriction_retract',
+        'account_restriction_approve',
+        'account_restriction_reject',
+      ]) {
+        expect(await audits(type)).toEqual([]);
+      }
+      expect(await accountActions()).toEqual([]);
+    });
+
+    it('refuses a request no admin could decide — none but the one asking and the member — and takes it once one could', async () => {
+      // Two admins, as the seed has: the market's maker (an admin the factory made) is one no more.
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'user' })
+        .where(
+          and(
+            eq(schema.profiles.role, 'admin'),
+            notInArray(schema.profiles.userId, [admin.id, second.id]),
+          ),
+        );
+      // One asks about the other, and no third could decide it.
+      expect(refusalOf(await ask(7, second))).toBe('no_decider');
+      expect(await t.db.select().from(schema.approvalRequests)).toEqual([]);
+      expect(await audits('account_restriction_request')).toEqual([]);
+      // A third admin can: the request is taken, and decided by that admin alone.
+      const third = await anAdmin();
+      const onSecond = requestOf(await ask(7, second));
+      const action = decisionOf(await approve(onSecond.id, third)).action!;
+      // Revoked since, the third admin leaves a change about the second undecidable: refused.
+      await revoke(third);
+      expect(refusalOf(await askChange(action.id, 'lift'))).toBe('no_decider');
+      expect(refusalOf(await askChange(action.id, 'cancel'))).toBe('no_decider');
+      expect(
+        refusalOf(
+          await askChange(action.id, 'shorten', {
+            endsAt: new Date(Date.now() + DAY_MS).toISOString(),
+          }),
+        ),
+      ).toBe('no_decider');
+      // A member's request needs another admin than the one asking: with one admin left, none.
+      await revoke(second);
+      expect(refusalOf(await ask(7))).toBe('no_decider');
+      expect((await t.db.select().from(schema.approvalRequests)).map((row) => row.id)).toEqual([
+        onSecond.id,
+      ]);
+    });
+
+    it('asks for a decider under the admin-roles lock: a revoke in flight is waited for and refuses the request, a grant in flight is waited for and takes it (answer 13, 7-14)', async () => {
+      // Two admins, as the seed has, and a third: the only one who could decide about the second.
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'user' })
+        .where(
+          and(
+            eq(schema.profiles.role, 'admin'),
+            notInArray(schema.profiles.userId, [admin.id, second.id]),
+          ),
+        );
+      const third = await anAdmin();
+      const onSecond = requestOf(await ask(7, second));
+      const action = decisionOf(await approve(onSecond.id, third)).action!;
+      const ids = async () =>
+        (await t.db.select().from(schema.approvalRequests)).map((row) => row.id).sort();
+
+      // A change asked while the third's revoke is in flight (the role written, not committed): it
+      // waits for the revoke and is refused once that commits, with nothing recorded.
+      expect(refusalOf(await behindRole(third, 'user', () => askChange(action.id, 'lift')))).toBe(
+        'no_decider',
+      );
+      expect(await ids()).toEqual([onSecond.id]);
+      // A restriction asked while the third's grant is in flight: waited for, then taken — not refused
+      // for want of the admin the grant is making. And the other way round for each kind of request.
+      const applied = requestOf(await behindRole(third, 'admin', () => ask(3, second)));
+      expect(refusalOf(await behindRole(third, 'user', () => ask(1, second)))).toBe('no_decider');
+      const lift = requestOf(await behindRole(third, 'admin', () => askChange(action.id, 'lift')));
+      expect(await ids()).toEqual([onSecond.id, applied.id, lift.id].sort());
+      expect(
+        (await audits('account_restriction_request')).map((row) => row.targetId).sort(),
+      ).toEqual([onSecond.id, applied.id].sort());
+      expect((await audits('account_restriction_lift_request')).map((row) => row.targetId)).toEqual(
+        [lift.id],
+      );
+      // And the third, admin again, decides them.
+      expect(decisionOf(await reject(applied.id, third)).request.status).toBe('rejected');
+      expect(decisionOf(await reject(lift.id, third)).request.status).toBe('rejected');
+    });
+
+    it('keeps the operators’ memo for every operator — the one who asked, the one who decides and the rest, before the decision and after — never the member’s nor the admin’s it is about', async () => {
+      const memo = '같은 기기에서 다섯 계정 — 운영자만';
+      const request = requestOf(await ask(7, member, { memo: `  ${memo}  ` }));
+      expect(request.apply).toMatchObject({ memo, reason: { note: NOTE } });
+      expect(requestOf(await ask(3, member, { memo: '   ' })).apply?.memo).toBeNull();
+      expect(requestOf(await ask(3)).apply?.memo).toBeNull();
+      expect((await ask(3, member, { memo: '메'.repeat(501) })).statusCode).toBe(400);
+      // Every admin reads it on the queue — the one who asked as well as the one who decides —
+      // and on the member's page.
+      for (const who of [admin, second]) {
+        expect(
+          (await queue('pending', who)).find((item) => item.id === request.id)?.apply?.memo,
+        ).toBe(memo);
+      }
+      expect(
+        adminUserModerationSchema
+          .parse(dataOf(await read(`/admin/moderation/users/${member.id}`, second)))
+          .accountRestrictionRequests.find((item) => item.id === request.id)?.apply?.memo,
+      ).toBe(memo);
+      // In force, the member reads the restriction and its explanation, never the memo.
+      const decision = decisionOf(await approve(request.id));
+      expect(decision.request.apply?.memo).toBe(memo);
+      // Decided, still every admin's — an admin who decided nothing of it included.
+      const bystander = await anAdmin();
+      for (const who of [admin, second, bystander]) {
+        expect(
+          (await queue('decided', who)).find((item) => item.id === request.id)?.apply?.memo,
+        ).toBe(memo);
+      }
+      for (const path of ['/me/moderation/actions', '/me/moderation/restriction']) {
+        const res = await read(path, member);
+        expect(res.statusCode).toBe(200);
+        expect(res.body).not.toContain(memo);
+      }
+      expect(JSON.stringify(decision.action)).not.toContain(memo);
+      // About an admin: withheld from that admin, shown to the others.
+      const restrictedAdmin = await anAdmin();
+      const aboutAdmin = requestOf(await ask(7, restrictedAdmin, { memo }));
+      expect(aboutAdmin.apply?.memo).toBe(memo);
+      const asTarget = (await queue('pending', restrictedAdmin)).find(
+        (item) => item.id === aboutAdmin.id,
+      );
+      expect(asTarget).toMatchObject({ aboutViewer: true, apply: { memo: null } });
+      expect(
+        (await queue('pending', second)).find((item) => item.id === aboutAdmin.id),
+      ).toMatchObject({ aboutViewer: false, apply: { memo } });
+      expect(
+        (await audits('account_restriction_request')).find((row) => row.targetId === aboutAdmin.id)
+          ?.payload,
+      ).toMatchObject({ memo });
     });
   });
 

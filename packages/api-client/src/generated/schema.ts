@@ -340,7 +340,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The account restriction requests: `pending` (default) — those waiting for another admin’s decision, the one waiting longest first, each with what approving it would be refused for now (`moot`) — or `decided` — the latest decision first. No asking or deciding admin on a request about the admin reading it (`aboutViewer`) */
+        /** The account restriction requests: `pending` (default) — those waiting for another admin’s decision, the one waiting longest first, each with what approving it would be refused for now (`moot`) — `decided` — approved or rejected, the latest decision first — or `retracted` — retracted by the admin who asked, the latest first. No asking or deciding admin and no operators’ memo on a request about the admin reading it (`aboutViewer`) */
         get: operations["adminListAccountRestrictionRequests"];
         put?: never;
         post?: never;
@@ -359,7 +359,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands */
+        /** Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`, a retracted one `retracted`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands */
         post: operations["adminApproveAccountRestrictionRequest"];
         delete?: never;
         options?: never;
@@ -376,8 +376,25 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Reject an account restriction request, with a reason: nothing is done. The way a request not wanted any more is closed — requests do not expire and the admin who asked cannot take one back. The admin who asked cannot (`requester`), nor the member (`own`); a decided request is `decided` */
+        /** Reject an account restriction request, with a reason: nothing is done. Requests do not expire. The admin who asked cannot (`requester`) — they retract it instead — nor the member (`own`); a decided request is `decided`, a retracted one `retracted` */
         post: operations["adminRejectAccountRestrictionRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract an account restriction request the acting admin made, before anyone decides it: nothing is done, and it closes as `retracted` with when — decided by no one after. Anyone else is refused (`APPROVAL_NOT_ALLOWED` `not_requester`), and so is one decided (`decided`) or retracted (`retracted`) already. Answers the request */
+        post: operations["adminRetractAccountRestrictionRequest"];
         delete?: never;
         options?: never;
         head?: never;
@@ -410,7 +427,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Ask for an account restriction to be cancelled (취소), with a reason (operators only): once another admin approves, it ends at once and the member reads it cancelled — an ended one too. Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one on the acting admin `own` */
+        /** Ask for an account restriction to be cancelled (취소), with a reason (operators only): once another admin approves, it ends at once and the member reads it cancelled — an ended one too. Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one on the acting admin `own`, and with no admin but the acting one and the member to decide it `no_decider` */
         post: operations["adminRequestAccountRestrictionCancel"];
         delete?: never;
         options?: never;
@@ -427,7 +444,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Ask for a standing account restriction to be lifted early (조기 해제), with a reason (operators only): once another admin approves, it ends then and stays on the record as given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`) */
+        /** Ask for a standing account restriction to be lifted early (조기 해제), with a reason (operators only): once another admin approves, it ends then and stays on the record as given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`, `no_decider`) */
         post: operations["adminRequestAccountRestrictionLift"];
         delete?: never;
         options?: never;
@@ -444,7 +461,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Ask for a standing account restriction’s end to be brought forward (감경) to `endsAt`, with a reason (operators only), done once another admin approves: still to come (`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own` — each asked again on approval */
+        /** Ask for a standing account restriction’s end to be brought forward (감경) to `endsAt`, with a reason (operators only), done once another admin approves: still to come (`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own` — each asked again on approval — and with no admin but the acting one and the member to decide it, `no_decider` */
         post: operations["adminRequestAccountRestrictionShorten"];
         delete?: never;
         options?: never;
@@ -614,7 +631,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own` */
+        /** Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; with no admin but the acting one and the member to decide it, `no_decider`. An optional `memo` is for the operators (not the admin it is about), never the member */
         post: operations["adminRequestAccountRestriction"];
         delete?: never;
         options?: never;
@@ -2047,6 +2064,7 @@ export type components = {
     schemas: {
         AccountRestrictionApply: {
             days: number | null;
+            memo: string | null;
             reason: components["schemas"]["ActionReason"];
             subject: components["schemas"]["ModerationTarget"] | null;
         };
@@ -2057,6 +2075,8 @@ export type components = {
              */
             days: 1 | 3 | 7 | 30 | null;
             expectedAccountId: string;
+            /** @description The operators’ own memo, read by the admins (not one the request is about), plain text, at most 500 characters after trimming; optional, never shown to the member */
+            memo?: string | null;
             /** @description The explanation the member reads, plain text, at most 500 characters after trimming; required. Also the reason the approving admin reads */
             note: string;
             reason: components["schemas"]["AccountRestrictionReason"];
@@ -2093,6 +2113,8 @@ export type components = {
             requestedAt: string;
             requestedBy: components["schemas"]["AdminAccountActor"] | null;
             requestReason: string;
+            /** Format: date-time */
+            retractedAt: string | null;
             status: components["schemas"]["ApprovalStatus"];
             target: components["schemas"]["AccountRestrictionTarget"] | null;
             user: components["schemas"]["ModerationUser"];
@@ -2574,8 +2596,11 @@ export type components = {
             expectedAccountId: string;
             reason: string;
         };
+        ApprovalRetractionBody: {
+            expectedAccountId: string;
+        };
         /** @enum {string} */
-        ApprovalStatus: "pending" | "approved" | "rejected";
+        ApprovalStatus: "pending" | "approved" | "rejected" | "retracted";
         AuditFailure: {
             /** Format: date-time */
             createdAt: string;
@@ -5800,7 +5825,7 @@ export interface operations {
             query?: {
                 cursor?: string;
                 limit?: number;
-                status?: "pending" | "decided";
+                status?: "pending" | "decided" | "retracted";
             };
             header?: never;
             path?: never;
@@ -6009,6 +6034,87 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractAccountRestrictionRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRetractionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

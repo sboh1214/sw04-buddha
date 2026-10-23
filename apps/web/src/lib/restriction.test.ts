@@ -11,6 +11,7 @@ import {
   restrictionOf,
   restrictionTermText,
   restrictionsShown,
+  WRITE_PAGE_RESTRICTION_KINDS,
 } from './restriction';
 
 /**
@@ -196,6 +197,31 @@ describe('the banner’s restrictions (`GET /me/moderation/restriction`)', () =>
         NOW,
       ),
     ).toEqual([account]);
+  });
+
+  it('keeps the account restriction off the write page’s banner: MY 요약 and MY 설정 only (owner decision 2026-10-23)', () => {
+    const account = { kind: 'account' as const, endsAt: null };
+    const writing = { kind: 'writing' as const, endsAt: new Date(NOW + 1).toISOString() };
+    expect(WRITE_PAGE_RESTRICTION_KINDS).toEqual(['writing']);
+    expect(
+      restrictionsShown(
+        { ...none, accountRestriction: account },
+        NOW,
+        WRITE_PAGE_RESTRICTION_KINDS,
+      ),
+    ).toEqual([]);
+    expect(
+      restrictionsShown(
+        { restriction: writing, accountRestriction: account },
+        NOW,
+        WRITE_PAGE_RESTRICTION_KINDS,
+      ),
+    ).toEqual([writing]);
+    // The other pages speak of both.
+    expect(restrictionsShown({ restriction: writing, accountRestriction: account }, NOW)).toEqual([
+      writing,
+      account,
+    ]);
   });
 
   it('shows nothing while the read has not answered, nor when none stands', () => {

@@ -21,17 +21,19 @@ import {
  * user sees notice in MY»:
  *
  * - the first operator asks, from the member's page, for a 7-day account restriction — one of the
- *   owner's eight reasons and a required explanation, a term picked (none by default); nothing is
- *   in force while it waits (no banner for the member), and the operator who asked is offered no
- *   decision on it; the second operator finds it in 계정 제한 요청 and approves it with a reason —
- *   the term counts from the approval — and the member's page then lists it '진행 중' with who
- *   approved and why; the member sees the banner on MY 요약 and MY 설정 (the end and the way to
- *   조치·신고 내역, no reason, no operator), a new 소개 is refused with the account restriction's
- *   sentence, the end and that way, clearing it stays open, a post goes up (an account
- *   restriction blocks no writing, #57-12), and 조치·신고 내역 lists it with its reason, explanation,
- *   end and appeal deadline and no operator; the first operator then asks for its 조기 해제, the
- *   second approves it, and the banner goes while 조치·신고 내역 says '조기 해제됨' and the end it was
- *   given;
+ *   owner's eight reasons and a required explanation, a term picked (none by default), and the
+ *   operators' memo (optional, owner decision 2026-10-23); nothing is in force while it waits (no
+ *   banner for the member), and the operator who asked is offered no decision on it, only its
+ *   retraction; the second operator finds it in 계정 제한 요청 — with the memo — and approves it
+ *   with a reason — the term counts from the approval — and the member's page then lists it
+ *   '진행 중' with who approved and why; the member sees the banner on MY 요약 and MY 설정 (the end
+ *   and the way to 조치·신고 내역, no reason, no operator, no memo), a new 소개 is refused with the
+ *   account restriction's sentence, the end and that way, clearing it stays open, a post goes up
+ *   under no banner (an account restriction blocks no writing, #57-12, and its banner is MY 요약's
+ *   and MY 설정's only — owner decision 2026-10-23), and 조치·신고 내역 lists it with its reason,
+ *   explanation, end and appeal deadline and no operator or memo; the first operator then asks for
+ *   its 조기 해제, the second approves it, and the banner goes while 조치·신고 내역 says '조기 해제됨'
+ *   and the end it was given;
  * - from a reported post's page the first operator asks for its author's account restriction about
  *   that post — the request names the post — and the report stays pending until a decision; the
  *   second operator rejects the request with a reason — nothing is done, the report still waits,
@@ -40,7 +42,10 @@ import {
  *   member's page, for the 무기한 one's 감경: the request's line names that one — when it was given,
  *   its end now and its reason, linked to its row — and the end asked for; nothing changes until
  *   the second operator approves it, and then the row and the member's 조치·신고 내역 say 감경; its
- *   취소 is asked and approved the same way.
+ *   취소 is asked and approved the same way;
+ * - the first operator asks for a member's account restriction and retracts it before anyone
+ *   decides it (owner decision 2026-10-23): it leaves the waiting list for 철회됨, with when, the
+ *   second operator can no longer decide it, and nothing is in force.
  *
  * Every rule's branch (the two-person rule's refusals, the moot requests, the triggers, the trading
  * check, the privacy guard) is the API's test (account-restrictions.controller.test.ts); the
@@ -235,6 +240,10 @@ test.describe('계정 제한', () => {
       await asking.getByTestId('moderation-reason').selectOption('multi_account');
       const note = `한 사람이 여러 계정으로 거래했습니다 ${tag}`;
       await asking.getByTestId('moderation-note').fill(note);
+      // The operators' memo: optional, for the operators (the one asking too), never the member's.
+      await expect(dialog).toContainText(copy.adminModerationAccountMemoHint);
+      const memo = `같은 기기에서 다섯 계정 ${tag}`;
+      await asking.getByTestId('moderation-memo').fill(memo);
       const request = await sendDialog<Request>(
         asking,
         `/api/v1/admin/moderation/users/${member.id}/account-restriction`,
@@ -251,11 +260,16 @@ test.describe('계정 제한', () => {
       );
       await expect(waiting.getByTestId('account-request-term')).toContainText('7일');
       await expect(waiting).toContainText(note);
+      await expect(waiting.getByTestId('account-request-memo')).toContainText(memo);
       await expect(waiting.getByTestId('account-request-own')).toHaveText(
         copy.adminAccountRequestOwn,
       );
       await expect(waiting.getByTestId('account-request-approve')).toHaveCount(0);
       await expect(waiting.getByTestId('account-request-reject')).toHaveCount(0);
+      // Its retraction is the one who asked's (owner decision 2026-10-23).
+      await expect(waiting.getByTestId('account-request-retract')).toHaveText(
+        copy.adminAccountRequestRetract,
+      );
 
       // --- the member: nothing is in force while it waits.
       await gotoWithRestrictionRead(page, '/my');
@@ -280,6 +294,8 @@ test.describe('계정 제한', () => {
       await expect(entry).toContainText(member.profile.nickname);
       await expect(entry).toContainText(copy.reportReasonMultiAccount);
       await expect(entry).toContainText(askingMe.profile.nickname);
+      await expect(entry.getByTestId('account-request-memo')).toContainText(memo);
+      await expect(entry.getByTestId('account-request-retract')).toHaveCount(0);
       await entry.getByTestId('account-request-approve').click();
       const approve = approving.getByTestId('account-request-approve-dialog');
       await expect(approve).toContainText(copy.adminAccountRequestApproveApplyBody);
@@ -353,6 +369,7 @@ test.describe('계정 제한', () => {
       );
       for (const hidden of [
         note,
+        memo,
         copy.reportReasonMultiAccount,
         approvalReason,
         askingMe.profile.nickname,
@@ -382,11 +399,10 @@ test.describe('계정 제한', () => {
       await page.getByTestId('bio-save').click();
       await expect(page.getByText(copy.bioCleared)).toBeVisible();
 
-      // An account restriction blocks no writing (#57-12): a post goes up.
+      // An account restriction blocks no writing (#57-12): a post goes up, under no banner — the
+      // account restriction's is MY 요약's and MY 설정's only (owner decision 2026-10-23).
       await gotoWithRestrictionRead(page, `/community/write?market=${market.id}`);
-      await expect(page.getByTestId('post-write-sanction-banner')).toContainText(
-        copy.restrictionAccountTitle,
-      );
+      await expect(page.getByTestId('post-write-sanction-banner')).toHaveCount(0);
       await page.getByTestId('post-title-input').fill(`계정 제한 중 글 ${tag}`);
       await page.getByTestId('post-editor-content').click();
       await page.keyboard.type(`계정 제한 중 본문 ${tag}`);
@@ -411,6 +427,7 @@ test.describe('계정 제한', () => {
       await expect(item.getByTestId('my-action-subject')).toHaveCount(0);
       for (const hidden of [
         approvalReason,
+        memo,
         askingMe.profile.nickname,
         approvingMe.profile.nickname,
       ]) {
@@ -690,6 +707,80 @@ test.describe('계정 제한', () => {
       await expect(row.getByTestId('moderation-action-cancelled')).toHaveText(
         copy.moderationCancelled,
       );
+      await gotoWithRestrictionRead(page, '/my');
+      await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
+    } finally {
+      await askingContext.close();
+    }
+  });
+  test('요청한 운영자가 결정 전에 요청을 철회하면 철회됨으로 닫혀 다른 운영자가 결정할 수 없고 아무것도 바뀌지 않는다', async ({
+    secondAdmin,
+    page,
+    browser,
+  }) => {
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const member = await meOf(page.request);
+    const approvingMe = await meOf(secondAdmin);
+
+    const askingContext = await browser.newContext();
+    try {
+      const asking = await askingContext.newPage();
+      await signIn(asking, adminAccount.email, adminAccount.password);
+      await asking.goto(`/admin/moderation/users/${member.id}`);
+      await asking.getByTestId('moderation-account-restrict').click();
+      await asking.getByTestId('moderation-term-3').click();
+      await asking.getByTestId('moderation-reason').selectOption('spam');
+      await asking.getByTestId('moderation-note').fill(`같은 광고를 되풀이했습니다 ${tag}`);
+      const request = await sendDialog<Request>(
+        asking,
+        `/api/v1/admin/moderation/users/${member.id}/account-restriction`,
+      );
+      await expect(asking.getByText(copy.adminModerationAccountRequested)).toBeVisible();
+
+      // --- 요청 철회 on the member's page: a confirmation, no reason asked.
+      const waiting = asking
+        .getByTestId('moderation-account-requests')
+        .getByTestId(`account-request-${request.id}`);
+      await waiting.getByTestId('account-request-retract').click();
+      const retract = asking.getByTestId('account-request-retract-dialog');
+      await expect(retract).toContainText(copy.adminAccountRequestRetractBody);
+      await expect(retract.getByTestId('moderation-record')).toHaveCount(0);
+      const retracted = await sendDialog<Request & { retractedAt: string | null }>(
+        asking,
+        `/api/v1/admin/moderation/account-restriction-requests/${request.id}/retract`,
+      );
+      expect(retracted.status).toBe('retracted');
+      await expect(asking.getByText(copy.adminAccountRequestRetracted)).toBeVisible();
+      await expect(waiting).toHaveCount(0);
+
+      // --- 계정 제한 요청's 철회됨: the request, 철회됨, when.
+      await asking.goto('/admin/moderation/account-restriction-requests');
+      await asking.getByTestId('admin-account-requests-queue-retracted').click();
+      await expect(asking).toHaveURL(
+        '/admin/moderation/account-restriction-requests?status=retracted',
+      );
+      const closed = asking.getByTestId(`account-request-${request.id}`);
+      await expect(closed.getByTestId('account-request-status')).toHaveText(
+        copy.approvalStatusRetracted,
+      );
+      await expect(closed.getByTestId('account-request-retracted-at')).toContainText(
+        kst(retracted.retractedAt!),
+      );
+      await expect(closed.getByTestId('account-request-retract')).toHaveCount(0);
+
+      // --- the second operator decides it no more.
+      const late = await secondAdmin.post(
+        `/api/v1/admin/moderation/account-restriction-requests/${request.id}/approve`,
+        { data: { reason: `늦은 승인 ${tag}`, expectedAccountId: approvingMe.id } },
+      );
+      expect(late.status(), await late.text()).toBe(409);
+      expect(
+        ((await late.json()) as { error: { details: { message: string }[] } }).error.details[0]
+          ?.message,
+      ).toBe('retracted');
+
+      // --- nothing in force for the member.
       await gotoWithRestrictionRead(page, '/my');
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
     } finally {

@@ -34,8 +34,9 @@ export const ERROR_CODES = [
    */
   'ROLE_CHANGE_NOT_ALLOWED',
   /**
-   * A decision on a two-person request the rule refuses: the decider requested it, or it is
-   * decided already. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
+   * A decision on a two-person request the rule refuses: the decider requested it, it is decided
+   * already, or its requester retracted it; or a retraction by anyone but the requester, or of one
+   * no longer pending. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
    */
   'APPROVAL_NOT_ALLOWED',
   /**
@@ -141,8 +142,9 @@ export const ERROR_CODES = [
    * operator, the item is hidden already or deleted, there is nothing to take away, the action
    * was cancelled already, a report was processed already, a warning or a restriction names a
    * post or a comment of another member, or a shortening or a lift is not of a writing
-   * restriction, of one that ended already, or not to an earlier end still to come. Details carry
-   * the reason, moderationNotAllowedDetailsSchema.
+   * restriction, of one that ended already, or not to an earlier end still to come — or an account
+   * restriction request no admin could decide (none but the one asking and the member). Details
+   * carry the reason, moderationNotAllowedDetailsSchema.
    */
   'MODERATION_NOT_ALLOWED',
   /**

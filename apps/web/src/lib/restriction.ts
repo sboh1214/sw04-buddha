@@ -163,25 +163,34 @@ export function restrictedMessage(
 }
 
 /**
+ * The restrictions the write page's banner speaks of: the writing restriction alone (owner decision
+ * 2026-10-23, ADR-0085: the account restriction's banner is MY 요약's and MY 설정's only — it
+ * refuses no post, #57-12). MY 요약 and MY 설정 speak of both (RESTRICTION_KINDS).
+ */
+export const WRITE_PAGE_RESTRICTION_KINDS: readonly RestrictionKind[] = ['writing'];
+
+/**
  * The restrictions the banner speaks of (ADR-0069 decision 4 #50: «진행 중인 제재가 있으면 MY 요약·
  * 글쓰기 화면의 안내 띠» — 제재 being 작성 제한 and 계정 제한, #45-12), from the member's own read of
  * them (`GET /me/moderation/restriction`) — of each kind the one that governs, the end a refused
  * write names — in RESTRICTION_KINDS' order (the writing restriction, then the account
- * restriction), each only while it stands: none while the read has not answered, and none whose end
- * has passed since by the browser's clock (a term ends by itself, #45-12: at its end and not
- * before). Empty when none stands.
+ * restriction) among the `kinds` its page shows (WRITE_PAGE_RESTRICTION_KINDS on the write page),
+ * each only while it stands: none while the read has not answered, and none whose end has passed
+ * since by the browser's clock (a term ends by itself, #45-12: at its end and not before). Empty
+ * when none stands.
  */
 export function restrictionsShown(
   answer: MyRestriction | undefined,
   // Read in render through this default: the member's restriction is never read on the server.
   now: number = Date.now(),
+  kinds: readonly RestrictionKind[] = RESTRICTION_KINDS,
 ): RestrictedDetails[] {
   if (answer === undefined) return [];
   const byKind: Readonly<Record<RestrictionKind, RestrictedDetails | null>> = {
     writing: answer.restriction,
     account: answer.accountRestriction,
   };
-  return RESTRICTION_KINDS.flatMap((kind) => {
+  return RESTRICTION_KINDS.filter((kind) => kinds.includes(kind)).flatMap((kind) => {
     const restriction = byKind[kind];
     if (restriction === null) return [];
     if (restriction.endsAt !== null && !(Date.parse(restriction.endsAt) > now)) return [];

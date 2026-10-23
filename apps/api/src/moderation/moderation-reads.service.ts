@@ -984,8 +984,9 @@ export class ModerationReadsService {
 
   /**
    * `GET /admin/moderation/account-restriction-requests`: `pending` — the requests waiting for a
-   * decision, the one waiting longest first — or `decided` — the latest decision first; a page at a
-   * time. A cursor that does not decode serves the first page.
+   * decision, the one waiting longest first — `decided` — approved or rejected, the latest decision
+   * first — or `retracted` — retracted by the one who asked, the latest first; a page at a time. A
+   * cursor that does not decode serves the first page.
    */
   async requestQueue(
     query: AccountRestrictionRequestQuery,
@@ -993,14 +994,21 @@ export class ModerationReadsService {
   ): Promise<Page<AccountRestrictionRequest>> {
     const { approvalRequests } = schema;
     const pending = query.status === 'pending';
+    const retracted = query.status === 'retracted';
     const cursor = decodeKeyset(query.cursor, 'uuid');
-    const sortKey = pending ? approvalRequests.requestedAt : approvalRequests.decidedAt;
+    const sortKey = pending
+      ? approvalRequests.requestedAt
+      : retracted
+        ? approvalRequests.retractedAt
+        : approvalRequests.decidedAt;
     const items = await this.requests(
       this.db,
       and(
         pending
           ? eq(approvalRequests.status, 'pending')
-          : inArray(approvalRequests.status, ['approved', 'rejected']),
+          : retracted
+            ? eq(approvalRequests.status, 'retracted')
+            : inArray(approvalRequests.status, ['approved', 'rejected']),
         cursor === undefined
           ? undefined
           : keysetPredicate(
@@ -1013,14 +1021,20 @@ export class ModerationReadsService {
       ),
       viewerId,
       pending
-        ? [asc(approvalRequests.requestedAt), asc(approvalRequests.id)]
-        : [desc(approvalRequests.decidedAt), desc(approvalRequests.id)],
+        ? [asc(sortKey), asc(approvalRequests.id)]
+        : [desc(sortKey), desc(approvalRequests.id)],
       query.limit + 1,
     );
     const hasMore = items.length > query.limit;
     const kept = hasMore ? items.slice(0, query.limit) : items;
     const last = kept.at(-1);
-    const lastAt = last ? (pending ? last.requestedAt : last.decidedAt) : null;
+    const lastAt = last
+      ? pending
+        ? last.requestedAt
+        : retracted
+          ? last.retractedAt
+          : last.decidedAt
+      : null;
     return {
       items: kept,
       nextCursor:
@@ -1085,6 +1099,7 @@ export class ModerationReadsService {
         decidedByNickname: deciderProfile.nickname,
         decisionReason: approvalRequests.decisionReason,
         decidedAt: approvalRequests.decidedAt,
+        retractedAt: approvalRequests.retractedAt,
       })
       .from(approvalRequests)
       .leftJoin(
@@ -1125,7 +1140,7 @@ export class ModerationReadsService {
                 reason: { code: row.changedReason, note: row.changedNote },
                 cancelledAt: row.changedCancelledAt?.toISOString() ?? null,
               },
-        apply: change === 'apply' ? applyOf(payload) : null,
+        apply: change === 'apply' ? applyOf(payload, withheld) : null,
         endsAt: requestedEnd?.toISOString() ?? null,
         requestReason: row.requestReason,
         requestedBy: withheld ? null : { id: row.requestedById, nickname: row.requestedByNickname },
@@ -1137,6 +1152,7 @@ export class ModerationReadsService {
             : { id: row.decidedById, nickname: row.decidedByNickname ?? '' },
         decisionReason: row.decisionReason,
         decidedAt: row.decidedAt?.toISOString() ?? null,
+        retractedAt: row.retractedAt?.toISOString() ?? null,
         moot:
           row.status !== 'pending' || change === 'apply' || row.changedType === null
             ? null
@@ -1180,8 +1196,12 @@ export function accountRestrictionMoot(
   return null;
 }
 
-/** What an `apply` request's payload asks for (AccountRestrictionService writes it). */
-function applyOf(payload: Record<string, unknown>): AccountRestrictionApply {
+/**
+ * What an `apply` request's payload asks for (AccountRestrictionService writes it), the operators'
+ * memo withheld from the admin the request is about (`withheld`): it is never the member's (owner
+ * decision 2026-10-23).
+ */
+function applyOf(payload: Record<string, unknown>, withheld: boolean): AccountRestrictionApply {
   const subject = moderationTargetSchema.safeParse(payload.subject);
   return {
     reason: {
@@ -1190,6 +1210,7 @@ function applyOf(payload: Record<string, unknown>): AccountRestrictionApply {
     },
     days: typeof payload.days === 'number' ? payload.days : null,
     subject: subject.success ? subject.data : null,
+    memo: !withheld && typeof payload.memo === 'string' ? payload.memo : null,
   };
 }
 

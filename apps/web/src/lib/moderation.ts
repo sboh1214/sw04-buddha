@@ -96,8 +96,10 @@ import { profilePath } from './profile';
  * restricted — one of the owner's eight reasons with a required explanation, 1, 3, 7 or 30 days or
  * 무기한, from an item's page or the member's — and for its 감경, early lift or cancellation, and
  * nothing is done until an admin who neither asked nor is the member approves; another rejects
- * what is not wanted. The member reads it as a writing restriction: on the banner, in 조치·신고
- * 내역 and in the refusal of a public profile item's new value.
+ * what is not wanted, or the one who asked retracts it first (owner decision 2026-10-23), with an
+ * optional memo for the operators alone. The member reads it as a writing restriction: on
+ * the banner of MY 요약 and MY 설정, in 조치·신고 내역 and in the refusal of a public profile item's
+ * new value.
  */
 
 // ---- addresses ---------------------------------------------------------------------------------
@@ -124,7 +126,7 @@ export const ADMIN_LINK_FLAGS_PATH = '/admin/moderation/link-flags';
 
 /**
  * 계정 제한 요청 (#139): the account restriction requests, the ones waiting for a decision first;
- * `?status=decided` is its other half.
+ * `?status=decided` and `?status=retracted` are its other two parts.
  */
 export const ADMIN_ACCOUNT_REQUESTS_PATH = '/admin/moderation/account-restriction-requests';
 
@@ -142,11 +144,11 @@ export function adminReportQueuePath(queue: AdminReportQueue): string {
     : `${ADMIN_REPORTS_PATH}?${ADMIN_REPORT_QUEUE_PARAM}=${queue}`;
 }
 
-/** The requests' half a `?status=` names: `decided` alone, `pending` for anything else. */
+/** The requests' part a `?status=` names: `decided`, `retracted`, `pending` for anything else. */
 export function adminAccountRequestQueueOf(
   param: string | string[] | null | undefined,
 ): AccountRestrictionRequestQueue {
-  return param === 'decided' ? 'decided' : 'pending';
+  return param === 'decided' || param === 'retracted' ? param : 'pending';
 }
 
 export function adminAccountRequestQueuePath(queue: AccountRestrictionRequestQueue): string {
@@ -1011,6 +1013,23 @@ export function accountRestrictionDraft(input: {
   };
 }
 
+/**
+ * The operators' memo on an account restriction request (owner decision 2026-10-23, ADR-0085):
+ * optional, for the operators and never the member — the text to send (null for none,
+ * blank included), or the error past MODERATION_REASON_MAX_LENGTH code points, normalised the
+ * server's way.
+ */
+export function accountRequestMemoDraft(text: string): {
+  memo: string | null;
+  error: string | null;
+} {
+  const memo = normaliseCommentBody(text);
+  if (codePointLength(memo) > MODERATION_REASON_MAX_LENGTH) {
+    return { memo, error: copy.errModerationMemoTooLong };
+  }
+  return { memo: memo === '' ? null : memo, error: null };
+}
+
 // ---- operators: the writing restriction (#185, ADR-0082) -------------------------------------
 
 /** One term of a restriction dialog: the radio's value, the days (null: 무기한) and its name. */
@@ -1165,18 +1184,23 @@ const APPROVAL_STATUS_LABELS: Readonly<Record<ApprovalStatus, string>> = {
   pending: copy.approvalStatusPending,
   approved: copy.approvalStatusApproved,
   rejected: copy.approvalStatusRejected,
+  retracted: copy.approvalStatusRetracted,
 };
 
-/** 승인 대기 · 승인됨 · 거절됨. */
+/** 승인 대기 · 승인됨 · 거절됨 · 철회됨. */
 export function approvalStatusLabel(status: ApprovalStatus): string {
   return APPROVAL_STATUS_LABELS[status];
 }
 
-/** A pending request waits (gray); an approved one acted (orange); a rejected one did nothing. */
+/**
+ * A pending request waits (gray); an approved one acted (orange); a rejected or a retracted one did
+ * nothing.
+ */
 export const APPROVAL_STATUS_PALETTE: Readonly<Record<ApprovalStatus, string>> = {
   pending: 'gray',
   approved: 'orange',
   rejected: 'gray',
+  retracted: 'gray',
 };
 
 const MOOT_TEXTS: Readonly<Record<AccountRestrictionMoot, string>> = {
@@ -1198,17 +1222,18 @@ export function accountRequestMootText(moot: AccountRestrictionMoot | null): str
 /**
  * What the reading operator may do with a request (ADR-0056 decision 1-7 and 4; decision 4 #50
  * «다른 운영자만»): `decide` — approve, unless it is moot, or reject; `requester` — they asked, so
- * another admin decides (APPROVAL_NOT_ALLOWED `requester` on the server, in every environment);
- * `own` — it is about them (`own`), its asking and deciding admins withheld from them; `decided` —
- * nothing more. Undefined while the session is unknown: the screen offers nothing until it knows.
+ * another admin decides (APPROVAL_NOT_ALLOWED `requester` on the server, in every environment) and
+ * they may retract it (owner decision 2026-10-23); `own` — it is about them (`own`), its asking and
+ * deciding admins withheld from them; `closed` — decided or retracted, nothing more. Undefined
+ * while the session is unknown: the screen offers nothing until it knows.
  */
-export type RequestStanding = 'decide' | 'requester' | 'own' | 'decided';
+export type RequestStanding = 'decide' | 'requester' | 'own' | 'closed';
 
 export function requestStanding(
   request: Pick<AccountRestrictionRequest, 'status' | 'user' | 'requestedBy' | 'aboutViewer'>,
   operatorId: string | undefined,
 ): RequestStanding | undefined {
-  if (request.status !== 'pending') return 'decided';
+  if (request.status !== 'pending') return 'closed';
   if (operatorId === undefined) return undefined;
   if (request.aboutViewer || request.user.id === operatorId) return 'own';
   if (request.requestedBy?.id === operatorId) return 'requester';
@@ -1230,6 +1255,8 @@ export function accountRequestMootNotice(
 const APPROVAL_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
   requester: copy.errApprovalRequester,
   decided: copy.errApprovalDecided,
+  retracted: copy.errApprovalRetracted,
+  not_requester: copy.errApprovalNotRequester,
 };
 
 const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> = {
@@ -1246,6 +1273,7 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
   end_passed: copy.errModerationEndPassed,
   approval_required: copy.errModerationApprovalRequired,
   not_account_restriction: copy.errModerationNotAccountRestriction,
+  no_decider: copy.errModerationNoDecider,
 };
 
 /**
@@ -1259,7 +1287,7 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
  * `ended`, `not_earlier`, `end_passed`) is MODERATION_NOT_ALLOWED's with the rest.
  */
 export type ModerationFailure =
-  | { kind: 'field'; field: 'note' | 'reason' | 'endsAt'; message: string }
+  | { kind: 'field'; field: 'note' | 'reason' | 'endsAt' | 'memo'; message: string }
   | { kind: 'alert'; message: string };
 
 export function moderationFailure(error: unknown): ModerationFailure {
@@ -1275,7 +1303,8 @@ export function moderationFailure(error: unknown): ModerationFailure {
     );
   }
   // The two-person rule's refusal (#139, ADR-0056 decision 4): the admin who asked decides
-  // nothing, and a request is decided once — `details[0].message` says which.
+  // nothing, a request is decided once, a retracted one by no one, and only the one who asked
+  // retracts it — `details[0].message` says which.
   if (isApiError(error, 'APPROVAL_NOT_ALLOWED')) {
     const refusal = APPROVAL_REFUSALS.find((reason) => reason === validationMessage(error));
     return alert(refusal === undefined ? copy.errUnknown : APPROVAL_REFUSAL_MESSAGES[refusal]);
@@ -1298,6 +1327,9 @@ export function moderationFailure(error: unknown): ModerationFailure {
     }
     if (field === 'endsAt') {
       return { kind: 'field', field: 'endsAt', message: copy.errModerationEndRequired };
+    }
+    if (field === 'memo') {
+      return { kind: 'field', field: 'memo', message: copy.errModerationMemoTooLong };
     }
     if (field === 'days') return alert(copy.errModerationTermRequired);
     if (field === 'reportIds') return alert(copy.errModerationReportIds);

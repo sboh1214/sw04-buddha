@@ -190,16 +190,18 @@ export type LiftRestrictionBody = components['schemas']['LiftRestrictionBody'];
 export type RestrictionEndChange = components['schemas']['RestrictionEndChange'];
 /**
  * 계정 제한 (#139, ADR-0085): the body of a request to restrict a member's account (one of the
- * owner's eight reasons, the explanation the member reads — required — the term, and what it is
- * about), one request as operators read it (what it asks, who asked, its decision, and what would
- * refuse its approval now — `moot`), the answer of a decision (the request and the restriction as
- * it stands), the body of a decision (the deciding admin's reason), and another admin's approval
- * as a restriction, its cancellation and each change of its end carry it.
+ * owner's eight reasons, the explanation the member reads — required — the term, what it is
+ * about, and the operators' memo — optional), one request as operators read it (what it asks, who
+ * asked, its decision or its retraction, and what would refuse its approval now — `moot`), the
+ * answer of a decision (the request and the restriction as it stands), the body of a decision (the
+ * deciding admin's reason) and of a retraction (the screen's admin alone), and another admin's
+ * approval as a restriction, its cancellation and each change of its end carry it.
  */
 export type AccountRestrictionBody = components['schemas']['AccountRestrictionBody'];
 export type AccountRestrictionRequest = components['schemas']['AccountRestrictionRequest'];
 export type AccountRestrictionDecision = components['schemas']['AccountRestrictionDecision'];
 export type ApprovalDecisionBody = components['schemas']['ApprovalDecisionBody'];
+export type ApprovalRetractionBody = components['schemas']['ApprovalRetractionBody'];
 export type ModerationApproval = components['schemas']['ModerationApproval'];
 export type DismissReportsBody = components['schemas']['DismissReportsBody'];
 export type DismissedReports = components['schemas']['DismissedReports'];

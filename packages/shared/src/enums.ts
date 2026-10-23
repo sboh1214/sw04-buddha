@@ -352,10 +352,11 @@ export const ADMIN_ACTION_TYPES = [
   /**
    * An operator asked for an account restriction (계정 제한, #139, ADR-0085) — nothing is in force
    * until another admin approves it (ADR-0056 decision 1-7): target `approval_request` / the
-   * request's id, payload `{requestId, userId, subject, days, reason, note}` — the term asked for
-   * (`days`, null for 무기한), the reason the member will read and what it is about (a post, a
-   * comment or the profile, whose pending reports its approval resolves). Written in the
-   * transaction that inserts the `approval_requests` row.
+   * request's id, payload `{requestId, userId, subject, days, reason, note, memo}` — the term asked
+   * for (`days`, null for 무기한), the reason the member will read, the operators' own memo (null
+   * for none; owner decision 2026-10-23) and what it is about (a post, a comment or the profile,
+   * whose pending reports its approval resolves). Written in the transaction that inserts the
+   * `approval_requests` row.
    */
   'account_restriction_request',
   /**
@@ -388,6 +389,13 @@ export const ADMIN_ACTION_TYPES = [
    * given).
    */
   'account_restriction_reject',
+  /**
+   * The operator who asked for an account restriction step retracted the request before anyone
+   * decided it (owner decision 2026-10-23, ADR-0085), nothing done: the same target, payload
+   * `{requestId, change, actionId, userId}` (`actionId` null for an `apply`). The actor is the one
+   * who asked — no one else retracts it.
+   */
+  'account_restriction_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -413,9 +421,10 @@ export const releaseSettingStatusSchema = z
 /**
  * approval_requests.status (Postgres enum `approval_status`): a request waits as `pending` until
  * an admin other than its requester decides it, once, as `approved` or `rejected`
- * (approvals.ts).
+ * (approvals.ts) — or until its requester retracts it, `retracted`, where its consumer allows
+ * that (#139, ADR-0085; migration 0040): closed with no decision, decided by no one.
  */
-export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected', 'retracted'] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 export const approvalStatusSchema = z.enum(APPROVAL_STATUSES).meta({ id: 'ApprovalStatus' });
 

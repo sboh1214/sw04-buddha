@@ -4029,6 +4029,70 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ]);
     });
 
+    it('takes a retraction: retracted at its instant with no decision, and never changed after (migration 0040, #139)', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      const retraction = { status: 'retracted' as const, retractedAt: new Date() };
+      // The retraction's instant comes with it and only with it, and no decision with it.
+      for (const set of [
+        { status: 'retracted' as const },
+        { retractedAt: new Date() },
+        { ...retraction, decidedBy: decider.id },
+        { ...retraction, ...decision(decider.id) },
+        { ...decision(decider.id), retractedAt: new Date() },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+          JSON.stringify(Object.keys(set)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_decision_check',
+        );
+      }
+      // Never inserted retracted, nor pending with a retraction's instant.
+      const base = {
+        kind: 'test_kind',
+        requestedBy: requester.id,
+        requestReason: '요청 사유',
+        requestedAt: new Date(),
+      };
+      await expect(
+        t.db.insert(approvalRequests).values({ ...base, ...retraction }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await expect(
+        t.db.insert(approvalRequests).values({ ...base, retractedAt: new Date() }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_decision_check',
+      );
+      await t.db.update(approvalRequests).set(retraction).where(eq(approvalRequests.id, row.id));
+      // Closed: no decision, no second retraction, not back to pending.
+      for (const set of [
+        { ...decision(decider.id), retractedAt: null },
+        decision(decider.id, 'rejected'),
+        { retractedAt: new Date() },
+        { status: 'pending' as const, retractedAt: null },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      expect(await t.db.select().from(approvalRequests)).toMatchObject([
+        { status: 'retracted', decidedBy: null, decisionReason: null, decidedAt: null },
+      ]);
+      // A decided request is not retracted either.
+      const decided = await request(requester.id);
+      await t.db
+        .update(approvalRequests)
+        .set(decision(decider.id))
+        .where(eq(approvalRequests.id, decided.id));
+      await expect(
+        t.db
+          .update(approvalRequests)
+          .set({ ...retraction, decidedBy: null, decisionReason: null, decidedAt: null })
+          .where(eq(approvalRequests.id, decided.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+    });
+
     it('refuses a decision by an account that is not an admin as it decides, whoever writes it', async () => {
       // buddha_app keeps UPDATE: a write past ApprovalService must not make a member's (or a
       // revoked admin's) approval look like another admin's.

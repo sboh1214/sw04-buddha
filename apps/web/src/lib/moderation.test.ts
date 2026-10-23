@@ -103,6 +103,7 @@ import {
   ACCOUNT_RESTRICTION_TERM_OPTIONS,
   ADMIN_ACCOUNT_REQUESTS_PATH,
   accountRequestChangeLabel,
+  accountRequestMemoDraft,
   accountRequestMootNotice,
   accountRequestMootText,
   accountRestrictionDraft,
@@ -1438,7 +1439,12 @@ describe('operators', () => {
       user: { id: USER, nickname: '회원', publicId: 'p1', role: 'user' },
       actionId: null,
       target: null,
-      apply: { reason: { code: 'multi_account', note: '설명' }, days: 7, subject: null },
+      apply: {
+        reason: { code: 'multi_account', note: '설명' },
+        days: 7,
+        subject: null,
+        memo: null,
+      },
       endsAt: null,
       requestReason: '설명',
       requestedBy: { id: 'admin-a', nickname: '운영자A' },
@@ -1447,6 +1453,7 @@ describe('operators', () => {
       decidedBy: null,
       decisionReason: null,
       decidedAt: null,
+      retractedAt: null,
       moot: null,
       aboutViewer: false,
       ...overrides,
@@ -1455,12 +1462,16 @@ describe('operators', () => {
     it('lists its own requests’ page in the area and keeps it under admin', () => {
       expect(ADMIN_ACCOUNT_REQUESTS_PATH).toBe('/admin/moderation/account-restriction-requests');
       expect(adminAccountRequestQueueOf('decided')).toBe('decided');
-      for (const param of ['pending', undefined, null, 'x', ['decided']]) {
+      expect(adminAccountRequestQueueOf('retracted')).toBe('retracted');
+      for (const param of ['pending', undefined, null, 'x', ['decided'], ['retracted']]) {
         expect(adminAccountRequestQueueOf(param)).toBe('pending');
       }
       expect(adminAccountRequestQueuePath('pending')).toBe(ADMIN_ACCOUNT_REQUESTS_PATH);
       expect(adminAccountRequestQueuePath('decided')).toBe(
         `${ADMIN_ACCOUNT_REQUESTS_PATH}?status=decided`,
+      );
+      expect(adminAccountRequestQueuePath('retracted')).toBe(
+        `${ADMIN_ACCOUNT_REQUESTS_PATH}?status=retracted`,
       );
       // Under the area's key: every action and decision re-reads it.
       expect(adminAccountRequestQueueKey('pending').slice(0, 2)).toEqual([...ADMIN_MODERATION_KEY]);
@@ -1562,6 +1573,7 @@ describe('operators', () => {
       expect(approvalStatusLabel('pending')).toBe('승인 대기');
       expect(approvalStatusLabel('approved')).toBe('승인됨');
       expect(approvalStatusLabel('rejected')).toBe('거절됨');
+      expect(approvalStatusLabel('retracted')).toBe('철회됨');
       expect(accountRequestMootText(null)).toBeNull();
       for (const moot of ['cancelled', 'ended', 'not_earlier', 'end_passed'] as const) {
         expect(accountRequestMootText(moot)).toContain('승인할 수 없습니다');
@@ -1605,16 +1617,49 @@ describe('operators', () => {
       // About the reader: their asking and deciding admins withheld, decided by another.
       expect(requestStanding(request({ aboutViewer: true, requestedBy: null }), USER)).toBe('own');
       expect(requestStanding(request({}), USER)).toBe('own');
-      for (const status of ['approved', 'rejected'] as const) {
-        expect(requestStanding(request({ status }), 'admin-b')).toBe('decided');
+      for (const status of ['approved', 'rejected', 'retracted'] as const) {
+        for (const reader of ['admin-a', 'admin-b']) {
+          expect(requestStanding(request({ status }), reader)).toBe('closed');
+        }
       }
+    });
+
+    it('lets the one who asked retract a waiting request, and says so on their line (owner decision 2026-10-23)', () => {
+      // The requester's standing is the one that offers '요청 철회' (moderation-parts.tsx).
+      expect(requestStanding(request({}), 'admin-a')).toBe('requester');
+      expect(copy.adminAccountRequestOwn).toContain('철회할 수 있습니다');
+      expect(copy.adminAccountRequestRetract).toBe('요청 철회');
+      expect(copy.adminAccountRequestRetractBody).toContain('누구도 승인하거나 거절할 수 없습니다');
+      expect(copy.adminAccountRequestsIntro).toContain('철회할 수 있습니다');
+      expect(copy.adminAccountRequestsIntro).not.toContain('다른 운영자가 사유와 함께 거절');
+    });
+
+    it('takes the operators’ memo as optional, never more than the server keeps (owner decision 2026-10-23)', () => {
+      expect(accountRequestMemoDraft('')).toEqual({ memo: null, error: null });
+      expect(accountRequestMemoDraft('  \n ')).toEqual({ memo: null, error: null });
+      expect(accountRequestMemoDraft(' 같은 기기 ')).toEqual({ memo: '같은 기기', error: null });
+      expect(accountRequestMemoDraft('가'.repeat(MODERATION_REASON_MAX_LENGTH)).error).toBeNull();
+      expect(accountRequestMemoDraft('가'.repeat(MODERATION_REASON_MAX_LENGTH + 1)).error).toBe(
+        copy.errModerationMemoTooLong,
+      );
+      expect(copy.adminModerationAccountMemoHint).toContain('회원에게는 보이지 않고');
+      // Every operator reads it — the one who asked too, before the decision and after (ADR-0085
+      // 7-5): the hint names no narrower reader than that.
+      expect(copy.adminModerationAccountMemoHint).toContain('운영자만 읽습니다');
+      expect(copy.adminModerationAccountMemoHint).not.toContain('결정하는');
+      // The server's refusal of it lands under the memo.
+      expect(
+        moderationFailure(
+          refused(400, 'VALIDATION_ERROR', [{ path: ['memo'], message: 'too long' }]),
+        ),
+      ).toEqual({ kind: 'field', field: 'memo', message: copy.errModerationMemoTooLong });
     });
 
     it('asks only the admin who can reject a moot request to reject it (ADR-0085 7-3)', () => {
       const moot = request({ change: 'lift', apply: null, moot: 'ended' });
       expect(accountRequestMootNotice(moot, 'decide')).toBe(copy.adminAccountRequestMootEnded);
       // The one who asked and the admin it is about decide nothing: no notice asks them to.
-      for (const standing of ['requester', 'own', 'decided', undefined] as const) {
+      for (const standing of ['requester', 'own', 'closed', undefined] as const) {
         expect(accountRequestMootNotice(moot, standing)).toBeNull();
       }
       expect(accountRequestMootNotice(request({}), 'decide')).toBeNull();
@@ -1631,6 +1676,14 @@ describe('operators', () => {
         kind: 'alert',
         message: copy.errApprovalDecided,
       });
+      expect(moderationFailure(approval('retracted'))).toEqual({
+        kind: 'alert',
+        message: copy.errApprovalRetracted,
+      });
+      expect(moderationFailure(approval('not_requester'))).toEqual({
+        kind: 'alert',
+        message: copy.errApprovalNotRequester,
+      });
       expect(moderationFailure(approval('something new'))).toEqual({
         kind: 'alert',
         message: copy.errUnknown,
@@ -1644,6 +1697,12 @@ describe('operators', () => {
         kind: 'alert',
         message: copy.errModerationNotAccountRestriction,
       });
+      // No admin but the one asking and the member could decide it (owner decision 2026-10-23).
+      expect(moderationFailure(notAllowed('no_decider'))).toEqual({
+        kind: 'alert',
+        message: copy.errModerationNoDecider,
+      });
+      expect(copy.errModerationNoDecider).toContain('결정할 운영자가 없습니다');
     });
   });
 
