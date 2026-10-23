@@ -74,7 +74,7 @@ interface LockedAction {
  * two-person rule (`approval_requests`, ApprovalService), and is done only by an admin who is
  * neither the one who asked (APPROVAL_NOT_ALLOWED `requester`, in every environment) nor the member
  * (`own`, decision 4 #50 «다른 운영자만»), in the transaction that writes the approval. Migration
- * 0040's triggers hold the same whoever writes: no account restriction, change of its end or
+ * 0042's triggers hold the same whoever writes: no account restriction, change of its end or
  * cancellation without its approved request.
  *
  * The record keeps what #57-12 asks — the reason (one of ACCOUNT_RESTRICTION_REASONS and the
@@ -522,7 +522,7 @@ export class AccountRestrictionService {
   /**
    * An approved `shorten` or `lift`: the restriction locked before the decision (see `approve`),
    * the rules asked again at `at`, the end brought forward and the change recorded (the asking
-   * operator's, its reason, the approval) — migration 0040's triggers hold that the change and the
+   * operator's, its reason, the approval) — migration 0042's triggers hold that the change and the
    * end go together.
    */
   private async changeEndApproved(

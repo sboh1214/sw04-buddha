@@ -15,7 +15,7 @@ import * as z from 'zod';
  * work runs on approval. A consumer names its `kind` and decides inside the transaction that does
  * the approved work (ApprovalService in apps/api). A retraction, where a consumer allows one (#139
  * does), is the requester's own and closes the request as `retracted` — no decision, decided by no
- * one — with its instant (`retracted_at`, migration 0040).
+ * one — with its instant (`retracted_at`, migration 0042).
  */
 
 /** Lower-case words joined by `_` (`market_open`); approval_requests.kind is varchar(40). */

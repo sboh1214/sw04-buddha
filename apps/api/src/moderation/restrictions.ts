@@ -30,7 +30,7 @@ export function writingRestrictionOf(
  * The account restriction in force on the account (계정 제한, #139, ADR-0085), or null — read as the
  * writing restriction is (`writingRestrictionOf`): the member's account restrictions not cancelled
  * whose end is still to come by the database clock, 무기한 over any term, else the latest end. Each
- * came into force by another admin's approval (ADR-0056 decision 1-7, migration 0040); nothing runs
+ * came into force by another admin's approval (ADR-0056 decision 1-7, migration 0042); nothing runs
  * when one ends (#57-12 «기간제는 끝나면 저절로 풀리고»).
  */
 export function accountRestrictionOf(

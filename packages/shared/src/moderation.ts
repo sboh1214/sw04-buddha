@@ -820,7 +820,7 @@ export const accountRestrictionChangeSchema = z
 
 /**
  * The two-person rule's `kind` of each change (approvals.ts: lower-case words joined by `_`) — the
- * names `approval_requests.kind` holds for #139 (migration 0040's triggers match them).
+ * names `approval_requests.kind` holds for #139 (migration 0042's triggers match them).
  */
 export const ACCOUNT_RESTRICTION_APPROVAL_KINDS = {
   apply: 'account_restriction',

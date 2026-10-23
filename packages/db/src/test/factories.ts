@@ -1051,7 +1051,7 @@ export interface CreateModerationActionInput {
   /**
    * An `account_restriction`'s approval (#139): the other admin who approves the request `createdBy`
    * asks for — a request of the kind `account_restriction` for the member, made and approved here
-   * (migration 0040 refuses the row without one). Required for that type, refused for the others.
+   * (migration 0042 refuses the row without one). Required for that type, refused for the others.
    */
   approvedBy?: string;
   /**
@@ -1166,7 +1166,7 @@ export interface CreateApprovalRequestInput {
    */
   decision?: { status: 'approved' | 'rejected'; by: string; reason?: string; at?: Date };
   /**
-   * Retracted by its requester instead (#139, migration 0040), a millisecond after the request
+   * Retracted by its requester instead (#139, migration 0042), a millisecond after the request
    * unless `at` is given. Not with `decision`.
    */
   retracted?: { at?: Date };

@@ -41,8 +41,8 @@ export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES);
 /**
  * 신고 사유 (#45-10): a report's reason, and the reason every moderation action carries (#50) —
  * with the two only an account restriction takes (#139, ADR-0069 decision 1 #57-12: 이상 거래 and
- * 다계정), added by migration 0040 at the end (MODERATION_REASONS). The tables' CHECKs hold a
- * report and every other action to REPORT_REASONS (migration 0040).
+ * 다계정), added by migration 0042 at the end (MODERATION_REASONS). The tables' CHECKs hold a
+ * report and every other action to REPORT_REASONS (migration 0042).
  */
 export const reportReasonEnum = pgEnum('report_reason', MODERATION_REASONS);
 export const reportTargetTypeEnum = pgEnum('report_target_type', REPORT_TARGET_TYPES);

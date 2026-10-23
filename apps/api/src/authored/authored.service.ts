@@ -182,7 +182,7 @@ const standingHide = alias(schema.moderationActions, 'standing_hide');
 
 /**
  * A standing hiding's reason, typed as the report reason it is: the `report_reason` enum also
- * holds the two only an account restriction takes (#139), and migration 0040's CHECK keeps every
+ * holds the two only an account restriction takes (#139), and migration 0042's CHECK keeps every
  * other action — a hiding among them — to REPORT_REASONS.
  */
 const STANDING_HIDE_REASON = sql<ReportReason | null>`${standingHide.reason}`;

@@ -19,7 +19,7 @@ import { approvalStatusEnum } from './enums.js';
  * who decided, when and why. Only the API's ApprovalService writes it.
  *
  * A request may instead be retracted by its requester before any decision, where its consumer
- * allows that (#139, migration 0040): `retracted`, with its instant (`retracted_at`) and no
+ * allows that (#139, migration 0042): `retracted`, with its instant (`retracted_at`) and no
  * decision — decided by no one, and as final as a decision (the triggers above refuse any change
  * of a row no longer pending). Who retracted it is its requester: ApprovalService lets no one else.
  *
@@ -27,7 +27,7 @@ import { approvalStatusEnum } from './enums.js';
  * `user`, the member), `account_restriction_shorten`, `account_restriction_lift` and
  * `account_restriction_cancel` (target `moderation_action`, the restriction); the action rows its
  * approvals bring in name them (`moderation_actions.approval_id`, `cancel_approval_id`,
- * `restriction_end_changes.approval_id`, migration 0040). Its requests may be retracted.
+ * `restriction_end_changes.approval_id`, migration 0042). Its requests may be retracted.
  */
 export const approvalRequests = pgTable(
   'approval_requests',
@@ -52,14 +52,14 @@ export const approvalRequests = pgTable(
     decisionReason: text(),
     decidedAt: timestampTz(),
     /**
-     * When its requester retracted it (#139, migration 0040): set exactly when `retracted`, from
+     * When its requester retracted it (#139, migration 0042): set exactly when `retracted`, from
      * the database clock.
      */
     retractedAt: timestampTz(),
   },
   (t) => [
     /**
-     * `status` compared as text: migration 0040 adds `retracted` to the enum in the batch that
+     * `status` compared as text: migration 0042 adds `retracted` to the enum in the batch that
      * replaces this CHECK, which cannot name the new value as the enum (55P04, migration 0014).
      */
     check(
@@ -75,7 +75,7 @@ export const approvalRequests = pgTable(
       sql`btrim(${t.requestReason}) <> '' AND btrim(${t.decisionReason}) IS DISTINCT FROM ''`,
     ),
     /**
-     * A target's requests (#139, migration 0040): a member's account restriction requests on their
+     * A target's requests (#139, migration 0042): a member's account restriction requests on their
      * moderation page, and a restriction's own — `target_id` is text, the member's account id or
      * the action's uuid.
      */

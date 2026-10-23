@@ -28,7 +28,7 @@ const END_CHANGE_KINDS_SQL = sql.raw(
 
 /**
  * REPORT_REASONS and ACCOUNT_RESTRICTION_REASONS as SQL text lists. The CHECKs compare the enum's
- * text (`reason::text`), never an enum literal: migration 0040 adds two values to `report_reason`
+ * text (`reason::text`), never an enum literal: migration 0042 adds two values to `report_reason`
  * in the same batch, and a value an `ADD VALUE` added may not be named as the enum there (55P04).
  */
 const REPORT_REASONS_SQL = sql.raw(REPORT_REASONS.map((reason) => `'${reason}'`).join(', '));
@@ -68,7 +68,7 @@ const ACCOUNT_RESTRICTION_REASONS_SQL = sql.raw(
  *   other type (the CHECK).
  * - `approval_id`: the approval that put an account restriction in force (#139, ADR-0056 decision
  *   1-7) — a request of the kind `account_restriction` for this member, asked for by `created_by`
- *   and approved by another admin who is not the member (migration 0040's trigger); its time is the
+ *   and approved by another admin who is not the member (migration 0042's trigger); its time is the
  *   action's. Exactly an account restriction has one (the CHECK).
  * - `cancel_approval_id`: the approval its cancellation came in by — kind
  *   `account_restriction_cancel`, for this action, asked for by `cancelled_by` (the trigger).

@@ -75,7 +75,7 @@ const ACCOUNT_RESTRICTION_KINDS: string[] = Object.values(ACCOUNT_RESTRICTION_AP
 /**
  * The member an account restriction request is about: an `apply`'s target (the account), or the
  * member of the restriction a change names. The approval's target, never its payload, so the
- * member read is the one the triggers of migration 0040 hold the restriction to.
+ * member read is the one the triggers of migration 0042 hold the restriction to.
  */
 const REQUEST_MEMBER_ID = sql<string>`CASE WHEN ${schema.approvalRequests.targetType} = 'user' THEN ${schema.approvalRequests.targetId} ELSE ${requestAction.userId} END`;
 

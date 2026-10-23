@@ -422,7 +422,7 @@ export const releaseSettingStatusSchema = z
  * approval_requests.status (Postgres enum `approval_status`): a request waits as `pending` until
  * an admin other than its requester decides it, once, as `approved` or `rejected`
  * (approvals.ts) — or until its requester retracts it, `retracted`, where its consumer allows
- * that (#139, ADR-0085; migration 0040): closed with no decision, decided by no one.
+ * that (#139, ADR-0085; migration 0042): closed with no decision, decided by no one.
  */
 export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected', 'retracted'] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
@@ -476,8 +476,8 @@ export const accountRestrictionReasonSchema = z
 
 /**
  * Every reason an operator's action may carry (Postgres enum `report_reason`, whose values come in
- * this order — the report reasons of migration 0038, then the two only an account restriction
- * takes, added by migration 0040): a report's reason is one of REPORT_REASONS (the reports' CHECK),
+ * this order — the report reasons of migration 0039, then the two only an account restriction
+ * takes, added by migration 0042): a report's reason is one of REPORT_REASONS (the reports' CHECK),
  * every action but an account restriction carries one of REPORT_REASONS too, and an account
  * restriction one of ACCOUNT_RESTRICTION_REASONS (moderation_actions' CHECK).
  */

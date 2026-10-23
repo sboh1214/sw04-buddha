@@ -1753,7 +1753,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
                 WHERE t.typname = ${name} ORDER BY e.enumsortorder`,
           )
         ).rows.map((row) => row.label);
-      // #139 (migration 0040): the two reasons only an account restriction takes, at the end.
+      // #139 (migration 0042): the two reasons only an account restriction takes, at the end.
       expect(await labels('report_reason')).toEqual([...MODERATION_REASONS]);
       expect(MODERATION_REASONS.slice(0, REPORT_REASONS.length)).toEqual([...REPORT_REASONS]);
       expect(await labels('report_target_type')).toEqual([...REPORT_TARGET_TYPES]);
@@ -4029,7 +4029,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ]);
     });
 
-    it('takes a retraction: retracted at its instant with no decision, and never changed after (migration 0040, #139)', async () => {
+    it('takes a retraction: retracted at its instant with no decision, and never changed after (migration 0042, #139)', async () => {
       const { user: requester } = await createUser(t.db, { role: 'admin' });
       const { user: decider } = await createUser(t.db, { role: 'admin' });
       const row = await request(requester.id);
