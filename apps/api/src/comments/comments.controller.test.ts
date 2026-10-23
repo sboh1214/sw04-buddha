@@ -466,10 +466,13 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       WHERE post_id = ${elsewhere.id}::uuid`);
     // Planned as a database with statistics plans them (autovacuum analyzes), not as a table never
     // measured, where a small partial index read off its leading columns can look cheapest — the
-    // plan the review found the deleted 대댓글 hiding behind. ANALYZE is the owner's.
+    // plan the review found the deleted 대댓글 hiding behind. The profiles the pages join are
+    // measured too: left unmeasured (some 290 rows assumed for the three here), the reply page
+    // could merge-join them down the authors' index and read every comment of the two authors,
+    // as the random ids of the accounts fell — about one run in three. ANALYZE is the owner's.
     const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
     try {
-      await owner.execute(sql`ANALYZE post_comments`);
+      await owner.execute(sql`ANALYZE post_comments, profiles`);
     } finally {
       await closeDb(owner);
     }
