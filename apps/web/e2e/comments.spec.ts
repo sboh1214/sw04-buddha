@@ -1067,6 +1067,18 @@ test.describe('댓글·대댓글', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
+    // The reader writes more 댓글·답글 here than one person may in a minute (#187: 5 a minute,
+    // WRITE_LIMITED with nothing written, ADR-0083 결정 4): each waits, when it must, until the
+    // oldest of the reader's last five has left the minute — counted from when it was sent, a
+    // second spare. The bulk is the admin's, which no limit counts.
+    const written: number[] = [];
+    const paced = async () => {
+      const fifthLast = written.at(-5);
+      if (fifthLast === undefined) return;
+      const wait = fifthLast + 61_000 - Date.now();
+      if (wait > 0) await page.waitForTimeout(wait);
+    };
+    const wrote = () => written.push(Date.now());
     const postId = await postThroughApi(page.request, market.id, `아주 긴 스레드 ${tag}`, tag);
     const top = await commentThroughApi(admin, postId, null, `답글 아주 많은 댓글 ${tag}`);
     // 50 shown, 250 the five pages read, and 60 more past them; written ten at a time (their order
@@ -1085,20 +1097,26 @@ test.describe('댓글·대댓글', () => {
       }
     };
     await replies(1, fifthPageLast - 1);
+    await paced();
     const onFifthPage = await commentThroughApi(
       page.request,
       postId,
       top,
       `내 ${String(fifthPageLast)}번째 답글 ${tag}`,
     );
+    wrote();
     const justPastBody = `내 ${String(fifthPageLast + 1)}번째 답글 ${tag}`;
+    await paced();
     const justPast = await commentThroughApi(page.request, postId, top, justPastBody);
+    wrote();
+    await paced();
     const nextPast = await commentThroughApi(
       page.request,
       postId,
       top,
       `내 ${String(fifthPageLast + 2)}번째 답글 ${tag}`,
     );
+    wrote();
     await replies(fifthPageLast + 3, total);
     const replyRequests: string[] = [];
     page.on('request', (request) => {
@@ -1117,7 +1135,9 @@ test.describe('댓글·대댓글', () => {
     await commentOf(page, top).getByTestId('comment-reply').click();
     const replyBox = thread.getByTestId('reply-composer');
     await replyBox.getByTestId('comment-input').fill(`새 답글 ${tag}`);
+    await paced();
     await replyBox.getByTestId('comment-submit').click();
+    wrote();
     await expect(replyBox).toHaveCount(0);
     await expect(shown).toHaveCount(51);
     await expect(shown.last().getByTestId('comment-body')).toHaveText(`새 답글 ${tag}`);
@@ -1160,7 +1180,9 @@ test.describe('댓글·대댓글', () => {
     replyRequests.length = 0;
     const box = page.getByTestId('comment-composer');
     await box.getByTestId('comment-input').fill(`새 댓글 ${tag}`);
+    await paced();
     await box.getByTestId('comment-submit').click();
+    wrote();
     await expect(page.getByTestId('comments-list').getByText(`새 댓글 ${tag}`)).toBeVisible();
     await expect(shown).toHaveCount(300);
     await expect(more).toBeVisible();
@@ -1356,7 +1378,9 @@ test.describe('댓글·대댓글', () => {
     await commentOf(page, ownTop).getByTestId('comment-reply').click();
     const ownReplyBox = page.getByTestId(`comment-thread-${ownTop}`).getByTestId('reply-composer');
     await ownReplyBox.getByTestId('comment-input').fill(`내 댓글의 답글 ${tag}`);
+    await paced();
     await ownReplyBox.getByTestId('comment-submit').click();
+    wrote();
     await expect(ownReplyBox).toHaveCount(0);
     await expect(heldUnderMine).toHaveCount(1);
     await expect(heldUnderMine.getByRole('alert')).toHaveText(copy.errCommentEditNotReopened);
@@ -1373,7 +1397,9 @@ test.describe('댓글·대댓글', () => {
     // the text stays, under its placeholder now, with why, read out as new; leaving asks first
     // (오너 결정 2026-10-22 (2차) 답 2: «아니면 그 글자를 맞는 까닭과 함께 따로 둔다»).
     await box.getByTestId('comment-input').fill(`또 새 댓글 ${tag}`);
+    await paced();
     await box.getByTestId('comment-submit').click();
+    wrote();
     await expect(page.getByTestId('comments-list').getByText(`또 새 댓글 ${tag}`)).toBeVisible();
     await expect(shown).toHaveCount(300);
     await expect(heldUnderMine).toHaveCount(0);
@@ -1414,7 +1440,9 @@ test.describe('댓글·대댓글', () => {
     });
     expect(deleted.status(), await deleted.text()).toBe(200);
     await box.getByTestId('comment-input').fill(`셋째 새 댓글 ${tag}`);
+    await paced();
     await box.getByTestId('comment-submit').click();
+    wrote();
     await expect(page.getByTestId('comments-list').getByText(`셋째 새 댓글 ${tag}`)).toBeVisible();
     await expect(shown).toHaveCount(300);
     await expect(heldUnderMine).toHaveCount(0);
@@ -1458,7 +1486,9 @@ test.describe('댓글·대댓글', () => {
     await commentOf(page, justPast).getByTestId('comment-edit').click();
     await pastForm.getByTestId('comment-input').fill(pastText);
     await box.getByTestId('comment-input').fill(`넷째 새 댓글 ${tag}`);
+    await paced();
     await box.getByTestId('comment-submit').click();
+    wrote();
     await expect(page.getByTestId('comments-list').getByText(`넷째 새 댓글 ${tag}`)).toBeVisible();
     await expect(shown).toHaveCount(300);
     await expect(pastForm).toHaveCount(0);
@@ -1473,7 +1503,9 @@ test.describe('댓글·대댓글', () => {
     });
     expect(removed.status(), await removed.text()).toBe(200);
     await box.getByTestId('comment-input').fill(`다섯째 새 댓글 ${tag}`);
+    await paced();
     await box.getByTestId('comment-submit').click();
+    wrote();
     await expect(
       page.getByTestId('comments-list').getByText(`다섯째 새 댓글 ${tag}`),
     ).toBeVisible();
@@ -1505,7 +1537,9 @@ test.describe('댓글·대댓글', () => {
     await commentOf(page, nextPast).getByTestId('comment-edit').click();
     await nextForm.getByTestId('comment-input').fill(nextText);
     await box.getByTestId('comment-input').fill(`여섯째 새 댓글 ${tag}`);
+    await paced();
     await box.getByTestId('comment-submit').click();
+    wrote();
     await expect(
       page.getByTestId('comments-list').getByText(`여섯째 새 댓글 ${tag}`),
     ).toBeVisible();
