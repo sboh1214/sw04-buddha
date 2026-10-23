@@ -27,6 +27,9 @@ export const LEDGER_TYPE_LABEL: Readonly<Record<LedgerEntryType, string>> = {
   PAYMENT_CANCEL: copy.ledgerTypePaymentCancel,
   PAYMENT_CANCEL_REVERSAL: copy.ledgerTypePaymentCancelReversal,
   START_GRANT: copy.ledgerTypeStartGrant,
+  // 탈퇴 소멸 (#140): written as the account closes, so no member's wallet ever lists it — the
+  // label is for completeness of the Record (an operator reads the ledger elsewhere).
+  CLOSURE_FORFEIT: copy.ledgerTypeClosureForfeit,
 };
 
 /**

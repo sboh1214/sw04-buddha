@@ -1,5 +1,5 @@
-import { desc } from 'drizzle-orm';
-import { bigint, bigserial, index, pgTable, text, varchar } from 'drizzle-orm/pg-core';
+import { desc, sql } from 'drizzle-orm';
+import { bigint, bigserial, index, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { createdAt } from './columns.js';
 import { ledgerEntryTypeEnum } from './enums.js';
@@ -28,5 +28,14 @@ export const ledgerEntries = pgTable(
   (t) => [
     index('ledger_entries_user_id_created_at_idx').on(t.userId, desc(t.createdAt)),
     index('ledger_entries_ref_type_ref_id_idx').on(t.refType, t.refId),
+    /**
+     * One forfeiture per closed account (#140, '탈퇴 소멸'): its entry refers to the account itself
+     * (`account_closure`), so a second closure — two requests at once — cannot forfeit twice.
+     * Migration 0041's triggers hold the rest: such an entry is the CLOSURE_FORFEIT of the account
+     * it names, and nothing is written for a closed account after it.
+     */
+    uniqueIndex('ledger_entries_account_closure_unique')
+      .on(t.refId)
+      .where(sql`${t.refType} = 'account_closure'`),
   ],
 );

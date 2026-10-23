@@ -169,7 +169,8 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       .select({ nickname: schema.profiles.nickname })
       .from(schema.profiles)
       .where(eq(schema.profiles.userId, userId));
-    return row!.nickname;
+    // An open account's (a closed one has none, #140).
+    return row!.nickname!;
   };
   const holds = () =>
     t.db

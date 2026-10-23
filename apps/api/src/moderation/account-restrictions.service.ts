@@ -15,7 +15,7 @@ import {
   type ParsedAccountRestrictionBody,
   type WarningSubject,
 } from '@buddha/shared';
-import { and, eq, notInArray } from 'drizzle-orm';
+import { and, eq, notInArray, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import {
   type ApprovalRequest,
@@ -206,6 +206,17 @@ export class AccountRestrictionService {
       if (!action) throw notFound('Action');
       if (action.userId === adminId) throw refused('own');
       if (action.type !== 'account_restriction') throw refused('not_account_restriction');
+      // The member's profile, held FOR KEY SHARE until the request commits, as `requestApply` holds
+      // it (FOR UPDATE): a closure in flight holds it FOR UPDATE from its start (#140), so a request
+      // about the member made meanwhile waits for it and comes after it. Otherwise one committed
+      // between the closure's look for the requests it closes and its commit would make migration
+      // 0041's check at that commit refuse the closure (`profiles_closed_completely`: a request
+      // about it waiting). Before the clock is read (infra/db/clock.ts).
+      await tx
+        .select({ one: sql`1` })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, action.userId))
+        .for('key share');
       const moot = accountRestrictionMoot(action, change, await clockTimestamp(tx), endsAt ?? null);
       if (moot !== null) throw refused(moot);
       await this.assertDecider(tx, adminId, action.userId);

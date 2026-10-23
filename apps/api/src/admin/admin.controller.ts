@@ -191,6 +191,7 @@ export class AdminController {
     summary: 'Credit or debit Coin with a mandatory reason (ADMIN_ADJUST)',
   })
   @ApiData(adminBalanceAdjustResultSchema)
+  // ACCOUNT_CLOSED: its member closed the account (#140) — its ledger ended with the forfeiture.
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -198,6 +199,7 @@ export class AdminController {
     'NOT_FOUND',
     'VALIDATION_ERROR',
     'INSUFFICIENT_BALANCE',
+    'ACCOUNT_CLOSED',
   )
   adjustBalance(
     @CurrentUser() admin: SessionUser,

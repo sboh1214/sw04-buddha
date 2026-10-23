@@ -278,17 +278,30 @@ interface MailpitMessage {
   Text: string;
 }
 
-/** The verify-email link of the newest Mailpit message addressed to `email`. */
-export async function verificationLink(email: string): Promise<string> {
+/** The Mailpit ids of every message addressed to `email`, newest first. */
+export async function mailMessageIds(email: string): Promise<string[]> {
+  const query = encodeURIComponent(`to:${email}`);
+  const search = (await (
+    await fetch(`${MAILPIT_URL}/api/v1/search?query=${query}`)
+  ).json()) as MailpitSearch;
+  return search.messages.map((message) => message.ID);
+}
+
+/**
+ * The verify-email link of the newest Mailpit message addressed to `email` that is not one of
+ * `seen` — the ids `mailMessageIds` gave before the mail was asked for, so a sign-up again with an
+ * address a closed account freed (#140, account-closure.spec.ts) never reads the first sign-up's
+ * mail for the second.
+ */
+export async function verificationLink(
+  email: string,
+  seen: readonly string[] = [],
+): Promise<string> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
-    const query = encodeURIComponent(`to:${email}`);
-    const search = (await (
-      await fetch(`${MAILPIT_URL}/api/v1/search?query=${query}`)
-    ).json()) as MailpitSearch;
-    const newest = search.messages[0];
-    if (newest) {
+    const newest = (await mailMessageIds(email)).find((id) => !seen.includes(id));
+    if (newest !== undefined) {
       const message = (await (
-        await fetch(`${MAILPIT_URL}/api/v1/message/${newest.ID}`)
+        await fetch(`${MAILPIT_URL}/api/v1/message/${newest}`)
       ).json()) as MailpitMessage;
       const match = /https?:\/\/\S+\/verify-email\?\S+/.exec(message.Text);
       if (match) return match[0];
@@ -435,12 +448,13 @@ export async function agreeOnScreen(page: Page): Promise<void> {
  * onboarding gate exists for (ADR-0043, #58), so onboarding.spec.ts starts from this.
  */
 export async function openSetPassword(page: Page, email: string): Promise<void> {
+  const seen = await mailMessageIds(email);
   await page.goto('/signup');
   await page.getByLabel(copy.email).fill(email);
   await page.getByRole('button', { name: copy.signupWithEmail }).click();
   await expect(page.getByTestId('signup-check-mail')).toBeVisible();
 
-  await page.goto(await verificationLink(email));
+  await page.goto(await verificationLink(email, seen));
   await expect(page).toHaveURL('/set-password');
 }
 

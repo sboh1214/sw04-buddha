@@ -1611,5 +1611,31 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         );
       expect(members).toHaveLength(1);
     });
+
+    it('reads an operator’s rejection as one even where the deciding admin is withheld, never as a closure’s (#140)', async () => {
+      // `decidedBy` is null both for the admin a request is about (withheld) and for a request a
+      // member's closure closed (no decider): `closedByAccountClosure` is the stored row's.
+      const restrictedAdmin = await anAdmin();
+      const request = requestOf(await ask(7, restrictedAdmin));
+      decisionOf(await reject(request.id));
+      const decided = async (who: TestUser) =>
+        dataOf<unknown[]>(
+          await read('/admin/moderation/account-restriction-requests?status=decided', who),
+        )
+          .map((item) => accountRestrictionRequestSchema.parse(item))
+          .find((item) => item.id === request.id);
+      expect(await decided(restrictedAdmin)).toMatchObject({
+        status: 'rejected',
+        decidedBy: null,
+        aboutViewer: true,
+        closedByAccountClosure: false,
+      });
+      expect(await decided(second)).toMatchObject({
+        status: 'rejected',
+        decidedBy: { id: second.id },
+        aboutViewer: false,
+        closedByAccountClosure: false,
+      });
+    });
   });
 });

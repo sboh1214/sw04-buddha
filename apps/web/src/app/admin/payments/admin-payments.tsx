@@ -21,6 +21,7 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useAdminPayments, useRefundPayment } from '@/hooks/use-admin-payments';
+import { nicknameShown } from '@/lib/account-closure';
 import { type AdminPayment } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { PAYMENT_STATUS_LABEL, PAYMENT_STATUS_PALETTE } from '@/lib/market-admin';
@@ -114,7 +115,7 @@ function PaymentRow({ payment }: { payment: AdminPayment }) {
     >
       <Stack gap="0.5" minW="0">
         <HStack gap="2" flexWrap="wrap">
-          <Text fontWeight="semibold">{payment.nickname}</Text>
+          <Text fontWeight="semibold">{nicknameShown(payment.nickname)}</Text>
           <Text>{formatCoin(parseCoinAmount(payment.amountCoin))}</Text>
           <Text color="fg.muted">{formatKrw(payment.priceKrw)}</Text>
           <Badge
@@ -256,8 +257,8 @@ function RefundDialog({
             <Dialog.Body>
               <Stack gap="3">
                 <Text fontWeight="medium">
-                  {payment.nickname} · {formatCoin(parseCoinAmount(payment.amountCoin))} ·{' '}
-                  {formatKrw(payment.priceKrw)}
+                  {nicknameShown(payment.nickname)} ·{' '}
+                  {formatCoin(parseCoinAmount(payment.amountCoin))} · {formatKrw(payment.priceKrw)}
                 </Text>
                 <Text>
                   {retry ? copy.adminPaymentRefundRetryBody : copy.adminPaymentRefundBody}

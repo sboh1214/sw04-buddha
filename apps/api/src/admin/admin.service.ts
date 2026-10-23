@@ -31,7 +31,8 @@ const userColumns = {
 interface UserRow {
   id: string;
   email: string;
-  nickname: string;
+  /** Null for an account its member closed (#140). */
+  nickname: string | null;
   role: Role;
   availableCoin: bigint;
   lockedCoin: bigint;
@@ -68,7 +69,8 @@ const adminPaymentColumns = {
 };
 
 type AdminPaymentRow = Omit<typeof schema.payments.$inferSelect, 'idempotencyKey' | 'updatedAt'> & {
-  nickname: string;
+  /** Null for an account its member closed (#140). */
+  nickname: string | null;
   cancelConfirmed: boolean | null;
 };
 
@@ -175,6 +177,16 @@ export class AdminService {
         .where(eq(schema.balances.userId, userId))
         .limit(1)
         .for('update');
+      // A closed account takes no ledger entry after its forfeiture (#140, migration 0041): read
+      // after the balance's lock, which a closure holds until it commits, so one in flight is seen.
+      const [profile] = await tx
+        .select({ closedAt: schema.profiles.closedAt })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, userId))
+        .limit(1);
+      if (profile?.closedAt != null) {
+        throw new AppError('ACCOUNT_CLOSED', { message: 'The account was closed by its member' });
+      }
       const adjustedAt = await clockTimestamp(tx);
 
       const [action] = await tx

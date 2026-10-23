@@ -310,9 +310,11 @@ export class ModerationService {
     const id = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       const profile = await this.lockProfile(tx, userId);
-      if (isAutoNickname(profile.nickname)) throw refused('nothing_to_remove');
+      // A closed account has no nickname at all (#140): nothing to take away either.
+      const { nickname } = profile;
+      if (nickname === null || isAutoNickname(nickname)) throw refused('nothing_to_remove');
       const now = await clockTimestamp(tx);
-      await this.giveAutoNickname(tx, userId, profile.nickname);
+      await this.giveAutoNickname(tx, userId, nickname);
       await tx
         .update(schema.profiles)
         .set({ nicknameChangedAt: null })
@@ -325,12 +327,12 @@ export class ModerationService {
         { targetType: 'profile', targetKey: userId },
         'moderation_nickname_reset',
         {},
-        { nickname: profile.nickname },
+        { nickname },
         now,
       );
       await tx
         .insert(schema.nicknameHolds)
-        .values({ nickname: profile.nickname, userId: null, releasedAt: now, actionId });
+        .values({ nickname, userId: null, releasedAt: now, actionId });
       return actionId;
     });
     return this.answer(id, adminId);
@@ -753,7 +755,19 @@ export class ModerationService {
    * A reset whose hold is gone (#184 removes it past the 30 days) hands nothing.
    */
   private async handHoldOver(tx: Tx, actionId: string, userId: string): Promise<void> {
-    const { nicknameHolds } = schema;
+    const { nicknameHolds, profiles } = schema;
+    // A member who closed the account gets nothing back (#140, ADR-0081 결과 5): the closure cut
+    // every hold's link to it (#57-18 «계정과의 연결을 끊은 채»), and this one stays held from
+    // everybody for the rest of its 30 days. FOR KEY SHARE waits for a closure in flight (it holds
+    // the profile FOR UPDATE), so its commit is seen; taken before the nickname's lock, the order
+    // the closure takes them in. Migration 0041 refuses a hold naming a closed account anyway.
+    const [member] = await tx
+      .select({ closedAt: profiles.closedAt })
+      .from(profiles)
+      .where(eq(profiles.userId, userId))
+      .limit(1)
+      .for('key share');
+    if (member?.closedAt != null) return;
     const [hold] = await tx
       .select({ id: nicknameHolds.id, nickname: nicknameHolds.nickname })
       .from(nicknameHolds)

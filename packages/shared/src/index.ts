@@ -1,3 +1,4 @@
+export * from './account-closure.js';
 export * from './accounting.js';
 export * from './admin-accounts.js';
 export * from './api/envelope.js';

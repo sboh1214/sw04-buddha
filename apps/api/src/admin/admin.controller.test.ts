@@ -218,7 +218,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
 
     const byNickname = await t.app.inject({
       method: 'GET',
-      url: `/api/v1/admin/users?q=${encodeURIComponent(profile!.nickname)}`,
+      url: `/api/v1/admin/users?q=${encodeURIComponent(profile!.nickname!)}`,
       headers: { cookie: admin.cookie },
     });
     expect(byNickname.statusCode).toBe(200);

@@ -2338,7 +2338,7 @@
             }
           },
           "409": {
-            "description": "ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE",
+            "description": "ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE | ACCOUNT_CLOSED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5777,7 +5777,7 @@
             }
           },
           "409": {
-            "description": "ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED",
+            "description": "ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED | ACCOUNT_CLOSED",
             "content": {
               "application/json": {
                 "schema": {
@@ -14377,6 +14377,176 @@
           "admin"
         ]
       }
+    },
+    "/api/v1/me/closure": {
+      "get": {
+        "operationId": "getMyClosureCheck",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountClosureCheck"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "What closing the account would do now: the Coin it forfeits and what refuses it (탈퇴, #140)",
+        "tags": [
+          "me"
+        ]
+      },
+      "post": {
+        "operationId": "closeMyAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountClosureBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountClosureResult"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN | RESTRICTED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "CLOSURE_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session",
+        "tags": [
+          "me"
+        ]
+      }
     }
   },
   "info": {
@@ -14461,6 +14631,8 @@
           "MODERATION_NOT_ALLOWED",
           "RESTRICTED",
           "WRITE_LIMITED",
+          "CLOSURE_NOT_ALLOWED",
+          "ACCOUNT_CLOSED",
           "INTERNAL"
         ]
       },
@@ -15223,7 +15395,8 @@
               "BONUS",
               "PAYMENT_CANCEL",
               "PAYMENT_CANCEL_REVERSAL",
-              "START_GRANT"
+              "START_GRANT",
+              "CLOSURE_FORFEIT"
             ]
           },
           "amountCoin": {
@@ -15241,7 +15414,8 @@
               "market",
               "admin_action",
               "coupon",
-              "start_grant"
+              "start_grant",
+              "account_closure"
             ]
           },
           "refId": {
@@ -15564,6 +15738,7 @@
             "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
           },
           "nickname": {
+            "nullable": true,
             "type": "string"
           },
           "role": {
@@ -15703,6 +15878,7 @@
             "type": "string"
           },
           "nickname": {
+            "nullable": true,
             "type": "string"
           }
         },
@@ -16318,6 +16494,7 @@
             "type": "string"
           },
           "nickname": {
+            "nullable": true,
             "type": "string"
           }
         },
@@ -17094,6 +17271,7 @@
             "type": "string"
           },
           "nickname": {
+            "nullable": true,
             "type": "string"
           }
         },
@@ -20141,6 +20319,7 @@
             "type": "string"
           },
           "excerpt": {
+            "nullable": true,
             "type": "string"
           },
           "pendingCount": {
@@ -20292,6 +20471,7 @@
             "description": "An account’s public id: 10 lower-case letters and digits, never the account id"
           },
           "nickname": {
+            "nullable": true,
             "type": "string"
           },
           "role": {
@@ -21277,6 +21457,9 @@
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
+          "closedByAccountClosure": {
+            "type": "boolean"
+          },
           "retractedAt": {
             "nullable": true,
             "type": "string",
@@ -21311,6 +21494,7 @@
           "decidedBy",
           "decisionReason",
           "decidedAt",
+          "closedByAccountClosure",
           "retractedAt",
           "moot",
           "aboutViewer"
@@ -21923,6 +22107,78 @@
           "outcome",
           "through"
         ]
+      },
+      "AccountClosureCheck": {
+        "type": "object",
+        "properties": {
+          "availableCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          },
+          "refusals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountClosureRefusal"
+            }
+          },
+          "restriction": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RestrictedDetails"
+              }
+            ]
+          }
+        },
+        "required": [
+          "availableCoin",
+          "refusals",
+          "restriction"
+        ],
+        "additionalProperties": false
+      },
+      "AccountClosureRefusal": {
+        "type": "string",
+        "enum": [
+          "admin",
+          "unsettled_contracts",
+          "payment_in_progress",
+          "pending_orders"
+        ]
+      },
+      "AccountClosureBody": {
+        "type": "object",
+        "properties": {
+          "confirmation": {
+            "type": "string"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "confirmation",
+          "expectedAccountId"
+        ]
+      },
+      "AccountClosureResult": {
+        "type": "object",
+        "properties": {
+          "closedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "forfeitedCoin": {
+            "$ref": "#/components/schemas/CoinAmount"
+          }
+        },
+        "required": [
+          "closedAt",
+          "forfeitedCoin"
+        ],
+        "additionalProperties": false
       }
     }
   }

@@ -205,6 +205,14 @@ export type ApprovalRetractionBody = components['schemas']['ApprovalRetractionBo
 export type ModerationApproval = components['schemas']['ModerationApproval'];
 export type DismissReportsBody = components['schemas']['DismissReportsBody'];
 export type DismissedReports = components['schemas']['DismissedReports'];
+/**
+ * 탈퇴 (#140, ADR-0086): what a closure would do now (`GET /me/closure` — the Coin it forfeits and
+ * what refuses it), the closure's body (the typed '탈퇴' and the account on screen) and its answer
+ * (when, and the Coin forfeited).
+ */
+export type AccountClosureCheck = components['schemas']['AccountClosureCheck'];
+export type AccountClosureBody = components['schemas']['AccountClosureBody'];
+export type AccountClosureResult = components['schemas']['AccountClosureResult'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

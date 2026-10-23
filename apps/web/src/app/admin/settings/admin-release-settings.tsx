@@ -34,6 +34,7 @@ import {
   useReleaseSettingChanges,
   useReleaseSettings,
 } from '@/hooks/use-admin-release-settings';
+import { nicknameShown } from '@/lib/account-closure';
 import { type ReleaseSetting, type ReleaseSettingChange } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { readFailed } from '@/lib/query-client';
@@ -205,7 +206,7 @@ function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void
       {item.updatedAt !== null && (
         <Text fontSize="xs" color="fg.muted">
           {copy.adminReleaseSettingLastChange} {formatKst(item.updatedAt)}
-          {item.updatedBy !== null && ` · ${item.updatedBy.nickname}`}
+          {item.updatedBy !== null && ` · ${nicknameShown(item.updatedBy.nickname)}`}
         </Text>
       )}
     </Stack>
@@ -515,7 +516,7 @@ function ChangeRow({ entry }: { entry: ReleaseSettingChange }) {
         {entry.reason}
       </Text>
       <Text fontSize="xs" color="fg.muted">
-        {copy.adminReleaseSettingChangeActor} {entry.actor.nickname}
+        {copy.adminReleaseSettingChangeActor} {nicknameShown(entry.actor.nickname)}
       </Text>
     </Stack>
   );

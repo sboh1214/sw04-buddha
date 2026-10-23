@@ -352,9 +352,12 @@ export function releaseSettingValueJsonSchema(
 
 // ---- DTOs ---------------------------------------------------------------------------
 
-/** Who changed an item: the admin's account id and nickname. */
+/**
+ * Who changed an item: the admin's account id and nickname — null once that account closed (#140:
+ * an admin closes once the role is revoked, and the nickname goes with the closure).
+ */
 export const releaseSettingActorSchema = z
-  .object({ id: z.string(), nickname: z.string() })
+  .object({ id: z.string(), nickname: z.string().nullable() })
   .meta({ id: 'ReleaseSettingActor' });
 export type ReleaseSettingActor = z.infer<typeof releaseSettingActorSchema>;
 

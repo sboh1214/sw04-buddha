@@ -44,6 +44,14 @@ export const LEDGER_ENTRY_TYPES = [
    * (N02 §8): nothing that computes PnL reads the ledger.
    */
   'START_GRANT',
+  /**
+   * 탈퇴 소멸 (#140, ADR-0069 decision 1 #57-16): the Coin left on an account its member closes,
+   * forfeited with the closure — the balance taken to 0 by an entry, never overwritten, so the
+   * ledger still sums to the balance (PLAN 5.6). Written only by the closure (−amount_coin, ref
+   * `account_closure` → the account itself), once per account, and nothing is written for the
+   * account after it (migration 0041). Not trading loss (N02 §8).
+   */
+  'CLOSURE_FORFEIT',
 ] as const;
 export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
@@ -57,6 +65,11 @@ export const LEDGER_REF_TYPES = [
   'coupon',
   /** A START_GRANT entry's start_grants row (#70, ADR-0071). */
   'start_grant',
+  /**
+   * A CLOSURE_FORFEIT entry's closed account (#140): `ref_id` is the account's own id, and
+   * `profiles.closed_at` says when it closed — one entry per account (migration 0041).
+   */
+  'account_closure',
 ] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);

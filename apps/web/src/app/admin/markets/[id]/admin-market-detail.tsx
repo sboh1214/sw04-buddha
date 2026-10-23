@@ -29,6 +29,7 @@ import { Controller, useForm } from 'react-hook-form';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { nicknameShown } from '@/lib/account-closure';
 import { SEARCH_INPUT_MAX_LENGTH } from '@/lib/market-search';
 import { listSection, listView } from '@/lib/query-client';
 import {
@@ -818,7 +819,7 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                         {copy.adminRelatedLinkedAt} {formatKst(row.linkedAt)} ·{' '}
                         {/* Who linked it, by nickname (owner decision 2026-10-17). */}
                         <Text as="span" data-testid={`admin-related-linked-by-${row.id}`}>
-                          {row.linkedBy.nickname}
+                          {nicknameShown(row.linkedBy.nickname)}
                         </Text>
                       </Text>
                     </RelatedMarketLine>

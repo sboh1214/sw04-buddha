@@ -77,7 +77,7 @@ import {
   namesPersonalProbability,
   type UserRealtimeEvent,
 } from '@buddha/shared';
-import { eq } from 'drizzle-orm';
+import { eq, isNotNull } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -709,6 +709,18 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     query: { expectedAccountId: (fixture) => fixture.a.id, purpose: () => 'notice' },
     body: () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
     contentType: 'image/jpeg',
+    status: 403,
+  },
+  // B's own closure check (#140): B's balance and what refuses B's closure — nothing of A's,
+  // whose available balance the same read shows A.
+  'GET /me/closure': {
+    status: 200,
+    own: ['available balance'],
+  },
+  // B's cookie naming A's account (#140): refused before anything is read or done — neither
+  // account closes (A's record, number and profile stay, below).
+  'POST /me/closure': {
+    body: (fixture) => ({ confirmation: '탈퇴', expectedAccountId: fixture.a.id }),
     status: 403,
   },
   'POST /payments/charge': {
@@ -1960,6 +1972,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .from(schema.profiles)
       .where(eq(schema.profiles.userId, f.a.id));
     expect(profile?.timeZone).toBe(sentinel('time zone'));
+    // B's refused closure closed nobody (#140): every account is open.
+    expect(
+      await t.db
+        .select({ userId: schema.profiles.userId })
+        .from(schema.profiles)
+        .where(isNotNull(schema.profiles.closedAt)),
+    ).toEqual([]);
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
     // B's refused consent, nickname, change, interests step and interest categories changed

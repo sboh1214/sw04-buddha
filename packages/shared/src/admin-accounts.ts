@@ -51,9 +51,12 @@ const adminRoleReasonSchema = z.string().trim().min(1).max(ADMIN_ROLE_REASON_MAX
 /** An account id (better-auth `user.id`, text) in a body, a path or a query. */
 export const adminAccountIdSchema = z.string().min(1).max(255);
 
-/** An account in an admin record: id and nickname. */
+/**
+ * An account in an admin record: id and nickname — null for an account its member closed since
+ * (#140: a former admin closes once the role is revoked, and the nickname goes with the closure).
+ */
 export const adminAccountActorSchema = z
-  .object({ id: z.string(), nickname: z.string() })
+  .object({ id: z.string(), nickname: z.string().nullable() })
   .meta({ id: 'AdminAccountActor' });
 export type AdminAccountActor = z.infer<typeof adminAccountActorSchema>;
 
@@ -123,7 +126,11 @@ export const adminRoleChangeSchema = z
     /** The admin_actions row. */
     id: z.uuid(),
     type: z.enum(ADMIN_ROLE_CHANGE_TYPES).meta({ id: 'AdminRoleChangeType' }),
-    /** The account whose role changed; email and nickname are null once it is gone. */
+    /**
+     * The account whose role changed. Its nickname is null once its member closed it (#140; the
+     * email is then its closed placeholder, `closedAccountEmail`), and both are null once the
+     * account is gone.
+     */
     target: z.object({
       id: z.string(),
       email: z.string().nullable(),

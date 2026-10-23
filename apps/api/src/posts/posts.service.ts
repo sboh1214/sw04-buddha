@@ -95,12 +95,15 @@ export function cardText(bodyText: AnyColumn): SQL<string> {
 }
 
 /** The account behind a post, as a query reads it (`authorColumns`). */
-interface AuthorRow {
+export interface AuthorRow {
   publicId: string;
-  nickname: string;
+  /** Null exactly once the member closed the account (#140). */
+  nickname: string | null;
   role: Role;
   /** `profiles.image_id`: the profile image (#141), or null. */
   imageId: string | null;
+  /** `profiles.closed_at`: when the member closed the account (#140), or null. */
+  closedAt: Date | null;
 }
 
 /**
@@ -113,6 +116,7 @@ export const authorColumns = {
   nickname: schema.profiles.nickname,
   role: schema.profiles.role,
   imageId: schema.profiles.imageId,
+  closedAt: schema.profiles.closedAt,
 };
 
 /**
@@ -121,10 +125,14 @@ export const authorColumns = {
  * address — a new upload is a new address — or null, and the web draws the nickname's first
  * letter; never a social login's photo) and the 운영자 mark (#45-9: an admin account's every post).
  * Never the account id. The one place a person is shown — a post's, a comment's author and the
- * public profile's member — so #140 makes a withdrawn author `{ kind: 'former_member' }` here
- * ('탈퇴한 사용자', #37-16).
+ * public profile's member — so an account its member closed (#140, ADR-0069 decision 3 #37-16) is
+ * `{ kind: 'former_member' }` here and nothing else, '탈퇴한 사용자' with no profile link: not even
+ * the public id, which would link the closed account's posts to one another. Every reader that
+ * finds a member through it — the profile, its lists, a report on the profile — answers such an
+ * account as none (404).
  */
 export function postAuthorOf(row: AuthorRow): PostAuthor {
+  if (row.closedAt !== null || row.nickname === null) return { kind: 'former_member' };
   return {
     kind: 'member',
     publicId: row.publicId,

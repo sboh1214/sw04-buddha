@@ -168,11 +168,15 @@ function UserView({
         <Heading as="h3" size="lg" data-testid="moderation-user-nickname">
           <UserName user={member.user} link={false} />
         </Heading>
-        <ChakraLink asChild fontSize="sm" color="brand.fg">
-          <NextLink href={profilePath(member.user.publicId) as Route}>
-            {copy.adminModerationOpenPublic}
-          </NextLink>
-        </ChakraLink>
+        {/* A member who closed the account (#140) has no public profile: its address answers as
+            for no account (#37-16), so there is nothing to open. */}
+        {member.user.nickname !== null && (
+          <ChakraLink asChild fontSize="sm" color="brand.fg">
+            <NextLink href={profilePath(member.user.publicId) as Route}>
+              {copy.adminModerationOpenPublic}
+            </NextLink>
+          </ChakraLink>
+        )}
       </HStack>
 
       {own === true && <OwnNotice />}
@@ -204,7 +208,7 @@ function UserView({
           >
             {copy.adminModerationAccountRestrict}
           </Button>
-          {!isAutoNickname(member.user.nickname) && (
+          {member.user.nickname !== null && !isAutoNickname(member.user.nickname) && (
             <Button
               size="sm"
               variant="outline"

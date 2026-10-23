@@ -46,7 +46,10 @@ export const approvalRequests = pgTable(
     status: approvalStatusEnum().notNull().default('pending'),
     /**
      * The deciding admin, its reason and instant: all three null exactly while `pending` and once
-     * `retracted` (no one decided it).
+     * `retracted` (no one decided it). A request about a member who closed their account while it
+     * waited is `rejected` by no admin (#140, owner decision 2026-10-23, ADR-0085 결과 5): the
+     * reason '탈퇴' and the instant of the closure, and `decided_by` null — the one rejection without
+     * a decider, which migration 0041's trigger allows for such a request only.
      */
     decidedBy: text().references(() => user.id, { onDelete: 'restrict' }),
     decisionReason: text(),
@@ -61,10 +64,12 @@ export const approvalRequests = pgTable(
     /**
      * `status` compared as text: migration 0042 adds `retracted` to the enum in the batch that
      * replaces this CHECK, which cannot name the new value as the enum (55P04, migration 0014).
+     * Migration 0041 lets a rejection go without a decider (#140: the closure's); every other
+     * decision names its admin.
      */
     check(
       'approval_requests_decision_check',
-      sql`(${t.status}::text IN ('pending', 'retracted')) = (${t.decidedBy} IS NULL) AND (${t.decidedBy} IS NULL) = (${t.decidedAt} IS NULL) AND (${t.decidedBy} IS NULL) = (${t.decisionReason} IS NULL) AND (${t.status}::text = 'retracted') = (${t.retractedAt} IS NOT NULL)`,
+      sql`(${t.status}::text IN ('pending', 'retracted')) = (${t.decidedAt} IS NULL) AND (${t.decidedAt} IS NULL) = (${t.decisionReason} IS NULL) AND (${t.decidedBy} IS NULL OR ${t.decidedAt} IS NOT NULL) AND (${t.decidedBy} IS NOT NULL OR ${t.status}::text <> 'approved') AND (${t.status}::text = 'retracted') = (${t.retractedAt} IS NOT NULL)`,
     ),
     check(
       'approval_requests_decider_not_requester_check',

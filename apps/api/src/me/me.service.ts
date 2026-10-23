@@ -82,8 +82,12 @@ export class MeService {
         .where(eq(schema.profileInterestCategories.userId, userId))
         .orderBy(asc(schema.profileInterestCategories.categoryId)),
     ]);
-    // The "user" trigger (PLAN 10.4) guarantees both rows; missing means a broken account.
-    if (!row || !onboarding) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+    // The "user" trigger (PLAN 10.4) guarantees both rows; missing means a broken account. A
+    // closed account (#140) has no session to ask with; read some other way, it is no account.
+    if (!row || !onboarding || row.nickname === null) {
+      throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+    }
+    const { nickname } = row;
 
     // The account's own grant, waiting or paid; a cancelled one (its account withdrew while it
     // waited) reads as none. No grant of its own although the nickname step asked for one: when
@@ -115,7 +119,7 @@ export class MeService {
       emailVerified: row.emailVerified,
       profile: {
         publicId: row.publicId,
-        nickname: row.nickname,
+        nickname,
         role: row.role,
         createdAt: row.createdAt.toISOString(),
         timeZone: row.timeZone,

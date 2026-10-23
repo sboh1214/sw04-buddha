@@ -31,6 +31,7 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
+import { nicknameShown } from '@/lib/account-closure';
 import { api, isApiError, unwrap, type AdminUser } from '@/lib/api';
 import { boundedInteger } from '@/lib/form-schema';
 import { readFailed } from '@/lib/query-client';
@@ -135,7 +136,26 @@ const adjustSchema = z.object({
 });
 type AdjustValues = z.infer<typeof adjustSchema>;
 
+/**
+ * What a refused balance adjustment says: a balance that would go below zero, an account its
+ * member closed since the list was read (ACCOUNT_CLOSED, #140 — a closed account's ledger takes
+ * nothing after its '탈퇴 소멸'), or anything else.
+ */
+function adjustFailureMessage(error: unknown): string {
+  if (isApiError(error, 'INSUFFICIENT_BALANCE')) return copy.errAdjustNegative;
+  if (isApiError(error, 'ACCOUNT_CLOSED')) return copy.adminAdjustClosed;
+  return copy.errUnknown;
+}
+
+/**
+ * One account: its nickname — '탈퇴한 사용자' for one its member closed (#140: the nickname went
+ * with the closure; the address is the closed placeholder) — role, address, the way to its
+ * moderation page, its balance and the adjustment, which a closed account never takes, so its card
+ * says so instead of offering the form.
+ */
 function UserCard({ user }: { user: AdminUser }) {
+  // A closed account is the only one with no nickname (profiles_closed_check, migration 0041).
+  const closed = user.nickname === null;
   const queryClient = useQueryClient();
   const {
     register,
@@ -167,10 +187,7 @@ function UserCard({ user }: { user: AdminUser }) {
       ]);
     },
     onError: (error) => {
-      toaster.create({
-        type: 'error',
-        title: isApiError(error, 'INSUFFICIENT_BALANCE') ? copy.errAdjustNegative : copy.errUnknown,
-      });
+      toaster.create({ type: 'error', title: adjustFailureMessage(error) });
     },
   });
 
@@ -185,7 +202,7 @@ function UserCard({ user }: { user: AdminUser }) {
           <HStack justify="space-between" align="start" flexWrap="wrap" gap="2">
             <Stack gap="0.5">
               <HStack gap="2">
-                <Text fontWeight="semibold">{user.nickname}</Text>
+                <Text fontWeight="semibold">{nicknameShown(user.nickname)}</Text>
                 {user.role === 'admin' && (
                   <Badge colorPalette="brand" variant="subtle">
                     {copy.adminTitle}
@@ -211,39 +228,45 @@ function UserCard({ user }: { user: AdminUser }) {
             </Text>
           </HStack>
 
-          <form onSubmit={(e) => void submit(e)} noValidate>
-            <Stack gap="3">
-              <Text fontSize="sm" fontWeight="medium">
-                {copy.adminAdjust}
-              </Text>
-              <HStack gap="2" align="start" flexWrap="wrap">
-                <Field.Root invalid={!!errors.amountCoin} required maxW="40">
-                  <Field.Label>{copy.adminAdjustAmount}</Field.Label>
-                  <Input
-                    inputMode="numeric"
-                    autoComplete="off"
-                    data-testid="adjust-amount"
-                    {...register('amountCoin')}
-                  />
-                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
-                </Field.Root>
-                <Field.Root invalid={!!errors.memo} required flex="1" minW="48">
-                  <Field.Label>{copy.adminAdjustMemo}</Field.Label>
-                  <Input autoComplete="off" data-testid="adjust-memo" {...register('memo')} />
-                  <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
-                </Field.Root>
-              </HStack>
-              <Button
-                type="submit"
-                size="sm"
-                alignSelf="flex-start"
-                loading={isSubmitting}
-                data-testid="adjust-submit"
-              >
-                {copy.adminAdjustSubmit}
-              </Button>
-            </Stack>
-          </form>
+          {closed ? (
+            <Text fontSize="sm" color="fg.muted" data-testid="admin-user-closed">
+              {copy.adminAdjustClosed}
+            </Text>
+          ) : (
+            <form onSubmit={(e) => void submit(e)} noValidate>
+              <Stack gap="3">
+                <Text fontSize="sm" fontWeight="medium">
+                  {copy.adminAdjust}
+                </Text>
+                <HStack gap="2" align="start" flexWrap="wrap">
+                  <Field.Root invalid={!!errors.amountCoin} required maxW="40">
+                    <Field.Label>{copy.adminAdjustAmount}</Field.Label>
+                    <Input
+                      inputMode="numeric"
+                      autoComplete="off"
+                      data-testid="adjust-amount"
+                      {...register('amountCoin')}
+                    />
+                    <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
+                  </Field.Root>
+                  <Field.Root invalid={!!errors.memo} required flex="1" minW="48">
+                    <Field.Label>{copy.adminAdjustMemo}</Field.Label>
+                    <Input autoComplete="off" data-testid="adjust-memo" {...register('memo')} />
+                    <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
+                  </Field.Root>
+                </HStack>
+                <Button
+                  type="submit"
+                  size="sm"
+                  alignSelf="flex-start"
+                  loading={isSubmitting}
+                  data-testid="adjust-submit"
+                >
+                  {copy.adminAdjustSubmit}
+                </Button>
+              </Stack>
+            </form>
+          )}
         </Stack>
       </Card.Body>
     </Card.Root>

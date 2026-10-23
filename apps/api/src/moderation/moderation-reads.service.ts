@@ -450,7 +450,7 @@ export class ModerationReadsService {
       let target: ModerationTarget;
       let state: ModerationItemState = 'published';
       let title: string | null = null;
-      let excerpt: string;
+      let excerpt: string | null;
       if (group.postId !== null) {
         const post = postOf.get(group.postId)!;
         target = { type: 'post', postId: post.id };
@@ -885,7 +885,7 @@ export class ModerationReadsService {
         cancelledBy:
           withheld || row.cancelledById === null
             ? null
-            : { id: row.cancelledById, nickname: row.cancelledByNickname ?? '' },
+            : { id: row.cancelledById, nickname: row.cancelledByNickname },
         cancelReason: row.cancelReason,
         cancelApproval: approvalOf(
           {
@@ -906,7 +906,7 @@ export class ModerationReadsService {
           reason: change.reason,
           createdBy: withheld
             ? null
-            : { id: change.createdById, nickname: change.createdByNickname ?? '' },
+            : { id: change.createdById, nickname: change.createdByNickname },
           createdAt: change.createdAt.toISOString(),
           approval: approvalOf(
             {
@@ -1149,9 +1149,12 @@ export class ModerationReadsService {
         decidedBy:
           withheld || row.decidedById === null
             ? null
-            : { id: row.decidedById, nickname: row.decidedByNickname ?? '' },
+            : { id: row.decidedById, nickname: row.decidedByNickname },
         decisionReason: row.decisionReason,
         decidedAt: row.decidedAt?.toISOString() ?? null,
+        // Rejected by no admin is the closure's (#140, migration 0041): read from the row, not
+        // from `decidedBy`, which is withheld from the admin the request is about as well.
+        closedByAccountClosure: row.status === 'rejected' && row.decidedById === null,
         retractedAt: row.retractedAt?.toISOString() ?? null,
         moot:
           row.status !== 'pending' || change === 'apply' || row.changedType === null
@@ -1234,7 +1237,7 @@ function approvalOf(
     decidedBy:
       withheld || row.decidedById === null
         ? null
-        : { id: row.decidedById, nickname: row.decidedByNickname ?? '' },
+        : { id: row.decidedById, nickname: row.decidedByNickname },
     reason: row.reason ?? '',
     decidedAt: row.decidedAt.toISOString(),
   };
@@ -1267,7 +1270,7 @@ function adminReportOf(
     resolvedBy:
       withheld || row.resolvedById === null
         ? null
-        : { id: row.resolvedById, nickname: row.resolvedByNickname ?? '' },
+        : { id: row.resolvedById, nickname: row.resolvedByNickname },
     actionId: row.actionId,
     dismissalReason: row.dismissalReason,
     aboutViewer: withheld,

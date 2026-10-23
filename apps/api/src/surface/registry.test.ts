@@ -582,6 +582,8 @@ describe('the public API document (static)', () => {
       'PUT /me/interest-categories',
       'POST /me/onboarding/interests',
       'PUT /me/profile-image',
+      // 탈퇴 (#140, ADR-0069 decision 4 #140): until either restriction ends or is lifted.
+      'POST /me/closure',
     ];
     // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
     // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is
@@ -609,8 +611,8 @@ describe('the public API document (static)', () => {
       'POST /payments/charge',
       'POST /coupons/redeem',
     ];
-    // A new owner write — #77's market proposal, #140's withdrawal — fails here until it is put
-    // in one list or the other: whether a writing restriction refuses it is decided, not missed.
+    // A new owner write — #77's market proposal — fails here until it is put in one list or the
+    // other: whether a writing restriction refuses it is decided, not missed.
     const writes = Object.keys(OWNER_ROUTES).filter((key) => !key.startsWith('GET '));
     expect([...REFUSED, ...OPEN].sort()).toEqual([...writes].sort());
     const documented = operations

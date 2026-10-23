@@ -63,6 +63,7 @@ import {
   validationField,
   validationMessage,
 } from './api';
+import { nicknameShown } from './account-closure';
 import { hiddenItemName, reportReasonLabel } from './authored';
 import { formatKst, kstLocalToIso } from './datetime';
 import { formatWait } from './phone-verification';
@@ -805,12 +806,39 @@ export function concernsOperator(
  * decision 2026-10-21), and '삭제된 계정' for an operator's account that is gone.
  */
 export function operatorLineText(
-  actor: { nickname: string } | null,
+  actor: { nickname: string | null } | null,
   at: string,
   aboutViewer: boolean,
 ): string {
   if (aboutViewer) return formatKst(at);
-  return `${actor?.nickname ?? copy.adminAccountsTargetGone} · ${formatKst(at)}`;
+  // An operator who closed the account since (#140, after the role was revoked) has no nickname.
+  const name = actor === null ? copy.adminAccountsTargetGone : nicknameShown(actor.nickname);
+  return `${name} · ${formatKst(at)}`;
+}
+
+/**
+ * A decided request's line (#139, ADR-0085): who decided it and when — the time alone on one
+ * about the admin reading it (`aboutViewer`) — or, for one the member's closure closed (#140,
+ * owner decision 2026-10-23 via ADR-0085 결과 5: «탈퇴 때 그 요청은 저절로 닫음(거절로 기록, 까닭
+ * '탈퇴')»), that it closed with the closure and when: no admin decided it, so no admin is named
+ * (`decidedBy` is null) and the line never reads as an account that is gone. Null while it is
+ * undecided.
+ */
+export function requestDecisionLine(
+  request: Pick<AccountRestrictionRequest, 'decidedBy' | 'decidedAt' | 'closedByAccountClosure'>,
+  aboutViewer: boolean,
+): { label: string; text: string } | null {
+  if (request.decidedAt === null) return null;
+  if (request.closedByAccountClosure) {
+    return {
+      label: copy.adminAccountRequestDecidedAt,
+      text: `${copy.adminAccountRequestClosedByClosure} · ${formatKst(request.decidedAt)}`,
+    };
+  }
+  return {
+    label: aboutViewer ? copy.adminAccountRequestDecidedAt : copy.adminAccountRequestDecidedBy,
+    text: operatorLineText(request.decidedBy, request.decidedAt, aboutViewer),
+  };
 }
 
 /**
@@ -875,7 +903,9 @@ export function reasonCountsText(reasons: AdminReportGroup['reasons']): string {
 
 /** A queue entry's line: a post by its title (or its text's start), a comment by its start. */
 export function queueEntryText(group: Pick<AdminReportGroup, 'title' | 'excerpt'>): string {
-  return group.title ?? postFirstLine(group.excerpt);
+  if (group.title !== null) return group.title;
+  // The profile of a member who closed the account (#140) has no nickname to show.
+  return group.excerpt === null ? copy.postAuthorFormer : postFirstLine(group.excerpt);
 }
 
 /** What a profile action took away, as the operators' pages name it (kept, never restored). */

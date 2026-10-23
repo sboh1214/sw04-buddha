@@ -100,8 +100,10 @@ export type BalanceAdjustBody = z.infer<typeof balanceAdjustBodySchema>;
 export const adminUserSchema = z
   .object({
     id: z.string(),
+    /** A closed account's is its placeholder (`closedAccountEmail`, #140): the address is gone. */
     email: z.email(),
-    nickname: z.string(),
+    /** Null for an account its member closed (#140): the nickname went with the closure. */
+    nickname: z.string().nullable(),
     role: z.enum(['user', 'admin']),
     balance: balanceSchema,
     createdAt: z.iso.datetime(),
@@ -117,7 +119,11 @@ export type AdminUserQuery = z.infer<typeof adminUserQuerySchema>;
 
 /** `GET /admin/payments`: every charge, with the account it belongs to. */
 export const adminPaymentSchema = paymentSchema
-  .extend({ userId: z.string(), nickname: z.string() })
+  .extend({
+    userId: z.string(),
+    /** Null for an account its member closed (#140): the nickname went with the closure. */
+    nickname: z.string().nullable(),
+  })
   .meta({ id: 'AdminPayment' });
 export type AdminPayment = z.infer<typeof adminPaymentSchema>;
 

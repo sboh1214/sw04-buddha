@@ -12,14 +12,15 @@ import { isApiError } from './api';
  * 작성 제한 (#185, ADR-0082) and 계정 제한 (#139, ADR-0085) as a refused write says them: the server
  * answers RESTRICTED (403) with the restriction's kind and its end — null for 무기한
  * (`RestrictedDetails`) — wherever it refuses (a writing restriction: every new post, 댓글 and
- * 대댓글, every edit of one's own, a post's image; either: a new value of a public profile item —
- * the later-ending one named, the account restriction when both end together, ADR-0085 7-6). The
- * screen says which restriction closes what and until when, and shows the way to 조치·신고 내역
- * under it (`isRestricted`, components/moderation/refusal-text.tsx) — the appeal's guidance and its
- * deadline live there, not in the refusal (owner decision 2026-10-22 evening, via #186: «제한 중
- * 거절의 이의 안내 → 끝나는 시각과 조치·신고 내역 링크(기한은 내역에)», which settles how ADR-0078's owner
- * answer 8 «끝나는 시각과 이의 안내» is said; #185·#139 both). Kept apart from lib/moderation.ts,
- * which reads lib/posts.ts and lib/profile.ts: those read this one, so neither imports the other.
+ * 대댓글, every edit of one's own, a post's image; either: a new value of a public profile item and
+ * the member's own closure, #140 — the later-ending one named, the account restriction when both
+ * end together, ADR-0085 7-6). The screen says which restriction closes what and until when, and
+ * shows the way to 조치·신고 내역 under it (`isRestricted`, components/moderation/refusal-text.tsx) —
+ * the appeal's guidance and its deadline live there, not in the refusal (owner decision 2026-10-22
+ * evening, via #186: «제한 중 거절의 이의 안내 → 끝나는 시각과 조치·신고 내역 링크(기한은 내역에)»,
+ * which settles how ADR-0078's owner answer 8 «끝나는 시각과 이의 안내» is said; #185·#139 both).
+ * Kept apart from lib/moderation.ts, which reads lib/posts.ts and lib/profile.ts: those read this
+ * one, so neither imports the other.
  *
  * Every function takes the formatter of the member's time zone (`useFormatDateTime`, ADR-0063), as
  * `nicknameFailure` does for the nickname's next change: the end is an absolute time.
@@ -38,14 +39,20 @@ export type RestrictedWrite =
    */
   | 'onboardingInterests'
   /** A new nickname (MY 설정): nothing to clear. */
-  | 'nickname';
+  | 'nickname'
+  /**
+   * 탈퇴 (#140, ADR-0086): either restriction keeps the member's own closure closed until it ends
+   * or is lifted (ADR-0069 decision 4 #140 «제재 중 탈퇴»), and nothing of it stays open.
+   */
+  | 'closure';
 
 /**
  * The refusal's first sentence, by the restriction that refused (`kind`) and what was refused. An
  * account restriction never refuses a post, a comment nor an edit (ADR-0069 decision 1 #57-12:
  * «커뮤니티 작성은 막지 않는다»), so a refused write is the writing restriction's sentence whatever
- * the kind; a public profile item and a nickname name the restriction that refused them (ADR-0085
- * 7-11). Unreadable details (never from this API) say the writing restriction's, as before #139.
+ * the kind; a public profile item, a nickname and a closure (#140) name the restriction that
+ * refused them (ADR-0085 7-11). Unreadable details (never from this API) say the writing
+ * restriction's, as before #139.
  */
 const LEAD: Readonly<Record<RestrictionKind, Readonly<Record<RestrictedWrite, string>>>> = {
   writing: {
@@ -53,12 +60,14 @@ const LEAD: Readonly<Record<RestrictionKind, Readonly<Record<RestrictedWrite, st
     profile: copy.errRestrictedProfile,
     onboardingInterests: copy.errRestrictedProfile,
     nickname: copy.errRestrictedNickname,
+    closure: copy.errRestrictedClosure,
   },
   account: {
     writing: copy.errRestrictedWriting,
     profile: copy.errRestrictedAccountProfile,
     onboardingInterests: copy.errRestrictedAccountProfile,
     nickname: copy.errRestrictedAccountNickname,
+    closure: copy.errRestrictedAccountClosure,
   },
 };
 
@@ -136,7 +145,33 @@ const STILL_OPEN: Readonly<Record<RestrictedWrite, string | undefined>> = {
   profile: copy.errRestrictedClearAllowed,
   onboardingInterests: copy.errRestrictedSkipAllowed,
   nickname: undefined,
+  closure: undefined,
 };
+
+/** The sentence of `LEAD`, the term and what stays open, from what the restriction is known as. */
+function sentence(
+  kind: RestrictionKind | undefined,
+  endsAt: RestrictedDetails['endsAt'] | undefined,
+  write: RestrictedWrite,
+  formatDate: (iso: string) => string,
+): string {
+  const term = endsAt === undefined ? '.' : `(${restrictionTermText(endsAt, formatDate)}).`;
+  const open = STILL_OPEN[write];
+  return `${LEAD[kind ?? 'writing'][write]}${term}${open === undefined ? '' : ` ${open}`}`;
+}
+
+/**
+ * The same sentence from a restriction read before anything was refused: the closure screen's
+ * check (`GET /me/closure`'s `restriction`, #140) says what would refuse the closure now, in the
+ * words a refusal of it would use.
+ */
+export function restrictionSentence(
+  restriction: RestrictedDetails,
+  write: RestrictedWrite,
+  formatDate: (iso: string) => string,
+): string {
+  return sentence(restriction.kind, restriction.endsAt, write, formatDate);
+}
 
 /**
  * What a refused write says under a restriction, or undefined when the answer is not RESTRICTED:
@@ -154,12 +189,7 @@ export function restrictedMessage(
 ): string | undefined {
   const restriction = restrictionOf(error);
   if (restriction === undefined) return undefined;
-  const term =
-    restriction.endsAt === undefined
-      ? '.'
-      : `(${restrictionTermText(restriction.endsAt, formatDate)}).`;
-  const open = STILL_OPEN[write];
-  return `${LEAD[restriction.kind ?? 'writing'][write]}${term}${open === undefined ? '' : ` ${open}`}`;
+  return sentence(restriction.kind, restriction.endsAt, write, formatDate);
 }
 
 /**

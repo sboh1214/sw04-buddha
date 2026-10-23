@@ -463,11 +463,26 @@ describe('the account restriction (#139)', () => {
       decidedBy: null,
       decisionReason: null,
       decidedAt: null,
+      closedByAccountClosure: false,
       retractedAt: null,
       moot: null,
       aboutViewer: true,
     });
     expect(request.apply?.reason.code).toBe('multi_account');
+    // Closed by the member's closure (#140): rejected by no admin, '탈퇴', and said so.
+    expect(
+      accountRestrictionRequestSchema.parse({
+        ...request,
+        status: 'rejected',
+        decisionReason: '탈퇴',
+        decidedAt: AT,
+        closedByAccountClosure: true,
+      }),
+    ).toMatchObject({ decidedBy: null, closedByAccountClosure: true });
+    expect(
+      accountRestrictionRequestSchema.safeParse({ ...request, closedByAccountClosure: undefined })
+        .success,
+    ).toBe(false);
     // Retracted: when, with no decision; the memo is always said (null for none, or withheld).
     expect(
       accountRestrictionRequestSchema.parse({ ...request, status: 'retracted', retractedAt: AT })

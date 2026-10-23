@@ -217,6 +217,46 @@ export const copy = {
   changeEmailSentNew: '새 이메일로 인증 메일을 보냈습니다.',
   errEmailSame: '현재 이메일과 같습니다.',
 
+  // --- 탈퇴 (#140, ADR-0086) ---
+  // ADR-0069 결정 1 #57-15~#57-18, 결정 3 #37-15~#37-17, 결정 4 #140 행. 본인만 하고 확인하는 즉시 처리하며
+  // 되돌리지 않는다(대리 탈퇴·복구 없음, #57-17). 마지막 확인은 한 화면이다: 남은 Coin의 소멸과 되돌릴 수
+  // 없음을 보이고 '탈퇴'를 직접 입력해 한 번 확인한다(결정 4 #140 «마지막 확인»). MY 설정 맨 끝의 카드에서
+  // 연다. 지우는 것과 남는 것의 두 줄은 이 화면의 선택이다(ADR-0086 7-2) — 지우는 것은 #57-18의 '곧바로
+  // 지운다', 남는 것은 #37-16·#37-17의 '본문을 남기고 작성자만 익명화, 좋아요는 수에 남는다'이다. 실명·휴대전화
+  // 번호는 '곧바로 지워지는' 줄에 없다: 본인확인 발송 기록이 번호·실명을 보존기간 동안 남긴다(ADR-0070 2차 답 1 —
+  // #57-18 즉시 삭제의 예외). 그 기록을 화면에 말할지와 문구는 오너에게 물었다(ADR-0086 결과 4).
+  closureTitle: '탈퇴',
+  closureHint: '계정을 닫습니다. 탈퇴는 되돌릴 수 없습니다.',
+  closureOpen: '탈퇴하기',
+  closureCoinLabel: '남은 Coin',
+  closureForfeit: '탈퇴하면 남은 Coin은 모두 사라지고 돌려받을 수 없습니다.',
+  closureIrreversible:
+    '탈퇴는 확인하는 즉시 처리되며 되돌릴 수 없습니다. 탈퇴한 계정으로는 다시 로그인할 수 없습니다.',
+  closureDeleted:
+    '닉네임·프로필 이미지·소개·관심 카테고리와 이메일·로그인 수단은 곧바로 지워집니다.',
+  closureKept: "작성한 글·댓글과 누른 좋아요는 남고, 작성자는 '탈퇴한 사용자'로 보입니다.",
+  closureConfirmLabel: "확인을 위해 '탈퇴'를 입력해 주세요.",
+  closureSubmit: '탈퇴하기',
+  closureBack: 'MY 설정으로 돌아가기',
+  closureDone: '탈퇴했습니다.',
+  closureCheckFailed: '남은 Coin과 지금 탈퇴할 수 있는지를 불러오지 못했습니다.',
+  // 지금 막는 것(GET /me/closure)과 탈퇴의 거절(CLOSURE_NOT_ALLOWED)의 까닭. 관리자 권한은 회수받은 뒤에
+  // (#57-17), 미정산 계약은 모두 정산될 때까지(#57-16), 진행 중인 결제·환불은 끝날 때까지(ADR-0069 결정 7 —
+  // 유료 충전이 닫힌 동안은 생기지 않는다), 대기 주문은 있는 동안(임시 — N02 §9는 대기 주문을 취소하고 탈퇴하며,
+  // 그 취소를 #178이 만들면 이 거절과 문장은 빠진다. 주문 접수가 없는 지금은 생기지 않는다, ADR-0086 7-9·결과
+  // 4). 작성 제한·계정 제한은 위의 errRestrictedClosure·errRestrictedAccountClosure다.
+  closureBlocked: '지금은 탈퇴할 수 없습니다.',
+  closureRefusalAdmin: '관리자 권한이 있는 계정은 권한을 회수받은 뒤에 탈퇴할 수 있습니다.',
+  closureRefusalUnsettled:
+    '정산되지 않은 계약이 있는 동안에는 탈퇴할 수 없습니다. 모두 정산된 뒤에 탈퇴할 수 있습니다.',
+  closureRefusalPayment: '진행 중인 결제나 환불이 끝난 뒤에 탈퇴할 수 있습니다.',
+  closureRefusalPendingOrders: '대기 주문이 있는 동안에는 탈퇴할 수 없습니다.',
+  errClosureConfirmation: "'탈퇴'를 정확히 입력해 주세요.",
+  // 탈퇴는 그 계정의 세션을 모두 끝내므로, 답을 받지 못한 탈퇴를 다시 보내면 이 거절(401)을 만난다. 앞은 앱의
+  // 다른 로그아웃 문장(portfolioSignedOut·onboardingSignedOut)과 같은 말이다.
+  errClosureSignedOut:
+    '로그인이 풀렸습니다. 이미 탈퇴한 계정이면 그 계정으로는 다시 로그인할 수 없습니다.',
+
   // --- wallet (M2) ---
   walletTitle: '지갑',
   walletBalance: '사용 가능 잔고',
@@ -266,6 +306,8 @@ export const copy = {
   ledgerTypePaymentCancelReversal: '결제 취소 복원',
   // ADR-0069 decision 4 #70: the start Coin's own ledger type, '시작 지급'.
   ledgerTypeStartGrant: '시작 지급',
+  /** The forfeiture of the Coin left when a member closes the account (#140, #57-16). */
+  ledgerTypeClosureForfeit: '탈퇴 소멸',
 
   // --- admin (M2 minimum, PLAN 12) ---
   adminTitle: '관리자',
@@ -305,6 +347,10 @@ export const copy = {
   errAdjustRange: '0이 아닌 금액을 1,000,000 Coin 이내로 입력해 주세요.',
   errAdjustMemo: '사유를 입력해 주세요.',
   errAdjustNegative: '잔고가 음수가 되는 조정은 할 수 없습니다.',
+  // 탈퇴한 계정(#140, ADR-0086): 탈퇴의 '탈퇴 소멸' 뒤로는 그 원장에 아무것도 쓰지 않으므로(마이그레이션
+  // 0041) 잔고 조정을 받지 않는다(ACCOUNT_CLOSED). 카드에는 조정 양식 대신 이 줄이 있고, 목록을 읽은 뒤
+  // 탈퇴한 계정의 조정도 이 문장으로 거절된다.
+  adminAdjustClosed: '탈퇴한 계정이라 잔고를 조정할 수 없습니다.',
   adminOnly: '관리자만 접근할 수 있습니다.',
 
   // --- admin: markets (M3, PLAN 12) ---
@@ -541,6 +587,9 @@ export const copy = {
     '이메일 인증을 마치지 않은 계정입니다. 이메일 인증과 휴대전화 본인확인을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
   errAdminGrantPhoneNotVerified:
     '휴대전화 본인확인을 마치지 않은 계정입니다. 이메일 인증과 휴대전화 본인확인을 마친 계정에만 관리자 권한을 부여할 수 있습니다.',
+  // 탈퇴한 계정(#140, ADR-0086 7-19): 다시 로그인하지 못하고 프로필이 바뀌지 않으므로 부여할 수 없다. 검색의
+  // 그 줄에는 '부여' 대신 이 문장이 있고, 검색한 뒤 탈퇴한 계정의 부여도 이 문장으로 거절된다(ACCOUNT_CLOSED).
+  adminGrantClosed: '탈퇴한 계정이라 관리자 권한을 부여할 수 없습니다.',
   errAdminRevokeNotAdmin: '관리자가 아닌 계정입니다. 이미 회수되었을 수 있습니다.',
   errAdminRevokeMinAdmins:
     '회수하면 관리자가 2명보다 적어지므로 회수할 수 없습니다. 회수한 뒤에도 관리자가 2명 이상 남아야 하고, 내 계정의 권한을 회수할 때도 같습니다. 다른 계정에 먼저 관리자 권한을 부여해 주세요.',
@@ -1433,6 +1482,10 @@ export const copy = {
   restrictionAccountTitle: '계정 제한 중입니다.',
   errRestrictedAccountProfile: '계정 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다',
   errRestrictedAccountNickname: '계정 제한 중에는 닉네임을 바꿀 수 없습니다',
+  // 탈퇴(#140, ADR-0086): 작성 제한·계정 제한이 끝날 때까지 막는다(ADR-0069 결정 4 #140 «제재 중 탈퇴» —
+  // 무기한이면 풀릴 때까지). 같은 꼴로 뒤에 '(…까지).'나 '(무기한).'이 붙고 열려 있는 것은 없다.
+  errRestrictedClosure: '작성 제한 중에는 탈퇴할 수 없습니다',
+  errRestrictedAccountClosure: '계정 제한 중에는 탈퇴할 수 없습니다',
   // 경고의 안내 띠(오너 결정 2026-10-21): 경고한 때부터 이의 기한 14일 동안 MY 요약에만 보이고(글쓰기
   // 화면은 제한만), 조치·신고 내역으로 잇는다. 취소된 경고에는 없다. 이 문장과 링크뿐이고 이의의 안내는
   // 없다(오너 결정 2026-10-22 답 3, #186).
@@ -1681,6 +1734,9 @@ export const copy = {
   adminAccountRequestDecidedBy: '결정한 운영자',
   adminAccountRequestDecidedAt: '결정한 때',
   adminAccountRequestDecisionReason: '결정 사유',
+  // 회원이 탈퇴해 저절로 닫힌 요청(#140, 오너 결정 2026-10-23 — ADR-0085 결과 5 «거절로 기록, 까닭 '탈퇴'»):
+  // 결정한 운영자가 없으므로 '결정한 운영자' 대신 이 말과 닫힌 때다. 결정 사유는 '탈퇴'다.
+  adminAccountRequestClosedByClosure: '회원 탈퇴로 닫힘',
   adminAccountRequestOwn:
     '내가 한 요청이라 다른 운영자가 승인하거나 거절합니다. 결정 전에는 철회할 수 있습니다.',
   adminAccountRequestMemo: '운영자 메모',

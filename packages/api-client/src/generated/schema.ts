@@ -1322,6 +1322,24 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/closure": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What closing the account would do now: the Coin it forfeits and what refuses it (탈퇴, #140) */
+        get: operations["getMyClosureCheck"];
+        put?: never;
+        /** Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session */
+        post: operations["closeMyAccount"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/comments": {
         parameters: {
             query?: never;
@@ -2062,6 +2080,22 @@ export type paths = {
 export type webhooks = Record<string, never>;
 export type components = {
     schemas: {
+        AccountClosureBody: {
+            confirmation: string;
+            expectedAccountId: string;
+        };
+        AccountClosureCheck: {
+            availableCoin: components["schemas"]["CoinAmount"];
+            refusals: components["schemas"]["AccountClosureRefusal"][];
+            restriction: components["schemas"]["RestrictedDetails"] | null;
+        };
+        /** @enum {string} */
+        AccountClosureRefusal: "admin" | "unsettled_contracts" | "payment_in_progress" | "pending_orders";
+        AccountClosureResult: {
+            /** Format: date-time */
+            closedAt: string;
+            forfeitedCoin: components["schemas"]["CoinAmount"];
+        };
         AccountRestrictionApply: {
             days: number | null;
             memo: string | null;
@@ -2100,6 +2134,7 @@ export type components = {
             actionId: string | null;
             apply: components["schemas"]["AccountRestrictionApply"] | null;
             change: components["schemas"]["AccountRestrictionChange"];
+            closedByAccountClosure: boolean;
             /** Format: date-time */
             decidedAt: string | null;
             decidedBy: components["schemas"]["AdminAccountActor"] | null;
@@ -2143,7 +2178,7 @@ export type components = {
         };
         AdminAccountActor: {
             id: string;
-            nickname: string;
+            nickname: string | null;
         };
         AdminBalanceAdjustResult: {
             ledgerEntry: components["schemas"]["LedgerEntry"];
@@ -2395,7 +2430,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             method: string | null;
-            nickname: string;
+            nickname: string | null;
             /** Format: uuid */
             packageId: string | null;
             priceKrw: number;
@@ -2505,7 +2540,7 @@ export type components = {
             target: components["schemas"]["ModerationTarget"];
         };
         AdminReportGroup: {
-            excerpt: string;
+            excerpt: string | null;
             /** Format: date-time */
             firstPendingAt: string | null;
             /** Format: date-time */
@@ -2569,7 +2604,7 @@ export type components = {
             /** Format: email */
             email: string;
             id: string;
-            nickname: string;
+            nickname: string | null;
             /** @enum {string} */
             role: "user" | "admin";
         };
@@ -2821,7 +2856,7 @@ export type components = {
             reportIds: string[];
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -2871,9 +2906,9 @@ export type components = {
             memo: string | null;
             refId: string | null;
             /** @enum {string|null} */
-            refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | "start_grant" | null;
+            refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | "start_grant" | "account_closure" | null;
             /** @enum {string} */
-            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL" | "START_GRANT";
+            type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL" | "START_GRANT" | "CLOSURE_FORFEIT";
         };
         LiftRestrictionBody: {
             expectedAccountId: string;
@@ -3034,7 +3069,7 @@ export type components = {
         ModerationTarget: components["schemas"]["ModerationPostTarget"] | components["schemas"]["ModerationCommentTarget"] | components["schemas"]["ModerationProfileTarget"];
         ModerationUser: {
             id: string;
-            nickname: string;
+            nickname: string | null;
             /** @description An account’s public id: 10 lower-case letters and digits, never the account id */
             publicId: string;
             role: components["schemas"]["UserRole"];
@@ -3558,7 +3593,7 @@ export type components = {
         };
         ReleaseSettingActor: {
             id: string;
-            nickname: string;
+            nickname: string | null;
         };
         ReleaseSettingChange: {
             actor: components["schemas"]["ReleaseSettingActor"];
@@ -3958,7 +3993,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED */
+            /** @description ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED | ACCOUNT_CLOSED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -9147,7 +9182,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE */
+            /** @description ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE | ACCOUNT_CLOSED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -10225,6 +10260,133 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getMyClosureCheck: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountClosureCheck"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    closeMyAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountClosureBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountClosureResult"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN | RESTRICTED */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description CLOSURE_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

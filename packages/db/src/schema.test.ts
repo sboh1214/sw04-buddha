@@ -15,6 +15,7 @@ import {
   REPORT_REASONS,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
+  closedAccountEmail,
   currentConsentVersion,
   nicknameSchema,
   releaseSettingChangeBodySchema,
@@ -23,6 +24,7 @@ import {
 import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
+  account,
   adminActions,
   approvalRequests,
   auditFailures,
@@ -68,9 +70,11 @@ import {
   releaseSettings,
   reports,
   restrictionEndChanges,
+  session,
   startGrantNumbers,
   startGrants,
   user,
+  verification,
   writeLimitEvents,
 } from './schema/index.js';
 import { closeDb, createDb } from './client.js';
@@ -257,7 +261,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           .select({ nickname: profiles.nickname })
           .from(profiles)
           .where(eq(profiles.userId, id));
-        return row!.nickname;
+        // A new account is open: it has a nickname (only a closed one has none, #140).
+        return row!.nickname!;
       });
     }
 
@@ -2936,6 +2941,609 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         approvedBy: second.id,
         cancelled: { at: new Date(), by: admin.id, reason: '취소', approvedBy: second.id },
       });
+    });
+  });
+
+  describe('closed accounts (migration 0041, #140)', () => {
+    type Kept =
+      | 'session'
+      | 'account'
+      | 'reset'
+      | 'verification'
+      | 'watch'
+      | 'search'
+      | 'interest'
+      | 'hold'
+      | 'coin'
+      | 'address'
+      | 'request';
+
+    /**
+     * An account with every row a closure deletes or changes: a session, a sign-in method, a
+     * password-reset token, a 본인확인 record, a watch, a search, an interest category, a nickname
+     * hold of its own, Coin, its address and name — and the two kinds of account restriction
+     * request about it still waiting: one to restrict it (`request`, its target the member) and
+     * one to lift an ended restriction of its (`change`, its target that restriction).
+     */
+    async function closable() {
+      const { user: member } = await createUser(t.db, { balanceCoin: 5_000n });
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const market = await createMarket(t.db);
+      const category = await createCategory(t.db);
+      await t.db.insert(session).values({
+        id: randomUUID(),
+        token: randomUUID(),
+        userId: member.id,
+        expiresAt: new Date(Date.now() + 60_000),
+        updatedAt: new Date(),
+      });
+      await t.db.insert(account).values({
+        id: randomUUID(),
+        issuer: 'local:credential',
+        accountId: member.id,
+        providerId: 'credential',
+        userId: member.id,
+        password: 'salt:key',
+        updatedAt: new Date(),
+      });
+      await t.db.insert(verification).values({
+        id: randomUUID(),
+        identifier: `reset-password:${randomUUID()}`,
+        value: member.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+      await createPhoneVerification(t.db, { userId: member.id });
+      await createWatch(t.db, { userId: member.id, marketId: market.id });
+      await createSearch(t.db, { userId: member.id, query: '금리' });
+      await t.db
+        .insert(profileInterestCategories)
+        .values({ userId: member.id, categoryId: category.id });
+      await t.db.insert(nicknameHolds).values({ nickname: 'gave_up', userId: member.id });
+      const request = await createApprovalRequest(t.db, {
+        kind: 'account_restriction',
+        targetType: 'user',
+        targetId: member.id,
+        requestedBy: admin.id,
+      });
+      const ended = await endedAccountRestriction(member.id, admin.id, approver.id);
+      const change = await createApprovalRequest(t.db, {
+        kind: 'account_restriction_lift',
+        targetType: 'moderation_action',
+        targetId: ended.id,
+        requestedBy: admin.id,
+      });
+      return { member, admin, request, ended, change, requestIds: [request.id, change.id] };
+    }
+
+    /** An account restriction of `userId` that ended yesterday: it refuses no closure. */
+    function endedAccountRestriction(userId: string, createdBy: string, approvedBy: string) {
+      return createModerationAction(t.db, {
+        userId,
+        createdBy,
+        approvedBy,
+        type: 'account_restriction',
+        reason: 'multi_account',
+        createdAt: new Date(Date.now() - 3 * 24 * 60 * 60 * 1_000),
+        endsAt: new Date(Date.now() - 24 * 60 * 60 * 1_000),
+      });
+    }
+
+    /** A forfeiture entry of the wrong shape, written in place of the closure's own. */
+    interface BadForfeiture {
+      amountCoin?: bigint;
+      balanceAfterCoin?: bigint;
+      refId?: string;
+    }
+
+    /**
+     * The closure as the API's AccountClosureService writes it, in one transaction — leaving out
+     * `keep`, to see the database refuse the commit, or writing `forfeiture` in place of its own
+     * entry. With `hold`, the transaction stays open after its writes (holding the profile FOR
+     * UPDATE) until `hold.release` resolves, telling `hold.written` once they are done. Returns the
+     * closure's instant.
+     */
+    async function closeInDb(
+      userId: string,
+      requestIds: string[],
+      keep?: Kept,
+      options: {
+        forfeiture?: BadForfeiture;
+        hold?: { written: () => void; release: Promise<void> };
+      } = {},
+    ): Promise<Date> {
+      return t.db.transaction(async (tx) => {
+        const [balance] = await tx
+          .select()
+          .from(balances)
+          .where(eq(balances.userId, userId))
+          .for('update');
+        const [profile] = await tx
+          .select()
+          .from(profiles)
+          .where(eq(profiles.userId, userId))
+          .for('update');
+        const closedAt = new Date();
+        if (keep !== 'coin' && balance!.availableCoin > 0n) {
+          await tx.insert(ledgerEntries).values({
+            userId,
+            type: 'CLOSURE_FORFEIT',
+            amountCoin: -balance!.availableCoin,
+            balanceAfterCoin: 0n,
+            refType: 'account_closure',
+            refId: userId,
+            ...options.forfeiture,
+          });
+          await tx.update(balances).set({ availableCoin: 0n }).where(eq(balances.userId, userId));
+        }
+        if (keep !== 'hold') {
+          await tx
+            .update(nicknameHolds)
+            .set({ userId: null })
+            .where(eq(nicknameHolds.userId, userId));
+        }
+        await tx
+          .insert(nicknameHolds)
+          .values({ nickname: profile!.nickname!, userId: null, releasedAt: closedAt });
+        await tx
+          .update(profiles)
+          .set({ closedAt, nickname: null, bio: null, imageId: null })
+          .where(eq(profiles.userId, userId));
+        if (keep !== 'interest') {
+          await tx
+            .delete(profileInterestCategories)
+            .where(eq(profileInterestCategories.userId, userId));
+        }
+        if (keep !== 'verification') {
+          await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
+        }
+        if (keep !== 'watch')
+          await tx.delete(marketWatches).where(eq(marketWatches.userId, userId));
+        if (keep !== 'search') {
+          await tx.delete(marketSearches).where(eq(marketSearches.userId, userId));
+        }
+        if (keep !== 'session') await tx.delete(session).where(eq(session.userId, userId));
+        if (keep !== 'account') await tx.delete(account).where(eq(account.userId, userId));
+        if (keep !== 'reset') await tx.delete(verification).where(eq(verification.value, userId));
+        if (keep !== 'address') {
+          await tx
+            .update(user)
+            .set({ email: closedAccountEmail(userId), name: '', image: null })
+            .where(eq(user.id, userId));
+        }
+        if (keep !== 'request') {
+          for (const id of requestIds) {
+            await tx
+              .update(approvalRequests)
+              .set({ status: 'rejected', decisionReason: '탈퇴', decidedAt: closedAt })
+              .where(eq(approvalRequests.id, id));
+          }
+        }
+        if (options.hold) {
+          options.hold.written();
+          await options.hold.release;
+        }
+        return closedAt;
+      });
+    }
+
+    /** A gate one transaction waits at until the test opens it. */
+    function gate() {
+      let open!: () => void;
+      const opened = new Promise<void>((resolve) => (open = resolve));
+      return { open, opened };
+    }
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    it('closes an account whose closure is whole, and the closed row never changes again', async () => {
+      const { member, requestIds } = await closable();
+      const closedAt = await closeInDb(member.id, requestIds);
+      const [profile] = await t.db.select().from(profiles).where(eq(profiles.userId, member.id));
+      expect(profile).toMatchObject({ closedAt, nickname: null, bio: null, imageId: null });
+      // Whoever writes: no change, no reopening (#57-17).
+      for (const change of [
+        { timeZone: 'Asia/Seoul' },
+        { closedAt: null, nickname: 'back_again' },
+        { updatedAt: new Date() },
+      ]) {
+        await expect(
+          t.db.update(profiles).set(change).where(eq(profiles.userId, member.id)),
+        ).rejects.toSatisfy((e) => errorMessage(e).includes('never changes again'));
+      }
+      // The ledger sums to the balance, now 0, and ends with the forfeiture.
+      const entries = await t.db
+        .select()
+        .from(ledgerEntries)
+        .where(eq(ledgerEntries.userId, member.id))
+        .orderBy(ledgerEntries.id);
+      expect(entries.map((e) => [e.type, e.amountCoin, e.balanceAfterCoin])).toEqual([
+        ['ADMIN_ADJUST', 5_000n, 5_000n],
+        ['CLOSURE_FORFEIT', -5_000n, 0n],
+      ]);
+    });
+
+    it('refuses the commit of a closure that left anything behind (profiles_closed_completely)', async () => {
+      const kept: [Kept, string][] = [
+        ['session', 'a session'],
+        ['account', 'a sign-in method'],
+        ['reset', 'a password reset'],
+        ['verification', 'its verified number'],
+        ['watch', 'its watchlist'],
+        ['search', 'its search history'],
+        ['interest', 'its interest categories'],
+        ['hold', 'a nickname hold of its own'],
+        ['coin', 'Coin'],
+        ['address', 'its address, name or photo'],
+        ['request', 'a request about it waiting'],
+      ];
+      for (const [keep, what] of kept) {
+        const { member, requestIds } = await closable();
+        await expect(closeInDb(member.id, requestIds, keep), keep).rejects.toSatisfy((e) =>
+          errorMessage(e).includes(`closed keeping ${what}`),
+        );
+        const [profile] = await t.db.select().from(profiles).where(eq(profiles.userId, member.id));
+        expect(profile?.closedAt, keep).toBeNull();
+      }
+      // Either kind of request left waiting: the one to restrict the member, or the one to change
+      // a restriction of theirs (its target the restriction, not the member).
+      for (const left of ['request', 'change'] as const) {
+        const { member, request, change } = await closable();
+        const closing = left === 'request' ? [change.id] : [request.id];
+        await expect(closeInDb(member.id, closing), left).rejects.toSatisfy((e) =>
+          errorMessage(e).includes('closed keeping a request about it waiting'),
+        );
+        const [profile] = await t.db.select().from(profiles).where(eq(profiles.userId, member.id));
+        expect(profile?.closedAt, left).toBeNull();
+      }
+    });
+
+    it('keeps a closed account without public items and never an admin; an open one keeps its nickname', async () => {
+      const { user: open } = await createUser(t.db);
+      await expect(
+        t.db.update(profiles).set({ nickname: null }).where(eq(profiles.userId, open.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'profiles_closed_check');
+      for (const set of [
+        { closedAt: new Date() },
+        { closedAt: new Date(), nickname: null, bio: '소개' },
+        { closedAt: new Date(), nickname: null, role: 'admin' as const },
+      ]) {
+        await expect(
+          t.db.update(profiles).set(set).where(eq(profiles.userId, open.id)),
+        ).rejects.toSatisfy((e) => sqlConstraint(e) === 'profiles_closed_check');
+      }
+    });
+
+    it('refuses a session or a sign-in method for a closed account, and takes them for an open one', async () => {
+      const { member, requestIds } = await closable();
+      await closeInDb(member.id, requestIds);
+      const { user: open } = await createUser(t.db);
+      for (const userId of [member.id, open.id]) {
+        const sessionInsert = t.db.insert(session).values({
+          id: randomUUID(),
+          token: randomUUID(),
+          userId,
+          expiresAt: new Date(Date.now() + 60_000),
+          updatedAt: new Date(),
+        });
+        const accountInsert = t.db.insert(account).values({
+          id: randomUUID(),
+          issuer: 'local:credential',
+          accountId: userId,
+          providerId: 'credential',
+          userId,
+          password: 'salt:key',
+          updatedAt: new Date(),
+        });
+        if (userId === open.id) {
+          await sessionInsert;
+          await accountInsert;
+        } else {
+          await expect(sessionInsert).rejects.toSatisfy((e) =>
+            errorMessage(e).includes('signs in no more'),
+          );
+          await expect(accountInsert).rejects.toSatisfy((e) =>
+            errorMessage(e).includes('signs in no more'),
+          );
+        }
+      }
+    });
+
+    it('ends a closed account’s ledger with its forfeiture, the closing account’s own and once', async () => {
+      const { member, requestIds } = await closable();
+      await closeInDb(member.id, requestIds);
+      // Nothing after the closure — checked at the commit.
+      await expect(
+        t.db.insert(ledgerEntries).values({
+          userId: member.id,
+          type: 'ADMIN_ADJUST',
+          amountCoin: 0n,
+          balanceAfterCoin: 0n,
+        }),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('takes no entry after the closure'));
+      // One forfeiture per account.
+      await expect(
+        t.db.insert(ledgerEntries).values({
+          userId: member.id,
+          type: 'CLOSURE_FORFEIT',
+          amountCoin: -1n,
+          balanceAfterCoin: 0n,
+          refType: 'account_closure',
+          refId: member.id,
+        }),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'ledger_entries_account_closure_unique');
+      // An open account takes no forfeiture, nor any entry that refers to a closure.
+      const { user: open } = await createUser(t.db, { balanceCoin: 100n });
+      for (const entry of [
+        { type: 'CLOSURE_FORFEIT' as const, refType: null, refId: null },
+        { type: 'CLOSURE_FORFEIT' as const, refType: 'account_closure', refId: open.id },
+        { type: 'ADMIN_ADJUST' as const, refType: 'account_closure', refId: open.id },
+      ]) {
+        await expect(
+          t.db.insert(ledgerEntries).values({
+            userId: open.id,
+            amountCoin: -100n,
+            balanceAfterCoin: 0n,
+            ...entry,
+          }),
+        ).rejects.toSatisfy((e) => errorMessage(e).includes('is a forfeiture only as'));
+      }
+    });
+
+    it('lets no nickname hold name a closed account (#57-18)', async () => {
+      const { member, requestIds } = await closable();
+      await closeInDb(member.id, requestIds);
+      await expect(
+        t.db.insert(nicknameHolds).values({ nickname: 'someone', userId: member.id }),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('no nickname hold names it'));
+      const [hold] = await t.db
+        .insert(nicknameHolds)
+        .values({ nickname: 'unlinked', userId: null })
+        .returning();
+      await expect(
+        t.db.update(nicknameHolds).set({ userId: member.id }).where(eq(nicknameHolds.id, hold!.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('no nickname hold names it'));
+    });
+
+    it('rejects a request without an admin only for the closure of the member it is about, as 탈퇴 (owner decision 2026-10-23)', async () => {
+      const { user: open } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const aboutOpen = await createApprovalRequest(t.db, {
+        kind: 'account_restriction',
+        targetType: 'user',
+        targetId: open.id,
+        requestedBy: admin.id,
+      });
+      const undecided = {
+        status: 'rejected' as const,
+        decisionReason: '탈퇴',
+        decidedAt: new Date(),
+      };
+      await expect(
+        t.db.update(approvalRequests).set(undecided).where(eq(approvalRequests.id, aboutOpen.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('only by the closure'));
+      // An approval always names its admin (the decision CHECK).
+      await expect(
+        t.db
+          .update(approvalRequests)
+          .set({ ...undecided, status: 'approved' })
+          .where(eq(approvalRequests.id, aboutOpen.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'approval_requests_decision_check');
+
+      const { member, requestIds } = await closable();
+      const second = await createApprovalRequest(t.db, {
+        kind: 'account_restriction',
+        targetType: 'user',
+        targetId: member.id,
+        requestedBy: admin.id,
+      });
+      const closedAt = await closeInDb(member.id, requestIds).catch(() => null);
+      // The second request still waited: the closure did not commit.
+      expect(closedAt).toBeNull();
+      const at = await closeInDb(member.id, [...requestIds, second.id]);
+      // Only '탈퇴', and not before the closure.
+      const [later] = await t.db
+        .insert(approvalRequests)
+        .values({
+          kind: 'account_restriction',
+          targetType: 'user',
+          targetId: member.id,
+          requestedBy: admin.id,
+          requestReason: '요청 사유',
+          requestedAt: new Date(at.getTime() - 60_000),
+        })
+        .returning();
+      for (const set of [
+        { ...undecided, decisionReason: '다른 사유', decidedAt: new Date(at.getTime() + 1) },
+        { ...undecided, decidedAt: new Date(at.getTime() - 1) },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, later!.id)),
+        ).rejects.toSatisfy((e) => errorMessage(e).includes('only by the closure'));
+      }
+      const [closed] = await t.db
+        .update(approvalRequests)
+        .set({ ...undecided, decidedAt: new Date(at.getTime() + 1) })
+        .where(eq(approvalRequests.id, later!.id))
+        .returning();
+      expect(closed).toMatchObject({ status: 'rejected', decidedBy: null, decisionReason: '탈퇴' });
+    });
+
+    it('rejects a request to change a restriction without an admin only once that restriction’s member closed (owner decision 2026-10-23)', async () => {
+      const { user: open } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const lift = (actionId: string) =>
+        createApprovalRequest(t.db, {
+          kind: 'account_restriction_lift',
+          targetType: 'moderation_action',
+          targetId: actionId,
+          requestedBy: admin.id,
+        });
+      const byClosure = (at: Date) => ({
+        status: 'rejected' as const,
+        decisionReason: '탈퇴',
+        decidedAt: at,
+      });
+      // The restriction's member is open: no rejection without an admin.
+      const aboutOpen = await lift(
+        (await endedAccountRestriction(open.id, admin.id, approver.id)).id,
+      );
+      await expect(
+        t.db
+          .update(approvalRequests)
+          .set(byClosure(new Date()))
+          .where(eq(approvalRequests.id, aboutOpen.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('only by the closure'));
+      // Its member closed: the closure's rejection of a change request (the restriction's member,
+      // not the request's target) — here one asked after the closure, as nothing stops that.
+      const { member, ended, requestIds } = await closable();
+      const at = await closeInDb(member.id, requestIds);
+      const later = await lift(ended.id);
+      const [closed] = await t.db
+        .update(approvalRequests)
+        .set(byClosure(new Date(at.getTime() + 1)))
+        .where(eq(approvalRequests.id, later.id))
+        .returning();
+      expect(closed).toMatchObject({ status: 'rejected', decidedBy: null, decisionReason: '탈퇴' });
+      // Still not another member's: the open member's request stays waiting.
+      const [still] = await t.db
+        .select({ status: approvalRequests.status })
+        .from(approvalRequests)
+        .where(eq(approvalRequests.id, aboutOpen.id));
+      expect(still).toEqual({ status: 'pending' });
+    });
+
+    it('takes a forfeiture only of the closing account’s whole balance, to 0 and naming itself (#57-16)', async () => {
+      const { user: elsewhere } = await createUser(t.db);
+      const bad: [string, BadForfeiture][] = [
+        ['a balance left after it', { balanceAfterCoin: 500n }],
+        ['a credit', { amountCoin: 5_000n }],
+        ['another account named', { refId: elsewhere.id }],
+      ];
+      for (const [what, forfeiture] of bad) {
+        const { member, requestIds } = await closable();
+        await expect(
+          closeInDb(member.id, requestIds, undefined, { forfeiture }),
+          what,
+        ).rejects.toSatisfy((e) => errorMessage(e).includes('is a forfeiture only as'));
+        const [profile] = await t.db.select().from(profiles).where(eq(profiles.userId, member.id));
+        expect(profile?.closedAt, what).toBeNull();
+        expect(
+          await t.db
+            .select()
+            .from(ledgerEntries)
+            .where(eq(ledgerEntries.refType, 'account_closure')),
+          what,
+        ).toEqual([]);
+      }
+    });
+
+    /**
+     * One new row of each kind migration 0041 refuses for a closed account (#57-18) from the
+     * writers that take no lock the closure holds — a watch, a search, a 본인확인 record, a code
+     * send, a password-reset token — for `userId`, on a market of its own.
+     */
+    const lateRows = {
+      market_watches_open_account: async (userId: string) =>
+        createWatch(t.db, { userId, marketId: (await createMarket(t.db)).id }),
+      market_searches_open_account: (userId: string) =>
+        createSearch(t.db, { userId, query: '늦은 검색' }),
+      phone_verifications_open_account: (userId: string) =>
+        createPhoneVerification(t.db, { userId }),
+      phone_verification_codes_open_account: (userId: string) =>
+        t.db.insert(phoneVerificationCodes).values({
+          id: randomUUID(),
+          userId,
+          phone: '01012345678',
+          realName: '김늦음',
+          codeHash: randomUUID(),
+          expiresAt: new Date(Date.now() + 180_000),
+        }),
+      verification_open_account: (userId: string) =>
+        t.db.insert(verification).values({
+          id: randomUUID(),
+          identifier: `reset-password:${randomUUID()}`,
+          value: userId,
+          expiresAt: new Date(Date.now() + 60_000),
+        }),
+    };
+    const lateTriggers = Object.keys(lateRows) as (keyof typeof lateRows)[];
+
+    it('refuses a closed account a new watch, search, 본인확인 record, code send or password reset, and takes them for an open one', async () => {
+      const { member, requestIds } = await closable();
+      await closeInDb(member.id, requestIds);
+      const { user: open } = await createUser(t.db);
+      for (const trigger of lateTriggers) {
+        await expect(lateRows[trigger](member.id), trigger).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000' && sqlConstraint(e) === trigger,
+        );
+        await lateRows[trigger](open.id);
+      }
+      // better-auth's other rows name no account and are not looked at.
+      await t.db.insert(verification).values({
+        id: randomUUID(),
+        identifier: `email-verification:${randomUUID()}`,
+        value: member.id,
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+    });
+
+    it('orders those rows with a closure in flight: refused after it, deleted by it before (no row kept, no closure refused)', async () => {
+      // Written after the closure took the profile: waits for its commit, then is refused.
+      for (const trigger of lateTriggers) {
+        const { member, requestIds } = await closable();
+        const written = gate();
+        const release = gate();
+        const closing = closeInDb(member.id, requestIds, undefined, {
+          hold: { written: written.open, release: release.opened },
+        });
+        await written.opened;
+        let doneAt: number | undefined;
+        const late = lateRows[trigger](member.id).finally(() => (doneAt = Date.now()));
+        await pause(150);
+        const waited = doneAt === undefined;
+        release.open();
+        const [closed, refused] = await Promise.allSettled([closing, late]);
+        expect(closed.status, trigger).toBe('fulfilled');
+        expect(
+          refused.status === 'rejected' && sqlConstraint(refused.reason) === trigger,
+          trigger,
+        ).toBe(true);
+        expect(waited, trigger).toBe(true);
+      }
+      // Written first, still open: the closure waits for it, then deletes the row and commits.
+      for (const trigger of [
+        'market_watches_open_account',
+        'market_searches_open_account',
+      ] as const) {
+        const { member, requestIds } = await closable();
+        const inserted = gate();
+        const end = gate();
+        const early = t.db.transaction(async (tx) => {
+          if (trigger === 'market_watches_open_account') {
+            await tx
+              .insert(marketWatches)
+              .values({ userId: member.id, marketId: (await createMarket(t.db)).id });
+          } else {
+            await tx.insert(marketSearches).values({ userId: member.id, query: '먼저 한 검색' });
+          }
+          inserted.open();
+          await end.opened;
+        });
+        await inserted.opened;
+        let closedAt: number | undefined;
+        const closing = closeInDb(member.id, requestIds).finally(() => (closedAt = Date.now()));
+        await pause(150);
+        const held = closedAt === undefined;
+        end.open();
+        await early;
+        await closing;
+        expect(held, trigger).toBe(true);
+        const table = trigger === 'market_watches_open_account' ? marketWatches : marketSearches;
+        expect(await t.db.select().from(table).where(eq(table.userId, member.id)), trigger).toEqual(
+          [],
+        );
+      }
     });
   });
 

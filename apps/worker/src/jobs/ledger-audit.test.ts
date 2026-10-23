@@ -4,6 +4,7 @@
  */
 import { schema } from '@buddha/db';
 import {
+  closeAccount,
   connectTestDb,
   createStartGrant,
   createUser,
@@ -40,6 +41,24 @@ describe.skipIf(!hasTestDb())('ledger.audit (integration)', () => {
     expect(result.checked).toBe(2);
     expect(result.mismatches).toEqual([]);
     expect(result.recorded).toBe(0);
+    expect(await failures()).toHaveLength(0);
+  });
+
+  it('finds a closed account balanced: its forfeiture took the balance to 0 by an entry (#140)', async () => {
+    // ADR-0069 decision 1 #57-16: the Coin left is forfeited as '탈퇴 소멸', never overwritten, so
+    // the account's ledger still sums to its balance — now 0 — and the audit has nothing to say.
+    const { user } = await createUser(t.db, { balanceCoin: 10_000n });
+    await createStartGrant(t.db, { userId: user.id, amountCoin: 3_000n });
+    await closeAccount(t.db, user.id);
+    const [balance] = await t.db
+      .select()
+      .from(schema.balances)
+      .where(eq(schema.balances.userId, user.id));
+    expect(balance).toMatchObject({ availableCoin: 0n, lockedCoin: 0n });
+
+    const result = await runLedgerAudit(t.db);
+    expect(result.checked).toBe(1);
+    expect(result.mismatches).toEqual([]);
     expect(await failures()).toHaveLength(0);
   });
 

@@ -121,6 +121,15 @@ const COPY_ALLOWANCES: readonly {
       "The wallet's 이용 내역 names the kept ledger types (D9, ADR-0049): rows from before sales " +
       'closed, not an offer. None is written while they are closed.',
   })),
+  {
+    key: 'closureRefusalPayment',
+    feature: 'paid-purchase',
+    words: ['결제'],
+    reason:
+      '탈퇴 (#140, ADR-0086) waits for a payment of the kept paid-Coin code that is pending or ' +
+      'refunding (ADR-0069 decision 7): a refusal, not an offer, and never shown while sales are ' +
+      'closed — no payment can be in progress then.',
+  },
 ];
 
 function isPreservedPaid(file: string): boolean {
