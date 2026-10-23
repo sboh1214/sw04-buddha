@@ -23,7 +23,7 @@ import { timestampTz } from './columns.js';
  *
  * Kept a day: the longest window is 24 hours, and the worker deletes rows an hour past it
  * (`community.records_purge` — the hour keeps what a count running meanwhile includes). buddha_app
- * inserts, reads and deletes, never rewrites one (migration 0038: no UPDATE).
+ * inserts, reads and deletes, never rewrites one (migration 0041: no UPDATE).
  */
 export const writeLimitEvents = pgTable(
   'write_limit_events',

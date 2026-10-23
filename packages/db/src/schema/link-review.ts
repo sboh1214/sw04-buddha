@@ -31,7 +31,7 @@ import { posts } from './posts.js';
  *
  * Kept a day: the rules look 24 hours back, and the worker deletes rows an hour past that
  * (`community.records_purge`). buddha_app inserts, reads and deletes, never rewrites one (migration
- * 0038: no UPDATE) — an operator's change of a member's number moves the last day's rows to the new
+ * 0041: no UPDATE) — an operator's change of a member's number moves the last day's rows to the new
  * number by deleting them and inserting them again (docs/OPERATIONS.md, owner decision 2026-10-22).
  */
 export const linkUses = pgTable(
@@ -64,7 +64,7 @@ export const linkUses = pgTable(
  * 2026-10-22) — the `admin_actions` row of type `link_flag_review` that says who, when, what came
  * of it and the note. NULL until then; the default list is the entries with none. Set once: an
  * operator's mark sets it on the group's unmarked entries (`WHERE review_action_id IS NULL`), and a
- * trigger refuses changing it once set (migration 0038). buddha_app may update this column only.
+ * trigger refuses changing it once set (migration 0041). buddha_app may update this column only.
  *
  * Kept for the retention period of #57-18 (owner decision 2026-10-22, ADR-0083 결과 5): buddha_app
  * may delete rows, and #184 deletes them when the period ends. Neither the writer nor the app

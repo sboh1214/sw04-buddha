@@ -117,7 +117,7 @@
  *    are the account's as well (the person the account inherited them from, as step 4 moves the
  *    likes it inherited). Older rows stay to the worker's purge (they count for no one). Deleted
  *    and inserted again with their kind, link, item and time (buddha_app has no UPDATE on them,
- *    migration 0038). A fourth DO block with the SET LOCAL values; it answers `DO`. After step 1
+ *    migration 0041). A fourth DO block with the SET LOCAL values; it answers `DO`. After step 1
  *    as step 4 is: a counted write of the account in flight holds the 본인확인 row FOR KEY SHARE
  *    (WriteLimitsService.lockWriter) and has committed by then, and a later one waits for the
  *    COMMIT and counts under the new hash. Run again — the old number read again is the new one —

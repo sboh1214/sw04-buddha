@@ -2448,7 +2448,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  describe('write limits and repeated links (migration 0038, #187)', () => {
+  describe('write limits and repeated links (migration 0041, #187)', () => {
     /** A post with a 댓글 under it, by a new account. */
     async function linkFixture() {
       const { user: author } = await createUser(t.db);
@@ -4851,7 +4851,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       // Migration 0035 (#49): a like is inserted and an unlike deletes it, never rewritten.
       expect(privs('post_likes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       expect(privs('comment_likes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
-      // Migration 0038 (#187): a counted write and a link use are inserted and purged after a day
+      // Migration 0041 (#187): a counted write and a link use are inserted and purged after a day
       // (or moved to a new number by deleting and inserting them again), never rewritten; a
       // review-list entry is inserted, marked once — its `review_action_id` only, a column grant —
       // and deleted after its retention period (owner decision 2026-10-22).
