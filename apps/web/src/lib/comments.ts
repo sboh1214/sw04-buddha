@@ -161,9 +161,12 @@ export const REPLY_READ_ON_PAGES = 5;
  * and the read had no bound before: on a post whose older 댓글 the reader had not opened, some
  * 2,000 of them, it asked for every page between and reached the limit's 429 — spending the
  * address's other requests with it — before falling back (Codex review on PR #220, ADR-0074
- * 7-14). Past it, as after a read that failed: the new 댓글 stands at the end of the pages held,
- * and 더 보기 brings it into its place with the page that holds it. Apart from the reply pages the
- * threads of those pages read on (REPLY_READ_ON_PAGES_IN_ALL below, one budget for the read).
+ * 7-14). Past it, as after a read that failed: the new 댓글 stands at the end of the pages held —
+ * their last page as read again, whose cursor leaves 더 보기 there — and 더 보기 brings it into its
+ * place with the page that holds it. Until then a read of as many pages as are held (a focus 30
+ * seconds on, a reconnect) leaves it out, and a box open on it goes as from a 댓글 deleted
+ * (`goneBoxReason` — ADR-0074 결과 4 asks the owner). Apart from the reply pages the threads of
+ * those pages read on (REPLY_READ_ON_PAGES_IN_ALL below, one budget for the read).
  */
 export const COMMENT_READ_ON_PAGES = 5;
 
@@ -288,7 +291,8 @@ function mapThreads(
  * meanwhile) does not come here. A 댓글 goes last of the pages read: the hooks read its
  * page instead (`readOnToTheEnd`) and come here only when that read fails or stops short of it,
  * COMMENT_READ_ON_PAGES read — before 댓글 still unread, and out of the pages at the next read of
- * as many pages, until 더 보기 brings it. Nothing is added twice, and a comment its page brings
+ * as many pages, until 더 보기 brings it (a box open on it then goes as from a 댓글 deleted,
+ * `goneBoxReason`; ADR-0074 7-14, 결과 4). Nothing is added twice, and a comment its page brings
  * later is drawn once, where that page puts it (`commentThreadsOf`, `repliesWith`).
  */
 export function withNewComment(
@@ -653,10 +657,14 @@ export type CommentsPostState = Post['state'] | 'gone';
  * 대댓글 whose thread now holds fewer than the screen did, 대댓글 still unread after them: a read of
  * the pages reads a thread on five reply pages at most (REPLY_READ_ON_PAGES, 오너 결정 2026-10-21
  * (2차) 답 1), so the 대댓글 may be past them as well as deleted, and the words — the owner's
- * (오너 결정 2026-10-22 답 3) — say it may be either (ADR-0074 7-30). What a held text says for a
- * box with no write that went because its place changed (오너 결정 2026-10-21 답 2), and when the
- * refusal its box heard was about something else — a network failure, say — and the box went later
- * because its thread changed (`heldTextsOf`).
+ * (오너 결정 2026-10-22 답 3) — say it may be either (ADR-0074 7-30). Nor is one on the writer's
+ * new 댓글 that its read left at the end of the pages held (`withNewComment` — the read failed, or
+ * stopped at COMMENT_READ_ON_PAGES): a read of as many pages leaves it out until 더 보기 brings it,
+ * so a box on it — an answer to it, its edit — is said gone as from a 댓글 deleted although it is
+ * not (ADR-0074 7-14; 결과 4 asks the owner). What a held text says for a box with no write that
+ * went because its place changed (오너 결정 2026-10-21 답 2), and when the refusal its box heard was
+ * about something else — a network failure, say — and the box went later because its thread
+ * changed (`heldTextsOf`).
  */
 export function goneBoxReason(
   place: HeldTextPlace,

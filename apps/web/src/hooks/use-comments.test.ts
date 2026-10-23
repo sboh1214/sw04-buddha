@@ -1678,11 +1678,14 @@ describe('a new 댓글', () => {
         };
       });
     };
-    /** The client holding the first page of the fake server, and an observer of the pages. */
-    const holdingFirst = () => {
+    /**
+     * The client holding the first page of the fake server — with `nextCursor`, as it was read —
+     * and an observer of the pages.
+     */
+    const holdingFirst = (nextCursor: string | null = 'c1') => {
       const queryClient = seeded();
       queryClient.setQueryData<CommentPages>(postCommentsKey(post), {
-        pages: [{ items: [thread(published(olderIds(0, 1)[0]!))], nextCursor: 'c1' }],
+        pages: [{ items: [thread(published(olderIds(0, 1)[0]!))], nextCursor }],
         pageParams: [undefined],
       });
       const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
@@ -1716,6 +1719,39 @@ describe('a new 댓글', () => {
       expect(mineHeld(queryClient)).toBe(2);
       expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
       unsubscribe();
+    });
+
+    it('past them keeps the last page held as read again: held as the end of the list, it leaves 더 보기 there', async () => {
+      // The reader had the whole list open (the page held says nothing is after it), and others
+      // wrote eight 댓글 meanwhile, MINE after them: past the five pages, MINE goes at the end of
+      // that page as read again, whose cursor leaves 더 보기 there to bring it into place.
+      const { queryClient, comments, unsubscribe } = holdingFirst(null);
+      expect(comments.getCurrentResult().hasNextPage).toBe(false);
+      const asked = serving(8);
+      await write(queryClient);
+      expect(cursorsAsked(asked)).toEqual(['', 'c1', 'c2', 'c3', 'c4']);
+      expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+      expect(comments.getCurrentResult().hasNextPage).toBe(true);
+      // Until 더 보기 brings it, a read of as many pages as are held leaves it out (ADR-0074 결과 4).
+      await comments.refetch();
+      expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+      expect(comments.getCurrentResult().hasNextPage).toBe(true);
+      while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
+      expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+      unsubscribe();
+
+      // So too a read that fails on the way, once the last page held came back read again.
+      const failed = holdingFirst(null);
+      const all = [...olderIds(0, 8), MINE];
+      getComments(({ params }) => {
+        if (params.query.cursor === 'c2') throw new TypeError('Failed to fetch');
+        const from = params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1));
+        return { items: [thread(published(all[from]!))], nextCursor: `c${String(from + 1)}` };
+      });
+      await write(failed.queryClient);
+      expect(threadIds(failed.queryClient)).toEqual([...olderIds(0, 1), MINE]);
+      expect(failed.comments.getCurrentResult().hasNextPage).toBe(true);
+      failed.unsubscribe();
     });
 
     it('stops at the page that holds it — on the fifth too, though others wrote after it — and keeps the pages read', async () => {

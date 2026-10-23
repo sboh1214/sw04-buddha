@@ -63,10 +63,11 @@ import { afterRefusal } from './use-posts';
  * (`readOnToTheEnd`): put at the end of the pages held, it would stand before older 댓글 still
  * unread, and a later read of as many pages as were held would leave it out — five comment pages
  * at most (COMMENT_READ_ON_PAGES, 오너 결정 2026-10-23 (2차)); past them it stands at the end of
- * the pages held until 더 보기 brings it into place. A new 대댓글 is the
- * newest of its thread: while 대댓글 of the thread are unread, they are read to the end first
- * (`readOnReplies`), for the same reason — five reply pages at most; past them it stands at the end
- * of the 대댓글 held until '답글 더 보기' brings it into place.
+ * the pages held until 더 보기 brings it into place — and a read of the pages meanwhile leaves it
+ * out until then (ADR-0074 결과 4). A new 대댓글 is the newest of its thread: while 대댓글 of the
+ * thread are unread, they are read to the end first (`readOnReplies`), for the same reason — five
+ * reply pages at most; past them it stands at the end of the 대댓글 held until '답글 더 보기' brings
+ * it into place.
  *
  * Before an answer is written — a write's, or the page of 대댓글 '답글 더 보기' read — a read of the
  * pages still on its way is cancelled (`writePages`, A-M5-18, the disputes' seed): it left before,
@@ -437,9 +438,14 @@ async function writePages(
  * or reads COMMENT_READ_ON_PAGES without reaching the 댓글 puts the answer at the end of the pages
  * held instead (`withNewComment`) — the 댓글 is written, and saying otherwise would invite a second
  * — and 더 보기 brings it into its place with the page that holds it; the pages read are dropped
- * then, the screen left as the reader had it. A read that reaches the end without it — the 댓글
- * deleted meanwhile, in another tab — is the server's word: the pages read are written as they
- * are, and the answer is not put back.
+ * then, the screen left as the reader had it, save the last page held read again (when that read
+ * came back): its cursor goes on where the read did, while the one held may say there is nothing
+ * after it — read when the reader had the whole list open, before others wrote past the five
+ * pages — and leave no 더 보기 to bring the 댓글 into place (Codex review on PR #220). Until 더 보기
+ * brings it, a read of as many pages as are held (a focus 30 seconds on, a reconnect) leaves it
+ * out, and a box open on it then goes as from a 댓글 deleted (`goneBoxReason`) — ADR-0074 7-14,
+ * 결과 4. A read that reaches the end without it — the 댓글 deleted meanwhile, in another tab — is
+ * the server's word: the pages read are written as they are, and the answer is not put back.
  */
 async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment: PublishedComment) {
   const key = postCommentsKey(postId);
@@ -469,8 +475,20 @@ async function readOnToTheEnd(queryClient: QueryClient, postId: string, comment:
     done = false;
   }
   if (!done) {
-    // Failed, or COMMENT_READ_ON_PAGES read and the 댓글 not among them: as a read that failed.
-    await writePages(queryClient, postId, (current) => withNewComment(current, comment));
+    // Failed, or COMMENT_READ_ON_PAGES read and the 댓글 not among them: as a read that failed,
+    // save the last page held as read again — its cursor leaves 더 보기 there (see above).
+    const [lastReadAgain] = pages;
+    await writePages(queryClient, postId, (current) =>
+      withNewComment(
+        current !== undefined && lastReadAgain !== undefined
+          ? {
+              pages: [...current.pages.slice(0, from), lastReadAgain],
+              pageParams: [...current.pageParams.slice(0, from), pageParams[0]],
+            }
+          : current,
+        comment,
+      ),
+    );
     return;
   }
   await writePages(
