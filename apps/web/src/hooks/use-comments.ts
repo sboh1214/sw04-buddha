@@ -81,13 +81,15 @@ import { afterRefusal } from './use-posts';
  * pages still on its way is cancelled (`writePages`, A-M5-18, the disputes' seed): it left before,
  * and landing after the answer it would put the pages back as they were — a deleted comment
  * published again, an edit undone, the 대댓글 just read taken off again with any box open on them.
- * A 더 보기 the reader just pressed is cancelled with it: the button stops loading and is there to
- * press again (for a draft taken back, the section presses it again itself). A read cancelled, or
- * left by a page that went, stops where it is: the query's signal reaches its requests and its
- * reads on through the 대댓글 (`threadsReadOn`), so none is sent after — each would count in the
- * reader's address limit (ADR-0074 7-28). A read whose answer has already arrived but not yet been
- * written can still land last — a window of a microtask, left as the disputes' is; the next read
- * puts it right.
+ * A read of every page held cancelled so is made again once the answer is in (ADR-0076 7-28): it
+ * was asked for, and leaving after the answer it reads it. A 더 보기 the reader just pressed is
+ * cancelled with it and not made again: the button stops loading and is there to press again (for
+ * a draft taken back, the section presses it again itself). A read cancelled, or left by a page
+ * that went, stops where it is: the query's signal reaches its requests and its reads on through
+ * the 대댓글 (`threadsReadOn`), so none is sent after — each would count in the reader's address
+ * limit (ADR-0074 7-28). A read whose answer has already arrived but not yet been written can
+ * still land last — a window of a microtask, left as the disputes' is; the next read puts it right
+ * (for a read of every page held, the one made again: the query still says it is on its way).
  *
  * The three reads that read pages themselves and put them in after — a new 댓글's, a new 대댓글's
  * and '답글 더 보기' — are not the query's, and no write cancels them. What they read can be older
@@ -522,12 +524,36 @@ function landWrite(queryClient: QueryClient, postId: string, write: PagesWrite) 
 }
 
 /**
+ * Whether a read of every page held is on its way for `key` — fetching, or paused until the
+ * browser is back online — rather than none, or a 더 보기 (`fetchNextPage`'s `fetchMore` meta).
+ */
+function readingEveryPage(queryClient: QueryClient, key: readonly unknown[]): boolean {
+  const state = queryClient.getQueryState(key);
+  return (
+    state !== undefined && state.fetchStatus !== 'idle' && state.fetchMeta?.fetchMore === undefined
+  );
+}
+
+/**
  * Writes into the pages held, once no read of them is on its way to undo it (see above) — and into
- * the log of every read toward a place still on its way, done again over what it reads (7-34).
+ * the log of every read toward a place still on its way, done again over what it reads (7-34) —
+ * and makes again a read of every page held that it cancelled for that (#49, ADR-0076 7-28): the
+ * read was asked for (a focus, the 30 seconds, a write's read again, a like's failure reading the
+ * pages for the server's word on a press whose answer was lost after it committed), its
+ * cancellation put the pages back as they were before it, and this write makes them fresh — no
+ * longer marked stale — so nothing would read them until the next focus or 30 seconds. Made again
+ * after the write, it reads it with them, as a like makes again a read it cancelled
+ * (use-likes.ts). Not waited for: the write is done once its answer is in the pages. A 더 보기
+ * cancelled is not made again — its button is there to press again — and, with nothing watching
+ * the pages, the read made again only marks them stale, for the next screen that shows them to
+ * read.
  */
 async function writePages(queryClient: QueryClient, postId: string, write: PagesWrite) {
-  await queryClient.cancelQueries({ queryKey: postCommentsKey(postId), exact: true });
+  const key = postCommentsKey(postId);
+  const readAgain = readingEveryPage(queryClient, key);
+  await queryClient.cancelQueries({ queryKey: key, exact: true });
   landWrite(queryClient, postId, write);
+  if (readAgain) void queryClient.invalidateQueries({ queryKey: key, exact: true });
 }
 
 /**
@@ -549,7 +575,9 @@ async function writePages(queryClient: QueryClient, postId: string, write: Pages
  * as it was read — the writer's own 대댓글 placed at the end of its thread, which the reply page
  * brings into place, as it was before an edit or a deletion that landed while it read — and, done
  * again over another read's pages after that write (which that read's log holds before it), would
- * bring it back as it was (the review of the Codex round-4 fix, 2026-10-24 — ADR-0074 7-34).
+ * bring it back as it was (the review of the Codex round-4 fix, 2026-10-24 — ADR-0074 7-34). A
+ * read of every page held that it cancels to put them in is made again after, as `writePages`
+ * makes it (7-28).
  */
 async function putReadPages(
   queryClient: QueryClient,
@@ -559,6 +587,7 @@ async function putReadPages(
   logged: boolean,
 ) {
   const key = postCommentsKey(postId);
+  const readAgain = readingEveryPage(queryClient, key);
   await queryClient.cancelQueries({ queryKey: key, exact: true });
   // From here to the end nothing else runs: a write after this lands on what is put in below.
   stopLogging(queryClient, postId, log);
@@ -569,6 +598,7 @@ async function putReadPages(
     if (logged) logWrite(queryClient, postId, (held) => again(put(held)));
     if (log.length > 0) queryClient.setQueryData<CommentPages>(key, again);
   });
+  if (readAgain) void queryClient.invalidateQueries({ queryKey: key, exact: true });
 }
 
 /**
@@ -598,7 +628,10 @@ async function putReadPages(
  * read are written as they are, and the answer is not put back. The pages read take the place of
  * the held ones from the last on, each comment held at the like count held (`withHeldLikeCounts`,
  * #49, ADR-0076 7-27): this read calls the query's function itself, so a like pressed while it is
- * out sees no read of the pages on its way and reads none after it — the count it wrote stays.
+ * out sees no read of the pages on its way and reads none after it — the count it wrote stays. A
+ * count held can be one a failed press put back while its read again of the pages, for the
+ * server's word, is on its way; putting the pages in cancels that read and makes it again
+ * (`putReadPages`, as `writePages`, 7-28), so the screen still ends on the server's count.
  * Either way — the pages read, or the last page held read again — the reader's writes that landed
  * while this read are done again over them as they go in (`putReadPages`, Codex review on PR #220,
  * round 4 — ADR-0074 7-34): an edit or a deletion of a comment on them, a new 대댓글 or '답글 더

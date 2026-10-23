@@ -23,7 +23,11 @@ import {
 import { commentLikeCount, myPostLikesKey, postLikeCount } from '@/lib/likes';
 import { communityPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
-import { createCommentOptions, readMoreReplies } from './use-comments';
+import {
+  commentsInfiniteQueryOptions,
+  createCommentOptions,
+  readMoreReplies,
+} from './use-comments';
 import { type LikeVariables, myPostLikesQueryOptions, updateLikeOptions } from './use-likes';
 import { ME_QUERY_KEY } from './use-me';
 
@@ -791,5 +795,73 @@ describe('a comment’s press while a new 댓글’s read to the end is on its w
     expect(await failed).toBeInstanceOf(ApiError);
     expect(commentCountOf(again, commentId)).toBe(2);
     expect(threadIds(again)).toEqual([commentId, OLDER, MINE]);
+  });
+
+  it('ends on the server’s count when a press whose answer was lost fails while they are on their way: its read again of the pages, cancelled to put them in, is made again (ADR-0076 7-28)', async () => {
+    const queryClient = seeded();
+    // The post page, watching the pages and the reader's likes: a read of them asked for is made.
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const mine = new QueryObserver(queryClient, myPostLikesQueryOptions(POST, { user: {} }));
+    const unsubscribe = [comments.subscribe(() => undefined), mine.subscribe(() => undefined)];
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, 0)));
+    // The pages as the server holds them once the like committed: COMMENT at '좋아요 3'.
+    const committed = {
+      data: {
+        data: [
+          ...firstPage(3).items,
+          { comment: published(OLDER, 7), replies: [], repliesNextCursor: null },
+          { comment: published(MINE, 0), replies: [], repliesNextCursor: null },
+        ],
+        meta: { nextCursor: null },
+      },
+      response: new Response(null, { status: 200 }),
+    };
+    const likes = deferred<unknown>();
+    const reads = [deferred<unknown>(), deferred<unknown>(), deferred<unknown>()];
+    const signals: (AbortSignal | undefined)[] = [];
+    vi.spyOn(api, 'GET').mockImplementation(((path: string, request: { signal?: AbortSignal }) => {
+      if (path === '/api/v1/me/likes/posts/{postId}') return likes.promise;
+      signals.push(request.signal);
+      return reads[signals.length - 1]?.promise;
+    }) as never);
+    const written = new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(1);
+    });
+    const failing = deferred<LikeState>();
+    const failed = toggle(queryClient, () => failing.promise)
+      .mutate(onComment(true))
+      .catch((error: unknown) => error);
+    await settle();
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    // The like committed, but its answer was lost: the press fails, puts back the count from
+    // before it, and reads the reader's likes and the pages again for the server's word.
+    failing.reject(refusal(503, 'INTERNAL'));
+    await vi.waitFor(() => {
+      expect(signals).toHaveLength(2);
+    });
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    // The new 댓글's pages land first, read after the commit: they keep the count held (7-27),
+    // and the read again on its way is cancelled to put them in — and made again.
+    reads[0]?.resolve(committed);
+    await written;
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    expect(signals[1]?.aborted).toBe(true);
+    expect(signals).toHaveLength(3);
+    reads[2]?.resolve(committed);
+    likes.resolve(answer({ postLiked: false, likedCommentIds: [commentId] }));
+    expect(await failed).toBeInstanceOf(ApiError);
+    await vi.waitFor(() => {
+      expect(queryClient.getQueryState(postCommentsKey(post))?.fetchStatus).toBe('idle');
+    });
+    // The screen ends on the server's word: the toggle pressed, beside the count with the press.
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    for (const stop of unsubscribe) stop();
   });
 });

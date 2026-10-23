@@ -133,7 +133,9 @@ function loadingMore(queryClient: QueryClient, key: QueryKey): Promise<unknown> 
  * 대댓글's read on and a new 댓글's read to the end (use-comments.ts) are not reads of the query but
  * pages written into it, which nothing here sees: a page of them that brings a comment already
  * held keeps the count held (`repliesWith`, `withHeldLikeCounts`, lib/comments.ts, ADR-0076 7-17
- * and 7-27), so it cannot take a press back either.
+ * and 7-27), so it cannot take a press back either. A read of the pages a press asked for — a
+ * failure's, for the server's word — that one of them cancels to write its page is made again
+ * after it (`writePages`, 7-28), so the count held, put back, does not outlast it.
  */
 async function holdReads(
   queryClient: QueryClient,

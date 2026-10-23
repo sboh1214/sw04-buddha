@@ -164,7 +164,9 @@ function withHeldLikeCount(comment: PostComment, counts: ReadonlyMap<string, num
  * back to the count from when the page was read, beside a pressed toggle, until the next read of
  * the pages (a focus, 30 seconds). A comment the pages did not hold (the new 댓글, older ones read
  * for the first time) comes at the page's count, and the rest of each (its state, its text, its
- * place) is the page's.
+ * place) is the page's. The count held may be one a failed press put back while its read again of
+ * the pages was on its way — a press whose answer was lost after it committed; putting these pages
+ * in cancels that read and makes it again (`writePages`, ADR-0076 7-28), which ends on the server's.
  */
 export function withHeldLikeCounts(
   pages: readonly CommentPage[],
