@@ -14,8 +14,9 @@
  * holding an unsettled contract, paying or ordering — nothing changes then; another member's rows,
  * requests, contracts, payments and orders are neither touched nor counted. Asked twice at once,
  * it runs once. A request that passed SessionGuard before the closure committed writes nothing
- * (UNAUTHENTICATED), and operators can neither adjust nor grant the closed account. Skips when
- * TEST_* are unset.
+ * (UNAUTHENTICATED), and operators can neither adjust nor grant the closed account; a former admin
+ * who closed the account is named with no nickname in the operators' records. Skips when TEST_*
+ * are unset.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -43,11 +44,20 @@ import {
   accountClosureCheckSchema,
   accountClosureResultSchema,
   accountRestrictionRequestSchema,
+  adminLinkFlagGroupSchema,
+  adminNoticeActionSchema,
+  adminNoticeRevisionSchema,
+  adminNoticeRevisionSummarySchema,
+  adminNoticeSchema,
   closedAccountEmail,
   orphanMediaRetryHours,
   type AccountClosureCheck,
   type AccountClosureResult,
   type AccountRestrictionRequest,
+  type AdminLinkFlagGroup,
+  type AdminNoticeAction,
+  type AdminNoticeRevisionSummary,
+  type AdminNoticeUpdateResult,
   type Me,
   type CommentThread,
   type PostSummary,
@@ -1435,6 +1445,110 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       // `closed`: only the closed ones.
       expect(await ids('status=closed&limit=100')).toEqual([[member.id, null]]);
       errorOf(await read('/admin/users?status=gone', admin), 400, 'VALIDATION_ERROR');
+    });
+
+    it('names a former admin who closed the account with no nickname in a notice’s records and versions and on the link review list (#138, #187, ADR-0086 결과 5)', async () => {
+      const text = (value: string) => ({
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: value }] }],
+      });
+      const edit = (id: string, title: string, expectedEditedAt: string | null, who: TestUser) =>
+        t.app.inject({
+          method: 'PUT',
+          url: `/api/v1/admin/notices/${id}`,
+          headers: {
+            origin: TRUSTED_ORIGIN,
+            'content-type': 'application/json',
+            cookie: who.cookie,
+          },
+          payload: JSON.stringify({ title, body: text(title), expectedEditedAt }),
+        });
+      // `second` writes a notice and edits it, `admin` edits it after; `second` marks a group of
+      // the repeated-link review list (a member's three posts with one link, same_account).
+      const notice = adminNoticeSchema.parse(
+        dataOf(await post('/admin/notices', { title: '첫 판', body: text('첫 판') }, second), 201),
+      );
+      const once = dataOf<AdminNoticeUpdateResult>(
+        await edit(notice.id, '둘째 판', notice.editedAt, second),
+      );
+      dataOf(await edit(notice.id, '지금 판', once.notice.editedAt, admin));
+      const linked = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              {
+                type: 'text',
+                text: '근거',
+                marks: [{ type: 'link', attrs: { href: 'https://spam.example/b' } }],
+              },
+            ],
+          },
+        ],
+      };
+      for (let index = 0; index < 3; index += 1) {
+        dataOf(await post('/posts', { marketId: market.id, body: linked }, other), 201);
+      }
+      const [group] = dataOf<AdminLinkFlagGroup[]>(await read('/admin/link-flags', second));
+      dataOf(
+        await post(
+          '/admin/link-flags/reviews',
+          {
+            url: group!.url,
+            reason: group!.reason,
+            outcome: 'no_issue',
+            through: group!.latestFlaggedAt,
+          },
+          second,
+        ),
+        201,
+      );
+
+      // Its role revoked, `second` closes the account (an admin is refused, above).
+      await t.db
+        .update(schema.profiles)
+        .set({ role: 'user' })
+        .where(eq(schema.profiles.userId, second.id));
+      await t.app.get(AdminGuard).invalidate(second.id);
+      await closed(second);
+
+      // The records and versions name the closed account with a null nickname — not '' (the
+      // screen's '탈퇴한 사용자', `noticeActorName`, against '기록 없음' for none) — and the admin
+      // still open with theirs.
+      const gone = { id: second.id, nickname: null };
+      const kept = { id: admin.id, nickname: (await profileOf(admin.id)).nickname };
+      const actions = dataOf<AdminNoticeAction[]>(
+        await read(`/admin/notices/${notice.id}/actions`, admin),
+      ).map((action) => adminNoticeActionSchema.parse(action));
+      expect(actions.map(({ type, actor }) => [type, actor])).toEqual([
+        ['notice_update', kept],
+        ['notice_update', gone],
+        ['notice_create', gone],
+      ]);
+      const versions = dataOf<AdminNoticeRevisionSummary[]>(
+        await read(`/admin/notices/${notice.id}/revisions`, admin),
+      ).map((version) => adminNoticeRevisionSummarySchema.parse(version));
+      expect(
+        versions.map(({ title, writtenBy, replacedBy }) => [title, writtenBy, replacedBy]),
+      ).toEqual([
+        ['둘째 판', gone, kept],
+        ['첫 판', gone, gone],
+      ]);
+      const first = adminNoticeRevisionSchema.parse(
+        dataOf(
+          await read(`/admin/notices/${notice.id}/revisions/${String(versions[1]!.id)}`, admin),
+        ),
+      );
+      expect([first.writtenBy, first.replacedBy]).toEqual([gone, gone]);
+      // The reviewed list names the operator who marked the group the same way
+      // (`linkFlagReviewedBy`).
+      const reviewed = dataOf<AdminLinkFlagGroup[]>(
+        await read('/admin/link-flags?status=reviewed', admin),
+      ).map((row) => adminLinkFlagGroupSchema.parse(row));
+      expect(reviewed.map((row) => row.review?.admin)).toEqual([
+        { userId: second.id, nickname: null },
+      ]);
     });
 
     it('hands a cancelled nickname reset’s hold to nobody (ADR-0081 결과 5)', async () => {
