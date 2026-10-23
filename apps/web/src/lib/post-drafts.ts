@@ -1,5 +1,6 @@
 import type { JSONContent } from '@tiptap/react';
 import { copy } from '@/copy';
+import { draftLandings } from './draft-landings';
 import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
 
 /**
@@ -423,32 +424,25 @@ export function clearSessionPostDrafts(): void {
 
 /**
  * When a write or an edit of each screen last landed in this tab, by the account that sent it and
- * the screen's storage key, as a `postDraftMoment`. TanStack Query runs a mutation's `onSuccess`
- * before it marks the mutation succeeded, and the form renders `saved` later still; a form the
- * gate takes away in between holds `saved: false` from its last render, and would keep — after
- * the success cleared it — a draft the post already holds, which its screen would then "restore"
- * for a second post. So the success records its moment here, and the form going away counts a
- * write landed after its last render as saved (`postDraftLandedSince`). The form is locked while
- * it sends, so that render held what was sent. In memory, as the forms are: this tab's, gone with
- * the page.
+ * the screen's storage key (lib/draft-landings.ts — the comment drafts keep theirs the same way).
+ * TanStack Query runs a mutation's `onSuccess` before it marks the mutation succeeded, and the
+ * form renders `saved` later still; a form the gate takes away in between holds `saved: false`
+ * from its last render, and would keep — after the success cleared it — a draft the post already
+ * holds, which its screen would then "restore" for a second post. So the success records its
+ * moment here, and the form going away counts a write landed after its last render as saved
+ * (`postDraftLandedSince`). The form is locked while it sends, so that render held what was sent.
  *
  * By account (ADR-0073 9-48 — the gap Codex's review of #48 found in the comment drafts, PR #220):
  * a write sent by account A can land after the tab changed to account B, and B can have the same
- * screen open meanwhile — its own draft, kept for B across an onboarding step. A's landing says nothing of B's
- * form: it neither removes B's kept draft nor counts B's form as saved, which would let B's draft
- * go unkept as the gate takes the form away.
+ * screen open meanwhile — its own draft, kept for B across an onboarding step. A's landing says
+ * nothing of B's form: it neither removes B's kept draft nor counts B's form as saved, which would
+ * let B's draft go unkept as the gate takes the form away.
  */
-const landedAt = new Map<string, number>();
-let moments = 0;
-
-function landedKey(key: PostDraftKey, accountId: string): string {
-  return `${accountId}\n${postDraftStorageKey(key)}`;
-}
+const landings = draftLandings();
 
 /** A moment in this tab's order of draft events: each call answers a larger number. */
 export function postDraftMoment(): number {
-  moments += 1;
-  return moments;
+  return landings.moment();
 }
 
 /**
@@ -458,7 +452,7 @@ export function postDraftMoment(): number {
  * screen are left as they are.
  */
 export function postDraftLanded(key: PostDraftKey, accountId: string): void {
-  landedAt.set(landedKey(key, accountId), postDraftMoment());
+  landings.landed(postDraftStorageKey(key), accountId);
   const storage = sessionDrafts();
   if (storage !== null) clearPostDraftOf(storage, key, accountId);
 }
@@ -472,5 +466,5 @@ export function postDraftLandedSince(
   accountId: string,
   moment: number,
 ): boolean {
-  return (landedAt.get(landedKey(key, accountId)) ?? 0) > moment;
+  return landings.landedSince(postDraftStorageKey(key), accountId, moment);
 }
