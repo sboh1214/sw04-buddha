@@ -863,15 +863,20 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
     expect(copy.moderationAppealDeadlinePassed).toBe('이의 기한이 지났습니다.');
   });
 
-  it('asks for the action in the words the operator’s ask-back uses (owner decision 2026-10-23 답 1)', () => {
-    // docs/OPERATIONS.md's ask-back, the owner's text: the member reads the same 'which action' on
-    // the page as in the mail that asks them again.
+  it('asks for the action in the words the operator’s ask-backs use (owner decision 2026-10-23 답 1, (2차) 답 1)', () => {
+    // docs/OPERATIONS.md's two ask-backs, the owner's texts — the usual one, and the late one that
+    // ends '3일 안에' (owner decision 2026-10-23 (2차) 답 1): the member reads the same 'which
+    // action' on the page as in either mail that asks them again (ADR-0084 6-2).
     const operations = readFileSync(path.join(SRC, '../../../docs/OPERATIONS.md'), 'utf8');
-    const askBack =
-      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 그 조치의 이의 기한 안에 다시 보내 주세요.';
-    expect(operations).toContain(`\n     ${askBack}\n`);
+    const askBacks = [
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 그 조치의 이의 기한 안에 다시 보내 주세요.',
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 3일 안에 다시 보내 주세요.',
+    ];
     const which = /어느 조치인지\([^)]*\)를 적어/;
-    expect(which.exec(copy.appealGuidance)?.[0]).toBe(which.exec(askBack)?.[0]);
+    for (const askBack of askBacks) {
+      expect(operations).toContain(`\n     ${askBack}\n`);
+      expect(which.exec(copy.appealGuidance)?.[0]).toBe(which.exec(askBack)?.[0]);
+    }
   });
 
   it('fills in the business info’s email — 미정 until the owner supplies it', () => {
