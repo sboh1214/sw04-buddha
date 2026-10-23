@@ -41,6 +41,7 @@ import {
   isStaleThreadRefusal,
 } from '@/lib/comments';
 import { type GoingBoxWrite } from '@/lib/held-comment-texts';
+import { isRestricted } from '@/lib/restriction';
 
 /**
  * What the comment section does with a box that goes (components/post/held-comment-text.tsx, rules
@@ -54,9 +55,14 @@ import { type GoingBoxWrite } from '@/lib/held-comment-texts';
 export interface CommentBoxGoing {
   /**
    * The box's write was refused, in these words; `stale`: they say the thread on screen is out of
-   * date (`isStaleThreadRefusal`).
+   * date (`isStaleThreadRefusal`); `restricted`: a writing restriction refused it (`isRestricted`,
+   * #185 — the way to 조치·신고 내역 goes under its words wherever they are shown).
    */
-  refused(boxId: string, accountId: string, refusal: { reason: string; stale: boolean }): void;
+  refused(
+    boxId: string,
+    accountId: string,
+    refusal: { reason: string; stale: boolean; restricted: boolean },
+  ): void;
   /**
    * The box went holding `text` other than it started with, its write as `write` says (in flight,
    * refused, or none); `focus`: the focus was in it as it went.
@@ -363,6 +369,7 @@ export function useCommentBoxDraft(box: CommentBoxDraft): {
       going?.refused(boxId, box.accountId, {
         reason: commentWriteErrorMessage(error, write, format),
         stale: isStaleThreadRefusal(error),
+        restricted: isRestricted(error),
       }),
     close: () => {
       const last = held.get(boxId);

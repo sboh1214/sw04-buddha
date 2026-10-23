@@ -16,13 +16,22 @@ export function RefusalText({ message, restricted }: { message: string; restrict
   return (
     <>
       {message}
-      {restricted && (
-        <ChakraLink asChild color="brand.fg" display="block" mt="1">
-          <NextLink href={MY_MODERATION_PATH} data-testid="restricted-moderation-link">
-            {copy.myModerationOpen}
-          </NextLink>
-        </ChakraLink>
-      )}
+      {restricted && <RestrictedModerationLink />}
     </>
+  );
+}
+
+/**
+ * The way to 조치·신고 내역 under a writing restriction's refusal (`RefusalText`), alone: for a
+ * refusal drawn where its sentence is an element of its own — a held comment's reason, which names
+ * its group (components/post/held-comment-text.tsx).
+ */
+export function RestrictedModerationLink() {
+  return (
+    <ChakraLink asChild color="brand.fg" display="block" mt="1">
+      <NextLink href={MY_MODERATION_PATH} data-testid="restricted-moderation-link">
+        {copy.myModerationOpen}
+      </NextLink>
+    </ChakraLink>
   );
 }

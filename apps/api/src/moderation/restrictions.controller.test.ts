@@ -24,6 +24,7 @@ import {
   createFill,
   createMarket,
   createModerationAction,
+  createNotice,
   createPosition,
   createPost,
 } from '@buddha/db/test';
@@ -409,19 +410,29 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
 
     it('is nowhere in a public answer, whoever reads it: no value of it, no field it adds or changes (#45-12, #37-8: an internal risk flag)', async () => {
       // Every public GET of the registry (PUBLIC_ROUTES), its path naming the member's market,
-      // post and profile — read by anyone, by another member and by the member, before and while
-      // a restriction stands. private-data.test.ts seeds none that stands (its A writes), so this
+      // post, 댓글 (its 대댓글 page — #48 — holding the member's 대댓글) and profile, and a pinned
+      // notice (#138) — read by anyone, by another member and by the member, before and while a
+      // restriction stands. private-data.test.ts seeds none that stands (its A writes), so this
       // is the check of the standing state GUARDS.md points to.
       const [profile] = await t.db
         .select({ publicId: schema.profiles.publicId })
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, member.id));
+      await createComment(t.db, {
+        postId: post.id,
+        authorId: member.id,
+        parentId: comment.id,
+        body: '대댓글',
+      });
+      const notice = await createNotice(t.db, { title: '점검 안내', pinSlot: 1 });
       const params: Readonly<Record<string, string>> = {
         id: market.id,
         idOrSlug: market.slug,
         postId: post.id,
+        commentId: comment.id,
         publicId: profile!.publicId,
         mediaId: randomUUID(),
+        noticeId: notice.id,
       };
       const urls = Object.keys(PUBLIC_ROUTES)
         .filter((key) => key.startsWith('GET '))
@@ -435,6 +446,8 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       expect(urls).toEqual(
         expect.arrayContaining([
           `/posts/${post.id}`,
+          `/comments/${comment.id}/replies`,
+          `/notices/${notice.id}`,
           `/profiles/${profile!.publicId}`,
           `/profiles/${profile!.publicId}/posts`,
           `/profiles/${profile!.publicId}/comments`,

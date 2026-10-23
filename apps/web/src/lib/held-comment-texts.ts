@@ -52,8 +52,11 @@ export type GoingBoxWrite = 'pending' | 'refused' | 'none';
 interface Heard {
   /** Who wrote it. */
   accountId: string;
-  /** The box's write was refused in these words; `stale`: they say the thread on screen is out of date. */
-  refusal?: { reason: string; stale: boolean };
+  /**
+   * The box's write was refused in these words; `stale`: they say the thread on screen is out of
+   * date; `restricted`: a writing restriction refused it (#185).
+   */
+  refusal?: { reason: string; stale: boolean; restricted?: boolean };
   /** The box went holding this text, from this place. */
   text?: string;
   place?: HeldTextPlace;
@@ -85,7 +88,15 @@ export interface HeldTextsState {
 
 export type HeldTextsEvent =
   | { type: 'account'; accountId: string | undefined }
-  | { type: 'refused'; boxId: string; accountId: string; reason: string; stale: boolean }
+  | {
+      type: 'refused';
+      boxId: string;
+      accountId: string;
+      reason: string;
+      stale: boolean;
+      /** A writing restriction's refusal (RESTRICTED, #185): the text shown with it says so. */
+      restricted?: boolean;
+    }
   | {
       type: 'left';
       boxId: string;
@@ -143,7 +154,7 @@ export function heldTextsAfter(state: HeldTextsState, event: HeldTextsEvent): He
       if (event.accountId !== state.accountId || state.gone.has(event.boxId)) return state;
       return hear(state, event.boxId, {
         accountId: event.accountId,
-        refusal: { reason: event.reason, stale: event.stale },
+        refusal: { reason: event.reason, stale: event.stale, restricted: event.restricted },
       });
     case 'left':
       if (event.accountId !== state.accountId) return state;
@@ -228,7 +239,9 @@ export function heldTextsAfter(state: HeldTextsState, event: HeldTextsEvent): He
  * date (`isStaleThreadRefusal`); a refusal about something else — the network, a limit — is not why
  * the box went, so the text says why its place took it no more as it went (`goneBoxReason`), and
  * the refusal's words only when nothing there says. A box with no write is shown at once with why
- * its place took it no more (오너 결정 2026-10-21 답 2).
+ * its place took it no more (오너 결정 2026-10-21 답 2). A text whose reason is a writing
+ * restriction's refusal (#185) says so (`restricted`): the way to 조치·신고 내역 goes under it, as
+ * under the box's own refusal (ADR-0082 7-6).
  */
 export function heldTextsOf(state: HeldTextsState): HeldText[] {
   return [...state.heard].flatMap(([id, heard]): HeldText[] => {
@@ -237,7 +250,20 @@ export function heldTextsOf(state: HeldTextsState): HeldText[] {
     if (heard.accountId !== state.accountId) return [];
     const reason = reasonOf(heard);
     if (reason === undefined) return [];
-    return [{ id, place, reason, text, focus: heard.focus === true, shown: heard.shown === true }];
+    const { refusal } = heard;
+    const restricted =
+      refusal?.restricted === true && (refusal.stale || heard.goneReason === undefined);
+    return [
+      {
+        id,
+        place,
+        reason,
+        ...(restricted ? { restricted: true as const } : {}),
+        text,
+        focus: heard.focus === true,
+        shown: heard.shown === true,
+      },
+    ];
   });
 }
 

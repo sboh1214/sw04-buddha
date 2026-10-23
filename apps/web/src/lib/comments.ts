@@ -1021,6 +1021,12 @@ export interface HeldText {
   place: HeldTextPlace;
   /** Why it cannot be sent: the refusal's words, or why its place takes it no more (`goneBoxReason`). */
   reason: string;
+  /**
+   * The reason is a writing restriction's refusal (RESTRICTED, #185): the way to 조치·신고 내역 goes
+   * under it, as under the box's own refusal (owner decision 2026-10-22 evening, ADR-0082 7-6).
+   * Absent otherwise.
+   */
+  restricted?: true;
   text: string;
   /**
    * The focus was in the box as it went: it comes here (ADR-0074 7-25). Never for a draft taken back

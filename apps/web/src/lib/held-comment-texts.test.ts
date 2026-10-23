@@ -135,6 +135,32 @@ describe('text a refused box leaves', () => {
   it('takes the focus only from a box that held it', () => {
     expect(heldTextsOf(run([refused('box'), left('box', { focus: false })]))[0]?.focus).toBe(false);
   });
+
+  it('says a writing restriction’s refusal is one, when its words are the reason (#185, ADR-0082 7-6)', () => {
+    const restriction = `${copy.errRestrictedWriting}(무기한).`;
+    const restricted: HeldTextsEvent = {
+      type: 'refused',
+      boxId: 'box',
+      accountId: A,
+      reason: restriction,
+      stale: false,
+      restricted: true,
+    };
+    // Nothing there says why the box went: the restriction's words, and the way to 조치·신고 내역.
+    expect(heldTextsOf(run([restricted, left('box')]))).toEqual([
+      expect.objectContaining({ reason: restriction, restricted: true }),
+    ]);
+    // Its place took it no more: that is the reason, and no way to 조치·신고 내역 goes with it.
+    const gone = heldTextsOf(
+      run([restricted, left('box', { goneReason: copy.errCommentParentDeleted })]),
+    );
+    expect(gone).toEqual([expect.objectContaining({ reason: copy.errCommentParentDeleted })]);
+    expect(gone[0]).not.toHaveProperty('restricted');
+    // Any other refusal says nothing of it.
+    expect(
+      heldTextsOf(run([refused('box', copy.errNetwork, false), left('box')]))[0],
+    ).not.toHaveProperty('restricted');
+  });
 });
 
 describe('text a box with no write leaves (오너 결정 2026-10-21 답 2)', () => {
