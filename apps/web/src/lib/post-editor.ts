@@ -190,10 +190,11 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * a refusal for the onboarding says nothing while the onboarding gate takes the account to its
  * step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and the form keeps
  * its draft in the tab, as for a refused send (owner decision 2026-10-21), and when the gate stays
- * — that read failed — says what a refused send says (owner decision 2026-10-21 answer 6); the day's uploads at their
- * limit (WRITE_LIMITED, #187: 50 in 24 hours, a post's images and the profile image together) say
- * so with the time it can upload again in the member's zone (`formatDate`, lib/write-limits.ts) —
- * once: it ends the batch too (`refusesImageBatch`); an upload given up while it waited to be sent again, the editor gone meanwhile (`UploadAbandoned`),
+ * — that read failed — says what a refused send says (owner decision 2026-10-21 answer 6); the
+ * day's uploads at their limit (WRITE_LIMITED, #187: 50 in 24 hours, a post's images and the
+ * profile image together) say so with the time it can upload again in the member's zone
+ * (`formatDate`, lib/write-limits.ts) — once: it ends the batch too (`refusesImageBatch`); an
+ * upload given up while it waited to be sent again, the editor gone meanwhile (`UploadAbandoned`),
  * says nothing, as the files a batch never sends once the editor sends no more; anything else is
  * a failed upload, said apart from an unreachable server — the API busy (a 429: the uploads it
  * receives, the account's three in flight, its memory, the conversion queue) still after the

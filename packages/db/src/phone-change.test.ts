@@ -350,14 +350,26 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(REPORTS_BODY).not.toContain('DELETE');
     expect(REPORTS_BODY).not.toContain('INSERT');
     // The records' block (owner decision 2026-10-22, ADR-0083) raises nothing either and gives no
-    // result to read; it reads the old number's hash and no account: the records carry none.
+    // result to read. It reads the three values the likes' and the reports' blocks read: a link
+    // use is its item's author's, so the account's own and those it inherited on the old number go
+    // (the likes' rule, ADR-0076 7-26); a counted write carries no account, so every one under the
+    // old number's hash goes.
     expect(RECORDS_BODY).toContain('write_limit_events');
     expect(RECORDS_BODY).toContain('link_uses');
     expect(RECORDS_BODY).not.toContain('RAISE');
     expect(variablesOf(RECORDS_BODY)).toEqual([]);
     expect(
       new Set([...RECORDS_BODY.matchAll(/current_setting\('([\w.]+)'\)/g)].map((m) => m[1])),
-    ).toEqual(new Set(['phone_change.new_hash', 'phone_change.old_hash']));
+    ).toEqual(new Set(['phone_change.new_hash', 'phone_change.old_hash', 'phone_change.user_id']));
+    expect(RECORDS_BODY).toContain(
+      'NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = w.author_id)',
+    );
+    // It deletes only the rows it inserts again, and nothing under the new number's hash: neither
+    // table holds one row per number, so nothing coming with the account gives way or is given way
+    // to (the likes' rule, ADR-0076 7-26).
+    expect([...RECORDS_BODY.matchAll(/DELETE FROM/g)]).toHaveLength(2);
+    expect([...RECORDS_BODY.matchAll(/WITH moved AS \(DELETE FROM/g)]).toHaveLength(2);
+    expect(RECORDS_BODY).not.toContain('ON CONFLICT');
     // The last day only — the longest window of the limits and of the repetition rules — kept as
     // the windows keep it (a record exactly 24 hours old is out).
     expect(RECORDS_BODY.match(/> now\(\) - interval '24 hours'/g)).toHaveLength(2);
@@ -838,9 +850,16 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     // that number wrote them — and the old number's next holder starts with none.
     const changes = sectionOf('**바뀌는 것.**', '**1. 요청 확인.**');
     expect(changes).toContain(
-      '작성 빈도 제한(#187)이 센 쓰기(`write_limit_events`)와 반복 링크 탐지가 센 링크 사용(`link_uses`) 가운데 지난 24시간의 것이 옛 번호의 해시에서 새 번호의 해시로 옮겨진다(오너 결정 2026-10-22, ADR-0083)',
+      '그 계정의 작성 빈도 제한(#187)이 센 쓰기(`write_limit_events`)와 반복 링크 탐지가 센 링크 사용(`link_uses`) 가운데 지난 24시간의 것이 새 번호의 해시로 옮겨진다(오너 결정 2026-10-22, ADR-0083)',
     );
     expect(changes).toContain('같은 번호의 탈퇴한 계정이 남긴 것도 함께 옮긴다');
+    // Whose a use is follows the likes' and the reports' rule (ADR-0076 7-26), and why the counted
+    // writes, which carry no account, all go.
+    expect(changes).toContain(
+      '살아 있는(본인확인 기록이 있는) 다른 계정의 사용은 옛 번호의 해시에 있든 다른 해시에 있든 옮기지 않는다',
+    );
+    expect(changes).toContain('센 쓰기에는 계정이 없어(번호의 해시·종류·시각뿐이다)');
+    expect(changes).toContain('지우거나 빼는 것도 없다');
     expect(changes).toContain('5단계의 넷째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
     expect(changes).toContain('운영자 검토 목록에 이미 오른 항목(`link_flags`)은');
     expect(sectionOf('**하지 않는 것.**', '**로컬.**')).toContain('기록을 옮기는 넷째 `DO`를 빼면');
@@ -2371,66 +2390,62 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
   const ago = (hours: number, minutes = 0) =>
     new Date(Date.now() - hours * 3_600_000 - minutes * 60_000);
 
-  it('moves the old number’s last day of write-limit and link records to the new number, whoever on it wrote them', async () => {
-    // Owner decision 2026-10-22 (ADR-0083): the limits and the repetition rules count per verified
-    // number, so the account's records go with it, and the old number's next holder starts with
-    // none. The records carry no account: those a withdrawn account on the old number left are
-    // moved as well, as the account inherited them.
+  it('moves the account’s last day of write-limit and link records to the new number, and those it inherited on the old one, never a live account’s (the likes’ rule, ADR-0076 7-26)', async () => {
+    // Owner decision 2026-10-22 answer 5 (ADR-0083): the limits and the repetition rules count per
+    // verified number, so the account's records go with it, and the old number's next holder
+    // starts with none. A link use is its item's author's: the account's own go, under whatever
+    // hash, and so do those it inherited on the old number (a withdrawn author's under its hash) —
+    // a live account's stay where they are (the Codex review on PR #222, the likes' and the
+    // reports' rule). A counted write carries no account: every one under the old hash goes.
     const { user } = await createUser(t.db);
     const { phone } = await createPhoneVerification(t.db, { userId: user.id });
     const market = await createMarket(t.db);
     const post = await createPost(t.db, { marketId: market.id, authorId: user.id });
     const comment = await createComment(t.db, { postId: post.id, authorId: user.id });
+    // W held the old number and withdrew; L is live, its number changed outside this procedure
+    // (its uses still under the old hash, ADR-0076 7-19); V held the new number and withdrew.
+    const { user: w } = await createUser(t.db);
+    await createPhoneVerification(t.db, { userId: w.id });
+    const wPost = await createPost(t.db, { marketId: market.id, authorId: w.id });
+    await withdraw(w.id);
+    const { user: l } = await createUser(t.db);
+    await createPhoneVerification(t.db, { userId: l.id });
+    const lPost = await createPost(t.db, { marketId: market.id, authorId: l.id });
+    const { user: v } = await createUser(t.db);
+    await createPhoneVerification(t.db, { userId: v.id });
+    const vPost = await createPost(t.db, { marketId: market.id, authorId: v.id });
+    await withdraw(v.id);
     const oldHash = randomPhoneHash();
     const newHash = randomPhoneHash();
     const otherHash = randomPhoneHash();
-    // Within the day under the old number: a post, a comment (23h59m ago), an upload, two link
-    // uses. Out of it: an edit and a link use a minute past 24 hours.
-    const within = [
-      await createWriteLimitEvent(t.db, { phoneHash: oldHash, action: 'post', createdAt: ago(1) }),
-      await createWriteLimitEvent(t.db, {
-        phoneHash: oldHash,
-        action: 'comment',
-        createdAt: ago(23, 59),
-      }),
-      await createWriteLimitEvent(t.db, {
-        phoneHash: oldHash,
-        action: 'upload',
-        createdAt: ago(5),
-      }),
-    ];
-    await createWriteLimitEvent(t.db, {
-      phoneHash: oldHash,
-      action: 'edit',
-      createdAt: ago(24, 1),
-    });
-    await createLinkUse(t.db, {
-      url: 'https://example.com/a',
-      phoneHash: oldHash,
-      postId: post.id,
-      usedAt: ago(2),
-    });
-    await createLinkUse(t.db, {
-      url: 'https://example.com/a',
-      phoneHash: oldHash,
-      commentId: comment.id,
-      usedAt: ago(3),
-    });
-    await createLinkUse(t.db, {
-      url: 'https://example.com/b',
-      phoneHash: oldHash,
-      postId: post.id,
-      usedAt: ago(24, 1),
-    });
-    // Another number's, and the new number's own (a withdrawn account that held it): they stay.
+    const thirdHash = randomPhoneHash();
+    // Within the day under the old number: a post, a comment (23h59m ago), an upload. Out of it:
+    // an edit a minute past 24 hours. Another number's and the new number's own stay.
+    for (const [action, at] of [
+      ['post', ago(1)],
+      ['comment', ago(23, 59)],
+      ['upload', ago(5)],
+      ['edit', ago(24, 1)],
+    ] as const) {
+      await createWriteLimitEvent(t.db, { phoneHash: oldHash, action, createdAt: at });
+    }
     await createWriteLimitEvent(t.db, { phoneHash: otherHash, action: 'post', createdAt: ago(1) });
     await createWriteLimitEvent(t.db, { phoneHash: newHash, action: 'post', createdAt: ago(4) });
-    await createLinkUse(t.db, {
-      url: 'https://example.com/a',
-      phoneHash: otherHash,
-      postId: post.id,
-      usedAt: ago(1),
-    });
+    const use = (phoneHash: string, item: { postId: string } | { commentId: string }, at: Date) =>
+      createLinkUse(t.db, { url: 'https://example.com/a', phoneHash, usedAt: at, ...item });
+    // The account's own: on its post and its 댓글 under the old hash, on its post under a third
+    // (a number it held before, changed outside this procedure), and one a minute out of the day.
+    await use(oldHash, { postId: post.id }, ago(2));
+    await use(oldHash, { commentId: comment.id }, ago(3));
+    await use(thirdHash, { postId: post.id }, ago(4));
+    await use(oldHash, { postId: post.id }, ago(24, 1));
+    // Inherited: W's, under the old hash.
+    await use(oldHash, { postId: wPost.id }, ago(5));
+    // A live account's, under the old hash and under another: they stay.
+    await use(oldHash, { postId: lPost.id }, ago(6));
+    await use(otherHash, { postId: lPost.id }, ago(1));
+    // The new number's own (V's): it stays, nothing gives way to what comes.
+    await use(newHash, { postId: vPost.id }, ago(7));
     const before = await recordRows();
     const vars = {
       user_id: user.id,
@@ -2441,19 +2456,37 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     };
     // The records give the result table nothing to read: the same row, the same COMMIT.
     expect(await change(vars)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
-    const moved = (row: { phoneHash: string; at: number }) =>
-      row.phoneHash === oldHash && row.at > Date.now() - 86_400_000;
-    const expected = before
-      .map((row) => (moved(row) ? { ...row, phoneHash: newHash } : row))
-      .sort((a, b) =>
+    const dayAgo = Date.now() - 86_400_000;
+    const own = new Set([post.id, comment.id]);
+    const itemOf = (what: string) => what.split(' ')[1];
+    const moved = (row: { phoneHash: string; what: string; at: number }) => {
+      if (row.at <= dayAgo || row.phoneHash === newHash) return false;
+      if (!row.what.includes(' ')) return row.phoneHash === oldHash;
+      const item = itemOf(row.what)!;
+      return own.has(item) || (item === wPost.id && row.phoneHash === oldHash);
+    };
+    const sorted = (rows: typeof before) =>
+      [...rows].sort((a, b) =>
         `${a.phoneHash}${a.what}${String(a.at)}`.localeCompare(
           `${b.phoneHash}${b.what}${String(b.at)}`,
         ),
       );
+    const expected = sorted(
+      before.map((row) => (moved(row) ? { ...row, phoneHash: newHash } : row)),
+    );
     expect(await recordRows()).toEqual(expected);
-    // Five moved, with their kind, link, item and time; the two out of the window stay.
-    expect(before.filter(moved)).toHaveLength(within.length + 2);
-    expect((await recordRows()).filter((row) => row.phoneHash === oldHash)).toHaveLength(2);
+    // Three counted writes and four uses moved, with their kind, link, item and time.
+    expect(before.filter(moved)).toHaveLength(7);
+    const after = await recordRows();
+    // Left under the old hash: the edit and the use out of the day, and L's use.
+    expect(after.filter((row) => row.phoneHash === oldHash)).toHaveLength(3);
+    expect(
+      after.filter((row) => row.phoneHash === oldHash && row.what.endsWith(lPost.id)),
+    ).toHaveLength(1);
+    // Nothing under the new hash went: V's use and the new number's write are there still.
+    expect(
+      after.filter((row) => row.phoneHash === newHash && row.what.endsWith(vPost.id)),
+    ).toHaveLength(1);
     // The same lines again: the old number read again is the new one, whose hash is not `oldHash`
     // — `UPDATE 0`, refused, and nothing moves back or on.
     expect(await change(vars)).toEqual(REFUSED_OLD_NUMBER);
@@ -2472,8 +2505,12 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     const numbers = await numbersOf(grant.id);
     const elsewhere = randomPhoneHash();
     await createWriteLimitEvent(t.db, { phoneHash: elsewhere, action: 'post', createdAt: ago(1) });
+    // A use a withdrawn account left on that other number: with its hash, it would be inherited.
     const market = await createMarket(t.db);
-    const post = await createPost(t.db, { marketId: market.id, authorId: user.id });
+    const { user: w } = await createUser(t.db);
+    await createPhoneVerification(t.db, { userId: w.id });
+    const post = await createPost(t.db, { marketId: market.id, authorId: w.id });
+    await withdraw(w.id);
     await createLinkUse(t.db, {
       url: 'https://example.com/a',
       phoneHash: elsewhere,

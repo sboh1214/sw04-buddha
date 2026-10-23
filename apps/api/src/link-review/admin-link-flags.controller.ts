@@ -28,7 +28,8 @@ import { LinkReviewService } from './link-review.service.js';
  * rule — the default list those no operator has marked, the reviewed list the marks — a group's
  * entries (the link, why and when, and the item as it is now), and the mark '확인함' with what came
  * of it ('문제 없음' or '조치함'), recorded in `admin_actions`. Nothing here acts on an item: hiding,
- * warning and restricting are #50's moderation, where this list moves when that area is built.
+ * warning and restricting are #50's moderation (`/admin/moderation/…`), whose admin area shows this
+ * list as one of its pages (ADR-0083 7-12) — the routes stay here, under `/admin/link-flags`.
  * Guards run in order: SessionGuard (401 without a session, 403 for a foreign Origin on a
  * mutation), AdminGuard (403 for a member), then OnboardedGuard (409 for an admin that has not
  * finished the onboarding, ADR-0072). The reads write no admin_actions row; the mark writes one

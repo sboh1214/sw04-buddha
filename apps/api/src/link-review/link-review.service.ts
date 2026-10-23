@@ -79,8 +79,10 @@ type UsesBefore = {
  * 1. the links' locks (LINK_LOCK_BUCKETS at most, in key order), so two writes of one link count one
  *    after the other and a third use is never missed by a race. Taken after every row lock of the
  *    write: from here a write takes no lock but the foreign-key checks of its inserts (FOR KEY
- *    SHARE on the posts and comments named, which no write holds FOR UPDATE), so a write waiting
- *    for a link's lock never holds up the one that has it (ADR-0083 7-13);
+ *    SHARE on the posts and comments named). No counted write holds those rows FOR UPDATE (its
+ *    own is FOR NO KEY UPDATE); only an operator's hiding does (#50, ModerationService), and it
+ *    waits on no lock a counted write holds once it has the row — so a write waiting for a link's
+ *    lock never holds up the one that has it (ADR-0083 7-13);
  * 2. the database clock, and each link's uses in the window before this write: the writer's posts
  *    and comments (`same_account`) and the people (`many_accounts`);
  * 3. the uses (`link_uses`), all in one insert;

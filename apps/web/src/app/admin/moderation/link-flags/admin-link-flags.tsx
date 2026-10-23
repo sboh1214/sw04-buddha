@@ -7,6 +7,7 @@ import {
   Dialog,
   Field,
   HStack,
+  Heading,
   Link as ChakraLink,
   Portal,
   RadioGroup,
@@ -24,6 +25,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useEffect, useId, useRef, useState } from 'react';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
@@ -45,7 +47,9 @@ import {
   toLinkFlagReviewBody,
 } from '@/lib/admin-link-flags';
 import { type AdminLinkFlag, type AdminLinkFlagGroup, api, unwrap } from '@/lib/api';
-import { profilePath } from '@/lib/profile';
+import { ADMIN_MODERATION_ACTIONS_PATH, adminUserModerationPath } from '@/lib/moderation';
+import { readFailed } from '@/lib/query-client';
+import { ModerationNav } from '../moderation-parts';
 
 const ADMIN_LINK_FLAGS_KEY = ['admin', 'link-flags'] as const;
 
@@ -56,8 +60,9 @@ const ADMIN_LINK_FLAGS_KEY = ['admin', 'link-flags'] as const;
  * 보임»), 20 rows a page with 더 보기. A row opens to its entries (항목 보기, 20 a page). An operator
  * marks a row '확인함' with what came of it ('문제 없음' or '조치함') and an optional note — recorded
  * on the server (`admin_actions`) — and it leaves the default list; '확인함' shows the marks. The
- * post stays as it is (decision 4 #187 «글은 그대로 보임»), and hiding, warning or restricting is
- * #50's moderation, where this list moves when that area is built.
+ * post stays as it is (decision 4 #187 «글은 그대로 보임»): hiding, warning or restricting is #50's
+ * moderation, whose area this page is part of (its row of links, `ModerationNav`) — an entry leads
+ * to its item's moderation page, and a group marked '조치함' to the action log.
  *
  * A marked row leaves the list it was on, its 확인함으로 표시 with it: once the list is read again,
  * a focus left on nothing goes to the list's pressed button, not to the page's start.
@@ -93,6 +98,10 @@ export function AdminLinkFlags() {
 
   return (
     <Stack gap="4" data-testid="admin-link-flags">
+      <ModerationNav />
+      <Heading as="h3" size="lg">
+        {copy.adminLinkFlags}
+      </Heading>
       <Text color="fg.muted">{copy.adminLinkFlagsIntro}</Text>
       <HStack gap="2" role="group" aria-label={copy.adminLinkFlags}>
         {(['open', 'reviewed'] as const).map((value) => (
@@ -111,7 +120,7 @@ export function AdminLinkFlags() {
       </HStack>
       {groups.isPending ? (
         <Skeleton height="24" />
-      ) : groups.isError ? (
+      ) : readFailed(groups) ? (
         <ErrorAlert />
       ) : rows.length === 0 ? (
         <Text color="fg.muted" data-testid="admin-link-flags-empty">
@@ -125,16 +134,25 @@ export function AdminLinkFlags() {
         </Stack>
       )}
       {groups.hasNextPage && (
-        <Button
-          alignSelf="center"
-          size="sm"
-          variant="ghost"
-          loading={groups.isFetchingNextPage}
-          onClick={() => void groups.fetchNextPage()}
-          data-testid="admin-link-flags-more"
-        >
-          {copy.loadMore}
-        </Button>
+        <>
+          {/* A 더 보기 that failed: the rows stay, and this says so above the button that asks
+              again (owner decision 2026-10-20 7, as every 더 보기 list). */}
+          <LoadMoreFailed
+            list={groups}
+            message={copy.errUnknown}
+            data-testid="admin-link-flags-more-failed"
+          />
+          <Button
+            alignSelf="center"
+            size="sm"
+            variant="ghost"
+            loading={groups.isFetchingNextPage}
+            onClick={() => void groups.fetchNextPage()}
+            data-testid="admin-link-flags-more"
+          >
+            {copy.loadMore}
+          </Button>
+        </>
       )}
     </Stack>
   );
@@ -216,6 +234,13 @@ function LinkFlagGroupRow({
               {review.note}
             </Text>
           )}
+          {review.outcome === 'actioned' && (
+            <ChakraLink asChild colorPalette="brand" color="colorPalette.fg" fontSize="sm">
+              <NextLink href={ADMIN_MODERATION_ACTIONS_PATH} data-testid="admin-link-flag-actions">
+                {copy.adminModerationActions}
+              </NextLink>
+            </ChakraLink>
+          )}
         </Stack>
       )}
       <HStack gap="2" flexWrap="wrap">
@@ -293,7 +318,7 @@ function LinkFlagItems({ id, group }: { id: string; group: AdminLinkFlagGroup })
     <Stack id={id} gap="2" ps={{ base: '0', md: '3' }} data-testid="admin-link-flag-items">
       {items.isPending ? (
         <Skeleton height="16" />
-      ) : items.isError ? (
+      ) : readFailed(items) ? (
         <ErrorAlert />
       ) : gone ? (
         <Text fontSize="sm" color="fg.muted" data-testid="admin-link-flag-items-empty">
@@ -303,25 +328,32 @@ function LinkFlagItems({ id, group }: { id: string; group: AdminLinkFlagGroup })
         rows.map((flag) => <LinkFlagEntry key={flag.id} flag={flag} />)
       )}
       {items.hasNextPage && (
-        <Button
-          alignSelf="center"
-          size="xs"
-          variant="ghost"
-          loading={items.isFetchingNextPage}
-          onClick={() => void items.fetchNextPage()}
-          data-testid="admin-link-flag-items-more"
-        >
-          {copy.loadMore}
-        </Button>
+        <>
+          <LoadMoreFailed
+            list={items}
+            message={copy.errUnknown}
+            data-testid="admin-link-flag-items-more-failed"
+          />
+          <Button
+            alignSelf="center"
+            size="xs"
+            variant="ghost"
+            loading={items.isFetchingNextPage}
+            onClick={() => void items.fetchNextPage()}
+            data-testid="admin-link-flag-items-more"
+          >
+            {copy.loadMore}
+          </Button>
+        </>
       )}
     </Stack>
   );
 }
 
 /**
- * One entry: the item — a 근거 글 or a 댓글, its excerpt linking to the post's page — its author
- * (their public profile), its market (the admin market screen), when it was caught and written,
- * and what became of it since (edited, deleted, hidden).
+ * One entry: the item — a 근거 글 or a 댓글, its excerpt linking to its moderation page (#50) — its
+ * author (their moderation page), its market (the admin market screen), when it was caught and
+ * written, and what became of it since (edited, deleted, hidden).
  */
 function LinkFlagEntry({ flag }: { flag: AdminLinkFlag }) {
   const { target } = flag;
@@ -353,7 +385,7 @@ function LinkFlagEntry({ flag }: { flag: AdminLinkFlag }) {
           {copy.adminLinkFlagAuthor}{' '}
           <ChakraLink asChild colorPalette="brand" color="colorPalette.fg">
             <NextLink
-              href={profilePath(target.author.publicId) as Route}
+              href={adminUserModerationPath(target.author.userId) as Route}
               data-testid="admin-link-flag-author"
             >
               {target.author.nickname}

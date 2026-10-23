@@ -41,6 +41,7 @@ import {
 import { reportReasonLabel } from '@/lib/authored';
 import { formatKst } from '@/lib/datetime';
 import {
+  ADMIN_LINK_FLAGS_PATH,
   ADMIN_MODERATION_ACTIONS_PATH,
   ADMIN_REPORTS_PATH,
   REPORT_REASON_OPTIONS,
@@ -73,8 +74,8 @@ import {
 import { useSession } from '@/lib/use-session';
 
 /**
- * The pieces every page of the admin 신고·조치 area shares (#50, ADR-0081): the area's own row of
- * links, an account's name, the lists of reports and of actions, and the two dialogs every action
+ * The pieces every page of the admin 신고·조치 area shares (#50, ADR-0081; #187's review list of
+ * repeated links, ADR-0083): the area's own row of links, an account's name, the lists of reports and of actions, and the two dialogs every action
  * goes through — one with the reason the member reads (a report reason and the operator's
  * explanation, owner decision 2026-10-22 on #51; a writing restriction's term too, #185), one with
  * the operators' own reason (a cancellation, a dismissal, a restriction's early lift and its 감경
@@ -82,12 +83,13 @@ import { useSession } from '@/lib/use-session';
  */
 
 /**
- * The area's row: the queue and the action log. The place #187's repeated-link review list joins
- * when the community stack is put back together (ADR-0081 결과 5).
+ * The area's row: the queue, the action log, and #187's review list of repeated links, which joined
+ * it when the community stack was put back together (ADR-0081 결과 5, ADR-0083 7-12).
  */
 const AREA_LINKS: readonly { href: string; label: string }[] = [
   { href: ADMIN_REPORTS_PATH, label: copy.adminReportQueue },
   { href: ADMIN_MODERATION_ACTIONS_PATH, label: copy.adminModerationActions },
+  { href: ADMIN_LINK_FLAGS_PATH, label: copy.adminLinkFlags },
 ];
 
 export function ModerationNav() {

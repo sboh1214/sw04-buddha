@@ -26,6 +26,7 @@ import {
   toLinkFlagReviewBody,
 } from './admin-link-flags';
 import { type AdminLinkFlag, type AdminLinkFlagGroup, ApiError } from './api';
+import { adminCommentModerationPath, adminPostModerationPath } from './moderation';
 import { postPath } from './posts';
 
 /** 반복 링크 검토 목록 (#187, ADR-0083; owner decision 2026-10-22) as the admin screen words it. */
@@ -81,13 +82,16 @@ describe('the review list’s words', () => {
     }
   });
 
-  it('says what carries the link and where to read it: the post’s page for a comment too', () => {
+  it('says what carries the link and where to act on it: its own moderation page (#50)', () => {
     expect(linkFlagKindLabel('post')).toBe(copy.adminLinkFlagPost);
     expect(linkFlagKindLabel('comment')).toBe(copy.adminLinkFlagComment);
-    expect(linkFlagItemPath(flag().target)).toBe(postPath(POST));
+    // The post's or the comment's page in the 신고·조치 area, where its actions are taken and
+    // listed — not the public post page (ADR-0083 7-12).
+    expect(linkFlagItemPath(flag().target)).toBe(adminPostModerationPath(POST));
     expect(linkFlagItemPath(flag({ kind: 'comment', commentId: COMMENT }).target)).toBe(
-      postPath(POST),
+      adminCommentModerationPath(COMMENT),
     );
+    expect(linkFlagItemPath(flag().target)).not.toBe(postPath(POST));
   });
 
   it('writes the times in Korean time, labelled', () => {

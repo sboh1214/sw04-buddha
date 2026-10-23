@@ -107,23 +107,32 @@
  *    flight holds its 본인확인 row FOR KEY SHARE (ReportsService), commits first and is moved, and a
  *    later one waits for the COMMIT and is sent under the new hash. Run again — the old number read
  *    again is the new one — it moves nothing.
- * 6. The last 24 hours of the number's write-limit and link records (#187, owner decision
- *    2026-10-22, ADR-0083): the owner's limits and the repetition rules count per verified number
- *    (ADR-0069 decision 7), so the `write_limit_events` and `link_uses` rows under `old_hash`
- *    younger than the longest window (24 hours — WRITE_LIMITS' day, LINK_REPEAT_WINDOW_SECONDS)
- *    go over to the new number's hash: the account's writes go on counting where they were, and
- *    the old number's next holder starts with none. Every row under the old hash, whoever wrote
- *    it — the records carry no account, and the ones a withdrawn account on the old number left
- *    are the account's as well (the person the account inherited them from, as step 4 moves the
- *    likes it inherited). Older rows stay to the worker's purge (they count for no one). Deleted
- *    and inserted again with their kind, link, item and time (buddha_app has no UPDATE on them,
- *    migration 0041). A fourth DO block with the SET LOCAL values; it answers `DO`. After step 1
- *    as step 4 is: a counted write of the account in flight holds the 본인확인 row FOR KEY SHARE
+ * 6. The last 24 hours of the person's write-limit and link records (#187, owner decision
+ *    2026-10-22 answer 5, ADR-0083): the owner's limits and the repetition rules count per
+ *    verified number (ADR-0069 decision 7), so the records younger than the longest window (24
+ *    hours — WRITE_LIMITS' day, LINK_REPEAT_WINDOW_SECONDS) that are the account's go over to the
+ *    new number's hash: its writes go on counting where they were, and the old number's next
+ *    holder starts with none. Which are the account's follows the likes' and the reports' rule
+ *    (steps 4 and 5, ADR-0076 7-26): the link uses (`link_uses`) of its own posts and comments —
+ *    a use is its item's author's, written by the author's write or edit — under any hash but the
+ *    new one, and those it inherited on the old number (under `old_hash`, on an item whose author
+ *    has no 본인확인 record left). A live account's use stays where it is, under the old hash or
+ *    any other. The counted writes (`write_limit_events`) carry no account — the number, the kind
+ *    and the time only (ADR-0083 decision 2) — so every one under `old_hash` goes: the account's
+ *    own and those a withdrawn account on the old number left. Only a number changed outside this
+ *    procedure leaves a live account's there (ADR-0076 7-19), and no limit reads it again — that
+ *    account counts under the number it holds — so moving it makes this account's count stricter
+ *    and no one's looser. Nothing under the new hash is deleted or given way: neither table holds
+ *    one row per number, so the rows coming with the account meet nothing there. Older rows stay
+ *    to the worker's purge (they count for no one). Deleted and inserted again with their kind,
+ *    link, item and time (buddha_app has no UPDATE on them, migration 0041). A fourth DO block
+ *    with the SET LOCAL values; it answers `DO` and nothing to read. After step 1 as step 4 is: a
+ *    counted write of the account in flight holds the 본인확인 row FOR KEY SHARE
  *    (WriteLimitsService.lockWriter) and has committed by then, and a later one waits for the
  *    COMMIT and counts under the new hash. Run again — the old number read again is the new one —
- *    it moves nothing. Nothing goes on the review list here: where the moved uses and the ones the
- *    new number held already make three items of a link, the account's next write of it puts them
- *    all on (LinkReviewService.record, ADR-0083 7-10).
+ *    it moves nothing. Nothing goes on the review list here: where the moved uses and the ones
+ *    the new number held already make three items of a link, the account's next write of it puts
+ *    them all on (LinkReviewService.record, ADR-0083 7-10).
  * 7. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
@@ -240,10 +249,14 @@ DO $$BEGIN
       RETURNING action, created_at)
     INSERT INTO write_limit_events (phone_hash, action, created_at)
       SELECT current_setting('phone_change.new_hash'), action, created_at FROM moved;
-  WITH moved AS (DELETE FROM link_uses
-      WHERE phone_hash = current_setting('phone_change.old_hash')
-        AND phone_hash <> current_setting('phone_change.new_hash')
-        AND used_at > now() - interval '24 hours'
+  WITH moved AS (DELETE FROM link_uses u
+      WHERE u.phone_hash <> current_setting('phone_change.new_hash')
+        AND u.used_at > now() - interval '24 hours'
+        AND EXISTS (SELECT 1 FROM (SELECT author_id FROM posts WHERE id = u.post_id
+            UNION ALL SELECT author_id FROM post_comments WHERE id = u.comment_id) w
+          WHERE w.author_id = current_setting('phone_change.user_id')
+            OR (u.phone_hash = current_setting('phone_change.old_hash')
+              AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = w.author_id)))
       RETURNING url, post_id, comment_id, used_at)
     INSERT INTO link_uses (url, phone_hash, post_id, comment_id, used_at)
       SELECT url, current_setting('phone_change.new_hash'), post_id, comment_id, used_at FROM moved;

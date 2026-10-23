@@ -90,6 +90,13 @@ export const ADMIN_REPORTS_PATH = '/admin/reports';
 /** Every action, newest first, with its cancellation. */
 export const ADMIN_MODERATION_ACTIONS_PATH = '/admin/moderation/actions';
 
+/**
+ * #187's review list of repeated links (ADR-0083), the area's third page: the posts and comments
+ * a repetition rule caught, which an operator marks '확인함' — any action on them is this area's
+ * (the item's moderation page, `adminTargetPath`).
+ */
+export const ADMIN_LINK_FLAGS_PATH = '/admin/moderation/link-flags';
+
 /** The query parameter of the queue's half; `pending` is the page without it. */
 export const ADMIN_REPORT_QUEUE_PARAM = 'status';
 

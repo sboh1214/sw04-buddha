@@ -97,7 +97,7 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // both. Last, so the document keeps the routes before it where they were.
     ModerationModule,
     // 반복 링크 검토 목록 (#187): the operators' review list of repeated links. Last, so the
-    // document keeps every route before it where it was; it moves into #50's moderation area.
+    // document keeps every route before it where it was. Its screen is a page of #50's area.
     AdminLinkFlagsModule,
   ],
   controllers: [HealthController],

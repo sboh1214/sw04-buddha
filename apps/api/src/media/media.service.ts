@@ -64,7 +64,12 @@ export class MediaService {
    * ADR-0069 decision 7, owner decision 2026-10-22) is asked before anything is decoded, so a
    * refused upload costs no conversion, and counted with the row, under the writer's number lock
    * (WriteLimitsService), which is what holds: WRITE_LIMITED, nothing kept. Only a stored image
-   * counts — a file the image rules refuse is no upload.
+   * counts — a file the image rules refuse is no upload. After the restriction's refusal, which
+   * comes first (RESTRICTED before WRITE_LIMITED, as a post's write asks `assertWriter` before its
+   * number). A notice's image is an upload as well: an admin's, recorded and never refused
+   * (decision 4 #187 «운영 계정 … 적용하지 않는다»). The row's transaction takes the number's lock and no
+   * profile row (`lockWriter`): it waits on another write of the person for the number alone, and
+   * holds nothing that write waits for.
    */
   async uploadPostImage(
     ownerId: string,

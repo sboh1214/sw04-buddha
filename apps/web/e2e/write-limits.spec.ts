@@ -276,20 +276,31 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
         })
       ).status(),
     ).toBe(403);
-    await page.goto('/admin/link-flags');
+    await page.goto('/admin/moderation/link-flags');
     await expect(page).toHaveURL('/');
     await expect(page.getByTestId('admin-link-flags')).toHaveCount(0);
 
-    // An operator opens it from the admin menu.
+    // An operator opens it in the 신고·조치 area (#50): the admin menu leads to the area, whose row
+    // of links leads on to the list (ADR-0083 7-12). The menu has no entry of its own for it.
     await logOut(page);
     await signIn(page, adminAccount.email, adminAccount.password);
     const operator = await meOf(page.request);
     await page.goto('/admin/markets');
+    await expect(
+      page.getByTestId('admin-nav').getByRole('link', { name: copy.adminLinkFlags, exact: true }),
+    ).toHaveCount(0);
     await page
       .getByTestId('admin-nav')
+      .getByRole('link', { name: copy.adminModeration, exact: true })
+      .click();
+    await page
+      .getByTestId('moderation-nav')
       .getByRole('link', { name: copy.adminLinkFlags, exact: true })
       .click();
-    await expect(page).toHaveURL('/admin/link-flags');
+    await expect(page).toHaveURL('/admin/moderation/link-flags');
+    await expect(
+      page.getByTestId('moderation-nav').getByRole('link', { name: copy.adminLinkFlags }),
+    ).toHaveAttribute('aria-current', 'page');
     const screen = page.getByTestId('admin-link-flags');
     await expect(screen).toContainText(copy.adminLinkFlagsIntro);
     await expect(page.getByTestId('admin-link-flags-open')).toHaveAttribute('aria-pressed', 'true');
@@ -344,14 +355,18 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
       await expect(entry).toContainText(
         flag.target.kind === 'post' ? copy.adminLinkFlagPost : copy.adminLinkFlagComment,
       );
+      // Each item leads to its moderation page (#50), where it is acted on — the post's or the
+      // comment's own — and its author to theirs.
       await expect(entry.getByTestId('admin-link-flag-item')).toHaveAttribute(
         'href',
-        `/community/posts/${postId}`,
+        flag.target.kind === 'post'
+          ? `/admin/moderation/posts/${postId}`
+          : `/admin/moderation/comments/${flag.target.commentId!}`,
       );
       await expect(entry.getByTestId('admin-link-flag-author')).toHaveText(me.profile.nickname);
       await expect(entry.getByTestId('admin-link-flag-author')).toHaveAttribute(
         'href',
-        `/u/${me.profile.publicId}`,
+        `/admin/moderation/users/${encodeURIComponent(flag.target.author.userId)}`,
       );
       await expect(entry.getByTestId('admin-link-flag-market')).toHaveText(market.title);
       await expect(entry.getByTestId('admin-link-flag-market')).toHaveAttribute(
@@ -425,6 +440,11 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
     );
     await expect(done.getByTestId('admin-link-flag-note')).toHaveText(note);
     await expect(done.getByTestId('admin-link-flag-review-open')).toHaveCount(0);
+    // '조치함' leads to the actions it records (#50's action log).
+    await expect(done.getByTestId('admin-link-flag-actions')).toHaveAttribute(
+      'href',
+      '/admin/moderation/actions',
+    );
     await done.getByTestId('admin-link-flag-toggle').click();
     for (const flag of flags) {
       await expect(done.getByTestId(`admin-link-flag-${flag.id}`)).toBeVisible();
@@ -435,13 +455,15 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
       ),
     ).toBe(true);
 
-    // From the list to the post, which reads as it was written.
+    // From the list to the post's moderation page (#50), where it reads as it was written and
+    // the actions are at hand.
     await done
       .getByTestId(`admin-link-flag-${flags.find((flag) => flag.target.kind === 'post')!.id}`)
       .getByTestId('admin-link-flag-item')
       .click();
-    await expect(page).toHaveURL(`/community/posts/${postId}`);
-    await expect(page.getByTestId('post-title')).toHaveText(title);
+    await expect(page).toHaveURL(`/admin/moderation/posts/${postId}`);
+    await expect(page.getByTestId('moderation-post-title')).toHaveText(title);
+    await expect(page.getByTestId('moderation-hide')).toBeVisible();
   });
 
   test('운영자가 목록을 연 뒤 다른 운영자가 그 줄을 표시하면, 그 줄을 펼칠 때 남은 항목이 없다고 말하고 목록을 다시 읽어 그 줄이 빠진다', async ({
@@ -459,7 +481,7 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
 
     await logOut(page);
     await signIn(page, adminAccount.email, adminAccount.password);
-    await page.goto('/admin/link-flags');
+    await page.goto('/admin/moderation/link-flags');
     const row = page.locator(`[data-testid="admin-link-flag-group"][data-url="${url}"]`);
     await expect(page.getByTestId('admin-link-flag-group').first()).toBeVisible();
     for (let more = 0; more < 10 && (await row.count()) === 0; more += 1) {

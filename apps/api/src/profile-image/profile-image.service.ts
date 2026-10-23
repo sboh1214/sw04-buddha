@@ -80,7 +80,8 @@ export class ProfileImageService {
    * under the writer's number lock (WriteLimitsService): a profile image counts with a post's — one
    * count for both (owner decision 2026-10-22: «#187 하루 업로드 50장 → 프로필 이미지도 함께 셈»,
    * ADR-0079). WRITE_LIMITED keeps the image the profile has. The number's lock is taken after the
-   * profile's, which no other counted write takes, so the two never wait on each other in turn.
+   * profile's, the order every counted write takes them in (a post, a comment or an edit holds the
+   * profile FOR KEY SHARE first, #185's `assertWriter`), so no two wait on each other in turn.
    */
   async replace(userId: string, bytes: Uint8Array): Promise<void> {
     await assertPublicItemEdit(this.db, userId, 'replace');

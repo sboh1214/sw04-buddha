@@ -44,11 +44,12 @@ interface Refusal {
  *    number cannot change or go until the write commits, as a like holds it — ADR-0076), the hash
  *    of that number, and the number's own lock (`buddha:writes`, the hash): two writes of one person
  *    — two tabs, two requests at once, or the accounts a number verified one after another — count
- *    one after the other, so no window is passed by a race. Taken before any row of the write is
- *    locked, by every counted path but the profile image's, so the number's lock never waits
- *    behind a row lock held by another write of the same person. ProfileImageService takes it
- *    after the profile's row, which no other counted write locks, so neither waits on the other
- *    in turn (ADR-0083 decision 4).
+ *    one after the other, so no window is passed by a race. Taken after the writer's profile row
+ *    and before any other row of the write is locked: a post, a comment or an edit holds the
+ *    profile FOR KEY SHARE first (#185's `assertWriter`, which an operator's restriction waits
+ *    on), a profile image FOR UPDATE (ProfileImageService), and a post image's upload locks no
+ *    profile — so every counted write takes the two in the same order, and the number's lock never
+ *    waits behind a row lock held by another write of the same person (ADR-0083 decision 4, 7-13).
  * 2. `take`, where the write is certain to happen (after the checks of what is written, so a
  *    refusal for a limit means the write was otherwise fine): the database clock read after the
  *    locks, every window of the action counted at it, and the record (`write_limit_events`) at that

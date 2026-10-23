@@ -12,7 +12,7 @@ import {
   isApiError,
 } from './api';
 import { formatKst } from './datetime';
-import { postPath } from './posts';
+import { adminTargetPath } from './moderation';
 
 /*
  * 반복 링크 검토 목록 (#187, ADR-0083; ADR-0069 decision 2 #45-15, decision 4 #187; owner decision
@@ -48,12 +48,16 @@ export function linkFlagKindLabel(kind: LinkFlagTargetKind): string {
 }
 
 /**
- * Where an operator reads the item: the post's page — a comment's too, which is under its post
- * (the page has no anchor per comment). A deleted or hidden item shows its placeholder there; the
- * list's excerpt is what it said.
+ * Where an operator reads the item and acts on it: its moderation page in the 신고·조치 area (#50,
+ * ADR-0081) — the post's or the comment's own, with what it says (a deleted or hidden one's
+ * original too), its reports and the actions taken on it, and the hiding, the warning and the
+ * writing restriction an operator may take. '조치함' records that one was taken there (owner
+ * decision 2026-10-22 answer 2, ADR-0083 7-12).
  */
 export function linkFlagItemPath(target: AdminLinkFlag['target']): string {
-  return postPath(target.postId);
+  return target.kind === 'comment' && target.commentId !== null
+    ? adminTargetPath({ type: 'comment', commentId: target.commentId, postId: target.postId })
+    : adminTargetPath({ type: 'post', postId: target.postId });
 }
 
 /**
