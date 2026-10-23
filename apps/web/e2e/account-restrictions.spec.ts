@@ -1,5 +1,7 @@
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
+import { fillBusinessInfo } from '../src/legal/business-info';
+import { deadlineOnCard, expectDeadlineLine } from './appeal';
 import {
   adminAccount,
   createOpenMarket,
@@ -45,7 +47,16 @@ import {
  *   취소 is asked and approved the same way;
  * - the first operator asks for a member's account restriction and retracts it before anyone
  *   decides it (owner decision 2026-10-23): it leaves the waiting list for 철회됨, with when, the
- *   second operator can no longer decide it, and nothing is in force.
+ *   second operator can no longer decide it, and nothing is in force;
+ * - with a writing restriction (#185) and an account restriction standing together, MY 요약 and
+ *   MY 설정 show one banner with both titles and ends and one link, and the write page the writing
+ *   restriction's alone — the one SanctionBanner keeping both owners' rules (restacked on #185 and
+ *   #186, ADR-0085 결과 5).
+ *
+ * On 조치·신고 내역 the guidance is the page's, once above the list, and an account restriction's
+ * card gives its '이의 기한' from when its approval put it in force — unmoved by a 감경 or an early
+ * lift, gone once it is cancelled (#186, ADR-0084 결과 5); no banner or refusal says anything of
+ * the appeal.
  *
  * Every rule's branch (the two-person rule's refusals, the moot requests, the triggers, the trading
  * check, the privacy guard) is the API's test (account-restrictions.controller.test.ts); the
@@ -113,8 +124,11 @@ function kst(iso: string): string {
     .join('');
 }
 
-/** The appeal's guidance as 조치·신고 내역 words it, up to its email: never on a banner or a refusal. */
-const APPEAL_START = copy.myModerationAppeal.slice(0, copy.myModerationAppeal.indexOf('{{'));
+/**
+ * The appeal's guidance as 조치·신고 내역 words it, once above the actions (`copy.appealGuidance`,
+ * #186), up to its email: never on a banner or a refusal (ADR-0084 결과 5's #139 item).
+ */
+const APPEAL_START = copy.appealGuidance.slice(0, copy.appealGuidance.indexOf('{{'));
 
 /** A refusal's way to 조치·신고 내역 (`RefusalText`): the link under the end, no appeal sentence. */
 async function expectModerationLink(refusal: Locator): Promise<void> {
@@ -378,14 +392,23 @@ test.describe('계정 제한', () => {
       ]) {
         await expect(banner).not.toContainText(hidden);
       }
+      await expect(banner).not.toContainText('이의');
 
-      // MY 설정: the banner above the public items; a new 소개 is refused with the account
-      // restriction's sentence, its end and the way to 내역 — clearing it stays open (#37-9,
-      // decision 7).
+      // MY 설정: the same banner above the public items — its title, end and the way to 내역, no
+      // appeal words (ADR-0084 결과 5) — and a new 소개 is refused with the account restriction's
+      // sentence, its end and the way to 내역 — clearing it stays open (#37-9, decision 7).
       await gotoWithRestrictionRead(page, '/my/settings');
+      const settingsBanner = page.getByTestId('settings-sanction-banner');
+      await expect(settingsBanner).toContainText(copy.restrictionAccountTitle);
       await expect(page.getByTestId('settings-sanction-banner-account-ends')).toHaveText(
         `${copy.moderationEndsAt} ${kst(endsAt)}`,
       );
+      await expect(page.getByTestId('settings-sanction-banner-link')).toHaveAttribute(
+        'href',
+        '/my/moderation',
+      );
+      await expect(settingsBanner).not.toContainText(APPEAL_START);
+      await expect(settingsBanner).not.toContainText('이의');
       const bioInput = page.getByTestId('bio-input');
       await bioInput.fill(`제한 중 소개 ${tag}`);
       await page.getByTestId('bio-save').click();
@@ -411,8 +434,13 @@ test.describe('계정 제한', () => {
       await expect(page.getByTestId('post-title')).toHaveText(`계정 제한 중 글 ${tag}`);
 
       // 조치·신고 내역: the fact, the reason and explanation, the end and the appeal's deadline —
-      // never who asked or approved, nor the approval's reason (#139).
+      // never who asked or approved, nor the approval's reason (#139). How to appeal it is the
+      // page's, once above the list (#186), and its card's line is its deadline alone: 14 days from
+      // when it was taken — when the approval put it in force (ADR-0085 7-1), not the request.
       await page.goto('/my/moderation');
+      await expect(page.getByTestId('my-moderation-appeal')).toHaveText(
+        fillBusinessInfo(copy.appealGuidance),
+      );
       const item = page.getByTestId(`my-action-${restriction.id}`);
       await expect(item.getByTestId('my-action-type')).toHaveText(
         copy.moderationActionAccountRestriction,
@@ -423,7 +451,11 @@ test.describe('계정 제한', () => {
         copy.reportReasonMultiAccount,
       );
       await expect(item.getByTestId('my-action-note')).toContainText(note);
-      await expect(item.getByTestId('my-action-appeal')).toBeVisible();
+      await expect(item.getByTestId('my-action-taken-value')).toHaveText(
+        kst(restriction.createdAt),
+      );
+      const deadline = await deadlineOnCard(item);
+      await expectDeadlineLine(item, deadline, false);
       await expect(item.getByTestId('my-action-subject')).toHaveCount(0);
       for (const hidden of [
         approvalReason,
@@ -489,6 +521,8 @@ test.describe('계정 제한', () => {
       await expect(item.getByTestId('my-action-ends')).toContainText(kst(liftedEnd));
       await expect(item.getByTestId('my-action-original-ends')).toContainText(kst(endsAt));
       await expect(page.getByTestId('my-moderation')).not.toContainText(liftReason);
+      // Lifted early, it stands as an action: the same deadline line (ADR-0084 결과 5).
+      await expectDeadlineLine(item, deadline, false);
     } finally {
       await askingContext.close();
       await approvingContext.close();
@@ -676,11 +710,15 @@ test.describe('계정 제한', () => {
       await expect(row.getByTestId('moderation-end-change')).toContainText(
         `${copy.adminModerationEndChangeShorten} · ${copy.restrictionIndefinite} → ${kst(newEnd)}`,
       );
-      // The member reads 감경됨.
+      // The member reads 감경됨, and the '이의 기한' its card had: a 감경 brings the end forward,
+      // not when it was taken (ADR-0084 결과 5).
       await page.goto('/my/moderation');
-      await expect(
-        page.getByTestId(`my-action-${indefinite.id}`).getByTestId('my-action-end-change'),
-      ).toHaveText(copy.moderationEndShortened);
+      const card = page.getByTestId(`my-action-${indefinite.id}`);
+      await expect(card.getByTestId('my-action-end-change')).toHaveText(
+        copy.moderationEndShortened,
+      );
+      await expect(card.getByTestId('my-action-taken-value')).toHaveText(kst(indefinite.createdAt));
+      await expectDeadlineLine(card, await deadlineOnCard(card), false);
 
       // --- 취소 요청 of the same restriction, approved: cancelled.
       await row.getByTestId('moderation-action-cancel-request').click();
@@ -707,6 +745,10 @@ test.describe('계정 제한', () => {
       await expect(row.getByTestId('moderation-action-cancelled')).toHaveText(
         copy.moderationCancelled,
       );
+      // Cancelled: nothing left to appeal, no deadline line (ADR-0081 7-17).
+      await page.goto('/my/moderation');
+      await expect(card.getByTestId('my-action-cancelled')).toBeVisible();
+      await expect(card.getByTestId('my-action-appeal')).toHaveCount(0);
       await gotoWithRestrictionRead(page, '/my');
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
     } finally {
@@ -785,6 +827,103 @@ test.describe('계정 제한', () => {
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
     } finally {
       await askingContext.close();
+    }
+  });
+
+  test('작성 제한과 계정 제한이 함께 서 있으면 MY 요약·MY 설정의 한 띠에 둘의 제목과 끝나는 때가 보이고 조치·신고 내역 링크는 하나이며, 글쓰기 화면의 띠에는 작성 제한만 보인다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    // The one SanctionBanner keeps both owners' rules (ADR-0085 결과 5, restacked on #185 and
+    // #186): MY 요약 and MY 설정 speak of every standing restriction — each its title and end, one
+    // link, no appeal words (#186 답 3) — and the write page of the writing restriction alone
+    // (owner decision 2026-10-23 답 10: the account restriction refuses no post, #57-12).
+    const tag = freshTag();
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const member = await meOf(page.request);
+    const operator = await meOf(admin);
+    const approver = await meOf(secondAdmin);
+    const given = await admin.post(
+      `/api/v1/admin/moderation/users/${member.id}/writing-restriction`,
+      { data: { reason: 'spam', note: null, days: 1, expectedAccountId: operator.id } },
+    );
+    expect(given.status(), await given.text()).toBe(200);
+    const writing = ((await given.json()) as { data: Restriction }).data;
+    const asked = await admin.post(
+      `/api/v1/admin/moderation/users/${member.id}/account-restriction`,
+      {
+        data: {
+          reason: 'multi_account',
+          note: `여러 계정 ${tag}`,
+          days: 7,
+          subject: null,
+          expectedAccountId: operator.id,
+        },
+      },
+    );
+    expect(asked.status(), await asked.text()).toBe(200);
+    const approved = await secondAdmin.post(
+      `/api/v1/admin/moderation/account-restriction-requests/${((await asked.json()) as { data: Request }).data.id}/approve`,
+      { data: { reason: `승인 ${tag}`, expectedAccountId: approver.id } },
+    );
+    expect(approved.status(), await approved.text()).toBe(200);
+    const account = ((await approved.json()) as { data: { action: Restriction } }).data.action;
+    try {
+      for (const [path, testId] of [
+        ['/my', 'my-sanction-banner'],
+        ['/my/settings', 'settings-sanction-banner'],
+      ] as const) {
+        await gotoWithRestrictionRead(page, path);
+        const banner = page.getByTestId(testId);
+        // The writing restriction first, then the account restriction (RESTRICTION_KINDS).
+        const items = banner.locator('[data-testid$="-restriction"]');
+        await expect(items).toHaveCount(2);
+        await expect(items.nth(0)).toHaveAttribute('data-testid', `${testId}-restriction`);
+        await expect(items.nth(0)).toContainText(copy.restrictionWritingTitle);
+        await expect(items.nth(1)).toHaveAttribute('data-testid', `${testId}-account-restriction`);
+        await expect(items.nth(1)).toContainText(copy.restrictionAccountTitle);
+        await expect(page.getByTestId(`${testId}-ends`)).toHaveText(
+          `${copy.moderationEndsAt} ${kst(writing.endsAt!)}`,
+        );
+        await expect(page.getByTestId(`${testId}-account-ends`)).toHaveText(
+          `${copy.moderationEndsAt} ${kst(account.endsAt!)}`,
+        );
+        await expect(page.getByTestId(`${testId}-link`)).toHaveCount(1);
+        await expect(banner.getByRole('link')).toHaveCount(1);
+        await expect(banner).not.toContainText('이의');
+      }
+      // The write page: the writing restriction's title and end alone.
+      await gotoWithRestrictionRead(page, `/community/write?market=${market.id}`);
+      const writeBanner = page.getByTestId('post-write-sanction-banner');
+      await expect(writeBanner).toContainText(copy.restrictionWritingTitle);
+      await expect(page.getByTestId('post-write-sanction-banner-ends')).toHaveText(
+        `${copy.moderationEndsAt} ${kst(writing.endsAt!)}`,
+      );
+      await expect(writeBanner).not.toContainText(copy.restrictionAccountTitle);
+      await expect(page.getByTestId('post-write-sanction-banner-account-restriction')).toHaveCount(
+        0,
+      );
+      await expect(writeBanner).not.toContainText(kst(account.endsAt!));
+      await expect(writeBanner).not.toContainText('이의');
+    } finally {
+      // Both end before the test does: the writing restriction lifted, the account restriction's
+      // lift asked and approved.
+      const lifted = await admin.post(`/api/v1/admin/moderation/actions/${writing.id}/lift`, {
+        data: { reason: `시험 정리 ${tag}`, expectedAccountId: operator.id },
+      });
+      expect(lifted.status(), await lifted.text()).toBe(200);
+      const liftAsked = await admin.post(
+        `/api/v1/admin/moderation/actions/${account.id}/account-restriction/lift`,
+        { data: { reason: `시험 정리 ${tag}`, expectedAccountId: operator.id } },
+      );
+      expect(liftAsked.status(), await liftAsked.text()).toBe(200);
+      const liftApproved = await secondAdmin.post(
+        `/api/v1/admin/moderation/account-restriction-requests/${((await liftAsked.json()) as { data: Request }).data.id}/approve`,
+        { data: { reason: `시험 정리 ${tag}`, expectedAccountId: approver.id } },
+      );
+      expect(liftApproved.status(), await liftApproved.text()).toBe(200);
     }
   });
 });

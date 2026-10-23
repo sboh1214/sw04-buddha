@@ -19,6 +19,7 @@ import {
   postExcerpt,
   readPostDocument,
   type ErrorCode,
+  type RestrictionKind,
 } from '@buddha/shared';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -1044,73 +1045,110 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
   const copyTexts: Readonly<Record<string, string>> = copy;
 
   /**
+   * The initializers of the module's own `const`s that `fn` names — a table of words it reads its
+   * copy through (the sanction banner's titles, `RESTRICTION_TITLES`): what it says, though declared
+   * outside it.
+   */
+  function constsNamedIn(tree: ts.SourceFile, fn: ts.FunctionDeclaration): ts.Expression[] {
+    const named = new Set(nodesIn(fn, ts.isIdentifier).map((node) => node.text));
+    return tree.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((statement) => [...statement.declarationList.declarations])
+      .filter(
+        (declaration) =>
+          ts.isIdentifier(declaration.name) &&
+          named.has(declaration.name.text) &&
+          declaration.initializer !== undefined,
+      )
+      .map((declaration) => declaration.initializer!);
+  }
+
+  /**
    * That `name` in `file` says nothing of the appeal: it calls nothing of it, reads no copy key whose
    * words speak of 이의, fills in no business info (where the email comes from) and writes no 이의
-   * itself. With `readsCopy`, it reads its own words from the copy (a banner); without, its words
-   * come to it (a refusal's sentence, `RefusalText`).
+   * itself — nor does any of the module's `const`s it names (`constsNamedIn`). With `readsCopy`, it
+   * reads its own words from the copy (a banner); without, its words come to it (a refusal's
+   * sentence, `RefusalText`). Answers the copy keys it reads.
    */
-  function expectNoAppeal(file: string, name: string, readsCopy: boolean): void {
+  function expectNoAppeal(file: string, name: string, readsCopy: boolean): string[] {
     const { tree, fn } = declaration(file, name);
     const where = `${file} ${name}`;
-    const identifiers = nodesIn(fn, ts.isIdentifier).map((node) => node.text);
+    const roots: ts.Node[] = [fn, ...constsNamedIn(tree, fn)];
+    const identifiers = roots.flatMap((root) => nodesIn(root, ts.isIdentifier).map((n) => n.text));
     expect(
       identifiers.filter((text) => /appeal/i.test(text)),
       where,
     ).toEqual([]);
     expect(identifiers, where).not.toContain('fillBusinessInfo');
-    const copyRead = nodesIn(fn, ts.isPropertyAccessExpression)
+    const copyRead = roots
+      .flatMap((root) => nodesIn(root, ts.isPropertyAccessExpression))
       .filter((access) => access.expression.getText(tree) === 'copy')
       .map((access) => access.name.text);
     if (readsCopy)
       expect(copyRead.length, `${where} reads its words from the copy`).toBeGreaterThan(0);
     for (const key of copyRead)
       expect(copyTexts[key] ?? '', `${where} copy.${key}`).not.toContain('이의');
-    const written = [
-      ...nodesIn(fn, ts.isStringLiteralLike).map((node) => node.text),
-      ...nodesIn(fn, ts.isJsxText).map((node) => node.text),
-    ];
+    const written = roots.flatMap((root) => [
+      ...nodesIn(root, ts.isStringLiteralLike).map((node) => node.text),
+      ...nodesIn(root, ts.isJsxText).map((node) => node.text),
+    ]);
     for (const text of written) expect(text, where).not.toContain('이의');
+    return copyRead;
   }
 
   it('is not on the warning and sanction banners, which name their end or the owner’s sentence and the link alone', () => {
     // Owner decision 2026-10-22 답 3: «경고·제재 띠 → 이의 안내를 빼고 정해진 문장(경고)이나 끝나는
-    // 시각(제한)과 조치·신고 내역 링크만». The sanction banner is #185's writing restriction's — on
-    // the MY summary, the write page and MY 설정 alike (owner decision 2026-10-23 답 6 for MY 설정,
-    // the one component under three test ids) — and #185, built beside this, drew an appeal
+    // 시각(제한)과 조치·신고 내역 링크만». The sanction banner is #185's writing restriction's and
+    // #139's account restriction's — one banner, each standing restriction's title and end and one
+    // link (ADR-0085 7-10), on the MY summary and MY 설정 alike, the write page showing the writing
+    // restriction's alone (owner decision 2026-10-23 답 6 for MY 설정, ADR-0085 답 10 for the write
+    // page; the one component under three test ids) — and #185, built beside this, drew an appeal
     // sentence on it when last seen before the restack (ADR-0084 결과 5): so neither banner may say
-    // anything of the appeal.
-    for (const name of ['SanctionBanner', 'WarningBanner']) {
-      expectNoAppeal('components/moderation/sanction-banner.tsx', name, true);
-    }
+    // anything of the appeal. The titles are read through the module's `RESTRICTION_TITLES`, which
+    // the check follows: the account restriction's title is the banner's own words too (ADR-0084
+    // 결과 5's #139 item, joined at #139's restack).
+    const sanctionWords = expectNoAppeal(
+      'components/moderation/sanction-banner.tsx',
+      'SanctionBanner',
+      true,
+    );
+    expect(sanctionWords).toEqual(
+      expect.arrayContaining(['restrictionWritingTitle', 'restrictionAccountTitle']),
+    );
+    expectNoAppeal('components/moderation/sanction-banner.tsx', 'WarningBanner', true);
   });
 
-  it('is not in a writing restriction’s refusal, which names its end and the way to 조치·신고 내역 alone', () => {
+  it('is not in a restriction’s refusal, which names its end and the way to 조치·신고 내역 alone', () => {
     // Owner decision 2026-10-22 답 8: «제한 중 거절 → 끝나는 시각과 조치·신고 내역 링크(14일 기한은
     // 적지 않음)». The way there under a refusal is #185's (`RefusalText`, `RestrictedModerationLink`,
     // components/moderation/refusal-text.tsx) — joined to this list at the restack (ADR-0084 결과 5) —
     // and the refusal's sentence is lib/restriction.ts's: what is closed, until when, what stays
-    // open. Neither says anything of the appeal, whichever write was refused, with an end or 무기한.
+    // open. Neither says anything of the appeal, whichever write was refused, with an end or 무기한 —
+    // nor for #139's account restriction, whose refusals go through the same two (ADR-0084 결과 5's
+    // #139 item, joined at #139's restack): every write it refuses on these screens is a public
+    // item's new value (the nickname, MY 설정's items, the onboarding's late pick — ADR-0085 7-11).
     expectNoAppeal('components/moderation/refusal-text.tsx', 'RefusalText', false);
     expectNoAppeal('components/moderation/refusal-text.tsx', 'RestrictedModerationLink', true);
-    const writes: readonly RestrictedWrite[] = [
-      'writing',
-      'profile',
-      'onboardingInterests',
-      'nickname',
+    const refusals: readonly { kind: RestrictionKind; writes: readonly RestrictedWrite[] }[] = [
+      { kind: 'writing', writes: ['writing', 'profile', 'onboardingInterests', 'nickname'] },
+      { kind: 'account', writes: ['profile', 'onboardingInterests', 'nickname'] },
     ];
-    for (const write of writes) {
-      for (const endsAt of ['2026-10-24T06:00:00.000Z', null]) {
-        const refused = new ApiError(403, {
-          code: 'RESTRICTED',
-          message: 'RESTRICTED',
-          details: { kind: 'writing', endsAt },
-        });
-        const message = restrictedMessage(refused, write, formatKst) ?? '';
-        expect(message, `${write} ${String(endsAt)}`).toContain(
-          endsAt === null ? copy.restrictionIndefinite : copy.restrictionUntil,
-        );
-        expect(message, `${write} ${String(endsAt)}`).not.toContain('이의');
-        expect(message, `${write} ${String(endsAt)}`).not.toContain(BUSINESS_INFO.email);
+    for (const { kind, writes } of refusals) {
+      for (const write of writes) {
+        for (const endsAt of ['2026-10-24T06:00:00.000Z', null]) {
+          const refused = new ApiError(403, {
+            code: 'RESTRICTED',
+            message: 'RESTRICTED',
+            details: { kind, endsAt },
+          });
+          const message = restrictedMessage(refused, write, formatKst) ?? '';
+          const where = `${kind} ${write} ${String(endsAt)}`;
+          expect(message, where).toContain(
+            endsAt === null ? copy.restrictionIndefinite : copy.restrictionUntil,
+          );
+          expect(message, where).not.toContain('이의');
+          expect(message, where).not.toContain(BUSINESS_INFO.email);
+        }
       }
     }
   });

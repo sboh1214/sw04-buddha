@@ -5,6 +5,7 @@ import { type AccountRestrictionRequestQueue } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useState } from 'react';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminAccountRequests } from '@/hooks/use-admin-moderation';
 import { adminAccountRequestQueuePath, moderationRows } from '@/lib/moderation';
@@ -93,16 +94,25 @@ export function AdminAccountRequests({ queue }: { queue: AccountRestrictionReque
             empty={QUEUES.find((item) => item.queue === queue)?.empty ?? ''}
           />
           {list.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-              data-testid="admin-account-requests-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              {/* A 더 보기 that failed: the rows stay, and this says so above the button that asks
+                  again (owner decision 2026-10-20 7, as every 더 보기 list — #50's admin lists). */}
+              <LoadMoreFailed
+                list={list}
+                message={copy.errUnknown}
+                data-testid="admin-account-requests-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+                data-testid="admin-account-requests-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

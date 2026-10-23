@@ -26,7 +26,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { OPERATOR_APPEAL_LOOKUP_SQL } from './appeal-lookup.js';
 import { OPERATOR_ACCOUNT_LOOKUP_SQL } from './phone-change.js';
 import { moderationActions, restrictionEndChanges } from './schema/index.js';
-import { createModerationAction, createUser } from './test/factories.js';
+import { createApprovalRequest, createModerationAction, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import { splitPsqlStatements, writePsqlVariables } from './test/operator.js';
 
@@ -137,15 +137,16 @@ describe('the operator appeal lookup (docs/OPERATIONS.md)', () => {
     expect(appealSection()).not.toMatch(/`\/admin\/users`에서[^.]*찾는다/);
   });
 
-  it('names every type of action the lookup returns, the writing restriction too', () => {
+  it('names every type of action the lookup returns, the writing and the account restriction too', () => {
     // The lookup filters no type (ADR-0084 결과 5): step 2 reads each one the operator may see —
-    // #185's `writing_restriction` joined at the restack, and a type #139 adds must join it here.
+    // #185's `writing_restriction` joined at the restack, and #139's `account_restriction` at its
+    // (ADR-0085 결과 5); a type added later must join it here.
     const text = step2();
     const list = text.slice(text.indexOf('`type`은 조치의 종류('));
     const named = list.slice(0, list.indexOf('), `acted_kst`'));
     for (const type of MODERATION_ACTION_TYPES) expect(named).toContain(`\`${type}\``);
-    // Lifted early or shortened, a writing restriction stands: not `cancelled`, its deadline kept.
-    expect(text).toContain('조기 해제하거나 감경한 작성 제한은 취소가 아니라 `f`다(1)');
+    // Lifted early or shortened, a restriction stands: not `cancelled`, its deadline kept.
+    expect(text).toContain('조기 해제하거나 감경한 작성 제한·계정 제한은 취소가 아니라 `f`다(1)');
   });
 
   it('keeps an appeal in time to the end of the minute its deadline shows, by the lookup’s deadline', () => {
@@ -1089,6 +1090,60 @@ describe.skipIf(!hasTestDb())('the operator appeal lookup (integration)', () => 
         user_id: member.id,
         action_id: restriction.id,
         type: 'writing_restriction',
+        acted_kst: kstToSecond(takenAt),
+        deadline_kst: lastSecondBefore(appealWindowEndOf(takenAt)),
+        cancelled: false,
+      },
+    ]);
+  });
+
+  it('gives an account restriction shortened since by an approved request as the action it is: taken when its approval put it in force, not cancelled', async () => {
+    // #139 (ADR-0085): its 감경 and early lift bring the end forward by another admin's approval
+    // and keep the action, as a writing restriction's do (ADR-0084 결과 5) — its appeal deadline
+    // runs from when it came into force (its approval, ADR-0085 7-1), as the member's card keeps
+    // it, and the lookup does not read it as cancelled (docs/OPERATIONS.md steps 1, 2 and 5).
+    const { user: asking } = await createUser(t.db, { role: 'admin' });
+    const { user: approving } = await createUser(t.db, { role: 'admin' });
+    const { user: member } = await createUser(t.db, { email: 'account@example.com' });
+    const DAY = 24 * 60 * 60 * 1_000;
+    const takenAt = new Date(Date.now() - 2 * DAY);
+    const restriction = await createModerationAction(t.db, {
+      userId: member.id,
+      createdBy: asking.id,
+      type: 'account_restriction',
+      reason: 'multi_account',
+      approvedBy: approving.id,
+      createdAt: takenAt,
+      endsAt: new Date(takenAt.getTime() + 7 * DAY),
+    });
+    const shorten = await createApprovalRequest(t.db, {
+      kind: 'account_restriction_shorten',
+      targetType: 'moderation_action',
+      targetId: restriction.id,
+      requestedBy: asking.id,
+      decision: { status: 'approved', by: approving.id },
+    });
+    const shortenedTo = new Date(takenAt.getTime() + 3 * DAY);
+    await t.db.transaction(async (tx) => {
+      await tx
+        .update(moderationActions)
+        .set({ endsAt: shortenedTo })
+        .where(eq(moderationActions.id, restriction.id));
+      await tx.insert(restrictionEndChanges).values({
+        actionId: restriction.id,
+        kind: 'shorten',
+        previousEndsAt: restriction.endsAt,
+        endsAt: shortenedTo,
+        reason: '이의를 일부 받아들임',
+        createdBy: asking.id,
+        approvalId: shorten.id,
+      });
+    });
+    expect(await lookup('account@example.com')).toEqual([
+      {
+        user_id: member.id,
+        action_id: restriction.id,
+        type: 'account_restriction',
         acted_kst: kstToSecond(takenAt),
         deadline_kst: lastSecondBefore(appealWindowEndOf(takenAt)),
         cancelled: false,

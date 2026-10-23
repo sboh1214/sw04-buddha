@@ -24,11 +24,13 @@ import {
   createFill,
   createMarket,
   createModerationAction,
+  createNotice,
   createPosition,
   createPost,
   createReport,
 } from '@buddha/db/test';
 import {
+  WRITE_LIMITS,
   accountRestrictionDecisionSchema,
   accountRestrictionRequestSchema,
   adminModerationActionSchema,
@@ -46,8 +48,10 @@ import { and, eq, inArray, notInArray } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { ApprovalService } from '../approvals/approval.service.js';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { PhoneHasher } from '../identity/phone-hash.js';
 import { PUBLIC_ROUTES } from '../surface/registry.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { pngOf } from '../test/png.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter } from '../test/wait.js';
 import {
@@ -720,6 +724,57 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       expect(zone.statusCode, zone.body).toBe(200);
     });
 
+    it('refuses a profile image as RESTRICTED before #187’s write limits ask, and counts the member’s post images under them as anyone’s (ADR-0083 7-14)', async () => {
+      // The member's number has used the day's uploads already (WRITE_LIMITS' uploads_24h, a
+      // post's image and a profile image together): unrestricted, the next is WRITE_LIMITED.
+      const [verified] = await t.db
+        .select({ phone: schema.phoneVerifications.phone })
+        .from(schema.phoneVerifications)
+        .where(eq(schema.phoneVerifications.userId, member.id));
+      const phoneHash = t.app.get(PhoneHasher).hash(verified!.phone);
+      const [day] = WRITE_LIMITS.upload;
+      await t.db.insert(schema.writeLimitEvents).values(
+        Array.from({ length: day!.limit }, (_, index) => ({
+          phoneHash,
+          action: 'upload' as const,
+          createdAt: new Date(Date.now() - 60 * 60 * 1_000 - index * 60_000),
+        })),
+      );
+      const uploads = async () =>
+        (
+          await t.db
+            .select()
+            .from(schema.writeLimitEvents)
+            .where(eq(schema.writeLimitEvents.phoneHash, phoneHash))
+        ).length;
+      // A real image each time, so that nothing but the checks keeps it from being stored.
+      const upload = (url: string, method: 'PUT' | 'POST') =>
+        t.app.inject({
+          method,
+          url: `/api/v1${url}?expectedAccountId=${encodeURIComponent(member.id)}`,
+          headers: { origin: TRUSTED_ORIGIN, 'content-type': 'image/png', cookie: member.cookie },
+          payload: pngOf(8, 8),
+        });
+      errorOf(await upload('/me/profile-image', 'PUT'), 429, 'WRITE_LIMITED');
+      const stored = t.storage.objects.size;
+      // Restricted: a profile image is a public item's new value, refused at the one check point
+      // (`assertPublicItemEdit` — `restrictionInForce`) before the limits' check ahead of the
+      // conversion (ProfileImageService.replace), as a writing restriction is (#185): the member
+      // hears the sanction, not a time to try again that would be refused anyway.
+      const action = await restrict(1);
+      expect(restrictedOf(await upload('/me/profile-image', 'PUT'))).toEqual({
+        kind: 'account',
+        endsAt: action.endsAt,
+      });
+      // A post's image is no public item and the account restriction no writing restriction
+      // (#57-12): it goes on to the limits like anyone's, past the day's uploads WRITE_LIMITED.
+      errorOf(await upload('/media/images', 'POST'), 429, 'WRITE_LIMITED');
+      // Nothing stored, recorded or counted.
+      expect(t.storage.objects.size).toBe(stored);
+      expect(await t.db.select().from(schema.mediaObjects)).toEqual([]);
+      expect(await uploads()).toBe(day!.limit);
+    });
+
     it('leaves community writing, likes, reports and the 관심 등록 open (#57-12, #57-13)', async () => {
       await restrict(null);
       const created = await send(
@@ -930,16 +985,29 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
     });
 
     it('is nowhere in a public answer, whoever reads it (#37-8: an internal risk flag)', async () => {
+      // Every public GET of the registry, its path naming the member's market, post, 댓글 (its
+      // 대댓글 page — #48 — holding the member's 대댓글) and profile, and a pinned notice (#138):
+      // the routes the restacked base added (ADR-0085 결과 5), as #185's own test names them.
       const [profile] = await t.db
         .select({ publicId: schema.profiles.publicId })
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, member.id));
+      const comment = await createComment(t.db, { postId: post.id, authorId: member.id });
+      await createComment(t.db, {
+        postId: post.id,
+        authorId: member.id,
+        parentId: comment.id,
+        body: '대댓글',
+      });
+      const notice = await createNotice(t.db, { title: '점검 안내', pinSlot: 1 });
       const params: Readonly<Record<string, string>> = {
         id: market.id,
         idOrSlug: market.slug,
         postId: post.id,
+        commentId: comment.id,
         publicId: profile!.publicId,
         mediaId: randomUUID(),
+        noticeId: notice.id,
       };
       const urls = Object.keys(PUBLIC_ROUTES)
         .filter((key) => key.startsWith('GET '))
@@ -950,6 +1018,16 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
             return value;
           }),
         );
+      expect(urls).toEqual(
+        expect.arrayContaining([
+          `/posts/${post.id}`,
+          `/comments/${comment.id}/replies`,
+          `/notices/${notice.id}`,
+          `/profiles/${profile!.publicId}`,
+          `/profiles/${profile!.publicId}/posts`,
+          `/profiles/${profile!.publicId}/comments`,
+        ]),
+      );
       const VOLATILE = new Set(['uptimeSeconds', 'checks', 'from', 'to', 'points']);
       const stable = (body: string): string => {
         try {
