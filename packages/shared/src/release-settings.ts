@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
+import { RETENTION_PERIOD_MAX_DAYS, type RetentionPeriod } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
 /**
@@ -187,14 +188,118 @@ export const START_COIN_SETTING = defineReleaseSetting({
 });
 
 /**
+ * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
+ * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
+ * one value says exactly when a record is due; a year is entered as its days.
+ */
+const retentionDaysSchema = z.number().int().min(1).max(RETENTION_PERIOD_MAX_DAYS);
+
+/**
+ * What every retention item's description ends with: the rules ADR-0069 decision 7 and ADR-0055 set
+ * for all of them.
+ */
+const RETENTION_RULES =
+  '상태가 승인됨일 때만 지우고, 미정·설계 제안·시험값이면 지우지 않는다(보존된다). 매일 한 번 처리하고 바꾼 값은 그 뒤의 처리부터 적용한다. 처리마다 종류·건수·시각을 운영 기록으로 남긴다.';
+
+/**
+ * 동의 기록의 보존기간 (#184): a withdrawn account's consent records (`consent_records`, ADR-0072 —
+ * the item, the version, the answer, the time, the client address and the browser), deleted once
+ * this period has passed since the withdrawal. A live account's records are its standing consent:
+ * never deleted.
+ */
+export const CONSENT_RECORDS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.consent_records',
+  label: '동의 기록 보존기간',
+  unit: '일',
+  description: `탈퇴한 계정의 약관 동의 기록(항목·판·동의 여부·시각·접속 주소·브라우저)을 탈퇴 시각부터 이 기간이 지나면 지운다(#184). 탈퇴하지 않은 계정의 기록은 지우지 않는다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
+/**
+ * 본인확인 기록의 보존기간 (#184): a withdrawn account's code sends (`phone_verification_codes`,
+ * ADR-0070 — the number, the real name, the code's hash, the times and the client address, kept in
+ * plain text past the withdrawal by the owner's exception to #57-18), deleted once this period has
+ * passed since the withdrawal. A live account keeps them.
+ */
+export const PHONE_VERIFICATION_RECORDS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.phone_verification_records',
+  label: '본인확인 기록 보존기간',
+  unit: '일',
+  description: `탈퇴한 계정의 휴대전화 본인확인 발송 기록(번호·실명·인증번호의 해시·시각·접속 주소)을 탈퇴 시각부터 이 기간이 지나면 지운다(#184). 탈퇴하지 않은 계정의 기록은 지우지 않는다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
+/**
+ * 지운 글 원문의 보존기간 (#184): what an author deleted — a post, a 댓글 or a 대댓글 — emptied once
+ * this period has passed since the deletion (since the withdrawal for a withdrawn author), with the
+ * images only it used; and, with the same period (ADR-0069 decision 7), each operator-only earlier
+ * version of a post or a comment, deleted once the period has passed since an edit replaced it,
+ * whether or not the author withdrew, with the images only those versions used. Nothing about an
+ * item a pending report is about is deleted.
+ */
+export const DELETED_POSTS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.deleted_posts',
+  label: '지운 글 원문·수정 이력 보존기간',
+  unit: '일',
+  description: `작성자가 지운 근거 글·댓글·대댓글의 원문(그것만 쓰던 이미지 포함)을 지운 시각부터(탈퇴한 작성자는 탈퇴 시각부터), 글·댓글의 운영자 전용 수정 이력(이전 내용과 그것만 쓰던 이미지)을 바뀐 시각부터 이 기간이 지나면 지운다(#184). 처리 중인 신고가 있는 글·댓글의 것은 지우지 않는다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
+/**
+ * 신고·제재 기록의 보존기간 (#184): the reports a withdrawn account sent, and the actions on a
+ * withdrawn member (warnings, hidings, the profile actions — nickname reset, 소개 clearing, image
+ * removal — and writing and account restrictions, with their end changes and their approval
+ * requests), deleted once this period has passed since the later of the withdrawal and the
+ * processing (ADR-0069 decision 7). A pending one, and an action still in force, are kept. A live
+ * account's records are kept. What a profile action took away is the removed items' period
+ * (REMOVED_PROFILE_ITEMS_RETENTION_SETTING); its action stays while that is kept.
+ */
+export const MODERATION_RECORDS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.moderation_records',
+  label: '신고·제재 기록 보존기간',
+  unit: '일',
+  description: `탈퇴한 계정이 낸 신고와 탈퇴한 회원이 받은 조치(경고·숨김·닉네임 강제 변경·소개 비우기·프로필 이미지 삭제·작성 제한·계정 제한과 그 감경·해제·승인 요청)를 탈퇴 시각과 처리 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#184). 프로필 조치가 가져간 항목 자체는 '운영자가 지운 프로필 항목 보존기간'을 따르고, 그 항목이 남아 있는 동안 조치도 남는다. 처리 중인 신고·요청과 효력이 있는 조치는 지우지 않는다. 탈퇴하지 않은 계정의 기록은 지우지 않는다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
+/**
+ * 운영자가 지운 프로필 항목의 보존기간 (#184): the nickname, 소개 or profile image an operator took
+ * away (#37-10, `profile_item_removals` — the image's row and object), deleted once this period has
+ * passed since the action (since the withdrawal for a withdrawn member).
+ */
+export const REMOVED_PROFILE_ITEMS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.removed_profile_items',
+  label: '운영자가 지운 프로필 항목 보존기간',
+  unit: '일',
+  description: `운영자가 지운 닉네임·소개·프로필 이미지를 지운 시각부터(탈퇴한 회원은 탈퇴 시각부터) 이 기간이 지나면 지운다(#184). ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
+/** The retention items by period (retention.ts): the worker's job reads each once per run. */
+export const RETENTION_PERIOD_SETTINGS: Readonly<
+  Record<RetentionPeriod, ReleaseSettingDefinition<number>>
+> = {
+  consent_records: CONSENT_RECORDS_RETENTION_SETTING,
+  phone_verification_records: PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
+  deleted_posts: DELETED_POSTS_RETENTION_SETTING,
+  moderation_records: MODERATION_RECORDS_RETENTION_SETTING,
+  removed_profile_items: REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
+};
+
+/**
  * The shipped registry, in the order the admin screen lists it. #170 built the mechanism, and each
- * value is registered by the issue that uses it (#70 the start grant; #74, #119, #152·#175,
- * #140·#184, … to come) — define it with `defineReleaseSetting` and list it here, then update every
- * test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own registry
- * (`createTestApp({ releaseSettings })` in apps/api).
+ * value is registered by the issue that uses it (#70 the start grant, #184 the retention periods;
+ * #74, #119, #152·#175, … to come) — define it with `defineReleaseSetting` and list it here, then
+ * update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own
+ * registry (`createTestApp({ releaseSettings })` in apps/api).
  */
 export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   START_COIN_SETTING,
+  CONSENT_RECORDS_RETENTION_SETTING,
+  PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
+  DELETED_POSTS_RETENTION_SETTING,
+  MODERATION_RECORDS_RETENTION_SETTING,
+  REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
 ]);
 
 /** A stored status and value: `value` is null exactly when `status` is `undecided`. */

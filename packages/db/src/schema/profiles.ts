@@ -159,6 +159,13 @@ export const profiles = pgTable(
       sql`(${t.nickname} IS NULL) = (${t.closedAt} IS NOT NULL) AND (${t.closedAt} IS NULL OR (${t.bio} IS NULL AND ${t.imageId} IS NULL AND ${t.role} = 'user'))`,
     ),
     /**
+     * #184's scans of a withdrawn account's remaining records start from the closed accounts,
+     * the longest closed first — few against all the accounts.
+     */
+    index('profiles_closed_at_idx')
+      .on(t.closedAt)
+      .where(sql`${t.closedAt} IS NOT NULL`),
+    /**
      * The profile image is a profile image of this very account (#141): the database holds it,
      * whoever writes — never another member's upload, nor a post's image (which the public reads
      * only while its post shows it). RESTRICT: an image is removed only after the profile let go of

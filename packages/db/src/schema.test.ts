@@ -70,6 +70,7 @@ import {
   releaseSettings,
   reports,
   restrictionEndChanges,
+  retentionPurges,
   session,
   startGrantNumbers,
   startGrants,
@@ -80,6 +81,7 @@ import {
 import { closeDb, createDb } from './client.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import {
+  closeAccount,
   completeOnboarding,
   createApprovalRequest,
   createCategory,
@@ -3587,6 +3589,296 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
+  describe('the retention (migration 0042, #184)', () => {
+    const EMPTY_DOCUMENT = { type: 'doc' as const, content: [] };
+
+    /** `retention_delete_approval_requests(ids)` as buddha_app calls it: how many it deleted. */
+    async function deleteRequests(ids: string[]): Promise<number> {
+      const { rows } = await t.db.execute<{ deleted: number }>(
+        sql`SELECT retention_delete_approval_requests(ARRAY[${sql.join(
+          ids.map((id) => sql`${id}`),
+          sql`, `,
+        )}]::uuid[]) AS deleted`,
+      );
+      return rows[0]!.deleted;
+    }
+
+    /**
+     * A change of `action` (#139) asked by `admin` and rejected by `approver`, written as
+     * AccountRestrictionService writes one: the restriction's member and id in the payload.
+     */
+    function rejectedChange(
+      kind: string,
+      action: { id: string; userId: string },
+      admin: { id: string },
+      approver: { id: string },
+    ) {
+      return createApprovalRequest(t.db, {
+        kind,
+        targetType: 'moderation_action',
+        targetId: action.id,
+        payload: { userId: action.userId, actionId: action.id },
+        requestedBy: admin.id,
+        decision: { status: 'rejected', by: approver.id },
+      });
+    }
+
+    it('empties a deleted post in place, only a deleted one, and keeps it empty', async () => {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const deletedAt = new Date(Date.now() - 60_000);
+      const post = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        title: '지운 글',
+        deletedAt,
+      });
+      const live = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      const purge = { title: null, body: EMPTY_DOCUMENT, bodyText: '', imageIds: [] };
+      // Not before the deletion, not a post never deleted, not with content left.
+      await expect(
+        t.db
+          .update(posts)
+          .set({ ...purge, purgedAt: new Date(deletedAt.getTime() - 1) })
+          .where(eq(posts.id, post.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'posts_purged_check');
+      await expect(
+        t.db
+          .update(posts)
+          .set({ ...purge, purgedAt: new Date() })
+          .where(eq(posts.id, live.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'posts_purged_check');
+      await expect(
+        t.db
+          .update(posts)
+          .set({ ...purge, title: '남은 제목', purgedAt: new Date() })
+          .where(eq(posts.id, post.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'posts_purged_check');
+      const purgedAt = new Date();
+      await t.db
+        .update(posts)
+        .set({ ...purge, purgedAt })
+        .where(eq(posts.id, post.id));
+      // Emptied for good: the time stays and the content with it (the CHECK); the rest of the row
+      // is the API's as before (an operator may still hide it).
+      await expect(
+        t.db.update(posts).set({ purgedAt: null }).where(eq(posts.id, post.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await expect(
+        t.db.update(posts).set({ bodyText: '되살린 글' }).where(eq(posts.id, post.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'posts_purged_check');
+      await t.db.update(posts).set({ hiddenAt: new Date() }).where(eq(posts.id, post.id));
+      const [row] = await t.db.select().from(posts).where(eq(posts.id, post.id));
+      expect(row).toMatchObject({ title: null, body: EMPTY_DOCUMENT, purgedAt, deletedAt });
+    });
+
+    it('lets a comment have no text only once a deleted one is emptied, and keeps it so', async () => {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      const deleted = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        deletedAt: new Date(Date.now() - 60_000),
+      });
+      const live = await createComment(t.db, { postId: post.id, authorId: author.id });
+      await expect(
+        t.db.update(postComments).set({ body: '' }).where(eq(postComments.id, deleted.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'post_comments_body_check');
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ body: '', purgedAt: new Date() })
+          .where(eq(postComments.id, live.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'post_comments_purged_check');
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ purgedAt: new Date() })
+          .where(eq(postComments.id, deleted.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'post_comments_purged_check');
+      await t.db
+        .update(postComments)
+        .set({ body: '', purgedAt: new Date() })
+        .where(eq(postComments.id, deleted.id));
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ purgedAt: new Date(Date.now() + 60_000) })
+          .where(eq(postComments.id, deleted.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+    });
+
+    it('keeps the purge records append-only and to the kinds, counts and periods there are', async () => {
+      const ranAt = new Date();
+      const [row] = await t.db
+        .insert(retentionPurges)
+        .values({ kind: 'consent_records', count: 0, periodDays: 30, ranAt })
+        .returning();
+      await expect(
+        t.db.update(retentionPurges).set({ count: 1 }).where(eq(retentionPurges.id, row!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db.delete(retentionPurges).where(eq(retentionPurges.id, row!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      for (const [values, constraint] of [
+        [{ kind: 'ledger_entries', count: 1, periodDays: 1 }, 'retention_purges_kind_check'],
+        [{ kind: 'reports', count: -1, periodDays: 1 }, 'retention_purges_count_check'],
+        [{ kind: 'reports', count: 1, periodDays: 0 }, 'retention_purges_period_days_check'],
+      ] as const) {
+        await expect(
+          t.db.insert(retentionPurges).values({ ...values, ranAt }),
+          constraint,
+        ).rejects.toSatisfy((e) => sqlConstraint(e) === constraint);
+      }
+    });
+
+    it('deletes through retention_delete_approval_requests only the finished account restriction requests about a closed member that nothing names', async () => {
+      const { user: member } = await createUser(t.db);
+      const { user: live } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const rejected = (targetId: string, kind = 'account_restriction') =>
+        createApprovalRequest(t.db, {
+          kind,
+          targetType: 'user',
+          targetId,
+          requestedBy: admin.id,
+          decision: { status: 'rejected', by: approver.id },
+        });
+      const ofMember = await rejected(member.id);
+      const ofLive = await rejected(live.id);
+      const otherKind = await rejected(member.id, 'admin_grant');
+      const pending = await createApprovalRequest(t.db, {
+        kind: 'account_restriction',
+        targetType: 'user',
+        targetId: member.id,
+        requestedBy: admin.id,
+      });
+      // A restriction on the member names its approval.
+      const action = await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        type: 'account_restriction',
+        approvedBy: approver.id,
+        endsAt: new Date(Date.now() - 1_000),
+        createdAt: new Date(Date.now() - 2_000),
+      });
+      // A live member's restriction, standing.
+      const liveAction = await createModerationAction(t.db, {
+        userId: live.id,
+        createdBy: admin.id,
+        type: 'account_restriction',
+        approvedBy: approver.id,
+        endsAt: new Date(Date.now() + 86_400_000),
+      });
+      // Changes asked about each restriction and rejected, nothing naming them: the closed
+      // member's goes, the live member's stays though its restriction still stands.
+      const liftOfMember = await rejectedChange(
+        'account_restriction_lift',
+        action,
+        admin,
+        approver,
+      );
+      const shortenOfLive = await rejectedChange(
+        'account_restriction_shorten',
+        liveAction,
+        admin,
+        approver,
+      );
+      // The closure rejects the pending request ('탈퇴').
+      await closeAccount(t.db, member.id);
+      const ids = [
+        ofMember.id,
+        ofLive.id,
+        otherKind.id,
+        pending.id,
+        action.approvalId!,
+        liftOfMember.id,
+        shortenOfLive.id,
+      ];
+      // The member's three finished requests no action names: the rejected one, the closure's and
+      // the rejected lift.
+      expect(await deleteRequests(ids)).toBe(3);
+      const left = (await t.db.select({ id: approvalRequests.id }).from(approvalRequests)).map(
+        (row) => row.id,
+      );
+      expect(left.sort()).toEqual(
+        [
+          ofLive.id,
+          otherKind.id,
+          action.approvalId!,
+          liveAction.approvalId!,
+          shortenOfLive.id,
+        ].sort(),
+      );
+      // buddha_app still deletes no request itself.
+      await expect(
+        t.db.delete(approvalRequests).where(eq(approvalRequests.id, ofLive.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+    });
+
+    it('reads the member of a change request from its frozen payload, not from the restriction it names: a live member’s stay once that restriction is deleted', async () => {
+      const { user: member } = await createUser(t.db);
+      const { user: live } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      // A cancelled restriction each, with its apply and cancel approvals and a rejected lift.
+      const restriction = (userId: string) =>
+        createModerationAction(t.db, {
+          userId,
+          createdBy: admin.id,
+          type: 'account_restriction',
+          approvedBy: approver.id,
+          endsAt: new Date(Date.now() + 86_400_000),
+          createdAt: new Date(Date.now() - 2_000),
+          cancelled: { at: new Date(), by: admin.id, reason: '취소', approvedBy: approver.id },
+        });
+      const closedAction = await restriction(member.id);
+      const liveAction = await restriction(live.id);
+      const closedLift = await rejectedChange(
+        'account_restriction_lift',
+        closedAction,
+        admin,
+        approver,
+      );
+      const liveLift = await rejectedChange(
+        'account_restriction_lift',
+        liveAction,
+        admin,
+        approver,
+      );
+      // A change that names no member: never deleted.
+      const anonymous = await createApprovalRequest(t.db, {
+        kind: 'account_restriction_shorten',
+        targetType: 'moderation_action',
+        targetId: closedAction.id,
+        requestedBy: admin.id,
+        decision: { status: 'rejected', by: approver.id },
+      });
+      await closeAccount(t.db, member.id);
+      // The closed member's restriction goes as the worker deletes it; the live member's is deleted
+      // straight by a buddha_app connection (it holds DELETE of the table), which #184 never does.
+      for (const id of [closedAction.id, liveAction.id]) {
+        await t.db.delete(restrictionEndChanges).where(eq(restrictionEndChanges.actionId, id));
+        await t.db.delete(moderationActions).where(eq(moderationActions.id, id));
+      }
+      const livesRequests = [liveAction.approvalId!, liveAction.cancelApprovalId!, liveLift.id];
+      const closedRequests = [
+        closedAction.approvalId!,
+        closedAction.cancelApprovalId!,
+        closedLift.id,
+      ];
+      expect(await deleteRequests([...livesRequests, ...closedRequests, anonymous.id])).toBe(3);
+      const left = (await t.db.select({ id: approvalRequests.id }).from(approvalRequests)).map(
+        (row) => row.id,
+      );
+      expect(left.sort()).toEqual([...livesRequests, anonymous.id].sort());
+      // The live member's alone, after its restriction is gone: still nothing.
+      expect(await deleteRequests(livesRequests)).toBe(0);
+    });
+  });
+
   describe('the direct AMM is gone (migration 0017, #125)', () => {
     it('has dropped its market columns, the slippage guards and market_mechanism', async () => {
       const { rows } = await t.db.execute<{ table: string; column: string }>(sql`
@@ -5839,7 +6131,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
             'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
             'profile_interest_categories', 'post_likes', 'comment_likes',
-            'write_limit_events', 'link_uses', 'link_flags')
+            'write_limit_events', 'link_uses', 'link_flags', 'retention_purges')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -5900,6 +6192,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = 'link_flags'
           AND privilege_type = 'UPDATE'`);
       expect(columns).toEqual([{ column: 'review_action_id', privilege: 'UPDATE' }]);
+      // Migration 0042 (#184): the purge records are operational records, kept with no period.
+      expect(privs('retention_purges')).toEqual(['INSERT', 'SELECT']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

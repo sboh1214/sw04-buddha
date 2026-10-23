@@ -275,6 +275,13 @@ export type AdminLinkFlag = components['schemas']['AdminLinkFlag'];
 export type AdminLinkFlagGroup = components['schemas']['AdminLinkFlagGroup'];
 /** `POST /admin/link-flags/reviews`: the mark '확인함' on a group, with what came of it. */
 export type AdminLinkFlagReviewBody = components['schemas']['AdminLinkFlagReviewBody'];
+/**
+ * One `GET /admin/retention-purges` record (#184, ADR-0087): a retention run deleted `count` records
+ * of `kind` at `ranAt`, with the period it applied — one per batch, or one of 0 for a kind the run
+ * found nothing due in. Never personal content.
+ */
+export type RetentionPurge = components['schemas']['RetentionPurge'];
+export type RetentionPurgeKind = components['schemas']['RetentionPurgeKind'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

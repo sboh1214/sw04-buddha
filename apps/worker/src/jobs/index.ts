@@ -11,6 +11,7 @@ import { purgeCommunityRecords } from './community-records-purge.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
 import { removeOrphanMedia } from './media-orphan-cleanup.js';
+import { purgeExpiredRecords } from './retention-purge.js';
 import { type ScanFailure } from './scan.js';
 import { payPendingStartGrants } from './start-grant-pay.js';
 
@@ -20,7 +21,7 @@ export interface JobContext {
   auditDb: Db;
   /** Realtime events after a market job commits (realtime.ts); best effort, never throws. */
   publish: Publish;
-  /** The media store (#46): the orphan clean-up removes objects from it. */
+  /** The media store (#46): the orphan clean-up and the retention purge remove objects from it. */
   storage: ObjectStorage;
   logger: Logger;
 }
@@ -137,6 +138,29 @@ const HANDLERS: Partial<Record<string, Handler>> = {
       'community records purge',
     );
     return { ...result };
+  },
+  [JOB_NAMES.retentionPurge]: async (_job, { db, storage, logger }) => {
+    const { ranAt, kinds, failed, failures, kindFailures } = await purgeExpiredRecords(db, storage);
+    // As the orphan clean-up's: an object the store kept is named by nothing any more; one error
+    // line each, and the run does not fail (its rows are gone, a retry would not find them).
+    for (const { storageKey, err } of failures) {
+      logger.error({ storageKey, err }, 'retention purge object not removed');
+    }
+    // As a scan's market: one error line per kind that failed, and the run itself does not fail —
+    // the other kinds went on, and the next day's run tries it again.
+    for (const { kind, err } of kindFailures) {
+      logger.error({ kind, err }, 'retention purge kind failed');
+    }
+    const result = {
+      ranAt: ranAt.toISOString(),
+      kinds,
+      failed,
+      failures: failures.map(({ storageKey, message }) => ({ storageKey, message })),
+      kindFailures: kindFailures.map(({ kind, message }) => ({ kind, message })),
+    };
+    // Daily: always a line — what each kind's period was and what it deleted (no personal content).
+    logger.info(result, 'retention purge');
+    return result;
   },
 };
 

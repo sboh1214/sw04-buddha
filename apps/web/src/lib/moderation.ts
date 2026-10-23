@@ -901,11 +901,33 @@ export function reasonCountsText(reasons: AdminReportGroup['reasons']): string {
   }).join(' · ');
 }
 
-/** A queue entry's line: a post by its title (or its text's start), a comment by its start. */
-export function queueEntryText(group: Pick<AdminReportGroup, 'title' | 'excerpt'>): string {
+/**
+ * A queue entry's line: a post by its title (or its text's start), a comment by its start. A post
+ * with no title and no text — one of images alone, or a deleted original #184's retention emptied —
+ * is '제목 없음', as its moderation page heads it; a comment with no text is one the retention
+ * emptied (a comment's text is never blank otherwise — `post_comments_body_check`).
+ */
+export function queueEntryText(
+  group: Pick<AdminReportGroup, 'target' | 'title' | 'excerpt'>,
+): string {
   if (group.title !== null) return group.title;
   // The profile of a member who closed the account (#140) has no nickname to show.
-  return group.excerpt === null ? copy.postAuthorFormer : postFirstLine(group.excerpt);
+  if (group.excerpt === null) return copy.postAuthorFormer;
+  const line = postFirstLine(group.excerpt);
+  if (line !== '') return line;
+  return group.target.type === 'comment'
+    ? copy.adminModerationPurgedLine
+    : copy.adminModerationUntitled;
+}
+
+/**
+ * A comment's line in a post's moderation page (`AdminPostComment.excerpt`, the start of its text
+ * whatever its state): its first line, or — for a deleted original #184's retention emptied, the
+ * only comment with no text (`post_comments_body_check`) — that it was emptied, so the row's link
+ * to its own page still has a name.
+ */
+export function adminCommentLine(excerpt: string): string {
+  return postFirstLine(excerpt) || copy.adminModerationPurgedLine;
 }
 
 /** What a profile action took away, as the operators' pages name it (kept, never restored). */
@@ -917,6 +939,25 @@ export function removedItemLabel(removed: RemovedProfileItem): string {
       return copy.adminModerationRemovedBio;
     case 'image':
       return copy.adminModerationRemovedImage;
+  }
+}
+
+/**
+ * The label of what a profile action took away once #184's retention deleted it (`removed` null on
+ * a profile action — the item is kept for the removed-items period, the action for the moderation
+ * records' period, so the action may outlive it): the line still names the item, and says it is
+ * gone. Null for the types that take nothing away.
+ */
+export function purgedRemovalLabel(type: ModerationActionType): string | null {
+  switch (type) {
+    case 'nickname_reset':
+      return copy.adminModerationRemovedNickname;
+    case 'bio_clear':
+      return copy.adminModerationRemovedBio;
+    case 'image_remove':
+      return copy.adminModerationRemovedImage;
+    default:
+      return null;
   }
 }
 

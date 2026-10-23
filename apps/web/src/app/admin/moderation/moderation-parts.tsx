@@ -81,6 +81,7 @@ import {
   moderationFailure,
   operatorLineText,
   recordReasonDraft,
+  purgedRemovalLabel,
   removedItemLabel,
   reportReasonOf,
   reportStatusLabel,
@@ -419,6 +420,9 @@ export function ActionRows({
         const account = isAccountRestriction(action.type);
         const standing = restrictionStanding(action);
         const viewer = action.aboutViewer;
+        // A profile action whose item #184's retention deleted once the removed items' period had
+        // passed: the action is a 신고·제재 기록 of its own period and may outlive what it took.
+        const purgedLabel = action.removed === null ? purgedRemovalLabel(action.type) : null;
         return (
           <Stack
             as="li"
@@ -612,7 +616,7 @@ export function ActionRows({
                 ))}
               </Stack>
             )}
-            {action.removed !== null && (
+            {action.removed !== null ? (
               <Line label={removedItemLabel(action.removed)} testId="moderation-action-removed">
                 {action.removed.item === 'nickname' ? (
                   action.removed.nickname
@@ -629,6 +633,12 @@ export function ActionRows({
                   </ChakraLink>
                 )}
               </Line>
+            ) : (
+              purgedLabel !== null && (
+                <Line label={purgedLabel} testId="moderation-action-removed">
+                  {copy.adminModerationRemovedPurged}
+                </Line>
+              )
             )}
             {action.reportCount > 0 && (
               <Line label={copy.adminModerationResolvedReports}>

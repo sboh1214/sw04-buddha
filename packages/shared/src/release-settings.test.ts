@@ -6,6 +6,7 @@ import {
   JSONB_NUL_MESSAGE,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
+  RETENTION_PERIOD_SETTINGS,
   START_COIN_SETTING,
   defineReleaseSetting,
   defineReleaseSettings,
@@ -19,6 +20,7 @@ import {
   releaseSettingValueJsonSchema,
   type ReleaseSettingValue,
 } from './release-settings.js';
+import { RETENTION_PERIODS, RETENTION_PERIOD_MAX_DAYS } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
 /** U+0000: PostgreSQL's jsonb cannot hold it. */
@@ -41,9 +43,61 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70)', () => {
-    expect([...RELEASE_SETTINGS.keys()]).toEqual(['grant.start_coin']);
+  it('ships the items the issues that use them registered: the start grant (#70) and the retention periods (#184)', () => {
+    expect([...RELEASE_SETTINGS.keys()]).toEqual([
+      'grant.start_coin',
+      'retention.consent_records',
+      'retention.phone_verification_records',
+      'retention.deleted_posts',
+      'retention.moderation_records',
+      'retention.removed_profile_items',
+    ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
+    // The worker reads each period through the very object the registry holds.
+    for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
+      expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
+    }
+  });
+
+  it('takes a retention period in whole days, 1 to RETENTION_PERIOD_MAX_DAYS (#184)', () => {
+    expect(Object.keys(RETENTION_PERIOD_SETTINGS)).toEqual([...RETENTION_PERIODS]);
+    for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
+      const accepts = (value: unknown) => definition.schema.safeParse(value).success;
+      expect(definition.unit, definition.key).toBe('일');
+      expect(definition.label, definition.key).toMatch(/보존기간$/);
+      // Every description says only an approved value deletes (ADR-0069 decision 7).
+      expect(definition.description, definition.key).toContain('승인됨일 때만 지우고');
+      expect(accepts(1)).toBe(true);
+      expect(accepts(365)).toBe(true);
+      expect(accepts(RETENTION_PERIOD_MAX_DAYS)).toBe(true);
+      for (const value of [0, -1, 1.5, '30', RETENTION_PERIOD_MAX_DAYS + 1]) {
+        expect(accepts(value), `${definition.key} ${String(value)}`).toBe(false);
+      }
+      expect(
+        readReleaseSetting(RELEASE_SETTINGS, definition, { status: 'approved', value: 30 }),
+      ).toEqual({
+        key: definition.key,
+        status: 'approved',
+        value: 30,
+      });
+    }
+  });
+
+  it('names, where the owner approves the 신고·제재 period, every action the worker deletes under it (#184)', () => {
+    // The worker's moderation_actions step takes every type of action on a withdrawn member, the
+    // profile actions among them; the screen the owner approves the period on lists them all.
+    const { description } = RETENTION_PERIOD_SETTINGS.moderation_records;
+    for (const action of [
+      '경고',
+      '숨김',
+      '닉네임 강제 변경',
+      '소개 비우기',
+      '프로필 이미지 삭제',
+      '작성 제한',
+      '계정 제한',
+    ]) {
+      expect(description, action).toContain(action);
+    }
   });
 
   it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {

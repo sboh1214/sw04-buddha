@@ -1117,6 +1117,9 @@ export async function createModerationAction(db: Db, input: CreateModerationActi
               kind: 'account_restriction_cancel',
               targetType: 'moderation_action',
               targetId: id,
+              // As AccountRestrictionService writes a change's request: the member it is about,
+              // which migration 0042's retention_delete_approval_requests reads.
+              payload: { userId: input.userId, actionId: id },
               requestedBy: cancelled.by,
               requestedAt: cancelled.at,
               decision: { status: 'approved', by: cancelled.approvedBy! },

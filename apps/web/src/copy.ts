@@ -744,6 +744,33 @@ export const copy = {
   adminNoticeRevisionBadge: '이전 판',
   adminNoticeRevisionNotFound: '이전 판을 찾을 수 없습니다.',
   adminNoticeBackToEdit: '공지 수정으로',
+  // --- admin: 보존기간 처리 기록 (#184, ADR-0087) ---
+  // 워커가 매일 한 번 보존기간이 지난 기록을 지우고 종류마다 지운 수·적용한 기간·처리 시각만 남긴다(ADR-0069
+  // 결정 4 #184 «경과 처리 기록»: 개인정보 내용은 남기지 않음). 기간은 출시 설정의 값이고 '승인됨'인 종류만
+  // 지운다(결정 7). 닉네임 보류의 30일은 #57-6의 고정값이라 설정이 없다. 종류의 이름은 RETENTION_PURGE_KINDS
+  // 하나하나의 것이다(lib/retention.ts).
+  adminRetention: '보존기간 처리',
+  adminRetentionIntro:
+    '보존기간이 지난 기록을 매일 한 번 지운 결과입니다. 종류마다 지운 수와 적용한 기간, 처리 시각만 남고 지운 내용은 남지 않습니다.',
+  adminRetentionSettingsNotice:
+    '보존기간은 출시 설정에서 종류마다 넣습니다. 상태가 승인됨인 종류만 지우고, 미정·설계 제안·시험값인 종류는 지우지 않아 기록도 없습니다. 30일이 지난 닉네임 보류는 설정 없이 늘 지웁니다. 처리 중 오류가 난 종류는 그날 줄이 없거나 오류 전까지 지운 수만 보이고, 다음 날 다시 처리합니다.',
+  adminRetentionSettingsLink: '출시 설정 열기',
+  adminRetentionEmpty: '처리 기록이 없습니다.',
+  adminRetentionRanAt: '처리 시각',
+  adminRetentionPeriod: '기간',
+  adminRetentionDayUnit: '일',
+  adminRetentionCountUnit: '건',
+  adminRetentionKindNicknameHolds: '30일이 지난 닉네임 보류',
+  adminRetentionKindPostRevisions: '글 수정 이력',
+  adminRetentionKindCommentRevisions: '댓글 수정 이력',
+  adminRetentionKindDeletedPosts: '지운 글 원문',
+  adminRetentionKindDeletedComments: '지운 댓글 원문',
+  adminRetentionKindReports: '신고 기록',
+  adminRetentionKindRemovedProfileItems: '운영자가 지운 프로필 항목',
+  adminRetentionKindModerationActions: '제재 기록',
+  adminRetentionKindApprovalRequests: '계정 제한 요청',
+  adminRetentionKindConsentRecords: '동의 기록',
+  adminRetentionKindPhoneVerificationRecords: '본인확인 기록',
 
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
@@ -1567,6 +1594,12 @@ export const copy = {
   adminModerationRemovedNickname: '바꾸기 전 닉네임',
   adminModerationRemovedBio: '비우기 전 소개',
   adminModerationRemovedImage: '삭제한 이미지',
+  // 보존기간이 지나 지운 것(#184, ADR-0087): 지운 글·댓글의 원문은 행을 남기고 제목·본문·이미지를 비운다.
+  // 운영자가 가져간 프로필 항목은 행째 지워 조치 기록에 그 줄만 남는다.
+  adminModerationPurgedAt: '원문 삭제(보존기간)',
+  adminModerationPurged: '보존기간이 지나 원문을 지웠습니다.',
+  adminModerationPurgedLine: '보존기간이 지나 지운 원문',
+  adminModerationRemovedPurged: '보존기간이 지나 지웠습니다.',
   adminModerationBio: '소개',
   adminModerationImage: '프로필 이미지',
   adminModerationNone: '없음',

@@ -52,6 +52,7 @@ import {
   actionReasonDraft,
   actionReasonText,
   actionSubjectView,
+  adminCommentLine,
   adminCommentModerationKey,
   adminCommentModerationPath,
   adminPostModerationKey,
@@ -85,6 +86,7 @@ import {
   operatorLineText,
   pendingReportIds,
   postReportItem,
+  purgedRemovalLabel,
   queueEntryText,
   reasonCountsText,
   recordReasonDraft,
@@ -1292,10 +1294,39 @@ describe('operators', () => {
         { reason: 'spam', count: 3 },
       ]),
     ).toBe(`${reportReasonLabel('spam')} 3 · ${reportReasonLabel('other')} 1`);
-    expect(queueEntryText({ title: '제목', excerpt: '본문' })).toBe('제목');
-    expect(queueEntryText({ title: null, excerpt: '\n첫 줄\n둘째' })).toBe('첫 줄');
+    const post = { type: 'post', postId: POST } as const;
+    const comment = { type: 'comment', commentId: COMMENT, postId: POST } as const;
+    const profile = { type: 'profile', userId: USER } as const;
+    expect(queueEntryText({ target: post, title: '제목', excerpt: '본문' })).toBe('제목');
+    expect(queueEntryText({ target: post, title: null, excerpt: '\n첫 줄\n둘째' })).toBe('첫 줄');
+    expect(queueEntryText({ target: comment, title: null, excerpt: '댓글 첫 줄\n둘째' })).toBe(
+      '댓글 첫 줄',
+    );
     // The profile of a member who closed the account (#140): no nickname to show.
-    expect(queueEntryText({ title: null, excerpt: null })).toBe(copy.postAuthorFormer);
+    expect(queueEntryText({ target: profile, title: null, excerpt: null })).toBe(
+      copy.postAuthorFormer,
+    );
+  });
+
+  it('names an entry with no text: a post untitled, a comment as the retention emptied it (#184)', () => {
+    // A post of images alone and a deleted original the retention emptied both have no title
+    // and no text: '제목 없음', as the post's moderation page heads it.
+    expect(
+      queueEntryText({ target: { type: 'post', postId: POST }, title: null, excerpt: '' }),
+    ).toBe(copy.adminModerationUntitled);
+    // A comment's text is never blank but once the retention emptied it.
+    expect(
+      queueEntryText({
+        target: { type: 'comment', commentId: COMMENT, postId: POST },
+        title: null,
+        excerpt: '',
+      }),
+    ).toBe(copy.adminModerationPurgedLine);
+    // A post's comment rows name each by its first line, an emptied one by what became of it.
+    expect(adminCommentLine('\n첫 줄\n둘째')).toBe('첫 줄');
+    expect(adminCommentLine('')).toBe(copy.adminModerationPurgedLine);
+    expect(copy.adminModerationPurgedLine).toContain('보존기간');
+    expect(copy.adminModerationPurged).toContain('보존기간');
   });
 
   it('names who processed or acted and when, the time alone on a record about the reader (owner decision 2026-10-21)', () => {
@@ -1328,6 +1359,14 @@ describe('operators', () => {
     expect(removedItemLabel({ item: 'image', imageUrl: '/api/v1/admin/media/x' })).toBe(
       copy.adminModerationRemovedImage,
     );
+    // Once the retention deleted the item (#184), the profile action's line still names it.
+    expect(purgedRemovalLabel('nickname_reset')).toBe(copy.adminModerationRemovedNickname);
+    expect(purgedRemovalLabel('bio_clear')).toBe(copy.adminModerationRemovedBio);
+    expect(purgedRemovalLabel('image_remove')).toBe(copy.adminModerationRemovedImage);
+    for (const type of ['hide', 'warning', 'writing_restriction', 'account_restriction'] as const) {
+      expect(purgedRemovalLabel(type), type).toBeNull();
+    }
+    expect(copy.adminModerationRemovedPurged).toContain('보존기간');
     const standing = { cancelledAt: null } as Pick<AdminModerationAction, 'cancelledAt'>;
     expect(isCancellable(standing)).toBe(true);
     expect(isCancellable({ cancelledAt: '2026-10-21T00:00:00.000Z' })).toBe(false);

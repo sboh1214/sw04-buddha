@@ -774,6 +774,11 @@ export const adminPostModerationSchema = z
     editedAt: z.iso.datetime().nullable(),
     deletedAt: z.iso.datetime().nullable(),
     hiddenAt: z.iso.datetime().nullable(),
+    /**
+     * When the deleted original was emptied after the retention period (#184): then `title` is null
+     * and `body` empty, and the images it alone used are gone. Null otherwise.
+     */
+    purgedAt: z.iso.datetime().nullable(),
     revisions: z.array(adminPostRevisionSchema),
     comments: z.array(adminPostCommentSchema),
     reports: z.array(adminReportSchema),
@@ -802,6 +807,11 @@ export const adminCommentModerationSchema = z
     editedAt: z.iso.datetime().nullable(),
     deletedAt: z.iso.datetime().nullable(),
     hiddenAt: z.iso.datetime().nullable(),
+    /**
+     * When the deleted original was emptied after the retention period (#184): then `body` is empty.
+     * Null otherwise.
+     */
+    purgedAt: z.iso.datetime().nullable(),
     revisions: z.array(adminCommentRevisionSchema),
     reports: z.array(adminReportSchema),
     reporterCount: z.number().int().min(0),

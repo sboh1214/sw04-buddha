@@ -11,6 +11,7 @@ import {
   connectTestDb,
   createMarket,
   createMedia,
+  createPost,
   createPosition,
   createStartGrant,
   createUser,
@@ -20,6 +21,7 @@ import {
   type TestDb,
 } from '@buddha/db/test';
 import {
+  DELETED_POSTS_RETENTION_SETTING,
   JOB_NAMES,
   START_COIN_SETTING,
   marketChannel,
@@ -36,6 +38,7 @@ import { type Publish } from '../realtime.js';
 import { createProcessor } from './index.js';
 
 const MINUTE_MS = 60_000;
+const DAY_MS = 24 * 60 * MINUTE_MS;
 const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 
 interface JobStub {
@@ -55,6 +58,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
   let logs: Record<string, unknown>[];
   let run: (input: JobStub) => Promise<unknown>;
   let storage: MemoryObjectStorage;
+  let deps: Parameters<typeof createProcessor>[0];
 
   beforeAll(async () => {
     t = await connectTestDb();
@@ -76,7 +80,8 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       { write: (line: string) => logs.push(JSON.parse(line) as Record<string, unknown>) },
     );
     storage = new MemoryObjectStorage();
-    const processor = createProcessor({ db: t.db, auditDb: t.db, publish, storage, logger });
+    deps = { db: t.db, auditDb: t.db, publish, storage, logger };
+    const processor = createProcessor(deps);
     run = (input) => processor(job(input)) as Promise<unknown>;
   });
 
@@ -332,6 +337,93 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     expect(
       logs.filter((line) => line.msg === 'community records purge').map((line) => line.level),
     ).toEqual([30, 20]);
+  });
+
+  it('retention.purge reports each kind JSON-safe and logs an object the store kept (#184)', async () => {
+    const { user } = await createUser(t.db);
+    const admin = (await createUser(t.db, { role: 'admin' })).user.id;
+    const market = await createMarket(t.db, { createdBy: admin });
+    const picture = await createMedia(t.db, { ownerId: user.id });
+    await createPost(t.db, {
+      marketId: market.id,
+      authorId: user.id,
+      imageIds: [picture.id],
+      deletedAt: new Date(Date.now() - 3 * DAY_MS),
+    });
+    await setReleaseSetting(t.db, {
+      adminId: admin,
+      key: DELETED_POSTS_RETENTION_SETTING.key,
+      status: 'approved',
+      value: 1,
+    });
+    storage.delete = () => Promise.reject(new Error('AccessDenied'));
+    const result = (await run({ name: JOB_NAMES.retentionPurge })) as {
+      ranAt: string;
+      kinds: { kind: string; status: string; periodDays: number | null; deleted: number }[];
+    };
+    expect(result).toEqual({
+      ranAt: expect.stringMatching(ISO_INSTANT) as string,
+      kinds: expect.any(Array) as unknown[],
+      failed: 1,
+      failures: [{ storageKey: picture.storageKey, message: 'AccessDenied' }],
+      kindFailures: [],
+    });
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(result.kinds.find((kind) => kind.kind === 'deleted_posts')).toEqual({
+      kind: 'deleted_posts',
+      status: 'approved',
+      periodDays: 1,
+      deleted: 1,
+    });
+    expect(result.kinds.find((kind) => kind.kind === 'consent_records')).toEqual({
+      kind: 'consent_records',
+      status: 'undecided',
+      periodDays: null,
+      deleted: 0,
+    });
+    expect(logs.filter((line) => line.msg === 'retention purge object not removed')).toEqual([
+      expect.objectContaining({ storageKey: picture.storageKey, level: 50 }),
+    ]);
+    // Daily, so always a line.
+    expect(logs.filter((line) => line.msg === 'retention purge').map((line) => line.level)).toEqual(
+      [30],
+    );
+  });
+
+  it('retention.purge logs a kind that failed, one error line, and goes on (#184)', async () => {
+    // The run's first transaction — the nickname holds' batch — is refused.
+    let calls = 0;
+    const failing = new Proxy(t.db, {
+      get(target, property, receiver) {
+        if (property === 'transaction') {
+          return (...args: Parameters<typeof target.transaction>) => {
+            calls += 1;
+            return calls === 1
+              ? Promise.reject(new Error('could not serialize access'))
+              : target.transaction(...args);
+          };
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const processor = createProcessor({ ...deps, db: failing });
+    const result = (await processor(job({ name: JOB_NAMES.retentionPurge }))) as {
+      kindFailures: unknown[];
+    };
+    expect(result.kindFailures).toEqual([
+      { kind: 'nickname_holds', message: 'could not serialize access' },
+    ]);
+    expect(JSON.parse(JSON.stringify(result))).toEqual(result);
+    expect(logs.filter((line) => line.msg === 'retention purge kind failed')).toEqual([
+      expect.objectContaining({
+        kind: 'nickname_holds',
+        level: 50,
+        err: expect.objectContaining({ message: 'could not serialize access' }) as unknown,
+      }),
+    ]);
+    expect(logs.filter((line) => line.msg === 'retention purge').map((line) => line.level)).toEqual(
+      [30],
+    );
   });
 
   it('ledger.audit runs on the audit connection and reports the mismatch count', async () => {

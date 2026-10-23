@@ -39,6 +39,12 @@ import { mediaObjects } from './media-objects.js';
  *   nothing otherwise.
  * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal are #50's
  *   `moderation_actions`). Out of the list, no new replies, no edits by the author; deletable.
+ * - `purged_at`: #184's retention emptied the deleted original once its period had passed (the
+ *   deletion's, or the withdrawal's for a withdrawn author): no title, an empty body, text and
+ *   image list, the images it alone used gone (`post_images`, `media_objects` and their objects).
+ *   The row stays — what names it (comments under it, likes, reports, actions) keeps naming it,
+ *   and the public placeholder reads `deleted_at` as before. Set once, never cleared, and the
+ *   content stays empty from then on (the CHECK and migration 0042's `posts_keep_purged`).
  *
  * The market and the author are RESTRICT: markets are never deleted, and a withdrawn author's
  * posts stay with the author anonymised (#37-17, #140).
@@ -67,10 +73,23 @@ export const posts = pgTable(
     editedAt: timestampTz(),
     deletedAt: timestampTz(),
     hiddenAt: timestampTz(),
+    purgedAt: timestampTz(),
   },
   (t) => [
     /** A title is absent or has text: the API turns a blank one into none. */
     check('posts_title_check', sql`${t.title} IS NULL OR btrim(${t.title}) <> ''`),
+    /**
+     * Only a deleted post is emptied (#184), not before its deletion, and an emptied one keeps
+     * nothing of its content.
+     */
+    check(
+      'posts_purged_check',
+      sql`${t.purgedAt} IS NULL OR (${t.deletedAt} IS NOT NULL AND ${t.purgedAt} >= ${t.deletedAt} AND ${t.title} IS NULL AND ${t.bodyText} = '' AND ${t.imageIds} = '{}'::uuid[] AND ${t.body} = '{"type":"doc","content":[]}'::jsonb)`,
+    ),
+    /** #184's scan: the deleted originals not emptied yet, the oldest deletion first. */
+    index('posts_unpurged_deleted_at_idx')
+      .on(t.deletedAt)
+      .where(sql`${t.deletedAt} IS NOT NULL AND ${t.purgedAt} IS NULL`),
     /**
      * The community list, newest first (`GET /posts`, #45-7): only what it shows, so a page is one
      * index walk however many posts were deleted or hidden.
@@ -119,6 +138,8 @@ export const postRevisions = pgTable(
   (t) => [
     /** A post's history in order. */
     index('post_revisions_post_id_id_idx').on(t.postId, t.id),
+    /** #184's scan: the versions replaced longest ago first. */
+    index('post_revisions_replaced_at_idx').on(t.replacedAt),
   ],
 );
 

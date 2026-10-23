@@ -6,7 +6,15 @@ import { uuidSchema } from './api/uuid.js';
  * close and finalize jobs after a transition commits) and the consumer (apps/worker). One
  * module, so a renamed job cannot leave the API adding work that no worker handles.
  */
-export const QUEUE_NAMES = ['markets', 'audit', 'stats', 'wallet', 'media', 'community'] as const;
+export const QUEUE_NAMES = [
+  'markets',
+  'audit',
+  'stats',
+  'wallet',
+  'media',
+  'community',
+  'retention',
+] as const;
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
@@ -34,6 +42,12 @@ export const JOB_NAMES = {
    * The worker's hourly scan.
    */
   communityRecordsPurge: 'community.records_purge',
+  /**
+   * Deletes the records whose retention period has passed (#184, retention.ts): every period whose
+   * release setting is approved, read once per run, and the nickname holds past their 30 days —
+   * recording each kind's count (`retention_purges`). The worker's daily run.
+   */
+  retentionPurge: 'retention.purge',
 } as const;
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 

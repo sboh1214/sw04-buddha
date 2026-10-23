@@ -1954,6 +1954,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         author: { id: author.id },
         revisions: [{ title: '처음 제목' }],
         reporterCount: 1,
+        purgedAt: null,
       });
       expect(page.reports).toHaveLength(1);
       expect(page.reports[0]).toMatchObject({
@@ -1994,6 +1995,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         body: '댓글',
         post: { id: post.id, state: 'deleted' },
         authorActions: [{ id: hidden.id }, { id: warned.id }],
+        purgedAt: null,
       });
 
       const userPage = adminUserModerationSchema.parse(
@@ -2009,6 +2011,47 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
 
       const all = dataOf<AdminModerationAction[]>(await read('/admin/moderation/actions', other));
       expect(all.map((action) => action.id)).toEqual([hidden.id, warned.id]);
+    });
+
+    it('says when the retention emptied a deleted original (#184)', async () => {
+      const deletedAt = new Date(Date.now() - 60_000);
+      const purgedAt = new Date();
+      await t.db.update(schema.posts).set({ deletedAt }).where(eq(schema.posts.id, post.id));
+      // As the worker's retention.purge leaves it (migration 0042).
+      await t.db
+        .update(schema.posts)
+        .set({
+          title: null,
+          body: { type: 'doc', content: [] },
+          bodyText: '',
+          imageIds: [],
+          purgedAt,
+        })
+        .where(eq(schema.posts.id, post.id));
+      const gone = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        body: '지운 댓글',
+        deletedAt,
+      });
+      await t.db
+        .update(schema.postComments)
+        .set({ body: '', purgedAt })
+        .where(eq(schema.postComments.id, gone.id));
+      const page = adminPostModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/posts/${post.id}`, admin)),
+      );
+      expect(page).toMatchObject({
+        state: 'deleted',
+        title: null,
+        body: { type: 'doc', content: [] },
+        deletedAt: deletedAt.toISOString(),
+        purgedAt: purgedAt.toISOString(),
+      });
+      const commentPage = adminCommentModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/comments/${gone.id}`, admin)),
+      );
+      expect(commentPage).toMatchObject({ body: '', purgedAt: purgedAt.toISOString() });
     });
 
     it('finds a member’s page by the public id of their profile’s address, as a public profile’s 운영 link does (owner decision 2026-10-21)', async () => {

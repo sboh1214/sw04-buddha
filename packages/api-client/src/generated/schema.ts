@@ -981,6 +981,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/retention-purges": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** What the daily retention purge deleted, newest run first: kind, count, the period applied (days) and the run’s instant. A page never ends inside a run: `limit` records, then the rest of the run the last of them belongs to */
+        get: operations["adminListRetentionPurges"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/sms/status": {
         parameters: {
             query?: never;
@@ -2208,6 +2225,8 @@ export type components = {
                 state: components["schemas"]["ModerationItemState"];
                 title: string | null;
             };
+            /** Format: date-time */
+            purgedAt: string | null;
             reporterCount: number;
             reports: components["schemas"]["AdminReport"][];
             revisions: components["schemas"]["AdminCommentRevision"][];
@@ -2477,6 +2496,8 @@ export type components = {
                 slug: string;
                 title: string;
             };
+            /** Format: date-time */
+            purgedAt: string | null;
             reporterCount: number;
             reports: components["schemas"]["AdminReport"][];
             revisions: components["schemas"]["AdminPostRevision"][];
@@ -3713,6 +3734,16 @@ export type components = {
         RestrictionEndChangeKind: "shorten" | "lift";
         /** @enum {string} */
         RestrictionKind: "writing" | "account";
+        RetentionPurge: {
+            count: number;
+            id: string;
+            kind: components["schemas"]["RetentionPurgeKind"];
+            periodDays: number;
+            /** Format: date-time */
+            ranAt: string;
+        };
+        /** @enum {string} */
+        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "consent_records" | "phone_verification_records";
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };
@@ -8976,6 +9007,77 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListRetentionPurges: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["RetentionPurge"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;

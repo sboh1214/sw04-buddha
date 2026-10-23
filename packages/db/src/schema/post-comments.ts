@@ -40,6 +40,10 @@ import { posts } from './posts.js';
  *   lets a post's 대댓글 be walked in their 댓글's order (the second index below), which is how the
  *   comment page finds the deleted 댓글 still in view — those that 대댓글 hang under — without
  *   walking those that left every view (Codex review on PR #220, ADR-0074 decision 2 and 7-31).
+ * - `purged_at`: #184's retention emptied the deleted original once its period had passed (the
+ *   deletion's, or the withdrawal's for a withdrawn author): the body is '' from then on. The row
+ *   stays, as a post's does (its 대댓글, likes, reports and actions name it). Set once, never
+ *   cleared (the CHECKs and migration 0042's `post_comments_keep_purged`).
  * - `is_reply` and `parent_is_reply`: generated, for the parent's foreign key only.
  *
  * The post and the author are RESTRICT, as a post's market and author are: nothing here is ever
@@ -65,6 +69,7 @@ export const postComments = pgTable(
     editedAt: timestampTz(),
     deletedAt: timestampTz(),
     hiddenAt: timestampTz(),
+    purgedAt: timestampTz(),
     /** Whether the row is a 대댓글: the key a 대댓글's parent is looked up by, with the post and id. */
     isReply: boolean()
       .notNull()
@@ -76,8 +81,11 @@ export const postComments = pgTable(
     parentIsReply: boolean().generatedAlwaysAs(sql`CASE WHEN parent_id IS NOT NULL THEN false END`),
   },
   (t) => [
-    /** A comment has text: the API trims the body and refuses a blank one. */
-    check('post_comments_body_check', sql`btrim(${t.body}) <> ''`),
+    /**
+     * A comment has text: the API trims the body and refuses a blank one. Only #184's emptying of a
+     * deleted original leaves none.
+     */
+    check('post_comments_body_check', sql`btrim(${t.body}) <> '' OR ${t.purgedAt} IS NOT NULL`),
     /**
      * A 대댓글 carries its 댓글's time and a 댓글 none: with it NULL the parent's foreign key would
      * not be checked at all (MATCH SIMPLE), and a 대댓글 could hang anywhere.
@@ -86,6 +94,15 @@ export const postComments = pgTable(
       'post_comments_parent_created_at_check',
       sql`(${t.parentId} IS NULL) = (${t.parentCreatedAt} IS NULL)`,
     ),
+    /** Only a deleted comment is emptied (#184), not before its deletion, and then to nothing. */
+    check(
+      'post_comments_purged_check',
+      sql`${t.purgedAt} IS NULL OR (${t.deletedAt} IS NOT NULL AND ${t.purgedAt} >= ${t.deletedAt} AND ${t.body} = '')`,
+    ),
+    /** #184's scan: the deleted originals not emptied yet, the oldest deletion first. */
+    index('post_comments_unpurged_deleted_at_idx')
+      .on(t.deletedAt)
+      .where(sql`${t.deletedAt} IS NOT NULL AND ${t.purgedAt} IS NULL`),
     /** The key the parent's foreign key references: the primary key alone cannot carry the rule. */
     unique('post_comments_post_id_id_created_at_is_reply_unique').on(
       t.postId,
@@ -158,6 +175,8 @@ export const postCommentRevisions = pgTable(
   (t) => [
     /** A comment's history in order. */
     index('post_comment_revisions_comment_id_id_idx').on(t.commentId, t.id),
+    /** #184's scan: the versions replaced longest ago first. */
+    index('post_comment_revisions_replaced_at_idx').on(t.replacedAt),
   ],
 );
 
