@@ -171,9 +171,11 @@ export const postCommentRevisions = pgTable(
  * The trigger of migration 0034 on `post_comments` writes it — inserts, deletions and the changes
  * of `deleted_at`, `hidden_at` or `post_id` (#50's hiding and #184's removals included), and a
  * TRUNCATE — and nothing else does: buddha_app may only read it (the trigger runs as the table's
- * owner). `count` never goes below 0, and a comment that leaves the count of a post with no row is
- * refused, so a count that drifted would show at once. The post CASCADEs: a post has no comments
- * left when it can be removed (`post_comments` RESTRICTs), and its row goes with it.
+ * owner and names it `public.post_comment_counts`, with pg_temp last on its search path, so no
+ * temporary table of the same name takes its writes). `count` never goes below 0, and a comment
+ * that leaves the count of a post with no row is refused, so a count that drifted would show at
+ * once. The post CASCADEs: a post has no comments left when it can be removed (`post_comments`
+ * RESTRICTs), and its row goes with it.
  */
 export const postCommentCounts = pgTable(
   'post_comment_counts',

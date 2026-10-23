@@ -74,10 +74,12 @@ REVOKE UPDATE ON TABLE "post_comment_revisions" FROM buddha_app;--> statement-br
 -- no count is lost. A comment leaving a post that has no row is refused rather than ignored: the
 -- row exists whenever a comment of the post is in view, so a missing one is a count gone wrong.
 -- SECURITY DEFINER, as the table's owner (the migration role): buddha_app reads the counts and
--- writes them through this trigger only (REVOKE below). The search path is fixed so the function
--- reaches nothing but these tables.
+-- writes them through this trigger only (REVOKE below). The function names the table with its
+-- schema and fixes its search path with pg_temp last: a session's pg_temp is otherwise searched
+-- first, and PUBLIC may create temporary tables, so a caller's own `post_comment_counts` would take
+-- the writes (Codex review on PR #220).
 CREATE FUNCTION post_comment_counts_follow() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   was_counted boolean := false;
   is_counted boolean := false;
@@ -92,7 +94,7 @@ BEGIN
     RETURN NULL;
   END IF;
   IF was_counted THEN
-    UPDATE post_comment_counts SET count = count - 1 WHERE post_id = OLD.post_id;
+    UPDATE public.post_comment_counts SET count = count - 1 WHERE post_id = OLD.post_id;
     IF NOT FOUND THEN
       RAISE EXCEPTION 'post %: comment % leaves a comment count that was never kept', OLD.post_id,
         OLD.id
@@ -100,7 +102,7 @@ BEGIN
     END IF;
   END IF;
   IF is_counted THEN
-    INSERT INTO post_comment_counts AS counted (post_id, count) VALUES (NEW.post_id, 1)
+    INSERT INTO public.post_comment_counts AS counted (post_id, count) VALUES (NEW.post_id, 1)
     ON CONFLICT (post_id) DO UPDATE SET count = counted.count + 1;
   END IF;
   RETURN NULL;
@@ -110,11 +112,12 @@ CREATE TRIGGER post_comments_keep_count
   AFTER INSERT OR UPDATE OF post_id, deleted_at, hidden_at OR DELETE ON "post_comments"
   FOR EACH ROW EXECUTE FUNCTION post_comment_counts_follow();--> statement-breakpoint
 -- Hand-edited: TRUNCATE fires no row trigger, so emptying the comments (the owner's — the reset of
--- docs/RESET.md truncates every table at once) empties their counts too.
+-- docs/RESET.md truncates every table at once) empties their counts too — as the owner, the table
+-- named with its schema and the search path fixed as above.
 CREATE FUNCTION post_comment_counts_clear() RETURNS trigger
-LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public AS $$
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, public, pg_temp AS $$
 BEGIN
-  DELETE FROM post_comment_counts;
+  DELETE FROM public.post_comment_counts;
   RETURN NULL;
 END;
 $$;--> statement-breakpoint

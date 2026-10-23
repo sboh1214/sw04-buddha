@@ -1210,11 +1210,41 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         ['post_comment_counts_clear', 'post_comment_counts_follow'].map((name) => ({
           name,
           definer: true,
-          config: ['search_path=pg_catalog, public'],
+          config: ['search_path=pg_catalog, public, pg_temp'],
           owner: 'buddha_migrate',
         })),
       );
       expect(await kept(post.id)).toBe(1);
+
+      // Nor through a table of its own by the same name (Codex review on PR #220): PUBLIC may
+      // create temporary tables, and a session's pg_temp is searched first for a relation unless
+      // the search path names it, so a function reaching `post_comment_counts` by its bare name
+      // would write buddha_app's table instead of the kept one. The functions name the table with
+      // its schema and put pg_temp last.
+      const session = createDb(testDbUrls()!.appUrl, { max: 1, applicationName: 'buddha-test' });
+      try {
+        await session.execute(sql`
+          CREATE TEMP TABLE post_comment_counts (post_id uuid PRIMARY KEY, count integer NOT NULL DEFAULT 0)`);
+        await session.execute(sql`GRANT ALL ON pg_temp.post_comment_counts TO PUBLIC`);
+        const [shadowed] = await session
+          .insert(postComments)
+          .values({ postId: post.id, authorId: author.id, body: '같은 이름의 표' })
+          .returning();
+        expect(await kept(post.id)).toBe(2);
+        await session
+          .update(postComments)
+          .set({ hiddenAt: sql`now()` })
+          .where(eq(postComments.id, shadowed!.id));
+        expect(await kept(post.id)).toBe(1);
+        await session.delete(postComments).where(eq(postComments.id, shadowed!.id));
+        expect(await kept(post.id)).toBe(1);
+        const { rows: own } = await session.execute<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM pg_temp.post_comment_counts`,
+        );
+        expect(own).toEqual([{ n: 0 }]);
+      } finally {
+        await closeDb(session);
+      }
     });
 
     it('counts comments written and taken out at the same time exactly: the writers of one post queue on its row', async () => {
@@ -1284,6 +1314,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         await expect(setComment(lost.id, { deletedAt: new Date() })).rejects.toSatisfy(
           (e) => sqlState(e) === '23000' && errorMessage(e).includes('never kept'),
         );
+        // A count kept when the comments are emptied (Codex review on PR #220: the TRUNCATE
+        // found the table empty, so it held without the statement trigger). `post_comments`'
+        // CASCADE reaches post_comment_revisions only — the counts are the posts'.
+        const third = await postFixture();
+        await createComment(t.db, { postId: third.post.id, authorId: third.author.id });
+        expect(await t.db.select().from(postCommentCounts)).toEqual([
+          { postId: third.post.id, count: 1 },
+        ]);
         await owner.execute(sql`TRUNCATE post_comments CASCADE`);
         expect(await t.db.select().from(postCommentCounts)).toEqual([]);
       } finally {
