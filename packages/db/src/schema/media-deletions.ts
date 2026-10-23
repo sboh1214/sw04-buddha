@@ -9,10 +9,11 @@ import { timestampTz } from './columns.js';
  * transaction, then removes the object and only then this row — so the key, which nothing else
  * names once the upload's row is gone, is never lost before the store has let the object go. The
  * API queues one too: an upload whose object it stored but whose row it could not write, when
- * the store refused to remove that object right away (`MediaService.uploadPostImage`, ADR-0073
- * 9-45). A removal the store refuses leaves the row, retried on later runs (`next_attempt_at`,
- * backing off up to a day, counted from the start of the run it was refused on) with its last
- * error kept for the log; a run never gives a key up.
+ * the store refused to remove that object right away (`removeUnrecordedUpload` in apps/api, which
+ * every upload that stores its object before its row calls, ADR-0073 9-45). A removal the store
+ * refuses leaves the row, retried on later runs (`next_attempt_at`, backing off up to a day,
+ * counted from the start of the run it was refused on) with its last error kept for the log; a
+ * run never gives a key up.
  *
  * - `storage_key`: the object's key (`post-images/<id>.<ext>`, OBJECT_KEY_PATTERN in
  *   @buddha/storage), one row per key.
