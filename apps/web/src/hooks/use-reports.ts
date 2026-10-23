@@ -142,9 +142,10 @@ async function postReport({ subject, ...body }: ReportVariables): Promise<MyRepo
  * new one is its newest). A refusal that the target became a placeholder or left every view
  * (`deleted`, `hidden`, NOT_FOUND) reads the post and its comments again — and the lists whose
  * cards carry 신고 (owner decision 2026-10-21), none of which holds a hidden or deleted item: the
- * community list and a profile's 글·댓글 tabs (`AUTHORED_KEY`, whichever profile is on screen) — so
- * the page shows what it is now and the card leaves its list; the dialog says why. A refusal for
- * the onboarding or of another account's cookie does what every refused write does
+ * community list and a market detail's 토론 (#47, ADR-0081 결과 5 — both under `POST_LIST_KEY`, the
+ * 토론 as `marketPostsKey`) and a profile's 글·댓글 tabs (`AUTHORED_KEY`, whichever profile is on
+ * screen) — so the page shows what it is now and the card leaves its list; the dialog says why. A
+ * refusal for the onboarding or of another account's cookie does what every refused write does
  * (`afterRefusal`). Nothing here is optimistic: a report changes nothing on the page.
  */
 export function reportOptions(queryClient: QueryClient, onSessionChanged: () => void) {

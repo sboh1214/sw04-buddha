@@ -31,7 +31,8 @@ import { RetriedImage } from './retried-image';
  * ADR-0076). Both counts are the public ones, the same for every reader and drawn by the server;
  * the card says nothing of whether the reader liked the post (that is the post page's toggle —
  * owner decision 2026-10-20, ADR-0076), and it is not a button: the whole card opens the post. On
- * the community list and a profile's 글 tab it carries 신고 for every reader but its author (owner
+ * the community list, a market detail's 토론 (#47 — owner decision 2026-10-21 답 12 «시장 토론»,
+ * ADR-0081 결과 5) and a profile's 글 tab it carries 신고 for every reader but its author (owner
  * decision 2026-10-21, `CardReportButton`), above the card's link and beside it — a press reports,
  * it never opens the post.
  *
@@ -56,8 +57,9 @@ export function PostCard({
   /** The market line above the title; off in a list of one market's posts (토론). */
   showMarket?: boolean;
   /**
-   * 신고 on the card (owner decision 2026-10-21) — the community list's and a profile's 글 tab's,
-   * not MY's (the member's own) — with the list's page for a visitor's login to come back to.
+   * 신고 on the card (owner decision 2026-10-21) — the community list's, a market detail's 토론's
+   * (#47, ADR-0081 결과 5) and a profile's 글 tab's, not MY's (the member's own) — with the list's
+   * page for a visitor's login to come back to.
    */
   report?: { backPath: string };
 }) {

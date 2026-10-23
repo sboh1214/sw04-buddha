@@ -44,8 +44,8 @@ function backPathOf(subject: ReportSubject): string {
 /**
  * 신고 (#50, ADR-0081; ADR-0069 decision 2 #45-10, decision 3 #37-10): the button beside a
  * published post, a published 댓글 or 대댓글 and on a profile — and on every post card and comment card
- * of the community list and a profile's tabs (owner decision 2026-10-21, `CardReportButton`) — and
- * the dialog it opens.
+ * of the community list, a market detail's 토론 (#47, ADR-0081 결과 5) and a profile's tabs (owner
+ * decision 2026-10-21 답 12, `CardReportButton`) — and the dialog it opens.
  *
  * Who sees it is decided in the browser, once `GET /me` has answered (the server's HTML names
  * nobody): nothing on the reader's own post, comment or profile — they cannot report it (#45-10);
@@ -92,7 +92,8 @@ export function ReportButton({
   /**
    * Where a visitor's login comes back to: the page the button is on. By default the reported
    * post's or profile's page; a card passes its list's, query and all (the community list's
-   * filters, a profile's tab — built by the screen from what it parsed, `loginPathBackToPage`).
+   * filters, a profile's tab — built by the screen from what it parsed, `loginPathBackToPage`; a
+   * 토론 card, its market detail's path).
    */
   backPath?: string;
   /**

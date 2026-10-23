@@ -3,7 +3,7 @@ import { ApiError, type MyModerationAction, type MyReport, api } from '@/lib/api
 import { myAuthoredKey, profileAuthoredKey } from '@/lib/authored';
 import { postCommentsKey } from '@/lib/comments';
 import { MY_ACTIONS_KEY, MY_REPORTS_KEY } from '@/lib/moderation';
-import { POST_LIST_KEY, postKey } from '@/lib/posts';
+import { POST_LIST_KEY, marketPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
   isStaleReportRefusal,
@@ -21,6 +21,7 @@ import {
 
 const POST = 'b7c9a1d2-6f34-4e58-9b0a-2d1e5f8c7a46';
 const COMMENT = '9b2e3c1d-4f5a-4b6c-8d7e-0f1a2b3c4d5e';
+const MARKET = '5d3f1a2b-7c8e-4d9f-a0b1-c2d3e4f5a6b7';
 
 const report: MyReport = {
   id: '22222222-2222-4222-8222-222222222222',
@@ -130,12 +131,14 @@ describe('a report', () => {
   });
 
   it('reads the post, its comments and every list with a card of it again when the item became a placeholder or left', async () => {
-    // The lists whose cards carry 신고 (owner decision 2026-10-21): the community list and a
+    // The lists whose cards carry 신고 (owner decision 2026-10-21): the community list, a market
+    // detail's 토론 (#47, ADR-0081 결과 5 — `marketPostsKey` sits under `POST_LIST_KEY`) and a
     // profile's 글·댓글 tabs — upper-case public id or not, the same member's.
     const stale = [
       postKey(POST),
       postCommentsKey(POST),
       POST_LIST_KEY,
+      marketPostsKey(MARKET),
       profileAuthoredKey('K7M2P9QX4Z', 'posts'),
       profileAuthoredKey('k7m2p9qx4z', 'comments'),
     ];
@@ -173,7 +176,12 @@ describe('a report', () => {
 
   it('reads nothing again for any other refusal', async () => {
     const queryClient = getQueryClient();
-    const keys = [postKey(POST), POST_LIST_KEY, profileAuthoredKey('k7m2p9qx4z', 'posts')];
+    const keys = [
+      postKey(POST),
+      POST_LIST_KEY,
+      marketPostsKey(MARKET),
+      profileAuthoredKey('k7m2p9qx4z', 'posts'),
+    ];
     for (const key of keys) queryClient.setQueryData(key, {});
     const duplicate = new ApiError(409, {
       code: 'REPORT_NOT_ALLOWED',
