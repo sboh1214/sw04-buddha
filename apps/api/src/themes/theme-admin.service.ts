@@ -40,7 +40,7 @@ const THEME_FIELDS = ['slug', 'name', 'intro', 'startDate', 'endDate'] as const;
 /** A notice's text, the fields an edit can change. */
 const NOTICE_FIELDS = ['title', 'body'] as const;
 
-/** UNIQUE (slug) on themes (migration 0031). */
+/** UNIQUE (slug) on themes (migration 0043). */
 export const THEME_SLUG_UNIQUE = 'themes_slug_unique';
 
 /** A VALIDATION_ERROR naming one field, with one of the `THEME_REFUSALS`. */
