@@ -378,7 +378,7 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
   'POST /me/proposals': {
     reason:
-      '본인 시장 제안 내기(#77, ADR-0069 결정 4): 온보딩을 마친 세션 계정의 제안만 접수로 쓰고(계정 제한·작성 제한 중이면 막는 자리, #139·#185), 회원의 처리 대기 5건·하루 3건을 본인확인한 번호의 키 있는 해시로 센다(결정 7, 운영자 계정은 예외 — 오너 결정 2026-10-19). 본문의 expectedAccountId가 세션 계정이어야 한다',
+      '본인 시장 제안 내기(#77, ADR-0069 결정 4): 온보딩을 마친 세션 계정의 제안만 접수로 쓰고(계정 제한·작성 제한 중이면 RESTRICTED로 거절 — 더 늦게 끝나는 쪽, #139·#185), 회원의 처리 대기 5건·하루 3건을 본인확인한 번호의 키 있는 해시로 센다(결정 7, 운영자 계정은 예외 — 오너 결정 2026-10-19). 본문의 expectedAccountId가 세션 계정이어야 한다',
     onboarded: true,
   },
   'POST /me/proposals/:id/retract': {
