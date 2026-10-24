@@ -9,7 +9,7 @@ import {
 import { hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { ApiError, type Post, type PostAuthor } from './api';
+import { ApiError, type Post, type PostAuthor, type PublishedPost } from './api';
 import { isPrivateQueryKey } from './market-keys';
 import {
   COMMUNITY_PATH,
@@ -23,6 +23,7 @@ import {
   isFiltered,
   isOwnPost,
   nameInitial,
+  postEditDeleted,
   postEditPath,
   postEditGoneAfter,
   postFirstLine,
@@ -241,12 +242,12 @@ describe('a post gone while its page is open (postGoneAfter, Codex review of #21
       /\{gone \? \([\s\S]*?data-testid="post-gone"[\s\S]*?\{copy\.postNotFound\}[\s\S]*?\) : post\.state !== 'published' \? \(/,
     );
     expect(page).toContain('{!gone && <MarketBox market={post.market} />}');
-    // The edit screen: the same read decides it, and the server page waits for what the form
-    // holds to be closed (오너 결정 2026-10-24, below).
+    // The edit screen: the same read decides it — and so does a read of a deleted post's
+    // placeholder over the post it had published (#48, below) — and the server page waits for what
+    // the form holds to be closed (오너 결정 2026-10-24, below).
     const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
-    expect(edit).toContain(
-      'const next = postEditGoneAfter(state, { gone: postGoneAfter(state.gone, query), formHolding });',
-    );
+    expect(edit).toContain('const nowNotFound = postGoneAfter(notFound, query);');
+    expect(edit).toContain('gone: nowNotFound || postEditDeleted(published, post),');
     expect(edit).not.toMatch(refreshAtOnce);
   });
 });
@@ -285,6 +286,52 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(postEditGoneAfter(closed, { gone: true, formHolding: false })).toBe(closed);
   });
 
+  it('hears a read that puts a deleted post’s placeholder in place of the post the screen had published as the post going: the API answers it, not NOT_FOUND, once comments hang under the post (#48, ADR-0074 7-35)', () => {
+    const postMarket = {
+      id: '6f1c0f5e-8a0e-4f8b-9d7e-2b1a3c4d5e6f',
+      slug: 'rate-cut',
+      title: '금리 인하',
+      status: 'open',
+      category: { slug: 'economy', nameKo: '경제' },
+    } as const;
+    const id = POST.toLowerCase();
+    const published: PublishedPost = {
+      state: 'published',
+      id,
+      title: '고칠 글',
+      body: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: '근거 한 줄' }] }],
+      },
+      author: member(),
+      market: postMarket,
+      createdAt: '2026-10-19T00:00:00.000Z',
+      editedAt: null,
+      commentCount: 1,
+    };
+    const deleted: Post = { state: 'deleted', id, market: postMarket, commentCount: 1 };
+    const hidden: Post = { state: 'hidden', id, market: postMarket, commentCount: 1 };
+    expect(postEditDeleted(published, deleted)).toBe(true);
+    // Read again published (edited elsewhere, say), or hidden (#45-5's own refusal, as before):
+    // not deleted.
+    expect(postEditDeleted(published, { ...published, title: '다른 탭에서 고친 글' })).toBe(false);
+    expect(postEditDeleted(published, hidden)).toBe(false);
+    // Opened on the placeholder: nothing was published on this screen, and it shows the
+    // placeholder as a reload does.
+    expect(postEditDeleted(undefined, deleted)).toBe(false);
+    // Heard as NOT_FOUND is: the form held while it holds something of the writer's, the server
+    // page at once otherwise.
+    expect(
+      postEditGoneAfter(onScreen, { gone: postEditDeleted(published, deleted), formHolding: true }),
+    ).toEqual({ gone: true, held: true });
+    expect(
+      postEditGoneAfter(onScreen, {
+        gone: postEditDeleted(published, deleted),
+        formHolding: false,
+      }),
+    ).toEqual({ gone: true, held: false });
+  });
+
   it('is what the edit screen draws from: the form held, read-only, with the sentence and 닫기, and the 404 once closed', () => {
     // No component renders under node: the wiring is pinned in the source, as above.
     const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
@@ -293,20 +340,36 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(edit).toContain(
       'const [state, setState] = useState<PostEditGone>({ gone: false, held: false });',
     );
-    expect(edit).toContain(
-      'const next = postEditGoneAfter(state, { gone: postGoneAfter(state.gone, query), formHolding });',
+    expect(edit).toContain('const [notFound, setNotFound] = useState(false);');
+    expect(edit).toContain('if (nowNotFound !== notFound) setNotFound(nowNotFound);');
+    expect(edit).toMatch(
+      /const next = postEditGoneAfter\(state, \{\s*gone: nowNotFound \|\| postEditDeleted\(published, post\),\s*formHolding,\s*\}\);/,
     );
     expect(edit).toContain('if (next !== state) setState(next);');
+    // The server page drawn again once nothing is held — and again as NOT_FOUND follows the
+    // placeholder (#48).
     expect(edit).toMatch(
-      /useEffect\(\(\) => \{\s*if \(gone && !held\) router\.refresh\(\);\s*\}, \[gone, held, router\]\);/,
+      /useEffect\(\(\) => \{\s*if \(gone && !held\) router\.refresh\(\);\s*\}, \[gone, held, notFound, router\]\);/,
     );
-    // The sentence in the form's place once nothing is held, before the gate and the form.
+    // The sentence in the form's place once nothing is held, before the gate and the form — for
+    // a post gone from every view; a deleted post's placeholder is the gate's, as a reload draws it.
     expect(edit).toMatch(
-      /\{gone && !held \? \(\s*<EmptyState message=\{copy\.postNotFound\} data-testid="post-edit-gone" \/>\s*\) : \(\s*<WriteGate/,
+      /\{gone && !held && notFound \? \(\s*<EmptyState message=\{copy\.postNotFound\} data-testid="post-edit-gone" \/>\s*\) : \(\s*<WriteGate/,
     );
+    // Held, the form is drawn from the post as the screen last had it published (#48: the query
+    // may hold the placeholder now), kept as each published read comes.
+    expect(edit).toContain(
+      "const [published, setPublished] = useState(post.state === 'published' ? post : undefined);",
+    );
+    expect(edit).toContain(
+      "if (post.state === 'published' && post !== published) setPublished(post);",
+    );
+    expect(edit).toContain('const shown = held && published !== undefined ? published : post;');
+    expect(edit).toMatch(/\(writer\) =>\s+shown\.state !== 'published' \? \(/);
+    expect(edit).toContain('!isOwnPost(shown.author, writer.publicId)');
     // The form hears the post gone, closes it, and says what it holds.
     expect(edit).toMatch(
-      /<EditForm\s+post=\{post\}\s+accountId=\{writer\.accountId\}\s+gone=\{gone\}\s+onClose=\{\(\) => setState\(\{ gone: true, held: false \}\)\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
+      /<EditForm\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+gone=\{gone\}\s+onClose=\{\(\) => setState\(\{ gone: true, held: false \}\)\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
     );
     expect(edit).toMatch(
       /gone=\{gone\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,

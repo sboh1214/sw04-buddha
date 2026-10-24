@@ -9,7 +9,13 @@ import {
   postDraftMoment,
   readPostDraft,
 } from '@/lib/post-drafts';
-import { communityPostsKey, postEditGoneAfter, postGoneAfter, postKey } from '@/lib/posts';
+import {
+  communityPostsKey,
+  postEditDeleted,
+  postEditGoneAfter,
+  postGoneAfter,
+  postKey,
+} from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import { type HeldPostDraftAt, keepHeldPostDraft } from './use-post-draft';
@@ -331,6 +337,49 @@ describe('the writes', () => {
     const stepLeft = { nextStep: 'consent' } as Me['onboarding'];
     expect(keepHeldPostDraft(last, { id: 'user-1', onboarding: stepLeft } as Me)).toBe(true);
     expect(readPostDraft(storage, editKey, 'user-1', Date.now())?.title).toBe('고친 제목');
+    unsubscribe();
+  });
+
+  it('an edit of a post deleted with comments under it is refused as NOT_FOUND too, and the read again answers its placeholder — not NOT_FOUND — which the edit screen hears as the post going all the same (#48, ADR-0074 7-35)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(postKey(post), { ...published, commentCount: 1 });
+    const screen = new QueryObserver(queryClient, postQueryOptions(POST));
+    const unsubscribe = screen.subscribe(() => undefined);
+    const opened = screen.getCurrentResult().data;
+    if (opened?.state !== 'published') throw new Error('opened on the post');
+    const placeholder: Post = {
+      state: 'deleted',
+      id: post,
+      market: published.market,
+      commentCount: 1,
+    };
+    const get = vi.spyOn(api, 'GET').mockResolvedValue(answer(placeholder));
+    vi.spyOn(api, 'PUT').mockRejectedValueOnce(
+      new ApiError(404, { code: 'NOT_FOUND', message: 'x' }),
+    );
+    const edit = new MutationObserver(
+      queryClient,
+      updatePostOptions(queryClient, () => undefined),
+    );
+    await expect(
+      edit.mutate({ postId: POST, title: '고친 제목', body: {}, expectedAccountId: 'user-1' }),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(get).toHaveBeenCalledTimes(1);
+    // The query holds the placeholder — a success: `postGoneAfter` hears nothing.
+    const result = screen.getCurrentResult();
+    expect(result.data).toEqual(placeholder);
+    expect(postGoneAfter(false, result)).toBe(false);
+    // Over the post the screen had published, it is the post deleted: the form held while it
+    // holds something of the writer's, as for NOT_FOUND.
+    const read = result.data ?? opened;
+    expect(postEditDeleted(opened, read)).toBe(true);
+    const onScreen = { gone: false, held: false };
+    expect(
+      postEditGoneAfter(onScreen, {
+        gone: postGoneAfter(false, result) || postEditDeleted(opened, read),
+        formHolding: true,
+      }),
+    ).toEqual({ gone: true, held: true });
     unsubscribe();
   });
 

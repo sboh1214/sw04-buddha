@@ -50,7 +50,10 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * or an edit with text asks first, in the app's own dialog, a restored box too; a failed later read
  * of `GET /me` leaves the new 댓글's box as it is; and a post gone from every view while a refused
  * text is on screen keeps its page — '없거나 삭제된 글입니다.' and the texts, through a later read
- * failing — until the last is closed, then its 404 (owner decisions 2026-10-21). The depth rule,
+ * failing — until the last is closed, then its 404 (owner decisions 2026-10-21). An edit screen
+ * whose post is deleted in another tab with a comment under it — its read now the placeholder, not
+ * NOT_FOUND — keeps the title and the body written in it, read-only, until 닫기, then shows the
+ * placeholder a reload draws (오너 결정 2026-10-24, ADR-0073 9-52; ADR-0074 7-35). The depth rule,
  * the placeholders' rules, the counts, the permissions and the link safety are the API's and the
  * shared package's tests; this walks the screens.
  */
@@ -2320,6 +2323,148 @@ test.describe('댓글·대댓글', () => {
     await held.getByTestId('comment-held-close').click();
     await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
     expect(asked).toHaveLength(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('댓글이 달린 글을 다른 탭에서 지우면 열어 둔 수정 화면은 거절된 저장이나 다시 읽기 뒤에 쓰던 제목·본문을 고칠 수 없게 남기고, 닫기 뒤에는 새로 고침처럼 삭제된 글의 자리표시이며, 고친 것이 없는 화면은 곧바로 그 자리표시다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-24 (ADR-0073 9-52) for a post with comments under it (#48, ADR-0074
+    // 7-35): deleted, it stays at its address as '삭제된 글입니다' and a read of it answers that
+    // placeholder, not NOT_FOUND — the save is refused as NOT_FOUND all the same. The edit screen
+    // dropped the form with what was written in it for '삭제된 글입니다.'; it keeps it now, as for
+    // a post gone from every view (posts.spec.ts's twentieth and twenty-first), and once it is
+    // closed it is what a reload draws: the placeholder. The page's clock makes a read older than
+    // `staleTime` (30 s) without waiting, as posts.spec.ts does.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const { asked, answers } = dialogs(page);
+    await page.clock.install();
+    const refocus = async () => {
+      await page.clock.fastForward('00:31');
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    };
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 1_000));
+    /** A post of this account's with a 댓글 under it, and its edit screen. */
+    const postWithComment = async (title: string) => {
+      const id = await postThroughApi(page.request, market.id, title, `${title}의 근거`);
+      const comment = await commentThroughApi(page.request, id, null, `${title}의 댓글`);
+      return { id, comment, edit: `/community/posts/${id}/edit` };
+    };
+    /** Its author deletes it on its page in another tab: it stays as its placeholder. */
+    const deleteInAnotherTab = async (id: string) => {
+      const other = await page.context().newPage();
+      await other.goto(`/community/posts/${id}`);
+      await other.getByTestId('post-delete').click();
+      await other.getByTestId('post-delete-confirm').click();
+      await expect(other).toHaveURL('/community');
+      const read = await other.request.get(`/api/v1/posts/${id}`);
+      expect(read.status()).toBe(200);
+      expect(((await read.json()) as { data: { state: string } }).data.state).toBe('deleted');
+      await other.close();
+    };
+    let saves = 0;
+    await page.route(/\/api\/v1\/posts\/[^/]+$/, (route) => {
+      if (route.request().method() === 'PUT') saves += 1;
+      return route.continue();
+    });
+    const title = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const unavailable = page.getByTestId('post-edit-unavailable');
+    const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+
+    // --- the title and the body changed, the post deleted in another tab, 저장: refused
+    // (NOT_FOUND), the read again answers the placeholder, and the form stays with what was
+    // written, read-only, under '없거나 삭제된 글입니다.', 닫기 in place of 저장.
+    const saved = await postWithComment(`저장할 글 ${tag}`);
+    await page.goto(saved.edit);
+    await expect(editor).toContainText(`저장할 글 ${tag}의 근거`);
+    await title.fill(`고친 제목 ${tag}`);
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 덧붙인 근거');
+    await expect(editor).toContainText('덧붙인 근거');
+    await deleteInAnotherTab(saved.id);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    expect(saves).toBe(1);
+    await expect(title).toHaveValue(`고친 제목 ${tag}`);
+    await expect(title).not.toBeEditable();
+    await expect(editor).toContainText('덧붙인 근거');
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+    await expect(page.getByTestId('post-submit')).toHaveCount(0);
+    await expect(page.getByTestId('post-form-close')).toBeVisible();
+    await expect(page.getByTestId('post-edit-market')).toHaveText(market.title);
+    await expect(page.getByTestId('post-form-error')).toHaveCount(0);
+    await settle();
+    await expect(unavailable).toHaveCount(0);
+    await expect(title).toHaveValue(`고친 제목 ${tag}`);
+    // Leaving asks, and staying keeps it all.
+    answers.push(false);
+    await home.click();
+    await expect.poll(() => asked).toEqual([`confirm: ${copy.postLeaveConfirm}`]);
+    await expect(page).toHaveURL(saved.edit);
+    await expect(title).toHaveValue(`고친 제목 ${tag}`);
+    await expect(editor).toContainText('덧붙인 근거');
+    // 닫기: asking nothing, the placeholder a reload draws — '삭제된 글입니다.', not the 404.
+    await page.getByTestId('post-form-close').click();
+    await expect(unavailable).toHaveText(copy.postDeletedPlaceholder);
+    await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+    await expect(title).toHaveCount(0);
+    await expect(page.getByTestId('post-edit-gone')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '404' })).toHaveCount(0);
+    await expect(page).toHaveURL(saved.edit);
+    expect(asked).toHaveLength(1);
+    expect((await page.reload())?.status()).toBe(200);
+    await expect(unavailable).toHaveText(copy.postDeletedPlaceholder);
+
+    // --- a line added to the body, the post deleted in another tab, and a focus reads it again:
+    // kept the same way — nothing was sent — and 닫기 is the placeholder.
+    const focused = await postWithComment(`포커스로 읽을 글 ${tag}`);
+    await page.goto(focused.edit);
+    await expect(editor).toContainText(`포커스로 읽을 글 ${tag}의 근거`);
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 쓰던 근거');
+    await expect(editor).toContainText('쓰던 근거');
+    await deleteInAnotherTab(focused.id);
+    await refocus();
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await expect(title).toHaveValue(`포커스로 읽을 글 ${tag}`);
+    await expect(title).not.toBeEditable();
+    await expect(editor).toContainText('쓰던 근거');
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+    await settle();
+    await expect(unavailable).toHaveCount(0);
+    expect(saves).toBe(1);
+    await page.getByTestId('post-form-close').click();
+    await expect(unavailable).toHaveText(copy.postDeletedPlaceholder);
+    await expect(page).toHaveURL(focused.edit);
+
+    // --- nothing changed: nothing of the writer's to keep, the placeholder at once — and once its
+    // last comment is deleted too, the post leaves every view and the open screen is its 404.
+    const plain = await postWithComment(`그냥 둔 글 ${tag}`);
+    await page.goto(plain.edit);
+    await expect(title).toHaveValue(`그냥 둔 글 ${tag}`);
+    await deleteInAnotherTab(plain.id);
+    await refocus();
+    await expect(unavailable).toHaveText(copy.postDeletedPlaceholder);
+    await expect(title).toHaveCount(0);
+    await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+    await expect(page).toHaveURL(plain.edit);
+    const me = await meOf(page.request);
+    const last = await page.request.post(`/api/v1/comments/${plain.comment}/delete`, {
+      data: { expectedAccountId: me.id },
+    });
+    expect(last.status(), await last.text()).toBe(200);
+    await refocus();
+    await expect(page.getByTestId('post-edit-screen')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(plain.edit);
+    expect(asked).toHaveLength(1);
+    expect(saves).toBe(1);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

@@ -14,6 +14,7 @@ import { type Post } from '@/lib/api';
 import {
   type PostEditGone,
   isOwnPost,
+  postEditDeleted,
   postEditGoneAfter,
   postEditPath,
   postGoneAfter,
@@ -47,44 +48,67 @@ import { useSession } from '@/lib/use-session';
  * (`notFound()`, page.tsx). Whether the form holds something is its own word as of its last
  * render (`onHoldingChange`), taken as the post goes (`postEditGoneAfter`). A read that fails
  * otherwise keeps the form and what is written in it.
+ *
+ * A post with comments under it is not gone when deleted (#48): it stays at its address as
+ * '삭제된 글입니다', and the read after the refused save — or a focus — answers that placeholder,
+ * not NOT_FOUND. The screen holds it deleted all the same (`postEditDeleted`, ADR-0074 7-35) and
+ * keeps the form as above, drawn from the post as it last had it published (the query holds the
+ * placeholder now). Closed — or at once — the screen is the placeholder, as a reload draws it, and
+ * draws the server page again too.
  */
 export function EditScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
   const query = useQuery(postQueryOptions(postId));
   const post = query.data ?? fallback;
+  // The post as the screen last had it published: what a held form is drawn from once a read has
+  // put the placeholder of the post deleted under it in its place (`postEditDeleted`).
+  const [published, setPublished] = useState(post.state === 'published' ? post : undefined);
+  if (post.state === 'published' && post !== published) setPublished(post);
+  // NOT_FOUND heard (`postGoneAfter`): the post left every view, and the server page is the 404.
+  const [notFound, setNotFound] = useState(false);
+  const nowNotFound = postGoneAfter(notFound, query);
+  if (nowNotFound !== notFound) setNotFound(nowNotFound);
   // Whether the form holds something of the writer's, as it last said (`onHoldingChange`).
   const [formHolding, setFormHolding] = useState(false);
   const [state, setState] = useState<PostEditGone>({ gone: false, held: false });
-  const next = postEditGoneAfter(state, { gone: postGoneAfter(state.gone, query), formHolding });
+  const next = postEditGoneAfter(state, {
+    gone: nowNotFound || postEditDeleted(published, post),
+    formHolding,
+  });
   if (next !== state) setState(next);
   const { gone, held } = state;
+  // Drawn again as NOT_FOUND comes after the placeholder too (its last comment deleted since): the
+  // 404 in place of the placeholder.
   useEffect(() => {
     if (gone && !held) router.refresh();
-  }, [gone, held, router]);
+  }, [gone, held, notFound, router]);
+  // Held, the form is drawn from the post as it last had it published: the query may hold the
+  // placeholder now.
+  const shown = held && published !== undefined ? published : post;
   return (
     <Stack gap="6" data-testid="post-edit-screen">
       <Heading as="h2" textStyle="headline">
         {copy.postEditTitle}
       </Heading>
-      {gone && !held ? (
+      {gone && !held && notFound ? (
         <EmptyState message={copy.postNotFound} data-testid="post-edit-gone" />
       ) : (
         <WriteGate back={postEditPath(postId)}>
           {(writer) =>
-            post.state !== 'published' ? (
+            shown.state !== 'published' ? (
               <EmptyState
                 message={
-                  post.state === 'hidden'
+                  shown.state === 'hidden'
                     ? copy.errPostNotEditable
-                    : postPlaceholderMessage(post.state)
+                    : postPlaceholderMessage(shown.state)
                 }
                 data-testid="post-edit-unavailable"
               />
-            ) : !isOwnPost(post.author, writer.publicId) ? (
+            ) : !isOwnPost(shown.author, writer.publicId) ? (
               <EmptyState message={copy.postEditNotYours} data-testid="post-edit-not-yours" />
             ) : (
               <EditForm
-                post={post}
+                post={shown}
                 accountId={writer.accountId}
                 gone={gone}
                 onClose={() => setState({ gone: true, held: false })}
@@ -107,7 +131,10 @@ function EditForm({
 }: {
   post: Extract<Post, { state: 'published' }>;
   accountId: string;
-  /** The post left every view, and the form holds what the writer had in it (`PostEditGone`). */
+  /**
+   * The post left every view or stands as its placeholder (#48), and the form holds what the writer
+   * had in it (`PostEditGone`).
+   */
   gone: boolean;
   onClose: () => void;
   onHoldingChange: (holding: boolean) => void;
