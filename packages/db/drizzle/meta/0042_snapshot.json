@@ -5638,6 +5638,51 @@
       },
       "isRLSEnabled": false
     },
+    "public.post_comment_counts": {
+      "name": "post_comment_counts",
+      "schema": "",
+      "columns": {
+        "post_id": {
+          "name": "post_id",
+          "type": "uuid",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "count": {
+          "name": "count",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "post_comment_counts_post_id_posts_id_fk": {
+          "name": "post_comment_counts_post_id_posts_id_fk",
+          "tableFrom": "post_comment_counts",
+          "tableTo": "posts",
+          "columnsFrom": [
+            "post_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "post_comment_counts_count_check": {
+          "name": "post_comment_counts_count_check",
+          "value": "\"post_comment_counts\".\"count\" >= 0"
+        }
+      },
+      "isRLSEnabled": false
+    },
     "public.post_comment_revisions": {
       "name": "post_comment_revisions",
       "schema": "",
@@ -5886,22 +5931,6 @@
           ],
           "isUnique": false,
           "where": "\"post_comments\".\"parent_id\" IS NOT NULL AND \"post_comments\".\"deleted_at\" IS NULL",
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "post_comments_visible_post_id_idx": {
-          "name": "post_comments_visible_post_id_idx",
-          "columns": [
-            {
-              "expression": "post_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "where": "\"post_comments\".\"deleted_at\" IS NULL AND \"post_comments\".\"hidden_at\" IS NULL",
           "concurrently": false,
           "method": "btree",
           "with": {}
