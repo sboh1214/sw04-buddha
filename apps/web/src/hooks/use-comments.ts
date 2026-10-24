@@ -505,9 +505,10 @@ function readingEveryPage(queryClient: QueryClient, key: readonly unknown[]): bo
  * (use-likes.ts). Not waited for: the write is done once its answer is in the pages. A 더 보기
  * cancelled is not made again — its button is there to press again — and, with nothing watching
  * the pages, the read made again only marks them stale, for the next screen that shows them to
- * read.
+ * read. MY's 삭제 on a hidden comment writes its answer here too (`deleteMyItemOptions`,
+ * use-authored.ts — #50, ADR-0081 7-28), as this page's own 삭제 does.
  */
-async function writePages(queryClient: QueryClient, postId: string, write: PagesWrite) {
+export async function writePages(queryClient: QueryClient, postId: string, write: PagesWrite) {
   const key = postCommentsKey(postId);
   const readAgain = readingEveryPage(queryClient, key);
   await queryClient.cancelQueries({ queryKey: key, exact: true });

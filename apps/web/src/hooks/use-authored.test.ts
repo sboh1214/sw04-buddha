@@ -252,8 +252,34 @@ describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
     }
   });
 
-  it('deletes a 댓글 or 대댓글 through the comment route, off the 댓글 tab', async () => {
+  it('deletes a 댓글 or 대댓글 through the comment route, off the 댓글 tab and as the answer says in the post’s comment pages held', async () => {
     const queryClient = held();
+    // The post page's comment pages in this tab: the hidden 댓글 with a 대댓글 under it.
+    const reply = {
+      state: 'published',
+      id: 'd4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f70',
+      parentId: COMMENT,
+      body: '답글',
+      author,
+      createdAt: '2026-10-18T02:00:00.000Z',
+      editedAt: null,
+      likeCount: 0,
+    };
+    queryClient.setQueryData(postCommentsKey(POST), {
+      pages: [
+        {
+          items: [
+            {
+              comment: { state: 'hidden', id: COMMENT },
+              replies: [reply],
+              repliesNextCursor: null,
+            },
+          ],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    });
     const send = vi
       .spyOn(api, 'POST')
       .mockResolvedValue(answer({ id: COMMENT, placeholder: true }));
@@ -282,6 +308,17 @@ describe('MY’s 삭제 on a hidden item (owner decision 2026-10-22)', () => {
     );
     expect(posts?.pages[0]?.items).toEqual([hiddenPost, shownPost]);
     expect(stale(queryClient, myAuthoredKey('posts'))).toBe(true);
+    // The answer in the comment pages held, as the post page's own 삭제 writes it (#50 다시
+    // 쌓기(2026-10-24), ADR-0081 결과 5): '삭제된 글입니다' with its 대댓글 — not the hidden copy
+    // a read of the pages could carry on (use-comments.test.ts, 'hidden by an operator
+    // meanwhile') — and read again for the rest.
+    const pagesHeld = queryClient.getQueryData<{
+      pages: { items: { comment: unknown; replies: { id: string }[] }[] }[];
+    }>(postCommentsKey(POST));
+    expect(pagesHeld?.pages[0]?.items.map((one) => one.comment)).toEqual([
+      { state: 'deleted', id: COMMENT },
+    ]);
+    expect(pagesHeld?.pages[0]?.items[0]?.replies.map((one) => one.id)).toEqual([reply.id]);
     expect(stale(queryClient, postCommentsKey(POST))).toBe(true);
   });
 

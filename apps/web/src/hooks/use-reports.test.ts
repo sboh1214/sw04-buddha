@@ -162,7 +162,11 @@ describe('a report', () => {
     for (const subject of subjects) {
       for (const refusal of refusals) {
         const queryClient = getQueryClient();
-        for (const key of [...stale, myAuthoredKey('posts')]) queryClient.setQueryData(key, {});
+        // The comment pages as a read holds them: every write under COMMENT_PAGES_KEY goes through
+        // #48's `keepPlacedComments` (lib/query-client.ts), which reads their pages.
+        for (const key of [...stale, myAuthoredKey('posts')]) {
+          queryClient.setQueryData(key, key === stale[1] ? { pages: [], pageParams: [] } : {});
+        }
         await reportOptions(queryClient, () => undefined).onError(refusal, { subject, ...body });
         for (const key of stale) {
           expect(queryClient.getQueryState(key)?.isInvalidated, JSON.stringify(key)).toBe(true);

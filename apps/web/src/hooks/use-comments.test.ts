@@ -39,6 +39,7 @@ import {
 import { withCommentLikeCount } from '@/lib/likes';
 import { communityPostsKey, marketPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
+import { deleteMyItemOptions } from './use-authored';
 import {
   commentsInfiniteQueryOptions,
   createCommentOptions,
@@ -2260,6 +2261,151 @@ describe('a new 댓글', () => {
         await comments.refetch();
         expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
         unsubscribe();
+      });
+
+      describe('hidden by an operator meanwhile (#50, ADR-0081 7-28·결과 5)', () => {
+        /**
+         * A fake server of the 댓글 `list()` names, one a page, answering each by `answers` — the
+         * thread as an operator's hiding or the writer's deletion left it — or as published.
+         */
+        const servingAnswers = (
+          list: () => readonly string[],
+          answers: ReadonlyMap<string, CommentThread>,
+        ) =>
+          getComments(({ params }) => {
+            const all = list();
+            const from =
+              params.query.cursor === undefined ? 0 : Number(params.query.cursor.slice(1));
+            const to = Math.min(from + 1, all.length);
+            return {
+              items: all.slice(from, to).map((id) => answers.get(id) ?? thread(published(id))),
+              nextCursor: to < all.length ? `c${String(to)}` : null,
+            };
+          });
+        const hiddenThread = (replies: PublishedComment[] = []): CommentThread => ({
+          comment: { state: 'hidden', id: MINE },
+          replies,
+          repliesNextCursor: null,
+        });
+        /** The state of MINE wherever the pages hold it, in the order held. */
+        const mineStates = (queryClient: QueryClient) =>
+          queryClient
+            .getQueryData<CommentPages>(postCommentsKey(post))!
+            .pages.flatMap((page) => page.items)
+            .filter((one) => one.comment.id === MINE)
+            .map((one) => one.comment.state);
+        /** MY's 삭제 on MINE (`deleteMyItemOptions`, use-authored.ts), answered `placeholder`. */
+        const deleteFromMy = (queryClient: QueryClient, placeholder: boolean) => {
+          vi.spyOn(api, 'POST').mockResolvedValue(answer({ id: MINE, placeholder }));
+          return new MutationObserver(
+            queryClient,
+            deleteMyItemOptions(queryClient, () => undefined),
+          ).mutate({ tab: 'comments', id: MINE, postId: post, expectedAccountId: 'user-1' });
+        };
+
+        it('a read that does not bring its page puts the copy held back, as for any placed; the 더 보기 that brings it shows it hidden in its place, placed no more, and no read after puts the published copy back', async () => {
+          const answers = new Map<string, CommentThread>();
+          const { queryClient, comments, unsubscribe } = holdingFirst();
+          servingAnswers(() => [...olderIds(0, 8), MINE], answers);
+          await write(queryClient);
+          expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+          answers.set(MINE, hiddenThread());
+          // The reads say nothing of MINE yet: the copy held stays at the end (오너 결정 2026-10-24
+          // — until its page is read), as it was written.
+          await comments.refetch();
+          expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+          expect(mineStates(queryClient)).toEqual(['published']);
+          for (let page = 1; page < 8; page += 1) await comments.fetchNextPage();
+          expect(mineStates(queryClient)).toEqual(['published']);
+          // c8 holds MINE, hidden: its placeholder in its place, drawn once, placed no more.
+          await comments.fetchNextPage();
+          expect(comments.getCurrentResult().hasNextPage).toBe(false);
+          expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+          expect(mineStates(queryClient)).toEqual(['hidden']);
+          expect(placedHeld(queryClient)).toEqual([]);
+          // Every read after reads it hidden where it is: nothing puts the copy held back.
+          for (let reads = 0; reads < 2; reads += 1) {
+            await comments.refetch();
+            expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+            expect(mineStates(queryClient)).toEqual(['hidden']);
+          }
+          unsubscribe();
+        });
+
+        it('a read of the pages that reaches its page — the 댓글 before it deleted — shows it hidden in its place, placed no more, and the next read too', async () => {
+          const all = [...olderIds(0, 8), MINE];
+          const answers = new Map<string, CommentThread>();
+          const { queryClient, comments, unsubscribe } = holdingFirst();
+          servingAnswers(() => all, answers);
+          await write(queryClient);
+          answers.set(MINE, hiddenThread());
+          all.splice(0, 8);
+          await comments.refetch();
+          expect(threadIds(queryClient)).toEqual([MINE]);
+          expect(mineStates(queryClient)).toEqual(['hidden']);
+          expect(placedHeld(queryClient)).toEqual([]);
+          await comments.refetch();
+          expect(mineStates(queryClient)).toEqual(['hidden']);
+          unsubscribe();
+        });
+
+        it('deleted from MY in this tab: out of the pages and of what is placed at once, and no read puts the copy held back', async () => {
+          const all = [...olderIds(0, 8), MINE];
+          const answers = new Map<string, CommentThread>();
+          const { queryClient, comments, unsubscribe } = holdingFirst();
+          servingAnswers(() => all, answers);
+          await write(queryClient);
+          answers.set(MINE, hiddenThread());
+          // MY's 삭제 (nothing under it: out of every view), then MY's reads of what it touched —
+          // the pages on screen read again among them.
+          all.pop();
+          await deleteFromMy(queryClient, false);
+          expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+          expect(placedHeld(queryClient)).toEqual([]);
+          for (let reads = 0; reads < 2; reads += 1) {
+            await comments.refetch();
+            expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
+          }
+          while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
+          expect(threadIds(queryClient)).toEqual(olderIds(0, 8));
+          unsubscribe();
+        });
+
+        it('deleted from MY with a 답글 under it: its placeholder ‘삭제된 글입니다’ with the 답글, as the post page’s own 삭제 leaves it — never the copy held — until 더 보기 brings it into place', async () => {
+          const answers = new Map<string, CommentThread>();
+          const { queryClient, comments, unsubscribe } = holdingFirst();
+          servingAnswers(() => [...olderIds(0, 8), MINE], answers);
+          await write(queryClient);
+          // A 답글 under it: its thread has nothing unread, so the 답글 is in its place.
+          const REPLY = LATER[0]!;
+          vi.spyOn(api, 'POST').mockResolvedValue(answer(published(REPLY, MINE, '답글')));
+          await new MutationObserver(
+            queryClient,
+            createCommentOptions(queryClient, POST, () => undefined),
+          ).mutate({ parentId: MINE, body: '답글', expectedAccountId: 'user-1' });
+          answers.set(MINE, hiddenThread([published(REPLY, MINE, '답글')]));
+          await comments.refetch();
+          expect(mineStates(queryClient)).toEqual(['published']);
+          // MY's 삭제: '삭제된 글입니다' with the 답글 under it, on the server as in the pages held.
+          answers.set(MINE, {
+            comment: { state: 'deleted', id: MINE },
+            replies: [published(REPLY, MINE, '답글')],
+            repliesNextCursor: null,
+          });
+          await deleteFromMy(queryClient, true);
+          const mine = () =>
+            commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).at(-1);
+          for (let reads = 0; reads < 2; reads += 1) {
+            expect(mineStates(queryClient)).toEqual(['deleted']);
+            expect(mine()?.replies.map((reply) => reply.id)).toEqual([REPLY]);
+            await comments.refetch();
+          }
+          while (comments.getCurrentResult().hasNextPage) await comments.fetchNextPage();
+          expect(threadIds(queryClient)).toEqual([...olderIds(0, 8), MINE]);
+          expect(mineStates(queryClient)).toEqual(['deleted']);
+          expect(placedHeld(queryClient)).toEqual([]);
+          unsubscribe();
+        });
       });
 
       it('for the account on screen only: written as one account and landing on another’s screen, it is placed for none — and a reset of the cache as the session changes drops what was placed', async () => {

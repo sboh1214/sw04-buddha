@@ -50,7 +50,7 @@ import {
   type Post,
   type PostSummary,
 } from '@buddha/shared';
-import { and, eq, gt, isNull } from 'drizzle-orm';
+import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import {
@@ -162,6 +162,24 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
   const postPage = async (postId = post.id): Promise<Post> =>
     postSchema.parse(dataOf(await read(`/posts/${postId}`)));
   const cards = async (): Promise<PostSummary[]> => dataOf(await read('/posts'));
+  /**
+   * The post's count of comments in view as #48's counter keeps it (`post_comment_counts`, 0 with
+   * no row, ADR-0074 7-33) — checked against the post's comments counted afresh, neither deleted
+   * nor hidden, and against what the public reads on the post and its card (`commentCount`).
+   */
+  const commentCount = async (postId = post.id): Promise<number> => {
+    const { rows } = await t.db.execute<{ kept: number; counted: number }>(sql`
+      SELECT COALESCE((SELECT count FROM post_comment_counts WHERE post_id = ${postId}::uuid), 0)
+               AS kept,
+             (SELECT count(*)::int FROM post_comments
+               WHERE post_id = ${postId}::uuid AND deleted_at IS NULL AND hidden_at IS NULL)
+               AS counted`);
+    const kept = rows[0]!.kept;
+    expect(kept, 'the counter against a count afresh').toBe(rows[0]!.counted);
+    expect((await postPage(postId)).commentCount).toBe(kept);
+    expect((await cards()).find((card) => card.id === postId)?.commentCount).toBe(kept);
+    return kept;
+  };
   const audits = (type: string) =>
     t.db.select().from(schema.adminActions).where(eq(schema.adminActions.type, type));
   const queue = async (status?: 'pending' | 'resolved', who: TestUser = admin) =>
@@ -583,6 +601,66 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
         await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
       );
       expect(again.id).not.toBe(hidden.id);
+    });
+
+    it('keeps the post’s comment count exact (#48’s counter, ADR-0074 7-33): a 댓글 or 대댓글 hidden leaves it and comes back with the cancellation; a refused hiding, a hidden one its author deletes and that hiding’s cancellation after move nothing', async () => {
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+        body: '답글',
+      });
+      const second = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        body: '둘째 댓글',
+      });
+      expect(await commentCount()).toBe(3);
+      const onComment = actionOf(
+        await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, admin),
+      );
+      expect(await commentCount()).toBe(2);
+      const onReply = actionOf(
+        await send(`/admin/moderation/comments/${reply.id}/hide`, { reason: 'spam' }, admin),
+      );
+      expect(await commentCount()).toBe(1);
+      // Hidden already: refused, nothing moves.
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/comments/${comment.id}/hide`, { reason: 'spam' }, other),
+        ),
+      ).toBe('hidden');
+      expect(await commentCount()).toBe(1);
+      // The 댓글's hiding cancelled: in view and counted again.
+      actionOf(
+        await send(
+          `/admin/moderation/actions/${onComment.id}/cancel`,
+          { reason: '이의 인정' },
+          other,
+        ),
+      );
+      expect(await commentCount()).toBe(2);
+      // The hidden 대댓글 deleted by its author (MY's 삭제, ADR-0080): out of the count already.
+      dataOf(await send(`/comments/${reply.id}/delete`, {}, author));
+      expect(await commentCount()).toBe(2);
+      // Its hiding cancelled after: `hidden_at` cleared on a deleted one, still out.
+      actionOf(
+        await send(
+          `/admin/moderation/actions/${onReply.id}/cancel`,
+          { reason: '이의 인정' },
+          other,
+        ),
+      );
+      expect(await commentCount()).toBe(2);
+      // A deleted 댓글: one less by its deletion, and its hiding is refused, nothing moving.
+      dataOf(await send(`/comments/${second.id}/delete`, {}, author));
+      expect(await commentCount()).toBe(1);
+      expect(
+        refusalOf(
+          await send(`/admin/moderation/comments/${second.id}/hide`, { reason: 'spam' }, admin),
+        ),
+      ).toBe('deleted');
+      expect(await commentCount()).toBe(1);
     });
 
     it('names an item the member deleted since by its kind alone on their record (#45-5)', async () => {
