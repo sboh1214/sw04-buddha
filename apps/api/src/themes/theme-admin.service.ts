@@ -498,8 +498,9 @@ export class ThemeAdminService {
   /**
    * The theme as the admin sees it, read through `executor` so a write answers the state it just
    * wrote: who made it and every notice with its writer, by id and current nickname (as the
-   * admin's 관련 시장 names who linked, ADR-0068). LEFT joins on `profiles` only so that a missing
-   * profile could never hide a row from the screen that manages it (every account has one).
+   * admin's 관련 시장 names who linked, ADR-0068) — null for a former admin who closed the account
+   * since (#140, `AdminAccountActor`). LEFT joins on `profiles` only so that a missing profile
+   * could never hide a row from the screen that manages it (every account has one).
    */
   private async adminTheme(executor: Executor, themeId: string, now: Date): Promise<AdminTheme> {
     const { themes, themeNotices, profiles } = schema;
@@ -518,7 +519,7 @@ export class ThemeAdminService {
     return {
       ...toAdminThemeSummary(row.theme, now),
       intro: row.theme.intro,
-      createdBy: { id: row.theme.createdBy, nickname: row.nickname ?? '' },
+      createdBy: { id: row.theme.createdBy, nickname: row.nickname },
       notices: notices.map(({ notice, nickname }) => toAdminNotice(notice, nickname)),
     };
   }
@@ -541,7 +542,7 @@ export class ThemeAdminService {
       .orderBy(desc(themeMarkets.createdAt), desc(markets.id));
     return rows.map((row) => ({
       ...toMarketSummary(row.market, row.category),
-      linkedBy: { id: row.linkedBy, nickname: row.linkedByNickname ?? '' },
+      linkedBy: { id: row.linkedBy, nickname: row.linkedByNickname },
       linkedAt: row.linkedAt.toISOString(),
     }));
   }
@@ -565,7 +566,7 @@ function toAdminNotice(notice: NoticeRow, nickname: string | null): AdminThemeNo
     createdAt: notice.createdAt.toISOString(),
     editedAt: notice.editedAt?.toISOString() ?? null,
     hiddenAt: notice.hiddenAt?.toISOString() ?? null,
-    createdBy: { id: notice.createdBy, nickname: nickname ?? '' },
+    createdBy: { id: notice.createdBy, nickname },
   };
 }
 

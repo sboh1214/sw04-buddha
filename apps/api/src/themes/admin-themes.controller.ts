@@ -39,12 +39,14 @@ import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
 import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { ThemeAdminService } from './theme-admin.service.js';
 
 /**
  * 테마 (#81) for admins. Guards run in order, as on every admin route: SessionGuard (401 without a
- * session, 403 for a foreign Origin on a mutation), then AdminGuard (403 for a member). Every
+ * session, 403 for a foreign Origin on a mutation), AdminGuard (403 for a member), then
+ * OnboardedGuard (409 for an admin that has not finished the onboarding, ADR-0072). Every
  * write records the admin and the time in `admin_actions` when it changes something
  * (admin-audit.test.ts's AUDITED); none asks a reason or a second admin (ADR-0069 decision 4).
  * There is no DELETE of a theme or a notice: a theme is unpublished, a notice hidden.
@@ -52,7 +54,7 @@ import { ThemeAdminService } from './theme-admin.service.js';
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('admin/themes')
-@UseGuards(SessionGuard, AdminGuard)
+@UseGuards(SessionGuard, AdminGuard, OnboardedGuard)
 export class AdminThemesController {
   constructor(private readonly themes: ThemeAdminService) {}
 
@@ -64,7 +66,7 @@ export class AdminThemesController {
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])
   @ApiPageOf(adminThemeSummarySchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async adminListThemes(
     @Query({ schema: cursorQuerySchema }) query: CursorQuery,
   ): Promise<ApiPage<AdminThemeSummary>> {
@@ -80,7 +82,7 @@ export class AdminThemesController {
       'dates from 2000-01-01 to 2100-12-31; a slug another theme has is refused naming slug',
   })
   @ApiData(adminThemeSchema, 201)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   adminCreateTheme(
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createThemeBodySchema }) body: CreateThemeBody,
@@ -94,7 +96,7 @@ export class AdminThemesController {
     summary: 'One theme with who made it and every notice, hidden ones too',
   })
   @ApiData(adminThemeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminGetTheme(@Param('id', { schema: uuidParamSchema }) id: string): Promise<AdminTheme> {
     return this.themes.get(id);
   }
@@ -109,7 +111,7 @@ export class AdminThemesController {
       'outside 2000-01-01 to 2100-12-31 naming its field',
   })
   @ApiData(adminThemeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUpdateTheme(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -127,7 +129,7 @@ export class AdminThemesController {
       'draft (drafts do not count); a published theme stays as it is',
   })
   @ApiData(adminThemeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminPublishTheme(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -142,7 +144,7 @@ export class AdminThemesController {
     summary: 'Take the theme off every public answer (it is never deleted)',
   })
   @ApiData(adminThemeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUnpublishTheme(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -160,7 +162,7 @@ export class AdminThemesController {
     summary: "The theme's markets, any status, the latest put in first, with who put it in",
   })
   @ApiData(adminThemeMarketSchema.array())
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminListThemeMarkets(
     @Param('id', { schema: uuidParamSchema }) id: string,
   ): Promise<AdminThemeMarket[]> {
@@ -177,7 +179,7 @@ export class AdminThemesController {
   })
   @ApiData(adminThemeMarketSchema.array())
   // NOT_FOUND names `marketId` for an unknown market (an unknown theme is a plain NOT_FOUND).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminLinkThemeMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -195,7 +197,7 @@ export class AdminThemesController {
   })
   @ApiData(adminThemeMarketSchema.array())
   // NOT_FOUND names the path's `marketId` for an unknown market, as the link names the body's.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUnlinkThemeMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -210,7 +212,7 @@ export class AdminThemesController {
     summary: "Write a notice on the theme's page, plain text, shown at once. Answers the theme",
   })
   @ApiData(adminThemeSchema, 201)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminCreateThemeNotice(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -227,7 +229,7 @@ export class AdminThemesController {
   })
   @ApiData(adminThemeSchema)
   // NOT_FOUND names `noticeId` for a notice that is not this theme's.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUpdateThemeNotice(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -244,7 +246,7 @@ export class AdminThemesController {
     summary: 'Take a notice off the public page (it is never deleted). Answers the theme',
   })
   @ApiData(adminThemeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminHideThemeNotice(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -260,7 +262,7 @@ export class AdminThemesController {
     summary: 'Show a hidden notice on the page again. Answers the theme',
   })
   @ApiData(adminThemeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminShowThemeNotice(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,

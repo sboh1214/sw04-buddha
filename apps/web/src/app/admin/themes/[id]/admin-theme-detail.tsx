@@ -33,6 +33,7 @@ import {
   useAdminTheme,
   useAdminThemeMarkets,
 } from '@/hooks/use-admin-themes';
+import { nicknameShown } from '@/lib/account-closure';
 import {
   EMPTY_THEME_NOTICE_FORM,
   type ThemeFormValues,
@@ -142,7 +143,7 @@ export function AdminThemeDetail({ id }: { id: string }) {
         <Card.Body>
           <DataList.Root orientation="horizontal" size="sm">
             <Item label={copy.themePeriod}>{formatThemePeriod(data, theme.dataUpdatedAt)}</Item>
-            <Item label={copy.adminThemeCreatedBy}>{data.createdBy.nickname}</Item>
+            <Item label={copy.adminThemeCreatedBy}>{nicknameShown(data.createdBy.nickname)}</Item>
             <Item label={copy.adminThemeCreatedAt}>{formatKst(data.createdAt)}</Item>
             <Item label={copy.adminThemeUpdatedAt}>{formatKst(data.updatedAt)}</Item>
             <Item label={copy.adminThemePublishedAt}>
@@ -462,7 +463,7 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
                     <RelatedMarketLine market={row}>
                       <Text fontSize="xs" color="fg.muted">
                         {copy.adminThemeMarketLinkedAt} {formatKst(row.linkedAt)} ·{' '}
-                        {row.linkedBy.nickname}
+                        {nicknameShown(row.linkedBy.nickname)}
                       </Text>
                     </RelatedMarketLine>
                     <Button
@@ -703,7 +704,7 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
                         )}
                       </HStack>
                       <Text fontSize="xs" color="fg.muted">
-                        {formatKst(notice.createdAt)} · {notice.createdBy.nickname}
+                        {formatKst(notice.createdAt)} · {nicknameShown(notice.createdBy.nickname)}
                         {notice.editedAt !== null &&
                           ` · ${copy.adminThemeNoticeEditedAt} ${formatKst(notice.editedAt)}`}
                       </Text>

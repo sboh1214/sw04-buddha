@@ -11,7 +11,15 @@
  * Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
-import { createCategory, createMarket, createTheme, createThemeMarket } from '@buddha/db/test';
+import {
+  closeAccount,
+  completeOnboarding,
+  createCategory,
+  createMarket,
+  createTheme,
+  createThemeMarket,
+  createThemeNotice,
+} from '@buddha/db/test';
 import {
   koreanDateAt,
   type AdminTheme,
@@ -60,6 +68,8 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
         .where(eq(schema.profiles.userId, user.id));
       // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
       await t.app.get(AdminGuard).invalidate(user.id);
+      // Past the onboarding, as every /admin route asks of an admin (ADR-0072, admin-access.test).
+      await completeOnboarding(t.db, { userId: user.id });
     }
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
   });
@@ -809,6 +819,29 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
         linkedBy: { id: other.id, nickname: await nicknameOf(other.id) },
       }),
     ]);
+  });
+
+  it('names an admin who has closed the account since by id alone, with no nickname (#140)', async () => {
+    // A former admin: the role revoked, then the account closed (ADR-0086) — the theme, the market
+    // it put in and the notice it wrote stay, and the admin screen names it as AdminAccountActor
+    // does for every closed account (the screen shows '탈퇴한 사용자').
+    const theme = await createTheme(t.db, { createdBy: other.id });
+    const linked = await market();
+    await createThemeMarket(t.db, { themeId: theme.id, marketId: linked.id, createdBy: other.id });
+    await createThemeNotice(t.db, { themeId: theme.id, createdBy: other.id });
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'user' })
+      .where(eq(schema.profiles.userId, other.id));
+    await closeAccount(t.db, other.id);
+
+    const read = data<AdminTheme>(await send('GET', `/admin/themes/${theme.id}`));
+    expect(read.createdBy).toEqual({ id: other.id, nickname: null });
+    expect(read.notices.map((notice) => notice.createdBy)).toEqual([
+      { id: other.id, nickname: null },
+    ]);
+    const rows = data<AdminThemeMarket[]>(await send('GET', `/admin/themes/${theme.id}/markets`));
+    expect(rows.map((row) => row.linkedBy)).toEqual([{ id: other.id, nickname: null }]);
   });
 
   it('is the admin’s alone: members and visitors are refused, and a foreign Origin too', async () => {
