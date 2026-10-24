@@ -1053,6 +1053,7 @@ test.describe('신고와 운영 처리', () => {
   test('작성자가 글을 고치는 사이 운영자가 그 글을 숨기면 수정 화면은 쓰던 제목·본문을 숨김의 문장과 함께 고칠 수 없게 남겨 떠날 때 묻고, 닫기 뒤에는 새로 고침과 같은 숨긴 글의 화면이며, 고친 것이 없는 화면은 곧바로 그 화면이고, 글 화면은 숨긴 글의 자리표시를 곧바로 그리며 쓰던 댓글을 까닭과 남긴다', async ({
     admin,
     page,
+    browser,
   }) => {
     // 오너 결정 2026-10-25 «숨김에도 글자를 남김» (ADR-0081 7-29): the rule of a post deleted under
     // its edit screen (ADR-0073 9-52, ADR-0074 7-35) for a post an operator hides there. The save
@@ -1219,7 +1220,19 @@ test.describe('신고와 운영 처리', () => {
     // --- the post page: a new 댓글 typed under the post, the post hidden, a focus — the hidden
     // post's placeholder at once in the post's place, its comment under it, and the typed text held
     // with why until it is closed; no 404 waits for it. The hiding cancelled, the post is back.
-    const onPage = await postThroughApi(page.request, market.id, `글 화면의 글 ${tag}`, '글 근거');
+    // Another member's post: a fourth of the member's own within ten minutes would be refused
+    // (WRITE_LIMITED, #187 — 3 posts in 10 minutes), and the post page reads a post the same for
+    // everyone.
+    const authorContext = await browser.newContext();
+    const author = await authorContext.newPage();
+    await signUp(author, freshEmail());
+    const onPage = await postThroughApi(
+      author.request,
+      market.id,
+      `글 화면의 글 ${tag}`,
+      '글 근거',
+    );
+    await authorContext.close();
     const comment = await commentThroughApi(page.request, onPage, `달려 있던 댓글 ${tag}`);
     await page.goto(`/community/posts/${onPage}`);
     await expect(page.getByTestId('post-title')).toHaveText(`글 화면의 글 ${tag}`);

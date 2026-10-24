@@ -1,4 +1,4 @@
-import { type APIRequestContext } from '@playwright/test';
+import { type APIRequestContext, type Request } from '@playwright/test';
 import type { AdminLinkFlag, AdminLinkFlagGroup, WriteLimitedDetails } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
@@ -22,9 +22,13 @@ import {
  * The limits: a member who wrote three posts in ten minutes sends a fourth from the write screen;
  * nothing is stored, and the screen says which limit it was and the time it can write again
  * («다시 쓸 수 있는 시각을 보인다») — in the screen's zone, from the server's wait — keeping the draft;
- * a comment, another limit, still goes through. Every window, the daily caps, deleted posts,
- * edits, uploads, the per-number count and the operators' exemption are the API's tests
- * (write-limits.test.ts); this walks the refusal on screen.
+ * a comment, another limit, still goes through. A member who edited ten times in ten minutes saves
+ * an eleventh from the edit screen: refused the same way, with the time it can edit again, and the
+ * form stays editable under it with 저장 — not the held form of a post taken from under it
+ * (#46·#48·#50), the post not read again for it — and sent again is refused again (ADR-0083 결과 5
+ * «다시 쌓기(2026-10-25)»). Every window, the daily caps, deleted posts, edits, uploads, the
+ * per-number count and the operators' exemption are the API's tests (write-limits.test.ts); this
+ * walks the refusal on screen.
  *
  * The repeated links: a member puts one address — written three ways, with the host in capitals,
  * a trailing slash, tracking parameters and a fragment — into a post and two comments within the
@@ -63,6 +67,24 @@ async function postThroughApi(
   });
   expect(res.status(), await res.text()).toBe(201);
   return ((await res.json()) as { data: { id: string } }).data.id;
+}
+
+/** An edit of the context's own post straight at the API: the title and a one-line body. */
+async function editThroughApi(
+  context: APIRequestContext,
+  postId: string,
+  title: string,
+  text: string,
+): Promise<void> {
+  const me = await meOf(context);
+  const res = await context.put(`/api/v1/posts/${postId}`, {
+    data: {
+      title,
+      body: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] },
+      expectedAccountId: me.id,
+    },
+  });
+  expect(res.status(), await res.text()).toBe(200);
 }
 
 /** A 댓글 straight at the API with the context's cookie. */
@@ -203,6 +225,118 @@ test.describe('작성 빈도 제한 (#187)', () => {
 
     // A comment is another limit (5 a minute): it goes through.
     await commentThroughApi(page.request, first, `댓글은 됩니다 ${tag}`);
+  });
+
+  test('10분에 열 번 고친 회원이 수정 화면에서 열한째를 저장하면 그 한도와 다시 고칠 수 있는 시각이 양식 아래에 보이고, 양식은 고칠 수 있는 그대로 남아 다시 보내도 같은 거절이며 그 거절로 글을 다시 읽지 않는다', async ({
+    admin,
+    page,
+    request,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `고칠 글 ${tag}`, tag);
+    // Ten edits that change the post: the edits of ten minutes (posts' and comments' together) are
+    // all taken.
+    for (let edit = 1; edit <= 10; edit += 1) {
+      await editThroughApi(page.request, postId, `고친 글 ${edit} ${tag}`, `${tag} 고침 ${edit}`);
+    }
+
+    // The eleventh, from the edit screen.
+    await page.goto(`/community/posts/${postId}/edit`);
+    const title = page.getByTestId('post-title-input');
+    const body = page.getByTestId('post-editor-content');
+    await expect(title).toHaveValue(`고친 글 10 ${tag}`);
+    await title.fill(`열한째 ${tag}`);
+    // The post's reads and the saves from here: a refusal that took the post from under the form
+    // would read it again (POST_NOT_EDITABLE, NOT_FOUND — hooks/use-posts.ts).
+    const postReads: string[] = [];
+    const saves: string[] = [];
+    const countPostRequest = (sent: Request) => {
+      if (new URL(sent.url()).pathname !== `/api/v1/posts/${postId}`) return;
+      if (sent.method() === 'GET') postReads.push(sent.url());
+      if (sent.method() === 'PUT') saves.push(sent.url());
+    };
+    page.on('request', countPostRequest);
+    const saved = () =>
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname === `/api/v1/posts/${postId}`,
+      );
+    const sent = saved();
+    const before = Date.now();
+    await page.getByTestId('post-submit').click();
+    const response = await sent;
+    const after = Date.now();
+    expect(response.status()).toBe(429);
+    const { error } = (await response.json()) as {
+      error: { code: string; details: WriteLimitedDetails };
+    };
+    expect(error.code).toBe('WRITE_LIMITED');
+    expect(error.details.reason).toBe('edits_10m');
+    expect(error.details.limit).toBe(10);
+    expect(error.details.retryAfterSeconds % 60).toBe(0);
+    expect(error.details.retryAfterSeconds).toBeGreaterThanOrEqual(60);
+    expect(error.details.retryAfterSeconds).toBeLessThanOrEqual(600);
+
+    // Under the form: which limit, and the time it can edit again — no way to 조치·신고 내역, as it
+    // is not a restriction.
+    const refusal = page.getByTestId('post-form-error');
+    await expect(refusal).toBeVisible();
+    const shown = ((await refusal.textContent()) ?? '').trim();
+    const expected = [before, after].map(
+      (at) =>
+        `${copy.errWriteLimitEdits10m} ${retryText(at, error.details.retryAfterSeconds)}${copy.writeLimitRetryEdit}`,
+    );
+    expect(expected).toContain(shown);
+    await expect(refusal.getByTestId('restricted-moderation-link')).toHaveCount(0);
+
+    // Not the post taken from under the form (the held form of #46·#48·#50 — ADR-0073 9-52,
+    // ADR-0074 7-35, ADR-0081 7-29): the server counted the edit once it found the post there to
+    // edit, so the form stays editable under the refusal with 저장 — no held notice, no 닫기.
+    await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+    await expect(page.getByTestId('post-form-close')).toHaveCount(0);
+    await expect(page.getByTestId('post-edit-unavailable')).toHaveCount(0);
+    await expect(title).toBeEditable();
+    await expect(title).toHaveValue(`열한째 ${tag}`);
+    await expect(body).toHaveAttribute('contenteditable', 'true');
+    await expect(page.getByTestId('post-submit')).toBeEnabled();
+
+    // Typed on and sent again, it is refused the same way.
+    await title.fill(`열한째 다시 ${tag}`);
+    await body.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 덧붙임');
+    await expect(body).toContainText('덧붙임');
+    const sentAgain = saved();
+    await page.getByTestId('post-submit').click();
+    expect((await sentAgain).status()).toBe(429);
+    await expect(refusal).toContainText(copy.errWriteLimitEdits10m);
+    await expect(refusal).toContainText(copy.writeLimitRetryEdit);
+    await page.waitForTimeout(1_000);
+    expect(saves).toHaveLength(2);
+    expect(postReads).toEqual([]);
+    page.off('request', countPostRequest);
+    await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+    await expect(title).toBeEditable();
+    await expect(title).toHaveValue(`열한째 다시 ${tag}`);
+    await expect(body).toHaveAttribute('contenteditable', 'true');
+    await expect(page).toHaveURL(`/community/posts/${postId}/edit`);
+
+    // Nothing was stored: the post is as the tenth edit left it.
+    const read = await request.get(`/api/v1/posts/${postId}`);
+    expect(read.status()).toBe(200);
+    expect(((await read.json()) as { data: { title: string } }).data.title).toBe(
+      `고친 글 10 ${tag}`,
+    );
+
+    // The message wraps inside a phone's width.
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+      ),
+    ).toBe(true);
   });
 });
 
