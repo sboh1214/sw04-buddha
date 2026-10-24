@@ -2590,5 +2590,66 @@ describe('writes that land while a read toward a place reads (Codex review on PR
       );
       expect(placedHeld(queryClient)).toEqual([]);
     });
+
+    it(`‘답글 더 보기’ landing while a new 댓글’s read is on its way: ${name} of the writer’s own 대댓글 placed at the thread’s end, done again over the page it brought, stays on the pages the new 댓글’s read puts in after it`, async () => {
+      // The thread holds its first page and PLACED placed at its end; the list goes on behind
+      // 'c2'. '답글 더 보기' (from 'r2': PLACED, and MINE — another's — after it) and a new 댓글's
+      // read (the first page again, then 'c2') leave before the write. The reply page lands
+      // first, the write done again over it; what goes into the other read's log is what it put in
+      // with that — the page as read, done again over the other read's pages after the write,
+      // would bring PLACED back as it was before it.
+      const queryClient = onScreen(seededThread(replyIds(0, 2), 'r2'));
+      queryClient.setQueryData<CommentPages>(postCommentsKey(post), (pages) => ({
+        pages: [
+          {
+            items: [
+              {
+                ...threadAnswered(replyIds(0, 2), 'r2'),
+                replies: [...replyIds(0, 2), PLACED].map((id) => published(id, commentId)),
+              },
+            ],
+            nextCursor: 'c2',
+          },
+        ],
+        pageParams: pages!.pageParams,
+        placed: [{ id: PLACED, threadId: commentId, accountId: 'user-1' }],
+      }));
+      const replies = onItsWay();
+      const lastPage = onItsWay();
+      const asked = getThreads(
+        async ({ params }) => {
+          if (params.query.cursor === undefined) {
+            return { items: [threadAnswered(replyIds(0, 2), 'r2')], nextCursor: 'c2' };
+          }
+          await lastPage.arrived;
+          return { items: [thread(published(OLDER))], nextCursor: null };
+        },
+        async (request) => {
+          await replies.arrived;
+          return fakeReplies(2, PLACED, [MINE])(request);
+        },
+      );
+      const more = readMoreReplies(queryClient, POST, commentId);
+      const writing = create(queryClient, published(OLDER));
+      await vi.waitFor(() =>
+        expect(asked).toEqual([`replies:${commentId}:r2`, 'comments:', 'comments:c2']),
+      );
+      await write(queryClient);
+      replies.arrive();
+      await more;
+      const thread0 =
+        name === 'an edit' ? [...replyIds(0, 2), PLACED, MINE] : [...replyIds(0, 2), MINE];
+      expect(repliesHeld(queryClient)).toEqual([thread0, null]);
+      lastPage.arrive();
+      await writing;
+      expect(asked).toEqual([`replies:${commentId}:r2`, 'comments:', 'comments:c2']);
+      expect(threadIds(queryClient)).toEqual([commentId, OLDER]);
+      expect(repliesHeld(queryClient)).toEqual([thread0, null]);
+      const placed = firstThread(queryClient)?.replies.find((reply) => reply.id === PLACED);
+      expect(placed === undefined ? undefined : bodyOf(placed)).toBe(
+        name === 'an edit' ? '고친 답글' : undefined,
+      );
+      expect(placedHeld(queryClient)).toEqual([]);
+    });
   }
 });

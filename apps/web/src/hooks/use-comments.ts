@@ -509,10 +509,15 @@ function stopLogging(queryClient: QueryClient, postId: string, log: PagesWrite[]
   if (logs.size === 0) byPost?.delete(postId);
 }
 
+/** `write` added to every log of a read of `postId`'s pages still on its way (not done here). */
+function logWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
+  for (const log of writesWhileReading.get(queryClient)?.get(postId) ?? []) log.push(write);
+}
+
 /** `write` done on the pages held, and added to every log of a read of them still on its way. */
 function landWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
   queryClient.setQueryData<CommentPages>(postCommentsKey(postId), write);
-  for (const log of writesWhileReading.get(queryClient)?.get(postId) ?? []) log.push(write);
+  logWrite(queryClient, postId, write);
 }
 
 /**
@@ -538,7 +543,12 @@ async function writePages(queryClient: QueryClient, postId: string, write: Pages
  * goes into the logs of the other reads still on their way — a new 대댓글 and the reply page of
  * '답글 더 보기' are writes of a thread over the pages held, and done again over another read's
  * pages as any write is; a new 댓글's pages are what the server held when it read them, and done
- * again over another read's, they would put that read's back as they were.
+ * again over another read's, they would put that read's back as they were. What goes into them is
+ * what landed: `put` with this log's writes done again over it. `put` alone carries what it read
+ * as it was read — the writer's own 대댓글 placed at the end of its thread, which the reply page
+ * brings into place, as it was before an edit or a deletion that landed while it read — and, done
+ * again over another read's pages after that write (which that read's log holds before it), would
+ * bring it back as it was (the review of the Codex round-4 fix, 2026-10-24 — ADR-0074 7-34).
  */
 async function putReadPages(
   queryClient: QueryClient,
@@ -551,14 +561,12 @@ async function putReadPages(
   await queryClient.cancelQueries({ queryKey: key, exact: true });
   // From here to the end nothing else runs: a write after this lands on what is put in below.
   stopLogging(queryClient, postId, log);
+  const again: PagesWrite = (held) =>
+    log.reduce<CommentPages | undefined>((pages, write) => write(pages), held);
   notifyManager.batch(() => {
-    if (logged) landWrite(queryClient, postId, put);
-    else queryClient.setQueryData<CommentPages>(key, put);
-    if (log.length > 0) {
-      queryClient.setQueryData<CommentPages>(key, (held) =>
-        log.reduce<CommentPages | undefined>((pages, write) => write(pages), held),
-      );
-    }
+    queryClient.setQueryData<CommentPages>(key, put);
+    if (logged) logWrite(queryClient, postId, (held) => again(put(held)));
+    if (log.length > 0) queryClient.setQueryData<CommentPages>(key, again);
   });
 }
 
