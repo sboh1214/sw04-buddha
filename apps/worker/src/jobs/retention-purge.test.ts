@@ -13,7 +13,7 @@
  * restriction request cites (12 — each kind of request and both columns a restriction cites) and a
  * failed kind's record (14). The release settings are changed the way the admin screen changes
  * them (a row and its record); the run's instant is moved past a period instead of backdating a
- * closure (a closed profile never changes, migration 0041). Skips when TEST_* are unset.
+ * closure (a closed profile never changes, migration 0043). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -370,7 +370,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await postOf(hidden.id)).toMatchObject({ purgedAt: null });
     expect(await countsAt(due)).toMatchObject({ deleted_posts: 1, deleted_comments: 0 });
 
-    // An emptied original stays emptied (migration 0042).
+    // An emptied original stays emptied (migration 0044).
     await expect(
       t.db.update(schema.posts).set({ purgedAt: null }).where(eq(schema.posts.id, post.id)),
     ).rejects.toThrow();
@@ -448,7 +448,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await countsAt(due)).toMatchObject({ deleted_comments: 1 });
 
     // The next run passes over what is emptied already: emptying it again would move `purged_at`,
-    // which migration 0042 refuses — the kind would fail every day.
+    // which migration 0044 refuses — the kind would fail every day.
     const later = after(due, 1);
     await run(later);
     expect(await commentOf(thread.id)).toMatchObject({ body: '', purgedAt: due });
@@ -932,7 +932,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       hidden_comments: 1,
       moderation_actions: 2,
     });
-    // It stays hidden whoever writes (migration 0042's CHECK): showing it again is refused.
+    // It stays hidden whoever writes (migration 0044's CHECK): showing it again is refused.
     await expect(
       t.db.update(schema.posts).set({ hiddenAt: null }).where(eq(schema.posts.id, post.id)),
     ).rejects.toThrow();

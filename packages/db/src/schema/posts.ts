@@ -47,7 +47,7 @@ import { mediaObjects } from './media-objects.js';
  *   images it alone used gone (`post_images`, `media_objects` and their objects). The row stays —
  *   what names it (comments under it, likes, reports, actions) keeps naming it, and the public
  *   placeholder reads `deleted_at` and `hidden_at` as before. Set once, never cleared, and the
- *   content stays empty from then on (the CHECK and migration 0042's `posts_keep_purged`); an
+ *   content stays empty from then on (the CHECK and migration 0044's `posts_keep_purged`); an
  *   emptied post that was not deleted stays hidden (the CHECK).
  *
  * The market and the author are RESTRICT: markets are never deleted, and a withdrawn author's

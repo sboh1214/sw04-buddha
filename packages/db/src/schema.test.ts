@@ -3589,7 +3589,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  describe('the retention (migration 0042, #184)', () => {
+  describe('the retention (migration 0044, #184)', () => {
     const EMPTY_DOCUMENT = { type: 'doc' as const, content: [] };
 
     /** `retention_delete_approval_requests(ids)` as buddha_app calls it: how many it deleted. */
@@ -6269,7 +6269,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = 'link_flags'
           AND privilege_type = 'UPDATE'`);
       expect(columns).toEqual([{ column: 'review_action_id', privilege: 'UPDATE' }]);
-      // Migration 0042 (#184): the purge records are operational records, kept with no period.
+      // Migration 0044 (#184): the purge records are operational records, kept with no period.
       expect(privs('retention_purges')).toEqual(['INSERT', 'SELECT']);
     });
 

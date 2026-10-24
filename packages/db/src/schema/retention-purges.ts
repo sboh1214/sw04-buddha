@@ -22,7 +22,7 @@ const PURGE_OUTCOMES_SQL = sql.raw(
  * processed and gets no row.
  *
  * An operational record, kept with no period (#57-18 «운영 기록은 기간 없이 보존한다»):
- * buddha_app may INSERT and SELECT only (migration 0042). Read at `GET /admin/retention-purges`.
+ * buddha_app may INSERT and SELECT only (migration 0044). Read at `GET /admin/retention-purges`.
  *
  * - `kind`: RETENTION_PURGE_KINDS.
  * - `period_days`: the period the run applied (the release setting's value at the run's start, or

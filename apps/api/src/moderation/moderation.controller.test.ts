@@ -2017,7 +2017,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
       const deletedAt = new Date(Date.now() - 60_000);
       const purgedAt = new Date();
       await t.db.update(schema.posts).set({ deletedAt }).where(eq(schema.posts.id, post.id));
-      // As the worker's retention.purge leaves it (migration 0042).
+      // As the worker's retention.purge leaves it (migration 0044).
       await t.db
         .update(schema.posts)
         .set({

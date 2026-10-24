@@ -269,7 +269,7 @@ const commentRevisions: Step = async (tx, { cutoff, limit }) => {
 
 /**
  * Empties `ids` in place (#184): no title, an empty document, text and image list, and when
- * (`purged_at`, the run's instant — migration 0042's CHECK holds the rest empty from then on).
+ * (`purged_at`, the run's instant — migration 0044's CHECK holds the rest empty from then on).
  */
 async function emptyPosts(tx: Tx, ids: string[], now: Date): Promise<void> {
   if (ids.length === 0) return;
@@ -389,7 +389,7 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
  * 지움» — not left to the versions' rule, counted as `post_revisions` under this period), their
  * hidings' actions deleted, and then the images only the content and the versions used — all in
  * one transaction, so an emptied post never has a standing hiding an operator could cancel to show
- * it (migration 0042's CHECK keeps it hidden: `hidden_at` stays) nor an earlier version left to
+ * it (migration 0044's CHECK keeps it hidden: `hidden_at` stays) nor an earlier version left to
  * show what it said. Not while a report about it or an account restriction request citing it waits
  * (`nothingAwaits`), nor while a report not yet due still names the hiding (it goes first, in
  * `reports`, under the same rule from its processing). Each action and its post are locked together
@@ -607,7 +607,7 @@ async function requestsOf(tx: Tx, actionIds: string[]): Promise<string[]> {
 
 /**
  * Deletes, of `ids`, the account restriction requests about withdrawn members that nothing names any
- * more, through migration 0042's `retention_delete_approval_requests` (buddha_app holds no DELETE of
+ * more, through migration 0044's `retention_delete_approval_requests` (buddha_app holds no DELETE of
  * the table). Returns how many it deleted.
  */
 async function deleteRequests(tx: Tx, ids: string[]): Promise<number> {
@@ -751,7 +751,7 @@ const consentRecords: Step = async (tx, { cutoff, limit }) => {
 /**
  * A withdrawn account's 본인확인 기록 — its code sends, number, real name and client address in plain
  * text (ADR-0070 2차 답 1) — once the period has passed since the withdrawal. A live account keeps
- * them. A closed account sends no more (migration 0041), so nothing is written to them meanwhile.
+ * them. A closed account sends no more (migration 0043), so nothing is written to them meanwhile.
  */
 const phoneVerificationRecords: Step = async (tx, { cutoff, limit }) => {
   const { phoneVerificationCodes: codes, profiles } = schema;

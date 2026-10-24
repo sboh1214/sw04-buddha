@@ -44,7 +44,7 @@ import { posts } from './posts.js';
  *   deletion's, or the withdrawal's for a withdrawn author) — or a withdrawn author's comment an
  *   operator still hides, as a post (owner decision 2026-10-24 3): the body is '' from then on.
  *   The row stays, as a post's does (its 대댓글, likes, reports and actions name it). Set once,
- *   never cleared (the CHECKs and migration 0042's `post_comments_keep_purged`); one emptied while
+ *   never cleared (the CHECKs and migration 0044's `post_comments_keep_purged`); one emptied while
  *   hidden and not deleted stays hidden (the CHECK).
  * - `is_reply` and `parent_is_reply`: generated, for the parent's foreign key only.
  *
