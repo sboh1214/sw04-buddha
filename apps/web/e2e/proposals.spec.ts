@@ -474,9 +474,10 @@ test.describe('시장 제안', () => {
     const waiting = await proposeThroughApi(page, `E2E 제한 전 ${group}`);
     const me = await meOf(page.request);
     // An operator's one-day writing restriction (#185), straight at the admin API.
+    const operatorId = (await meOf(admin)).id;
     await dataOf(
       await admin.post(`/api/v1/admin/moderation/users/${me.id}/writing-restriction`, {
-        data: { reason: 'spam', days: 1 },
+        data: { reason: 'spam', note: null, days: 1, subject: null, expectedAccountId: operatorId },
       }),
     );
 
@@ -576,8 +577,9 @@ test.describe('시장 제안', () => {
       await expect(row).toContainText(`${copy.adminProposalProposer} ${copy.postAuthorFormer}`);
       await row.getByRole('link', { name: waiting.question }).click();
       await expect(adminPage).toHaveURL(`/admin/proposals/${waiting.id}`);
+      // The DataList item: its label, then the name.
       await expect(adminPage.getByTestId('admin-proposal-proposer')).toHaveText(
-        copy.postAuthorFormer,
+        `${copy.adminProposalProposer}${copy.postAuthorFormer}`,
       );
       // ADR-0069 decision 4 #140 «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다».
       await adminPage.getByTestId('admin-proposal-review').click();

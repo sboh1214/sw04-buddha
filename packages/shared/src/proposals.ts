@@ -255,7 +255,8 @@ export type AdminProposalMarket = z.infer<typeof adminProposalMarketSchema>;
  * and when (ADR-0069 decision 4 #77, 검토 흐름·기록), the reason or memo, the market — and who
  * linked it and when, when it was linked after the 채택 (owner decision 2026-10-19) — and the
  * operators' internal memo. Accounts are named as every admin record names one
- * (`AdminAccountActor`: id and current nickname). The wished-for category says whether it is still
+ * (`AdminAccountActor`: id and current nickname — null for an account its member closed, #140,
+ * whose proposals the operators still review). The wished-for category says whether it is still
  * in use.
  */
 export const adminProposalSchema = z
