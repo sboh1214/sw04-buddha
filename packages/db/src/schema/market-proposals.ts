@@ -17,7 +17,7 @@ import { markets } from './markets.js';
  * 시장 제안 (#77, ADR-0069 decision 4 #77): one row per proposal a member submitted, with the
  * operators' review of it. What was submitted never changes (no edits), the status moves only
  * along PROPOSAL_TRANSITIONS (@buddha/shared) — 접수 → 검토 → 채택·반려, 접수 → 반려, 접수 → 철회 —
- * and 채택, 반려 and 철회 are final; triggers (migration 0032) hold both whoever writes, and the
+ * and 채택, 반려 and 철회 are final; triggers (migration 0044) hold both whoever writes, and the
  * CHECKs below tie each status to the columns it fills. The operators' internal memo, and once
  * the market of a 채택 that had none, are what change after a decision.
  *

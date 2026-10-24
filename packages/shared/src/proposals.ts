@@ -81,7 +81,7 @@ export const PENDING_PROPOSAL_STATUSES = [
 /**
  * Where each status may go (ADR-0069 decision 4 #77): 접수 to 검토, 반려 or (by the proposer) 철회;
  * 검토 to 채택 or 반려; nothing out of 채택, 반려 or 철회. The database holds the same table
- * (migration 0032's trigger), whoever writes.
+ * (migration 0044's trigger), whoever writes.
  */
 export const PROPOSAL_TRANSITIONS: Readonly<Record<ProposalStatus, readonly ProposalStatus[]>> = {
   submitted: ['reviewing', 'rejected', 'retracted'],
@@ -99,7 +99,7 @@ export function canMoveProposal(from: ProposalStatus, to: ProposalStatus): boole
  * Whether a market may be linked to a proposal now (owner decision 2026-10-19): only to a 채택
  * that has none — adopted with no market and not linked since. Once, so a proposal with a market
  * never takes another; the status stays 채택. Not a move of PROPOSAL_TRANSITIONS: the database
- * allows exactly this one change of a 채택 (migration 0032's trigger), whoever writes.
+ * allows exactly this one change of a 채택 (migration 0044's trigger), whoever writes.
  */
 export function canLinkProposalMarket(status: ProposalStatus, hasMarket: boolean): boolean {
   return status === 'adopted' && !hasMarket;

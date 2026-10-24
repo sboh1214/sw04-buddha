@@ -4631,7 +4631,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     expect(updated!.updatedAt.getTime()).toBeGreaterThan(profile.updatedAt.getTime());
   });
 
-  describe('market proposals (migration 0032, #77)', () => {
+  describe('market proposals (migration 0044, #77)', () => {
     it('labels its enums like PROPOSAL_STATUSES and PROPOSAL_REJECTION_REASONS', async () => {
       async function labels(type: string): Promise<string[]> {
         const { rows } = await t.db.execute<{ label: string }>(sql`
