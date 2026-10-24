@@ -52,7 +52,12 @@ export interface RetentionKindOutcome {
   status: ReleaseSettingStatus | 'fixed';
   /** The period applied, in days; null when the kind was not processed (not approved). */
   periodDays: number | null;
-  /** Records deleted (0 when not processed). */
+  /**
+   * Records deleted (0 when not processed) when its step ended — with what an earlier step deleted
+   * of it under the same period (a hidden item's hiding, `moderation_actions`; an action's requests,
+   * `approval_requests`). The edit history a later step deletes with a hidden item's content
+   * (owner decision 2026-10-24 (2차) 2) is in the purge records alone, under that step's period.
+   */
   deleted: number;
 }
 
@@ -209,8 +214,10 @@ const nicknameHolds: Step = async (tx, { cutoff, limit }) => {
  * Earlier versions of posts (#45-4) replaced at or before the cutoff — counted from the replacement
  * whatever became of the author (ADR-0069 decision 7) — then the images only they used. Not while a
  * report about the post or an account restriction request citing it waits: its processing or its
- * decision reads them (`nothingAwaits`). buddha_app holds no UPDATE of the table, so no row lock:
- * nothing else ever changes or deletes a version, and the job runs one at a time.
+ * decision reads them (`nothingAwaits`). A withdrawn member's post an operator still hides loses
+ * the versions this has not taken yet when its content is emptied, whatever their age
+ * (`hiddenPosts`, owner decision 2026-10-24 (2차) 2). buddha_app holds no UPDATE of the table, so
+ * no row lock: nothing but this job ever changes or deletes a version, and it runs one at a time.
  */
 const postRevisions: Step = async (tx, { cutoff, limit }) => {
   const { postRevisions: revisions } = schema;
@@ -290,6 +297,33 @@ async function emptyComments(tx: Tx, ids: string[], now: Date): Promise<void> {
 }
 
 /**
+ * Every earlier version of the posts `postIds`, whenever it was replaced — deleted with their
+ * emptied content by the step that empties them (owner decision 2026-10-24 (2차) 2: a withdrawn
+ * member's post still hidden), not left to the versions' own rule (`postRevisions`). The caller
+ * then drops the images only they used (`dropUnusedPostImages`). Returns how many it deleted.
+ */
+async function deletePostRevisionsOf(tx: Tx, postIds: string[]): Promise<number> {
+  if (postIds.length === 0) return 0;
+  const { postRevisions: revisions } = schema;
+  const deleted = await tx
+    .delete(revisions)
+    .where(inArray(revisions.postId, postIds))
+    .returning({ id: revisions.id });
+  return deleted.length;
+}
+
+/** The same for the earlier versions of the comments `commentIds` (no images). */
+async function deleteCommentRevisionsOf(tx: Tx, commentIds: string[]): Promise<number> {
+  if (commentIds.length === 0) return 0;
+  const { postCommentRevisions: revisions } = schema;
+  const deleted = await tx
+    .delete(revisions)
+    .where(inArray(revisions.commentId, commentIds))
+    .returning({ id: revisions.id });
+  return deleted.length;
+}
+
+/**
  * Deleted posts (#45-5) whose period has passed since the deletion — since the withdrawal for a
  * withdrawn author (decision 4 #184: the later of the two, GREATEST ignoring a NULL `closed_at`) —
  * emptied in place, then the images only they used. The row stays: comments under it, likes,
@@ -349,15 +383,20 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
  * (owner decision 2026-10-24 3: «기간이 지나면 지운 원문처럼 내용을 비우고(자리 행 남김) 숨김 조치도
  * 지움, 글은 계속 숨김») — once the 신고·제재 기록 period has passed since the later of the
  * withdrawal and the hiding (its standing `hide` action's time, which `hidden_at` precedes within
- * its transaction): emptied in place as a deleted original is (`emptyPosts`, then the images only
- * they used), and their hidings' actions deleted in the same transaction — so an emptied post never
- * has a standing hiding an operator could cancel to show it (migration 0042's CHECK keeps it hidden:
- * `hidden_at` stays). Not while a report about it or an account restriction request citing it
- * waits (`nothingAwaits`), nor while a report not yet due still names the hiding (it goes first,
- * in `reports`, under the same rule from its processing). Each action and its post are locked
- * together and skipped while either is taken (SKIP LOCKED waits for neither): a cancellation in
- * flight keeps both until it commits — the post shown again, the next run passes it by — and one
- * that comes after waits on the action and then finds it gone.
+ * its transaction; owner decision 2026-10-24 (2차) 1): emptied in place as a deleted original is
+ * (`emptyPosts`), their operator-only edit history deleted with them whenever it was replaced
+ * (owner decision 2026-10-24 (2차) 2 «비울 때 … 수정 이력(이전 판과 그것만 쓴 이미지)도 함께
+ * 지움» — not left to the versions' rule, counted as `post_revisions` under this period), their
+ * hidings' actions deleted, and then the images only the content and the versions used — all in
+ * one transaction, so an emptied post never has a standing hiding an operator could cancel to show
+ * it (migration 0042's CHECK keeps it hidden: `hidden_at` stays) nor an earlier version left to
+ * show what it said. Not while a report about it or an account restriction request citing it waits
+ * (`nothingAwaits`), nor while a report not yet due still names the hiding (it goes first, in
+ * `reports`, under the same rule from its processing). Each action and its post are locked together
+ * and skipped while either is taken (SKIP LOCKED waits for neither): a cancellation in flight keeps
+ * both until it commits — the post shown again, the next run passes it by — and one that comes
+ * after waits on the action and then finds it gone. A hidden post takes no edit (POST_NOT_EDITABLE)
+ * and its author has withdrawn, so no version is added meanwhile.
  */
 const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
   const { posts, profiles, moderationActions: actions, reports: reportsTable } = schema;
@@ -385,6 +424,7 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
     .for('update', { of: [actions, posts], skipLocked: true });
   const ids = due.map((row) => row.id);
   await emptyPosts(tx, ids, now);
+  const revisions = await deletePostRevisionsOf(tx, ids);
   if (due.length > 0) {
     await tx.delete(actions).where(
       inArray(
@@ -396,12 +436,19 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
   const storageKeys = await dropUnusedPostImages(tx, ids);
   return {
     selected: ids.length,
-    deleted: { hidden_posts: ids.length, moderation_actions: due.length },
+    deleted: {
+      hidden_posts: ids.length,
+      post_revisions: revisions,
+      moderation_actions: due.length,
+    },
     storageKeys,
   };
 };
 
-/** The same for a withdrawn member's 댓글 and 대댓글 an operator still hides (no images). */
+/**
+ * The same for a withdrawn member's 댓글 and 대댓글 an operator still hides, with their edit history
+ * (counted as `comment_revisions`; no images).
+ */
 const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
   const { postComments, profiles, moderationActions: actions, reports: reportsTable } = schema;
   const due = await tx
@@ -428,6 +475,7 @@ const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
     .for('update', { of: [actions, postComments], skipLocked: true });
   const ids = due.map((row) => row.id);
   await emptyComments(tx, ids, now);
+  const revisions = await deleteCommentRevisionsOf(tx, ids);
   if (due.length > 0) {
     await tx.delete(actions).where(
       inArray(
@@ -438,7 +486,11 @@ const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
   }
   return {
     selected: ids.length,
-    deleted: { hidden_comments: ids.length, moderation_actions: due.length },
+    deleted: {
+      hidden_comments: ids.length,
+      comment_revisions: revisions,
+      moderation_actions: due.length,
+    },
     storageKeys: [],
   };
 };
@@ -727,9 +779,10 @@ const phoneVerificationRecords: Step = async (tx, { cutoff, limit }) => {
 
 /**
  * The steps in the order a run takes them (RETENTION_PURGE_KINDS): each kind before what it names —
- * a report before its action (a hiding's among them, which goes with its hidden item), a removed
- * profile item and an ended hold before theirs, an action before its requests — and the versions
- * before the originals, so an original's images are judged against the versions still kept.
+ * a report before its action (a hiding's among them, which goes with its hidden item and that
+ * item's versions), a removed profile item and an ended hold before theirs, an action before its
+ * requests — and the versions before the originals, so an original's images are judged against the
+ * versions still kept.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },

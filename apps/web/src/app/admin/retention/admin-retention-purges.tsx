@@ -100,7 +100,8 @@ export function AdminRetentionPurges() {
  * One run: its instant, then a line per kind — the name with 실패 beside it for a kind it gave up
  * on, then the count ('오류 전까지 N건' for that kind, so the badge is not the word before the
  * number, on screen or read aloud) and the period — wrapping rather than scrolling sideways at
- * phone width.
+ * phone width. Lines are keyed by `RetentionRunKind.key`: a kind can have two of one period, the
+ * second what a later step deleted of it after its failure (`retentionRuns`).
  */
 function RunRow({ run }: { run: RetentionRun }) {
   return (
@@ -119,7 +120,7 @@ function RunRow({ run }: { run: RetentionRun }) {
         {run.kinds.map((line) => (
           <HStack
             as="li"
-            key={`${line.kind}-${String(line.periodDays)}`}
+            key={line.key}
             justify="space-between"
             align="baseline"
             gap="3"

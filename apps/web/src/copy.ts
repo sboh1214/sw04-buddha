@@ -771,7 +771,10 @@ export const copy = {
   adminRetentionKindDeletedPosts: '지운 글 원문',
   adminRetentionKindDeletedComments: '지운 댓글 원문',
   // 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것의 내용(오너 결정 2026-10-24 3): 지운 원문처럼 비우고
-  // 숨김 조치와 함께 지운다 — 조치는 '제재 기록'의 줄에 든다.
+  // 숨김 조치와 그 수정 이력과 함께 지운다 — 조치는 '제재 기록'의 줄에, 수정 이력은 '글 수정 이력'·'댓글 수정
+  // 이력'의 줄에 든다(오너 결정 2026-10-24 (2차) 2 — '신고·제재 기록'의 기간으로 세어, 그 기간이 수정 이력
+  // 자신의 기간과 다르면 따로 된 줄이고 같으면 한 줄에 더한다. 다만 수정 이력 자신의 단계가 그 실행에서 실패했으면
+  // 그 뒤에 함께 지운 수는 '오류 전까지'가 아니라서 실패한 줄 바로 다음의 따로 된 줄이다 — lib/retention.ts).
   adminRetentionKindHiddenPosts: '숨긴 글 원문',
   adminRetentionKindHiddenComments: '숨긴 댓글 원문',
   adminRetentionKindReports: '신고 기록',

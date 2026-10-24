@@ -73,6 +73,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
         ranAt: LATER,
         kinds: [
           {
+            key: 'nickname_holds:30',
             kind: 'nickname_holds',
             label: copy.adminRetentionKindNicknameHolds,
             count: 3,
@@ -80,6 +81,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             failed: false,
           },
           {
+            key: 'post_revisions:90',
             kind: 'post_revisions',
             label: copy.adminRetentionKindPostRevisions,
             count: 512,
@@ -87,6 +89,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             failed: false,
           },
           {
+            key: 'moderation_actions:1825',
             kind: 'moderation_actions',
             label: copy.adminRetentionKindModerationActions,
             count: 2,
@@ -95,6 +98,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
           },
           // The requests the actions came in by and those decided without one: one line.
           {
+            key: 'approval_requests:1825',
             kind: 'approval_requests',
             label: copy.adminRetentionKindApprovalRequests,
             count: 3,
@@ -102,6 +106,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             failed: false,
           },
           {
+            key: 'consent_records:365',
             kind: 'consent_records',
             label: copy.adminRetentionKindConsentRecords,
             count: 0,
@@ -114,6 +119,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
         ranAt: EARLIER,
         kinds: [
           {
+            key: 'nickname_holds:30',
             kind: 'nickname_holds',
             label: copy.adminRetentionKindNicknameHolds,
             count: 0,
@@ -140,6 +146,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
         ranAt: LATER,
         kinds: [
           {
+            key: 'deleted_posts:90',
             kind: 'deleted_posts',
             label: copy.adminRetentionKindDeletedPosts,
             count: 1_007,
@@ -183,14 +190,86 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     expect(retentionCountText(500, false)).toBe('500건');
   });
 
-  it('keeps apart, within a run, batches of one kind under different periods', () => {
+  it('keeps apart, within a run, one kind’s records under different periods: the edit history a hidden item’s content took with it, beside the versions’ own — and sums them under one period (owner decision 2026-10-24 (2차) 2)', () => {
+    // As the worker writes them: the versions' own step under the 지운 글 원문·수정 이력 period, then
+    // the hidden posts' batch — the emptied posts, their edit history and their hidings — under the
+    // 신고·제재 period.
     const runs = retentionRuns([
-      record(1, LATER, 'reports', 1, 400),
-      record(0, LATER, 'reports', 2, 365),
+      record(5, LATER, 'moderation_actions', 2, 1_825),
+      record(4, LATER, 'post_revisions', 3, 1_825),
+      record(3, LATER, 'hidden_posts', 2, 1_825),
+      record(2, LATER, 'deleted_posts', 0, 90),
+      record(1, LATER, 'post_revisions', 12, 90),
     ]);
-    expect(runs[0]?.kinds.map(({ count, periodDays }) => [count, periodDays])).toEqual([
-      [2, 365],
-      [1, 400],
+    expect(
+      runs[0]?.kinds.map(({ kind, label, count, periodDays }) => [kind, label, count, periodDays]),
+    ).toEqual([
+      ['post_revisions', copy.adminRetentionKindPostRevisions, 12, 90],
+      ['post_revisions', copy.adminRetentionKindPostRevisions, 3, 1_825],
+      ['deleted_posts', copy.adminRetentionKindDeletedPosts, 0, 90],
+      ['hidden_posts', copy.adminRetentionKindHiddenPosts, 2, 1_825],
+      ['moderation_actions', copy.adminRetentionKindModerationActions, 2, 1_825],
+    ]);
+    // The two periods approved at one value: one '글 수정 이력' line, what the run deleted of it.
+    const [equal] = retentionRuns([
+      record(9, EARLIER, 'moderation_actions', 2, 365),
+      record(8, EARLIER, 'post_revisions', 3, 365),
+      record(7, EARLIER, 'hidden_posts', 2, 365),
+      record(6, EARLIER, 'post_revisions', 12, 365),
+    ]);
+    expect(equal?.kinds.map(({ kind, count, periodDays }) => [kind, count, periodDays])).toEqual([
+      ['post_revisions', 15, 365],
+      ['hidden_posts', 2, 365],
+      ['moderation_actions', 2, 365],
+    ]);
+  });
+
+  it('keeps on a line of its own what a later step deleted of a kind after the kind failed under the same period: it did not go before the error (owner decisions 2026-10-24 14 and (2차) 2)', () => {
+    // Both periods approved at one value. The versions' own step deletes a batch and then fails;
+    // the hidden posts' step later empties 2 posts with their 5 versions and their 2 hidings; then
+    // the actions' own step fails too. Ids as the run wrote them, past a digit's width so that
+    // they compare as numbers.
+    const [run] = retentionRuns([
+      record(13, LATER, 'moderation_actions', 0, 365, 'failed'),
+      record(12, LATER, 'moderation_actions', 2, 365),
+      record(11, LATER, 'post_revisions', 5, 365),
+      record(10, LATER, 'hidden_posts', 2, 365),
+      record(9, LATER, 'post_revisions', 0, 365, 'failed'),
+      record(8, LATER, 'post_revisions', 500, 365),
+    ]);
+    const lines = run?.kinds ?? [];
+    expect(
+      lines.map(({ kind, count, periodDays, failed }) => [kind, count, periodDays, failed]),
+    ).toEqual([
+      // The versions' own step: what it deleted before its error.
+      ['post_revisions', 500, 365, true],
+      // The hidden posts' step, after it: a line of its own, right after, not failed.
+      ['post_revisions', 5, 365, false],
+      ['hidden_posts', 2, 365, false],
+      // The hidings went before the actions' own step failed: before its error, on its line.
+      ['moderation_actions', 2, 365, true],
+    ]);
+    expect(lines.map((line) => retentionCountText(line.count, line.failed))).toEqual([
+      '오류 전까지 500건',
+      '5건',
+      '2건',
+      '오류 전까지 2건',
+    ]);
+    expect(new Set(lines.map((line) => line.key)).size).toBe(lines.length);
+    // Failed at its first batch: '오류 전까지 0건', never the 3 the hidden posts' step deleted.
+    const [first] = retentionRuns([
+      record(4, EARLIER, 'moderation_actions', 2, 1_825),
+      record(3, EARLIER, 'post_revisions', 3, 1_825),
+      record(2, EARLIER, 'hidden_posts', 2, 1_825),
+      record(1, EARLIER, 'post_revisions', 0, 1_825, 'failed'),
+    ]);
+    expect(
+      first?.kinds.map((line) => [line.kind, retentionCountText(line.count, line.failed)]),
+    ).toEqual([
+      ['post_revisions', '오류 전까지 0건'],
+      ['post_revisions', '3건'],
+      ['hidden_posts', '2건'],
+      ['moderation_actions', '2건'],
     ]);
   });
 

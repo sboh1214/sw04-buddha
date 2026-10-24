@@ -981,6 +981,372 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
   });
 
+  it('deletes a withdrawn member’s hidden post’s and comment’s edit history, with the images only those versions used, when it empties them — not by the versions’ own period (owner decision 2026-10-24 (2차) 2)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const liveMember = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const hiddenAt = before(new Date(), 200);
+    // The post shows one image; its earlier versions showed another, theirs alone (createPost
+    // attached what the current body shows, so attach the other the way the first version did).
+    const shown = await image(member);
+    const versionsOnly = await image(member);
+    const post = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '숨긴 글',
+      imageIds: [shown.id],
+      createdAt: before(hiddenAt, 3),
+      hiddenAt,
+    });
+    await t.db.insert(schema.postImages).values({ postId: post.id, mediaId: versionsOnly.id });
+    await postRevision(post.id, before(hiddenAt, 2), [versionsOnly.id]);
+    await postRevision(post.id, before(hiddenAt, 1), [versionsOnly.id, shown.id]);
+    const thread = (await createPost(t.db, { marketId, authorId: liveMember })).id;
+    const comment = await createComment(t.db, {
+      postId: thread,
+      authorId: member,
+      body: '숨긴 댓글',
+      hiddenAt,
+    });
+    await commentRevision(comment.id, before(hiddenAt, 1));
+    for (const item of [{ postId: post.id }, { commentId: comment.id }]) {
+      await createModerationAction(t.db, {
+        userId: member,
+        createdBy: admin,
+        ...item,
+        createdAt: hiddenAt,
+      });
+    }
+    // Kept with their content, each with its earlier version: the member's hidden post and comment
+    // a report still waits about, a live member's hidden post and comment, and the member's post
+    // and comment neither hidden nor deleted — whose versions wait for their own period.
+    const reportedPost = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '신고 대기 중인 숨긴 글',
+      hiddenAt,
+    });
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: reportedPost.id,
+      createdAt: hiddenAt,
+    });
+    await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      postId: reportedPost.id,
+    });
+    const reportedRevision = await postRevision(reportedPost.id, before(hiddenAt, 1));
+    const livesPost = await createPost(t.db, {
+      marketId,
+      authorId: liveMember,
+      title: '살아 있는 회원의 숨긴 글',
+      hiddenAt,
+    });
+    await createModerationAction(t.db, {
+      userId: liveMember,
+      createdBy: admin,
+      postId: livesPost.id,
+      createdAt: hiddenAt,
+    });
+    const livesRevision = await postRevision(livesPost.id, before(hiddenAt, 1));
+    const shownPost = await createPost(t.db, { marketId, authorId: member, title: '보이는 글' });
+    const shownRevision = await postRevision(shownPost.id, before(hiddenAt, 1));
+    const reportedComment = await createComment(t.db, {
+      postId: thread,
+      authorId: member,
+      body: '신고 대기 중인 숨긴 댓글',
+      hiddenAt,
+    });
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      commentId: reportedComment.id,
+      createdAt: hiddenAt,
+    });
+    await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      commentId: reportedComment.id,
+    });
+    const reportedCommentRevision = await commentRevision(reportedComment.id, before(hiddenAt, 1));
+    const livesComment = await createComment(t.db, {
+      postId: thread,
+      authorId: liveMember,
+      body: '살아 있는 회원의 숨긴 댓글',
+      hiddenAt,
+    });
+    await createModerationAction(t.db, {
+      userId: liveMember,
+      createdBy: admin,
+      commentId: livesComment.id,
+      createdAt: hiddenAt,
+    });
+    const livesCommentRevision = await commentRevision(livesComment.id, before(hiddenAt, 1));
+    const shownComment = await createComment(t.db, {
+      postId: thread,
+      authorId: member,
+      body: '보이는 댓글',
+    });
+    const shownCommentRevision = await commentRevision(shownComment.id, before(hiddenAt, 1));
+    const closedAt = await closeAccount(t.db, member);
+    // The 신고·제재 period, and the versions' own one far longer: by their own rule none would go
+    // for years.
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 3_650);
+    const postRevisionIds = async () =>
+      (await t.db.select({ id: schema.postRevisions.id }).from(schema.postRevisions))
+        .map((row) => row.id)
+        .sort();
+    const commentRevisionIds = async () =>
+      (await t.db.select({ id: schema.postCommentRevisions.id }).from(schema.postCommentRevisions))
+        .map((row) => row.id)
+        .sort();
+
+    // A millisecond short of the period since the withdrawal: the content and every version stay.
+    await run(after(closedAt, 30, -1));
+    expect(await postOf(post.id)).toMatchObject({ title: '숨긴 글', purgedAt: null });
+    expect(await t.db.select().from(schema.postRevisions)).toHaveLength(5);
+    expect(await t.db.select().from(schema.postCommentRevisions)).toHaveLength(4);
+
+    const due = after(closedAt, 30);
+    await run(due);
+    expect(await postOf(post.id)).toMatchObject({
+      title: null,
+      imageIds: [],
+      purgedAt: due,
+      hiddenAt,
+    });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '', purgedAt: due, hiddenAt });
+    // Their earlier versions went with them, and the images the content or the versions alone
+    // showed — rows and objects. Only theirs: every other post's and comment's stay.
+    expect(await postRevisionIds()).toEqual(
+      [reportedRevision.id, livesRevision.id, shownRevision.id].sort(),
+    );
+    expect(await commentRevisionIds()).toEqual(
+      [reportedCommentRevision.id, livesCommentRevision.id, shownCommentRevision.id].sort(),
+    );
+    expect(
+      await t.db.select().from(schema.postImages).where(eq(schema.postImages.postId, post.id)),
+    ).toEqual([]);
+    expect(await mediaIds()).toEqual([]);
+    expect(storage.objects.has(shown.storageKey)).toBe(false);
+    expect(storage.objects.has(versionsOnly.storageKey)).toBe(false);
+    // Recorded as edit history under the 신고·제재 period applied, in the rows of the step that
+    // emptied them, beside the 0 the versions' own step found under theirs.
+    const revisionRecords = (await purgeRecords())
+      .filter(
+        (row) =>
+          row.ranAt.getTime() === due.getTime() &&
+          (row.kind === 'post_revisions' || row.kind === 'comment_revisions'),
+      )
+      .map(({ kind, count, periodDays, outcome }) => ({ kind, count, periodDays, outcome }));
+    expect(revisionRecords).toEqual([
+      { kind: 'post_revisions', count: 0, periodDays: 3_650, outcome: 'done' },
+      { kind: 'comment_revisions', count: 0, periodDays: 3_650, outcome: 'done' },
+      { kind: 'post_revisions', count: 2, periodDays: 30, outcome: 'done' },
+      { kind: 'comment_revisions', count: 1, periodDays: 30, outcome: 'done' },
+    ]);
+    expect(await countsAt(due)).toMatchObject({
+      hidden_posts: 1,
+      hidden_comments: 1,
+      moderation_actions: 2,
+    });
+    expect(await postOf(reportedPost.id)).toMatchObject({
+      title: '신고 대기 중인 숨긴 글',
+      purgedAt: null,
+    });
+    expect(await postOf(livesPost.id)).toMatchObject({
+      title: '살아 있는 회원의 숨긴 글',
+      purgedAt: null,
+    });
+    expect(await commentOf(reportedComment.id)).toMatchObject({
+      body: '신고 대기 중인 숨긴 댓글',
+      purgedAt: null,
+    });
+    expect(await commentOf(livesComment.id)).toMatchObject({
+      body: '살아 있는 회원의 숨긴 댓글',
+      purgedAt: null,
+    });
+    // Their hidings stand; only the emptied post's and comment's went.
+    expect(
+      (
+        await t.db
+          .select({
+            postId: schema.moderationActions.postId,
+            commentId: schema.moderationActions.commentId,
+          })
+          .from(schema.moderationActions)
+          .where(eq(schema.moderationActions.type, 'hide'))
+      )
+        .map((row) => row.postId ?? row.commentId)
+        .sort(),
+    ).toEqual([reportedPost.id, livesPost.id, reportedComment.id, livesComment.id].sort());
+  });
+
+  it.each([
+    ['the hidings’', schema.moderationActions, ['hidden_posts', 'hidden_comments']],
+    ['the post versions’', schema.postRevisions, ['hidden_posts']],
+    ['the comment versions’', schema.postCommentRevisions, ['hidden_comments']],
+  ] as const)(
+    'empties a withdrawn member’s hidden post and comment, deletes their edit history and hidings and drops their images in one transaction: with %s delete refused, a batch keeps it all for the next run (owner decision 2026-10-24 (2차) 2)',
+    async (_refused, table, failed: readonly string[]) => {
+      const member = (await createUser(t.db)).user.id;
+      const liveMember = (await createUser(t.db)).user.id;
+      const hiddenAt = before(new Date(), 200);
+      const versionsOnly = await image(member);
+      const post = await createPost(t.db, {
+        marketId,
+        authorId: member,
+        title: '숨긴 글',
+        createdAt: before(hiddenAt, 2),
+        hiddenAt,
+      });
+      await t.db.insert(schema.postImages).values({ postId: post.id, mediaId: versionsOnly.id });
+      const revision = await postRevision(post.id, before(hiddenAt, 1), [versionsOnly.id]);
+      const comment = await createComment(t.db, {
+        postId: (await createPost(t.db, { marketId, authorId: liveMember })).id,
+        authorId: member,
+        body: '숨긴 댓글',
+        hiddenAt,
+      });
+      const commentRevisionRow = await commentRevision(comment.id, before(hiddenAt, 1));
+      for (const item of [{ postId: post.id }, { commentId: comment.id }]) {
+        await createModerationAction(t.db, {
+          userId: member,
+          createdBy: admin,
+          ...item,
+          createdAt: hiddenAt,
+        });
+      }
+      const closedAt = await closeAccount(t.db, member);
+      await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+      const hidings = async () =>
+        (
+          await t.db
+            .select({
+              postId: schema.moderationActions.postId,
+              commentId: schema.moderationActions.commentId,
+            })
+            .from(schema.moderationActions)
+        )
+          .map((row) => row.postId ?? row.commentId)
+          .sort();
+
+      // One statement of a batch refused — the hidings' after the content was emptied and the
+      // versions deleted, or the versions' between the two: the batch rolls back whole, its record
+      // with it, and the other kind's goes through. Were the versions deleted in a transaction of
+      // their own, a failure of theirs would leave an emptied item with its old content in them.
+      const now = after(closedAt, 30);
+      const outcome = await purgeExpiredRecords(failingDelete(table), storage, { now });
+      expect(outcome.kindFailures.map(({ kind }) => kind)).toEqual(failed);
+      const postFailed = failed.includes('hidden_posts');
+      const commentFailed = failed.includes('hidden_comments');
+      expect(await postOf(post.id)).toMatchObject(
+        postFailed
+          ? { title: '숨긴 글', purgedAt: null }
+          : { title: null, imageIds: [], purgedAt: now, hiddenAt },
+      );
+      expect((await t.db.select().from(schema.postRevisions)).map((row) => row.id)).toEqual(
+        postFailed ? [revision.id] : [],
+      );
+      expect(await mediaIds()).toEqual(postFailed ? [versionsOnly.id] : []);
+      expect(storage.objects.has(versionsOnly.storageKey)).toBe(postFailed);
+      expect(await commentOf(comment.id)).toMatchObject(
+        commentFailed
+          ? { body: '숨긴 댓글', purgedAt: null }
+          : { body: '', purgedAt: now, hiddenAt },
+      );
+      expect((await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id)).toEqual(
+        commentFailed ? [commentRevisionRow.id] : [],
+      );
+      expect(await hidings()).toEqual(
+        [...(postFailed ? [post.id] : []), ...(commentFailed ? [comment.id] : [])].sort(),
+      );
+      // The failed kind recorded as such, with nothing of what its batch would have deleted.
+      expect(
+        (await purgeRecords())
+          .filter((row) => row.ranAt.getTime() === now.getTime() && row.outcome === 'failed')
+          .map((row) => row.kind),
+      ).toEqual(failed);
+      const failedRun = await countsAt(now);
+      expect(failedRun.hidden_posts).toBe(postFailed ? 0 : 1);
+      expect(failedRun.post_revisions).toBe(postFailed ? undefined : 1);
+      expect(failedRun.hidden_comments).toBe(commentFailed ? 0 : 1);
+      expect(failedRun.comment_revisions).toBe(commentFailed ? undefined : 1);
+      expect(failedRun.moderation_actions).toBe(2 - failed.length);
+
+      // The next run does what the failed batch did not.
+      const next = after(now, 1);
+      await run(next);
+      expect(await postOf(post.id)).toMatchObject({
+        title: null,
+        purgedAt: postFailed ? next : now,
+        hiddenAt,
+      });
+      expect(await commentOf(comment.id)).toMatchObject({
+        body: '',
+        purgedAt: commentFailed ? next : now,
+        hiddenAt,
+      });
+      expect(await t.db.select().from(schema.postRevisions)).toEqual([]);
+      expect(await t.db.select().from(schema.postCommentRevisions)).toEqual([]);
+      expect(await hidings()).toEqual([]);
+      expect(await mediaIds()).toEqual([]);
+      expect(storage.objects.has(versionsOnly.storageKey)).toBe(false);
+      const nextRun = await countsAt(next);
+      expect(nextRun.hidden_posts).toBe(postFailed ? 1 : 0);
+      expect(nextRun.post_revisions ?? 0).toBe(postFailed ? 1 : 0);
+      expect(nextRun.hidden_comments).toBe(commentFailed ? 1 : 0);
+      expect(nextRun.comment_revisions ?? 0).toBe(commentFailed ? 1 : 0);
+      expect(nextRun.moderation_actions).toBe(failed.length);
+    },
+  );
+
+  it('records the edit history a hidden post lost with its content after the versions’ own step failed under the same period, after that failure: the failure counts none of it (owner decisions 2026-10-24 14 and (2차) 2)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const hiddenAt = before(new Date(), 200);
+    const post = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '숨긴 글',
+      createdAt: before(hiddenAt, 3),
+      hiddenAt,
+    });
+    await postRevision(post.id, before(hiddenAt, 2));
+    await postRevision(post.id, before(hiddenAt, 1));
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: post.id,
+      createdAt: hiddenAt,
+    });
+    const closedAt = await closeAccount(t.db, member);
+    // Both periods approved at one value: the run records the two steps' edit history under it.
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
+    // Transactions: the nickname holds' (1), then the post versions' first batch (2), refused.
+    const now = after(closedAt, 30);
+    const outcome = await purgeExpiredRecords(failingTransaction(2), storage, { now });
+    expect(outcome.kindFailures.map(({ kind }) => kind)).toEqual(['post_revisions']);
+    expect(await postOf(post.id)).toMatchObject({ title: null, purgedAt: now, hiddenAt });
+    expect(await t.db.select().from(schema.postRevisions)).toEqual([]);
+    // In the order written (the records' ids): the failure first, then the hidden posts' batch's —
+    // so the screen tells what the versions' step deleted before its error (none) from what the
+    // hidden posts' step deleted after it (lib/retention.ts, ADR-0087 7-18).
+    expect((await purgeRecords()).filter((row) => row.kind === 'post_revisions')).toEqual([
+      { kind: 'post_revisions', count: 0, periodDays: 30, ranAt: now, outcome: 'failed' },
+      { kind: 'post_revisions', count: 2, periodDays: 30, ranAt: now, outcome: 'done' },
+    ]);
+    expect(await countsAt(now)).toMatchObject({ hidden_posts: 1, moderation_actions: 1 });
+    // The run's outcome for the kind is its own step's: none, failed.
+    expect(outcome.kinds.find(({ kind }) => kind === 'post_revisions')).toMatchObject({
+      periodDays: 30,
+      deleted: 0,
+    });
+  });
+
   it('keeps a withdrawn member’s hidden post and comment, and their hidings, while a report processed after the withdrawal still names the hiding, and empties them once that report has gone (ADR-0087 7-23)', async () => {
     const member = (await createUser(t.db)).user.id;
     const reporter = (await createUser(t.db)).user.id;
@@ -1795,6 +2161,38 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect((await postOf(post.id)).purgedAt).not.toBeNull();
     expect(await mediaIds()).toEqual([]);
   });
+
+  /**
+   * `t.db` whose transactions have every delete from `table` refused — thrown when the statement is
+   * built, after the statements before it in the same transaction ran — and the rest as they are.
+   */
+  function failingDelete(table: unknown) {
+    return new Proxy(t.db, {
+      get(target, property, receiver) {
+        if (property === 'transaction') {
+          return (...[callback, config]: Parameters<typeof target.transaction>) =>
+            target.transaction(
+              (tx) =>
+                callback(
+                  new Proxy(tx, {
+                    get(txTarget, txProperty, txReceiver) {
+                      if (txProperty === 'delete') {
+                        return (deleted: Parameters<typeof txTarget.delete>[0]) => {
+                          if (deleted === table) throw new Error('could not serialize access');
+                          return txTarget.delete(deleted);
+                        };
+                      }
+                      return Reflect.get(txTarget, txProperty, txReceiver) as unknown;
+                    },
+                  }),
+                ),
+              config,
+            );
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+  }
 
   /** `t.db` with its `failing`-th transaction refused (counted from 1), the others as they are. */
   function failingTransaction(failing: number) {

@@ -100,7 +100,7 @@ describe('release settings registry', () => {
     }
   });
 
-  it('tells the owner, where the periods are approved, what the answers of 2026-10-24 changed (#184)', () => {
+  it('tells the owner, where the periods are approved, what the answers of 2026-10-24 and 2026-10-24 (2차) changed (#184)', () => {
     const { moderation_records: moderation, deleted_posts: deleted } = RETENTION_PERIOD_SETTINGS;
     // 1: the reports a withdrawn member received go too; 3: a hidden item is emptied, kept hidden.
     expect(moderation.description).toContain('탈퇴한 회원이 받은 신고와 조치');
@@ -111,6 +111,16 @@ describe('release settings registry', () => {
     expect(deleted.description).toContain('처리 중인 신고가 있는 글·댓글과 결정을 기다리는');
     expect(deleted.description).toContain('신고가 처리되거나 요청이 결정·철회될 때까지');
     expect(deleted.description).not.toContain('신고가 있거나 결정을 기다리는');
+    // (2차) 2: the hidden item's edit history goes with its content, under the 신고·제재 period —
+    // and the edit history's own item says so too, whatever its own status and value: the rule at
+    // its end (only an approved value deletes) does not hold it back.
+    expect(moderation.description).toContain(
+      '그 수정 이력(이전 내용과 그것만 쓰던 이미지)과 숨김 조치도 함께 지운다',
+    );
+    expect(deleted.description).toContain(
+      "숨긴 채로 남은 것의 수정 이력은 이 항목의 상태·값과 상관없이 그 내용을 비울 때('신고·제재 기록 보존기간') 함께 지운다",
+    );
+    expect(deleted.description).not.toContain('이 기간 전이라도');
     // 14: a kind that failed is recorded as such.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(definition.description, definition.key).toContain(

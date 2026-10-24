@@ -13,11 +13,13 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  *   period once, when it starts.
  * - The period counts from the withdrawal (`profiles.closed_at`) for a withdrawn account's remaining
  *   records, and from the deletion for what a live account deleted (decision 4 #184 «기간의 기준
- *   시각»). Edit history always counts from when the version was replaced, and a record still being
- *   processed is never deleted before its processing ends — its period then counts from the later
- *   of the withdrawal and the processing (decision 7). What a pending report or a pending account
- *   restriction request is about keeps its deleted original and its edit history until it is
- *   processed, decided or retracted (owner decisions 2026-10-24 4 and 12).
+ *   시각»). Edit history counts from when the version was replaced — what is left of it on a
+ *   withdrawn member's item still hidden goes when that item's content is emptied (owner decision
+ *   2026-10-24 (2차) 2) — and a record still being processed is never deleted before its processing
+ *   ends — its period then counts from the later of the withdrawal and the processing (decision
+ *   7). What a pending report or a pending account restriction request is about keeps its deleted
+ *   original and its edit history until it is processed, decided or retracted (owner decisions
+ *   2026-10-24 4 and 12).
  * - The ledger and the operational records (`admin_actions`, the purge records below) are kept with
  *   no period (#57-18), and so are the watch events (ADR-0064), likes, posts that were not deleted
  *   and the start grants: nothing here names them.
@@ -46,13 +48,15 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  *   kept past the withdrawal by the owner's exception to #57-18's immediate deletion).
  * - `deleted_posts`: 지운 글 원문 — what an author deleted (posts, 댓글 and 대댓글) and, with the same
  *   period (decision 7), the operator-only edit history of posts and comments, with the images only
- *   they used.
+ *   they used — save what of it a withdrawn member's item still hidden has left when its content
+ *   is emptied, which goes with it (below).
  * - `moderation_records`: 신고·제재 기록 — the reports a withdrawn account sent or a withdrawn member
  *   received (owner decision 2026-10-24 1), the actions on a withdrawn member (with their end
  *   changes and their two-person approval requests), and the content of a withdrawn member's post
- *   or comment an operator still hides, emptied as its hiding goes (owner decision 2026-10-24 3);
- *   later the judgement objections (#175) and #187's link flags join it (owner decision 2026-10-24
- *   13).
+ *   or comment an operator still hides, emptied as its hiding goes (owner decision 2026-10-24 3) —
+ *   its edit history and the images only that used deleted with it (owner decision 2026-10-24
+ *   (2차) 2); later the judgement objections (#175) and #187's link flags join it (owner decision
+ *   2026-10-24 13).
  * - `removed_profile_items`: 운영자가 지운 프로필 항목 — the nickname, 소개 or image an operator took
  *   away (#37-10, `profile_item_removals`).
  */
@@ -71,14 +75,16 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  * an expired nickname hold before their action, an action before its approval requests):
  * - `nickname_holds`: nickname holds whose NICKNAME_HOLD_DAYS have passed — they hold nothing any
  *   more (#57-6 «30일 남는다»); a fixed period, no setting.
- * - `post_revisions`, `comment_revisions`: earlier versions of posts and comments.
+ * - `post_revisions`, `comment_revisions`: earlier versions of posts and comments — by their own
+ *   period, and those of a hidden item below when its content is emptied.
  * - `deleted_posts`, `deleted_comments`: deleted originals, emptied in place (the row stays: the
  *   placeholder of a deleted 댓글 with replies, the likes and the records name it).
  * - `reports`: reports a withdrawn account sent or a withdrawn member received.
  * - `hidden_posts`, `hidden_comments`: a withdrawn member's posts and comments an operator still
  *   hides, emptied in place the same way — they stay hidden — with their hidings, which the run
- *   counts as `moderation_actions` (owner decision 2026-10-24 3): after the reports, which may name
- *   a hiding.
+ *   counts as `moderation_actions` (owner decision 2026-10-24 3), and their edit history, counted as
+ *   `post_revisions` and `comment_revisions` under the period applied (owner decision 2026-10-24
+ *   (2차) 2): after the reports, which may name a hiding.
  * - `removed_profile_items`: what an operator took away from a profile.
  * - `moderation_actions`: actions on a withdrawn member (each with its end changes).
  * - `approval_requests`: the account restriction requests about a withdrawn member.
@@ -104,7 +110,13 @@ export const retentionPurgeKindSchema = z
   .enum(RETENTION_PURGE_KINDS)
   .meta({ id: 'RetentionPurgeKind' });
 
-/** The period each purge kind is deleted after; null for the nickname holds' fixed 30 days. */
+/**
+ * The period each purge kind's own step deletes after; null for the nickname holds' fixed 30 days.
+ * What a step deletes of another kind along with its own is recorded under that kind with the
+ * step's period: a hidden item's hiding (`moderation_actions`, the same period) and its edit
+ * history (`post_revisions`, `comment_revisions` — the 신고·제재 period, owner decision 2026-10-24
+ * (2차) 2), so one run can record a kind under two periods.
+ */
 export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   Record<RetentionPurgeKind, RetentionPeriod | null>
 > = {
