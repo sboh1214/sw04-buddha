@@ -4,7 +4,7 @@ import { Heading, Stack, Text } from '@chakra-ui/react';
 import { useQuery } from '@tanstack/react-query';
 import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PostForm } from '@/components/post/post-form';
 import { WriteGate } from '@/components/post/write-gate';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -14,6 +14,7 @@ import { type Post } from '@/lib/api';
 import {
   isOwnPost,
   postEditPath,
+  postGoneAfter,
   postPath,
   postPlaceholderMessage,
   postWriteErrorMessage,
@@ -30,33 +31,52 @@ import { useSession } from '@/lib/use-session';
  * one. Saving the same content changes nothing on the server (no '수정됨'); saving a change marks
  * it edited and keeps the earlier version for operators. Either way the screen goes back to the
  * post.
+ *
+ * A post deleted while its edit screen is open — in another tab — is gone once a read of it
+ * answers NOT_FOUND (`postGoneAfter`, ADR-0073 9-50, Codex review of #219, round 5): the read after
+ * a save refused as NOT_FOUND (`updatePostOptions`), or a window's focus. The query keeps the post
+ * it read before, so the form stayed, and every save could only be refused again. Now the screen
+ * says '없거나 삭제된 글입니다.' in the form's place — the form goes, as it does for a post hidden
+ * meanwhile — and draws the server page again (`router.refresh`): the 404 a reload gets
+ * (`notFound()`, page.tsx). A read that fails otherwise keeps the form and what is written in it.
  */
 export function EditScreen({ postId, fallback }: { postId: string; fallback: Post }) {
+  const router = useRouter();
   const query = useQuery(postQueryOptions(postId));
   const post = query.data ?? fallback;
+  const [gone, setGone] = useState(false);
+  const nowGone = postGoneAfter(gone, query);
+  if (nowGone !== gone) setGone(nowGone);
+  useEffect(() => {
+    if (gone) router.refresh();
+  }, [gone, router]);
   return (
     <Stack gap="6" data-testid="post-edit-screen">
       <Heading as="h2" textStyle="headline">
         {copy.postEditTitle}
       </Heading>
-      <WriteGate back={postEditPath(postId)}>
-        {(writer) =>
-          post.state !== 'published' ? (
-            <EmptyState
-              message={
-                post.state === 'hidden'
-                  ? copy.errPostNotEditable
-                  : postPlaceholderMessage(post.state)
-              }
-              data-testid="post-edit-unavailable"
-            />
-          ) : !isOwnPost(post.author, writer.publicId) ? (
-            <EmptyState message={copy.postEditNotYours} data-testid="post-edit-not-yours" />
-          ) : (
-            <EditForm post={post} accountId={writer.accountId} />
-          )
-        }
-      </WriteGate>
+      {gone ? (
+        <EmptyState message={copy.postNotFound} data-testid="post-edit-gone" />
+      ) : (
+        <WriteGate back={postEditPath(postId)}>
+          {(writer) =>
+            post.state !== 'published' ? (
+              <EmptyState
+                message={
+                  post.state === 'hidden'
+                    ? copy.errPostNotEditable
+                    : postPlaceholderMessage(post.state)
+                }
+                data-testid="post-edit-unavailable"
+              />
+            ) : !isOwnPost(post.author, writer.publicId) ? (
+              <EmptyState message={copy.postEditNotYours} data-testid="post-edit-not-yours" />
+            ) : (
+              <EditForm post={post} accountId={writer.accountId} />
+            )
+          }
+        </WriteGate>
+      )}
     </Stack>
   );
 }

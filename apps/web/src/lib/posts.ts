@@ -364,6 +364,20 @@ export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): 
   return state === 'deleted' ? copy.postDeletedPlaceholder : copy.postHiddenPlaceholder;
 }
 
+/**
+ * Whether a post page — or its edit screen — holds its post to be gone (ADR-0073 9-50, Codex review
+ * of #219, round 5), from what it held before (`gone`) and the post's read as the query has it
+ * now (`read`: its `isError` and `error`). The query keeps the post it last read through a read
+ * that fails, so the screen tells the failures apart itself: NOT_FOUND is the API's answer that
+ * the post left every view — deleted with nothing under it (#45-5), never undone, the 404 a reload
+ * gets — while any other failure (unreachable, a 5xx, a 429) says nothing about the post, and the
+ * post read before stays on screen. Once gone, gone: a later read failing otherwise does not
+ * bring the post back as it was last read.
+ */
+export function postGoneAfter(gone: boolean, read: { isError: boolean; error: unknown }): boolean {
+  return gone || (read.isError && isApiError(read.error, 'NOT_FOUND'));
+}
+
 /** Search engines cut a description around here. */
 const META_DESCRIPTION_MAX = 160;
 

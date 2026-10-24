@@ -9,7 +9,7 @@ import {
   postDraftMoment,
   readPostDraft,
 } from '@/lib/post-drafts';
-import { communityPostsKey, postKey } from '@/lib/posts';
+import { communityPostsKey, postGoneAfter, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import { type HeldPostDraftAt, keepHeldPostDraft } from './use-post-draft';
@@ -126,6 +126,56 @@ describe('a post page', () => {
       params: { path: { postId: post } },
     });
   });
+
+  it('read again, NOT_FOUND leaves the post held but says it is gone; a read failing otherwise keeps it (Codex review of #219, round 5, ADR-0073 9-50)', async () => {
+    vi.useFakeTimers();
+    try {
+      const queryClient = getQueryClient();
+      queryClient.setQueryData(postKey(post), published);
+      const page = new QueryObserver(queryClient, postQueryOptions(POST));
+      const unsubscribe = page.subscribe(() => undefined);
+      const get = vi.spyOn(api, 'GET');
+      /** A read of the page as a window's focus sends it, through the client's retries. */
+      const readAgain = async () => {
+        const read = page.refetch();
+        await vi.runAllTimersAsync();
+        await read;
+        return page.getCurrentResult();
+      };
+
+      // Failing otherwise — the API down (its 5xx, retried), a 429, a request that never left:
+      // the post stays, and the page does not hold it gone.
+      get.mockRejectedValue(new ApiError(503, { code: 'INTERNAL', message: 'x' }));
+      let result = await readAgain();
+      expect(get).toHaveBeenCalledTimes(3);
+      expect(result.isError).toBe(true);
+      expect(result.data).toEqual(published);
+      expect(postGoneAfter(false, result)).toBe(false);
+      get.mockRejectedValue(new ApiError(429, { code: 'RATE_LIMITED', message: 'x' }));
+      result = await readAgain();
+      expect(postGoneAfter(false, result)).toBe(false);
+      get.mockRejectedValue(new TypeError('fetch failed'));
+      result = await readAgain();
+      expect(result.data).toEqual(published);
+      expect(postGoneAfter(false, result)).toBe(false);
+
+      // Deleted in another tab: NOT_FOUND, not retried. The query still holds the post as it was
+      // last read — what the page drew before — and the page holds it gone.
+      get.mockClear();
+      get.mockRejectedValue(new ApiError(404, { code: 'NOT_FOUND', message: 'x' }));
+      result = await readAgain();
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(result.data).toEqual(published);
+      expect(postGoneAfter(false, result)).toBe(true);
+      // A later read failing otherwise does not bring it back.
+      get.mockRejectedValue(new TypeError('fetch failed'));
+      result = await readAgain();
+      expect(postGoneAfter(true, result)).toBe(true);
+      unsubscribe();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('the writes', () => {
@@ -167,6 +217,75 @@ describe('the writes', () => {
       edit.mutate({ postId: POST, title: null, body: {}, expectedAccountId: 'user-1' }),
     ).rejects.toBeInstanceOf(ApiError);
     expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(true);
+  });
+
+  it('an edit cancels a read of the post still on its way: its earlier answer, coming after the save, never replaces the saved post (Codex review of #219, round 5, ADR-0073 9-49)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(postKey(post), published);
+    // The post page's read, as a window's focus sends it: it left before the edit was saved and
+    // answers — the earlier version — only after the save has landed.
+    let answerRead: (value: unknown) => void = () => undefined;
+    const get = vi.spyOn(api, 'GET').mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerRead = resolve;
+      }) as never,
+    );
+    const page = new QueryObserver(queryClient, postQueryOptions(POST));
+    const unsubscribe = page.subscribe(() => undefined);
+    const read = page.refetch();
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryState(postKey(post))?.fetchStatus).toBe('fetching');
+
+    const edited: Post = { ...published, title: '고친 제목', editedAt: '2026-10-19T00:00:00.000Z' };
+    vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer(edited));
+    const edit = new MutationObserver(
+      queryClient,
+      updatePostOptions(queryClient, () => undefined),
+    );
+    await edit.mutate({ postId: POST, title: '고친 제목', body: {}, expectedAccountId: 'user-1' });
+    expect(queryClient.getQueryData(postKey(post))).toEqual(edited);
+    expect(queryClient.getQueryState(postKey(post))?.fetchStatus).toBe('idle');
+
+    // The earlier answer comes now: dropped.
+    answerRead(answer(published));
+    await read;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(queryClient.getQueryData(postKey(post))).toEqual(edited);
+    expect(page.getCurrentResult().data).toEqual(edited);
+
+    // The next read is one that left after the save, and its answer goes in.
+    const later: Post = { ...edited, title: '또 고친 제목' };
+    get.mockResolvedValueOnce(answer(later));
+    await page.refetch();
+    expect(queryClient.getQueryData(postKey(post))).toEqual(later);
+    unsubscribe();
+  });
+
+  it('an edit refused as NOT_FOUND reads the page again, and that read says the post is gone — the edit screen then shows no form (Codex review of #219, round 5, ADR-0073 9-50)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(postKey(post), published);
+    // The edit screen's read of the post, on screen.
+    const screen = new QueryObserver(queryClient, postQueryOptions(POST));
+    const unsubscribe = screen.subscribe(() => undefined);
+    const get = vi
+      .spyOn(api, 'GET')
+      .mockRejectedValue(new ApiError(404, { code: 'NOT_FOUND', message: 'x' }));
+    vi.spyOn(api, 'PUT').mockRejectedValueOnce(
+      new ApiError(404, { code: 'NOT_FOUND', message: 'x' }),
+    );
+    const edit = new MutationObserver(
+      queryClient,
+      updatePostOptions(queryClient, () => undefined),
+    );
+    await expect(
+      edit.mutate({ postId: POST, title: '고친 제목', body: {}, expectedAccountId: 'user-1' }),
+    ).rejects.toBeInstanceOf(ApiError);
+    // The refusal's read of the page has come back by the time the refusal is the screen's.
+    expect(get).toHaveBeenCalledTimes(1);
+    const result = screen.getCurrentResult();
+    expect(result.data).toEqual(published);
+    expect(postGoneAfter(false, result)).toBe(true);
+    unsubscribe();
   });
 
   it('a write or an edit that lands removes the draft the onboarding gate kept for its screen — a refusal keeps it (오너 결정 2026-10-20)', async () => {

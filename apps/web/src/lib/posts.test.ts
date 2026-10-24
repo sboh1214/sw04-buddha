@@ -25,6 +25,7 @@ import {
   nameInitial,
   postEditPath,
   postFirstLine,
+  postGoneAfter,
   postKey,
   postListQuery,
   postPageMetadata,
@@ -185,6 +186,60 @@ describe('what a post page says instead of a post (#45-5)', () => {
   it('names neither the author nor the post', () => {
     expect(postPlaceholderMessage('deleted')).toBe('삭제된 글입니다.');
     expect(postPlaceholderMessage('hidden')).toBe('운영 정책에 따라 숨긴 글입니다.');
+  });
+});
+
+describe('a post gone while its page is open (postGoneAfter, Codex review of #219, round 5)', () => {
+  const failed = (error: unknown) => ({ isError: true, error });
+  const read = { isError: false, error: null };
+
+  it('is gone once a read answers NOT_FOUND — the query still holds the post it read before', () => {
+    expect(postGoneAfter(false, failed(refusal(404, 'NOT_FOUND')))).toBe(true);
+    expect(postGoneAfter(false, read)).toBe(false);
+  });
+
+  it('keeps the post through a read that fails otherwise: it says nothing about the post', () => {
+    // A 5xx, a 429, a body the API did not write (a 404 too: not the API's NOT_FOUND), and a
+    // request that never reached it.
+    expect(postGoneAfter(false, failed(refusal(503, 'INTERNAL')))).toBe(false);
+    expect(postGoneAfter(false, failed(refusal(429, 'RATE_LIMITED')))).toBe(false);
+    expect(postGoneAfter(false, failed(new ApiError(500, undefined)))).toBe(false);
+    expect(postGoneAfter(false, failed(new ApiError(404, undefined)))).toBe(false);
+    expect(postGoneAfter(false, failed(new TypeError('fetch failed')))).toBe(false);
+  });
+
+  it('stays gone: a later read failing otherwise, or none failing, does not bring the post back', () => {
+    expect(postGoneAfter(true, failed(new TypeError('fetch failed')))).toBe(true);
+    expect(postGoneAfter(true, failed(refusal(503, 'INTERNAL')))).toBe(true);
+    expect(postGoneAfter(true, read)).toBe(true);
+  });
+
+  it('is what the post page and the edit screen draw from, and both then draw the server page again (the 404)', () => {
+    // No component renders under node: the screens' wiring is pinned in their source, as the
+    // write screen's is below.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    for (const file of [
+      '../app/community/posts/[postId]/post-screen.tsx',
+      '../app/community/posts/[postId]/edit/edit-screen.tsx',
+    ]) {
+      const screen = source(file);
+      expect(screen, file).toContain('const [gone, setGone] = useState(false);');
+      expect(screen, file).toContain('const nowGone = postGoneAfter(gone, query);');
+      expect(screen, file).toContain('if (nowGone !== gone) setGone(nowGone);');
+      expect(screen, file).toMatch(
+        /useEffect\(\(\) => \{\s*if \(gone\) router\.refresh\(\);\s*\}, \[gone, router\]\);/,
+      );
+    }
+    // The post page: the sentence and the way back in place of the post and its market.
+    const page = source('../app/community/posts/[postId]/post-screen.tsx');
+    expect(page).toMatch(
+      /if \(gone\) \{\s*return \(\s*<Stack gap="6" data-testid="post-screen">\s*<Alert\.Root status="info" data-testid="post-gone">[\s\S]*?\{copy\.postNotFound\}[\s\S]*?<BackLink \/>\s*<\/Stack>\s*\);\s*\}\s*if \(post\.state !== 'published'\)/,
+    );
+    // The edit screen: the sentence in the form's place, before the gate and the form.
+    const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
+    expect(edit).toMatch(
+      /\{gone \? \(\s*<EmptyState message=\{copy\.postNotFound\} data-testid="post-edit-gone" \/>\s*\) : \(\s*<WriteGate/,
+    );
   });
 });
 

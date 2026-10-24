@@ -58,6 +58,9 @@ import {
  * takes more than ten, and an image refused or failed gives its place back (owner decisions
  * 2026-10-21); and an image the API asked to read again later (429) is drawn once it can be — a
  * post's and a card's — but asked for three times at most (ADR-0073 결과 5, Codex review of #219).
+ * A post its author deletes in another tab turns its open page into the 404 once a read says it is
+ * gone — a read that fails otherwise keeps the post — and its open edit screen too, once a save is
+ * refused for it (ADR-0073 9-50).
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -1621,5 +1624,79 @@ test.describe('근거 글', () => {
       ),
     ).toBe(true);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('다른 탭에서 지운 글은 열어 둔 글 화면이 다시 읽을 때 404가 되고(잠깐 실패한 다시 읽기는 글을 그대로 둔다), 수정 화면은 그 글의 거절된 저장 뒤에 양식 대신 404가 된다', async ({
+    admin,
+    page,
+  }) => {
+    // Codex review of #219, round 5 (ADR-0073 9-50): a read of a post deleted meanwhile answers
+    // NOT_FOUND while the query keeps the post it read before, and the screens drew that post — a
+    // deleted post's page, an edit screen whose every save is refused. The page's clock, so the
+    // read on mount can be made older than `staleTime` (30 s, lib/query-client.ts) without waiting
+    // for it; a refocus then reads the post again, as it does for a reader coming back to the tab.
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const tag = freshTag();
+    const postId = await postThroughApi(page.request, market.id, `지워질 글 ${tag}`, '지워질 근거');
+    const postPage = `/community/posts/${postId}`;
+    await page.clock.install();
+    await page.goto(postPage);
+    await expect(page.getByTestId('post-title')).toHaveText(`지워질 글 ${tag}`);
+    const refocus = async () => {
+      await page.clock.fastForward('00:31');
+      // TanStack's focus manager listens for `visibilitychange` on window (watchlist.spec.ts).
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    };
+
+    // --- a read that fails otherwise — the API down for a moment, through the client's retries —
+    // says nothing about the post: it stays.
+    let refused = 0;
+    const isRead = (url: URL) => url.pathname === `/api/v1/posts/${postId}`;
+    await page.route(isRead, (route) => {
+      refused += 1;
+      return route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'Service unavailable' } },
+      });
+    });
+    await refocus();
+    await expect.poll(() => refused).toBe(3);
+    await settle();
+    await expect(page.getByTestId('post-title')).toHaveText(`지워질 글 ${tag}`);
+    await expect(page.getByTestId('post-gone')).toHaveCount(0);
+    await page.unroute(isRead);
+
+    // --- its author deletes it in another tab: the next read is NOT_FOUND, and the open page is
+    // the post's 404, as a reload says it.
+    const other = await page.context().newPage();
+    await other.goto(postPage);
+    await other.getByTestId('post-delete').click();
+    await other.getByTestId('post-delete-confirm').click();
+    await expect(other).toHaveURL('/community');
+    await other.close();
+    await refocus();
+    await expect(page.getByTestId('post-screen')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(postPage);
+    expect((await page.reload())?.status()).toBe(404);
+
+    // --- the edit screen: a save refused because the post was deleted meanwhile reads the post
+    // again — NOT_FOUND — and the screen offers no form that could only be refused again: the
+    // 404, as a reload says it.
+    const editedId = await postThroughApi(page.request, market.id, `고칠 글 ${tag}`, '고칠 근거');
+    const edit = `/community/posts/${editedId}/edit`;
+    await page.goto(edit);
+    await page.getByTestId('post-title-input').fill(`고친 제목 ${tag}`);
+    const me = await meOf(page.request);
+    const deletion = await page.request.post(`/api/v1/posts/${editedId}/delete`, {
+      data: { expectedAccountId: me.id },
+    });
+    expect(deletion.status(), await deletion.text()).toBe(200);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByTestId('post-edit-screen')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(edit);
+    expect((await page.reload())?.status()).toBe(404);
   });
 });

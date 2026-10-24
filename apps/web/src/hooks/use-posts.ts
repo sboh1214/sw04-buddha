@@ -158,6 +158,14 @@ export function createPostOptions(queryClient: QueryClient, onSessionChanged: ()
 /**
  * `PUT /posts/:postId`: the edited post replaces the held one; the lists' cards follow it, and a
  * kept draft of its edit screen by the account that sent it goes, as a new post's does.
+ *
+ * A read of the post still on its way is cancelled before the answer goes in (ADR-0073 9-49,
+ * Codex review of #219, round 5): one that left before the edit was saved — a window's focus — and
+ * answered after it would otherwise put the earlier version back over the saved one, and the post
+ * page the screen goes to would show it. A cancelled read's answer is dropped when it comes
+ * (query-core's retryer), and the write follows the cancel with nothing in between, so the next
+ * read is one that left after the save. Unconditional (`exact`, not `cancelFirstFetch`): this is a
+ * seed over held data, the case lib/query-client.ts says to cancel for itself.
  */
 export function updatePostOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
@@ -170,6 +178,7 @@ export function updatePostOptions(queryClient: QueryClient, onSessionChanged: ()
       ).data,
     onSuccess: async (post: Post, { postId, expectedAccountId }: UpdatePostVariables) => {
       postDraftLanded({ kind: 'edit', postId }, expectedAccountId);
+      await queryClient.cancelQueries({ queryKey: postKey(post.id), exact: true });
       queryClient.setQueryData<Post>(postKey(post.id), post);
       await queryClient.invalidateQueries({ queryKey: POST_LIST_KEY });
     },

@@ -17,7 +17,7 @@ import { useQuery } from '@tanstack/react-query';
 import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { PostByline } from '@/components/post/post-author';
 import { PostBody } from '@/components/post/post-body';
 import { toaster } from '@/components/ui/toaster';
@@ -32,6 +32,7 @@ import {
   isOwnPost,
   postEditPath,
   postFirstLine,
+  postGoneAfter,
   postPlaceholderMessage,
   postWriteErrorMessage,
 } from '@/lib/posts';
@@ -55,10 +56,38 @@ import { useSession } from '@/lib/use-session';
  * consent step and comes back to the edit screen once that is done (`useOnboardingEntry`);
  * everything else this page links to is gated as before. An account that has not finished is sent
  * on from this page too, and comes back to it at the end.
+ *
+ * A post can leave every view while its page is open: its author deletes it in another tab, and a
+ * read of it after that — a window's focus — answers NOT_FOUND, while the query keeps the post it
+ * read before (ADR-0073 9-50, Codex review of #219, round 5). From then on (`postGoneAfter`) the
+ * page says '없거나 삭제된 글입니다.' in place of the post and its market, and draws the server page
+ * again (`router.refresh`): it answers what a reload does, the 404 (`notFound()`, page.tsx). A read
+ * that fails otherwise keeps the post on screen.
  */
 export function PostScreen({ postId, fallback }: { postId: string; fallback: Post }) {
+  const router = useRouter();
   const query = useQuery(postQueryOptions(postId));
   const post = query.data ?? fallback;
+  const [gone, setGone] = useState(false);
+  const nowGone = postGoneAfter(gone, query);
+  if (nowGone !== gone) setGone(nowGone);
+  useEffect(() => {
+    if (gone) router.refresh();
+  }, [gone, router]);
+
+  if (gone) {
+    return (
+      <Stack gap="6" data-testid="post-screen">
+        <Alert.Root status="info" data-testid="post-gone">
+          <Alert.Indicator />
+          <Alert.Content>
+            <Alert.Description>{copy.postNotFound}</Alert.Description>
+          </Alert.Content>
+        </Alert.Root>
+        <BackLink />
+      </Stack>
+    );
+  }
 
   if (post.state !== 'published') {
     return (
