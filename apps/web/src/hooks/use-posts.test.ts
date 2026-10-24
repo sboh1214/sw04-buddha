@@ -429,7 +429,6 @@ describe('the writes', () => {
       key: editKey,
       accountId: 'user-1',
       hasDraft: true,
-      saved: false,
       title: '고친 제목',
       body: { type: 'doc', content: [] },
       previews: new Map(),
