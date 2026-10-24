@@ -1626,7 +1626,7 @@ test.describe('근거 글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('다른 탭에서 지운 글은 열어 둔 글 화면이 다시 읽을 때 404가 되고(잠깐 실패한 다시 읽기는 글을 그대로 둔다), 수정 화면은 그 글의 거절된 저장 뒤에 양식 대신 404가 된다', async ({
+  test('다른 탭에서 지운 글은 열어 둔 글 화면이 다시 읽을 때 404가 되고(잠깐 실패한 다시 읽기는 글을 그대로 둔다), 수정 화면은 그 글의 거절된 저장 뒤에 쓰던 제목·본문을 고칠 수 없게 남겨 떠날 때 묻고 닫기 뒤에야 404가 된다', async ({
     admin,
     page,
   }) => {
@@ -1681,22 +1681,151 @@ test.describe('근거 글', () => {
     await expect(page).toHaveURL(postPage);
     expect((await page.reload())?.status()).toBe(404);
 
-    // --- the edit screen: a save refused because the post was deleted meanwhile reads the post
-    // again — NOT_FOUND — and the screen offers no form that could only be refused again: the
-    // 404, as a reload says it.
+    // --- the edit screen (오너 결정 2026-10-24, ADR-0073 9-52): its author deletes the post in
+    // another tab while its title and body are being changed here. The save is refused
+    // (NOT_FOUND) and reads the post again — gone — and the screen keeps what was written: the
+    // title and the body read-only, to select and copy, under '없거나 삭제된 글입니다.', and 닫기
+    // in place of 저장. Leaving asks first; the 404 comes with 닫기, as a reload says it.
     const editedId = await postThroughApi(page.request, market.id, `고칠 글 ${tag}`, '고칠 근거');
     const edit = `/community/posts/${editedId}/edit`;
     await page.goto(edit);
-    await page.getByTestId('post-title-input').fill(`고친 제목 ${tag}`);
-    const me = await meOf(page.request);
-    const deletion = await page.request.post(`/api/v1/posts/${editedId}/delete`, {
-      data: { expectedAccountId: me.id },
-    });
-    expect(deletion.status(), await deletion.text()).toBe(200);
+    const title = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toContainText('고칠 근거');
+    await title.fill(`고친 제목 ${tag}`);
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 덧붙인 근거');
+    await expect(editor).toContainText('덧붙인 근거');
+    const deleting = await page.context().newPage();
+    await deleting.goto(`/community/posts/${editedId}`);
+    await deleting.getByTestId('post-delete').click();
+    await deleting.getByTestId('post-delete-confirm').click();
+    await expect(deleting).toHaveURL('/community');
+    await deleting.close();
     await page.getByTestId('post-submit').click();
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await expect(title).toHaveValue(`고친 제목 ${tag}`);
+    await expect(title).not.toBeEditable();
+    await expect(editor).toContainText('고칠 근거');
+    await expect(editor).toContainText('덧붙인 근거');
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+    await expect(editor).toHaveAttribute('aria-readonly', 'true');
+    await expect(page.getByTestId('post-submit')).toHaveCount(0);
+    // The sentence once: the refusal's own line under the form is not drawn as well.
+    await expect(page.getByTestId('post-form-error')).toHaveCount(0);
+    await expect(page.getByText(copy.errPostGone)).toHaveCount(1);
+    // Selectable — and so copyable: the title's text, and the body's.
+    await title.selectText();
+    expect(
+      await title.evaluate((input: HTMLInputElement) =>
+        input.value.slice(input.selectionStart ?? 0, input.selectionEnd ?? 0),
+      ),
+    ).toBe(`고친 제목 ${tag}`);
+    await editor.locator('p').first().click({ clickCount: 3 });
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(
+      '덧붙인 근거',
+    );
+    // Typing changes nothing.
+    await page.keyboard.type('더');
+    await expect(editor).not.toContainText('더');
+    // No 404 while it is held.
+    await settle();
+    await expect(page.getByTestId('post-edit-screen')).toBeVisible();
+    await expect(page.getByRole('heading', { name: '404' })).toHaveCount(0);
+
+    // --- leaving asks, and staying keeps it all.
+    const asked: string[] = [];
+    page.once('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    await page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link').click();
+    await expect.poll(() => asked).toEqual([`confirm: ${copy.postLeaveConfirm}`]);
+    await expect(page).toHaveURL(edit);
+    await expect(title).toHaveValue(`고친 제목 ${tag}`);
+    await expect(editor).toContainText('덧붙인 근거');
+
+    // --- 닫기: the 404, asking nothing (an unexpected dialog would be dismissed and keep us).
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    await page.getByTestId('post-form-close').click();
     await expect(page.getByTestId('post-edit-screen')).toHaveCount(0);
     await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
     await expect(page).toHaveURL(edit);
+    expect(asked).toHaveLength(1);
     expect((await page.reload())?.status()).toBe(404);
+  });
+
+  test('수정 화면의 글이 다른 탭에서 지워지면, 다시 읽을 때 쓰던 제목·본문은 고칠 수 없게 남아 닫기 뒤에 404가 되고, 고친 것이 없는 화면은 곧바로 404가 된다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-24 (ADR-0073 9-52): the read that finds the post gone is a window's focus
+    // here — no save — and the screen keeps what the form held then; one holding nothing of the
+    // writer's is the 404 at once, as before. The page's clock makes the read older than
+    // `staleTime` (30 s) without waiting, as above.
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const tag = freshTag();
+    await page.clock.install();
+    const refocus = async () => {
+      await page.clock.fastForward('00:31');
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    };
+    const deleteInAnotherTab = async (postId: string) => {
+      const other = await page.context().newPage();
+      await other.goto(`/community/posts/${postId}`);
+      await other.getByTestId('post-delete').click();
+      await other.getByTestId('post-delete-confirm').click();
+      await expect(other).toHaveURL('/community');
+      await other.close();
+    };
+    let saves = 0;
+    await page.route(/\/api\/v1\/posts\/[^/]+$/, (route) => {
+      if (route.request().method() === 'PUT') saves += 1;
+      return route.continue();
+    });
+
+    // --- a line added to the body: kept, read-only, under the sentence — and nothing was sent.
+    const keptId = await postThroughApi(page.request, market.id, `남길 글 ${tag}`, '남길 근거');
+    const keptEdit = `/community/posts/${keptId}/edit`;
+    await page.goto(keptEdit);
+    const title = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toContainText('남길 근거');
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.keyboard.type(' 쓰던 근거');
+    await expect(editor).toContainText('쓰던 근거');
+    await deleteInAnotherTab(keptId);
+    await refocus();
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await expect(title).toHaveValue(`남길 글 ${tag}`);
+    await expect(title).not.toBeEditable();
+    await expect(editor).toContainText('쓰던 근거');
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+    await expect(page.getByTestId('post-form-close')).toBeVisible();
+    await settle();
+    await expect(page.getByRole('heading', { name: '404' })).toHaveCount(0);
+    expect(saves).toBe(0);
+    await page.getByTestId('post-form-close').click();
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(keptEdit);
+
+    // --- nothing changed: nothing of the writer's to keep, the 404 at once.
+    const plainId = await postThroughApi(page.request, market.id, `그냥 둔 글 ${tag}`, '그냥 근거');
+    const plainEdit = `/community/posts/${plainId}/edit`;
+    await page.goto(plainEdit);
+    await expect(title).toHaveValue(`그냥 둔 글 ${tag}`);
+    await deleteInAnotherTab(plainId);
+    await refocus();
+    await expect(page.getByTestId('post-edit-screen')).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(plainEdit);
+    await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

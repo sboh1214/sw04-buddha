@@ -9,7 +9,7 @@ import {
   postDraftMoment,
   readPostDraft,
 } from '@/lib/post-drafts';
-import { communityPostsKey, postGoneAfter, postKey } from '@/lib/posts';
+import { communityPostsKey, postEditGoneAfter, postGoneAfter, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import { ME_QUERY_KEY } from './use-me';
 import { type HeldPostDraftAt, keepHeldPostDraft } from './use-post-draft';
@@ -261,9 +261,18 @@ describe('the writes', () => {
     unsubscribe();
   });
 
-  it('an edit refused as NOT_FOUND reads the page again, and that read says the post is gone — the edit screen then shows no form (Codex review of #219, round 5, ADR-0073 9-50)', async () => {
+  it('an edit refused as NOT_FOUND reads the page again, and that read says the post is gone — the edit screen then keeps what its form held, and no draft of the tab goes with the post (Codex review of #219, round 5, ADR-0073 9-50; 오너 결정 2026-10-24, 9-52)', async () => {
     const queryClient = getQueryClient();
     queryClient.setQueryData(postKey(post), published);
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    // What the onboarding gate kept in this tab: the edit screen's draft and another screen's.
+    const now = Date.now();
+    const editKey = { kind: 'edit', postId: post } as const;
+    const newKey = { kind: 'new', marketId: MARKET } as const;
+    const kept = { title: '쓰던 제목', body: { type: 'doc', content: [] }, previews: {} };
+    keepPostDraft(storage, editKey, 'user-1', kept, now);
+    keepPostDraft(storage, newKey, 'user-1', kept, now);
     // The edit screen's read of the post, on screen.
     const screen = new QueryObserver(queryClient, postQueryOptions(POST));
     const unsubscribe = screen.subscribe(() => undefined);
@@ -285,6 +294,41 @@ describe('the writes', () => {
     const result = screen.getCurrentResult();
     expect(result.data).toEqual(published);
     expect(postGoneAfter(false, result)).toBe(true);
+    // The form held the refused title as the post went: the screen keeps it, read-only, until it
+    // is closed — one holding nothing of the writer's is the 404 at once.
+    const onScreen = { gone: false, held: false };
+    expect(
+      postEditGoneAfter(onScreen, { gone: postGoneAfter(false, result), formHolding: true }),
+    ).toEqual({ gone: true, held: true });
+    expect(
+      postEditGoneAfter(onScreen, { gone: postGoneAfter(false, result), formHolding: false }),
+    ).toEqual({ gone: true, held: false });
+    // The refusal landed nothing: every draft the gate kept stays.
+    expect(readPostDraft(storage, editKey, 'user-1', now)).toEqual(kept);
+    expect(readPostDraft(storage, newKey, 'user-1', now)).toEqual(kept);
+
+    // The held form goes — closed (닫기), its 404 drawn: with no step left it keeps nothing, and
+    // removes nothing either.
+    const last: HeldPostDraftAt = {
+      key: editKey,
+      accountId: 'user-1',
+      hasDraft: true,
+      saved: false,
+      title: '고친 제목',
+      body: { type: 'doc', content: [] },
+      previews: new Map(),
+      moment: postDraftMoment(),
+    };
+    expect(keepHeldPostDraft(last, { id: 'user-1', onboarding: { nextStep: null } } as Me)).toBe(
+      false,
+    );
+    expect(readPostDraft(storage, editKey, 'user-1', now)).toEqual(kept);
+    expect(readPostDraft(storage, newKey, 'user-1', now)).toEqual(kept);
+    // The gate taking the account to a step while the form is held keeps what it holds, as it does
+    // for any form (오너 결정 2026-10-20).
+    const stepLeft = { nextStep: 'consent' } as Me['onboarding'];
+    expect(keepHeldPostDraft(last, { id: 'user-1', onboarding: stepLeft } as Me)).toBe(true);
+    expect(readPostDraft(storage, editKey, 'user-1', Date.now())?.title).toBe('고친 제목');
     unsubscribe();
   });
 

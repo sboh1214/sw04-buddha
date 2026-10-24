@@ -65,6 +65,20 @@ export interface PostFormProps {
   /** The images the last refusal named (`refusedImageIds`). */
   refusedImageIds?: readonly string[];
   onSubmit: (values: PostFormValues) => void;
+  /**
+   * The post the form edits left every view while the form held something of the writer's (the
+   * edit screen, 오너 결정 2026-10-24, ADR-0073 9-52): the form stays, read-only, with
+   * '없거나 삭제된 글입니다.' and 닫기 (`onClose`) in place of its button.
+   */
+  gone?: boolean;
+  /** 닫기, while `gone`: the writer is done with what the form held. */
+  onClose?: () => void;
+  /**
+   * Told whether the form holds something of the writer's — a changed title or body, a draft taken
+   * back, an upload on its way, and no write that landed: what leaving would lose — each time that
+   * changes, and false as the form goes: what the edit screen keeps should its post go (`gone`).
+   */
+  onHoldingChange?: (holding: boolean) => void;
 }
 
 /**
@@ -97,6 +111,16 @@ export interface PostFormProps {
  * says so in a toast like the app's other completions — on screen and, once, to screen readers
  * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
  * storage: the form holds it, and guards it like any draft.
+ *
+ * The post an edit form edits can leave every view while it is open — deleted in another tab: a
+ * save refused as NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`).
+ * The form then keeps what the writer had in it, as #48's comment boxes keep a text whose place
+ * went (오너 결정 2026-10-24, ADR-0073 9-52; ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답
+ * 1·2): the title and the body stay on screen, read-only — selectable and copyable, never changed
+ * or sent — under '없거나 삭제된 글입니다.' (`GoneNotice`), and 닫기 takes the button's place;
+ * leaving still asks first, and the draft the onboarding gate would keep is kept as before — the
+ * post going clears nothing. The screen decides it as the post goes, by what the form said it held
+ * (`onHoldingChange`): a form holding nothing of the writer's is not kept.
  *
  * Focus: the notice is focused when the form is drawn with a draft taken back — it appears with
  * its text already in it, which a live region may not announce, and the reader lands on it with
@@ -136,7 +160,8 @@ export function PostForm(props: PostFormProps) {
       />
       {kept.draft !== null && (
         <DiscardDialog
-          open={held.asking}
+          // Nothing to discard into once the post is gone: the form is read-only.
+          open={held.asking && props.gone !== true}
           discarded={held.discarded}
           titleRef={titleRef}
           onCancel={() => send('cancel')}
@@ -232,6 +257,9 @@ function PostFormFields({
   errorMessage,
   refusedImageIds,
   onSubmit,
+  gone = false,
+  onClose,
+  onHoldingChange,
   restored,
   focusTitle,
   titleRef,
@@ -263,7 +291,15 @@ function PostFormFields({
   const [previews] = useState(() => new Map(Object.entries(restored?.previews ?? {})));
   // A draft taken back is something to lose until it is sent or discarded, as typed text is.
   const dirty = restored !== null || draftChanged({ title, initialTitle, bodyChanged, uploading });
-  useLeaveGuard(!pending && dirty, copy.postLeaveConfirm);
+  // Held once the post is gone (오너 결정 2026-10-24): leaving asks until the writer closes it.
+  useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);
+  // What the edit screen keeps should the post go: what leaving would lose, while no write of it
+  // has landed — and, once gone, the form is on screen only while it holds that.
+  const holding = gone || (dirty && !saved);
+  useEffect(() => {
+    onHoldingChange?.(holding);
+  }, [holding, onHoldingChange]);
+  useEffect(() => () => onHoldingChange?.(false), [onHoldingChange]);
   useKeepPostDraftForOnboarding({
     key: draftKey,
     accountId,
@@ -285,6 +321,7 @@ function PostFormFields({
   const count = countWithUploads(countEditorDocument(body), imagesUploading);
   const titleInvalid = titleTooLong(title);
   const blocked =
+    gone ||
     pending ||
     uploading ||
     accountId === undefined ||
@@ -305,7 +342,8 @@ function PostFormFields({
       }}
       data-testid="post-form"
     >
-      {restored !== null && (
+      {gone && <GoneNotice />}
+      {restored !== null && !gone && (
         <Alert.Root
           ref={noticeRef}
           status="info"
@@ -341,7 +379,10 @@ function PostFormFields({
           // below is the rule.
           maxLength={POST_TITLE_MAX_LENGTH * 2}
           placeholder={copy.postWriteTitlePlaceholder}
-          disabled={pending}
+          // Read-only rather than disabled once the post is gone: its text is still the writer's to
+          // select and copy.
+          readOnly={gone}
+          disabled={pending && !gone}
           onChange={(event) => setTitle(event.target.value.replace(/[\r\n]+/g, ' '))}
           data-testid="post-title-input"
         />
@@ -368,7 +409,8 @@ function PostFormFields({
           accountId={accountId}
           imageSlots={imageSlots}
           onUploadingChange={setUploading}
-          disabled={pending}
+          disabled={pending || gone}
+          readOnly={gone}
           invalid={count.tooLong || count.tooManyImages}
           describedBy="post-body-length post-body-images post-body-errors"
           refusedImageIds={refusedImageIds}
@@ -406,7 +448,8 @@ function PostFormFields({
         </Box>
       </Stack>
 
-      {errorMessage !== undefined && (
+      {/* Once the post is gone, the notice above says why (a save refused for it said the same). */}
+      {errorMessage !== undefined && !gone && (
         <Alert.Root status="error" role="alert" data-testid="post-form-error">
           <Alert.Indicator />
           <Alert.Content>
@@ -415,16 +458,69 @@ function PostFormFields({
         </Alert.Root>
       )}
 
-      <Button
-        type="submit"
-        alignSelf="flex-end"
-        colorPalette="brand"
-        loading={pending}
-        disabled={blocked}
-        data-testid="post-submit"
-      >
-        {submitLabel}
-      </Button>
+      {gone ? (
+        // A button of its own (`key`), not the send's made over: a focus on the send — held there
+        // while the refused save was in flight — does not land on 닫기, where the next Enter would
+        // close what the form holds.
+        <Button
+          key="close"
+          alignSelf="flex-end"
+          variant="outline"
+          onClick={onClose}
+          data-testid="post-form-close"
+        >
+          {copy.close}
+        </Button>
+      ) : (
+        <Button
+          key="submit"
+          type="submit"
+          alignSelf="flex-end"
+          colorPalette="brand"
+          loading={pending}
+          disabled={blocked}
+          data-testid="post-submit"
+        >
+          {submitLabel}
+        </Button>
+      )}
     </Stack>
+  );
+}
+
+/**
+ * '없거나 삭제된 글입니다.' at the top of a form whose post left every view (오너 결정 2026-10-24,
+ * ADR-0073 9-52) — the reason #48 puts at the top of a comment text it holds, in the words of a
+ * save refused for it (`copy.errPostGone`). The focus comes here only when it has fallen to the
+ * page — the controls a save in flight disabled took it with them — and the sentence, the notice's
+ * name, is read out then; otherwise the focus stays where the writer has it and the sentence is an
+ * alert, read out as it appears. Decided as it first appears, on the client only (the server's
+ * HTML never holds it), as #48's held texts decide it (ADR-0074 7-25).
+ */
+function GoneNotice() {
+  const ref = useRef<HTMLDivElement>(null);
+  const textId = useId();
+  const [takesFocus] = useState(
+    () =>
+      typeof document !== 'undefined' &&
+      (document.activeElement === null || document.activeElement === document.body),
+  );
+  useEffect(() => {
+    if (takesFocus) ref.current?.focus({ preventScroll: false });
+  }, [takesFocus]);
+  return (
+    <Alert.Root
+      ref={ref}
+      status="error"
+      role={takesFocus ? 'group' : 'alert'}
+      tabIndex={-1}
+      aria-labelledby={textId}
+      data-testid="post-form-gone"
+    >
+      <Alert.Indicator />
+      <Alert.Content>
+        <Alert.Description id={textId}>{copy.errPostGone}</Alert.Description>
+      </Alert.Content>
+    </Alert.Root>
   );
 }

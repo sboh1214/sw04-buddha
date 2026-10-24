@@ -262,8 +262,14 @@ export interface PostEditorProps {
   imageSlots: ImageSlots;
   /** Uploads in flight, so the form can hold its submit until they land. */
   onUploadingChange: (uploading: boolean) => void;
-  /** While the post is being sent. */
+  /** While the post is being sent, and while `readOnly`: nothing changes the document. */
   disabled?: boolean;
+  /**
+   * The edit screen's post left every view, and the form holds what the writer had in it (오너
+   * 결정 2026-10-24, ADR-0073 9-52): the body is there to select and copy, never to change — the
+   * form passes `disabled` with it, and the editor says it is read-only to assistive tech.
+   */
+  readOnly?: boolean;
   /** Whether the body is over a limit (the form's counts): the editor says so to assistive tech. */
   invalid?: boolean;
   /** Ids of what describes the body (the counts, the limit messages), space-separated. */
@@ -282,6 +288,7 @@ export function PostEditor({
   imageSlots: slots,
   onUploadingChange,
   disabled = false,
+  readOnly = false,
   invalid = false,
   describedBy,
   refusedImageIds = [],
@@ -334,6 +341,13 @@ export function PostEditor({
         'data-testid': 'post-editor-content',
       },
       transformPastedHTML: keepServerLinks,
+      handleDOMEvents: {
+        // Locked (a send in flight, or `readOnly`): the browser's own selection — a drag, a double
+        // or a triple click — so the text can be selected and copied. ProseMirror's would take a
+        // triple click and draw its selection only in a view holding the focus, which a locked
+        // one cannot take: it selected nothing.
+        mousedown: (view) => !view.editable,
+      },
     },
     onCreate: ({ editor: made }) => {
       // Settled first: StarterKit's trailing node adds an empty paragraph after a body that ends in
@@ -379,12 +393,14 @@ export function PostEditor({
     if (dom === undefined) return;
     if (invalid) dom.setAttribute('aria-invalid', 'true');
     else dom.removeAttribute('aria-invalid');
+    if (readOnly) dom.setAttribute('aria-readonly', 'true');
+    else dom.removeAttribute('aria-readonly');
     if (describedBy !== undefined && describedBy !== '') {
       dom.setAttribute('aria-describedby', describedBy);
     } else {
       dom.removeAttribute('aria-describedby');
     }
-  }, [editor, invalid, describedBy]);
+  }, [editor, invalid, readOnly, describedBy]);
 
   const changeUploads = (delta: number) => {
     setUploads((count) => count + delta);
@@ -542,7 +558,9 @@ export function PostEditor({
           const files = Array.from(event.dataTransfer.files);
           if (files.length === 0) return;
           event.preventDefault();
-          void insertImages(files);
+          // A locked editor takes no file, as its toolbar's image button does not: not while the
+          // post is sent, nor once it is read-only (the browser does not open the file either).
+          if (!disabled) void insertImages(files);
         }}
       >
         <EditorContent editor={editor} />

@@ -24,6 +24,7 @@ import {
   isOwnPost,
   nameInitial,
   postEditPath,
+  postEditGoneAfter,
   postFirstLine,
   postGoneAfter,
   postKey,
@@ -218,28 +219,121 @@ describe('a post gone while its page is open (postGoneAfter, Codex review of #21
     // No component renders under node: the screens' wiring is pinned in their source, as the
     // write screen's is below.
     const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
-    for (const file of [
-      '../app/community/posts/[postId]/post-screen.tsx',
-      '../app/community/posts/[postId]/edit/edit-screen.tsx',
-    ]) {
-      const screen = source(file);
-      expect(screen, file).toContain('const [gone, setGone] = useState(false);');
-      expect(screen, file).toContain('const nowGone = postGoneAfter(gone, query);');
-      expect(screen, file).toContain('if (nowGone !== gone) setGone(nowGone);');
-      expect(screen, file).toMatch(
-        /useEffect\(\(\) => \{\s*if \(gone\) router\.refresh\(\);\s*\}, \[gone, router\]\);/,
-      );
-    }
-    // The post page: the sentence and the way back in place of the post and its market.
+    const refreshAtOnce =
+      /useEffect\(\(\) => \{\s*if \(gone\) router\.refresh\(\);\s*\}, \[gone, router\]\);/;
+    // The post page: the sentence and the way back in place of the post and its market, and the
+    // server page at once.
     const page = source('../app/community/posts/[postId]/post-screen.tsx');
+    expect(page).toContain('const [gone, setGone] = useState(false);');
+    expect(page).toContain('const nowGone = postGoneAfter(gone, query);');
+    expect(page).toContain('if (nowGone !== gone) setGone(nowGone);');
+    expect(page).toMatch(refreshAtOnce);
     expect(page).toMatch(
       /if \(gone\) \{\s*return \(\s*<Stack gap="6" data-testid="post-screen">\s*<Alert\.Root status="info" data-testid="post-gone">[\s\S]*?\{copy\.postNotFound\}[\s\S]*?<BackLink \/>\s*<\/Stack>\s*\);\s*\}\s*if \(post\.state !== 'published'\)/,
     );
-    // The edit screen: the sentence in the form's place, before the gate and the form.
+    // The edit screen: the same read decides it, and the server page waits for what the form
+    // holds to be closed (오너 결정 2026-10-24, below).
     const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
-    expect(edit).toMatch(
-      /\{gone \? \(\s*<EmptyState message=\{copy\.postNotFound\} data-testid="post-edit-gone" \/>\s*\) : \(\s*<WriteGate/,
+    expect(edit).toContain(
+      'const next = postEditGoneAfter(state, { gone: postGoneAfter(state.gone, query), formHolding });',
     );
+    expect(edit).not.toMatch(refreshAtOnce);
+  });
+});
+
+describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 2026-10-24, ADR-0073 9-52)', () => {
+  const onScreen = { gone: false, held: false };
+
+  it('changes nothing while the post is there, whatever the form holds', () => {
+    expect(postEditGoneAfter(onScreen, { gone: false, formHolding: false })).toBe(onScreen);
+    expect(postEditGoneAfter(onScreen, { gone: false, formHolding: true })).toBe(onScreen);
+  });
+
+  it('keeps the form, held, when it holds something of the writer’s as the post goes; one holding nothing — or none on screen — is the 404 at once', () => {
+    expect(postEditGoneAfter(onScreen, { gone: true, formHolding: true })).toEqual({
+      gone: true,
+      held: true,
+    });
+    expect(postEditGoneAfter(onScreen, { gone: true, formHolding: false })).toEqual({
+      gone: true,
+      held: false,
+    });
+  });
+
+  it('is decided as the post goes: held until closed or until the form leaves the screen, and never held later', () => {
+    const held = { gone: true, held: true };
+    expect(postEditGoneAfter(held, { gone: true, formHolding: true })).toBe(held);
+    // The form taken away under it (the gate's sign-in prompt for a session gone, say).
+    expect(postEditGoneAfter(held, { gone: true, formHolding: false })).toEqual({
+      gone: true,
+      held: false,
+    });
+    // Closed (닫기), or the 404 at once: a form saying it holds something afterwards changes
+    // nothing.
+    const closed = { gone: true, held: false };
+    expect(postEditGoneAfter(closed, { gone: true, formHolding: true })).toBe(closed);
+    expect(postEditGoneAfter(closed, { gone: true, formHolding: false })).toBe(closed);
+  });
+
+  it('is what the edit screen draws from: the form held, read-only, with the sentence and 닫기, and the 404 once closed', () => {
+    // No component renders under node: the wiring is pinned in the source, as above.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
+    expect(edit).toContain('const [formHolding, setFormHolding] = useState(false);');
+    expect(edit).toContain(
+      'const [state, setState] = useState<PostEditGone>({ gone: false, held: false });',
+    );
+    expect(edit).toContain(
+      'const next = postEditGoneAfter(state, { gone: postGoneAfter(state.gone, query), formHolding });',
+    );
+    expect(edit).toContain('if (next !== state) setState(next);');
+    expect(edit).toMatch(
+      /useEffect\(\(\) => \{\s*if \(gone && !held\) router\.refresh\(\);\s*\}, \[gone, held, router\]\);/,
+    );
+    // The sentence in the form's place once nothing is held, before the gate and the form.
+    expect(edit).toMatch(
+      /\{gone && !held \? \(\s*<EmptyState message=\{copy\.postNotFound\} data-testid="post-edit-gone" \/>\s*\) : \(\s*<WriteGate/,
+    );
+    // The form hears the post gone, closes it, and says what it holds.
+    expect(edit).toMatch(
+      /<EditForm\s+post=\{post\}\s+accountId=\{writer\.accountId\}\s+gone=\{gone\}\s+onClose=\{\(\) => setState\(\{ gone: true, held: false \}\)\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
+    );
+    expect(edit).toMatch(
+      /gone=\{gone\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,
+    );
+
+    const form = source('../components/post/post-form.tsx');
+    // What it says it holds: what leaving would lose and no landed write — and, gone, the form.
+    expect(form).toContain('const holding = gone || (dirty && !saved);');
+    expect(form).toMatch(
+      /useEffect\(\(\) => \{\s*onHoldingChange\?\.\(holding\);\s*\}, \[holding, onHoldingChange\]\);/,
+    );
+    expect(form).toContain('useEffect(() => () => onHoldingChange?.(false), [onHoldingChange]);');
+    // Leaving asks while it is held.
+    expect(form).toContain('useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);');
+    // The sentence on top; the title and the body read-only (selectable, never changed), and
+    // nothing to send or discard.
+    expect(form).toContain('{gone && <GoneNotice />}');
+    expect(form).toContain('{restored !== null && !gone && (');
+    expect(form).toMatch(/readOnly=\{gone\}\s+disabled=\{pending && !gone\}/);
+    expect(form).toMatch(/disabled=\{pending \|\| gone\}\s+readOnly=\{gone\}/);
+    expect(form).toMatch(/const blocked =\s+gone \|\|/);
+    expect(form).toContain('{errorMessage !== undefined && !gone && (');
+    expect(form).toContain('open={held.asking && props.gone !== true}');
+    expect(form).toMatch(
+      /\{gone \? \(\s*(?:\/\/[^\n]*\n\s*)*<Button\s+key="close"[\s\S]*?onClick=\{onClose\}\s+data-testid="post-form-close"\s*>\s*\{copy\.close\}/,
+    );
+    expect(form).toContain('<Alert.Description id={textId}>{copy.errPostGone}</Alert.Description>');
+    // The post going clears no draft of the tab: the form clears one only where a draft taken
+    // back is taken in, or discarded.
+    expect(form.match(/clearSessionPostDraft\(/g)).toHaveLength(2);
+    expect(form).not.toContain('postDraftLanded');
+
+    const editor = source('../components/post/post-editor.tsx');
+    expect(editor).toContain("if (readOnly) dom.setAttribute('aria-readonly', 'true');");
+    expect(editor).toContain('if (!disabled) void insertImages(files);');
+    // Selected by the browser while locked: ProseMirror's triple click selected nothing there.
+    expect(editor).toContain('mousedown: (view) => !view.editable,');
   });
 });
 

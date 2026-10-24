@@ -378,6 +378,40 @@ export function postGoneAfter(gone: boolean, read: { isError: boolean; error: un
   return gone || (read.isError && isApiError(read.error, 'NOT_FOUND'));
 }
 
+/**
+ * An edit screen whose post left every view (오너 결정 2026-10-24, ADR-0073 9-52): what it draws.
+ * The form keeps what the writer had in it — the title and the body, which they can select and
+ * copy but no longer change — with '없거나 삭제된 글입니다.' and 닫기, until they close it (`held`);
+ * then, and at once when the form held nothing of theirs, the screen is the server's 404. The rule
+ * of #48's comment boxes (ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답 1·2): a box going
+ * with a changed text is held with why until it is closed, the page's 404 waits for it, and one
+ * holding nothing of the writer's is not.
+ */
+export interface PostEditGone {
+  /** The post left every view (`postGoneAfter`): no later read brings it back. */
+  gone: boolean;
+  /** The form is on screen holding what the writer had in it, until they close it. */
+  held: boolean;
+}
+
+/**
+ * The edit screen's `PostEditGone` once `now` is heard: whether a read says the post is gone
+ * (`postGoneAfter`), and whether the form holds something of the writer's (`formHolding`, the
+ * form's own word as of its last render — a changed title or body, a draft taken back, an upload on
+ * its way, and no save that landed: what leaving would lose). Held is decided as the post goes, by
+ * what the form held then, and is never taken up later; it ends when the writer closes it, or when
+ * the form leaves the screen under it (the session gone in another tab, say: the gate's sign-in
+ * prompt in its place) — there is nothing left on screen to hold. The same object when nothing
+ * changes.
+ */
+export function postEditGoneAfter(
+  state: PostEditGone,
+  now: { gone: boolean; formHolding: boolean },
+): PostEditGone {
+  if (!state.gone) return now.gone ? { gone: true, held: now.formHolding } : state;
+  return state.held && !now.formHolding ? { gone: true, held: false } : state;
+}
+
 /** Search engines cut a description around here. */
 const META_DESCRIPTION_MAX = 160;
 
