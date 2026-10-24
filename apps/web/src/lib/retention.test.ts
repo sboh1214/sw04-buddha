@@ -279,6 +279,9 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     // Only an approved period deletes, and the screen says so, with the nickname holds' rule.
     expect(copy.adminRetentionSettingsNotice).toContain('승인됨');
     expect(copy.adminRetentionSettingsNotice).toContain('미정·설계 제안·시험값');
+    expect(copy.adminRetentionSettingsNotice).toContain(
+      '숨긴 채로 남은 글·댓글과 함께 지운 수정 이력은 신고·제재 기록의 기간으로 보입니다.',
+    );
     expect(copy.adminRetentionSettingsNotice).toContain('30일');
     // A kind that failed has its line, marked 실패 (owner decision 2026-10-24 14).
     expect(copy.adminRetentionSettingsNotice).toContain('오류');
