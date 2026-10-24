@@ -22,6 +22,7 @@ import {
   PROPOSAL_STATUS_LABEL,
   PROPOSAL_STATUS_PALETTE,
   formatProposalDate,
+  proposalActorName,
 } from '@/lib/proposals';
 
 /**
@@ -107,9 +108,9 @@ export function AdminProposals() {
                 </ChakraLink>
               </HStack>
               <Text fontSize="xs" color="fg.muted">
-                {copy.adminProposalProposer} {proposal.proposer.nickname} · {copy.proposalDeadline}{' '}
-                {formatProposalDate(proposal.deadline)} · {copy.proposalSubmittedAt}{' '}
-                {formatKst(proposal.createdAt)}
+                {copy.adminProposalProposer} {proposalActorName(proposal.proposer)} ·{' '}
+                {copy.proposalDeadline} {formatProposalDate(proposal.deadline)} ·{' '}
+                {copy.proposalSubmittedAt} {formatKst(proposal.createdAt)}
               </Text>
             </Stack>
           ))}

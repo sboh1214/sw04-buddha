@@ -25,9 +25,11 @@ import {
   isApiError,
   isForAnotherAccount,
 } from './api';
+import { nicknameShown } from './account-closure';
 import { type CategoryNode, locateCategory } from './category-tree';
 import { kstLocalToIso } from './datetime';
 import { formatWait } from './phone-verification';
+import { restrictedMessage } from './restriction';
 
 /**
  * 시장 제안 (#77, ADR-0089) as the screens read it: the form (`/proposals/new`), 내 제안
@@ -141,6 +143,18 @@ export function adminProposalActions(proposal: Pick<AdminProposal, 'status' | 'a
     reject: canMoveProposal(status, 'rejected'),
     link: canLinkProposalMarket(status, (adoption?.market ?? null) !== null),
   };
+}
+
+/**
+ * An account as the admin screens name it — the proposer, who started the review, who decided,
+ * who linked a market later: its nickname, or '탈퇴한 사용자' once its member closed the account
+ * (#140, ADR-0086: `AdminAccountActor`'s nickname is null then — the operators still review and
+ * decide its proposals, ADR-0069 decision 4 #140). Every line of the list and of the detail's
+ * record that names one goes through here, so none of them draws an empty name; '' only for a step
+ * with no account (never with its time, which the record shows alone then).
+ */
+export function proposalActorName(actor: AdminProposal['proposer'] | null): string {
+  return actor === null ? '' : nicknameShown(actor.nickname);
 }
 
 // ---- dates ----------------------------------------------------------------------------
@@ -311,6 +325,11 @@ export type ProposalFailure =
   | { kind: 'refresh'; message: string }
   /** The cookie is another account's: the session is asked again (SessionCacheGuard follows). */
   | { kind: 'session'; message: string }
+  /**
+   * A writing or an account restriction (RESTRICTED, #185·#139): said above the form with its end,
+   * and the way to 조치·신고 내역 under it (`RefusalText`) — owner decision 2026-10-22 evening.
+   */
+  | { kind: 'restricted'; message: string }
   /** Anything else, said above the form: a limit (with when, for the daily one), the rest. */
   | { kind: 'notice'; message: string };
 
@@ -318,10 +337,17 @@ export type ProposalFailure =
  * A refusal of the form, read. The limits (PROPOSAL_LIMITED, ADR-0069 decision 4 #77 and decision
  * 7): the waiting one passes only once the operators decide or the member retracts, so it names no
  * time; the daily one names when the oldest of the day's proposals leaves the 24 hours, rounded up
- * as the server rounds it. The restriction hook (#139 계정 제한, #185 작성 제한) has no refusal of
- * its own yet: those PRs bring its code and its line here.
+ * as the server rounds it. A writing or an account restriction (RESTRICTED — ADR-0069 decision 4
+ * #77 자격, #185 and #139) is said as every refused write says it (`restrictedMessage`): which
+ * restriction keeps a proposal closed and until when, in the member's time zone (`formatDate`,
+ * ADR-0063) — the later-ending one when both stand, as the server names it.
  */
-export function proposalFailure(error: unknown): ProposalFailure {
+export function proposalFailure(
+  error: unknown,
+  formatDate: (iso: string) => string,
+): ProposalFailure {
+  const restricted = restrictedMessage(error, 'proposal', formatDate);
+  if (restricted !== undefined) return { kind: 'restricted', message: restricted };
   if (isForAnotherAccount(error)) return { kind: 'session', message: copy.sessionChanged };
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = issuePath(error) as keyof ProposalFormValues | undefined;

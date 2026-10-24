@@ -33,8 +33,9 @@ const { marketProposals } = schema;
  *
  * A submission is one transaction (`create`):
  * 1. The onboarding (`assertOnboarded`, #57-8; OnboardedGuard asked it already, this holds it
- *    to the write's snapshot) and the restrictions (`ProposalRestrictions`, the hook #139 and
- *    #185 fill — ADR-0069 decision 4 #77, 자격).
+ *    to the write's snapshot) and the restrictions (`ProposalRestrictions`: the profile row FOR KEY
+ *    SHARE, then a writing or an account restriction refuses it — RESTRICTED, ADR-0069 decision 4
+ *    #77 자격, #185 and #139).
  * 2. The account's 본인확인 record FOR SHARE, so its number cannot change or go until this
  *    commits, and the keyed hash of the number (PhoneHasher, ADR-0071): the limits count by it,
  *    across every account that verified the number (decision 7).
@@ -62,7 +63,7 @@ export class ProposalsService {
   async create(userId: string, body: CreateProposalBody): Promise<Proposal> {
     const id = await this.db.transaction(async (tx) => {
       await assertOnboarded(tx, userId);
-      // HOOK (#139 계정 제한, #185 작성 제한): proposal-restrictions.ts.
+      // 작성 제한 (#185)·계정 제한 (#139): proposal-restrictions.ts — the profile row first.
       await this.restrictions.assertMayPropose(tx, userId);
       const phoneHash = await this.verifiedNumberHash(tx, userId);
       await tx.execute(

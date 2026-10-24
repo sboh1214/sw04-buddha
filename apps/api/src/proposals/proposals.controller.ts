@@ -27,8 +27,8 @@ import { ProposalsService } from './proposals.service.js';
  * one. Owner-only routes: the session decides whose proposals are read or written, and another
  * account's proposal is NOT_FOUND (ADR-0069 decision 4 #77: only the proposer and the operators see
  * one). Submitting is open to accounts that finished the onboarding (OnboardedGuard: #57-8 leaves
- * the rest only reading) and are not restricted (the hook in proposal-restrictions.ts, #139 and
- * #185). Retracting one's own 접수 proposal, like reading one's own, is the session alone (owner
+ * the rest only reading) and are under no writing or account restriction (proposal-restrictions.ts,
+ * #185 and #139: RESTRICTED). Retracting one's own 접수 proposal, like reading one's own, is the session alone (owner
  * decision 2026-10-19, as #46's own-post delete): neither the onboarding nor a restriction (#45-12)
  * refuses it. Counted like the other owner routes: the per-address bucket every route has. The
  * limits that bound how many proposals there are — PROPOSAL_LIMITS, per verified number, for
@@ -81,8 +81,9 @@ export class MeProposalsController {
 
   /**
    * Submits a proposal, 접수 (ADR-0069 decision 4 #77). Refused for an account that has not
-   * finished the onboarding (the guard, before the body is read), under a restriction (the hook),
-   * for a date before today in Korea or a category that is not active, and past a member's limits.
+   * finished the onboarding (the guard, before the body is read), under a writing or an account
+   * restriction (RESTRICTED, proposal-restrictions.ts), for a date before today in Korea or a
+   * category that is not active, and past a member's limits.
    */
   @Post()
   @UseGuards(OnboardedGuard)
@@ -94,7 +95,8 @@ export class MeProposalsController {
   })
   @ApiData(proposalSchema, 201)
   // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
-  // cookie's account (nothing written). ONBOARDING_REQUIRED: the onboarding is not done.
+  // cookie's account (nothing written), or RESTRICTED: a writing or an account restriction stands
+  // (its kind and end, the later-ending one). ONBOARDING_REQUIRED: the onboarding is not done.
   // VERIFICATION_REQUIRED: the 본인확인 record went away while the request ran (a withdrawal).
   // VALIDATION_ERROR: the form, a date before today (Korea), a category that is not active.
   // PROPOSAL_LIMITED: the verified number's waiting or daily proposals (a member's: an operator's
@@ -105,6 +107,7 @@ export class MeProposalsController {
     'FORBIDDEN',
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
+    'RESTRICTED',
     'VERIFICATION_REQUIRED',
     'PROPOSAL_LIMITED',
     'RATE_LIMITED',

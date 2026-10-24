@@ -4,6 +4,7 @@ import { ADMIN_ACTION_TYPES, RELEASE_SETTING_STATUSES } from './enums.js';
 import {
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
+  MARKET_PROPOSALS_RETENTION_SETTING,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
   RETENTION_PERIOD_SETTINGS,
@@ -43,7 +44,7 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70) and the retention periods (#184)', () => {
+  it('ships the items the issues that use them registered: the start grant (#70) and the retention periods (#184, #77)', () => {
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       'grant.start_coin',
       'retention.consent_records',
@@ -51,6 +52,8 @@ describe('release settings registry', () => {
       'retention.deleted_posts',
       'retention.moderation_records',
       'retention.removed_profile_items',
+      // 시장 제안 기록 보존기간 (#77, owner decision 2026-10-24 13).
+      'retention.market_proposals',
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
     // The worker reads each period through the very object the registry holds.
@@ -133,6 +136,23 @@ describe('release settings registry', () => {
         '오류로 끝내지 못한 종류는 실패로 남긴다',
       );
     }
+  });
+
+  it('names the market proposals’ period as the owner set it: a withdrawn account’s, once processed (#77, owner decision 2026-10-24 13)', () => {
+    const definition = RETENTION_PERIOD_SETTINGS.market_proposals;
+    expect(definition).toBe(MARKET_PROPOSALS_RETENTION_SETTING);
+    expect(definition).toMatchObject({
+      key: 'retention.market_proposals',
+      label: '시장 제안 기록 보존기간',
+      unit: '일',
+    });
+    // From the later of the withdrawal and the processing's end (ADR-0069 decision 7), never while
+    // the operators have it to review, and never a live account's.
+    expect(definition.description).toContain('탈퇴한 계정의 시장 제안');
+    expect(definition.description).toContain('탈퇴 시각과 처리가 끝난 시각');
+    expect(definition.description).toContain('늦은 쪽부터');
+    expect(definition.description).toContain('처리를 기다리는 제안(접수·검토)');
+    expect(definition.description).toContain('탈퇴하지 않은 계정의 제안은 지우지 않는다');
   });
 
   it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {

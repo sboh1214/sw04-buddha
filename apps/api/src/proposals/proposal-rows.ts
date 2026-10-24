@@ -87,9 +87,12 @@ export type ProposalRow = Awaited<ReturnType<ReturnType<typeof proposalQuery>['e
  * A proposal with what the admin screen shows besides: the internal memo, whether the wished-for
  * category is still in use (a retired wish is no default for a draft, owner decision 2026-10-19),
  * a market linked after the 채택 and when, and the proposer and operators by their current nickname
- * (`AdminAccountActor`, read here — the row stores ids, as every admin record does). Every account
- * has a profile (trigger 0002); the joins are LEFT only so that a missing one could never hide a
- * proposal from the screen that reviews it.
+ * (`AdminAccountActor`, read here — the row stores ids, as every admin record does): null for an
+ * account its member closed (#140, ADR-0086 — the profile's nickname is emptied; the screen says
+ * '탈퇴한 사용자'), whose proposals the operators still review and decide (ADR-0069 decision 4 #140
+ * «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다»). Every account has a profile (trigger 0002); the
+ * joins are LEFT only so that a missing one could never hide a proposal from the screen that
+ * reviews it.
  */
 export function adminProposalQuery(executor: Executor) {
   return executor
@@ -174,8 +177,9 @@ export function toProposal(row: ProposalRow): Proposal {
   };
 }
 
+/** An account as the admin screen names it: its nickname, null once its member closed it (#140). */
 const actor = (id: string | null, nickname: string | null) =>
-  id === null ? null : { id, nickname: nickname ?? '' };
+  id === null ? null : { id, nickname };
 
 /**
  * The operators' view (`AdminProposal`): everything, markets in any status, who and when, and
@@ -186,7 +190,7 @@ export function toAdminProposal(row: AdminProposalRow): AdminProposal {
   return {
     ...submitted(row),
     category: category === null ? null : { ...category, isActive: row.categoryIsActive ?? false },
-    proposer: { id: proposal.userId, nickname: row.proposerNickname ?? '' },
+    proposer: { id: proposal.userId, nickname: row.proposerNickname },
     reviewStartedAt: proposal.reviewStartedAt?.toISOString() ?? null,
     reviewStartedBy: actor(proposal.reviewStartedBy, row.reviewerNickname),
     decidedAt: proposal.decidedAt?.toISOString() ?? null,

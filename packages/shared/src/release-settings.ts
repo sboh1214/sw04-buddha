@@ -289,6 +289,24 @@ export const REMOVED_PROFILE_ITEMS_RETENTION_SETTING = defineReleaseSetting({
   schema: retentionDaysSchema,
 });
 
+/**
+ * 시장 제안 기록의 보존기간 (#77, ADR-0089; owner decision 2026-10-24 13, ADR-0087 결과 5): a withdrawn
+ * account's market proposals (`market_proposals` — the form as submitted, the keyed hash of the
+ * number, the status, the operators' reasons, memos and internal memo), deleted once this period
+ * has passed since the later of the withdrawal and the end of their processing — the 채택 or 반려,
+ * a market linked to a 채택 later, or the 철회 (ADR-0069 decision 7). One waiting for the operators
+ * (접수, 검토) is never deleted: the operators still review it (decision 4 #140). A live account's
+ * proposals are its own record: never. Who reviewed and decided stays in the operational records
+ * (`admin_actions`), with no period.
+ */
+export const MARKET_PROPOSALS_RETENTION_SETTING = defineReleaseSetting({
+  key: 'retention.market_proposals',
+  label: '시장 제안 기록 보존기간',
+  unit: '일',
+  description: `탈퇴한 계정의 시장 제안(낸 양식·상태·반려 사유와 설명·채택 메모·운영자 내부 메모)을 탈퇴 시각과 처리가 끝난 시각(채택·반려, 채택 뒤 나중에 이은 시장, 철회) 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#77). 처리를 기다리는 제안(접수·검토)과 탈퇴하지 않은 계정의 제안은 지우지 않는다. ${RETENTION_RULES}`,
+  schema: retentionDaysSchema,
+});
+
 /** The retention items by period (retention.ts): the worker's job reads each once per run. */
 export const RETENTION_PERIOD_SETTINGS: Readonly<
   Record<RetentionPeriod, ReleaseSettingDefinition<number>>
@@ -298,11 +316,13 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
   deleted_posts: DELETED_POSTS_RETENTION_SETTING,
   moderation_records: MODERATION_RECORDS_RETENTION_SETTING,
   removed_profile_items: REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
+  market_proposals: MARKET_PROPOSALS_RETENTION_SETTING,
 };
 
 /**
  * The shipped registry, in the order the admin screen lists it. #170 built the mechanism, and each
- * value is registered by the issue that uses it (#70 the start grant, #184 the retention periods;
+ * value is registered by the issue that uses it (#70 the start grant, #184 the retention periods,
+ * #77 the market proposals' retention period;
  * #74, #119, #152·#175, … to come) — define it with `defineReleaseSetting` and list it here, then
  * update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own
  * registry (`createTestApp({ releaseSettings })` in apps/api).
@@ -314,6 +334,7 @@ export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   DELETED_POSTS_RETENTION_SETTING,
   MODERATION_RECORDS_RETENTION_SETTING,
   REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
+  MARKET_PROPOSALS_RETENTION_SETTING,
 ]);
 
 /** A stored status and value: `value` is null exactly when `status` is `undecided`. */

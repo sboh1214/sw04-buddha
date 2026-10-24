@@ -1005,6 +1005,39 @@ const phoneVerificationRecords: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * A withdrawn account's market proposals (#77, ADR-0089; owner decision 2026-10-24 13 — their own
+ * period, '시장 제안 기록'), once the period has passed since the later of the withdrawal and the end
+ * of their processing: the 채택 or 반려 (`decided_at`), a market linked to a 채택 later
+ * (`market_linked_at`, owner decision 2026-10-19 8) or the 철회 (`retracted_at`) — ADR-0069 decision
+ * 7 «처리 중이면 남기고, 탈퇴와 처리 가운데 늦은 쪽부터». One still waiting for the operators (접수,
+ * 검토) is never taken: they review and decide it all the same (decision 4 #140), and its end is not
+ * yet. A live account's are kept. Nothing refers to a proposal — the operators' records name it by
+ * id (`admin_actions`, kept with no period) — so the row goes alone. Locked SKIP LOCKED, as the
+ * reports: an operator's write in flight on one (its internal memo, a later link) is left to the
+ * next run.
+ */
+const marketProposals: Step = async (tx, { cutoff, limit }) => {
+  const { marketProposals: table, profiles } = schema;
+  const due = await tx
+    .select({ id: table.id })
+    .from(table)
+    .innerJoin(profiles, eq(profiles.userId, table.userId))
+    .where(
+      and(
+        inArray(table.status, ['adopted', 'rejected', 'retracted']),
+        lte(profiles.closedAt, cutoff),
+        sql`GREATEST(${table.decidedAt}, ${table.marketLinkedAt}, ${table.retractedAt}) <= ${ts(cutoff)}`,
+      ),
+    )
+    .orderBy(asc(profiles.closedAt), asc(table.id))
+    .limit(limit)
+    .for('update', { of: table, skipLocked: true });
+  const ids = due.map((row) => row.id);
+  if (ids.length > 0) await tx.delete(table).where(inArray(table.id, ids));
+  return { selected: ids.length, deleted: { market_proposals: ids.length }, storageKeys: [] };
+};
+
+/**
  * The steps in the order a run takes them (RETENTION_PURGE_KINDS): each kind before what it names —
  * a report before its action (a hiding's among them, which goes with its hidden item and that
  * item's versions), a removed profile item and an ended hold before theirs, an action before its
@@ -1027,6 +1060,7 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'link_flags', step: linkFlags },
   { kind: 'consent_records', step: consentRecords },
   { kind: 'phone_verification_records', step: phoneVerificationRecords },
+  { kind: 'market_proposals', step: marketProposals },
 ];
 
 /**

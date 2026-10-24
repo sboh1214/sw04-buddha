@@ -5,6 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { RefusalText } from '@/components/moderation/refusal-text';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
@@ -20,6 +22,7 @@ import {
   proposalFormSchema,
   toCreateProposalBody,
 } from '@/lib/proposals';
+import { type Refusal } from '@/lib/restriction';
 
 const schema = proposalFormSchema();
 
@@ -32,14 +35,17 @@ const schema = proposalFormSchema();
  * form is the only place the fields are typed.
  *
  * The rules are the API's (lib/proposals.ts); a refusal lands under the field the server named, or
- * above the form — a limit with when the next one may go, the screen out of date (the hook asked
- * for the session or `['me']` again, and the onboarding gate follows the latter).
+ * above the form — a writing or an account restriction with its end and the way to 조치·신고 내역
+ * (#185, #139), a limit with when the next one may go, the screen out of date (the hook asked for
+ * the session or `['me']` again, and the onboarding gate follows the latter).
  */
 export function ProposalForm() {
   const router = useRouter();
   const create = useCreateProposal();
   const categories = useCategories();
-  const [notice, setNotice] = useState<string | null>(null);
+  // The member's time zone (ADR-0063): a restriction's end in the refusal is an absolute time.
+  const format = useFormatDateTime();
+  const [notice, setNotice] = useState<Refusal | null>(null);
   const noticeRef = useRef<HTMLDivElement>(null);
   // A refusal said above the form is out of sight from the submit button at its foot.
   useEffect(() => {
@@ -68,12 +74,12 @@ export function ProposalForm() {
       toaster.create({ type: 'success', title: copy.proposalSubmitted });
       router.push(MY_PROPOSALS_PATH);
     } catch (error) {
-      const failure = proposalFailure(error);
+      const failure = proposalFailure(error, format);
       if (failure.kind === 'field') {
         setError(failure.field, { message: failure.message }, { shouldFocus: true });
         return;
       }
-      setNotice(failure.message);
+      setNotice({ message: failure.message, restricted: failure.kind === 'restricted' });
     }
   });
 
@@ -93,7 +99,9 @@ export function ProposalForm() {
           <Alert.Root ref={noticeRef} status="error" role="alert" data-testid="proposal-form-error">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{notice}</Alert.Description>
+              <Alert.Description>
+                <RefusalText message={notice.message} restricted={notice.restricted} />
+              </Alert.Description>
             </Alert.Content>
           </Alert.Root>
         )}

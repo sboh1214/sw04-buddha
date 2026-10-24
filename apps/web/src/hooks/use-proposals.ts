@@ -89,7 +89,8 @@ export function createProposalOptions(
       await queryClient.invalidateQueries({ queryKey: PROPOSALS_KEY });
     },
     onError: async (error: Error, body: CreateProposalBody) => {
-      const failure = proposalFailure(error);
+      // Only the kind is read here — the sentence (a restriction's end among it) is the form's.
+      const failure = proposalFailure(error, (iso) => iso);
       if (failure.kind === 'session') onSessionChanged();
       if (failure.kind === 'refresh') await refreshOwnMe(queryClient, body.expectedAccountId);
     },

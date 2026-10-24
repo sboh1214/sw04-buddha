@@ -9,10 +9,17 @@
  * and shown, each move recorded in `admin_actions` with its operator; the internal memo apart from
  * the proposer. And the owner's answers of 2026-10-19: a 채택 made with no market takes one later,
  * once (a draft or an existing market, `proposal_link`), the status staying 채택; a retired wish is
- * shown as retired. Skips when TEST_* are unset.
+ * shown as retired. And #140's: a proposal of an account its member closed is reviewed and decided
+ * all the same, its proposer named by no nickname. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { completeOnboarding, createCategory, createMarket, createProposal } from '@buddha/db/test';
+import {
+  closeAccount,
+  completeOnboarding,
+  createCategory,
+  createMarket,
+  createProposal,
+} from '@buddha/db/test';
 import {
   adminProposalSchema,
   proposalDraftCloseAt,
@@ -171,6 +178,43 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     const submitted = (await get('?status=submitted')).json<ListPage>();
     expect(submitted.data.map((row) => row.id)).toEqual([c.id, a.id]);
     expect((await get(`/${randomUUID()}`)).statusCode).toBe(404);
+  });
+
+  it('reviews and decides a proposal whose proposer closed the account, naming the proposer by no nickname (#140)', async () => {
+    // ADR-0069 decision 4 #140 «처리 중인 신고·이의·제안: 그대로 검토하고 결과를 기록한다. 탈퇴한 본인은
+    // 볼 수 없다»: the closure (#140) leaves the row, the operators go on with it.
+    const waiting = await proposal();
+    await closeAccount(t.db, proposer.id);
+    const listed = (await get('?status=submitted')).json<ListPage>();
+    expect(listed.data.map((row) => [row.id, row.proposer])).toEqual([
+      [waiting.id, { id: proposer.id, nickname: null }],
+    ]);
+    expect(answerOf(await review(waiting.id))).toMatchObject({
+      status: 'reviewing',
+      proposer: { id: proposer.id, nickname: null },
+      reviewStartedBy: { id: admin.id },
+    });
+    const adopted = answerOf(await adopt(waiting.id, { memo: '채택합니다' }, second));
+    expect(adopted).toMatchObject({
+      status: 'adopted',
+      proposer: { id: proposer.id, nickname: null },
+      decidedBy: { id: second.id },
+      adoption: { memo: '채택합니다', market: null },
+    });
+    expect((await actions()).map((row) => [row.type, row.adminId])).toEqual([
+      ['proposal_review', admin.id],
+      ['proposal_adopt', second.id],
+    ]);
+    // An operator who reviewed it and closed the account since (the role revoked first, #57-17) is
+    // named by no nickname either (AdminAccountActor, #140).
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'user' })
+      .where(eq(schema.profiles.userId, admin.id));
+    await closeAccount(t.db, admin.id);
+    const read = answerOf(await get(`/${waiting.id}`, second));
+    expect(read.reviewStartedBy).toEqual({ id: admin.id, nickname: null });
+    expect(read.decidedBy).toEqual({ id: second.id, nickname: expect.any(String) as string });
   });
 
   it('starts a review once, recording who and when, and the record of it', async () => {

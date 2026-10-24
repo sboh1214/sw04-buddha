@@ -4,7 +4,7 @@ import {
   type Browser,
   type Page,
 } from '@playwright/test';
-import type { Proposal } from '@buddha/shared';
+import type { Me, Proposal } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
@@ -15,6 +15,8 @@ import {
   freshTag,
   logOut,
   meOf,
+  openSetPassword,
+  setFirstPassword,
   signIn,
   signUp,
   test,
@@ -31,6 +33,13 @@ import {
  * retracted and rejected ones). A proposal adopted with no market takes one later, once (owner
  * decision 2026-10-19): an existing draft market picked by title, whose link the member sees once
  * it opens. The search's no-results screen leads a visitor to the login and back to the form.
+ *
+ * Restacked onto #184's chain (ADR-0089 결과 5): a writing restriction refuses the form with its end
+ * and the way to 조치·신고 내역 while the 철회 stays open (#185·#139); an account with steps of its
+ * onboarding left — a new one, or one a terms revision sent back to agree again — opens 내 제안 and
+ * takes a 접수 proposal back, while its 시장 제안하기 still meets the gate (owner decision
+ * 2026-10-20); and a member who closed the account (#140) stays on the operators' screens as
+ * '탈퇴한 사용자', the proposal reviewed all the same.
  *
  * Who may propose (onboarding, restrictions), the waiting limit, the exact edges of both limits,
  * the status machine against races and who sees what are the API's integration tests
@@ -455,5 +464,131 @@ test.describe('시장 제안', () => {
     await logOut(page);
     await page.goto('/my/proposals');
     await expect(page).toHaveURL('/login?next=%2Fmy%2Fproposals');
+  });
+  test('작성 제한 중에는 양식이 끝나는 때와 조치·신고 내역 링크로 거절하고, 접수 제안의 철회는 그대로 된다', async ({
+    admin,
+    page,
+  }) => {
+    const group = freshTag();
+    await signUp(page, freshEmail());
+    const waiting = await proposeThroughApi(page, `E2E 제한 전 ${group}`);
+    const me = await meOf(page.request);
+    // An operator's one-day writing restriction (#185), straight at the admin API.
+    await dataOf(
+      await admin.post(`/api/v1/admin/moderation/users/${me.id}/writing-restriction`, {
+        data: { reason: 'spam', days: 1 },
+      }),
+    );
+
+    // The form refuses a new proposal (ADR-0069 decision 4 #77 자격): which restriction, until when,
+    // and the way to 조치·신고 내역 under it — no appeal sentence (owner decision 2026-10-22 evening).
+    await page.goto('/proposals/new');
+    await fillForm(page, `E2E 제한 중 ${group}`, koreanDateIn(5));
+    await page.getByTestId('proposal-submit').click();
+    const refusal = page.getByTestId('proposal-form-error');
+    await expect(refusal).toContainText(copy.errRestrictedProposal);
+    await expect(refusal).toContainText(copy.restrictionUntil);
+    await expect(refusal.getByTestId('restricted-moderation-link')).toHaveAttribute(
+      'href',
+      '/my/moderation',
+    );
+    await expect(refusal).not.toContainText('이의');
+    await expect(page).toHaveURL('/proposals/new');
+
+    // The 접수 one is still taken back (#45-12: one's own, under a restriction too).
+    await page.goto('/my/proposals');
+    await page.getByTestId(`my-proposal-retract-${waiting.id}`).click();
+    await page.getByTestId('my-proposal-retract-confirm').click();
+    await expect(page.getByText(copy.proposalRetracted)).toBeVisible();
+    await expect(statusOf(page, waiting.id)).toHaveText(copy.proposalStatusRetracted);
+    const items = await dataOf<Proposal[]>(await page.request.get('/api/v1/me/proposals'));
+    expect(items.map((row) => row.id)).toEqual([waiting.id]);
+  });
+
+  test('온보딩을 마치지 않은 계정도 재동의만 남은 계정도 내 제안을 열고 접수 제안을 철회하며, 시장 제안하기는 온보딩으로 보낸다', async ({
+    page,
+  }) => {
+    // A new account with every step left (owner decision 2026-10-20): 내 제안 opens — empty, as an
+    // account that never finished has proposed nothing — and 시장 제안하기 meets the gate.
+    await openSetPassword(page, freshEmail());
+    await setFirstPassword(page);
+    await expect(page).toHaveURL('/onboarding');
+    await page.goto('/my/proposals');
+    await expect(page.getByTestId('my-proposals-empty')).toBeVisible();
+    await expect(page).toHaveURL('/my/proposals');
+    await page.getByTestId('my-proposals-new').click();
+    await expect(page).toHaveURL('/onboarding?next=%2Fproposals%2Fnew');
+    // Signed out by dropping the cookie: MY's 로그아웃 is behind the gate for this account.
+    await page.context().clearCookies();
+
+    // A member a revision of the terms sent back to agree again (#57-5): its 접수 proposal from
+    // before. `GET /me` says the re-consent, as onboarding.spec.ts makes it — the server's own
+    // onboarding stays done, and the 철회 asks it nothing anyway (owner decision 2026-10-19).
+    const group = freshTag();
+    await signUp(page, freshEmail());
+    const waiting = await proposeThroughApi(page, `E2E 재동의 ${group}`);
+    await page.route('**/api/v1/me', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: Me };
+      body.data.onboarding = {
+        ...body.data.onboarding,
+        consent: false,
+        completed: false,
+        nextStep: 'consent',
+      };
+      await route.fulfill({ response, json: body });
+    });
+    // The rest of MY is gated as before.
+    await page.goto('/my');
+    await expect(page).toHaveURL('/onboarding?next=%2Fmy');
+    await page.goto('/my/proposals');
+    await expect(statusOf(page, waiting.id)).toHaveText(copy.proposalStatusSubmitted);
+    await expect(page).toHaveURL('/my/proposals');
+    await page.getByTestId(`my-proposal-retract-${waiting.id}`).click();
+    await page.getByTestId('my-proposal-retract-confirm').click();
+    await expect(page.getByText(copy.proposalRetracted)).toBeVisible();
+    await expect(statusOf(page, waiting.id)).toHaveText(copy.proposalStatusRetracted);
+    await page.getByTestId('my-proposals-new').click();
+    await expect(page).toHaveURL('/onboarding?next=%2Fproposals%2Fnew');
+  });
+
+  test('탈퇴한 회원의 제안은 운영자 화면에 탈퇴한 사용자로 남고 그대로 검토된다', async ({
+    browser,
+    page,
+  }) => {
+    const group = freshTag();
+    await signUp(page, freshEmail());
+    const waiting = await proposeThroughApi(page, `E2E 탈퇴 ${group}`);
+    const me = await meOf(page.request);
+    // 탈퇴 (#140): a waiting proposal does not refuse it.
+    await dataOf(
+      await page.request.post('/api/v1/me/closure', {
+        data: { confirmation: '탈퇴', expectedAccountId: me.id },
+      }),
+    );
+
+    const operator = await adminBrowser(browser);
+    try {
+      const adminPage = operator.page;
+      await adminPage.goto('/admin/proposals');
+      const row = adminPage.getByTestId(`admin-proposal-${waiting.id}`);
+      await expect(row).toContainText(`${copy.adminProposalProposer} ${copy.postAuthorFormer}`);
+      await row.getByRole('link', { name: waiting.question }).click();
+      await expect(adminPage).toHaveURL(`/admin/proposals/${waiting.id}`);
+      await expect(adminPage.getByTestId('admin-proposal-proposer')).toHaveText(
+        copy.postAuthorFormer,
+      );
+      // ADR-0069 decision 4 #140 «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다».
+      await adminPage.getByTestId('admin-proposal-review').click();
+      await expect(adminPage.getByTestId('admin-proposal-status')).toHaveText(
+        copy.proposalStatusReviewing,
+      );
+      await expect(adminPage.getByTestId('admin-proposal-record')).toContainText(
+        copy.postAuthorFormer,
+      );
+    } finally {
+      await operator.close();
+    }
   });
 });

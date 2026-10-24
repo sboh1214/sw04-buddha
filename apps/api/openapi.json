@@ -16740,7 +16740,7 @@
             }
           },
           "403": {
-            "description": "FORBIDDEN",
+            "description": "FORBIDDEN | RESTRICTED",
             "content": {
               "application/json": {
                 "schema": {
@@ -26109,7 +26109,8 @@
           "approval_requests",
           "link_flags",
           "consent_records",
-          "phone_verification_records"
+          "phone_verification_records",
+          "market_proposals"
         ]
       },
       "RetentionPurgeOutcome": {

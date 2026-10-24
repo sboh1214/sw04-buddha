@@ -4,9 +4,9 @@ import { copy } from '../src/copy';
 import { adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: six registered items — 시작 지급액
- * (`grant.start_coin`, #70, ADR-0071) and the five retention periods (`retention.*`, #184,
- * ADR-0087) — which the screen and the API list alike, in the registry's order. Changing and
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: seven registered items — 시작 지급액
+ * (`grant.start_coin`, #70, ADR-0071) and the six retention periods (`retention.*` — #184's five,
+ * ADR-0087, and #77's market proposals, ADR-0089) — which the screen and the API list alike, in the registry's order. Changing and
  * recording an item are fixed by the API suite with injected test items (`createTestApp({
  * releaseSettings })`), paying the start Coin once a value is entered by the API and worker suites,
  * and deleting what a retention period has kept by the worker's suite; a browser cannot register
@@ -26,8 +26,8 @@ const CHANGES = '/api/v1/admin/release-settings/changes';
 const START_COIN_KEY = 'grant.start_coin';
 
 /**
- * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184) with their names, restated: these specs
- * import only types from `@buddha/shared` (helpers.ts). Whole days each.
+ * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184 and #77) with their names, restated:
+ * these specs import only types from `@buddha/shared` (helpers.ts). Whole days each.
  */
 const RETENTION_ITEMS = [
   ['retention.consent_records', '동의 기록 보존기간'],
@@ -35,6 +35,8 @@ const RETENTION_ITEMS = [
   ['retention.deleted_posts', '지운 글 원문·수정 이력 보존기간'],
   ['retention.moderation_records', '신고·제재 기록 보존기간'],
   ['retention.removed_profile_items', '운영자가 지운 프로필 항목 보존기간'],
+  // #77 (owner decision 2026-10-24 13): a withdrawn account's market proposals, once processed.
+  ['retention.market_proposals', '시장 제안 기록 보존기간'],
 ] as const;
 
 /** Every key the shipped registry holds, in its order (`RELEASE_SETTINGS`). */
@@ -66,7 +68,7 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액과 다섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {

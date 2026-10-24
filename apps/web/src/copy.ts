@@ -881,6 +881,9 @@ export const copy = {
   adminRetentionKindLinkFlags: '반복 링크 검토 목록',
   adminRetentionKindConsentRecords: '동의 기록',
   adminRetentionKindPhoneVerificationRecords: '본인확인 기록',
+  // 시장 제안(#77, ADR-0089): 탈퇴한 계정의 것, 처리가 끝난 뒤 — 새 항목 '시장 제안 기록 보존기간'(오너 결정
+  // 2026-10-24 13)의 기간으로 센다.
+  adminRetentionKindMarketProposals: '시장 제안 기록',
 
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
@@ -1672,6 +1675,11 @@ export const copy = {
   // 무기한이면 풀릴 때까지). 같은 꼴로 뒤에 '(…까지).'나 '(무기한).'이 붙고 열려 있는 것은 없다.
   errRestrictedClosure: '작성 제한 중에는 탈퇴할 수 없습니다',
   errRestrictedAccountClosure: '계정 제한 중에는 탈퇴할 수 없습니다',
+  // 시장 제안(#77, ADR-0089; ADR-0069 결정 4 #77 자격 «계정 제한과 작성 제한 중에는 낼 수 없다»): 새 제안만
+  // 막는다 — 접수 제안의 철회는 열려 있다(내 제안 화면이라 이 거절에는 말하지 않는다). 같은 꼴로 뒤에
+  // '(…까지).'나 '(무기한).'이 붙고, 양식이 그 아래에 조치·신고 내역 링크를 둔다(ADR-0085 결과 5).
+  errRestrictedProposal: '작성 제한 중에는 시장을 제안할 수 없습니다',
+  errRestrictedAccountProposal: '계정 제한 중에는 시장을 제안할 수 없습니다',
   // 경고의 안내 띠(오너 결정 2026-10-21): 경고한 때부터 이의 기한 14일 동안 MY 요약에만 보이고(글쓰기
   // 화면은 제한만), 조치·신고 내역으로 잇는다. 취소된 경고에는 없다. 이 문장과 링크뿐이고 이의의 안내는
   // 없다(오너 결정 2026-10-22 답 3, #186).

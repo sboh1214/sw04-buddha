@@ -10,8 +10,12 @@
 -- - A trigger keeps the submitted form as it was and moves the status only along the owner's
 --   steps (접수 → 검토 → 채택·반려, 접수 → 반려, 접수 → 철회; 채택, 반려 and 철회 final), with the one
 --   later change of a 채택: a market linked to one that has none.
--- - buddha_app keeps every privilege of the defaults: the row moves (UPDATE), and #184 deletes a
---   withdrawn account's proposals after their retention period (DELETE).
+-- - buddha_app keeps every privilege of the defaults: the row moves (UPDATE), and #184's worker
+--   deletes a withdrawn account's proposals once their processing has ended and their retention
+--   period — '시장 제안 기록 보존기간', `retention.market_proposals` — has passed (DELETE).
+-- - retention_purges_kind_check: the purge records take the new kind `market_proposals` (#184's
+--   RETENTION_PURGE_KINDS, ADR-0087 결과 5; owner decision 2026-10-24 13) — the generated drop and
+--   add of the CHECK, the list as before with the kind at its end.
 CREATE TYPE "public"."market_proposal_rejection_reason" AS ENUM('duplicate', 'ambiguous_criteria', 'prohibited_topic', 'other');--> statement-breakpoint
 CREATE TYPE "public"."market_proposal_status" AS ENUM('submitted', 'reviewing', 'adopted', 'rejected', 'retracted');--> statement-breakpoint
 CREATE TABLE "market_proposals" (
@@ -47,6 +51,7 @@ CREATE TABLE "market_proposals" (
 	CONSTRAINT "market_proposals_memo_check" CHECK (btrim("market_proposals"."adoption_memo") IS DISTINCT FROM '' AND btrim("market_proposals"."internal_memo") IS DISTINCT FROM '')
 );
 --> statement-breakpoint
+ALTER TABLE "retention_purges" DROP CONSTRAINT "retention_purges_kind_check";--> statement-breakpoint
 ALTER TABLE "market_proposals" ADD CONSTRAINT "market_proposals_user_id_user_id_fk" FOREIGN KEY ("user_id") REFERENCES "public"."user"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "market_proposals" ADD CONSTRAINT "market_proposals_category_id_categories_id_fk" FOREIGN KEY ("category_id") REFERENCES "public"."categories"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "market_proposals" ADD CONSTRAINT "market_proposals_review_started_by_user_id_fk" FOREIGN KEY ("review_started_by") REFERENCES "public"."user"("id") ON DELETE restrict ON UPDATE no action;--> statement-breakpoint
@@ -59,6 +64,7 @@ CREATE INDEX "market_proposals_phone_hash_created_at_idx" ON "market_proposals" 
 CREATE INDEX "market_proposals_phone_hash_pending_idx" ON "market_proposals" USING btree ("phone_hash") WHERE "market_proposals"."status" IN ('submitted', 'reviewing');--> statement-breakpoint
 CREATE INDEX "market_proposals_created_at_id_idx" ON "market_proposals" USING btree ("created_at" desc,"id" desc);--> statement-breakpoint
 CREATE INDEX "market_proposals_status_created_at_id_idx" ON "market_proposals" USING btree ("status","created_at" desc,"id" desc);--> statement-breakpoint
+ALTER TABLE "retention_purges" ADD CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'consent_records', 'phone_verification_records', 'market_proposals'));--> statement-breakpoint
 -- Hand-edited: what was submitted never changes, and the status moves only along the owner's steps
 -- (ADR-0069 decision 4 #77; PROPOSAL_TRANSITIONS in @buddha/shared), whoever writes — the API checks
 -- the same under the row lock and never asks for anything else. A proposal is inserted 접수

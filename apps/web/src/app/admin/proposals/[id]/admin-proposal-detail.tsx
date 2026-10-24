@@ -63,6 +63,7 @@ import {
   internalMemoFormSchema,
   type LinkProposalMarketFormValues,
   linkProposalMarketFormSchema,
+  proposalActorName,
   proposalIdParam,
   rejectProposalFormSchema,
   toAdoptProposalBody,
@@ -203,7 +204,7 @@ function ContentCard({ proposal }: { proposal: AdminProposal }) {
       <Card.Body>
         <DataList.Root orientation="horizontal" size="sm">
           <Item label={copy.adminProposalProposer} testId="admin-proposal-proposer">
-            {proposal.proposer.nickname}
+            {proposalActorName(proposal.proposer)}
           </Item>
           <Item label={copy.proposalDeadline}>{formatProposalDate(proposal.deadline)}</Item>
           <Item label={copy.proposalYesCondition}>{proposal.yesCondition}</Item>
@@ -231,11 +232,11 @@ function RecordCard({ proposal }: { proposal: AdminProposal }) {
       <Card.Body>
         <DataList.Root orientation="horizontal" size="sm">
           <Item label={copy.proposalStatusSubmitted}>
-            {formatKst(proposal.createdAt)} · {proposal.proposer.nickname}
+            {formatKst(proposal.createdAt)} · {proposalActorName(proposal.proposer)}
           </Item>
           {proposal.reviewStartedAt !== null && (
             <Item label={copy.proposalReviewStartedAt} testId="admin-proposal-record-review">
-              {formatKst(proposal.reviewStartedAt)} · {proposal.reviewStartedBy?.nickname ?? ''}
+              {formatKst(proposal.reviewStartedAt)} · {proposalActorName(proposal.reviewStartedBy)}
             </Item>
           )}
           {decided && proposal.decidedAt !== null && (
@@ -243,7 +244,7 @@ function RecordCard({ proposal }: { proposal: AdminProposal }) {
               label={PROPOSAL_STATUS_LABEL[proposal.status]}
               testId="admin-proposal-record-decided"
             >
-              {formatKst(proposal.decidedAt)} · {proposal.decidedBy?.nickname ?? ''}
+              {formatKst(proposal.decidedAt)} · {proposalActorName(proposal.decidedBy)}
             </Item>
           )}
           {proposal.retractedAt !== null && (
@@ -253,7 +254,7 @@ function RecordCard({ proposal }: { proposal: AdminProposal }) {
           )}
           {proposal.marketLinkedAt !== null && (
             <Item label={copy.adminProposalLink} testId="admin-proposal-record-linked">
-              {formatKst(proposal.marketLinkedAt)} · {proposal.marketLinkedBy?.nickname ?? ''}
+              {formatKst(proposal.marketLinkedAt)} · {proposalActorName(proposal.marketLinkedBy)}
             </Item>
           )}
         </DataList.Root>

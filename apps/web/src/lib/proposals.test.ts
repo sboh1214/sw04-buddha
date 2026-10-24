@@ -18,6 +18,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type Category } from './api';
 import { groupCategories } from './category-tree';
+import { formatKst } from './datetime';
 import { isPrivateQueryKey } from './market-keys';
 import { MY_TABS, isMyTabCurrent, myLoginPath } from './my';
 import {
@@ -47,6 +48,7 @@ import {
   issuePath,
   koreanToday,
   linkProposalMarketFormSchema,
+  proposalActorName,
   proposalCategoryFitsDraft,
   proposalFailure,
   proposalFormSchema,
@@ -328,18 +330,21 @@ describe('the form', () => {
 });
 
 describe('proposalFailure', () => {
+  // The member's time zone is the screen's; Korea's here, the end of a restriction being absolute.
+  const fail = (error: unknown) => proposalFailure(error, formatKst);
+
   it('puts a field the server named under that field', () => {
-    expect(proposalFailure(invalid(['deadline']))).toEqual({
+    expect(fail(invalid(['deadline']))).toEqual({
       kind: 'field',
       field: 'deadline',
       message: copy.errProposalDeadline,
     });
-    expect(proposalFailure(invalid(['categoryId']))).toEqual({
+    expect(fail(invalid(['categoryId']))).toEqual({
       kind: 'field',
       field: 'categoryId',
       message: copy.errProposalCategory,
     });
-    expect(proposalFailure(invalid(['probability']))).toEqual({
+    expect(fail(invalid(['probability']))).toEqual({
       kind: 'notice',
       message: copy.errUnknown,
     });
@@ -347,54 +352,69 @@ describe('proposalFailure', () => {
 
   it('says the waiting limit without a time and the daily one with when', () => {
     expect(
-      proposalFailure(
+      fail(
         refused(429, 'PROPOSAL_LIMITED', { reason: 'pending', limit: 5, retryAfterSeconds: null }),
       ),
     ).toEqual({ kind: 'notice', message: copy.errProposalPendingLimit });
     expect(
-      proposalFailure(
+      fail(
         refused(429, 'PROPOSAL_LIMITED', { reason: 'daily', limit: 3, retryAfterSeconds: 3_660 }),
       ),
     ).toEqual({
       kind: 'notice',
       message: `${copy.errProposalDailyLimit} 1시간 1분 ${copy.verificationRetryAfter}`,
     });
-    expect(proposalFailure(refused(429, 'PROPOSAL_LIMITED', { reason: 'odd' }))).toEqual({
+    expect(fail(refused(429, 'PROPOSAL_LIMITED', { reason: 'odd' }))).toEqual({
       kind: 'notice',
       message: copy.errUnknown,
     });
   });
 
   it('tells the address bucket from the limits', () => {
-    expect(proposalFailure(refused(429, 'RATE_LIMITED', { retryAfterSeconds: 30 }))).toEqual({
+    expect(fail(refused(429, 'RATE_LIMITED', { retryAfterSeconds: 30 }))).toEqual({
       kind: 'notice',
       message: `${copy.errProposalTooManyRequests} 30초 ${copy.verificationRetryAfter}`,
     });
-    expect(proposalFailure(refused(429, 'RATE_LIMITED'))).toEqual({
+    expect(fail(refused(429, 'RATE_LIMITED'))).toEqual({
       kind: 'notice',
       message: copy.errProposalTooManyRequests,
     });
   });
 
+  it('says which restriction keeps a proposal closed and until when — the form shows the way to 조치·신고 내역 under it (#185, #139)', () => {
+    const END = '2026-11-02T06:00:00.000Z';
+    expect(fail(refused(403, 'RESTRICTED', { kind: 'writing', endsAt: END }))).toEqual({
+      kind: 'restricted',
+      message: `${copy.errRestrictedProposal}(${formatKst(END)}${copy.restrictionUntil}).`,
+    });
+    expect(fail(refused(403, 'RESTRICTED', { kind: 'account', endsAt: null }))).toEqual({
+      kind: 'restricted',
+      message: `${copy.errRestrictedAccountProposal}(${copy.restrictionIndefinite}).`,
+    });
+    // Every restriction's refusal in one form (ADR-0085 7-11): the restriction, then what it closes.
+    expect(copy.errRestrictedProposal).toBe('작성 제한 중에는 시장을 제안할 수 없습니다');
+    expect(copy.errRestrictedAccountProposal).toBe('계정 제한 중에는 시장을 제안할 수 없습니다');
+  });
+
   it('asks for what the screen is out of date about', () => {
-    expect(proposalFailure(refused(409, 'ONBOARDING_REQUIRED'))).toEqual({
+    expect(fail(refused(409, 'ONBOARDING_REQUIRED'))).toEqual({
       kind: 'refresh',
       message: copy.errProposalOnboarding,
     });
-    expect(proposalFailure(refused(403, 'VERIFICATION_REQUIRED'))).toEqual({
+    expect(fail(refused(403, 'VERIFICATION_REQUIRED'))).toEqual({
       kind: 'refresh',
       message: copy.errProposalVerification,
     });
     expect(
-      proposalFailure(
+      fail(
         refused(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'another account' }]),
       ),
     ).toEqual({ kind: 'session', message: copy.sessionChanged });
-    expect(proposalFailure(refused(403, 'FORBIDDEN'))).toEqual({
+    expect(fail(refused(403, 'FORBIDDEN'))).toEqual({
       kind: 'notice',
       message: copy.errUnknown,
     });
-    expect(proposalFailure(new Error('offline'))).toEqual({
+    expect(fail(new Error('offline'))).toEqual({
       kind: 'notice',
       message: copy.errUnknown,
     });
@@ -413,6 +433,17 @@ describe('retractFailureMessage', () => {
       ),
     ).toBe(copy.sessionChanged);
     expect(retractFailureMessage(refused(500, 'INTERNAL'))).toBe(copy.errUnknown);
+  });
+});
+
+describe('proposalActorName', () => {
+  it('names an account by its nickname, and one its member closed as 탈퇴한 사용자 (#140)', () => {
+    expect(proposalActorName({ id: 'a', nickname: 'proposer_one' })).toBe('proposer_one');
+    // AdminAccountActor's nickname is null once the account is closed (ADR-0086): never an empty
+    // name on the list or in the record — the operators still review its proposals.
+    expect(proposalActorName({ id: 'a', nickname: null })).toBe('탈퇴한 사용자');
+    expect(proposalActorName({ id: 'a', nickname: null })).toBe(copy.postAuthorFormer);
+    expect(proposalActorName(null)).toBe('');
   });
 });
 

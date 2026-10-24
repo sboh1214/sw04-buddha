@@ -375,7 +375,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/me/proposals` | The account's market proposals, newest first, each with its status, the operators' reason or memo, and the market it led to once that market is public | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `RATE_LIMITED` |
-| POST | `/api/v1/me/proposals` | Propose a market: question, the date its result is known, YES condition, expected sources, optional background and category; starts as submitted | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `VERIFICATION_REQUIRED`, `PROPOSAL_LIMITED`, `RATE_LIMITED` |
+| POST | `/api/v1/me/proposals` | Propose a market: question, the date its result is known, YES condition, expected sources, optional background and category; starts as submitted | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RESTRICTED`, `ONBOARDING_REQUIRED`, `VERIFICATION_REQUIRED`, `PROPOSAL_LIMITED`, `RATE_LIMITED` |
 | GET | `/api/v1/me/proposals/{id}` | One of the account's proposals (another account's is NOT_FOUND) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `NOT_FOUND`, `RATE_LIMITED` |
 | POST | `/api/v1/me/proposals/{id}/retract` | Retract one of the account’s proposals while it is submitted, signed in whatever the onboarding (VALIDATION_ERROR naming status once the review started or it was decided or retracted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 

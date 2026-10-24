@@ -15,8 +15,8 @@ import { ProposalsService } from './proposals.service.js';
  * IdentityModule for the keyed hash of the verified number the limits count by (ADR-0071), and
  * MarketsModule for the draft a 채택 makes (`MarketAdminService.createIn`). DbModule and
  * RedisModule for the guards: AdminGuard reads the role through the Redis cache, OnboardedGuard the
- * onboarding from Postgres. `ProposalRestrictions` is the hook #139 and #185 fill: they import their
- * own modules here for the checks it calls.
+ * onboarding from Postgres. `ProposalRestrictions` asks the writing and the account restriction
+ * (#185, #139) through moderation/restrictions.ts, plain functions of the transaction.
  */
 @Module({
   imports: [DbModule, RedisModule, AuthModule, IdentityModule, MarketsModule],

@@ -12,8 +12,8 @@ import { isApiError } from './api';
  * 작성 제한 (#185, ADR-0082) and 계정 제한 (#139, ADR-0085) as a refused write says them: the server
  * answers RESTRICTED (403) with the restriction's kind and its end — null for 무기한
  * (`RestrictedDetails`) — wherever it refuses (a writing restriction: every new post, 댓글 and
- * 대댓글, every edit of one's own, a post's image; either: a new value of a public profile item and
- * the member's own closure, #140 — the later-ending one named, the account restriction when both
+ * 대댓글, every edit of one's own, a post's image; either: a new value of a public profile item, a
+ * new market proposal (#77) and the member's own closure, #140 — the later-ending one named, the account restriction when both
  * end together, ADR-0085 7-6). The screen says which restriction closes what and until when, and
  * shows the way to 조치·신고 내역 under it (`isRestricted`, components/moderation/refusal-text.tsx) —
  * the appeal's guidance and its deadline live there, not in the refusal (owner decision 2026-10-22
@@ -44,14 +44,20 @@ export type RestrictedWrite =
    * 탈퇴 (#140, ADR-0086): either restriction keeps the member's own closure closed until it ends
    * or is lifted (ADR-0069 decision 4 #140 «제재 중 탈퇴»), and nothing of it stays open.
    */
-  | 'closure';
+  | 'closure'
+  /**
+   * 시장 제안 (#77, ADR-0089): either restriction keeps a new proposal from being sent until it
+   * ends or is lifted (ADR-0069 decision 4 #77 자격). The 철회 of one's own 접수 proposal stays open,
+   * but on another screen (내 제안), so the form's refusal says nothing of it.
+   */
+  | 'proposal';
 
 /**
  * The refusal's first sentence, by the restriction that refused (`kind`) and what was refused. An
  * account restriction never refuses a post, a comment nor an edit (ADR-0069 decision 1 #57-12:
  * «커뮤니티 작성은 막지 않는다»), so a refused write is the writing restriction's sentence whatever
- * the kind; a public profile item, a nickname and a closure (#140) name the restriction that
- * refused them (ADR-0085 7-11). Unreadable details (never from this API) say the writing
+ * the kind; a public profile item, a nickname, a closure (#140) and a market proposal (#77) name
+ * the restriction that refused them (ADR-0085 7-11). Unreadable details (never from this API) say the writing
  * restriction's, as before #139.
  */
 const LEAD: Readonly<Record<RestrictionKind, Readonly<Record<RestrictedWrite, string>>>> = {
@@ -61,6 +67,7 @@ const LEAD: Readonly<Record<RestrictionKind, Readonly<Record<RestrictedWrite, st
     onboardingInterests: copy.errRestrictedProfile,
     nickname: copy.errRestrictedNickname,
     closure: copy.errRestrictedClosure,
+    proposal: copy.errRestrictedProposal,
   },
   account: {
     writing: copy.errRestrictedWriting,
@@ -68,6 +75,7 @@ const LEAD: Readonly<Record<RestrictionKind, Readonly<Record<RestrictedWrite, st
     onboardingInterests: copy.errRestrictedAccountProfile,
     nickname: copy.errRestrictedAccountNickname,
     closure: copy.errRestrictedAccountClosure,
+    proposal: copy.errRestrictedAccountProposal,
   },
 };
 
@@ -146,6 +154,7 @@ const STILL_OPEN: Readonly<Record<RestrictedWrite, string | undefined>> = {
   onboardingInterests: copy.errRestrictedSkipAllowed,
   nickname: undefined,
   closure: undefined,
+  proposal: undefined,
 };
 
 /** The sentence of `LEAD`, the term and what stays open, from what the restriction is known as. */

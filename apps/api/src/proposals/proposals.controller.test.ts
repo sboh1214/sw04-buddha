@@ -15,6 +15,7 @@ import {
   completeOnboarding,
   createCategory,
   createMarket,
+  createModerationAction,
   createProposal,
   createUser,
 } from '@buddha/db/test';
@@ -24,6 +25,7 @@ import {
   proposalSchema,
   type Proposal,
   type ProposalLimitedDetails,
+  type RestrictedDetails,
 } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -262,6 +264,62 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     expect(await rows()).toHaveLength(PROPOSAL_LIMITS.pendingProposals);
   });
 
+  it('refuses a new proposal under a writing or an account restriction, naming the later-ending one, and writes nothing; 철회 stays open (#185, #139)', async () => {
+    // ADR-0069 decision 4 #77 자격 «계정 제한과 작성 제한 중에는 낼 수 없다» — the real restrictions, as
+    // ProposalRestrictions asks them (ADR-0085 결과 5).
+    const { user: operator } = await createUser(t.db, { role: 'admin' });
+    const { user: approver } = await createUser(t.db, { role: 'admin' });
+    const own = await createProposal(t.db, { userId: user.id, phoneHash });
+    const ends = new Date(Date.now() + 3 * DAY_MS);
+    await createModerationAction(t.db, {
+      type: 'writing_restriction',
+      userId: user.id,
+      createdBy: operator.id,
+      endsAt: ends,
+    });
+    const underWriting = await propose(form());
+    expect(underWriting.statusCode, underWriting.body).toBe(403);
+    expect(errorOf(underWriting)).toEqual({
+      code: 'RESTRICTED',
+      message: expect.any(String) as string,
+      details: { kind: 'writing', endsAt: ends.toISOString() } satisfies RestrictedDetails,
+    });
+    // An account restriction with no end on top: the later-ending one is what the member waits for.
+    await createModerationAction(t.db, {
+      type: 'account_restriction',
+      userId: user.id,
+      createdBy: operator.id,
+      approvedBy: approver.id,
+      endsAt: null,
+    });
+    const underBoth = await propose(form());
+    expect(underBoth.statusCode).toBe(403);
+    expect(errorOf(underBoth)).toMatchObject({
+      code: 'RESTRICTED',
+      details: { kind: 'account', endsAt: null },
+    });
+    expect((await rows()).map((row) => row.id)).toEqual([own.id]);
+    // Taking one's own 접수 proposal back stays open under both (#45-12).
+    const retracted = await retract(own.id);
+    expect(retracted.statusCode, retracted.body).toBe(200);
+    // An account restriction alone refuses it all the same (#57-13), with its end.
+    const other = await signUpTestUser(t);
+    await onboard(other);
+    const accountEnds = new Date(Date.now() + 7 * DAY_MS);
+    await createModerationAction(t.db, {
+      type: 'account_restriction',
+      userId: other.id,
+      createdBy: operator.id,
+      approvedBy: approver.id,
+      endsAt: accountEnds,
+    });
+    expect(errorOf(await propose(form({}, other), other))).toMatchObject({
+      code: 'RESTRICTED',
+      details: { kind: 'account', endsAt: accountEnds.toISOString() },
+    });
+    expect(await rows()).toHaveLength(1);
+  });
+
   it('refuses a body naming another account than the session’s, before anything is written', async () => {
     const other = await signUpTestUser(t);
     const res = await propose(form({ expectedAccountId: other.id }));
@@ -379,6 +437,43 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     await onboard(other);
     expect((await propose(form({}, other), other)).statusCode).toBe(201);
     expect(await rows()).toHaveLength(PROPOSAL_LIMITS.pendingProposals + 1);
+  });
+
+  it('keeps a closed account’s proposals waiting for the operators, out of its reach, and counted for its number into a new account (#140, ADR-0069 decision 7)', async () => {
+    // Five waiting, older than a day; one of them through the API (the others as made before).
+    const old = Date.now() - 2 * DAY_MS;
+    for (let i = 0; i < PROPOSAL_LIMITS.pendingProposals - 1; i += 1) {
+      await createProposal(t.db, { userId: user.id, phoneHash, createdAt: new Date(old + i) });
+    }
+    const last = await propose(form());
+    expect(last.statusCode).toBe(201);
+    const [verified] = await t.db
+      .select({ phone: schema.phoneVerifications.phone })
+      .from(schema.phoneVerifications)
+      .where(eq(schema.phoneVerifications.userId, user.id));
+    // 탈퇴 (#140): a waiting proposal does not refuse it (ADR-0069 decision 4 #140 «처리 중인 신고·이의·
+    // 제안: 그대로 검토하고 결과를 기록한다»).
+    const closed = await t.app.inject({
+      method: 'POST',
+      url: '/api/v1/me/closure',
+      headers: { ...jsonHeaders, cookie: user.cookie },
+      payload: { confirmation: '탈퇴', expectedAccountId: user.id },
+    });
+    expect(closed.statusCode, closed.body).toBe(200);
+    // The proposals stay as they were, the account's, waiting; the member reaches none of them.
+    const kept = await rows();
+    expect(kept).toHaveLength(PROPOSAL_LIMITS.pendingProposals);
+    expect(kept.every((row) => row.userId === user.id && row.status === 'submitted')).toBe(true);
+    expect(kept.every((row) => row.phoneHash === phoneHash)).toBe(true);
+    expect((await get('/api/v1/me/proposals')).statusCode).toBe(401);
+    // Signed up again on the same number (#57-17): the number's five still wait, so it waits too.
+    const again = await signUpTestUser(t);
+    expect(await onboard(again, verified!.phone)).toBe(phoneHash);
+    const refused = await propose(form({}, again), again);
+    expect(refused.statusCode).toBe(429);
+    expect((errorOf(refused).details as ProposalLimitedDetails).reason).toBe('pending');
+    // Its own 내 제안 is empty: the closed account's proposals are not the new account's.
+    expect((await get('/api/v1/me/proposals', again)).json<ListPage>().data).toEqual([]);
   });
 
   it('lets an operator’s account propose past both limits, as long as it is one (owner decision 2026-10-19)', async () => {

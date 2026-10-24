@@ -11,7 +11,8 @@
  * their case: the reports a withdrawn member received (1), a withdrawn member's items still hidden
  * (3 — a post and a comment each, under every guard of their steps), what a pending account
  * restriction request cites (12 — each kind of request and both columns a restriction cites) and a
- * failed kind's record (14) — and #187's repeated-link review list (13). At the restack onto the
+ * failed kind's record (14) — and #187's repeated-link review list and the market proposals of a
+ * withdrawn account (#77, ADR-0089), their own period, once processed (13). At the restack onto the
  * full chain (ADR-0087 결과 5): an object the store refuses stays queued for #46's clean-up, #48's
  * comment counts stay exact, #138's notice history is never touched, and another write's foreign
  * key check naming an item (a link flag) neither waits for the run nor is waited for. After PR
@@ -39,6 +40,7 @@ import {
   createPost,
   createPostLike,
   createProfileImage,
+  createProposal,
   createReport,
   createUser,
   createWatch,
@@ -51,6 +53,7 @@ import {
 import {
   CONSENT_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,
+  MARKET_PROPOSALS_RETENTION_SETTING,
   MODERATION_RECORDS_RETENTION_SETTING,
   ORPHAN_MEDIA_RETRY_FIRST_HOURS,
   ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
@@ -248,8 +251,10 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       requestedBy: admin,
       decision: { status: 'rejected', by: otherAdmin },
     });
+    await createProposal(t.db, { userId: user.id, status: 'retracted' });
     const closedAt = await closeAccount(t.db, user.id);
     await setPeriod(CONSENT_RECORDS_RETENTION_SETTING, 1, 'test');
+    await setPeriod(MARKET_PROPOSALS_RETENTION_SETTING, 1, 'proposal');
     await setPeriod(PHONE_VERIFICATION_RECORDS_RETENTION_SETTING, 1, 'proposal');
     await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 1, 'test');
     // A value set and then taken back to undecided; the other two never had one (no row).
@@ -270,6 +275,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await t.db.select().from(schema.profileItemRemovals)).toHaveLength(1);
     expect(await t.db.select().from(schema.approvalRequests)).toHaveLength(1);
     expect(await t.db.select().from(schema.linkFlags)).toHaveLength(1);
+    expect(await t.db.select().from(schema.marketProposals)).toHaveLength(1);
     const byKind = Object.fromEntries(outcome.kinds.map((kind) => [kind.kind, kind]));
     expect(byKind.consent_records).toEqual({
       kind: 'consent_records',
@@ -282,6 +288,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(byKind.link_flags).toMatchObject({ status: 'test', periodDays: null, deleted: 0 });
     expect(byKind.deleted_posts).toMatchObject({ status: 'undecided', periodDays: null });
     expect(byKind.removed_profile_items).toMatchObject({ status: 'undecided', periodDays: null });
+    expect(byKind.market_proposals).toMatchObject({ status: 'proposal', periodDays: null });
     // Only the nickname holds' fixed 30 days applied: the closure's hold of the nickname is over.
     expect(await purgeRecords()).toEqual([
       { kind: 'nickname_holds', count: 1, periodDays: 30, ranAt: now, outcome: 'done' },
@@ -708,6 +715,103 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 1);
     await run(after(closedAt, 3_650));
     expect((await t.db.select().from(schema.reports)).map((row) => row.id)).toEqual([pending.id]);
+  });
+
+  it('deletes a withdrawn account’s market proposals once processed, from the later of the withdrawal and the end of their processing; waiting ones and a live account’s stay (#77, owner decision 2026-10-24 13)', async () => {
+    const proposer = (await createUser(t.db)).user.id;
+    const live = (await createUser(t.db)).user.id;
+    const long = before(new Date(), 40);
+    // Processed well before the withdrawal — rejected, retracted: counted from the withdrawal.
+    const rejected = await createProposal(t.db, {
+      userId: proposer,
+      adminId: admin,
+      status: 'rejected',
+      createdAt: before(long, 2),
+      reviewStartedAt: before(long, 1),
+      decidedAt: long,
+    });
+    const retracted = await createProposal(t.db, {
+      userId: proposer,
+      status: 'retracted',
+      createdAt: before(long, 1),
+      retractedAt: long,
+    });
+    // Adopted with no market before the withdrawal, a market linked to it after (owner decision
+    // 2026-10-19 8): its processing ended with the link.
+    const adopted = await createProposal(t.db, {
+      userId: proposer,
+      adminId: admin,
+      status: 'adopted',
+      createdAt: before(long, 2),
+      reviewStartedAt: before(long, 1),
+      decidedAt: long,
+    });
+    // Waiting when the account closes: one decided after it, one the operators never decide.
+    const decidedLater = await createProposal(t.db, { userId: proposer });
+    const waiting = await createProposal(t.db, {
+      userId: proposer,
+      adminId: admin,
+      status: 'reviewing',
+    });
+    // A live account's, processed long ago: its own record, never deleted.
+    const livesOwn = await createProposal(t.db, {
+      userId: live,
+      adminId: admin,
+      status: 'rejected',
+      createdAt: before(long, 2),
+      reviewStartedAt: before(long, 1),
+      decidedAt: long,
+    });
+    const closedAt = await closeAccount(t.db, proposer);
+    const linkedAt = after(closedAt, 5);
+    await t.db
+      .update(schema.marketProposals)
+      .set({ marketId, marketLinkedAt: linkedAt, marketLinkedBy: admin })
+      .where(eq(schema.marketProposals.id, adopted.id));
+    const decidedAt = after(closedAt, 10);
+    await t.db
+      .update(schema.marketProposals)
+      .set({
+        status: 'rejected',
+        decidedAt,
+        decidedBy: admin,
+        rejectionReason: 'other',
+        rejectionExplanation: '사유 설명',
+      })
+      .where(eq(schema.marketProposals.id, decidedLater.id));
+    await setPeriod(MARKET_PROPOSALS_RETENTION_SETTING, 30);
+    const left = async () =>
+      (await t.db.select({ id: schema.marketProposals.id }).from(schema.marketProposals))
+        .map((row) => row.id)
+        .sort();
+    const all = [rejected.id, retracted.id, adopted.id, decidedLater.id, waiting.id, livesOwn.id];
+
+    // 40 days since their processing, a millisecond short of 30 since the withdrawal: kept.
+    const early = after(closedAt, 30, -1);
+    await run(early);
+    expect(await left()).toEqual([...all].sort());
+    expect(await countsAt(early)).toEqual({ market_proposals: 0 });
+
+    // 30 days since the withdrawal: the two whose processing ended before it.
+    const first = after(closedAt, 30);
+    await run(first);
+    expect(await left()).toEqual([adopted.id, decidedLater.id, waiting.id, livesOwn.id].sort());
+    expect(await countsAt(first)).toEqual({ market_proposals: 2 });
+    // 30 days since the later link, then since the later decision: each from its own end.
+    await run(after(linkedAt, 30, -1));
+    expect(await left()).toContain(adopted.id);
+    const linkDue = after(linkedAt, 30);
+    await run(linkDue);
+    expect(await left()).toEqual([decidedLater.id, waiting.id, livesOwn.id].sort());
+    const decisionDue = after(decidedAt, 30);
+    await run(decisionDue);
+    expect(await countsAt(decisionDue)).toEqual({ market_proposals: 1 });
+    // The one still waiting for the operators stays however long (decision 4 #140), and the live
+    // account's is never due.
+    await run(after(closedAt, 3_650));
+    expect(await left()).toEqual([waiting.id, livesOwn.id].sort());
+    const recorded = (await purgeRecords()).filter((row) => row.kind === 'market_proposals');
+    expect(recorded.map((row) => row.periodDays)).toEqual(recorded.map(() => 30));
   });
 
   it('deletes the reports a withdrawn member received from live reporters, and the actions they name, from the later of the withdrawal and the processing (owner decision 2026-10-24 1)', async () => {
@@ -2137,6 +2241,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       DELETED_POSTS_RETENTION_SETTING,
       MODERATION_RECORDS_RETENTION_SETTING,
       REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
+      MARKET_PROPOSALS_RETENTION_SETTING,
     ]) {
       await setPeriod(definition, 1);
     }
