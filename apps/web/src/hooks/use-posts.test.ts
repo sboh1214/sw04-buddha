@@ -7,11 +7,13 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type Me, type Post, type PostSummary, api } from '@/lib/api';
+import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from '@/lib/moderation';
 import {
   type DraftStorage,
   type PostDraftKey,
   clearPostDraft,
   keepPostDraft,
+  postDraftLandedSince,
   postDraftMoment,
   readPostDraft,
 } from '@/lib/post-drafts';
@@ -751,6 +753,63 @@ describe('the writes', () => {
       expect(keepHeldPostDraft(theirs, b)).toBe(false);
       expect(readPostDraft(storage, key, 'user-2', Date.now())).toBeNull();
     }
+  });
+
+  it('a writing restriction’s refusal (RESTRICTED, #185) keeps the draft the gate kept for the account that sent it, new and edit, lands nothing, and leaves the post held; the member’s restriction is read again (ADR-0082)', async () => {
+    const queryClient = getQueryClient();
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const draft = { title: '쓰던 제목', body: { type: 'doc', content: [] }, previews: {} };
+    const now = Date.now();
+    const newKey = { kind: 'new', marketId: MARKET } as const;
+    const editKey = { kind: 'edit', postId: post } as const;
+    keepPostDraft(storage, newKey, 'user-1', draft, now);
+    keepPostDraft(storage, editKey, 'user-1', draft, now);
+    queryClient.setQueryData(postKey(post), published);
+    queryClient.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    queryClient.setQueryData(MY_ACTIONS_KEY, { pages: [], pageParams: [] });
+    const since = postDraftMoment();
+    const restricted = new ApiError(403, {
+      code: 'RESTRICTED',
+      message: 'x',
+      details: { kind: 'writing', endsAt: '2026-10-31T00:00:00.000Z' },
+    });
+    vi.spyOn(api, 'POST').mockRejectedValueOnce(restricted);
+    vi.spyOn(api, 'PUT').mockRejectedValueOnce(restricted);
+
+    await expect(
+      new MutationObserver(
+        queryClient,
+        createPostOptions(queryClient, () => undefined),
+      ).mutate({
+        marketId: MARKET,
+        title: null,
+        body: {},
+        expectedAccountId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'RESTRICTED' });
+    await expect(
+      new MutationObserver(
+        queryClient,
+        updatePostOptions(queryClient, () => undefined),
+      ).mutate({
+        postId: POST,
+        title: null,
+        body: {},
+        expectedAccountId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'RESTRICTED' });
+
+    for (const key of [newKey, editKey]) {
+      // Kept for the screen to take back, and the form still counts as unsaved when it goes.
+      expect(readPostDraft(storage, key, 'user-1', now)).toEqual(draft);
+      expect(postDraftLandedSince(key, 'user-1', since)).toBe(false);
+    }
+    expect(queryClient.getQueryData(postKey(post))).toBe(published);
+    expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(false);
+    // The banner's read again (`afterRestricted`, the query client's MutationCache).
+    expect(queryClient.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
   });
 
   it('a form going away keeps nothing for another account, nor with no step left', () => {

@@ -40,7 +40,7 @@ import {
   type MyModerationAction,
   type RestrictedDetails,
 } from '@buddha/shared';
-import { and, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { PUBLIC_ROUTES } from '../surface/registry.js';
@@ -219,12 +219,17 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       });
       const posts = await rows(schema.posts);
       const comments = await rows(schema.postComments);
+      const counts = () =>
+        t.db.select().from(schema.postCommentCounts).orderBy(asc(schema.postCommentCounts.postId));
+      const countsBefore = await counts();
       const expected: RestrictedDetails = { kind: 'writing', endsAt: action.endsAt };
       expect(restrictedOf(await newPost())).toEqual(expected);
       expect(restrictedOf(await editPost())).toEqual(expected);
       expect(restrictedOf(await newComment())).toEqual(expected);
       expect(restrictedOf(await newReply())).toEqual(expected);
       expect(restrictedOf(await editComment())).toEqual(expected);
+      // #48's per-post counter (`post_comment_counts`, its trigger) moved for none of them.
+      expect(await counts()).toEqual(countsBefore);
       expect(restrictedOf(await uploadImage())).toEqual(expected);
       // Asked first: another's post, a hidden post of one's own and an unknown one say the same.
       expect(restrictedOf(await editPost(member, othersPost.id))).toEqual(expected);

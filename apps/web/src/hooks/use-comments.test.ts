@@ -37,6 +37,7 @@ import {
   resolveCommentDrafts,
 } from '@/lib/comments';
 import { withCommentLikeCount } from '@/lib/likes';
+import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from '@/lib/moderation';
 import { communityPostsKey, marketPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import { deleteMyItemOptions } from './use-authored';
@@ -2461,6 +2462,57 @@ describe('a new 댓글', () => {
         await comments.refetch();
         expect(threadIds(queryClient)).toEqual(olderIds(0, 1));
         expect(placedHeld(queryClient)).toEqual([]);
+        unsubscribe();
+      });
+
+      it('nothing for a write a writing restriction refused (RESTRICTED, #185): a 댓글 and a 대댓글 under the placed one leave the pages, what is placed and the count as they were, read nothing and land no draft; the member’s restriction is read again (ADR-0082)', async () => {
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        const asked = serving(8, LATER_ROOTS);
+        await write(queryClient);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        const pages = queryClient.getQueryData<CommentPages>(postCommentsKey(post));
+        const count = commentCountOf(queryClient);
+        queryClient.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+        queryClient.setQueryData(MY_ACTIONS_KEY, { pages: [], pageParams: [] });
+        asked.length = 0;
+        const before = commentDraftMoment();
+        vi.spyOn(api, 'POST').mockRejectedValue(
+          new ApiError(403, {
+            code: 'RESTRICTED',
+            message: 'x',
+            details: { kind: 'writing', endsAt: '2026-10-31T00:00:00.000Z' },
+          } as never),
+        );
+        const send = new MutationObserver(
+          queryClient,
+          createCommentOptions(queryClient, POST, () => undefined),
+        );
+        for (const parentId of [null, MINE]) {
+          await expect(
+            send.mutate({ parentId, body: '쓰던 댓글', expectedAccountId: 'user-1' }),
+          ).rejects.toMatchObject({ code: 'RESTRICTED' });
+        }
+        expect(queryClient.getQueryData(postCommentsKey(post))).toBe(pages);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        expect(commentCountOf(queryClient)).toBe(count);
+        expect(cursorsAsked(asked)).toEqual([]);
+        expect(commentDraftLandedSince({ kind: 'comment', postId: post }, 'user-1', before)).toBe(
+          false,
+        );
+        expect(
+          commentDraftLandedSince(
+            { kind: 'reply', postId: post, parentId: MINE },
+            'user-1',
+            before,
+          ),
+        ).toBe(false);
+        expect(queryClient.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(true);
+        expect(queryClient.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
+        // The next read of the pages puts back MINE alone, as before the refusals.
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        expect(mineHeld(queryClient)).toBe(1);
         unsubscribe();
       });
     });
