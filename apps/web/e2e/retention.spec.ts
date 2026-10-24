@@ -107,6 +107,13 @@ const SECOND_PAGE = [
 ];
 const NEXT_CURSOR = 'e2e-second-page';
 
+/** A server error as the API's envelope says it (discussion.spec.ts's): the client retries it twice. */
+const SERVER_ERROR = {
+  status: 500,
+  contentType: 'application/json',
+  body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+};
+
 /** Answers the browser's reads of the records with the two pages above. */
 async function shapePurges(page: Page): Promise<void> {
   await page.route(
@@ -314,8 +321,28 @@ test.describe('보존기간 처리 (#184)', () => {
     await expect(consent.getByTestId('admin-retention-period')).toHaveText('기간 365일');
     await expect(later.getByTestId('admin-retention-failed')).toHaveCount(1);
 
-    // 더 보기: the earlier run follows, and the later one is as it was.
+    // A 더 보기 that fails keeps the run read so far and says so above the button (owner decision
+    // 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list, ADR-0087 결과 5).
+    const isNextPage = (url: URL) =>
+      url.pathname === PURGES && url.searchParams.get('cursor') === NEXT_CURSOR;
+    await page.route(isNextPage, (route) => route.fulfill(SERVER_ERROR));
     await page.getByTestId('admin-retention-more').click();
+    const moreFailed = page.getByTestId('admin-retention-more-failed');
+    await expect(moreFailed).toHaveText(copy.errUnknown);
+    await expect(moreFailed).toHaveAttribute('role', 'alert');
+    await expect(
+      page.locator(
+        '[data-testid="admin-retention-more-failed"] + [data-testid="admin-retention-more"]',
+      ),
+    ).toHaveCount(1);
+    await expect(runs).toHaveCount(1);
+    await expect(laterKinds).toHaveCount(7);
+    await expect(page.getByTestId('admin-retention-more')).toBeEnabled();
+    await page.unroute(isNextPage);
+
+    // 더 보기 again: the earlier run follows, and the later one is as it was.
+    await page.getByTestId('admin-retention-more').click();
+    await expect(moreFailed).toHaveCount(0);
     await expect(runs).toHaveCount(2);
     await expect(page.getByTestId('admin-retention-more')).toHaveCount(0);
     await expect(laterKinds).toHaveCount(7);

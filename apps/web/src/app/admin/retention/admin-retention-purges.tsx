@@ -11,6 +11,7 @@ import {
   Text,
 } from '@chakra-ui/react';
 import NextLink from 'next/link';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useRetentionPurges } from '@/hooks/use-admin-retention';
 import { formatKst } from '@/lib/datetime';
@@ -36,7 +37,9 @@ import {
  * failure the database would not even record (ADR-0087 7-21) leaves the kind without a line, or
  * with what its earlier batches deleted and no 실패 — the notice's last sentence says that as well.
  * 20 records per page with 더 보기 (A-M2-5), each page completed to the end of its last run by the
- * API, so every run shows whole.
+ * API, so every run shows whole. A 더 보기 that failed keeps the runs read so far and says so above
+ * its button (`LoadMoreFailed`, owner decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기
+ * list); only a first read that failed (`isLoadingError`) shows the error in their place.
  */
 export function AdminRetentionPurges() {
   const purges = useRetentionPurges();
@@ -60,7 +63,7 @@ export function AdminRetentionPurges() {
       </Stack>
       {purges.isPending ? (
         <Skeleton height="24" />
-      ) : purges.isError ? (
+      ) : purges.isLoadingError ? (
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
           <Alert.Content>
@@ -79,16 +82,25 @@ export function AdminRetentionPurges() {
             ))}
           </Stack>
           {purges.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={purges.isFetchingNextPage}
-              onClick={() => void purges.fetchNextPage()}
-              data-testid="admin-retention-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              {/* A 더 보기 that failed: the runs stay, and this says so above the button that asks
+                  again (owner decision 2026-10-20 7, as every 더 보기 list). */}
+              <LoadMoreFailed
+                list={purges}
+                message={copy.errUnknown}
+                data-testid="admin-retention-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={purges.isFetchingNextPage}
+                onClick={() => void purges.fetchNextPage()}
+                data-testid="admin-retention-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

@@ -1113,6 +1113,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       );
       // No index of a post's or a thread's comments holds the deleted ones besides the key of the
       // parent's foreign key (whose leading post_id serves the operators' read of every comment).
+      // #184's two (migration 0044) lead with the deletion's and the hiding's time and hold only
+      // what is not emptied yet: the retention's scans, not a post's or a thread's comments.
       expect(Object.keys(defs).sort()).toEqual([
         'post_comments_author_id_created_at_idx',
         'post_comments_live_parent_id_created_at_id_idx',
@@ -1120,7 +1122,15 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         'post_comments_live_post_id_parent_created_at_parent_id_idx',
         'post_comments_pkey',
         'post_comments_post_id_id_created_at_is_reply_unique',
+        'post_comments_unpurged_deleted_at_idx',
+        'post_comments_unpurged_hidden_at_idx',
       ]);
+      expect(defs['post_comments_unpurged_deleted_at_idx']).toContain(
+        '(deleted_at) WHERE ((deleted_at IS NOT NULL) AND (purged_at IS NULL))',
+      );
+      expect(defs['post_comments_unpurged_hidden_at_idx']).toContain(
+        '(hidden_at) WHERE ((hidden_at IS NOT NULL) AND (deleted_at IS NULL) AND (purged_at IS NULL))',
+      );
     });
 
     /**
