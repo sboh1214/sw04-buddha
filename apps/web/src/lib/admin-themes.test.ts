@@ -9,6 +9,9 @@ import { copy } from '@/copy';
 import {
   EMPTY_THEME_FORM,
   type ThemeFormValues,
+  formatThemeMarketLinked,
+  formatThemeNoticeByline,
+  themeActorName,
   themeFormError,
   themeFormSchema,
   themeFormValues,
@@ -21,6 +24,7 @@ import {
   toUpdateThemeBody,
 } from './admin-themes';
 import { type AdminTheme, ApiError, type ErrorEnvelope } from './api';
+import { formatKst } from './datetime';
 
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
 
@@ -234,5 +238,37 @@ describe('notices and the picker', () => {
     const linked = new Set([ID]);
     expect(themePickState(ID.toUpperCase(), linked)).toBe('linked');
     expect(themePickState('9c858901-8a57-4791-81fe-4c455b099bc9', linked)).toBe('linkable');
+  });
+});
+
+describe('who did it (#140, ADR-0086)', () => {
+  const at = '2026-10-20T03:00:00.000Z';
+  const edited = '2026-10-21T05:30:00.000Z';
+  const admin = { id: 'admin-1', nickname: '운영자' };
+  // An admin closes only once the role is revoked; the theme, its markets and its notices stay,
+  // and the API names that account by id with a null nickname.
+  const former = { id: 'admin-2', nickname: null };
+
+  it('names the theme’s maker, and a former admin who has closed the account as 탈퇴한 사용자', () => {
+    expect(themeActorName(theme.createdBy)).toBe('운영자');
+    expect(themeActorName(former)).toBe(copy.postAuthorFormer);
+  });
+
+  it('says when a market was put in and by whom, a closed account as 탈퇴한 사용자', () => {
+    expect(formatThemeMarketLinked({ linkedAt: at, linkedBy: admin })).toBe(
+      `${copy.adminThemeMarketLinkedAt} ${formatKst(at)} · 운영자`,
+    );
+    expect(formatThemeMarketLinked({ linkedAt: at, linkedBy: former })).toBe(
+      `${copy.adminThemeMarketLinkedAt} ${formatKst(at)} · ${copy.postAuthorFormer}`,
+    );
+  });
+
+  it('says when and by whom a notice was written and its last edit, a closed account as 탈퇴한 사용자', () => {
+    expect(formatThemeNoticeByline({ createdAt: at, createdBy: admin, editedAt: null })).toBe(
+      `${formatKst(at)} · 운영자`,
+    );
+    expect(formatThemeNoticeByline({ createdAt: at, createdBy: former, editedAt: edited })).toBe(
+      `${formatKst(at)} · ${copy.postAuthorFormer} · ${copy.adminThemeNoticeEditedAt} ${formatKst(edited)}`,
+    );
   });
 });

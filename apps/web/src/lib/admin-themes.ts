@@ -11,14 +11,18 @@ import {
 } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
+import { nicknameShown } from './account-closure';
 import {
   type AdminTheme,
+  type AdminThemeMarket,
+  type AdminThemeNotice,
   type CreateThemeBody,
   type UpdateThemeBody,
   isApiError,
   validationField,
   validationMessage,
 } from './api';
+import { formatKst } from './datetime';
 
 /**
  * 테마 (#81, ADR-0088), the admin half: the theme form and the notice form, the bodies they send,
@@ -259,4 +263,33 @@ export function themePickState(
   linkedIds: ReadonlySet<string>,
 ): 'linked' | 'linkable' {
   return linkedIds.has(candidateId.toLowerCase()) ? 'linked' : 'linkable';
+}
+
+/**
+ * The admin who made the theme, put a market in it or wrote a notice, as the theme's admin page
+ * names them: the nickname, or '탈퇴한 사용자' once that admin has closed the account. An admin
+ * closes only once the role is revoked, and the theme, its markets and its notices stay, so the
+ * API sends the account by id with a null nickname then (#140, ADR-0086 — as the base's other
+ * admin screens name it).
+ */
+export function themeActorName(actor: Pick<AdminTheme['createdBy'], 'nickname'>): string {
+  return nicknameShown(actor.nickname);
+}
+
+/** The line under a market in the theme: when it was put in, and by whom. */
+export function formatThemeMarketLinked(
+  row: Pick<AdminThemeMarket, 'linkedAt' | 'linkedBy'>,
+): string {
+  return `${copy.adminThemeMarketLinkedAt} ${formatKst(row.linkedAt)} · ${themeActorName(row.linkedBy)}`;
+}
+
+/** The line under a notice's title: when and by whom it was written, and its last edit if any. */
+export function formatThemeNoticeByline(
+  notice: Pick<AdminThemeNotice, 'createdAt' | 'createdBy' | 'editedAt'>,
+): string {
+  const edited =
+    notice.editedAt === null
+      ? ''
+      : ` · ${copy.adminThemeNoticeEditedAt} ${formatKst(notice.editedAt)}`;
+  return `${formatKst(notice.createdAt)} · ${themeActorName(notice.createdBy)}${edited}`;
 }
