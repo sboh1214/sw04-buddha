@@ -27,6 +27,7 @@ const KIND_LABELS: Readonly<Record<RetentionPurgeKind, string>> = {
   removed_profile_items: copy.adminRetentionKindRemovedProfileItems,
   moderation_actions: copy.adminRetentionKindModerationActions,
   approval_requests: copy.adminRetentionKindApprovalRequests,
+  link_flags: copy.adminRetentionKindLinkFlags,
   consent_records: copy.adminRetentionKindConsentRecords,
   phone_verification_records: copy.adminRetentionKindPhoneVerificationRecords,
 };

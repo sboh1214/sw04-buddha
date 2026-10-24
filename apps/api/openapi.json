@@ -22387,6 +22387,7 @@
           "removed_profile_items",
           "moderation_actions",
           "approval_requests",
+          "link_flags",
           "consent_records",
           "phone_verification_records"
         ]

@@ -67,8 +67,9 @@ export const linkUses = pgTable(
  * trigger refuses changing it once set (migration 0041). buddha_app may update this column only.
  *
  * Kept for the retention period of #57-18 (owner decision 2026-10-22, ADR-0083 결과 5): buddha_app
- * may delete rows, and #184 deletes them when the period ends. Neither the writer nor the app
- * changes an entry otherwise. What became of the item since — edited, deleted, hidden — is read
+ * may delete rows, and #184's `retention.purge` deletes each once the 신고·제재 기록 period has passed
+ * since the later of `flagged_at` and its mark's time (owner decision 2026-10-24 13, ADR-0087) —
+ * the mark's `admin_actions` row stays. Neither the writer nor the app changes an entry otherwise. What became of the item since — edited, deleted, hidden — is read
  * from the item.
  */
 export const linkFlags = pgTable(
@@ -95,6 +96,11 @@ export const linkFlags = pgTable(
       .where(isNull(t.reviewActionId)),
     /** The entries one mark covered, newest first with the same cursor. */
     index('link_flags_review_action_id_idx').on(t.reviewActionId, desc(t.flaggedAt), desc(t.id)),
+    /**
+     * #184's scan (migration 0044, ADR-0087): the entries flagged before the cutoff, the oldest
+     * first — an entry is due once the later of its flagging and its mark is.
+     */
+    index('link_flags_flagged_at_idx').on(t.flaggedAt),
     check('link_flags_target_check', sql`num_nonnulls(${t.postId}, ${t.commentId}) = 1`),
     check('link_flags_reason_check', sql`${t.reason} IN ('same_account', 'many_accounts')`),
   ],

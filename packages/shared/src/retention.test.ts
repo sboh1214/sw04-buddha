@@ -34,6 +34,8 @@ describe('retention (#184)', () => {
     // the 신고·제재 period, not the deleted originals'.
     expect(RETENTION_PURGE_KIND_PERIODS.hidden_posts).toBe('moderation_records');
     expect(RETENTION_PURGE_KIND_PERIODS.hidden_comments).toBe('moderation_records');
+    // #187's repeated-link review list follows the 신고·제재 period (owner decision 2026-10-24 13).
+    expect(RETENTION_PURGE_KIND_PERIODS.link_flags).toBe('moderation_records');
     // Every period is applied to some kind.
     expect(new Set(Object.values(RETENTION_PURGE_KIND_PERIODS).filter(Boolean))).toEqual(
       new Set(RETENTION_PERIODS),

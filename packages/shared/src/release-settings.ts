@@ -263,12 +263,16 @@ export const DELETED_POSTS_RETENTION_SETTING = defineReleaseSetting({
  * restriction that has not ended, are kept; so are a live member's actions and the reports between
  * live accounts (owner decision 2026-10-24 2). What a profile action took away is the removed
  * items' period (REMOVED_PROFILE_ITEMS_RETENTION_SETTING); its action stays while that is kept.
+ * #187's repeated-link review list (`link_flags`, ADR-0083) follows this period too, whoever wrote
+ * the items it names: each entry from the later of its flagging and the operator's '확인함' mark
+ * that covered it (owner decision 2026-10-24 13) — the mark itself, with the link, is an
+ * operational record and stays (owner decision 2026-10-22 (2차) 3).
  */
 export const MODERATION_RECORDS_RETENTION_SETTING = defineReleaseSetting({
   key: 'retention.moderation_records',
   label: '신고·제재 기록 보존기간',
   unit: '일',
-  description: `탈퇴한 계정이 낸 신고, 탈퇴한 회원이 받은 신고와 조치(경고·숨김·닉네임 강제 변경·소개 비우기·프로필 이미지 삭제·작성 제한·계정 제한과 그 감경·해제·승인 요청)를 탈퇴 시각과 처리 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#184). 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것은 지운 원문처럼 내용을 비우고(글은 계속 숨긴 채) 그 수정 이력(이전 내용과 그것만 쓰던 이미지)과 숨김 조치도 함께 지운다. 프로필 조치가 가져간 항목 자체는 '운영자가 지운 프로필 항목 보존기간'을 따르고, 그 항목이 남아 있는 동안 조치도 남는다. 처리 중인 신고·요청이 있는 것과 끝나지 않은 제한은 지우지 않는다. 탈퇴하지 않은 회원이 받은 조치와 탈퇴하지 않은 계정끼리의 신고는 지우지 않는다. ${RETENTION_RULES}`,
+  description: `탈퇴한 계정이 낸 신고, 탈퇴한 회원이 받은 신고와 조치(경고·숨김·닉네임 강제 변경·소개 비우기·프로필 이미지 삭제·작성 제한·계정 제한과 그 감경·해제·승인 요청)를 탈퇴 시각과 처리 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#184). 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것은 지운 원문처럼 내용을 비우고(글은 계속 숨긴 채) 그 수정 이력(이전 내용과 그것만 쓰던 이미지)과 숨김 조치도 함께 지운다. 프로필 조치가 가져간 항목 자체는 '운영자가 지운 프로필 항목 보존기간'을 따르고, 그 항목이 남아 있는 동안 조치도 남는다. 처리 중인 신고·요청이 있는 것과 끝나지 않은 제한은 지우지 않는다. 탈퇴하지 않은 회원이 받은 조치와 탈퇴하지 않은 계정끼리의 신고는 지우지 않는다. 반복 링크 검토 목록의 항목은 작성자의 탈퇴와 상관없이 탐지된 시각과 '확인함'으로 표시된 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다('확인함' 운영 기록과 그 주소는 남는다). ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
 });
 

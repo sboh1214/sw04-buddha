@@ -141,8 +141,9 @@ const HANDLERS: Partial<Record<string, Handler>> = {
   },
   [JOB_NAMES.retentionPurge]: async (_job, { db, storage, logger }) => {
     const { ranAt, kinds, failed, failures, kindFailures } = await purgeExpiredRecords(db, storage);
-    // As the orphan clean-up's: an object the store kept is named by nothing any more; one error
-    // line each, and the run does not fail (its rows are gone, a retry would not find them).
+    // As the orphan clean-up's: one error line for each object the store kept, whose key stays
+    // queued (`media_deletions`) for `media.orphan_cleanup` — the run does not fail (its rows are
+    // gone, and the queue tries the object again).
     for (const { storageKey, err } of failures) {
       logger.error({ storageKey, err }, 'retention purge object not removed');
     }

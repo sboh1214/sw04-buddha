@@ -781,6 +781,9 @@ export const copy = {
   adminRetentionKindRemovedProfileItems: '운영자가 지운 프로필 항목',
   adminRetentionKindModerationActions: '제재 기록',
   adminRetentionKindApprovalRequests: '계정 제한 요청',
+  // #187의 반복 링크 검토 목록(ADR-0083)의 항목: '신고·제재 기록'의 기간으로 탐지된 때와 '확인함' 가운데
+  // 늦은 때부터 센다(오너 결정 2026-10-24 13). 이름은 그 목록을 부르는 말(ADR-0083 '검토 목록')로 골랐다.
+  adminRetentionKindLinkFlags: '반복 링크 검토 목록',
   adminRetentionKindConsentRecords: '동의 기록',
   adminRetentionKindPhoneVerificationRecords: '본인확인 기록',
 

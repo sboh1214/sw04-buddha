@@ -2,9 +2,11 @@ import { getReleaseSetting, schema, type Db } from '@buddha/db';
 import {
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   NICKNAME_HOLD_PURGE_DAYS,
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   RELEASE_SETTINGS,
   RETENTION_PERIOD_SETTINGS,
   RETENTION_PURGE_KIND_PERIODS,
+  orphanMediaRetryHours,
   retentionCutoffOf,
   type ReleaseSettingStatus,
   type RetentionPeriod,
@@ -36,7 +38,10 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
  */
 export const RETENTION_PURGE_BATCH = 500;
 
-/** One object the run could not remove from the store: its row is gone already. */
+/**
+ * One object the run could not remove from the store: its row is gone already, and its key stays
+ * queued (`media_deletions`, #46) for `media.orphan_cleanup` to remove later.
+ */
 export interface RetentionStorageFailure {
   storageKey: string;
   /** `messageOf(err)`: the job result is JSON. */
@@ -81,7 +86,10 @@ export interface RetentionPurgeOutcome {
   /** The run's instant: the end of every period it applied. */
   ranAt: Date;
   kinds: RetentionKindOutcome[];
-  /** Image objects the store would not remove (logged; nothing names them any more). */
+  /**
+   * Image objects the store would not remove right after their batch (logged): their keys stay
+   * queued in `media_deletions`, which `media.orphan_cleanup` works through (#46).
+   */
   failed: number;
   failures: RetentionStorageFailure[];
   /** Kinds whose processing failed this run (logged; the next run tries again). */
@@ -94,7 +102,10 @@ export interface RetentionPurgeOptions {
   batch?: number;
 }
 
-/** What one batch did: how many it took up, what it deleted by kind, and the objects to remove. */
+/**
+ * What one batch did: how many it took up, what it deleted by kind, and the objects whose rows it
+ * deleted — their keys queued in the batch's transaction (`media_deletions`), removed after it.
+ */
 interface Batch {
   /** Records the batch selected — fewer than the batch size means the kind is done. */
   selected: number;
@@ -113,6 +124,18 @@ interface Window {
 type Step = (tx: Tx, window: Window) => Promise<Batch>;
 
 const ts = (date: Date) => sql`${date.toISOString()}::timestamptz`;
+
+/**
+ * When a key the run queued is due for `media.orphan_cleanup` after the run's own try: the queue's
+ * first wait from now, less its slack — as a refusal on a run of that job is due again (#46's
+ * `media_deletions`; the API's `firstRetryAt` for the keys its writes queue, ADR-0079 7-5 and
+ * ADR-0086 7-14) — so the job does not race the run's try.
+ */
+const firstRetryAt = () =>
+  sql`now() + make_interval(hours => ${orphanMediaRetryHours(1)}, mins => ${-ORPHAN_MEDIA_RETRY_SLACK_MINUTES})`;
+
+/** As media-orphan-cleanup.ts and the API keep a store's refusal: its message, bounded. */
+const LAST_ERROR_MAX_LENGTH = 1_000;
 
 /**
  * The kinds of a request to change an account restriction that stands (#139): what it cites is the
@@ -146,11 +169,26 @@ function nothingAwaits(on: 'post' | 'comment', column: SQLWrapper): SQL {
 }
 
 /**
+ * How the run locks a post or a comment it empties or judges: FOR NO KEY UPDATE, the lock its own
+ * UPDATE takes — never FOR UPDATE (ADR-0083 7-13 and 결과 5, ADR-0087 7-27). It still waits for, and
+ * is waited for by, every write that changes the row or hangs under it: an author's edit
+ * (`lockOwnPost`/`lockOwnComment`, FOR NO KEY UPDATE), an operator's hiding or action on it (#50's
+ * ITEM_LOCK, the same), a comment or a like written under it (FOR SHARE). It does not wait for the
+ * foreign key checks of another write naming it — #187's `link_uses` and `link_flags` rows, a reply,
+ * a report, a like (FOR KEY SHARE) — nor do they wait for it: the run empties a row, it never deletes
+ * one or changes its key, so a writer that holds the counts row of #48's trigger and the link locks
+ * (7-13's chain) never queues behind the run, and the run never holds a row such a writer waits for
+ * while it waits for another. The selecting steps also skip what is locked (SKIP LOCKED).
+ */
+const ITEM_LOCK = 'no key update';
+
+/**
  * The post images of `postIds` that no version of their post shows any more — not the post as it
  * stands (an emptied original shows none) nor an earlier version still kept — with their media rows:
- * an image belongs to one post (`post_images`), so nothing else can show it. Under the posts' locks,
- * taken first: an edit in flight that puts an earlier image back has committed by then, and its
- * post's `image_ids` names it. Returns the storage keys to remove after the commit.
+ * an image belongs to one post (`post_images`), so nothing else can show it. Under the posts' locks
+ * (ITEM_LOCK, in id order), taken first: an edit in flight that puts an earlier image back has
+ * committed by then, and its post's `image_ids` names it. Returns the storage keys to queue and
+ * remove (the caller's transaction queues them, `media_deletions`).
  */
 async function dropUnusedPostImages(tx: Tx, postIds: string[]): Promise<string[]> {
   if (postIds.length === 0) return [];
@@ -160,7 +198,7 @@ async function dropUnusedPostImages(tx: Tx, postIds: string[]): Promise<string[]
     .from(posts)
     .where(inArray(posts.id, postIds))
     .orderBy(asc(posts.id))
-    .for('update');
+    .for(ITEM_LOCK);
   const unused = await tx
     .delete(postImages)
     .where(
@@ -286,7 +324,12 @@ async function emptyPosts(tx: Tx, ids: string[], now: Date): Promise<void> {
     .where(inArray(posts.id, ids));
 }
 
-/** Empties the comments `ids` in place, as `emptyPosts`: an empty body and when. */
+/**
+ * Empties the comments `ids` in place, as `emptyPosts`: an empty body and when. Neither `deleted_at`
+ * nor `hidden_at` changes, so #48's counter trigger (`post_comments_keep_count`, on INSERT, DELETE
+ * and an UPDATE of `post_id`, `deleted_at` or `hidden_at`) does not fire: a post's
+ * `post_comment_counts` stays exact — the comments emptied are deleted or hidden, never counted.
+ */
 async function emptyComments(tx: Tx, ids: string[], now: Date): Promise<void> {
   if (ids.length === 0) return;
   const { postComments } = schema;
@@ -347,7 +390,7 @@ const deletedPosts: Step = async (tx, { cutoff, now, limit }) => {
     )
     .orderBy(asc(posts.deletedAt), asc(posts.id))
     .limit(limit)
-    .for('update', { of: posts, skipLocked: true });
+    .for(ITEM_LOCK, { of: posts, skipLocked: true });
   const ids = due.map((row) => row.id);
   await emptyPosts(tx, ids, now);
   const storageKeys = await dropUnusedPostImages(tx, ids);
@@ -372,7 +415,7 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
     )
     .orderBy(asc(postComments.deletedAt), asc(postComments.id))
     .limit(limit)
-    .for('update', { of: postComments, skipLocked: true });
+    .for(ITEM_LOCK, { of: postComments, skipLocked: true });
   const ids = due.map((row) => row.id);
   await emptyComments(tx, ids, now);
   return { selected: ids.length, deleted: { deleted_comments: ids.length }, storageKeys: [] };
@@ -392,15 +435,17 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
  * it (migration 0044's CHECK keeps it hidden: `hidden_at` stays) nor an earlier version left to
  * show what it said. Not while a report about it or an account restriction request citing it waits
  * (`nothingAwaits`), nor while a report not yet due still names the hiding (it goes first, in
- * `reports`, under the same rule from its processing). Each action and its post are locked together
- * and skipped while either is taken (SKIP LOCKED waits for neither): a cancellation in flight keeps
- * both until it commits — the post shown again, the next run passes it by — and one that comes
- * after waits on the action and then finds it gone. A hidden post takes no edit (POST_NOT_EDITABLE)
- * and its author has withdrawn, so no version is added meanwhile.
+ * `reports`, under the same rule from its processing). The action is locked FOR UPDATE (it is
+ * deleted), then its post FOR NO KEY UPDATE (ITEM_LOCK — not FOR UPDATE, so another write's foreign
+ * key check naming the post, a #187 link flag's, neither waits for the run nor is waited for), each
+ * skipped while taken (SKIP LOCKED waits for neither) and the post checked again under its lock: a
+ * cancellation in flight keeps both until it commits — the post shown again, the next run passes it
+ * by — and one that comes after waits on the action and then finds it gone. A hidden post takes no
+ * edit (POST_NOT_EDITABLE) and its author has withdrawn, so no version is added meanwhile.
  */
 const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
   const { posts, profiles, moderationActions: actions, reports: reportsTable } = schema;
-  const due = await tx
+  const candidates = await tx
     .select({ id: posts.id, actionId: actions.id })
     .from(actions)
     .innerJoin(posts, eq(posts.id, actions.postId))
@@ -421,7 +466,28 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
     )
     .orderBy(asc(actions.createdAt), asc(actions.id))
     .limit(limit)
-    .for('update', { of: [actions, posts], skipLocked: true });
+    .for('update', { of: actions, skipLocked: true });
+  const locked =
+    candidates.length === 0
+      ? []
+      : await tx
+          .select({ id: posts.id })
+          .from(posts)
+          .where(
+            and(
+              inArray(
+                posts.id,
+                candidates.map((row) => row.id),
+              ),
+              isNotNull(posts.hiddenAt),
+              isNull(posts.deletedAt),
+              isNull(posts.purgedAt),
+            ),
+          )
+          .orderBy(asc(posts.id))
+          .for(ITEM_LOCK, { skipLocked: true });
+  const lockedIds = new Set(locked.map((row) => row.id));
+  const due = candidates.filter((row) => lockedIds.has(row.id));
   const ids = due.map((row) => row.id);
   await emptyPosts(tx, ids, now);
   const revisions = await deletePostRevisionsOf(tx, ids);
@@ -435,7 +501,9 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
   }
   const storageKeys = await dropUnusedPostImages(tx, ids);
   return {
-    selected: ids.length,
+    // The actions taken up: an item another write holds is left to the next run, and one batch of
+    // them only stops the kind when nothing else came of it (`purgeExpiredRecords`).
+    selected: candidates.length,
     deleted: {
       hidden_posts: ids.length,
       post_revisions: revisions,
@@ -447,11 +515,14 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
 
 /**
  * The same for a withdrawn member's 댓글 and 대댓글 an operator still hides, with their edit history
- * (counted as `comment_revisions`; no images).
+ * (counted as `comment_revisions`; no images) — the action FOR UPDATE, then the comment ITEM_LOCK.
+ * Emptying one changes neither `deleted_at` nor `hidden_at`: #48's counter (`post_comment_counts`,
+ * whose trigger follows those two and `post_id`) is left as it was — a hidden comment is not counted
+ * before nor after (ADR-0087 7-28).
  */
 const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
   const { postComments, profiles, moderationActions: actions, reports: reportsTable } = schema;
-  const due = await tx
+  const candidates = await tx
     .select({ id: postComments.id, actionId: actions.id })
     .from(actions)
     .innerJoin(postComments, eq(postComments.id, actions.commentId))
@@ -472,7 +543,28 @@ const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
     )
     .orderBy(asc(actions.createdAt), asc(actions.id))
     .limit(limit)
-    .for('update', { of: [actions, postComments], skipLocked: true });
+    .for('update', { of: actions, skipLocked: true });
+  const locked =
+    candidates.length === 0
+      ? []
+      : await tx
+          .select({ id: postComments.id })
+          .from(postComments)
+          .where(
+            and(
+              inArray(
+                postComments.id,
+                candidates.map((row) => row.id),
+              ),
+              isNotNull(postComments.hiddenAt),
+              isNull(postComments.deletedAt),
+              isNull(postComments.purgedAt),
+            ),
+          )
+          .orderBy(asc(postComments.id))
+          .for(ITEM_LOCK, { skipLocked: true });
+  const lockedIds = new Set(locked.map((row) => row.id));
+  const due = candidates.filter((row) => lockedIds.has(row.id));
   const ids = due.map((row) => row.id);
   await emptyComments(tx, ids, now);
   const revisions = await deleteCommentRevisionsOf(tx, ids);
@@ -485,7 +577,7 @@ const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
     );
   }
   return {
-    selected: ids.length,
+    selected: candidates.length,
     deleted: {
       hidden_comments: ids.length,
       comment_revisions: revisions,
@@ -720,6 +812,39 @@ const approvalRequests: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * #187's repeated-link review list (`link_flags`, ADR-0083): each entry once the 신고·제재 기록 period
+ * has passed since the later of its flagging and the operator's '확인함' mark that covered it — the
+ * mark's `admin_actions.created_at`; an entry no operator has marked counts from its flagging (owner
+ * decision 2026-10-24 13 «표시되거나 확인한 때부터»). Whoever wrote the post or comment it names,
+ * withdrawn or not: the list is about links (ADR-0083 answer 6). The mark itself — the operator's
+ * record, with the link and the rule — stays in `admin_actions` with no period (owner decision
+ * 2026-10-22 (2차) 3); the reviewed list shows a mark while an entry of it is left. Entries locked
+ * SKIP LOCKED: an operator marking the group now holds them (FOR UPDATE) and the next run takes
+ * them; a mark that comes after waits and finds them gone (NOT_FOUND when none is left). Nothing
+ * names an entry, and deleting one locks nothing it names — a referencing row's foreign keys are
+ * checked when it is written, not when it is deleted — so the step waits for no post or comment.
+ */
+const linkFlags: Step = async (tx, { cutoff, limit }) => {
+  const { linkFlags: flags, adminActions } = schema;
+  const due = await tx
+    .select({ id: flags.id })
+    .from(flags)
+    .leftJoin(adminActions, eq(adminActions.id, flags.reviewActionId))
+    .where(
+      and(
+        lte(flags.flaggedAt, cutoff),
+        sql`GREATEST(${flags.flaggedAt}, ${adminActions.createdAt}) <= ${ts(cutoff)}`,
+      ),
+    )
+    .orderBy(asc(flags.flaggedAt), asc(flags.id))
+    .limit(limit)
+    .for('update', { of: flags, skipLocked: true });
+  const ids = due.map((row) => row.id);
+  if (ids.length > 0) await tx.delete(flags).where(inArray(flags.id, ids));
+  return { selected: ids.length, deleted: { link_flags: ids.length }, storageKeys: [] };
+};
+
+/**
  * A withdrawn account's consent records (#57-18 «동의 기록»), once the period has passed since the
  * withdrawal. A live account's are its standing consent: never. No row lock (no UPDATE of the
  * table for buddha_app, and nothing changes a record).
@@ -782,7 +907,8 @@ const phoneVerificationRecords: Step = async (tx, { cutoff, limit }) => {
  * a report before its action (a hiding's among them, which goes with its hidden item and that
  * item's versions), a removed profile item and an ended hold before theirs, an action before its
  * requests — and the versions before the originals, so an original's images are judged against the
- * versions still kept.
+ * versions still kept. #187's review list names nothing the run deletes and nothing names it: it
+ * closes the 신고·제재 kinds.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },
@@ -796,9 +922,48 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'removed_profile_items', step: removedProfileItems },
   { kind: 'moderation_actions', step: moderationActions },
   { kind: 'approval_requests', step: approvalRequests },
+  { kind: 'link_flags', step: linkFlags },
   { kind: 'consent_records', step: consentRecords },
   { kind: 'phone_verification_records', step: phoneVerificationRecords },
 ];
+
+/**
+ * Removes the object of a key the batch queued, after its commit (the fast path, as the API's
+ * `removeQueuedObject`): the key leaves the queue once the store has let the object go. A store
+ * that refuses leaves it queued, this refusal counted as its first (`attempts` 1, its error kept,
+ * due again after the queue's first wait), for `media.orphan_cleanup`; the refusal is reported
+ * (`failures`, a log line). Never throws: the batch stands either way — a queue write that fails
+ * here leaves the key queued as the batch wrote it (only the count, or the unqueueing of a key
+ * already removed, is lost: the job's removal of nothing is done).
+ */
+async function removeQueued(
+  db: Db,
+  storage: ObjectStorage,
+  storageKey: string,
+  failures: RetentionStorageFailure[],
+): Promise<void> {
+  const { mediaDeletions } = schema;
+  try {
+    await storage.delete(storageKey);
+  } catch (err) {
+    const message = messageOf(err);
+    failures.push({ storageKey, message, err });
+    await db
+      .update(mediaDeletions)
+      .set({
+        attempts: 1,
+        lastError: message.slice(0, LAST_ERROR_MAX_LENGTH),
+        nextAttemptAt: firstRetryAt(),
+      })
+      .where(eq(mediaDeletions.storageKey, storageKey))
+      .catch(() => undefined);
+    return;
+  }
+  await db
+    .delete(mediaDeletions)
+    .where(eq(mediaDeletions.storageKey, storageKey))
+    .catch(() => undefined);
+}
 
 /** Each period's reading at the run's start: the days when approved, else null (not processed). */
 async function readPeriods(
@@ -833,9 +998,9 @@ async function readPeriods(
  * - A kind whose batch fails is reported, recorded as `failed` with a count of 0 (owner decision
  *   2026-10-24 14 — its batch rolled back, its earlier batches stand recorded as `done`), and the
  *   run goes on to the next kind; the next run tries it again.
- * - Image objects go after their transaction commits; one the store will not remove is logged and
- *   left, named by nothing (the rows are gone). #46's `media_deletions` queue takes them once the
- *   branch is restacked onto it (ADR-0087 결과 5).
+ * - Image objects go after their transaction commits, their keys queued in it (#46's
+ *   `media_deletions`): one the store will not remove is logged and stays queued, and
+ *   `media.orphan_cleanup` removes it later (ADR-0087 7-12).
  * - The ledger, orders, watch events, likes, posts not deleted, start grants and the operational
  *   records are never touched: no step names them.
  */
@@ -875,6 +1040,21 @@ export async function purgeExpiredRecords(
             count && count > 0 ? [{ kind: deletedKind, count, periodDays: days, ranAt }] : [],
           );
           if (rows.length > 0) await tx.insert(schema.retentionPurges).values(rows);
+          // The objects whose rows the batch deleted: their keys queued with the deletion (#46), so
+          // a commit is never left naming no object it removed — a refusal below, or a run that
+          // stops before it, leaves the key to `media.orphan_cleanup`. A key is one object's:
+          // never queued already (DO NOTHING all the same).
+          if (done.storageKeys.length > 0) {
+            await tx
+              .insert(schema.mediaDeletions)
+              .values(
+                done.storageKeys.map((storageKey) => ({
+                  storageKey,
+                  nextAttemptAt: firstRetryAt(),
+                })),
+              )
+              .onConflictDoNothing({ target: schema.mediaDeletions.storageKey });
+          }
           return done;
         });
         for (const [deletedKind, count] of Object.entries(batch.deleted)) {
@@ -882,11 +1062,7 @@ export async function purgeExpiredRecords(
           totals[key] = (totals[key] ?? 0) + (count ?? 0);
         }
         for (const storageKey of batch.storageKeys) {
-          try {
-            await storage.delete(storageKey);
-          } catch (err) {
-            failures.push({ storageKey, message: messageOf(err), err });
-          }
+          await removeQueued(db, storage, storageKey, failures);
         }
         const deleted = batch.deleted[kind] ?? 0;
         if (batch.selected < limit || deleted === 0) break;

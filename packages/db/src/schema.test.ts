@@ -3771,6 +3771,80 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
     });
 
+    it('keeps an emptied row so with a trigger that leaves a comment’s update the lock it was: no BEFORE row trigger, which would count the generated key `is_reply` as updated and lock the row FOR UPDATE against another write’s foreign key check (ADR-0083 7-13, ADR-0087 7-27)', async () => {
+      // Only AFTER UPDATE OF purged_at on the two tables: a BEFORE row trigger on UPDATE makes
+      // PostgreSQL recompute every stored generated column and count it as updated.
+      const { rows: triggers } = await t.db.execute<{
+        table: string;
+        name: string;
+        def: string;
+      }>(sql`
+        SELECT c.relname AS "table", tg.tgname AS name, pg_get_triggerdef(tg.oid) AS def
+        FROM pg_trigger tg JOIN pg_class c ON c.oid = tg.tgrelid
+        WHERE c.relname IN ('posts', 'post_comments') AND NOT tg.tgisinternal
+          AND tg.tgname LIKE '%keep_purged'
+        ORDER BY 1`);
+      expect(triggers.map(({ table, name }) => [table, name])).toEqual([
+        ['post_comments', 'post_comments_keep_purged'],
+        ['posts', 'posts_keep_purged'],
+      ]);
+      for (const { def } of triggers) expect(def).toContain('AFTER UPDATE OF purged_at ON');
+      const { rows: before } = await t.db.execute<{ name: string }>(sql`
+        SELECT tg.tgname AS name FROM pg_trigger tg
+        WHERE tg.tgrelid = 'post_comments'::regclass AND NOT tg.tgisinternal
+          AND (tg.tgtype & 1) = 1 AND (tg.tgtype & 2) = 2 AND (tg.tgtype & 16) = 16`);
+      expect(before).toEqual([]);
+
+      // A write in flight names the comment and its post (a link flag's foreign key checks, FOR KEY
+      // SHARE): an edit, a hiding and an emptying of either wait for nothing.
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        deletedAt: new Date(Date.now() - 60_000),
+      });
+      const comment = await createComment(t.db, {
+        postId: (await createPost(t.db, { marketId: market.id, authorId: author.id })).id,
+        authorId: author.id,
+        deletedAt: new Date(Date.now() - 60_000),
+      });
+      const holder = await t.db.$client.connect();
+      const writer = await t.db.$client.connect();
+      try {
+        await holder.query('BEGIN');
+        await holder.query(
+          `INSERT INTO link_flags (url, reason, post_id) VALUES ('https://example.com/held', 'many_accounts', $1)`,
+          [post.id],
+        );
+        await holder.query(
+          `INSERT INTO link_flags (url, reason, comment_id) VALUES ('https://example.com/held', 'many_accounts', $1)`,
+          [comment.id],
+        );
+        await writer.query(`SET lock_timeout = '2s'`);
+        await writer.query(`UPDATE post_comments SET edited_at = now() WHERE id = $1`, [
+          comment.id,
+        ]);
+        await writer.query(`UPDATE post_comments SET hidden_at = now() WHERE id = $1`, [
+          comment.id,
+        ]);
+        await writer.query(`UPDATE post_comments SET body = '', purged_at = now() WHERE id = $1`, [
+          comment.id,
+        ]);
+        await writer.query(
+          `UPDATE posts SET title = NULL, body = '{"type":"doc","content":[]}', body_text = '', image_ids = '{}', purged_at = now() WHERE id = $1`,
+          [post.id],
+        );
+        await holder.query('COMMIT');
+      } finally {
+        await holder.query('ROLLBACK').catch(() => undefined);
+        await writer.query('RESET lock_timeout').catch(() => undefined);
+        holder.release();
+        writer.release();
+      }
+      expect(await t.db.select().from(linkFlags)).toHaveLength(2);
+    });
+
     it('keeps the purge records append-only and to the kinds, counts, periods and outcomes there are', async () => {
       const ranAt = new Date();
       const [row] = await t.db

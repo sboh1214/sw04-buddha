@@ -14,7 +14,9 @@
 --   a hidden one emptied (not before its deletion or hiding), and one emptied while hidden and not
 --   deleted hidden; post_comments_body_check is replaced so an emptied comment may have no text.
 -- - The indexes the job's scans read: the deleted originals and the hidden items not emptied yet,
---   the versions by when they were replaced, the closed accounts by when they closed.
+--   the versions by when they were replaced, the closed accounts by when they closed, and #187's
+--   repeated-link review entries by when they were flagged (link_flags_flagged_at_idx — the
+--   retention of the review list, owner decision 2026-10-24 13).
 -- - retention_delete_approval_requests(): the one way buddha_app deletes an approval request
 --   (below) — it keeps no DELETE of the table (migration 0021).
 CREATE TABLE "retention_purges" (
@@ -24,7 +26,7 @@ CREATE TABLE "retention_purges" (
 	"period_days" integer NOT NULL,
 	"ran_at" timestamp (3) with time zone NOT NULL,
 	"outcome" varchar(16) DEFAULT 'done' NOT NULL,
-	CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'consent_records', 'phone_verification_records')),
+	CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'link_flags', 'consent_records', 'phone_verification_records')),
 	CONSTRAINT "retention_purges_count_check" CHECK ("retention_purges"."count" >= 0),
 	CONSTRAINT "retention_purges_period_days_check" CHECK ("retention_purges"."period_days" >= 1),
 	CONSTRAINT "retention_purges_outcome_check" CHECK ("retention_purges"."outcome" IN ('done', 'failed') AND ("retention_purges"."outcome" <> 'failed' OR "retention_purges"."count" = 0))
@@ -34,6 +36,7 @@ ALTER TABLE "post_comments" DROP CONSTRAINT "post_comments_body_check";--> state
 ALTER TABLE "post_comments" ADD COLUMN "purged_at" timestamp (3) with time zone;--> statement-breakpoint
 ALTER TABLE "posts" ADD COLUMN "purged_at" timestamp (3) with time zone;--> statement-breakpoint
 CREATE INDEX "retention_purges_ran_at_id_idx" ON "retention_purges" USING btree ("ran_at" desc,"id" desc);--> statement-breakpoint
+CREATE INDEX "link_flags_flagged_at_idx" ON "link_flags" USING btree ("flagged_at");--> statement-breakpoint
 CREATE INDEX "post_comment_revisions_replaced_at_idx" ON "post_comment_revisions" USING btree ("replaced_at");--> statement-breakpoint
 CREATE INDEX "post_comments_unpurged_deleted_at_idx" ON "post_comments" USING btree ("deleted_at") WHERE "post_comments"."deleted_at" IS NOT NULL AND "post_comments"."purged_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "post_comments_unpurged_hidden_at_idx" ON "post_comments" USING btree ("hidden_at") WHERE "post_comments"."hidden_at" IS NOT NULL AND "post_comments"."deleted_at" IS NULL AND "post_comments"."purged_at" IS NULL;--> statement-breakpoint
@@ -47,7 +50,13 @@ ALTER TABLE "posts" ADD CONSTRAINT "posts_purged_check" CHECK ("posts"."purged_a
 -- Hand-edited: an emptied original stays emptied (#184: deleted for good, never restored) whoever
 -- writes — purged_at, once set, never changes, and the CHECKs keep the content empty while it is
 -- set. The other columns stay as the API keeps them (an operator may still hide a deleted post).
--- TRUNCATE fires no row trigger.
+-- TRUNCATE fires no row trigger. AFTER UPDATE OF purged_at, not BEFORE UPDATE: only an UPDATE that
+-- names the column can change it, and a BEFORE row trigger on UPDATE makes PostgreSQL recompute
+-- every stored generated column and count it as updated — post_comments.is_reply is a key column
+-- (the unique key its replies' foreign key references), so every UPDATE of a comment (an edit, a
+-- deletion, #50's hiding, this purge's emptying) would lock the row as FOR UPDATE does and wait
+-- for, and be waited for by, another write's foreign key check naming it (FOR KEY SHARE: #187's
+-- link flags and link uses, a reply, a like) — the deadlock ADR-0083 7-13 removed (ADR-0087 7-27).
 CREATE FUNCTION keep_purged() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -56,14 +65,14 @@ BEGIN
       OLD.id, OLD.purged_at
       USING ERRCODE = 'integrity_constraint_violation';
   END IF;
-  RETURN NEW;
+  RETURN NULL;
 END;
 $$;--> statement-breakpoint
 CREATE TRIGGER posts_keep_purged
-  BEFORE UPDATE ON "posts"
+  AFTER UPDATE OF "purged_at" ON "posts"
   FOR EACH ROW EXECUTE FUNCTION keep_purged();--> statement-breakpoint
 CREATE TRIGGER post_comments_keep_purged
-  BEFORE UPDATE ON "post_comments"
+  AFTER UPDATE OF "purged_at" ON "post_comments"
   FOR EACH ROW EXECUTE FUNCTION keep_purged();--> statement-breakpoint
 -- Hand-edited: the purge records are operational records, kept with no period (#57-18) and never
 -- rewritten. buddha_app keeps SELECT/INSERT of the default privileges in

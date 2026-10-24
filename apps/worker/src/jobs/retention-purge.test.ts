@@ -11,7 +11,11 @@
  * their case: the reports a withdrawn member received (1), a withdrawn member's items still hidden
  * (3 — a post and a comment each, under every guard of their steps), what a pending account
  * restriction request cites (12 — each kind of request and both columns a restriction cites) and a
- * failed kind's record (14). The release settings are changed the way the admin screen changes
+ * failed kind's record (14) — and #187's repeated-link review list (13). At the restack onto the
+ * full chain (ADR-0087 결과 5): an object the store refuses stays queued for #46's clean-up, #48's
+ * comment counts stay exact, #138's notice history is never touched, and another write's foreign
+ * key check naming an item (a link flag) neither waits for the run nor is waited for. The release
+ * settings are changed the way the admin screen changes
  * them (a row and its record); the run's instant is moved past a period instead of backdating a
  * closure (a closed profile never changes, migration 0043). Skips when TEST_* are unset.
  */
@@ -23,9 +27,12 @@ import {
   createComment,
   createCommentLike,
   createConsents,
+  createLinkFlag,
+  createLinkUse,
   createMarket,
   createMedia,
   createModerationAction,
+  createNotice,
   createPost,
   createPostLike,
   createProfileImage,
@@ -41,6 +48,8 @@ import {
   CONSENT_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,
   MODERATION_RECORDS_RETENTION_SETTING,
+  ORPHAN_MEDIA_RETRY_FIRST_HOURS,
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
   RETENTION_PURGE_KINDS,
@@ -52,6 +61,7 @@ import { MemoryObjectStorage } from '@buddha/storage';
 import { randomUUID } from 'node:crypto';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { removeOrphanMedia } from './media-orphan-cleanup.js';
 import { purgeExpiredRecords } from './retention-purge.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -221,6 +231,12 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     });
     await createModerationAction(t.db, { userId: user.id, createdBy: admin });
     await createModerationAction(t.db, { userId: user.id, createdBy: admin, type: 'bio_clear' });
+    await createLinkFlag(t.db, {
+      url: 'https://example.com/a',
+      reason: 'same_account',
+      postId: post.id,
+      flaggedAt: before(new Date(), 1),
+    });
     await createApprovalRequest(t.db, {
       kind: 'account_restriction',
       targetType: 'user',
@@ -249,6 +265,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await t.db.select().from(schema.moderationActions)).toHaveLength(2);
     expect(await t.db.select().from(schema.profileItemRemovals)).toHaveLength(1);
     expect(await t.db.select().from(schema.approvalRequests)).toHaveLength(1);
+    expect(await t.db.select().from(schema.linkFlags)).toHaveLength(1);
     const byKind = Object.fromEntries(outcome.kinds.map((kind) => [kind.kind, kind]));
     expect(byKind.consent_records).toEqual({
       kind: 'consent_records',
@@ -258,6 +275,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     });
     expect(byKind.phone_verification_records).toMatchObject({ status: 'proposal', deleted: 0 });
     expect(byKind.reports).toMatchObject({ status: 'test', periodDays: null, deleted: 0 });
+    expect(byKind.link_flags).toMatchObject({ status: 'test', periodDays: null, deleted: 0 });
     expect(byKind.deleted_posts).toMatchObject({ status: 'undecided', periodDays: null });
     expect(byKind.removed_profile_items).toMatchObject({ status: 'undecided', periodDays: null });
     // Only the nickname holds' fixed 30 days applied: the closure's hold of the nickname is over.
@@ -2141,7 +2159,320 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(columns.sort()).toEqual(['count', 'id', 'kind', 'outcome', 'periodDays', 'ranAt']);
   });
 
-  it('reports an object the store would not remove and goes on (its row is gone)', async () => {
+  it('deletes #187’s repeated-link review entries once the 신고·제재 period has passed since the later of the flag and its ‘확인함’ mark, whoever wrote the item; the mark keeps the link (owner decisions 2026-10-24 13, 2026-10-22 (2차) 3)', async () => {
+    const live = (await createUser(t.db)).user.id;
+    const leaving = (await createUser(t.db)).user.id;
+    const flaggedAt = before(new Date(), 100);
+    const url = 'https://example.com/repeated';
+    const post = await createPost(t.db, { marketId, authorId: live, title: '링크 글' });
+    const comment = await createComment(t.db, {
+      postId: post.id,
+      authorId: live,
+      body: '링크 댓글',
+    });
+    const leavingPost = await createPost(t.db, { marketId, authorId: leaving, title: '떠난 글' });
+    const use = await createLinkUse(t.db, { url, postId: post.id, usedAt: flaggedAt });
+    // An operator's '확인함' 10 days after the flags it covered (LinkReviewService.review).
+    const [mark] = await t.db
+      .insert(schema.adminActions)
+      .values({
+        adminId: admin,
+        type: 'link_flag_review',
+        targetType: 'link',
+        targetId: url,
+        payload: {
+          reason: 'many_accounts',
+          outcome: 'no_issue',
+          note: null,
+          itemCount: 1,
+          through: flaggedAt.toISOString(),
+        },
+        createdAt: after(flaggedAt, 10),
+      })
+      .returning();
+    // Never marked: due 30 days after the flag — a live author's item and a withdrawn one's.
+    const open = await createLinkFlag(t.db, {
+      url,
+      reason: 'same_account',
+      postId: post.id,
+      flaggedAt,
+    });
+    const leavingOpen = await createLinkFlag(t.db, {
+      url,
+      reason: 'same_account',
+      postId: leavingPost.id,
+      flaggedAt,
+    });
+    // Marked 10 days later: due 30 days after the mark.
+    const marked = await createLinkFlag(t.db, {
+      url,
+      reason: 'many_accounts',
+      commentId: comment.id,
+      flaggedAt,
+      reviewActionId: mark!.id,
+    });
+    // Flagged 20 days later and never marked: due 30 days after its own flag.
+    const later = await createLinkFlag(t.db, {
+      url,
+      reason: 'many_accounts',
+      postId: post.id,
+      flaggedAt: after(flaggedAt, 20),
+    });
+    await closeAccount(t.db, leaving);
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    const flags = async () =>
+      (await t.db.select({ id: schema.linkFlags.id }).from(schema.linkFlags))
+        .map((row) => row.id)
+        .sort();
+
+    const early = after(flaggedAt, 30, -1);
+    await run(early);
+    expect(await flags()).toEqual([open.id, leavingOpen.id, marked.id, later.id].sort());
+    expect(await countsAt(early)).toMatchObject({ link_flags: 0 });
+
+    const first = after(flaggedAt, 30);
+    await run(first);
+    expect(await flags()).toEqual([marked.id, later.id].sort());
+    expect(await countsAt(first)).toMatchObject({ link_flags: 2 });
+    expect(
+      (await purgeRecords()).filter((row) => row.kind === 'link_flags' && row.count > 0),
+    ).toEqual([{ kind: 'link_flags', count: 2, periodDays: 30, ranAt: first, outcome: 'done' }]);
+
+    await run(after(flaggedAt, 40, -1));
+    expect(await flags()).toEqual([marked.id, later.id].sort());
+    const second = after(flaggedAt, 40);
+    await run(second);
+    expect(await flags()).toEqual([later.id]);
+    expect(await countsAt(second)).toMatchObject({ link_flags: 1 });
+
+    const third = after(flaggedAt, 50);
+    await run(third);
+    expect(await flags()).toEqual([]);
+    // The mark is an operational record, with the link: it stays (owner decision 2026-10-22 (2차)
+    // 3). The items, the link's use (#187's own hourly purge) and the accounts are not this kind's.
+    expect(
+      await t.db.select().from(schema.adminActions).where(eq(schema.adminActions.id, mark!.id)),
+    ).toEqual([expect.objectContaining({ type: 'link_flag_review', targetId: url })]);
+    expect(await postOf(post.id)).toMatchObject({ title: '링크 글', purgedAt: null });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '링크 댓글', purgedAt: null });
+    expect(await postOf(leavingPost.id)).toMatchObject({ title: '떠난 글', purgedAt: null });
+    expect((await t.db.select().from(schema.linkUses)).map((row) => row.id)).toEqual([use.id]);
+  });
+
+  it('keeps #48’s comment counts exact when it empties deleted and hidden comments: neither was counted, and the hidden one stays hidden (ADR-0087 7-28)', async () => {
+    const author = (await createUser(t.db)).user.id;
+    const member = (await createUser(t.db)).user.id;
+    const post = await createPost(t.db, { marketId, authorId: author });
+    const at = before(new Date(), 100);
+    await createComment(t.db, { postId: post.id, authorId: author, body: '보이는 댓글' });
+    const deleted = await createComment(t.db, {
+      postId: post.id,
+      authorId: author,
+      body: '지운 댓글',
+      deletedAt: at,
+    });
+    // A 대댓글 under the deleted 댓글, which keeps its placeholder: counted.
+    await createComment(t.db, {
+      postId: post.id,
+      authorId: member,
+      parentId: deleted.id,
+      body: '살아 있는 대댓글',
+    });
+    const hidden = await createComment(t.db, {
+      postId: post.id,
+      authorId: member,
+      body: '숨긴 댓글',
+      hiddenAt: at,
+    });
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      commentId: hidden.id,
+      createdAt: at,
+    });
+    const closedAt = await closeAccount(t.db, member);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    const counted = async () => {
+      const [row] = await t.db
+        .select({ count: schema.postCommentCounts.count })
+        .from(schema.postCommentCounts)
+        .where(eq(schema.postCommentCounts.postId, post.id));
+      const { rows } = await t.db.execute<{ visible: number }>(
+        sql`SELECT count(*)::int AS visible FROM post_comments WHERE post_id = ${post.id} AND deleted_at IS NULL AND hidden_at IS NULL`,
+      );
+      return { counter: row?.count ?? 0, visible: rows[0]!.visible };
+    };
+    expect(await counted()).toEqual({ counter: 2, visible: 2 });
+
+    const due = after(closedAt, 30);
+    await run(due);
+    expect(await commentOf(deleted.id)).toMatchObject({ body: '', purgedAt: due, deletedAt: at });
+    expect(await commentOf(hidden.id)).toMatchObject({
+      body: '',
+      purgedAt: due,
+      hiddenAt: at,
+      deletedAt: null,
+    });
+    expect(await countsAt(due)).toMatchObject({ deleted_comments: 1, hidden_comments: 1 });
+    // The counter's trigger follows `deleted_at` and `hidden_at`, which emptying leaves: the post
+    // still counts its two visible comments.
+    expect(await counted()).toEqual({ counter: 2, visible: 2 });
+  });
+
+  it('never touches #138’s notices, their history or their images, every period approved (owner decision 2026-10-21: kept with no period)', async () => {
+    const pictureOfOld = await image(admin);
+    const pictureOfNow = await image(admin);
+    const notice = await createNotice(t.db, {
+      title: '공지',
+      imageIds: [pictureOfNow.id],
+      createdAt: before(new Date(), 400),
+      editedAt: before(new Date(), 300),
+    });
+    // The version an edit replaced 300 days ago, with the image only it showed.
+    await t.db
+      .insert(schema.noticeImages)
+      .values({ noticeId: notice.id, mediaId: pictureOfOld.id });
+    await t.db.insert(schema.noticeRevisions).values({
+      noticeId: notice.id,
+      title: '이전 공지',
+      body: {
+        type: 'doc',
+        content: [{ type: 'image', attrs: { mediaId: pictureOfOld.id } }],
+      },
+      bodyText: '',
+      imageIds: [pictureOfOld.id],
+      writtenAt: before(new Date(), 400),
+      replacedAt: before(new Date(), 300),
+    });
+    for (const definition of [
+      CONSENT_RECORDS_RETENTION_SETTING,
+      PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
+      DELETED_POSTS_RETENTION_SETTING,
+      MODERATION_RECORDS_RETENTION_SETTING,
+      REMOVED_PROFILE_ITEMS_RETENTION_SETTING,
+    ]) {
+      await setPeriod(definition, 1);
+    }
+    await run(after(new Date(), 10));
+    expect(await t.db.select().from(schema.noticeRevisions)).toEqual([
+      expect.objectContaining({ noticeId: notice.id, title: '이전 공지' }),
+    ]);
+    expect(
+      (await t.db.select().from(schema.noticeImages)).map((row) => row.mediaId).sort(),
+    ).toEqual([pictureOfOld.id, pictureOfNow.id].sort());
+    expect((await mediaIds()).sort()).toEqual([pictureOfOld.id, pictureOfNow.id].sort());
+    expect(storage.objects.has(pictureOfOld.storageKey)).toBe(true);
+    expect(await queuedKeys()).toEqual([]);
+  });
+
+  /** `promise`, or a refusal once `seconds` have passed while it still waits. */
+  const within = <T>(promise: Promise<T>, seconds: number) =>
+    Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error(`still waiting after ${seconds}s`)), seconds * 1_000),
+      ),
+    ]);
+
+  it('takes no lock another write’s foreign key check waits for, nor waits for one: it empties, judges and drops the images of items a link flag being written names (ADR-0083 결과 5, ADR-0087 7-27)', async () => {
+    const author = (await createUser(t.db)).user.id;
+    const member = (await createUser(t.db)).user.id;
+    const at = before(new Date(), 100);
+    const deletedPost = await createPost(t.db, {
+      marketId,
+      authorId: author,
+      title: '지운 글',
+      deletedAt: at,
+    });
+    const deletedComment = await createComment(t.db, {
+      postId: (await createPost(t.db, { marketId, authorId: author })).id,
+      authorId: author,
+      body: '지운 댓글',
+      deletedAt: at,
+    });
+    // A post whose earlier version alone shows an image: dropping it locks the post (and waits).
+    const oldPicture = await image(author);
+    const edited = await createPost(t.db, { marketId, authorId: author, title: '고친 글' });
+    await t.db.insert(schema.postImages).values({ postId: edited.id, mediaId: oldPicture.id });
+    await postRevision(edited.id, at, [oldPicture.id]);
+    const hiddenPost = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '숨긴 글',
+      hiddenAt: at,
+    });
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: hiddenPost.id,
+      createdAt: at,
+    });
+    const hiddenComment = await createComment(t.db, {
+      postId: edited.id,
+      authorId: member,
+      body: '숨긴 댓글',
+      hiddenAt: at,
+    });
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      commentId: hiddenComment.id,
+      createdAt: at,
+    });
+    const closedAt = await closeAccount(t.db, member);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+
+    // Another write in flight puts each item on #187's review list: its foreign key checks hold
+    // the five rows FOR KEY SHARE until it commits.
+    const holder = await t.db.$client.connect();
+    try {
+      await holder.query('BEGIN');
+      for (const [postId, commentId] of [
+        [deletedPost.id, null],
+        [edited.id, null],
+        [hiddenPost.id, null],
+        [null, deletedComment.id],
+        [null, hiddenComment.id],
+      ]) {
+        await holder.query(
+          `INSERT INTO link_flags (url, reason, post_id, comment_id) VALUES ($1, 'many_accounts', $2, $3)`,
+          ['https://example.com/held', postId, commentId],
+        );
+      }
+      const due = after(closedAt, 30);
+      // FOR UPDATE would pass the held rows by (SKIP LOCKED) or wait for the write.
+      await within(run(due), 10);
+      expect(await postOf(deletedPost.id)).toMatchObject({ title: null, purgedAt: due });
+      expect(await commentOf(deletedComment.id)).toMatchObject({ body: '', purgedAt: due });
+      expect(await postOf(hiddenPost.id)).toMatchObject({ title: null, purgedAt: due });
+      expect(await commentOf(hiddenComment.id)).toMatchObject({ body: '', purgedAt: due });
+      expect(await t.db.select().from(schema.postRevisions)).toEqual([]);
+      expect(await mediaIds()).toEqual([]);
+      expect(await countsAt(due)).toMatchObject({
+        post_revisions: 1,
+        deleted_posts: 1,
+        deleted_comments: 1,
+        hidden_posts: 1,
+        hidden_comments: 1,
+      });
+      // And the write goes through: the rows it names are there, emptied.
+      await holder.query('COMMIT');
+    } finally {
+      await holder.query('ROLLBACK').catch(() => undefined);
+      holder.release();
+    }
+    expect(await t.db.select().from(schema.linkFlags)).toHaveLength(5);
+  });
+
+  /** The keys queued for removal from the store (#46's `media_deletions`), by key. */
+  const queuedKeys = async () =>
+    (await t.db.select().from(schema.mediaDeletions)).sort((a, b) =>
+      a.storageKey.localeCompare(b.storageKey),
+    );
+
+  it('queues each object’s key with its row’s deletion and unqueues it once the store has removed it (#46, ADR-0087 7-12)', async () => {
     const author = (await createUser(t.db)).user.id;
     const picture = await image(author);
     const post = await createPost(t.db, {
@@ -2150,16 +2481,89 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       imageIds: [picture.id],
       deletedAt: new Date(),
     });
-    storage.delete = () => Promise.reject(new Error('AccessDenied'));
+    // What the store is asked to remove is queued already, by the batch's committed transaction.
+    const queuedWhenRemoved: string[][] = [];
+    const remove = storage.delete.bind(storage);
+    storage.delete = async (key: string) => {
+      queuedWhenRemoved.push((await queuedKeys()).map((row) => row.storageKey));
+      await remove(key);
+    };
     await setPeriod(DELETED_POSTS_RETENTION_SETTING, 1);
     const outcome = await run(after(new Date(), 2));
-    expect(outcome.failed).toBe(1);
-    expect(outcome.failures[0]).toMatchObject({
-      storageKey: picture.storageKey,
-      message: 'AccessDenied',
-    });
+    expect(outcome.failed).toBe(0);
+    expect(queuedWhenRemoved).toEqual([[picture.storageKey]]);
     expect((await postOf(post.id)).purgedAt).not.toBeNull();
     expect(await mediaIds()).toEqual([]);
+    expect(storage.objects.has(picture.storageKey)).toBe(false);
+    expect(await queuedKeys()).toEqual([]);
+  });
+
+  it('keeps the key of an object the store would not remove queued, its refusal counted, for media.orphan_cleanup to remove later — a post’s image and a removed profile image (#46, ADR-0087 7-12)', async () => {
+    const author = (await createUser(t.db)).user.id;
+    const picture = await image(author);
+    const post = await createPost(t.db, {
+      marketId,
+      authorId: author,
+      imageIds: [picture.id],
+      deletedAt: before(new Date(), 2),
+    });
+    const member = (await createUser(t.db)).user.id;
+    const avatar = await createProfileImage(t.db, { userId: member });
+    await storage.put(avatar.storageKey, new Uint8Array([1]), avatar.contentType);
+    await t.db
+      .update(schema.profiles)
+      .set({ imageId: null })
+      .where(eq(schema.profiles.userId, member));
+    await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      type: 'image_remove',
+      createdAt: before(new Date(), 2),
+      removed: { imageId: avatar.id },
+    });
+    const remove = storage.delete.bind(storage);
+    storage.delete = () => Promise.reject(new Error('AccessDenied'));
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 1);
+    await setPeriod(REMOVED_PROFILE_ITEMS_RETENTION_SETTING, 1);
+    const ranFrom = await dbNow();
+    const outcome = await run(after(new Date(), 2));
+    const ranTo = await dbNow();
+
+    // The rows are gone and the run went on; the objects stay in the store, their keys queued.
+    expect(outcome.failed).toBe(2);
+    expect(outcome.failures.map(({ storageKey, message }) => ({ storageKey, message }))).toEqual(
+      expect.arrayContaining([
+        { storageKey: picture.storageKey, message: 'AccessDenied' },
+        { storageKey: avatar.storageKey, message: 'AccessDenied' },
+      ]),
+    );
+    expect((await postOf(post.id)).purgedAt).not.toBeNull();
+    expect(await t.db.select().from(schema.profileItemRemovals)).toEqual([]);
+    expect(await mediaIds()).toEqual([]);
+    expect(storage.objects.has(picture.storageKey)).toBe(true);
+    expect(storage.objects.has(avatar.storageKey)).toBe(true);
+    const queued = await queuedKeys();
+    expect(queued.map((row) => row.storageKey)).toEqual(
+      [picture.storageKey, avatar.storageKey].sort(),
+    );
+    // Counted as the queue's first refusal, due again after its first wait less the slack — as the
+    // API's own try of a key it queued (ADR-0079 7-5), so the clean-up does not race the run.
+    const wait = (ORPHAN_MEDIA_RETRY_FIRST_HOURS * 60 - ORPHAN_MEDIA_RETRY_SLACK_MINUTES) * 60_000;
+    for (const row of queued) {
+      expect(row).toMatchObject({ attempts: 1, lastError: 'AccessDenied' });
+      expect(row.nextAttemptAt.getTime()).toBeGreaterThanOrEqual(ranFrom.getTime() + wait - 1_000);
+      expect(row.nextAttemptAt.getTime()).toBeLessThanOrEqual(ranTo.getTime() + wait + 1_000);
+    }
+
+    // #46's hourly clean-up, once they are due and the store lets them go, removes them.
+    storage.delete = remove;
+    const cleaned = await removeOrphanMedia(t.db, storage, {
+      at: new Date(ranTo.getTime() + wait + 60_000),
+    });
+    expect(cleaned).toMatchObject({ removed: 2, failed: 0, pending: 0 });
+    expect(storage.objects.has(picture.storageKey)).toBe(false);
+    expect(storage.objects.has(avatar.storageKey)).toBe(false);
+    expect(await queuedKeys()).toEqual([]);
   });
 
   /**

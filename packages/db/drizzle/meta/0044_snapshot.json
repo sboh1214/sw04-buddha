@@ -2058,6 +2058,21 @@
           "concurrently": false,
           "method": "btree",
           "with": {}
+        },
+        "link_flags_flagged_at_idx": {
+          "name": "link_flags_flagged_at_idx",
+          "columns": [
+            {
+              "expression": "flagged_at",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         }
       },
       "foreignKeys": {
@@ -6987,7 +7002,7 @@
       "checkConstraints": {
         "retention_purges_kind_check": {
           "name": "retention_purges_kind_check",
-          "value": "\"retention_purges\".\"kind\" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'consent_records', 'phone_verification_records')"
+          "value": "\"retention_purges\".\"kind\" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'link_flags', 'consent_records', 'phone_verification_records')"
         },
         "retention_purges_count_check": {
           "name": "retention_purges_count_check",

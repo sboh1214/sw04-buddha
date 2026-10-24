@@ -121,6 +121,12 @@ describe('release settings registry', () => {
       "숨긴 채로 남은 것의 수정 이력은 이 항목의 상태·값과 상관없이 그 내용을 비울 때('신고·제재 기록 보존기간') 함께 지운다",
     );
     expect(deleted.description).not.toContain('이 기간 전이라도');
+    // 13: #187's repeated-link review list, from the later of the flag and its '확인함' mark —
+    // whoever wrote the items — while the mark's record keeps the link.
+    expect(moderation.description).toContain(
+      "반복 링크 검토 목록의 항목은 작성자의 탈퇴와 상관없이 탐지된 시각과 '확인함'으로 표시된 시각 가운데 늦은 쪽부터",
+    );
+    expect(moderation.description).toContain("('확인함' 운영 기록과 그 주소는 남는다)");
     // 14: a kind that failed is recorded as such.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(definition.description, definition.key).toContain(

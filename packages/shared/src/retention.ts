@@ -55,8 +55,8 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  *   changes and their two-person approval requests), and the content of a withdrawn member's post
  *   or comment an operator still hides, emptied as its hiding goes (owner decision 2026-10-24 3) —
  *   its edit history and the images only that used deleted with it (owner decision 2026-10-24
- *   (2차) 2); later the judgement objections (#175) and #187's link flags join it (owner decision
- *   2026-10-24 13).
+ *   (2차) 2); and #187's repeated-link review list, whoever wrote the items it names (owner
+ *   decision 2026-10-24 13); later the judgement objections (#175) join it.
  * - `removed_profile_items`: 운영자가 지운 프로필 항목 — the nickname, 소개 or image an operator took
  *   away (#37-10, `profile_item_removals`).
  */
@@ -88,6 +88,10 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  * - `removed_profile_items`: what an operator took away from a profile.
  * - `moderation_actions`: actions on a withdrawn member (each with its end changes).
  * - `approval_requests`: the account restriction requests about a withdrawn member.
+ * - `link_flags`: #187's repeated-link review list (ADR-0083), each entry once the 신고·제재 period
+ *   has passed since the later of its flagging and the operator's '확인함' mark that covered it
+ *   (owner decision 2026-10-24 13) — an entry nothing names; the mark, with the link, stays in
+ *   `admin_actions` (owner decision 2026-10-22 (2차) 3).
  * - `consent_records`, `phone_verification_records`: as their periods.
  */
 export const RETENTION_PURGE_KINDS = [
@@ -102,6 +106,7 @@ export const RETENTION_PURGE_KINDS = [
   'removed_profile_items',
   'moderation_actions',
   'approval_requests',
+  'link_flags',
   'consent_records',
   'phone_verification_records',
 ] as const;
@@ -131,6 +136,7 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   removed_profile_items: 'removed_profile_items',
   moderation_actions: 'moderation_records',
   approval_requests: 'moderation_records',
+  link_flags: 'moderation_records',
   consent_records: 'consent_records',
   phone_verification_records: 'phone_verification_records',
 };

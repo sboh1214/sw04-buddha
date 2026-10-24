@@ -3744,7 +3744,7 @@ export type components = {
             ranAt: string;
         };
         /** @enum {string} */
-        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "consent_records" | "phone_verification_records";
+        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "link_flags" | "consent_records" | "phone_verification_records";
         /** @enum {string} */
         RetentionPurgeOutcome: "done" | "failed";
         SearchHistoryWriteBody: {
