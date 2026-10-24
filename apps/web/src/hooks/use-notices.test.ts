@@ -448,6 +448,45 @@ describe('the writes', () => {
     expect(stale()).toEqual([true, true, true, true, true]);
   });
 
+  it('an edit cancels a read of the notice still on its way: its earlier answer, coming after the save, never replaces the saved notice (ADR-0077 8-27, as ADR-0073 9-49)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(adminNoticeKey(notice), adminNotice);
+    // The edit screen's read, as a window's focus sends it: it left before the edit was saved and
+    // answers — the earlier version — only after the save has landed.
+    let answerRead: (value: unknown) => void = () => undefined;
+    const get = vi.spyOn(api, 'GET').mockReturnValueOnce(
+      new Promise((resolve) => {
+        answerRead = resolve;
+      }) as never,
+    );
+    const screen = new QueryObserver(queryClient, adminNoticeQueryOptions(NOTICE));
+    const unsubscribe = screen.subscribe(() => undefined);
+    try {
+      await vi.waitFor(() => expect(get).toHaveBeenCalledTimes(1));
+      expect(queryClient.getQueryState(adminNoticeKey(notice))?.fetchStatus).toBe('fetching');
+
+      const edited = { ...adminNotice, title: '고친 안내', editedAt: '2026-10-20T01:00:00.000Z' };
+      vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer({ notice: edited, changed: true }));
+      await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+        noticeId: NOTICE,
+        title: '고친 안내',
+        body: {},
+        expectedEditedAt: null,
+        accountId: 'admin-1',
+      });
+      expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(edited);
+
+      // The earlier answer comes now: dropped — the screen keeps the saved version, whose
+      // `editedAt` its next save sends.
+      answerRead(answer(adminNotice));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(edited);
+      expect(screen.getCurrentResult().data).toEqual(edited);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('a save the server found unchanged says so, and holds the notice it answered', async () => {
     const queryClient = getQueryClient();
     queryClient.setQueryData(adminNoticeKey(notice), adminNotice);

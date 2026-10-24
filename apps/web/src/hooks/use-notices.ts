@@ -207,8 +207,16 @@ export function useAdminNotice(noticeId: string) {
  * are marked stale — a write, an edit, a pin and an unpin each move a row between or within the
  * lists and add a record (an edit a version too), and the fixed area shows the pinned ones'
  * titles. The community list's fixed area in this browser follows on its next read.
+ *
+ * A read of the notice still on its way is cancelled before the answer goes in (ADR-0077 8-27, as
+ * a post's edit does — ADR-0073 9-49): one that left before the write was saved — a window's focus
+ * on the edit screen — and answered after it would otherwise put the earlier version back over the
+ * saved one, and the edit screen's next save would send that version's `expectedEditedAt` and be
+ * refused as overtaken by its own save. A cancelled read's answer is dropped when it comes, and the
+ * write follows the cancel with nothing in between, so the next read is one that left after it.
  */
 async function afterNoticeWrite(queryClient: QueryClient, notice: AdminNotice): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: adminNoticeKey(notice.id), exact: true });
   queryClient.setQueryData<AdminNotice>(adminNoticeKey(notice.id), notice);
   await Promise.all([
     queryClient.invalidateQueries({ queryKey: [...ADMIN_NOTICES_KEY, 'list'] }),
