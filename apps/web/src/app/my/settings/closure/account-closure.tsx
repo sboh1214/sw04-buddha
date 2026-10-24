@@ -22,6 +22,7 @@ import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useClosureCheck, useCloseAccount } from '@/hooks/use-account-closure';
+import { forgetAccountInTab } from '@/hooks/use-sign-out';
 import {
   afterClosureInOrder,
   closureBlockers,
@@ -56,7 +57,8 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  *
  * Closed, the screen says so at once (the session is gone, so MY's signed-out rung must not take
  * its place), then the cookie is cleared — which tells the other tabs (`afterClosureInOrder`) —
- * the tab's caches are emptied and it goes home with the toast '탈퇴했습니다.'. A refusal stays on
+ * the tab's caches and the drafts an onboarding step kept in it are emptied, as 로그아웃 empties
+ * them (`forgetAccountInTab`), and it goes home with the toast '탈퇴했습니다.'. A refusal stays on
  * the screen under the button (`closureFailure`), the restriction's with the way to 조치·신고 내역.
  *
  * Not a MY tab: it names itself (`h3` under MY's `h2`). Personal and client-only like every MY
@@ -115,9 +117,11 @@ function ClosureScreen({ onClosed }: { onClosed: () => void }) {
     await afterClosureInOrder({
       signOut,
       onClosed: () => {
-        // Everything, as 로그아웃 does (use-sign-out.ts): the browser's QueryClient outlives the
-        // account, and none of its keys carries whose it was.
-        queryClient.clear();
+        // Everything, as 로그아웃 does (`forgetAccountInTab`, use-sign-out.ts): the browser's
+        // QueryClient outlives the account and none of its keys carries whose it was, and the
+        // post, comment and MY 설정 drafts an onboarding step kept in this tab — the step's
+        // '탈퇴하기' leads here — go with the account that wrote them (ADR-0086 7-20).
+        forgetAccountInTab(queryClient);
         toaster.create({ type: 'success', title: copy.closureDone });
         router.push('/');
         router.refresh();

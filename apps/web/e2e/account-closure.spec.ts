@@ -44,6 +44,9 @@ import {
  *   bottom of its consent step to the screen — the gate leaves it alone, while MY 설정 stays gated
  *   and the screen's way back to it goes through the steps left — and closes itself (owner decisions
  *   2026-10-23 (2차) 3 and (4차) 1·2);
+ * - a member facing a re-consent, whose write screen, post page and MY 설정 each kept what it was
+ *   typing in the tab on the way to the step, closes the account from that step's '탈퇴하기': the
+ *   tab keeps none of it, as after 로그아웃 (ADR-0086 7-20);
  * - an account whose start Coin was paid reads, right under what stays, that the same number gets
  *   no start Coin again ((3차) 9) — the check's answer rewritten in the browser, as this database
  *   pays none;
@@ -132,6 +135,57 @@ async function showInDecided(page: Page, entry: Locator): Promise<void> {
     ).toHaveCount(0);
   }
   await expect(entry).toBeVisible();
+}
+
+/**
+ * `GET /me` in this page answering as the server would after a revision of the terms that changed
+ * members' rights, while `on` (posts.spec.ts, comments.spec.ts and profile.spec.ts draw it the same
+ * way — no spec can bring about a re-consent for real).
+ */
+async function asReconsent(page: Page): Promise<{ on: boolean }> {
+  const state = { on: false };
+  await page.route('**/api/v1/me', async (route) => {
+    if (route.request().method() !== 'GET' || !state.on) return route.fallback();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = (await response.json()) as { data: Me };
+    const { onboarding } = body.data;
+    body.data.onboarding = {
+      ...onboarding,
+      consent: false,
+      completed: false,
+      nextStep: 'consent',
+      consents: onboarding.consents.map((answer) =>
+        answer.item === 'terms' ? { ...answer, version: 'draft-1999-01-01' } : answer,
+      ),
+    };
+    await route.fulfill({ response, json: body });
+  });
+  return state;
+}
+
+/** A write refused as the server refuses an account with a step left. */
+const ONBOARDING_REFUSAL = {
+  status: 409,
+  json: {
+    error: {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'The onboarding is not done',
+      details: { steps: ['consent'] },
+    },
+  },
+};
+
+/**
+ * The storage keys of the drafts an onboarding step kept in this tab's sessionStorage — a post's,
+ * a comment's and MY 설정's (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts).
+ */
+function draftsInTab(page: Page): Promise<string[]> {
+  return page.evaluate(() =>
+    Object.keys(sessionStorage)
+      .filter((key) => /^buddha\.[a-zA-Z]+Draft:/.test(key))
+      .sort(),
+  );
 }
 
 test.describe('탈퇴', () => {
@@ -400,6 +454,85 @@ test.describe('탈퇴', () => {
     await expect(page).toHaveURL('/');
     await expect(page.getByText(copy.closureDone).first()).toBeVisible();
     expect((await page.request.get('/api/v1/me')).status()).toBe(401);
+  });
+
+  test("온보딩 단계로 가며 이 탭에 둔 쓰던 글·댓글·소개는 그 단계의 '탈퇴하기'로 탈퇴하면 로그아웃처럼 모두 지워진다", async ({
+    admin,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `탈퇴 전의 글 ${tag}`, tag);
+    const reconsent = await asReconsent(page);
+    const write = `/community/write?market=${market.id}`;
+    const postPage = `/community/posts/${postId}`;
+    const settings = '/my/settings';
+    const viaStep = (next: string) => `/onboarding?next=${encodeURIComponent(next)}`;
+
+    // --- a post draft, kept by the gate when its write is refused for the onboarding (a revision
+    // asked for the consent again meanwhile — posts.spec.ts).
+    await page.goto(write);
+    await page.getByTestId('post-title-input').fill(`탈퇴 전에 쓰던 제목 ${tag}`);
+    await page.getByTestId('post-editor-content').click();
+    await page.keyboard.type(`탈퇴 전에 쓰던 근거 ${tag}`);
+    await page.route('**/api/v1/posts', async (route) => {
+      if (route.request().method() !== 'POST') return route.fallback();
+      reconsent.on = true;
+      await route.fulfill(ONBOARDING_REFUSAL);
+    });
+    await page.getByTestId('post-submit').click();
+    await expect(page).toHaveURL(viaStep(write));
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+
+    // --- a 댓글: the post page stays open to a re-consent, and its 올리기 goes to the step with
+    // the box's text kept (comments.spec.ts).
+    await page.goto(postPage);
+    await expect(page).toHaveURL(postPage);
+    const composer = page.getByTestId('comment-composer');
+    await composer.getByTestId('comment-input').fill(`탈퇴 전에 쓰던 댓글 ${tag}`);
+    await composer.getByTestId('comment-submit').click();
+    await expect(page).toHaveURL(viaStep(postPage));
+    await expect(page.getByTestId('consent-step')).toBeVisible();
+
+    // --- a new 소개: MY 설정 stays open to a re-consent too, and its 저장 goes to the step with the
+    // 소개 kept (profile.spec.ts).
+    const meRead = page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === '/api/v1/me' && response.request().method() === 'GET',
+    );
+    await page.goto(settings);
+    await meRead;
+    await expect(page).toHaveURL(settings);
+    const bioCard = page.getByTestId('settings-bio');
+    await bioCard.getByTestId('bio-input').fill(`탈퇴 전에 쓰던 소개 ${tag}`);
+    await bioCard.getByTestId('bio-save').click();
+    await expect(page).toHaveURL(viaStep(settings));
+    const kept = [
+      `buddha.commentDraft:${postId}:comment`,
+      `buddha.postDraft:new:${market.id}`,
+      'buddha.profileDraft:bio',
+    ];
+    expect(await draftsInTab(page)).toEqual(kept);
+
+    // --- the step's '탈퇴하기' to the screen — the drafts still kept there — and the closure: they
+    // go with the account, as on 로그아웃 (ADR-0086 7-20).
+    await expectOnboardingClosureLink(page);
+    await openClosure(page, () => page.getByTestId('onboarding-closure').click());
+    expect(await draftsInTab(page)).toEqual(kept);
+    await page.getByTestId('closure-confirmation').fill('탈퇴');
+    const answer = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === '/api/v1/me/closure',
+    );
+    await page.getByTestId('closure-submit').click();
+    const closed = await answer;
+    expect(closed.status(), await closed.text()).toBe(200);
+    await expect(page).toHaveURL('/');
+    await expect(page.getByText(copy.closureDone).first()).toBeVisible();
+    expect(await draftsInTab(page)).toEqual([]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
   test('시작 Coin이 지급된 계정의 확인 화면은 남는 것의 줄 바로 아래에 같은 번호로는 시작 Coin을 다시 받지 못한다고 말한다', async ({
