@@ -22,13 +22,15 @@ import {
  *   default, with a reason); the member's write page and MY summary show the banner with the end
  *   and the way to 조치·신고 내역 — no reason, no appeal (owner decision 2026-10-22 evening); a new
  *   post, an edit of their own, a 댓글 and a new 소개 are refused with the end and that way, no
- *   appeal sentence; two post images picked at once are refused in one toast with the end and no
- *   button, the second never sent (owner decision 2026-10-23 answer 12; the refusal ends the
- *   batch); a like and deleting their own stay open; 조치·신고 내역 lists it '진행 중'; the
- *   operator lifts it early with a reason of their own — the banner goes, the member writes again,
- *   and 조치·신고 내역 says '조기 해제됨', the changed end and the end it was given, not the reason
- *   (owner decision 2026-10-23 answer 4; the brief: «admin restricts a user for 1 day → write
- *   button shows restriction message, likes still work, admin lifts → can write»);
+ *   appeal sentence — the edit's form stays editable under its refusal and sends again, the post
+ *   not read for it: not the held form of a post taken from under it (#46·#48·#50); two post images
+ *   picked at once are refused in one toast with the end and no button, the second never sent
+ *   (owner decision 2026-10-23 answer 12; the refusal ends the batch); a like and deleting their
+ *   own stay open; 조치·신고 내역 lists it '진행 중'; the operator lifts it early with a reason of
+ *   their own — the banner goes, the member writes again, and 조치·신고 내역 says '조기 해제됨',
+ *   the changed end and the end it was given, not the reason (owner decision 2026-10-23 answer 4;
+ *   the brief: «admin restricts a user for 1 day → write button shows restriction message, likes
+ *   still work, admin lifts → can write»);
  * - from a reported post's page the operator restricts its author 무기한 about that post — its
  *   pending report is resolved (조치함) — the member's banner and refusal say 무기한, clearing the
  *   소개 stays open, and the operator's 감경 brings the end forward to a time, which the member
@@ -294,6 +296,51 @@ test.describe('작성 제한', () => {
       await page.getByTestId('post-submit').click();
       await expect(page.getByTestId('post-form-error')).toContainText(writing);
       await expectModerationLink(page.getByTestId('post-form-error'));
+      // Not the post taken from under the form (the held form of #46·#48·#50 — ADR-0073 9-52,
+      // ADR-0074 7-35, ADR-0081 7-29): the refusal is the writer's, asked before the post, so the
+      // form stays editable under it with 저장 — no held notice, no 닫기 — and the post is not
+      // read again for it (ADR-0082 결과 5 «다시 쌓기(2026-10-25)»). Typed on and sent again, it
+      // is refused the same way.
+      const editTitle = page.getByTestId('post-title-input');
+      const editBody = page.getByTestId('post-editor-content');
+      await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+      await expect(page.getByTestId('post-form-close')).toHaveCount(0);
+      await expect(page.getByTestId('post-edit-unavailable')).toHaveCount(0);
+      await expect(editTitle).toBeEditable();
+      await expect(editTitle).toHaveValue(`제한 중 고친 글 ${tag}`);
+      await expect(editBody).toHaveAttribute('contenteditable', 'true');
+      await expect(page.getByTestId('post-submit')).toBeEnabled();
+      const postReads: string[] = [];
+      const edits: string[] = [];
+      const countPostRequest = (request: Request) => {
+        if (new URL(request.url()).pathname !== `/api/v1/posts/${ownPost}`) return;
+        if (request.method() === 'GET') postReads.push(request.url());
+        if (request.method() === 'PUT') edits.push(request.url());
+      };
+      page.on('request', countPostRequest);
+      await editTitle.fill(`제한 중 다시 고친 글 ${tag}`);
+      await editBody.click();
+      await page.keyboard.press('End');
+      await page.keyboard.type(' 덧붙임');
+      await expect(editBody).toContainText('덧붙임');
+      const refusedAgain = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' &&
+          new URL(response.url()).pathname === `/api/v1/posts/${ownPost}`,
+      );
+      await page.getByTestId('post-submit').click();
+      expect((await refusedAgain).status()).toBe(403);
+      await expect(page.getByTestId('post-form-error')).toContainText(writing);
+      await expectModerationLink(page.getByTestId('post-form-error'));
+      await page.waitForTimeout(1_000);
+      expect(edits).toHaveLength(1);
+      expect(postReads).toEqual([]);
+      page.off('request', countPostRequest);
+      await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+      await expect(editTitle).toBeEditable();
+      await expect(editTitle).toHaveValue(`제한 중 다시 고친 글 ${tag}`);
+      await expect(editBody).toHaveAttribute('contenteditable', 'true');
+      await expect(page).toHaveURL(`/community/posts/${ownPost}/edit`);
 
       // On another's post: a 댓글 is refused under its box, the like goes through (#45-12).
       await page.goto(`/community/posts/${othersPost}`);

@@ -55,6 +55,7 @@ import {
   type WriteMarketLookup,
   type WriteScreenEvent,
 } from './posts';
+import { refusalOf } from './restriction';
 
 /**
  * The community's URL, keys and refusals (#46, ADR-0073): pure functions, so they run here under
@@ -779,6 +780,49 @@ describe('a post taken from under an open screen: one rule for its page and its 
         formHolding: true,
       }),
     ).toBe(POST_EDIT_ON_SCREEN);
+  });
+
+  it('a writing restriction’s refusal of the save (RESTRICTED, #185) takes nothing from under the form: the edit screen stays on screen, and its form editable under the refusal with its end and the way to 조치·신고 내역 (ADR-0082 결과 5 «다시 쌓기(2026-10-25)»)', () => {
+    const endsAt = '2026-10-31T00:00:00.000Z';
+    const zone = (iso: string) => `<${iso}>`;
+    const restricted = refusal(403, 'RESTRICTED', { kind: 'writing', endsAt });
+    // The server asks the writer before the post (ADR-0082 7-5): the refusal says nothing about the
+    // post — published, hidden or deleted meanwhile — so the post is not read again for it
+    // (`updatePostOptions`: POST_NOT_EDITABLE and NOT_FOUND only), and the query keeps the post
+    // the form was drawn from. Nor would a read so refused be the post gone.
+    expect(postGoneAfter(false, { isError: true, error: restricted })).toBe(false);
+    const state = postEditGoneAfter(POST_EDIT_ON_SCREEN, {
+      gone: postGoneAfter(false, ok) || postEditDeleted(published, published),
+      hidden: postEditHidden(published, published),
+      formHolding: true,
+    });
+    expect(state).toBe(POST_EDIT_ON_SCREEN);
+    expect(state.held).toBe(false);
+    // The form's refusal line (not a held form's notice): the restriction with its end, and the
+    // way to 조치·신고 내역 under it (`errorRestricted`) — neither a deletion's nor a hiding's.
+    const message = postWriteErrorMessage(restricted, zone);
+    expect(message).toBe(`${copy.errRestrictedWriting}(<${endsAt}>까지).`);
+    expect(message).not.toBe(copy.errPostGone);
+    expect(message).not.toBe(copy.errPostNotEditable);
+    expect(refusalOf(restricted, message)).toEqual({ message, restricted: true });
+    // The wiring, pinned in the source as above: the held form (`gone`) follows the post's reads
+    // alone, and a refused save goes to the form's refusal line; the post is read again after a
+    // refused save for a hiding or a deletion alone.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
+    expect(edit).toContain('gone={held}');
+    expect(edit).toMatch(
+      /errorMessage=\{refusal\?\.message\}\s*errorRestricted=\{refusal\?\.restricted\}/,
+    );
+    expect(edit).toContain('setRefusal(refusalOf(error, postWriteErrorMessage(error, format)))');
+    const hooks = source('../hooks/use-posts.ts');
+    expect(hooks).toMatch(
+      /\/\/ Hidden or deleted meanwhile: the page is read again so it shows what the post is now\.\s*if \(isApiError\(error, 'POST_NOT_EDITABLE'\) \|\| isApiError\(error, 'NOT_FOUND'\)\) \{\s*await queryClient\.invalidateQueries\(\{ queryKey: postKey\(postId\), exact: true \}\);/,
+    );
+    // The form draws its refusal line only while it is not held (post-form.tsx): editable under it.
+    const form = source('../components/post/post-form.tsx');
+    expect(form).toContain('{errorMessage !== undefined && !gone && (');
+    expect(form).toContain('readOnly={gone}');
   });
 
   it('is written once for the post page: its comment section hears the post as the page holds it', () => {
