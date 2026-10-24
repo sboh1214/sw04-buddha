@@ -2462,6 +2462,57 @@ describe('writes that land while a read toward a place reads (Codex review on PR
     expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), null]);
   });
 
+  it('a new 댓글’s read: a new 대댓글 placed at the end of its thread while it read — its own read stopped at REPLY_READ_ON_PAGES — stays placed on the page the read put in, and the next read of the pages puts it back (the two writes of `putReadPages`)', async () => {
+    const queryClient = onScreen(seededThread(replyIds(0, 2), 'r2'));
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), (pages) => ({
+      ...pages!,
+      pages: [{ ...pages!.pages[0]!, nextCursor: 'c2' }],
+    }));
+    const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+    const unsubscribe = comments.subscribe(() => undefined);
+    /** The first page as the screen holds it: the thread's first two, PLACED not among them. */
+    const firstPage = () => ({ items: [threadAnswered(replyIds(0, 2), 'r2')], nextCursor: 'c2' });
+    const read = onItsWay();
+    let holdBack = true;
+    // The thread has 20 대댓글 after its first two, then PLACED: five reply pages stop short of it.
+    const asked = getThreads(
+      async ({ params }) => {
+        if (params.query.cursor !== undefined) {
+          return { items: [thread(published(OLDER)), thread(published(MINE))], nextCursor: null };
+        }
+        if (holdBack) await read.arrived;
+        return firstPage();
+      },
+      fakeReplies(22, PLACED),
+    );
+    const writing = create(queryClient, published(MINE));
+    await vi.waitFor(() => expect(asked).toEqual(['comments:']));
+    await create(queryClient, published(PLACED, commentId, '답글'));
+    const replyPagesRead = Array.from(
+      { length: REPLY_READ_ON_PAGES },
+      (_, page) => `replies:${commentId}:r${String(2 + 2 * page)}`,
+    );
+    expect(asked).toEqual(['comments:', ...replyPagesRead]);
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), PLACED], 'r2']);
+    expect(placedHeld(queryClient)).toEqual([`${commentId}:${PLACED}`]);
+    read.arrive();
+    await writing;
+    expect(asked).toEqual(['comments:', ...replyPagesRead, 'comments:c2']);
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    // The page read holds the thread without it; the new 대댓글 done again over that page puts it
+    // back — and it stays placed: in one write, it would read as one the read brought, in place.
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), PLACED], 'r2']);
+    expect(placedHeld(queryClient)).toEqual([`${commentId}:${PLACED}`]);
+    // So the next read of the pages, which reads nothing on for it, puts it back at the end.
+    holdBack = false;
+    asked.length = 0;
+    await comments.refetch();
+    expect(asked).toEqual(['comments:', 'comments:c2']);
+    expect(repliesHeld(queryClient)).toEqual([[...replyIds(0, 2), PLACED], 'r2']);
+    expect(placedHeld(queryClient)).toEqual([`${commentId}:${PLACED}`]);
+    unsubscribe();
+  });
+
   /**
    * The thread above holding its first `first` 대댓글 and, at their end, the writer's own PLACED —
    * its read had stopped short (오너 결정 2026-10-24) — with the server's 대댓글 r0…r3, PLACED and
