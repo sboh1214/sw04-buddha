@@ -1153,7 +1153,9 @@ test.describe('댓글·대댓글', () => {
     replyRequests.length = 0;
     const firstBox = page.getByTestId('comment-composer');
     await firstBox.getByTestId('comment-input').fill(`다시 읽게 쓴 댓글 ${tag}`);
+    await paced();
     await firstBox.getByTestId('comment-submit').click();
+    wrote();
     await expect(
       page.getByTestId('comments-list').getByText(`다시 읽게 쓴 댓글 ${tag}`),
     ).toBeVisible();

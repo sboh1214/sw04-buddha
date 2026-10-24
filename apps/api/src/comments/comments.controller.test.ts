@@ -1251,7 +1251,11 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
       casing: 'snake_case',
       logger: { logQuery: (text, values) => statements.push({ text, values }) },
     });
-    const service = new PostsService(recording);
+    const service = new PostsService(
+      recording,
+      t.app.get(WriteLimitsService),
+      t.app.get(LinkReviewService),
+    );
     /** The relations the statements `run` sends scan, and the rows of `post_comments` they read. */
     const readBy = async (run: () => Promise<unknown>) => {
       statements.length = 0;

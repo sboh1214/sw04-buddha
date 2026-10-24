@@ -2515,6 +2515,55 @@ describe('a new 댓글', () => {
         expect(mineHeld(queryClient)).toBe(1);
         unsubscribe();
       });
+
+      it('nothing for a write the write limits refused (WRITE_LIMITED, #187): a 댓글 and a 대댓글 under the placed one leave the pages, what is placed and the count as they were, read nothing and land no draft — not a stale thread, and no restriction read again (ADR-0083)', async () => {
+        const { queryClient, comments, unsubscribe } = holdingFirst();
+        const asked = serving(8, LATER_ROOTS);
+        await write(queryClient);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        const pages = queryClient.getQueryData<CommentPages>(postCommentsKey(post));
+        const count = commentCountOf(queryClient);
+        queryClient.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+        asked.length = 0;
+        const before = commentDraftMoment();
+        vi.spyOn(api, 'POST').mockRejectedValue(
+          new ApiError(429, {
+            code: 'WRITE_LIMITED',
+            message: 'x',
+            details: { reason: 'comments_1m', limit: 5, retryAfterSeconds: 60 },
+          } as never),
+        );
+        const send = new MutationObserver(
+          queryClient,
+          createCommentOptions(queryClient, POST, () => undefined),
+        );
+        for (const parentId of [null, MINE]) {
+          await expect(
+            send.mutate({ parentId, body: '쓰던 댓글', expectedAccountId: 'user-1' }),
+          ).rejects.toMatchObject({ code: 'WRITE_LIMITED' });
+        }
+        expect(queryClient.getQueryData(postCommentsKey(post))).toBe(pages);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        expect(commentCountOf(queryClient)).toBe(count);
+        expect(cursorsAsked(asked)).toEqual([]);
+        expect(commentDraftLandedSince({ kind: 'comment', postId: post }, 'user-1', before)).toBe(
+          false,
+        );
+        expect(
+          commentDraftLandedSince(
+            { kind: 'reply', postId: post, parentId: MINE },
+            'user-1',
+            before,
+          ),
+        ).toBe(false);
+        expect(queryClient.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(false);
+        // The next read of the pages puts back MINE alone, as before the refusals.
+        await comments.refetch();
+        expect(threadIds(queryClient)).toEqual([...olderIds(0, 1), MINE]);
+        expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+        expect(mineHeld(queryClient)).toBe(1);
+        unsubscribe();
+      });
     });
   });
 });

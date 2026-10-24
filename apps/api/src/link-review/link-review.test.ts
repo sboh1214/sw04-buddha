@@ -632,6 +632,62 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     expect(await usedLinks()).toEqual(firstOf(20));
   });
 
+  it('puts a comment on the list while an operator hides it, the post’s comment count held by the comment that names it: neither waits for the other (#48’s counter, ADR-0083 7-13)', async () => {
+    // The author's two comments with the link under another member's post; a third under the same
+    // post meets `same_account` and puts all three on the list. Its insert moved the post's comment
+    // count first (#48's trigger, post_comment_counts — the row held to its commit).
+    const admin = await anAdmin();
+    const post = await writePost(plainDoc('남의 글'), other);
+    const first = await writeComment(post.id, `첫 ${LINK}`);
+    const second = await writeComment(post.id, `둘 ${LINK}`);
+    const { rows } = await t.db.execute<{ key: number }>(
+      sql`SELECT (hashtext(${LINK}) & ${LINK_LOCK_BUCKETS - 1}::int)::int AS key`,
+    );
+    // Another connection holds the link's lock: the third comment waits there, its row written.
+    const holder = await t.db.$client.connect();
+    let held = true;
+    const release = async () => {
+      if (!held) return;
+      held = false;
+      await holder.query('ROLLBACK');
+      holder.release();
+    };
+    try {
+      await holder.query('BEGIN');
+      await holder.query(`SELECT pg_advisory_xact_lock(hashtext('buddha:link'), $1::int)`, [
+        rows[0]!.key,
+      ]);
+      const third = send('POST', `/posts/${post.id}/comments`, { body: `셋 ${LINK}` }, author);
+      await waitForLockWaiter(holder, 'the third comment, on the link’s lock');
+      // An operator hides the first: it takes the comment's row, and its hidden_at moves the same
+      // post's count, which the third comment holds — it waits for that comment's commit.
+      const hiding = send(
+        'POST',
+        `/admin/moderation/comments/${first.id}/hide`,
+        { reason: 'spam' },
+        admin,
+      );
+      await waitForLockWaiter(holder, 'the hiding, on the post’s comment count', 2);
+      // The third comment goes on and names the first on the list: the foreign-key check of that
+      // insert (FOR KEY SHARE) on the row the hiding holds. While the hiding held it FOR UPDATE,
+      // each waited for the other (40P01) and one of the two answered 500.
+      await release();
+      const [written, hidden] = await Promise.all([third, hiding]);
+      const comment = created(written);
+      expect(hidden.statusCode, hidden.body).toBe(200);
+      expect(await flags()).toEqual(
+        flagsOf('same_account', LINK, [first.id, second.id, comment.id]),
+      );
+      const [counted] = await t.db
+        .select({ count: schema.postCommentCounts.count })
+        .from(schema.postCommentCounts)
+        .where(eq(schema.postCommentCounts.postId, post.id));
+      expect(counted?.count).toBe(2);
+    } finally {
+      await release();
+    }
+  });
+
   // ---- the review list (owner decision 2026-10-22: grouped, marked '확인함') -------------------------
 
   it('groups the entries by link and rule for admins, newest group first, each group’s entries a page at a time', async () => {

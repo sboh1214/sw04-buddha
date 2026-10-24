@@ -812,6 +812,67 @@ describe('the writes', () => {
     expect(queryClient.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
   });
 
+  it('the write limits’ refusal (WRITE_LIMITED, #187) keeps the draft the gate kept for the account that sent it, new and edit, lands nothing, and leaves the post held; no restriction is read again (ADR-0083)', async () => {
+    const queryClient = getQueryClient();
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const draft = { title: '쓰던 제목', body: { type: 'doc', content: [] }, previews: {} };
+    const now = Date.now();
+    const newKey = { kind: 'new', marketId: MARKET } as const;
+    const editKey = { kind: 'edit', postId: post } as const;
+    keepPostDraft(storage, newKey, 'user-1', draft, now);
+    keepPostDraft(storage, editKey, 'user-1', draft, now);
+    queryClient.setQueryData(postKey(post), published);
+    queryClient.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    const since = postDraftMoment();
+    vi.spyOn(api, 'POST').mockRejectedValueOnce(
+      new ApiError(429, {
+        code: 'WRITE_LIMITED',
+        message: 'x',
+        details: { reason: 'posts_10m', limit: 3, retryAfterSeconds: 120 },
+      }),
+    );
+    vi.spyOn(api, 'PUT').mockRejectedValueOnce(
+      new ApiError(429, {
+        code: 'WRITE_LIMITED',
+        message: 'x',
+        details: { reason: 'edits_10m', limit: 10, retryAfterSeconds: 60 },
+      }),
+    );
+
+    await expect(
+      new MutationObserver(
+        queryClient,
+        createPostOptions(queryClient, () => undefined),
+      ).mutate({
+        marketId: MARKET,
+        title: null,
+        body: {},
+        expectedAccountId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'WRITE_LIMITED' });
+    await expect(
+      new MutationObserver(
+        queryClient,
+        updatePostOptions(queryClient, () => undefined),
+      ).mutate({
+        postId: POST,
+        title: null,
+        body: {},
+        expectedAccountId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'WRITE_LIMITED' });
+
+    for (const key of [newKey, editKey]) {
+      // Kept for the screen to take back, and the form still counts as unsaved when it goes.
+      expect(readPostDraft(storage, key, 'user-1', now)).toEqual(draft);
+      expect(postDraftLandedSince(key, 'user-1', since)).toBe(false);
+    }
+    expect(queryClient.getQueryData(postKey(post))).toBe(published);
+    expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(false);
+    expect(queryClient.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(false);
+  });
+
   it('a form going away keeps nothing for another account, nor with no step left', () => {
     const storage = tabStorage();
     vi.stubGlobal('window', { sessionStorage: storage });
