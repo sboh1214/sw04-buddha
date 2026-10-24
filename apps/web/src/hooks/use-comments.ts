@@ -470,7 +470,7 @@ function moveCommentCount(queryClient: QueryClient, postId: string, by: 1 | -1) 
 }
 
 /** What a write does to the pages held: a function of them, so it can be done again over others. */
-type PagesWrite = (held: CommentPages | undefined) => CommentPages | undefined;
+export type PagesWrite = (held: CommentPages | undefined) => CommentPages | undefined;
 
 /**
  * The writes of each post's pages that landed while a read toward a place was on its way, by query
@@ -517,8 +517,14 @@ function logWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
   for (const log of writesWhileReading.get(queryClient)?.get(postId) ?? []) log.push(write);
 }
 
-/** `write` done on the pages held, and added to every log of a read of them still on its way. */
-function landWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
+/**
+ * `write` done on the pages held of `postId` (lower-cased), and added to every log of a read of
+ * them still on its way. Exported for the one write of the pages from outside this file that a
+ * read toward a place must not undo either — a like's count (use-likes.ts, #49, ADR-0076 7-29): it
+ * cancels no read of the pages itself (it lets a 더 보기 be), so it lands here rather than through
+ * `writePages`.
+ */
+export function landWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
   queryClient.setQueryData<CommentPages>(postCommentsKey(postId), write);
   logWrite(queryClient, postId, write);
 }

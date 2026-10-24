@@ -27,6 +27,7 @@ import {
   commentsInfiniteQueryOptions,
   createCommentOptions,
   readMoreReplies,
+  updateCommentOptions,
 } from './use-comments';
 import { type LikeVariables, myPostLikesQueryOptions, updateLikeOptions } from './use-likes';
 import { ME_QUERY_KEY } from './use-me';
@@ -162,6 +163,28 @@ const refusal = (status: number, code: string, details?: unknown) =>
 /** openapi-fetch's `{ data, response }`, the shape `unwrap` reads. */
 const answer = (data: unknown) =>
   ({ data: { data }, response: new Response(null, { status: 200 }) }) as never;
+
+/**
+ * The reader's edit of COMMENT, answered as edited at the count from when it was saved — 2, the
+ * count the pages held before any press: an edit's answer carries the comment's count.
+ */
+function editComment(queryClient: QueryClient) {
+  vi.spyOn(api, 'PUT').mockResolvedValue(
+    answer({ ...published(commentId, 2), body: '고친 댓글', editedAt: '2026-10-24T00:00:00.000Z' }),
+  );
+  return new MutationObserver(
+    queryClient,
+    updateCommentOptions(queryClient, POST, () => undefined),
+  ).mutate({ commentId, body: '고친 댓글', expectedAccountId: 'user-1' });
+}
+
+/** COMMENT's text as the pages hold it. */
+const commentBodyOf = (queryClient: QueryClient) => {
+  const thread = commentThreadsOf(
+    queryClient.getQueryData<CommentPages>(postCommentsKey(post)),
+  ).find((held) => held.comment.id === commentId);
+  return thread?.comment.state === 'published' ? thread.comment.body : thread?.comment.state;
+};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -690,6 +713,25 @@ describe('a 대댓글’s press while 답글 더 보기 is on its way', () => {
     expect(commentCountOf(again, REPLY)).toBe(0);
     expect(repliesHeld(again)).toEqual([[EARLIER, BETWEEN, REPLY], null]);
   });
+  it('keeps the count of a press on a 댓글 edited while the page is read: the press is done again over it after the edit (ADR-0074 7-34, ADR-0076 7-29)', async () => {
+    const queryClient = seeded();
+    const replies = repliesOnTheirWay(queryClient);
+    // While the page is on its way the reader edits the 댓글 and then likes it: the edit, which
+    // the page's read does again over what it puts in, carries the count from before the press.
+    await editComment(queryClient);
+    const sent = deferred<LikeState>();
+    const done = toggle(queryClient, () => sent.promise).mutate(onComment(true));
+    await settle();
+    sent.resolve({ liked: true, likeCount: 3 });
+    await done;
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    replies.arrive();
+    await replies.more;
+    expect(repliesHeld(queryClient)).toEqual([[EARLIER, BETWEEN, REPLY], null]);
+    expect(commentBodyOf(queryClient)).toBe('고친 댓글');
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+  });
 });
 
 describe('a comment’s press while a new 댓글’s read to the end is on its way', () => {
@@ -762,6 +804,26 @@ describe('a comment’s press while a new 댓글’s read to the end is on its w
     expect(commentCountOf(queryClient, MINE)).toBe(0);
     expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId, REPLY]);
     // Nothing more was read for it: the one page read of the write.
+    expect(write.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps the count of a press on a 댓글 edited while the pages are read: the press is done again over them after the edit (ADR-0074 7-34, ADR-0076 7-29)', async () => {
+    const queryClient = seeded();
+    const write = await newCommentOnItsWay(queryClient);
+    // The edit lands while the pages are on their way and goes into their read's log; the press
+    // after it must too, or the edit done again over the pages takes the press back to 2.
+    await editComment(queryClient);
+    const sent = deferred<LikeState>();
+    const done = toggle(queryClient, () => sent.promise).mutate(onComment(true));
+    await settle();
+    sent.resolve({ liked: true, likeCount: 3 });
+    await done;
+    write.arrive();
+    await write.written;
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(commentBodyOf(queryClient)).toBe('고친 댓글');
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
     expect(write.get).toHaveBeenCalledTimes(1);
   });
 

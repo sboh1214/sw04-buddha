@@ -32,6 +32,7 @@ import {
 } from '@/lib/likes';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
 import { useSession } from '@/lib/use-session';
+import { landWrite } from './use-comments';
 import { afterRefusal } from './use-posts';
 
 /**
@@ -95,13 +96,21 @@ function readCount(queryClient: QueryClient, postId: string, target: LikeTarget)
     : commentLikeCount(queryClient.getQueryData<CommentPages>(postCommentsKey(postId)), target.id);
 }
 
+/**
+ * Writes `count` as the target's. A comment's goes in as the comment section's writes do
+ * (`landWrite`, use-comments.ts — ADR-0074 7-34, ADR-0076 7-29): into the log of every read toward
+ * a place on its way — a new 댓글's read to the end, a new 대댓글's read on, '답글 더 보기' — which
+ * does it again over its pages after the writes that landed before it. Done once, over pages that
+ * were already in, it would be undone by an edit of the same comment that landed earlier in that
+ * read: done again over what the read brought, the edit's answer carries the count from when it
+ * was saved. A function of the pages held — that comment's count, nothing where it is not — so
+ * done again it is the same.
+ */
 function writeCount(queryClient: QueryClient, postId: string, target: LikeTarget, count: number) {
   if (target.kind === 'post') {
     queryClient.setQueryData<Post>(postKey(postId), (post) => withPostLikeCount(post, count));
   } else {
-    queryClient.setQueryData<CommentPages>(postCommentsKey(postId), (pages) =>
-      withCommentLikeCount(pages, target.id, count),
-    );
+    landWrite(queryClient, postId, (pages) => withCommentLikeCount(pages, target.id, count));
   }
 }
 
@@ -133,9 +142,11 @@ function loadingMore(queryClient: QueryClient, key: QueryKey): Promise<unknown> 
  * 대댓글's read on and a new 댓글's read to the end (use-comments.ts) are not reads of the query but
  * pages written into it, which nothing here sees: a page of them that brings a comment already
  * held keeps the count held (`repliesWith`, `withHeldLikeCounts`, lib/comments.ts, ADR-0076 7-17
- * and 7-27), so it cannot take a press back either. A read of the pages a press asked for — a
- * failure's, for the server's word — that one of them cancels to write its page is made again
- * after it (`writePages`, 7-28), so the count held, put back, does not outlast it.
+ * and 7-27), and the count a press writes while one of them reads is done again over its pages
+ * after the writes that landed before it (`writeCount`, 7-29), so it cannot take a press back
+ * either. A read of the pages a press asked for — a failure's, for the server's word — that one of
+ * them cancels to write its page is made again after it (`putReadPages`, 7-28), so the count held,
+ * put back, does not outlast it.
  */
 async function holdReads(
   queryClient: QueryClient,
