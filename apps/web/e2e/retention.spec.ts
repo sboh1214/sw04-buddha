@@ -23,9 +23,12 @@ import {
  * 보존기간 처리 (#184, ADR-0087): an admin reads, on /admin/retention, what the worker's daily
  * `retention.purge` recorded — kind, count, the period applied and the run's instant, no personal
  * content (ADR-0069 decision 4 #184 «경과 처리 기록») — told that the periods are the release
- * settings' and only an approved one deletes (decision 7); a member reads nothing. And the operators'
- * pages of a deleted original the retention emptied say so, and when, and a profile action whose
- * removed item it deleted names the item and says it is gone.
+ * settings' and only an approved one deletes (decision 7), and a kind a run gave up on marked 실패
+ * beside its name, its count '오류 전까지 N건' (owner decision 2026-10-24 14); a member reads
+ * nothing. And the operators' pages of a deleted original the retention emptied say so, and when —
+ * as they do of a withdrawn member's hidden post it emptied, still hidden (owner decision
+ * 2026-10-24 3) — and a profile action whose removed item it deleted names the item and says it is
+ * gone.
  *
  * The purge itself cannot run here: it runs once a day (04:30 KST) and deletes only what an approved
  * period has kept — records days old, under a value that would stay in the e2e database and delete
@@ -69,18 +72,23 @@ function purge(
   kind: RetentionPurge['kind'],
   count: number,
   periodDays: number,
+  outcome: RetentionPurge['outcome'] = 'done',
 ): RetentionPurge {
-  return { id: String(id), kind, count, periodDays, ranAt };
+  return { id: String(id), kind, count, periodDays, ranAt, outcome };
 }
 
 /**
  * Two pages of records as `GET /admin/retention-purges` would answer them — newest run first, the
  * record written last first, each page completed to the end of its last run (so a run never
- * splits): the later run on the first, with two batches of its edit history, and the earlier on
- * the second.
+ * splits): the later run on the first, with two batches of its edit history, a batch of deleted
+ * originals and then that kind's failure, and a withdrawn member's hidden posts emptied; the
+ * earlier run on the second.
  */
 const FIRST_PAGE = [
-  purge(9, LATER, 'consent_records', 0, 365),
+  purge(12, LATER, 'consent_records', 0, 365),
+  purge(11, LATER, 'hidden_posts', 2, 1_825),
+  purge(10, LATER, 'deleted_posts', 0, 90, 'failed'),
+  purge(9, LATER, 'deleted_posts', 500, 90),
   purge(8, LATER, 'post_revisions', 12, 90),
   purge(7, LATER, 'post_revisions', 500, 90),
   purge(6, LATER, 'nickname_holds', 3, 30),
@@ -157,7 +165,14 @@ test.describe('보존기간 처리 (#184)', () => {
     // What the database holds: nothing on a fresh one, and never anything about whose.
     const held = await dataOf<RetentionPurge[]>(await admin.get(PURGES));
     for (const record of held) {
-      expect(Object.keys(record).sort()).toEqual(['count', 'id', 'kind', 'periodDays', 'ranAt']);
+      expect(Object.keys(record).sort()).toEqual([
+        'count',
+        'id',
+        'kind',
+        'outcome',
+        'periodDays',
+        'ranAt',
+      ]);
     }
 
     await signIn(page, adminAccount.email, adminAccount.password);
@@ -199,7 +214,7 @@ test.describe('보존기간 처리 (#184)', () => {
       `${copy.adminRetentionRanAt} ${LATER_SHOWN}`,
     );
     const laterKinds = later.locator('[data-testid^="admin-retention-kind-"]');
-    await expect(laterKinds).toHaveCount(3);
+    await expect(laterKinds).toHaveCount(5);
     await expect(laterKinds.nth(0)).toHaveAttribute(
       'data-testid',
       'admin-retention-kind-nickname_holds',
@@ -215,7 +230,35 @@ test.describe('보존기간 처리 (#184)', () => {
     await expect(revisions).toContainText(copy.adminRetentionKindPostRevisions);
     await expect(revisions.getByTestId('admin-retention-count')).toHaveText('512건');
     await expect(revisions.getByTestId('admin-retention-period')).toHaveText('기간 90일');
+    await expect(revisions.getByTestId('admin-retention-failed')).toHaveCount(0);
+    // A kind the run gave up on: marked 실패 beside its name, with what its batch before the
+    // failure deleted said as such — a bare '500건' right after the badge reads as 500 failures.
     await expect(laterKinds.nth(2)).toHaveAttribute(
+      'data-testid',
+      'admin-retention-kind-deleted_posts',
+    );
+    const failedKind = later.getByTestId('admin-retention-kind-deleted_posts');
+    const failedLabel = failedKind.getByTestId('admin-retention-label');
+    await expect(failedLabel).toContainText(copy.adminRetentionKindDeletedPosts);
+    await expect(failedLabel.getByTestId('admin-retention-failed')).toHaveText(
+      copy.adminRetentionFailed,
+    );
+    await expect(
+      failedKind.getByTestId('admin-retention-figures').getByTestId('admin-retention-failed'),
+    ).toHaveCount(0);
+    await expect(failedKind.getByTestId('admin-retention-count')).toHaveText(
+      `${copy.adminRetentionCountBeforeFailure} 500건`,
+    );
+    await expect(failedKind.getByTestId('admin-retention-period')).toHaveText('기간 90일');
+    await expect(laterKinds.nth(3)).toHaveAttribute(
+      'data-testid',
+      'admin-retention-kind-hidden_posts',
+    );
+    const hidden = later.getByTestId('admin-retention-kind-hidden_posts');
+    await expect(hidden).toContainText(copy.adminRetentionKindHiddenPosts);
+    await expect(hidden.getByTestId('admin-retention-count')).toHaveText('2건');
+    await expect(hidden.getByTestId('admin-retention-period')).toHaveText('기간 1,825일');
+    await expect(laterKinds.nth(4)).toHaveAttribute(
       'data-testid',
       'admin-retention-kind-consent_records',
     );
@@ -223,12 +266,13 @@ test.describe('보존기간 처리 (#184)', () => {
     await expect(consent).toContainText(copy.adminRetentionKindConsentRecords);
     await expect(consent.getByTestId('admin-retention-count')).toHaveText('0건');
     await expect(consent.getByTestId('admin-retention-period')).toHaveText('기간 365일');
+    await expect(later.getByTestId('admin-retention-failed')).toHaveCount(1);
 
     // 더 보기: the earlier run follows, and the later one is as it was.
     await page.getByTestId('admin-retention-more').click();
     await expect(runs).toHaveCount(2);
     await expect(page.getByTestId('admin-retention-more')).toHaveCount(0);
-    await expect(laterKinds).toHaveCount(3);
+    await expect(laterKinds).toHaveCount(5);
     await expect(revisions.getByTestId('admin-retention-count')).toHaveText('512건');
     const earlier = page.getByTestId(`admin-retention-run-${EARLIER}`);
     await expect(runs.nth(1)).toHaveAttribute('data-testid', `admin-retention-run-${EARLIER}`);
@@ -346,12 +390,80 @@ test.describe('보존기간 처리 (#184)', () => {
     );
   });
 
+  test('탈퇴한 회원의 숨긴 채로 남은 글을 보존기간이 지나 비우면 운영자 화면에서 숨김 상태 그대로 원문 대신 그 안내와 비운 때로 보인다', async ({
+    page,
+    admin,
+  }) => {
+    // A member writes a post, and an operator hides it (#45-5): operators read it with its
+    // hiding until the retention empties it and deletes the hiding (owner decision 2026-10-24 3).
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `숨길 글 ${tag}`, `본문 ${tag}`);
+    const operator = await meOf(admin);
+    const hid = await admin.post(`/api/v1/admin/moderation/posts/${postId}/hide`, {
+      data: { reason: 'spam', note: null, expectedAccountId: operator.id },
+    });
+    expect(hid.status(), await hid.text()).toBe(200);
+    await logOut(page);
+    await signIn(page, adminAccount.email, adminAccount.password);
+
+    // Before: hidden, the original and its hiding.
+    await page.goto(`/admin/moderation/posts/${postId}`);
+    await expect(page.getByTestId('moderation-item-state')).toHaveText(
+      copy.adminModerationStateHidden,
+    );
+    await expect(page.getByTestId('moderation-post-title')).toHaveText(`숨길 글 ${tag}`);
+    await expect(page.getByTestId('moderation-purged')).toHaveCount(0);
+    const itemActions = page.getByTestId('moderation-item-actions');
+    await expect(itemActions.getByTestId('moderation-actions').locator(':scope > li')).toHaveCount(
+      1,
+    );
+
+    // As the API answers once the member withdrew and the 신고·제재 period passed
+    // (moderation-reads.service.ts): still hidden, no title, an empty body, `purgedAt`, and the
+    // hiding gone from the item's actions and the member's.
+    await page.route(
+      (url) => url.pathname === `/api/v1/admin/moderation/posts/${postId}`,
+      async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as { data: AdminPostModeration };
+        await route.fulfill({
+          response,
+          json: {
+            ...body,
+            data: {
+              ...body.data,
+              title: null,
+              body: { type: 'doc', content: [] },
+              purgedAt: PURGED_AT,
+              actions: [],
+              authorActions: body.data.authorActions.filter((action) => action.type !== 'hide'),
+            },
+          },
+        });
+      },
+    );
+    await page.reload();
+    await expect(page.getByTestId('moderation-item-state')).toHaveText(
+      copy.adminModerationStateHidden,
+    );
+    await expect(page.getByTestId('moderation-purged')).toHaveText(copy.adminModerationPurged);
+    await expect(page.getByTestId('moderation-post-title')).toHaveCount(0);
+    await expect(page.getByTestId('moderation-content')).not.toContainText(`본문 ${tag}`);
+    await expect(page.getByTestId('moderation-purged-at')).toHaveText(
+      `${copy.adminModerationPurgedAt}${PURGED_SHOWN}`,
+    );
+    await expect(itemActions.getByTestId('moderation-actions')).toHaveCount(0);
+    await expect(itemActions).toContainText(copy.adminModerationNoActions);
+  });
+
   test('보존기간이 지나 가져간 프로필 항목을 지운 조치는 운영자 화면에서 그 항목의 이름과 지웠다는 줄로 보인다', async ({
     page,
     admin,
   }) => {
     // A member with a 소개, which an operator empties (#37-10), and a warning beside it: operators
-    // read what the clearing took until the retention deletes it (ADR-0087 결정 4의 7).
+    // read what the clearing took until the retention deletes it (ADR-0087 결정 4의 9).
     const tag = freshTag();
     await signUp(page, freshEmail());
     const member = await meOf(page.request);

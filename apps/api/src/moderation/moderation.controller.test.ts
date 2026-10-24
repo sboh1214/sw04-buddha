@@ -2054,6 +2054,54 @@ describe.skipIf(!hasTestInfra)('/api/v1 moderation (integration)', () => {
       expect(commentPage).toMatchObject({ body: '', purgedAt: purgedAt.toISOString() });
     });
 
+    it('reads a hidden post and comment the retention emptied (a withdrawn member’s, owner decision 2026-10-24 3) as hidden with no content, on both sides', async () => {
+      const hiddenAt = new Date(Date.now() - 60_000);
+      const purgedAt = new Date();
+      // As the worker's retention.purge leaves it: emptied, still hidden, its hiding deleted.
+      await t.db.update(schema.posts).set({ hiddenAt }).where(eq(schema.posts.id, post.id));
+      await t.db
+        .update(schema.posts)
+        .set({
+          title: null,
+          body: { type: 'doc', content: [] },
+          bodyText: '',
+          imageIds: [],
+          purgedAt,
+        })
+        .where(eq(schema.posts.id, post.id));
+      const gone = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        body: '숨긴 댓글',
+        hiddenAt,
+      });
+      await t.db
+        .update(schema.postComments)
+        .set({ body: '', purgedAt })
+        .where(eq(schema.postComments.id, gone.id));
+      const page = adminPostModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/posts/${post.id}`, admin)),
+      );
+      expect(page).toMatchObject({
+        state: 'hidden',
+        title: null,
+        body: { type: 'doc', content: [] },
+        deletedAt: null,
+        hiddenAt: hiddenAt.toISOString(),
+        purgedAt: purgedAt.toISOString(),
+      });
+      const commentPage = adminCommentModerationSchema.parse(
+        dataOf(await read(`/admin/moderation/comments/${gone.id}`, admin)),
+      );
+      expect(commentPage).toMatchObject({
+        state: 'hidden',
+        body: '',
+        purgedAt: purgedAt.toISOString(),
+      });
+      // The public reads the hidden placeholder as before.
+      expect(await postPage()).toMatchObject({ state: 'hidden', id: post.id });
+    });
+
     it('finds a member’s page by the public id of their profile’s address, as a public profile’s 운영 link does (owner decision 2026-10-21)', async () => {
       const publicId = await publicIdOf(author.id);
       await report(`/profiles/${publicId}`, reporter, 'impersonation');

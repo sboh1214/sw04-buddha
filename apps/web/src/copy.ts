@@ -748,23 +748,32 @@ export const copy = {
   // 워커가 매일 한 번 보존기간이 지난 기록을 지우고 종류마다 지운 수·적용한 기간·처리 시각만 남긴다(ADR-0069
   // 결정 4 #184 «경과 처리 기록»: 개인정보 내용은 남기지 않음). 기간은 출시 설정의 값이고 '승인됨'인 종류만
   // 지운다(결정 7). 닉네임 보류의 30일은 #57-6의 고정값이라 설정이 없다. 종류의 이름은 RETENTION_PURGE_KINDS
-  // 하나하나의 것이다(lib/retention.ts).
+  // 하나하나의 것이다(lib/retention.ts). 오류로 끝내지 못한 종류는 그 실행의 줄에 '실패'로 보인다(오너 결정
+  // 2026-10-24 14 — 처리 기록의 `outcome`). 그 줄의 수는 '오류 전까지 500건'이다 — 이름 옆의 '실패'와 떨어져
+  // '실패 500건'(실패한 수)으로 읽히지 않게. 실패의 기록마저 DB가 거절하면 그 실행에 줄이 없거나 '실패' 없이
+  // 지운 수만 보인다(ADR-0087 7-21) — 안내의 마지막 문장.
   adminRetention: '보존기간 처리',
   adminRetentionIntro:
     '보존기간이 지난 기록을 매일 한 번 지운 결과입니다. 종류마다 지운 수와 적용한 기간, 처리 시각만 남고 지운 내용은 남지 않습니다.',
   adminRetentionSettingsNotice:
-    '보존기간은 출시 설정에서 종류마다 넣습니다. 상태가 승인됨인 종류만 지우고, 미정·설계 제안·시험값인 종류는 지우지 않아 기록도 없습니다. 30일이 지난 닉네임 보류는 설정 없이 늘 지웁니다. 처리 중 오류가 난 종류는 그날 줄이 없거나 오류 전까지 지운 수만 보이고, 다음 날 다시 처리합니다.',
+    '보존기간은 출시 설정에서 종류마다 넣습니다. 상태가 승인됨인 종류만 지우고, 미정·설계 제안·시험값인 종류는 지우지 않아 기록도 없습니다. 30일이 지난 닉네임 보류는 설정 없이 늘 지웁니다. 처리 중 오류가 난 종류는 그날 줄에 실패로 표시되고 오류 전까지 지운 수만 보이며, 다음 날 다시 처리합니다. 실패 기록마저 남기지 못한 오류는 그날 줄이 없거나 실패 표시 없이 지운 수만 보일 수 있습니다.',
   adminRetentionSettingsLink: '출시 설정 열기',
   adminRetentionEmpty: '처리 기록이 없습니다.',
   adminRetentionRanAt: '처리 시각',
   adminRetentionPeriod: '기간',
   adminRetentionDayUnit: '일',
   adminRetentionCountUnit: '건',
+  adminRetentionCountBeforeFailure: '오류 전까지',
+  adminRetentionFailed: '실패',
   adminRetentionKindNicknameHolds: '30일이 지난 닉네임 보류',
   adminRetentionKindPostRevisions: '글 수정 이력',
   adminRetentionKindCommentRevisions: '댓글 수정 이력',
   adminRetentionKindDeletedPosts: '지운 글 원문',
   adminRetentionKindDeletedComments: '지운 댓글 원문',
+  // 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것의 내용(오너 결정 2026-10-24 3): 지운 원문처럼 비우고
+  // 숨김 조치와 함께 지운다 — 조치는 '제재 기록'의 줄에 든다.
+  adminRetentionKindHiddenPosts: '숨긴 글 원문',
+  adminRetentionKindHiddenComments: '숨긴 댓글 원문',
   adminRetentionKindReports: '신고 기록',
   adminRetentionKindRemovedProfileItems: '운영자가 지운 프로필 항목',
   adminRetentionKindModerationActions: '제재 기록',

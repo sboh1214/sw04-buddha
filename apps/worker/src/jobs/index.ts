@@ -147,16 +147,25 @@ const HANDLERS: Partial<Record<string, Handler>> = {
       logger.error({ storageKey, err }, 'retention purge object not removed');
     }
     // As a scan's market: one error line per kind that failed, and the run itself does not fail —
-    // the other kinds went on, and the next day's run tries it again.
-    for (const { kind, err } of kindFailures) {
+    // the other kinds went on, and the next day's run tries it again. The failure is recorded
+    // (`failed`, owner decision 2026-10-24 14) unless the database refused that too: a line of its
+    // own then, for the record the admin screen will not show.
+    for (const { kind, err, recordErr } of kindFailures) {
       logger.error({ kind, err }, 'retention purge kind failed');
+      if (recordErr !== null) {
+        logger.error({ kind, err: recordErr }, 'retention purge failure not recorded');
+      }
     }
     const result = {
       ranAt: ranAt.toISOString(),
       kinds,
       failed,
       failures: failures.map(({ storageKey, message }) => ({ storageKey, message })),
-      kindFailures: kindFailures.map(({ kind, message }) => ({ kind, message })),
+      kindFailures: kindFailures.map(({ kind, message, recorded }) => ({
+        kind,
+        message,
+        recorded,
+      })),
     };
     // Daily: always a line — what each kind's period was and what it deleted (no personal content).
     logger.info(result, 'retention purge');

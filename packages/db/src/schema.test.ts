@@ -3623,7 +3623,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
     }
 
-    it('empties a deleted post in place, only a deleted one, and keeps it empty', async () => {
+    it('empties a deleted post in place, not one neither deleted nor hidden, and keeps it empty', async () => {
       const { user: author } = await createUser(t.db);
       const market = await createMarket(t.db);
       const deletedAt = new Date(Date.now() - 60_000);
@@ -3635,7 +3635,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
       const live = await createPost(t.db, { marketId: market.id, authorId: author.id });
       const purge = { title: null, body: EMPTY_DOCUMENT, bodyText: '', imageIds: [] };
-      // Not before the deletion, not a post never deleted, not with content left.
+      // Not before the deletion, not a post never deleted nor hidden, not with content left.
       await expect(
         t.db
           .update(posts)
@@ -3672,7 +3672,69 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(row).toMatchObject({ title: null, body: EMPTY_DOCUMENT, purgedAt, deletedAt });
     });
 
-    it('lets a comment have no text only once a deleted one is emptied, and keeps it so', async () => {
+    it('empties a hidden post or comment in place too, not before its hiding, and keeps one not deleted hidden (owner decision 2026-10-24 3)', async () => {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const hiddenAt = new Date(Date.now() - 60_000);
+      const post = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        title: '숨긴 글',
+        hiddenAt,
+      });
+      const purge = { title: null, body: EMPTY_DOCUMENT, bodyText: '', imageIds: [] };
+      await expect(
+        t.db
+          .update(posts)
+          .set({ ...purge, purgedAt: new Date(hiddenAt.getTime() - 1) })
+          .where(eq(posts.id, post.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'posts_purged_check');
+      const purgedAt = new Date();
+      await t.db
+        .update(posts)
+        .set({ ...purge, purgedAt })
+        .where(eq(posts.id, post.id));
+      // Hidden for good: nothing shows an emptied post the author did not delete.
+      await expect(
+        t.db.update(posts).set({ hiddenAt: null }).where(eq(posts.id, post.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'posts_purged_check');
+      // A deleted one emptied may still be shown again by its hiding's cancellation (it shows as
+      // deleted): the deletion covers it.
+      const deleted = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        hiddenAt,
+        deletedAt: hiddenAt,
+      });
+      await t.db
+        .update(posts)
+        .set({ ...purge, purgedAt })
+        .where(eq(posts.id, deleted.id));
+      await t.db.update(posts).set({ hiddenAt: null }).where(eq(posts.id, deleted.id));
+
+      const comment = await createComment(t.db, {
+        postId: (await createPost(t.db, { marketId: market.id, authorId: author.id })).id,
+        authorId: author.id,
+        hiddenAt,
+      });
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ body: '', purgedAt: new Date(hiddenAt.getTime() - 1) })
+          .where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'post_comments_purged_check');
+      await t.db
+        .update(postComments)
+        .set({ body: '', purgedAt })
+        .where(eq(postComments.id, comment.id));
+      await expect(
+        t.db.update(postComments).set({ hiddenAt: null }).where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlConstraint(e) === 'post_comments_purged_check');
+      const [row] = await t.db.select().from(posts).where(eq(posts.id, post.id));
+      expect(row).toMatchObject({ title: null, purgedAt, hiddenAt, deletedAt: null });
+    });
+
+    it('lets a comment have no text only once it is emptied (a deleted one here; a hidden one above), and keeps it so', async () => {
       const { user: author } = await createUser(t.db);
       const market = await createMarket(t.db);
       const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
@@ -3709,7 +3771,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy((e) => sqlState(e) === '23000');
     });
 
-    it('keeps the purge records append-only and to the kinds, counts and periods there are', async () => {
+    it('keeps the purge records append-only and to the kinds, counts, periods and outcomes there are', async () => {
       const ranAt = new Date();
       const [row] = await t.db
         .insert(retentionPurges)
@@ -3721,10 +3783,25 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await expect(
         t.db.delete(retentionPurges).where(eq(retentionPurges.id, row!.id)),
       ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      // `done` unless written otherwise; a failure (owner decision 2026-10-24 14) deleted nothing.
+      expect(row!.outcome).toBe('done');
+      const [failure] = await t.db
+        .insert(retentionPurges)
+        .values({ kind: 'reports', count: 0, periodDays: 30, ranAt, outcome: 'failed' })
+        .returning();
+      expect(failure!.outcome).toBe('failed');
       for (const [values, constraint] of [
         [{ kind: 'ledger_entries', count: 1, periodDays: 1 }, 'retention_purges_kind_check'],
         [{ kind: 'reports', count: -1, periodDays: 1 }, 'retention_purges_count_check'],
         [{ kind: 'reports', count: 1, periodDays: 0 }, 'retention_purges_period_days_check'],
+        [
+          { kind: 'reports', count: 1, periodDays: 1, outcome: 'failed' },
+          'retention_purges_outcome_check',
+        ],
+        [
+          { kind: 'reports', count: 0, periodDays: 1, outcome: 'skipped' },
+          'retention_purges_outcome_check',
+        ],
       ] as const) {
         await expect(
           t.db.insert(retentionPurges).values({ ...values, ranAt }),

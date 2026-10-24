@@ -4,14 +4,17 @@
 -- 0041: no row changes.
 --
 -- - retention_purges: what each run of the worker's `retention.purge` deleted — kind, count, the
---   period it read and the run's instant, nothing about whose (decision 4 #184 «경과 처리 기록»).
---   An operational record: buddha_app may INSERT and SELECT only (below).
--- - posts.purged_at, post_comments.purged_at: when the retention emptied a deleted original in
---   place (the row stays: replies, likes, reports and actions name it). posts_purged_check and
---   post_comments_purged_check keep an emptied one empty and only a deleted one emptied;
---   post_comments_body_check is replaced so an emptied comment may have no text.
--- - The indexes the job's scans read: the deleted originals not emptied yet, the versions by when
---   they were replaced, the closed accounts by when they closed.
+--   period it read, the run's instant and its outcome (`done`, or `failed` with a count of 0 for a
+--   kind the run gave up on — owner decision 2026-10-24 14), nothing about whose (decision 4 #184
+--   «경과 처리 기록»). An operational record: buddha_app may INSERT and SELECT only (below).
+-- - posts.purged_at, post_comments.purged_at: when the retention emptied in place a deleted
+--   original, or a withdrawn member's post or comment an operator still hides (owner decision
+--   2026-10-24 3) — the row stays: replies, likes, reports and actions name it.
+--   posts_purged_check and post_comments_purged_check keep an emptied one empty, only a deleted or
+--   a hidden one emptied (not before its deletion or hiding), and one emptied while hidden and not
+--   deleted hidden; post_comments_body_check is replaced so an emptied comment may have no text.
+-- - The indexes the job's scans read: the deleted originals and the hidden items not emptied yet,
+--   the versions by when they were replaced, the closed accounts by when they closed.
 -- - retention_delete_approval_requests(): the one way buddha_app deletes an approval request
 --   (below) — it keeps no DELETE of the table (migration 0021).
 CREATE TABLE "retention_purges" (
@@ -20,9 +23,11 @@ CREATE TABLE "retention_purges" (
 	"count" integer NOT NULL,
 	"period_days" integer NOT NULL,
 	"ran_at" timestamp (3) with time zone NOT NULL,
-	CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'consent_records', 'phone_verification_records')),
+	"outcome" varchar(16) DEFAULT 'done' NOT NULL,
+	CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'consent_records', 'phone_verification_records')),
 	CONSTRAINT "retention_purges_count_check" CHECK ("retention_purges"."count" >= 0),
-	CONSTRAINT "retention_purges_period_days_check" CHECK ("retention_purges"."period_days" >= 1)
+	CONSTRAINT "retention_purges_period_days_check" CHECK ("retention_purges"."period_days" >= 1),
+	CONSTRAINT "retention_purges_outcome_check" CHECK ("retention_purges"."outcome" IN ('done', 'failed') AND ("retention_purges"."outcome" <> 'failed' OR "retention_purges"."count" = 0))
 );
 --> statement-breakpoint
 ALTER TABLE "post_comments" DROP CONSTRAINT "post_comments_body_check";--> statement-breakpoint
@@ -31,12 +36,14 @@ ALTER TABLE "posts" ADD COLUMN "purged_at" timestamp (3) with time zone;--> stat
 CREATE INDEX "retention_purges_ran_at_id_idx" ON "retention_purges" USING btree ("ran_at" desc,"id" desc);--> statement-breakpoint
 CREATE INDEX "post_comment_revisions_replaced_at_idx" ON "post_comment_revisions" USING btree ("replaced_at");--> statement-breakpoint
 CREATE INDEX "post_comments_unpurged_deleted_at_idx" ON "post_comments" USING btree ("deleted_at") WHERE "post_comments"."deleted_at" IS NOT NULL AND "post_comments"."purged_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "post_comments_unpurged_hidden_at_idx" ON "post_comments" USING btree ("hidden_at") WHERE "post_comments"."hidden_at" IS NOT NULL AND "post_comments"."deleted_at" IS NULL AND "post_comments"."purged_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "post_revisions_replaced_at_idx" ON "post_revisions" USING btree ("replaced_at");--> statement-breakpoint
 CREATE INDEX "posts_unpurged_deleted_at_idx" ON "posts" USING btree ("deleted_at") WHERE "posts"."deleted_at" IS NOT NULL AND "posts"."purged_at" IS NULL;--> statement-breakpoint
+CREATE INDEX "posts_unpurged_hidden_at_idx" ON "posts" USING btree ("hidden_at") WHERE "posts"."hidden_at" IS NOT NULL AND "posts"."deleted_at" IS NULL AND "posts"."purged_at" IS NULL;--> statement-breakpoint
 CREATE INDEX "profiles_closed_at_idx" ON "profiles" USING btree ("closed_at") WHERE "profiles"."closed_at" IS NOT NULL;--> statement-breakpoint
-ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_purged_check" CHECK ("post_comments"."purged_at" IS NULL OR ("post_comments"."deleted_at" IS NOT NULL AND "post_comments"."purged_at" >= "post_comments"."deleted_at" AND "post_comments"."body" = ''));--> statement-breakpoint
+ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_purged_check" CHECK ("post_comments"."purged_at" IS NULL OR ((("post_comments"."deleted_at" IS NOT NULL AND "post_comments"."purged_at" >= "post_comments"."deleted_at") OR ("post_comments"."hidden_at" IS NOT NULL AND "post_comments"."purged_at" >= "post_comments"."hidden_at")) AND "post_comments"."body" = ''));--> statement-breakpoint
 ALTER TABLE "post_comments" ADD CONSTRAINT "post_comments_body_check" CHECK (btrim("post_comments"."body") <> '' OR "post_comments"."purged_at" IS NOT NULL);--> statement-breakpoint
-ALTER TABLE "posts" ADD CONSTRAINT "posts_purged_check" CHECK ("posts"."purged_at" IS NULL OR ("posts"."deleted_at" IS NOT NULL AND "posts"."purged_at" >= "posts"."deleted_at" AND "posts"."title" IS NULL AND "posts"."body_text" = '' AND "posts"."image_ids" = '{}'::uuid[] AND "posts"."body" = '{"type":"doc","content":[]}'::jsonb));--> statement-breakpoint
+ALTER TABLE "posts" ADD CONSTRAINT "posts_purged_check" CHECK ("posts"."purged_at" IS NULL OR ((("posts"."deleted_at" IS NOT NULL AND "posts"."purged_at" >= "posts"."deleted_at") OR ("posts"."hidden_at" IS NOT NULL AND "posts"."purged_at" >= "posts"."hidden_at")) AND "posts"."title" IS NULL AND "posts"."body_text" = '' AND "posts"."image_ids" = '{}'::uuid[] AND "posts"."body" = '{"type":"doc","content":[]}'::jsonb));--> statement-breakpoint
 -- Hand-edited: an emptied original stays emptied (#184: deleted for good, never restored) whoever
 -- writes — purged_at, once set, never changes, and the CHECKs keep the content empty while it is
 -- set. The other columns stay as the API keeps them (an operator may still hide a deleted post).

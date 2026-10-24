@@ -16,6 +16,7 @@ import {
   RELEASE_SETTINGS,
   RESTRICTION_END_CHANGE_KINDS,
   RETENTION_PURGE_KINDS,
+  RETENTION_PURGE_OUTCOMES,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
   START_GRANT_NUMBER_SOURCES,
@@ -98,8 +99,10 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
   // first; #130's bot control and the rest add theirs here.
   'approval_requests.kind': Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
-  // #184's purge records: the kinds a run counts (no personal content).
+  // #184's purge records: the kinds a run counts (no personal content), and whether a kind was
+  // done or failed (owner decision 2026-10-24 14).
   'retention_purges.kind': RETENTION_PURGE_KINDS,
+  'retention_purges.outcome': RETENTION_PURGE_OUTCOMES,
 };
 
 /**

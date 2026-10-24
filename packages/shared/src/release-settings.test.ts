@@ -100,6 +100,25 @@ describe('release settings registry', () => {
     }
   });
 
+  it('tells the owner, where the periods are approved, what the answers of 2026-10-24 changed (#184)', () => {
+    const { moderation_records: moderation, deleted_posts: deleted } = RETENTION_PERIOD_SETTINGS;
+    // 1: the reports a withdrawn member received go too; 3: a hidden item is emptied, kept hidden.
+    expect(moderation.description).toContain('탈퇴한 회원이 받은 신고와 조치');
+    expect(moderation.description).toContain('숨긴 채로 남은 것은 지운 원문처럼 내용을 비우고');
+    // 12: what a pending account restriction request cites waits for its decision — a condition of
+    // its own beside a pending report's (4), not a kind of request.
+    expect(deleted.description).toContain('결정을 기다리는 계정 제한 요청이 근거로 든');
+    expect(deleted.description).toContain('처리 중인 신고가 있는 글·댓글과 결정을 기다리는');
+    expect(deleted.description).toContain('신고가 처리되거나 요청이 결정·철회될 때까지');
+    expect(deleted.description).not.toContain('신고가 있거나 결정을 기다리는');
+    // 14: a kind that failed is recorded as such.
+    for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
+      expect(definition.description, definition.key).toContain(
+        '오류로 끝내지 못한 종류는 실패로 남긴다',
+      );
+    }
+  });
+
   it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {
     const accepts = (value: unknown) => START_COIN_SETTING.schema.safeParse(value).success;
     expect(START_COIN_SETTING).toMatchObject({ label: '시작 지급액', unit: 'Coin' });

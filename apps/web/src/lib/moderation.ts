@@ -903,9 +903,10 @@ export function reasonCountsText(reasons: AdminReportGroup['reasons']): string {
 
 /**
  * A queue entry's line: a post by its title (or its text's start), a comment by its start. A post
- * with no title and no text — one of images alone, or a deleted original #184's retention emptied —
- * is '제목 없음', as its moderation page heads it; a comment with no text is one the retention
- * emptied (a comment's text is never blank otherwise — `post_comments_body_check`).
+ * with no title and no text — one of images alone, or a deleted or a still-hidden original #184's
+ * retention emptied (owner decision 2026-10-24 3) — is '제목 없음', as its moderation page heads
+ * it; a comment with no text is one the retention emptied (a comment's text is never blank
+ * otherwise — `post_comments_body_check`).
  */
 export function queueEntryText(
   group: Pick<AdminReportGroup, 'target' | 'title' | 'excerpt'>,
@@ -922,9 +923,10 @@ export function queueEntryText(
 
 /**
  * A comment's line in a post's moderation page (`AdminPostComment.excerpt`, the start of its text
- * whatever its state): its first line, or — for a deleted original #184's retention emptied, the
- * only comment with no text (`post_comments_body_check`) — that it was emptied, so the row's link
- * to its own page still has a name.
+ * whatever its state): its first line, or — for a deleted or a still-hidden original #184's
+ * retention emptied (owner decision 2026-10-24 3), the only comment with no text
+ * (`post_comments_body_check`) — that it was emptied, so the row's link to its own page still has
+ * a name.
  */
 export function adminCommentLine(excerpt: string): string {
   return postFirstLine(excerpt) || copy.adminModerationPurgedLine;

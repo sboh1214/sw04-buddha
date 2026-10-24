@@ -22,6 +22,8 @@ const KIND_LABELS: Readonly<Record<RetentionPurgeKind, string>> = {
   deleted_posts: copy.adminRetentionKindDeletedPosts,
   deleted_comments: copy.adminRetentionKindDeletedComments,
   reports: copy.adminRetentionKindReports,
+  hidden_posts: copy.adminRetentionKindHiddenPosts,
+  hidden_comments: copy.adminRetentionKindHiddenComments,
   removed_profile_items: copy.adminRetentionKindRemovedProfileItems,
   moderation_actions: copy.adminRetentionKindModerationActions,
   approval_requests: copy.adminRetentionKindApprovalRequests,
@@ -33,9 +35,15 @@ export function retentionPurgeKindLabel(kind: RetentionPurgeKind): string {
   return KIND_LABELS[kind];
 }
 
-/** A count of records: `1,012건` — 0 too, the record that the run looked and found nothing due. */
-export function retentionCountText(count: number): string {
-  return `${count.toLocaleString('ko-KR')}${copy.adminRetentionCountUnit}`;
+/**
+ * A count of records: `1,012건` — 0 too, the record that the run looked and found nothing due. A
+ * kind the run gave up on (`failed`) says what it deleted before the error, `오류 전까지 500건`: a
+ * bare `500건` after its 실패 would read as 500 failures — a label then its count, as /admin/sms
+ * reads '보내지 못함' and its 건.
+ */
+export function retentionCountText(count: number, failed = false): string {
+  const text = `${count.toLocaleString('ko-KR')}${copy.adminRetentionCountUnit}`;
+  return failed ? `${copy.adminRetentionCountBeforeFailure} ${text}` : text;
 }
 
 /** The period a run applied, as a label and its value: `기간 365일`. */
@@ -47,8 +55,14 @@ export function retentionPeriodText(days: number): string {
 export interface RetentionRunKind {
   kind: RetentionPurgeKind;
   label: string;
+  /** What its batches deleted — before the failure, for a kind that failed ('오류 전까지 N건'). */
   count: number;
   periodDays: number;
+  /**
+   * The run gave the kind up (a `failed` record, owner decision 2026-10-24 14): its batch rolled
+   * back, the next run tries it again.
+   */
+  failed: boolean;
 }
 
 /** One run: its instant (the database clock's, shared by every record it wrote) and its kinds. */
@@ -62,9 +76,11 @@ export interface RetentionRun {
  * (`(ran_at, id)` descending — a run's records share its instant), and in each run one line per kind
  * in the order the run took them (RETENTION_PURGE_KINDS), the counts of its batches summed — a kind
  * with more due than one batch writes a record per batch, and the screen says what the run deleted
- * of it. The API ends each page at a run's end, so a run's records all come on one page; the pages
- * loaded are read together, newest run first. A kind's batches in one run share the period it read
- * once at the start; a line per period keeps them apart were it otherwise.
+ * of it. A kind the run gave up on has its `failed` record (count 0) beside the batches it
+ * finished: its line is marked failed, with what those deleted. The API ends each page at a run's
+ * end, so a run's records all come on one page; the pages loaded are read together, newest run
+ * first. A kind's batches in one run share the period it read once at the start; a line per period
+ * keeps them apart were it otherwise.
  */
 export function retentionRuns(records: readonly RetentionPurge[]): RetentionRun[] {
   const runs = new Map<string, Map<string, RetentionRunKind>>();
@@ -75,6 +91,7 @@ export function retentionRuns(records: readonly RetentionPurge[]): RetentionRun[
       runs.set(record.ranAt, kinds);
     }
     const key = `${record.kind}:${String(record.periodDays)}`;
+    const failed = record.outcome === 'failed';
     const line = kinds.get(key);
     if (line === undefined) {
       kinds.set(key, {
@@ -82,9 +99,11 @@ export function retentionRuns(records: readonly RetentionPurge[]): RetentionRun[
         label: retentionPurgeKindLabel(record.kind),
         count: record.count,
         periodDays: record.periodDays,
+        failed,
       });
     } else {
       line.count += record.count;
+      line.failed ||= failed;
     }
   }
   const order = (kind: RetentionPurgeKind) => RETENTION_PURGE_KINDS.indexOf(kind);

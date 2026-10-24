@@ -14670,7 +14670,7 @@
             "session": []
           }
         ],
-        "summary": "What the daily retention purge deleted, newest run first: kind, count, the period applied (days) and the run’s instant. A page never ends inside a run: `limit` records, then the rest of the run the last of them belongs to",
+        "summary": "What the daily retention purge deleted, newest run first: kind, count, the period applied (days), the run’s instant and its outcome (`failed`, count 0, for a kind the run gave up on). A page never ends inside a run: `limit` records, then the rest of the run the last of them belongs to",
         "tags": [
           "admin"
         ]
@@ -22358,6 +22358,9 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/RetentionPurgeOutcome"
           }
         },
         "required": [
@@ -22365,7 +22368,8 @@
           "kind",
           "count",
           "periodDays",
-          "ranAt"
+          "ranAt",
+          "outcome"
         ],
         "additionalProperties": false
       },
@@ -22378,11 +22382,20 @@
           "deleted_posts",
           "deleted_comments",
           "reports",
+          "hidden_posts",
+          "hidden_comments",
           "removed_profile_items",
           "moderation_actions",
           "approval_requests",
           "consent_records",
           "phone_verification_records"
+        ]
+      },
+      "RetentionPurgeOutcome": {
+        "type": "string",
+        "enum": [
+          "done",
+          "failed"
         ]
       }
     }

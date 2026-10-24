@@ -5,11 +5,15 @@
  * earlier version, the later of the withdrawal and the processing for a processed record), the
  * boundary (a record exactly its period old is due), the records still being processed or still
  * named, a period that is not approved (nothing deleted, nothing recorded), the nickname holds' fixed
- * 30 days, the purge records (kind, count, period, run instant — per batch, or one 0), and that the
- * ledger, the watch events, likes, posts not deleted and the other operational records are never
- * touched. The release settings are changed the way the admin screen changes them (a row and its
- * record); the run's instant is moved past a period instead of backdating a closure (a closed
- * profile never changes, migration 0041). Skips when TEST_* are unset.
+ * 30 days, the purge records (kind, count, period, run instant and outcome — per batch, one 0, or
+ * one `failed`), and that the ledger, the watch events, likes, posts not deleted and the other
+ * operational records are never touched. The owner's answers of 2026-10-24 (ADR-0087) each have
+ * their case: the reports a withdrawn member received (1), a withdrawn member's items still hidden
+ * (3 — a post and a comment each, under every guard of their steps), what a pending account
+ * restriction request cites (12 — each kind of request and both columns a restriction cites) and a
+ * failed kind's record (14). The release settings are changed the way the admin screen changes
+ * them (a row and its record); the run's instant is moved past a period instead of backdating a
+ * closure (a closed profile never changes, migration 0041). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -113,6 +117,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
         count: schema.retentionPurges.count,
         periodDays: schema.retentionPurges.periodDays,
         ranAt: schema.retentionPurges.ranAt,
+        outcome: schema.retentionPurges.outcome,
       })
       .from(schema.retentionPurges)
       .orderBy(asc(schema.retentionPurges.id));
@@ -257,7 +262,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(byKind.removed_profile_items).toMatchObject({ status: 'undecided', periodDays: null });
     // Only the nickname holds' fixed 30 days applied: the closure's hold of the nickname is over.
     expect(await purgeRecords()).toEqual([
-      { kind: 'nickname_holds', count: 1, periodDays: 30, ranAt: now },
+      { kind: 'nickname_holds', count: 1, periodDays: 30, ranAt: now, outcome: 'done' },
     ]);
     expect(outcome.kinds.map((kind) => kind.kind)).toEqual([...RETENTION_PURGE_KINDS]);
   });
@@ -294,6 +299,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       count: 4,
       periodDays: 30,
       ranAt: due,
+      outcome: 'done',
     });
   });
 
@@ -682,7 +688,664 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect((await t.db.select().from(schema.reports)).map((row) => row.id)).toEqual([pending.id]);
   });
 
+  it('deletes the reports a withdrawn member received from live reporters, and the actions they name, from the later of the withdrawal and the processing (owner decision 2026-10-24 1)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const liveMember = (await createUser(t.db)).user.id;
+    const post = await createPost(t.db, { marketId, authorId: member });
+    // A report on the member's post that a warning resolved, before the withdrawal.
+    const warning = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: post.id,
+      type: 'warning',
+    });
+    const actioned = await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      postId: post.id,
+      status: 'actioned',
+      resolvedAt: warning.createdAt,
+      resolvedBy: admin,
+      actionId: warning.id,
+    });
+    // One on the member's profile, dismissed five days after the withdrawal (the later of the two).
+    const dismissedLater = await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+    });
+    // Still pending: kept however long.
+    const pending = await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      commentId: (await createComment(t.db, { postId: post.id, authorId: member })).id,
+    });
+    // Between two live accounts: kept (owner decision 2026-10-24 2).
+    const livesReport = await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: liveMember,
+      status: 'dismissed',
+      resolvedAt: before(new Date(), 400),
+      resolvedBy: admin,
+      dismissalReason: '기각',
+    });
+    const closedAt = await closeAccount(t.db, member);
+    const resolvedLater = after(closedAt, 5);
+    await t.db
+      .update(schema.reports)
+      .set({
+        status: 'dismissed',
+        resolvedAt: resolvedLater,
+        resolvedBy: admin,
+        dismissalReason: '기각',
+      })
+      .where(eq(schema.reports.id, dismissedLater.id));
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    const reportIds = async () =>
+      (await t.db.select({ id: schema.reports.id }).from(schema.reports))
+        .map((row) => row.id)
+        .sort();
+
+    const early = after(closedAt, 30, -1);
+    await run(early);
+    expect(await reportIds()).toEqual(
+      [actioned.id, dismissedLater.id, pending.id, livesReport.id].sort(),
+    );
+    expect(await countsAt(early)).toMatchObject({ reports: 0, moderation_actions: 0 });
+
+    // The reporter is live, the member reported withdrew: the report and the warning it names go —
+    // from the reporter's own 조치·신고 내역 too (GET /me/reports reads these rows).
+    const due = after(closedAt, 30);
+    await run(due);
+    expect(await reportIds()).toEqual([dismissedLater.id, pending.id, livesReport.id].sort());
+    expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+    expect(await countsAt(due)).toMatchObject({ reports: 1, moderation_actions: 1 });
+
+    const later = after(resolvedLater, 30);
+    await run(later);
+    expect(await reportIds()).toEqual([pending.id, livesReport.id].sort());
+    expect(await countsAt(later)).toMatchObject({ reports: 1 });
+    await run(after(closedAt, 3_650));
+    expect(await reportIds()).toEqual([pending.id, livesReport.id].sort());
+  });
+
+  it('empties a withdrawn member’s post and comment an operator still hides once the 신고·제재 period has passed since the later of the withdrawal and the hiding, deleting the hidings; they stay hidden (owner decision 2026-10-24 3)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const liveMember = (await createUser(t.db)).user.id;
+    const hiddenAt = before(new Date(), 200);
+    const picture = await image(member);
+    const post = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '숨긴 글',
+      imageIds: [picture.id],
+      createdAt: before(hiddenAt, 1),
+      hiddenAt,
+    });
+    const hide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: post.id,
+      createdAt: hiddenAt,
+    });
+    // The report the hiding resolved: a report the member received, which goes first.
+    await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      postId: post.id,
+      status: 'actioned',
+      resolvedAt: hiddenAt,
+      resolvedBy: admin,
+      actionId: hide.id,
+    });
+    const comment = await createComment(t.db, {
+      postId: (await createPost(t.db, { marketId, authorId: liveMember })).id,
+      authorId: member,
+      body: '숨긴 댓글',
+      hiddenAt,
+    });
+    const commentHide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      commentId: comment.id,
+      createdAt: hiddenAt,
+    });
+    // A hidden post a report still waits about: kept, and its hiding (in force) with it.
+    const reportedPost = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '신고 대기 중인 숨긴 글',
+      hiddenAt,
+    });
+    const reportedHide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: reportedPost.id,
+      createdAt: hiddenAt,
+    });
+    await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      postId: reportedPost.id,
+    });
+    // The same for a hidden comment a report still waits about.
+    const reportedComment = await createComment(t.db, {
+      postId: (await createPost(t.db, { marketId, authorId: liveMember })).id,
+      authorId: member,
+      body: '신고 대기 중인 숨긴 댓글',
+      hiddenAt,
+    });
+    const reportedCommentHide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      commentId: reportedComment.id,
+      createdAt: hiddenAt,
+    });
+    await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      commentId: reportedComment.id,
+    });
+    // A live member's hidden post and comment: theirs, kept however old (owner decision
+    // 2026-10-24 2).
+    const livesPost = await createPost(t.db, {
+      marketId,
+      authorId: liveMember,
+      title: '살아 있는 회원의 숨긴 글',
+      hiddenAt,
+    });
+    const livesHide = await createModerationAction(t.db, {
+      userId: liveMember,
+      createdBy: admin,
+      postId: livesPost.id,
+      createdAt: hiddenAt,
+    });
+    const livesComment = await createComment(t.db, {
+      postId: livesPost.id,
+      authorId: liveMember,
+      body: '살아 있는 회원의 숨긴 댓글',
+      hiddenAt,
+    });
+    const livesCommentHide = await createModerationAction(t.db, {
+      userId: liveMember,
+      createdBy: admin,
+      commentId: livesComment.id,
+      createdAt: hiddenAt,
+    });
+    const closedAt = await closeAccount(t.db, member);
+    // Only the 신고·제재 period: the deleted originals' is undecided.
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+
+    // 200 days since the hiding, a millisecond short of 30 since the withdrawal: kept.
+    const early = after(closedAt, 30, -1);
+    await run(early);
+    expect(await postOf(post.id)).toMatchObject({ title: '숨긴 글', purgedAt: null });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '숨긴 댓글', purgedAt: null });
+    expect(await countsAt(early)).toMatchObject({ hidden_posts: 0, hidden_comments: 0 });
+
+    const due = after(closedAt, 30);
+    await run(due);
+    // Emptied as a deleted original is, the row kept and still hidden; the hiding gone.
+    expect(await postOf(post.id)).toMatchObject({
+      title: null,
+      body: { type: 'doc', content: [] },
+      bodyText: '',
+      imageIds: [],
+      purgedAt: due,
+      hiddenAt,
+      deletedAt: null,
+    });
+    expect(await commentOf(comment.id)).toMatchObject({
+      body: '',
+      purgedAt: due,
+      hiddenAt,
+      deletedAt: null,
+    });
+    expect(await mediaIds()).toEqual([]);
+    expect(storage.objects.has(picture.storageKey)).toBe(false);
+    const actions = (await t.db.select().from(schema.moderationActions)).map((row) => row.id);
+    expect(actions.sort()).toEqual(
+      [reportedHide.id, reportedCommentHide.id, livesHide.id, livesCommentHide.id].sort(),
+    );
+    expect(actions).not.toContain(hide.id);
+    expect(actions).not.toContain(commentHide.id);
+    expect(await postOf(reportedPost.id)).toMatchObject({
+      title: '신고 대기 중인 숨긴 글',
+      purgedAt: null,
+    });
+    expect(await commentOf(reportedComment.id)).toMatchObject({
+      body: '신고 대기 중인 숨긴 댓글',
+      purgedAt: null,
+    });
+    expect(await postOf(livesPost.id)).toMatchObject({
+      title: '살아 있는 회원의 숨긴 글',
+      purgedAt: null,
+    });
+    expect(await commentOf(livesComment.id)).toMatchObject({
+      body: '살아 있는 회원의 숨긴 댓글',
+      purgedAt: null,
+    });
+    expect(await countsAt(due)).toMatchObject({
+      reports: 1,
+      hidden_posts: 1,
+      hidden_comments: 1,
+      moderation_actions: 2,
+    });
+    // It stays hidden whoever writes (migration 0042's CHECK): showing it again is refused.
+    await expect(
+      t.db.update(schema.posts).set({ hiddenAt: null }).where(eq(schema.posts.id, post.id)),
+    ).rejects.toThrow();
+    await expect(
+      t.db
+        .update(schema.postComments)
+        .set({ hiddenAt: null })
+        .where(eq(schema.postComments.id, comment.id)),
+    ).rejects.toThrow();
+  });
+
+  it('counts a withdrawn member’s hidden item from the hiding when it came after the withdrawal', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const post = await createPost(t.db, { marketId, authorId: member, title: '늦게 숨긴 글' });
+    const comment = await createComment(t.db, {
+      postId: post.id,
+      authorId: member,
+      body: '늦게 숨긴 댓글',
+    });
+    const closedAt = await closeAccount(t.db, member);
+    const hiddenAt = after(closedAt, 10);
+    await t.db.update(schema.posts).set({ hiddenAt }).where(eq(schema.posts.id, post.id));
+    await t.db
+      .update(schema.postComments)
+      .set({ hiddenAt })
+      .where(eq(schema.postComments.id, comment.id));
+    for (const item of [{ postId: post.id }, { commentId: comment.id }]) {
+      await createModerationAction(t.db, {
+        userId: member,
+        createdBy: admin,
+        ...item,
+        createdAt: hiddenAt,
+      });
+    }
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+
+    // Forty days since the withdrawal, a millisecond short of thirty since the hiding: kept.
+    await run(after(hiddenAt, 30, -1));
+    expect((await postOf(post.id)).purgedAt).toBeNull();
+    expect(await commentOf(comment.id)).toMatchObject({ body: '늦게 숨긴 댓글', purgedAt: null });
+    expect(await t.db.select().from(schema.moderationActions)).toHaveLength(2);
+    const due = after(hiddenAt, 30);
+    await run(due);
+    expect(await postOf(post.id)).toMatchObject({ title: null, purgedAt: due, hiddenAt });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '', purgedAt: due, hiddenAt });
+    expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+  });
+
+  it('keeps a withdrawn member’s hidden post and comment, and their hidings, while a report processed after the withdrawal still names the hiding, and empties them once that report has gone (ADR-0087 7-23)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const hiddenAt = before(new Date(), 10);
+    const picture = await image(member);
+    const post = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '숨긴 글',
+      imageIds: [picture.id],
+      createdAt: before(hiddenAt, 1),
+      hiddenAt,
+    });
+    const postHide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: post.id,
+      createdAt: hiddenAt,
+    });
+    const comment = await createComment(t.db, {
+      postId: (await createPost(t.db, { marketId, authorId: reporter })).id,
+      authorId: member,
+      body: '숨긴 댓글',
+      hiddenAt,
+    });
+    const commentHide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      commentId: comment.id,
+      createdAt: hiddenAt,
+    });
+    // Each hiding named by a live reporter's report processed twenty days on — after the
+    // withdrawal. The API does not write one (a hiding closes its item's pending reports at its own
+    // instant); the factory does, and the foreign key would refuse the hiding's delete.
+    const resolvedAt = after(new Date(), 20);
+    for (const [item, hide] of [
+      [{ postId: post.id }, postHide],
+      [{ commentId: comment.id }, commentHide],
+    ] as const) {
+      await createReport(t.db, {
+        reporterId: reporter,
+        reportedUserId: member,
+        ...item,
+        status: 'actioned',
+        resolvedAt,
+        resolvedBy: admin,
+        actionId: hide.id,
+      });
+    }
+    const closedAt = await closeAccount(t.db, member);
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    const actionIds = async () =>
+      (await t.db.select({ id: schema.moderationActions.id }).from(schema.moderationActions))
+        .map((row) => row.id)
+        .sort();
+
+    // The hidings are due from the withdrawal, the reports naming them are not: nothing goes, and
+    // no kind fails on the foreign key (`run`).
+    const hidingsDue = after(closedAt, 30);
+    await run(hidingsDue);
+    expect(await postOf(post.id)).toMatchObject({ title: '숨긴 글', purgedAt: null });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '숨긴 댓글', purgedAt: null });
+    expect(storage.objects.has(picture.storageKey)).toBe(true);
+    expect(await actionIds()).toEqual([postHide.id, commentHide.id].sort());
+    expect(await countsAt(hidingsDue)).toMatchObject({
+      reports: 0,
+      hidden_posts: 0,
+      hidden_comments: 0,
+      moderation_actions: 0,
+    });
+
+    // The reports' own period has passed: they go first, then the items are emptied and their
+    // hidings deleted, in the same run.
+    const due = after(resolvedAt, 30);
+    await run(due);
+    expect(await t.db.select().from(schema.reports)).toEqual([]);
+    expect(await actionIds()).toEqual([]);
+    expect(await postOf(post.id)).toMatchObject({ title: null, purgedAt: due, hiddenAt });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '', purgedAt: due, hiddenAt });
+    expect(storage.objects.has(picture.storageKey)).toBe(false);
+    expect(await countsAt(due)).toMatchObject({
+      reports: 2,
+      hidden_posts: 1,
+      hidden_comments: 1,
+      moderation_actions: 2,
+    });
+  });
+
+  it('keeps a withdrawn member’s hidden post and its hiding when the reports kind fails in the same run, and empties it on the next (ADR-0087 7-23)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const hiddenAt = before(new Date(), 200);
+    const post = await createPost(t.db, { marketId, authorId: member, title: '숨긴 글', hiddenAt });
+    const hide = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      postId: post.id,
+      createdAt: hiddenAt,
+    });
+    // As the API leaves it: the hiding resolved the post's report at its own instant.
+    await createReport(t.db, {
+      reporterId: reporter,
+      reportedUserId: member,
+      postId: post.id,
+      status: 'actioned',
+      resolvedAt: hiddenAt,
+      resolvedBy: admin,
+      actionId: hide.id,
+    });
+    const closedAt = await closeAccount(t.db, member);
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+
+    // Only the 신고·제재 period is approved: the nickname holds' transaction (1), then the reports'
+    // (2), refused — the report that names the hiding stays this run, and so do the hiding and the
+    // post it hides.
+    const now = after(closedAt, 30);
+    const outcome = await purgeExpiredRecords(failingTransaction(2), storage, { now });
+    expect(outcome.kindFailures.map(({ kind }) => kind)).toEqual(['reports']);
+    expect(await postOf(post.id)).toMatchObject({ title: '숨긴 글', purgedAt: null });
+    expect((await t.db.select().from(schema.moderationActions)).map((row) => row.id)).toEqual([
+      hide.id,
+    ]);
+    expect(await countsAt(now)).toMatchObject({ reports: 0, hidden_posts: 0 });
+
+    const next = after(now, 1);
+    await run(next);
+    expect(await t.db.select().from(schema.reports)).toEqual([]);
+    expect(await t.db.select().from(schema.moderationActions)).toEqual([]);
+    expect(await postOf(post.id)).toMatchObject({ title: null, purgedAt: next, hiddenAt });
+    expect(await countsAt(next)).toMatchObject({
+      reports: 1,
+      hidden_posts: 1,
+      moderation_actions: 1,
+    });
+  });
+
+  it('keeps a deleted original and its edit history while an account restriction request citing it waits, and empties them once it is decided or retracted (owner decision 2026-10-24 12)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const deletedAt = before(new Date(), 50);
+    // The apply's subject: a post the member deleted, with an earlier version.
+    const cited = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '요청의 근거 글',
+      deletedAt,
+    });
+    const citedRevision = await postRevision(cited.id, deletedAt);
+    const apply = await createApprovalRequest(t.db, {
+      kind: 'account_restriction',
+      targetType: 'user',
+      targetId: member,
+      payload: {
+        userId: member,
+        reason: 'abuse',
+        note: '설명',
+        days: 7,
+        subject: { type: 'post', postId: cited.id },
+        memo: null,
+      },
+      requestedBy: admin,
+    });
+    // A restriction that stands, about a comment the member deleted, with a lift asked for.
+    const comment = await createComment(t.db, {
+      postId: (await createPost(t.db, { marketId, authorId: otherAdmin })).id,
+      authorId: member,
+      body: '제한의 근거 댓글',
+      deletedAt,
+    });
+    const commentRevisionRow = await commentRevision(comment.id, deletedAt);
+    const restriction = await createModerationAction(t.db, {
+      userId: member,
+      createdBy: admin,
+      type: 'account_restriction',
+      approvedBy: otherAdmin,
+      commentId: comment.id,
+      createdAt: before(deletedAt, -1),
+      endsAt: after(new Date(), 30),
+    });
+    const lift = await createApprovalRequest(t.db, {
+      kind: 'account_restriction_lift',
+      targetType: 'moderation_action',
+      targetId: restriction.id,
+      payload: { userId: member, actionId: restriction.id },
+      requestedBy: admin,
+    });
+    // Nothing waits about this one: emptied on time.
+    const uncited = await createPost(t.db, { marketId, authorId: member, deletedAt });
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 10);
+
+    const due = after(deletedAt, 10);
+    await run(due);
+    expect((await postOf(uncited.id)).purgedAt).toEqual(due);
+    expect(await postOf(cited.id)).toMatchObject({ title: '요청의 근거 글', purgedAt: null });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '제한의 근거 댓글', purgedAt: null });
+    expect((await t.db.select().from(schema.postRevisions)).map((row) => row.id)).toEqual([
+      citedRevision.id,
+    ]);
+    expect((await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id)).toEqual([
+      commentRevisionRow.id,
+    ]);
+    expect(await countsAt(due)).toMatchObject({
+      deleted_posts: 1,
+      deleted_comments: 0,
+      post_revisions: 0,
+      comment_revisions: 0,
+    });
+
+    // The apply rejected, the lift retracted by its requester: nothing waits any more, and the
+    // period still counts from the deletion — the next run empties them.
+    await t.db
+      .update(schema.approvalRequests)
+      .set({
+        status: 'rejected',
+        decidedBy: otherAdmin,
+        decisionReason: '거절',
+        decidedAt: new Date(),
+      })
+      .where(eq(schema.approvalRequests.id, apply.id));
+    await t.db
+      .update(schema.approvalRequests)
+      .set({ status: 'retracted', retractedAt: new Date() })
+      .where(eq(schema.approvalRequests.id, lift.id));
+    const next = after(due, 1);
+    await run(next);
+    expect(await postOf(cited.id)).toMatchObject({ title: null, purgedAt: next });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '', purgedAt: next });
+    expect(await t.db.select().from(schema.postRevisions)).toEqual([]);
+    expect(await t.db.select().from(schema.postCommentRevisions)).toEqual([]);
+    expect(await countsAt(next)).toMatchObject({
+      deleted_posts: 1,
+      deleted_comments: 1,
+      post_revisions: 1,
+      comment_revisions: 1,
+    });
+  });
+
+  it('holds, for a pending apply citing a comment, that comment alone, and for a pending shorten or cancellation, the post the restriction cites, until it is decided or retracted (owner decision 2026-10-24 12)', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const deletedAt = before(new Date(), 50);
+    // The apply's subject: a comment the member deleted, under a post they deleted too, each with
+    // an earlier version. The request cites the comment alone (ADR-0087 결정 7의 6).
+    const parent = await createPost(t.db, {
+      marketId,
+      authorId: member,
+      title: '근거 댓글이 달린 글',
+      deletedAt,
+    });
+    await postRevision(parent.id, deletedAt);
+    const comment = await createComment(t.db, {
+      postId: parent.id,
+      authorId: member,
+      body: '요청의 근거 댓글',
+      deletedAt,
+    });
+    const commentRevisionRow = await commentRevision(comment.id, deletedAt);
+    const apply = await createApprovalRequest(t.db, {
+      kind: 'account_restriction',
+      targetType: 'user',
+      targetId: member,
+      payload: {
+        userId: member,
+        reason: 'abuse',
+        note: '설명',
+        days: 7,
+        // As the API writes a comment's subject (account-restrictions.service.ts, `targetOf`).
+        subject: { type: 'comment', commentId: comment.id, postId: parent.id },
+        memo: null,
+      },
+      requestedBy: admin,
+    });
+    // Two restrictions that stand, each about a post the member deleted: a shorten asked for on
+    // one, a cancellation on the other.
+    const changes = [];
+    for (const [kind, title] of [
+      ['account_restriction_shorten', '감경을 기다리는 제한의 근거 글'],
+      ['account_restriction_cancel', '취소를 기다리는 제한의 근거 글'],
+    ] as const) {
+      const post = await createPost(t.db, { marketId, authorId: member, title, deletedAt });
+      const revision = await postRevision(post.id, deletedAt);
+      const restriction = await createModerationAction(t.db, {
+        userId: member,
+        createdBy: admin,
+        type: 'account_restriction',
+        approvedBy: otherAdmin,
+        postId: post.id,
+        createdAt: before(deletedAt, -1),
+        endsAt: after(new Date(), 30),
+      });
+      const request = await createApprovalRequest(t.db, {
+        kind,
+        targetType: 'moderation_action',
+        targetId: restriction.id,
+        payload: {
+          userId: member,
+          actionId: restriction.id,
+          ...(kind === 'account_restriction_shorten'
+            ? { endsAt: after(new Date(), 10).toISOString() }
+            : {}),
+        },
+        requestedBy: admin,
+      });
+      changes.push({ post, revision, request });
+    }
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 10);
+    const revisionIds = async () =>
+      (await t.db.select({ id: schema.postRevisions.id }).from(schema.postRevisions))
+        .map((row) => row.id)
+        .sort();
+
+    const due = after(deletedAt, 10);
+    await run(due);
+    // The comment's post, which nothing cites, is emptied on time with its earlier version.
+    expect(await postOf(parent.id)).toMatchObject({ title: null, purgedAt: due });
+    expect(await commentOf(comment.id)).toMatchObject({ body: '요청의 근거 댓글', purgedAt: null });
+    expect((await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id)).toEqual([
+      commentRevisionRow.id,
+    ]);
+    for (const { post } of changes) {
+      expect(await postOf(post.id)).toMatchObject({ title: post.title, purgedAt: null });
+    }
+    expect(await revisionIds()).toEqual(changes.map(({ revision }) => revision.id).sort());
+    expect(await countsAt(due)).toMatchObject({
+      deleted_posts: 1,
+      deleted_comments: 0,
+      post_revisions: 1,
+      comment_revisions: 0,
+    });
+
+    // The apply and the shorten rejected, the cancellation retracted: the next run empties them.
+    for (const request of [apply, changes[0]!.request]) {
+      await t.db
+        .update(schema.approvalRequests)
+        .set({
+          status: 'rejected',
+          decidedBy: otherAdmin,
+          decisionReason: '거절',
+          decidedAt: new Date(),
+        })
+        .where(eq(schema.approvalRequests.id, request.id));
+    }
+    await t.db
+      .update(schema.approvalRequests)
+      .set({ status: 'retracted', retractedAt: new Date() })
+      .where(eq(schema.approvalRequests.id, changes[1]!.request.id));
+    const next = after(due, 1);
+    await run(next);
+    expect(await commentOf(comment.id)).toMatchObject({ body: '', purgedAt: next });
+    for (const { post } of changes) {
+      expect(await postOf(post.id)).toMatchObject({ title: null, purgedAt: next });
+    }
+    expect(await revisionIds()).toEqual([]);
+    expect(await t.db.select().from(schema.postCommentRevisions)).toEqual([]);
+    expect(await countsAt(next)).toMatchObject({
+      deleted_posts: 2,
+      deleted_comments: 1,
+      post_revisions: 2,
+      comment_revisions: 1,
+    });
+  });
+
   it('deletes the actions on a withdrawn member with their end changes and approvals, keeping what is in force or still named', async () => {
+    // Owner decision 2026-10-24 3 empties the items a standing hiding still hides and deletes the
+    // hiding with them (`hidden_posts`, `hidden_comments` — their own case below); owner decision
+    // 2026-10-24 1 deletes the reports the member received, so an action a report names goes with
+    // it — kept only while a report processed later than the action still names it.
     const member = (await createUser(t.db)).user.id;
     const liveReporter = (await createUser(t.db)).user.id;
     const liveMember = (await createUser(t.db)).user.id;
@@ -699,6 +1362,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       userId: member,
       createdBy: admin,
       postId: hiddenPost.id,
+      createdAt: hiddenPost.hiddenAt!,
     });
     // A standing hiding of a post its author deleted afterwards no longer hides anything.
     const deletedHidden = await createPost(t.db, {
@@ -712,8 +1376,9 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       createdBy: admin,
       postId: deletedHidden.id,
     });
-    // The same for a 댓글: a standing hiding of a live one stays (the only way to show it again),
-    // one of a 댓글 its author deleted goes.
+    // The same for a 댓글: a standing hiding of one its author did not delete goes with its emptied
+    // item (owner decision 2026-10-24 3, `hidden_comments`), one of a 댓글 its author deleted goes
+    // as a moot hiding.
     const hiddenComment = await createComment(t.db, {
       postId: post.id,
       authorId: member,
@@ -723,6 +1388,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       userId: member,
       createdBy: admin,
       commentId: hiddenComment.id,
+      createdAt: hiddenComment.hiddenAt!,
     });
     const deletedHiddenComment = await createComment(t.db, {
       postId: post.id,
@@ -742,12 +1408,25 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       postId: (await createPost(t.db, { marketId, authorId: member })).id,
       cancelled: { at: after(new Date(), 10), by: admin, reason: '탈퇴 뒤 취소' },
     });
-    const named = await createModerationAction(t.db, { userId: member, createdBy: admin });
+    // A live reporter's report the warning resolved: a report the member received, which goes at
+    // the same time (owner decision 2026-10-24 1), and the warning after it in the same run.
+    const reported = await createModerationAction(t.db, { userId: member, createdBy: admin });
     await createReport(t.db, {
       reporterId: liveReporter,
       reportedUserId: member,
       status: 'actioned',
       resolvedAt: new Date(),
+      resolvedBy: admin,
+      actionId: reported.id,
+    });
+    // One whose report was processed twenty days after the withdrawal names it until that report's
+    // own period has passed (the foreign key's guard).
+    const named = await createModerationAction(t.db, { userId: member, createdBy: admin });
+    const namingReport = await createReport(t.db, {
+      reporterId: liveReporter,
+      reportedUserId: member,
+      status: 'actioned',
+      resolvedAt: after(new Date(), 20),
       resolvedBy: admin,
       actionId: named.id,
     });
@@ -783,28 +1462,49 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 90);
 
     await run(after(closedAt, 90, -1));
-    expect(await t.db.select().from(schema.moderationActions)).toHaveLength(10);
+    expect(await t.db.select().from(schema.moderationActions)).toHaveLength(11);
 
     const due = after(closedAt, 90);
     await run(due);
     const actions = (await t.db.select().from(schema.moderationActions)).map((row) => row.id);
-    expect(actions.sort()).toEqual(
-      [standingHide.id, standingCommentHide.id, lateCancelled.id, named.id, livesAction.id].sort(),
-    );
-    expect(actions).not.toContain(warning.id);
-    expect(actions).not.toContain(cancelledHide.id);
-    expect(actions).not.toContain(restriction.id);
-    expect(actions).not.toContain(mootHide.id);
-    expect(actions).not.toContain(mootCommentHide.id);
+    expect(actions.sort()).toEqual([lateCancelled.id, named.id, livesAction.id].sort());
+    for (const gone of [
+      warning,
+      cancelledHide,
+      restriction,
+      mootHide,
+      mootCommentHide,
+      reported,
+      standingHide,
+      standingCommentHide,
+    ]) {
+      expect(actions).not.toContain(gone.id);
+    }
     const requests = (await t.db.select().from(schema.approvalRequests)).map((row) => row.id);
     expect(requests).toEqual([grant.id]);
     expect(requests).not.toContain(rejected.id);
-    // The restriction's apply and cancel approvals, and the rejected request.
-    expect(await countsAt(due)).toMatchObject({ moderation_actions: 5, approval_requests: 3 });
-    // The posts and comments the actions named stay as they are.
-    expect((await postOf(hiddenPost.id)).hiddenAt).not.toBeNull();
+    // Six actions of the step and the two hidings that went with their items; the restriction's
+    // apply and cancel approvals, and the rejected request.
+    expect(await countsAt(due)).toMatchObject({
+      moderation_actions: 8,
+      approval_requests: 3,
+      hidden_posts: 1,
+      hidden_comments: 1,
+      reports: 1,
+    });
+    // The items the standing hidings hid stay hidden, emptied; the rest stay as they are.
+    expect(await postOf(hiddenPost.id)).toMatchObject({
+      hiddenAt: hiddenPost.hiddenAt,
+      purgedAt: due,
+      title: null,
+    });
+    expect(await commentOf(hiddenComment.id)).toMatchObject({
+      hiddenAt: hiddenComment.hiddenAt,
+      purgedAt: due,
+      body: '',
+    });
     expect((await postOf(post.id)).purgedAt).toBeNull();
-    expect((await commentOf(hiddenComment.id)).hiddenAt).not.toBeNull();
+    expect((await postOf(deletedHidden.id)).purgedAt).toBeNull();
 
     // The late cancellation's period runs from the cancellation, not the withdrawal.
     const cancelledAt = lateCancelled.cancelledAt!;
@@ -816,9 +1516,17 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await run(cancelDue);
     expect(
       (await t.db.select().from(schema.moderationActions)).map((row) => row.id).sort(),
-    ).toEqual([standingHide.id, standingCommentHide.id, named.id, livesAction.id].sort());
+    ).toEqual([named.id, livesAction.id].sort());
     expect(await countsAt(cancelDue)).toMatchObject({ moderation_actions: 1 });
-    expect((await commentOf(hiddenComment.id)).hiddenAt).not.toBeNull();
+
+    // The report processed later goes once its own period has passed, and the warning it named
+    // with it.
+    const namedDue = after(namingReport.resolvedAt!, 90);
+    await run(namedDue);
+    expect((await t.db.select().from(schema.moderationActions)).map((row) => row.id)).toEqual([
+      livesAction.id,
+    ]);
+    expect(await countsAt(namedDue)).toMatchObject({ reports: 1, moderation_actions: 1 });
   });
 
   it('keeps every record of a live member however old', async () => {
@@ -998,9 +1706,9 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     const due = after(closedAt, 3);
     await run(due, 3);
     expect((await purgeRecords()).filter((row) => row.kind === 'consent_records')).toEqual([
-      { kind: 'consent_records', count: 3, periodDays: 3, ranAt: due },
-      { kind: 'consent_records', count: 3, periodDays: 3, ranAt: due },
-      { kind: 'consent_records', count: 2, periodDays: 3, ranAt: due },
+      { kind: 'consent_records', count: 3, periodDays: 3, ranAt: due, outcome: 'done' },
+      { kind: 'consent_records', count: 3, periodDays: 3, ranAt: due, outcome: 'done' },
+      { kind: 'consent_records', count: 2, periodDays: 3, ranAt: due, outcome: 'done' },
     ]);
     expect(await t.db.select().from(schema.consentRecords)).toEqual([]);
   });
@@ -1062,9 +1770,9 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect((await postOf(post.id)).purgedAt).not.toBeNull();
     expect(await t.db.select().from(schema.consentRecords)).toEqual([]);
     expect(await t.db.select().from(schema.phoneVerificationCodes)).toEqual([]);
-    // The purge records name no person: kind, count, period and instant only.
+    // The purge records name no person: kind, count, period, instant and outcome only.
     const columns = Object.keys((await t.db.select().from(schema.retentionPurges))[0]!);
-    expect(columns.sort()).toEqual(['count', 'id', 'kind', 'periodDays', 'ranAt']);
+    expect(columns.sort()).toEqual(['count', 'id', 'kind', 'outcome', 'periodDays', 'ranAt']);
   });
 
   it('reports an object the store would not remove and goes on (its row is gone)', async () => {
@@ -1088,19 +1796,15 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await mediaIds()).toEqual([]);
   });
 
-  it('goes on past a kind that fails, reporting it, and records no 0 for it', async () => {
-    const id = (await createUser(t.db)).user.id;
-    await createConsents(t.db, { userId: id });
-    const closedAt = await closeAccount(t.db, id);
-    await setPeriod(CONSENT_RECORDS_RETENTION_SETTING, 1);
-    // The first transaction of the run — the nickname holds' — is refused.
+  /** `t.db` with its `failing`-th transaction refused (counted from 1), the others as they are. */
+  function failingTransaction(failing: number) {
     let calls = 0;
-    const failing = new Proxy(t.db, {
+    return new Proxy(t.db, {
       get(target, property, receiver) {
         if (property === 'transaction') {
           return (...args: Parameters<typeof target.transaction>) => {
             calls += 1;
-            return calls === 1
+            return calls === failing
               ? Promise.reject(new Error('could not serialize access'))
               : target.transaction(...args);
           };
@@ -1108,13 +1812,56 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
         return Reflect.get(target, property, receiver) as unknown;
       },
     });
+  }
+
+  it('goes on past a kind that fails, reporting it and recording it as failed (0, the run’s instant) in place of its 0', async () => {
+    const id = (await createUser(t.db)).user.id;
+    await createConsents(t.db, { userId: id });
+    const closedAt = await closeAccount(t.db, id);
+    await setPeriod(CONSENT_RECORDS_RETENTION_SETTING, 1);
+    // The first transaction of the run — the nickname holds' — is refused.
     const now = after(closedAt, 1);
-    const outcome = await purgeExpiredRecords(failing, storage, { now });
-    expect(outcome.kindFailures.map(({ kind, message }) => ({ kind, message }))).toEqual([
-      { kind: 'nickname_holds', message: 'could not serialize access' },
-    ]);
+    const outcome = await purgeExpiredRecords(failingTransaction(1), storage, { now });
+    expect(
+      outcome.kindFailures.map(({ kind, message, recorded }) => ({ kind, message, recorded })),
+    ).toEqual([{ kind: 'nickname_holds', message: 'could not serialize access', recorded: true }]);
     expect(await t.db.select().from(schema.consentRecords)).toEqual([]);
-    expect((await purgeRecords()).map((row) => row.kind)).toEqual(['consent_records']);
+    // Owner decision 2026-10-24 14: the failure is in the records, with the period, the run's
+    // instant and no count, where a kind that finished looking has its 0.
+    expect(await purgeRecords()).toEqual([
+      { kind: 'nickname_holds', count: 0, periodDays: 30, ranAt: now, outcome: 'failed' },
+      { kind: 'consent_records', count: 4, periodDays: 1, ranAt: now, outcome: 'done' },
+    ]);
+  });
+
+  it('records a kind that fails after a batch committed: the batch as done, then the failure', async () => {
+    const users = [];
+    for (let i = 0; i < 2; i += 1) {
+      const id = (await createUser(t.db)).user.id;
+      await createConsents(t.db, { userId: id });
+      users.push(id);
+    }
+    let closedAt = new Date(0);
+    for (const id of users) closedAt = await closeAccount(t.db, id);
+    await setPeriod(CONSENT_RECORDS_RETENTION_SETTING, 3);
+    const now = after(closedAt, 3);
+    // Transactions: the nickname holds' (1), then the consent records' first batch of 3 (2) and
+    // its second (3), refused.
+    const outcome = await purgeExpiredRecords(failingTransaction(3), storage, { now, batch: 3 });
+    expect(outcome.kindFailures.map(({ kind }) => kind)).toEqual(['consent_records']);
+    expect((await purgeRecords()).filter((row) => row.kind === 'consent_records')).toEqual([
+      { kind: 'consent_records', count: 3, periodDays: 3, ranAt: now, outcome: 'done' },
+      { kind: 'consent_records', count: 0, periodDays: 3, ranAt: now, outcome: 'failed' },
+    ]);
+    expect(await t.db.select().from(schema.consentRecords)).toHaveLength(5);
+    expect(outcome.kinds.find((kind) => kind.kind === 'consent_records')).toMatchObject({
+      deleted: 3,
+    });
+    // The next run tries again and finishes it.
+    const next = after(now, 1);
+    await run(next);
+    expect(await t.db.select().from(schema.consentRecords)).toEqual([]);
+    expect(await countsAt(next)).toEqual({ consent_records: 5 });
   });
 
   it('runs on the database clock by default, not the worker’s', async () => {
@@ -1128,7 +1875,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
       expect(outcome.ranAt.getTime()).toBeGreaterThanOrEqual(start.getTime());
       expect(outcome.ranAt.getTime()).toBeLessThanOrEqual(end.getTime());
       expect(await purgeRecords()).toEqual([
-        { kind: 'nickname_holds', count: 0, periodDays: 30, ranAt: outcome.ranAt },
+        { kind: 'nickname_holds', count: 0, periodDays: 30, ranAt: outcome.ranAt, outcome: 'done' },
       ]);
     } finally {
       vi.useRealTimers();

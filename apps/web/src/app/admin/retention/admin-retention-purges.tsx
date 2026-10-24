@@ -1,6 +1,15 @@
 'use client';
 
-import { Alert, Button, HStack, Link as ChakraLink, Skeleton, Stack, Text } from '@chakra-ui/react';
+import {
+  Alert,
+  Badge,
+  Button,
+  HStack,
+  Link as ChakraLink,
+  Skeleton,
+  Stack,
+  Text,
+} from '@chakra-ui/react';
 import NextLink from 'next/link';
 import { copy } from '@/copy';
 import { useRetentionPurges } from '@/hooks/use-admin-retention';
@@ -20,12 +29,14 @@ import {
  * nothing due) and the period it applied, at the run's instant in Seoul. Read-only. Which kinds a
  * run processes is the release settings' (`/admin/settings` — only an approved period deletes,
  * ADR-0069 decision 7), so the screen says so above the list with the way there. A kind missing
- * from a run is one whose period was not approved then — or one whose first batch failed: a failed
- * batch rolls back with its record and the kind writes no 0, so it shows no line, or only what its
- * earlier batches deleted. The failure is in the worker's log ('retention purge kind failed') and
- * the job's result alone, and the next day's run tries the kind again (ADR-0087 결정 4); the notice
- * says so too. 20 records per page with 더 보기 (A-M2-5), each page completed to the end of its last
- * run by the API, so every run shows whole.
+ * from a run is usually one whose period was not approved then. A kind the run gave up on — a
+ * batch's transaction rejected and rolled back — has its line marked 실패 beside its name, with
+ * what its earlier batches deleted as '오류 전까지 N건' (owner decision 2026-10-24 14: the `failed`
+ * record), and the next day's run tries it again (ADR-0087 결정 4); the notice says so too. A
+ * failure the database would not even record (ADR-0087 7-21) leaves the kind without a line, or
+ * with what its earlier batches deleted and no 실패 — the notice's last sentence says that as well.
+ * 20 records per page with 더 보기 (A-M2-5), each page completed to the end of its last run by the
+ * API, so every run shows whole.
  */
 export function AdminRetentionPurges() {
   const purges = useRetentionPurges();
@@ -86,8 +97,10 @@ export function AdminRetentionPurges() {
 }
 
 /**
- * One run: its instant, then a line per kind — the name, the count and the period — wrapping
- * rather than scrolling sideways at phone width.
+ * One run: its instant, then a line per kind — the name with 실패 beside it for a kind it gave up
+ * on, then the count ('오류 전까지 N건' for that kind, so the badge is not the word before the
+ * number, on screen or read aloud) and the period — wrapping rather than scrolling sideways at
+ * phone width.
  */
 function RunRow({ run }: { run: RetentionRun }) {
   return (
@@ -114,16 +127,23 @@ function RunRow({ run }: { run: RetentionRun }) {
             fontSize="sm"
             data-testid={`admin-retention-kind-${line.kind}`}
           >
-            <Text fontWeight="medium" minW="0" wordBreak="keep-all">
-              {line.label}
-            </Text>
-            <HStack gap="3" flexWrap="wrap">
+            <HStack gap="2" flexWrap="wrap" minW="0" data-testid="admin-retention-label">
+              <Text fontWeight="medium" minW="0" wordBreak="keep-all">
+                {line.label}
+              </Text>
+              {line.failed && (
+                <Badge colorPalette="red" variant="subtle" data-testid="admin-retention-failed">
+                  {copy.adminRetentionFailed}
+                </Badge>
+              )}
+            </HStack>
+            <HStack gap="3" flexWrap="wrap" data-testid="admin-retention-figures">
               <Text
                 fontWeight="semibold"
                 fontVariantNumeric="tabular-nums"
                 data-testid="admin-retention-count"
               >
-                {retentionCountText(line.count)}
+                {retentionCountText(line.count, line.failed)}
               </Text>
               <Text color="fg.muted" data-testid="admin-retention-period">
                 {retentionPeriodText(line.periodDays)}

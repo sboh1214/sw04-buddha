@@ -199,7 +199,7 @@ const retentionDaysSchema = z.number().int().min(1).max(RETENTION_PERIOD_MAX_DAY
  * for all of them.
  */
 const RETENTION_RULES =
-  '상태가 승인됨일 때만 지우고, 미정·설계 제안·시험값이면 지우지 않는다(보존된다). 매일 한 번 처리하고 바꾼 값은 그 뒤의 처리부터 적용한다. 처리마다 종류·건수·시각을 운영 기록으로 남긴다.';
+  '상태가 승인됨일 때만 지우고, 미정·설계 제안·시험값이면 지우지 않는다(보존된다). 매일 한 번 처리하고 바꾼 값은 그 뒤의 처리부터 적용한다. 처리마다 종류·건수·시각을 운영 기록으로 남기고, 오류로 끝내지 못한 종류는 실패로 남긴다.';
 
 /**
  * 동의 기록의 보존기간 (#184): a withdrawn account's consent records (`consent_records`, ADR-0072 —
@@ -235,30 +235,35 @@ export const PHONE_VERIFICATION_RECORDS_RETENTION_SETTING = defineReleaseSetting
  * images only it used; and, with the same period (ADR-0069 decision 7), each operator-only earlier
  * version of a post or a comment, deleted once the period has passed since an edit replaced it,
  * whether or not the author withdrew, with the images only those versions used. Nothing about an
- * item a pending report is about is deleted.
+ * item a pending report is about, or a pending account restriction request cites, is deleted until
+ * it is processed, decided or retracted (owner decisions 2026-10-24 4 and 12); the period still
+ * counts from the deletion or the replacement.
  */
 export const DELETED_POSTS_RETENTION_SETTING = defineReleaseSetting({
   key: 'retention.deleted_posts',
   label: '지운 글 원문·수정 이력 보존기간',
   unit: '일',
-  description: `작성자가 지운 근거 글·댓글·대댓글의 원문(그것만 쓰던 이미지 포함)을 지운 시각부터(탈퇴한 작성자는 탈퇴 시각부터), 글·댓글의 운영자 전용 수정 이력(이전 내용과 그것만 쓰던 이미지)을 바뀐 시각부터 이 기간이 지나면 지운다(#184). 처리 중인 신고가 있는 글·댓글의 것은 지우지 않는다. ${RETENTION_RULES}`,
+  description: `작성자가 지운 근거 글·댓글·대댓글의 원문(그것만 쓰던 이미지 포함)을 지운 시각부터(탈퇴한 작성자는 탈퇴 시각부터), 글·댓글의 운영자 전용 수정 이력(이전 내용과 그것만 쓰던 이미지)을 바뀐 시각부터 이 기간이 지나면 지운다(#184). 처리 중인 신고가 있는 글·댓글과 결정을 기다리는 계정 제한 요청이 근거로 든 글·댓글의 것은 신고가 처리되거나 요청이 결정·철회될 때까지 지우지 않는다(기간은 그대로 지운 시각·바뀐 시각부터 센다). ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
 });
 
 /**
- * 신고·제재 기록의 보존기간 (#184): the reports a withdrawn account sent, and the actions on a
- * withdrawn member (warnings, hidings, the profile actions — nickname reset, 소개 clearing, image
- * removal — and writing and account restrictions, with their end changes and their approval
- * requests), deleted once this period has passed since the later of the withdrawal and the
- * processing (ADR-0069 decision 7). A pending one, and an action still in force, are kept. A live
- * account's records are kept. What a profile action took away is the removed items' period
- * (REMOVED_PROFILE_ITEMS_RETENTION_SETTING); its action stays while that is kept.
+ * 신고·제재 기록의 보존기간 (#184): the reports a withdrawn account sent or a withdrawn member received
+ * (owner decision 2026-10-24 1), and the actions on a withdrawn member (warnings, hidings, the
+ * profile actions — nickname reset, 소개 clearing, image removal — and writing and account
+ * restrictions, with their end changes and their approval requests), deleted once this period has
+ * passed since the later of the withdrawal and the processing (ADR-0069 decision 7). A withdrawn
+ * member's post or comment an operator still hides is emptied then, as a deleted original is, and
+ * its hiding deleted with it — it stays hidden (owner decision 2026-10-24 3). A pending one, and a
+ * restriction that has not ended, are kept; so are a live member's actions and the reports between
+ * live accounts (owner decision 2026-10-24 2). What a profile action took away is the removed
+ * items' period (REMOVED_PROFILE_ITEMS_RETENTION_SETTING); its action stays while that is kept.
  */
 export const MODERATION_RECORDS_RETENTION_SETTING = defineReleaseSetting({
   key: 'retention.moderation_records',
   label: '신고·제재 기록 보존기간',
   unit: '일',
-  description: `탈퇴한 계정이 낸 신고와 탈퇴한 회원이 받은 조치(경고·숨김·닉네임 강제 변경·소개 비우기·프로필 이미지 삭제·작성 제한·계정 제한과 그 감경·해제·승인 요청)를 탈퇴 시각과 처리 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#184). 프로필 조치가 가져간 항목 자체는 '운영자가 지운 프로필 항목 보존기간'을 따르고, 그 항목이 남아 있는 동안 조치도 남는다. 처리 중인 신고·요청과 효력이 있는 조치는 지우지 않는다. 탈퇴하지 않은 계정의 기록은 지우지 않는다. ${RETENTION_RULES}`,
+  description: `탈퇴한 계정이 낸 신고, 탈퇴한 회원이 받은 신고와 조치(경고·숨김·닉네임 강제 변경·소개 비우기·프로필 이미지 삭제·작성 제한·계정 제한과 그 감경·해제·승인 요청)를 탈퇴 시각과 처리 시각 가운데 늦은 쪽부터 이 기간이 지나면 지운다(#184). 탈퇴한 회원의 글·댓글 가운데 운영자가 숨긴 채로 남은 것은 지운 원문처럼 내용을 비우고(글은 계속 숨긴 채) 그 숨김 조치도 지운다. 프로필 조치가 가져간 항목 자체는 '운영자가 지운 프로필 항목 보존기간'을 따르고, 그 항목이 남아 있는 동안 조치도 남는다. 처리 중인 신고·요청이 있는 것과 끝나지 않은 제한은 지우지 않는다. 탈퇴하지 않은 회원이 받은 조치와 탈퇴하지 않은 계정끼리의 신고는 지우지 않는다. ${RETENTION_RULES}`,
   schema: retentionDaysSchema,
 });
 

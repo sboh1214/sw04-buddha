@@ -41,9 +41,11 @@ import { posts } from './posts.js';
  *   comment page finds the deleted 댓글 still in view — those that 대댓글 hang under — without
  *   walking those that left every view (Codex review on PR #220, ADR-0074 decision 2 and 7-31).
  * - `purged_at`: #184's retention emptied the deleted original once its period had passed (the
- *   deletion's, or the withdrawal's for a withdrawn author): the body is '' from then on. The row
- *   stays, as a post's does (its 대댓글, likes, reports and actions name it). Set once, never
- *   cleared (the CHECKs and migration 0042's `post_comments_keep_purged`).
+ *   deletion's, or the withdrawal's for a withdrawn author) — or a withdrawn author's comment an
+ *   operator still hides, as a post (owner decision 2026-10-24 3): the body is '' from then on.
+ *   The row stays, as a post's does (its 대댓글, likes, reports and actions name it). Set once,
+ *   never cleared (the CHECKs and migration 0042's `post_comments_keep_purged`); one emptied while
+ *   hidden and not deleted stays hidden (the CHECK).
  * - `is_reply` and `parent_is_reply`: generated, for the parent's foreign key only.
  *
  * The post and the author are RESTRICT, as a post's market and author are: nothing here is ever
@@ -83,7 +85,7 @@ export const postComments = pgTable(
   (t) => [
     /**
      * A comment has text: the API trims the body and refuses a blank one. Only #184's emptying of a
-     * deleted original leaves none.
+     * deleted or a hidden original leaves none.
      */
     check('post_comments_body_check', sql`btrim(${t.body}) <> '' OR ${t.purgedAt} IS NOT NULL`),
     /**
@@ -94,15 +96,22 @@ export const postComments = pgTable(
       'post_comments_parent_created_at_check',
       sql`(${t.parentId} IS NULL) = (${t.parentCreatedAt} IS NULL)`,
     ),
-    /** Only a deleted comment is emptied (#184), not before its deletion, and then to nothing. */
+    /**
+     * Only a deleted or a hidden comment is emptied (#184), not before its deletion or its hiding,
+     * and then to nothing. One emptied while hidden and not deleted stays hidden.
+     */
     check(
       'post_comments_purged_check',
-      sql`${t.purgedAt} IS NULL OR (${t.deletedAt} IS NOT NULL AND ${t.purgedAt} >= ${t.deletedAt} AND ${t.body} = '')`,
+      sql`${t.purgedAt} IS NULL OR (((${t.deletedAt} IS NOT NULL AND ${t.purgedAt} >= ${t.deletedAt}) OR (${t.hiddenAt} IS NOT NULL AND ${t.purgedAt} >= ${t.hiddenAt})) AND ${t.body} = '')`,
     ),
     /** #184's scan: the deleted originals not emptied yet, the oldest deletion first. */
     index('post_comments_unpurged_deleted_at_idx')
       .on(t.deletedAt)
       .where(sql`${t.deletedAt} IS NOT NULL AND ${t.purgedAt} IS NULL`),
+    /** #184's scan: the hidden comments not deleted nor emptied yet, the oldest hiding first. */
+    index('post_comments_unpurged_hidden_at_idx')
+      .on(t.hiddenAt)
+      .where(sql`${t.hiddenAt} IS NOT NULL AND ${t.deletedAt} IS NULL AND ${t.purgedAt} IS NULL`),
     /** The key the parent's foreign key references: the primary key alone cannot carry the rule. */
     unique('post_comments_post_id_id_created_at_is_reply_unique').on(
       t.postId,

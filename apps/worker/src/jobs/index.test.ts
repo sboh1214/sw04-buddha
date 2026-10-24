@@ -390,7 +390,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     );
   });
 
-  it('retention.purge logs a kind that failed, one error line, and goes on (#184)', async () => {
+  it('retention.purge logs a kind that failed, one error line, records it and goes on (#184)', async () => {
     // The run's first transaction — the nickname holds' batch — is refused.
     let calls = 0;
     const failing = new Proxy(t.db, {
@@ -411,7 +411,7 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       kindFailures: unknown[];
     };
     expect(result.kindFailures).toEqual([
-      { kind: 'nickname_holds', message: 'could not serialize access' },
+      { kind: 'nickname_holds', message: 'could not serialize access', recorded: true },
     ]);
     expect(JSON.parse(JSON.stringify(result))).toEqual(result);
     expect(logs.filter((line) => line.msg === 'retention purge kind failed')).toEqual([
@@ -421,9 +421,40 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
         err: expect.objectContaining({ message: 'could not serialize access' }) as unknown,
       }),
     ]);
+    expect(logs.filter((line) => line.msg === 'retention purge failure not recorded')).toEqual([]);
     expect(logs.filter((line) => line.msg === 'retention purge').map((line) => line.level)).toEqual(
       [30],
     );
+  });
+
+  it('retention.purge logs, on a line of its own, a failure the database would not record either (#184)', async () => {
+    // The nickname holds' batch is refused, and so is every insert — the failure's record too.
+    const failing = new Proxy(t.db, {
+      get(target, property, receiver) {
+        if (property === 'transaction') {
+          return () => Promise.reject(new Error('could not serialize access'));
+        }
+        if (property === 'insert') {
+          return () => ({ values: () => Promise.reject(new Error('connection lost')) });
+        }
+        return Reflect.get(target, property, receiver) as unknown;
+      },
+    });
+    const processor = createProcessor({ ...deps, db: failing });
+    const result = (await processor(job({ name: JOB_NAMES.retentionPurge }))) as {
+      kindFailures: unknown[];
+    };
+    expect(result.kindFailures).toEqual([
+      { kind: 'nickname_holds', message: 'could not serialize access', recorded: false },
+    ]);
+    expect(logs.filter((line) => line.msg === 'retention purge failure not recorded')).toEqual([
+      expect.objectContaining({
+        kind: 'nickname_holds',
+        level: 50,
+        err: expect.objectContaining({ message: 'connection lost' }) as unknown,
+      }),
+    ]);
+    expect(await t.db.select().from(schema.retentionPurges)).toEqual([]);
   });
 
   it('ledger.audit runs on the audit connection and reports the mismatch count', async () => {

@@ -62,11 +62,12 @@ import {
  * The moderation pages of a 근거 글 and of a 댓글 or 대댓글 (#50, ADR-0081; #50 guidance: «target
  * detail (content incl. deleted original and revision history, reporter count, past actions on the
  * user), action dialogs with required reason»): the item whatever its state — the deleted original
- * (until #184's retention empties it once its period has passed: then that it was emptied, and
- * when) and a hidden one too, its images at their operator address (`adminMediaPath`) — its earlier
- * versions (#45-4) still kept, the reports on it with their reporters, the actions about it and
- * every action its author received — and, on a post's page, every comment under it with the way to
- * its own page (`CommentRows`), reported or not. The actions, chosen by the violation's weight
+ * and a hidden one too (until #184's retention empties it once its period has passed — a hidden
+ * one only a withdrawn member's, owner decision 2026-10-24 3: then that it was emptied, and when),
+ * its images at their operator address (`adminMediaPath`) — its earlier versions (#45-4) still
+ * kept, the reports on it with their reporters, the actions about it and every action its author
+ * received — and, on a post's page, every comment under it with the way to its own page
+ * (`CommentRows`), reported or not. The actions, chosen by the violation's weight
  * (#45-11): 숨기기 (while it is public), 경고 (about this item or about nothing in particular), 작성 제한 of
  * its author (#185, ADR-0082 — a term and a reason, about this item, whose pending reports it
  * resolves, or nothing in particular), the request of its author's 계정 제한 (#139, ADR-0085 —
@@ -106,9 +107,11 @@ function StateBadge({
 }
 
 /**
- * The item's times: written, edited, deleted by its author, hidden by an operator — and, once its
- * retention period had passed since the deletion, when #184's retention emptied the deleted
- * original (`purgedAt`).
+ * The item's times: written, edited, deleted by its author, hidden by an operator — and when #184's
+ * retention emptied it (`purgedAt`): a deleted original once its period had passed since the
+ * deletion, or a withdrawn member's item an operator still hides once the 신고·제재 period had
+ * passed since the later of the withdrawal and the hiding (owner decision 2026-10-24 3 — it stays
+ * hidden, its hiding's action deleted).
  */
 function Times({
   item,
@@ -143,9 +146,10 @@ function Times({
 }
 
 /**
- * In place of a deleted original #184's retention emptied: that it is gone. The row stays — the
- * comments, likes, reports and actions that name it keep naming it — with no title, text or image
- * (`posts_purged_check`, `post_comments_purged_check`), and nothing brings it back.
+ * In place of a deleted or a still-hidden original #184's retention emptied: that it is gone. The
+ * row stays — the comments, likes, reports and actions that name it keep naming it — with no
+ * title, text or image (`posts_purged_check`, `post_comments_purged_check`), and nothing brings it
+ * back.
  */
 function PurgedNotice() {
   return (

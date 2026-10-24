@@ -1,8 +1,9 @@
 /**
  * 경과 처리 기록 over HTTP (#184, ADR-0069 decision 4 #184 «종류·건수·시각을 운영 기록으로 남긴다»,
  * ADR-0087), against the docker `test` profile: an admin reads what the worker's retention purge
- * recorded — kind, count, the period applied and the run's instant, newest run first, page by page —
- * and nothing about whose; a member and a visitor read nothing (admin-access.test.ts checks the
+ * recorded — kind, count, the period applied, the run's instant and its outcome (a kind the run
+ * gave up on is `failed`, owner decision 2026-10-24 14), newest run first, page by page — and
+ * nothing about whose; a member and a visitor read nothing (admin-access.test.ts checks the
  * guards of every /admin route as well). The purge itself is the worker's (retention-purge.test.ts),
  * so the records are written here as it writes them.
  */
@@ -59,25 +60,51 @@ describe.skipIf(!hasTestInfra)(
         { kind: 'consent_records', count: 0, periodDays: 365, ranAt: earlier },
         { kind: 'nickname_holds', count: 0, periodDays: 30, ranAt: later },
         { kind: 'consent_records', count: 8, periodDays: 365, ranAt: later },
-        { kind: 'deleted_posts', count: 1, periodDays: 90, ranAt: later },
+        { kind: 'deleted_posts', count: 0, periodDays: 90, ranAt: later, outcome: 'failed' },
       ]);
       const first = await read('?limit=3');
       expect(first.statusCode).toBe(200);
       const body = first.json<{ data: RetentionPurge[]; meta: { nextCursor: string | null } }>();
       for (const item of body.data) retentionPurgeSchema.parse(item);
       // Within a run, the last written first.
+      // The kind the run gave up on says so; the rest were done.
       expect(
-        body.data.map(({ kind, count, periodDays, ranAt }) => ({ kind, count, periodDays, ranAt })),
+        body.data.map(({ kind, count, periodDays, ranAt, outcome }) => ({
+          kind,
+          count,
+          periodDays,
+          ranAt,
+          outcome,
+        })),
       ).toEqual([
-        { kind: 'deleted_posts', count: 1, periodDays: 90, ranAt: later.toISOString() },
-        { kind: 'consent_records', count: 8, periodDays: 365, ranAt: later.toISOString() },
-        { kind: 'nickname_holds', count: 0, periodDays: 30, ranAt: later.toISOString() },
+        {
+          kind: 'deleted_posts',
+          count: 0,
+          periodDays: 90,
+          ranAt: later.toISOString(),
+          outcome: 'failed',
+        },
+        {
+          kind: 'consent_records',
+          count: 8,
+          periodDays: 365,
+          ranAt: later.toISOString(),
+          outcome: 'done',
+        },
+        {
+          kind: 'nickname_holds',
+          count: 0,
+          periodDays: 30,
+          ranAt: later.toISOString(),
+          outcome: 'done',
+        },
       ]);
-      // Kind, count, period and instant: nothing about whose.
+      // Kind, count, period, instant and outcome: nothing about whose.
       expect(Object.keys(body.data[0]!).sort()).toEqual([
         'count',
         'id',
         'kind',
+        'outcome',
         'periodDays',
         'ranAt',
       ]);

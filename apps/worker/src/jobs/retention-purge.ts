@@ -1,5 +1,6 @@
 import { getReleaseSetting, schema, type Db } from '@buddha/db';
 import {
+  ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   NICKNAME_HOLD_PURGE_DAYS,
   RELEASE_SETTINGS,
   RETENTION_PERIOD_SETTINGS,
@@ -55,13 +56,20 @@ export interface RetentionKindOutcome {
   deleted: number;
 }
 
-/** A kind the run gave up on: a batch's transaction rejected, and the run moved on. */
+/**
+ * A kind the run gave up on: a batch's transaction rejected, and the run moved on. Recorded as a
+ * `failed` purge record of 0 (owner decision 2026-10-24 14), unless that write failed too.
+ */
 export interface RetentionKindFailure {
   kind: RetentionPurgeKind;
   /** `messageOf(err)`: the job result is JSON. */
   message: string;
   /** The thrown value itself, for the log line. */
   err: unknown;
+  /** Whether its `failed` record was written (`retention_purges.outcome`). */
+  recorded: boolean;
+  /** Why it was not: the thrown value, for its own log line; null when it was. */
+  recordErr: unknown;
 }
 
 export interface RetentionPurgeOutcome {
@@ -101,11 +109,35 @@ type Step = (tx: Tx, window: Window) => Promise<Batch>;
 
 const ts = (date: Date) => sql`${date.toISOString()}::timestamptz`;
 
-/** No report about the item `column` names (a post's or a comment's id) is waiting to be processed. */
-function noPendingReport(on: 'post' | 'comment', column: SQLWrapper): SQL {
-  const { reports } = schema;
-  const target = on === 'post' ? reports.postId : reports.commentId;
-  return sql`NOT EXISTS (SELECT 1 FROM ${reports} WHERE ${target} = ${column} AND ${reports.status} = 'pending')`;
+/**
+ * The kinds of a request to change an account restriction that stands (#139): what it cites is the
+ * restriction's.
+ */
+const RESTRICTION_CHANGE_KINDS = [
+  ACCOUNT_RESTRICTION_APPROVAL_KINDS.shorten,
+  ACCOUNT_RESTRICTION_APPROVAL_KINDS.lift,
+  ACCOUNT_RESTRICTION_APPROVAL_KINDS.cancel,
+];
+
+/**
+ * Nothing about the item `column` names (a post's or a comment's id) is waiting: no report about it
+ * to be processed (ADR-0069 decision 7 «처리 전에는 지우지 않는다»; owner decision 2026-10-24 4), and
+ * no account restriction request (#139) to be decided that cites it — an apply whose subject it is
+ * (`payload.subject`, the member's post or comment as the API wrote it), or a shorten, lift or
+ * cancellation of a restriction about it (`moderation_actions.post_id` / `comment_id`): owner
+ * decision 2026-10-24 12 «결정될 때까지 남김». A decision or a retraction ends the wait (the request
+ * is no longer `pending`); the period still counts from the deletion or the replacement.
+ */
+function nothingAwaits(on: 'post' | 'comment', column: SQLWrapper): SQL {
+  const { reports, approvalRequests: requests, moderationActions: actions } = schema;
+  const reported = on === 'post' ? reports.postId : reports.commentId;
+  const cited = on === 'post' ? actions.postId : actions.commentId;
+  const subjectId = on === 'post' ? 'postId' : 'commentId';
+  return and(
+    sql`NOT EXISTS (SELECT 1 FROM ${reports} WHERE ${reported} = ${column} AND ${reports.status} = 'pending')`,
+    sql`NOT EXISTS (SELECT 1 FROM ${requests} WHERE ${requests.kind} = ${ACCOUNT_RESTRICTION_APPROVAL_KINDS.apply} AND ${requests.status} = 'pending' AND ${requests.payload} -> 'subject' ->> 'type' = ${on} AND ${requests.payload} -> 'subject' ->> ${subjectId} = ${column}::text)`,
+    sql`NOT EXISTS (SELECT 1 FROM ${requests} JOIN ${actions} ON ${actions.id}::text = ${requests.targetId} WHERE ${inArray(requests.kind, RESTRICTION_CHANGE_KINDS)} AND ${requests.targetType} = 'moderation_action' AND ${requests.status} = 'pending' AND ${cited} = ${column})`,
+  )!;
 }
 
 /**
@@ -176,9 +208,9 @@ const nicknameHolds: Step = async (tx, { cutoff, limit }) => {
 /**
  * Earlier versions of posts (#45-4) replaced at or before the cutoff — counted from the replacement
  * whatever became of the author (ADR-0069 decision 7) — then the images only they used. Not while a
- * report about the post waits: its processing reads them (decision 7 «처리 전에는 지우지 않는다»).
- * buddha_app holds no UPDATE of the table, so no row lock: nothing else ever changes or deletes a
- * version, and the job runs one at a time.
+ * report about the post or an account restriction request citing it waits: its processing or its
+ * decision reads them (`nothingAwaits`). buddha_app holds no UPDATE of the table, so no row lock:
+ * nothing else ever changes or deletes a version, and the job runs one at a time.
  */
 const postRevisions: Step = async (tx, { cutoff, limit }) => {
   const { postRevisions: revisions } = schema;
@@ -190,7 +222,7 @@ const postRevisions: Step = async (tx, { cutoff, limit }) => {
         tx
           .select({ id: revisions.id })
           .from(revisions)
-          .where(and(lte(revisions.replacedAt, cutoff), noPendingReport('post', revisions.postId)))
+          .where(and(lte(revisions.replacedAt, cutoff), nothingAwaits('post', revisions.postId)))
           .orderBy(asc(revisions.replacedAt), asc(revisions.id))
           .limit(limit),
       ),
@@ -214,7 +246,7 @@ const commentRevisions: Step = async (tx, { cutoff, limit }) => {
           .select({ id: revisions.id })
           .from(revisions)
           .where(
-            and(lte(revisions.replacedAt, cutoff), noPendingReport('comment', revisions.commentId)),
+            and(lte(revisions.replacedAt, cutoff), nothingAwaits('comment', revisions.commentId)),
           )
           .orderBy(asc(revisions.replacedAt), asc(revisions.id))
           .limit(limit),
@@ -229,11 +261,40 @@ const commentRevisions: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
+ * Empties `ids` in place (#184): no title, an empty document, text and image list, and when
+ * (`purged_at`, the run's instant — migration 0042's CHECK holds the rest empty from then on).
+ */
+async function emptyPosts(tx: Tx, ids: string[], now: Date): Promise<void> {
+  if (ids.length === 0) return;
+  const { posts } = schema;
+  await tx
+    .update(posts)
+    .set({
+      title: null,
+      body: { type: 'doc', content: [] },
+      bodyText: '',
+      imageIds: [],
+      purgedAt: now,
+    })
+    .where(inArray(posts.id, ids));
+}
+
+/** Empties the comments `ids` in place, as `emptyPosts`: an empty body and when. */
+async function emptyComments(tx: Tx, ids: string[], now: Date): Promise<void> {
+  if (ids.length === 0) return;
+  const { postComments } = schema;
+  await tx
+    .update(postComments)
+    .set({ body: '', purgedAt: now })
+    .where(inArray(postComments.id, ids));
+}
+
+/**
  * Deleted posts (#45-5) whose period has passed since the deletion — since the withdrawal for a
  * withdrawn author (decision 4 #184: the later of the two, GREATEST ignoring a NULL `closed_at`) —
  * emptied in place, then the images only they used. The row stays: comments under it, likes,
  * reports and actions name it, and the public placeholder reads `deleted_at`. Not while a report
- * about it waits.
+ * about it or an account restriction request citing it waits (`nothingAwaits`).
  */
 const deletedPosts: Step = async (tx, { cutoff, now, limit }) => {
   const { posts, profiles } = schema;
@@ -247,25 +308,14 @@ const deletedPosts: Step = async (tx, { cutoff, now, limit }) => {
         isNull(posts.purgedAt),
         lte(posts.deletedAt, cutoff),
         sql`GREATEST(${posts.deletedAt}, ${profiles.closedAt}) <= ${ts(cutoff)}`,
-        noPendingReport('post', posts.id),
+        nothingAwaits('post', posts.id),
       ),
     )
     .orderBy(asc(posts.deletedAt), asc(posts.id))
     .limit(limit)
     .for('update', { of: posts, skipLocked: true });
   const ids = due.map((row) => row.id);
-  if (ids.length > 0) {
-    await tx
-      .update(posts)
-      .set({
-        title: null,
-        body: { type: 'doc', content: [] },
-        bodyText: '',
-        imageIds: [],
-        purgedAt: now,
-      })
-      .where(inArray(posts.id, ids));
-  }
+  await emptyPosts(tx, ids, now);
   const storageKeys = await dropUnusedPostImages(tx, ids);
   return { selected: ids.length, deleted: { deleted_posts: ids.length }, storageKeys };
 };
@@ -283,44 +333,140 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
         isNull(postComments.purgedAt),
         lte(postComments.deletedAt, cutoff),
         sql`GREATEST(${postComments.deletedAt}, ${profiles.closedAt}) <= ${ts(cutoff)}`,
-        noPendingReport('comment', postComments.id),
+        nothingAwaits('comment', postComments.id),
       ),
     )
     .orderBy(asc(postComments.deletedAt), asc(postComments.id))
     .limit(limit)
     .for('update', { of: postComments, skipLocked: true });
   const ids = due.map((row) => row.id);
-  if (ids.length > 0) {
-    await tx
-      .update(postComments)
-      .set({ body: '', purgedAt: now })
-      .where(inArray(postComments.id, ids));
-  }
+  await emptyComments(tx, ids, now);
   return { selected: ids.length, deleted: { deleted_comments: ids.length }, storageKeys: [] };
 };
 
 /**
- * Reports a withdrawn account sent (#57-18 «신고 … 기록»; decision 7 «탈퇴한 계정의 신고»), processed,
- * once the period has passed since the later of the withdrawal and the processing. A pending one
- * stays until it is processed (decision 7), and a live reporter's stay (its own record, read at
- * `GET /me/reports`).
+ * A withdrawn member's posts an operator still hides — hidden and not deleted by their author
+ * (owner decision 2026-10-24 3: «기간이 지나면 지운 원문처럼 내용을 비우고(자리 행 남김) 숨김 조치도
+ * 지움, 글은 계속 숨김») — once the 신고·제재 기록 period has passed since the later of the
+ * withdrawal and the hiding (its standing `hide` action's time, which `hidden_at` precedes within
+ * its transaction): emptied in place as a deleted original is (`emptyPosts`, then the images only
+ * they used), and their hidings' actions deleted in the same transaction — so an emptied post never
+ * has a standing hiding an operator could cancel to show it (migration 0042's CHECK keeps it hidden:
+ * `hidden_at` stays). Not while a report about it or an account restriction request citing it
+ * waits (`nothingAwaits`), nor while a report not yet due still names the hiding (it goes first,
+ * in `reports`, under the same rule from its processing). Each action and its post are locked
+ * together and skipped while either is taken (SKIP LOCKED waits for neither): a cancellation in
+ * flight keeps both until it commits — the post shown again, the next run passes it by — and one
+ * that comes after waits on the action and then finds it gone.
+ */
+const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
+  const { posts, profiles, moderationActions: actions, reports: reportsTable } = schema;
+  const due = await tx
+    .select({ id: posts.id, actionId: actions.id })
+    .from(actions)
+    .innerJoin(posts, eq(posts.id, actions.postId))
+    .innerJoin(profiles, eq(profiles.userId, posts.authorId))
+    .where(
+      and(
+        eq(actions.type, 'hide'),
+        isNull(actions.cancelledAt),
+        isNotNull(posts.hiddenAt),
+        isNull(posts.deletedAt),
+        isNull(posts.purgedAt),
+        lte(profiles.closedAt, cutoff),
+        lte(posts.hiddenAt, cutoff),
+        lte(actions.createdAt, cutoff),
+        nothingAwaits('post', posts.id),
+        sql`NOT EXISTS (SELECT 1 FROM ${reportsTable} WHERE ${reportsTable.actionId} = ${actions.id})`,
+      ),
+    )
+    .orderBy(asc(actions.createdAt), asc(actions.id))
+    .limit(limit)
+    .for('update', { of: [actions, posts], skipLocked: true });
+  const ids = due.map((row) => row.id);
+  await emptyPosts(tx, ids, now);
+  if (due.length > 0) {
+    await tx.delete(actions).where(
+      inArray(
+        actions.id,
+        due.map((row) => row.actionId),
+      ),
+    );
+  }
+  const storageKeys = await dropUnusedPostImages(tx, ids);
+  return {
+    selected: ids.length,
+    deleted: { hidden_posts: ids.length, moderation_actions: due.length },
+    storageKeys,
+  };
+};
+
+/** The same for a withdrawn member's 댓글 and 대댓글 an operator still hides (no images). */
+const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
+  const { postComments, profiles, moderationActions: actions, reports: reportsTable } = schema;
+  const due = await tx
+    .select({ id: postComments.id, actionId: actions.id })
+    .from(actions)
+    .innerJoin(postComments, eq(postComments.id, actions.commentId))
+    .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
+    .where(
+      and(
+        eq(actions.type, 'hide'),
+        isNull(actions.cancelledAt),
+        isNotNull(postComments.hiddenAt),
+        isNull(postComments.deletedAt),
+        isNull(postComments.purgedAt),
+        lte(profiles.closedAt, cutoff),
+        lte(postComments.hiddenAt, cutoff),
+        lte(actions.createdAt, cutoff),
+        nothingAwaits('comment', postComments.id),
+        sql`NOT EXISTS (SELECT 1 FROM ${reportsTable} WHERE ${reportsTable.actionId} = ${actions.id})`,
+      ),
+    )
+    .orderBy(asc(actions.createdAt), asc(actions.id))
+    .limit(limit)
+    .for('update', { of: [actions, postComments], skipLocked: true });
+  const ids = due.map((row) => row.id);
+  await emptyComments(tx, ids, now);
+  if (due.length > 0) {
+    await tx.delete(actions).where(
+      inArray(
+        actions.id,
+        due.map((row) => row.actionId),
+      ),
+    );
+  }
+  return {
+    selected: ids.length,
+    deleted: { hidden_comments: ids.length, moderation_actions: due.length },
+    storageKeys: [],
+  };
+};
+
+/**
+ * Processed reports (#57-18 «신고 … 기록»; decision 7) a withdrawn account sent, or a withdrawn member
+ * received from anyone (owner decision 2026-10-24 1: «탈퇴 뒤 기간이 지나면 지움» — a live reporter's
+ * report about a member who withdrew goes from that reporter's own history too, `GET /me/reports`),
+ * once the period has passed since the later of that party's withdrawal and the processing: either
+ * party's rule makes it due. A pending one stays until it is processed (decision 7). A report
+ * between two live accounts stays (owner decision 2026-10-24 2). The actions they name go after
+ * them, by their own rule (`hiddenPosts`, `hiddenComments`, `moderationActions`).
  */
 const reports: Step = async (tx, { cutoff, limit }) => {
   const { reports: table, profiles } = schema;
   const due = await tx
     .select({ id: table.id })
     .from(table)
-    .innerJoin(profiles, eq(profiles.userId, table.reporterId))
     .where(
       and(
         ne(table.status, 'pending'),
-        lte(profiles.closedAt, cutoff),
         lte(table.resolvedAt, cutoff),
+        sql`EXISTS (SELECT 1 FROM ${profiles} WHERE ${profiles.userId} IN (${table.reporterId}, ${table.reportedUserId}) AND ${profiles.closedAt} <= ${ts(cutoff)})`,
       ),
     )
-    .orderBy(asc(profiles.closedAt), asc(table.id))
+    .orderBy(asc(table.resolvedAt), asc(table.id))
     .limit(limit)
-    .for('update', { of: table, skipLocked: true });
+    .for('update', { skipLocked: true });
   const ids = due.map((row) => row.id);
   if (ids.length > 0) await tx.delete(table).where(inArray(table.id, ids));
   return { selected: ids.length, deleted: { reports: ids.length }, storageKeys: [] };
@@ -429,11 +575,11 @@ async function deleteRequests(tx: Tx, ids: string[]): Promise<number> {
  * they came in by — once the period has passed since the later of the withdrawal and the last of
  * the action's processing (its time, its cancellation, a restriction's end, its last end change).
  * Kept while it is in force — a hiding not cancelled whose item its author has not deleted (the item
- * stays hidden by it, and only its cancellation shows it again) or a restriction not cancelled whose
- * end has not come — while a request about it waits, and while anything still
- * kept names it: a report (a live reporter's), what a profile action took away, or a nickname
- * reset's hold within its 30 days (each goes first, by its own rule). A live member's actions are
- * kept.
+ * stays hidden by it, and only its cancellation shows it again: such a hiding goes with its item's
+ * content instead, `hiddenPosts` and `hiddenComments`) or a restriction not cancelled whose end has
+ * not come — while a request about it waits, and while anything still kept names it: a report not
+ * due yet (processed after the action), what a profile action took away, or a nickname reset's hold
+ * within its 30 days (each goes first, by its own rule). A live member's actions are kept.
  */
 const moderationActions: Step = async (tx, { cutoff, now, limit }) => {
   const {
@@ -581,9 +727,9 @@ const phoneVerificationRecords: Step = async (tx, { cutoff, limit }) => {
 
 /**
  * The steps in the order a run takes them (RETENTION_PURGE_KINDS): each kind before what it names —
- * a report before its action, a removed profile item and an ended hold before theirs, an action
- * before its requests — and the versions before the originals, so an original's images are judged
- * against the versions still kept.
+ * a report before its action (a hiding's among them, which goes with its hidden item), a removed
+ * profile item and an ended hold before theirs, an action before its requests — and the versions
+ * before the originals, so an original's images are judged against the versions still kept.
  */
 const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'nickname_holds', step: nicknameHolds },
@@ -592,6 +738,8 @@ const STEPS: readonly { kind: RetentionPurgeKind; step: Step }[] = [
   { kind: 'deleted_posts', step: deletedPosts },
   { kind: 'deleted_comments', step: deletedComments },
   { kind: 'reports', step: reports },
+  { kind: 'hidden_posts', step: hiddenPosts },
+  { kind: 'hidden_comments', step: hiddenComments },
   { kind: 'removed_profile_items', step: removedProfileItems },
   { kind: 'moderation_actions', step: moderationActions },
   { kind: 'approval_requests', step: approvalRequests },
@@ -629,8 +777,9 @@ async function readPeriods(
  * - A kind is processed in transactions of at most `batch` records; each writes a
  *   `retention_purges` row for each kind it deleted from, in the same transaction, and a kind the
  *   run found nothing due in gets one row of 0 — the record says the run looked.
- * - A kind whose batch fails is reported and the run goes on to the next kind (its earlier batches
- *   stand, recorded); the next run tries it again.
+ * - A kind whose batch fails is reported, recorded as `failed` with a count of 0 (owner decision
+ *   2026-10-24 14 — its batch rolled back, its earlier batches stand recorded as `done`), and the
+ *   run goes on to the next kind; the next run tries it again.
  * - Image objects go after their transaction commits; one the store will not remove is logged and
  *   left, named by nothing (the rows are gone). #46's `media_deletions` queue takes them once the
  *   branch is restacked onto it (ADR-0087 결과 5).
@@ -695,8 +844,24 @@ export async function purgeExpiredRecords(
     } catch (err) {
       // A kind that fails does not hold the others back, as a scan's market does not (scan.ts): its
       // batch rolled back with its record, the batches before it stand recorded, and the next run
-      // tries it again. No row of 0: the run did not finish looking.
-      kindFailures.push({ kind, message: messageOf(err), err });
+      // tries it again. Its record says so — `failed`, 0, at the run's instant (owner decision
+      // 2026-10-24 14) — in place of the 0 of a kind that finished looking; a database that will
+      // not take even that leaves the log line alone.
+      let recordErr: unknown = null;
+      try {
+        await db
+          .insert(schema.retentionPurges)
+          .values({ kind, count: 0, periodDays: days, ranAt, outcome: 'failed' });
+      } catch (error) {
+        recordErr = error;
+      }
+      kindFailures.push({
+        kind,
+        message: messageOf(err),
+        err,
+        recorded: recordErr === null,
+        recordErr,
+      });
     }
     outcomes.push({ kind, status: reading.status, periodDays: days, deleted: totals[kind] ?? 0 });
   }

@@ -988,7 +988,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** What the daily retention purge deleted, newest run first: kind, count, the period applied (days) and the run’s instant. A page never ends inside a run: `limit` records, then the rest of the run the last of them belongs to */
+        /** What the daily retention purge deleted, newest run first: kind, count, the period applied (days), the run’s instant and its outcome (`failed`, count 0, for a kind the run gave up on). A page never ends inside a run: `limit` records, then the rest of the run the last of them belongs to */
         get: operations["adminListRetentionPurges"];
         put?: never;
         post?: never;
@@ -3738,12 +3738,15 @@ export type components = {
             count: number;
             id: string;
             kind: components["schemas"]["RetentionPurgeKind"];
+            outcome: components["schemas"]["RetentionPurgeOutcome"];
             periodDays: number;
             /** Format: date-time */
             ranAt: string;
         };
         /** @enum {string} */
-        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "consent_records" | "phone_verification_records";
+        RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "consent_records" | "phone_verification_records";
+        /** @enum {string} */
+        RetentionPurgeOutcome: "done" | "failed";
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };

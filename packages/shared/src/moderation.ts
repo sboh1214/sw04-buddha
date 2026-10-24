@@ -775,8 +775,12 @@ export const adminPostModerationSchema = z
     deletedAt: z.iso.datetime().nullable(),
     hiddenAt: z.iso.datetime().nullable(),
     /**
-     * When the deleted original was emptied after the retention period (#184): then `title` is null
-     * and `body` empty, and the images it alone used are gone. Null otherwise.
+     * When #184's retention emptied it: a deleted original once its period had passed since the
+     * deletion, or a withdrawn member's post an operator still hides once the 신고·제재 period had
+     * passed since the later of the withdrawal and the hiding (owner decision 2026-10-24 3 — it
+     * stays hidden, `state` 'hidden', and its hiding's action is deleted), so it does not imply
+     * `deletedAt`. Then `title` is null and `body` empty, and the images it alone used are gone.
+     * Null otherwise.
      */
     purgedAt: z.iso.datetime().nullable(),
     revisions: z.array(adminPostRevisionSchema),
@@ -808,8 +812,10 @@ export const adminCommentModerationSchema = z
     deletedAt: z.iso.datetime().nullable(),
     hiddenAt: z.iso.datetime().nullable(),
     /**
-     * When the deleted original was emptied after the retention period (#184): then `body` is empty.
-     * Null otherwise.
+     * When #184's retention emptied it, as a post's (`AdminPostModeration.purgedAt`): a deleted
+     * original, or a withdrawn member's comment an operator still hides (it stays hidden, its
+     * hiding's action deleted — owner decision 2026-10-24 3), so it does not imply `deletedAt`.
+     * Then `body` is empty. Null otherwise.
      */
     purgedAt: z.iso.datetime().nullable(),
     revisions: z.array(adminCommentRevisionSchema),

@@ -40,11 +40,15 @@ import { mediaObjects } from './media-objects.js';
  * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal are #50's
  *   `moderation_actions`). Out of the list, no new replies, no edits by the author; deletable.
  * - `purged_at`: #184's retention emptied the deleted original once its period had passed (the
- *   deletion's, or the withdrawal's for a withdrawn author): no title, an empty body, text and
- *   image list, the images it alone used gone (`post_images`, `media_objects` and their objects).
- *   The row stays — what names it (comments under it, likes, reports, actions) keeps naming it,
- *   and the public placeholder reads `deleted_at` as before. Set once, never cleared, and the
- *   content stays empty from then on (the CHECK and migration 0042's `posts_keep_purged`).
+ *   deletion's, or the withdrawal's for a withdrawn author) — or a withdrawn author's post an
+ *   operator still hides (owner decision 2026-10-24 3: «내용을 비우고 조치도 지움», once the
+ *   신고·제재 기록 period has passed since the later of the withdrawal and the hiding; it stays
+ *   hidden, its hiding's action deleted): no title, an empty body, text and image list, the
+ *   images it alone used gone (`post_images`, `media_objects` and their objects). The row stays —
+ *   what names it (comments under it, likes, reports, actions) keeps naming it, and the public
+ *   placeholder reads `deleted_at` and `hidden_at` as before. Set once, never cleared, and the
+ *   content stays empty from then on (the CHECK and migration 0042's `posts_keep_purged`); an
+ *   emptied post that was not deleted stays hidden (the CHECK).
  *
  * The market and the author are RESTRICT: markets are never deleted, and a withdrawn author's
  * posts stay with the author anonymised (#37-17, #140).
@@ -79,17 +83,22 @@ export const posts = pgTable(
     /** A title is absent or has text: the API turns a blank one into none. */
     check('posts_title_check', sql`${t.title} IS NULL OR btrim(${t.title}) <> ''`),
     /**
-     * Only a deleted post is emptied (#184), not before its deletion, and an emptied one keeps
-     * nothing of its content.
+     * Only a deleted or a hidden post is emptied (#184), not before its deletion or its hiding, and
+     * an emptied one keeps nothing of its content. One emptied while hidden and not deleted stays
+     * hidden: `hidden_at` cannot be cleared while the deletion does not cover it.
      */
     check(
       'posts_purged_check',
-      sql`${t.purgedAt} IS NULL OR (${t.deletedAt} IS NOT NULL AND ${t.purgedAt} >= ${t.deletedAt} AND ${t.title} IS NULL AND ${t.bodyText} = '' AND ${t.imageIds} = '{}'::uuid[] AND ${t.body} = '{"type":"doc","content":[]}'::jsonb)`,
+      sql`${t.purgedAt} IS NULL OR (((${t.deletedAt} IS NOT NULL AND ${t.purgedAt} >= ${t.deletedAt}) OR (${t.hiddenAt} IS NOT NULL AND ${t.purgedAt} >= ${t.hiddenAt})) AND ${t.title} IS NULL AND ${t.bodyText} = '' AND ${t.imageIds} = '{}'::uuid[] AND ${t.body} = '{"type":"doc","content":[]}'::jsonb)`,
     ),
     /** #184's scan: the deleted originals not emptied yet, the oldest deletion first. */
     index('posts_unpurged_deleted_at_idx')
       .on(t.deletedAt)
       .where(sql`${t.deletedAt} IS NOT NULL AND ${t.purgedAt} IS NULL`),
+    /** #184's scan: the hidden posts not deleted nor emptied yet, the oldest hiding first. */
+    index('posts_unpurged_hidden_at_idx')
+      .on(t.hiddenAt)
+      .where(sql`${t.hiddenAt} IS NOT NULL AND ${t.deletedAt} IS NULL AND ${t.purgedAt} IS NULL`),
     /**
      * The community list, newest first (`GET /posts`, #45-7): only what it shows, so a page is one
      * index walk however many posts were deleted or hidden.

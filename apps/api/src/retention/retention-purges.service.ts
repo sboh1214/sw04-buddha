@@ -8,8 +8,9 @@ import { type Page } from '../wallet/wallet.service.js';
 
 /**
  * 경과 처리 기록 (#184, ADR-0087) for admins: what the worker's `retention.purge` runs deleted — the
- * kind, how many, the period applied and the run's instant (`retention_purges`). The API only reads
- * them; the worker writes them in the transactions that delete what they count.
+ * kind, how many, the period applied, the run's instant and whether the kind was done or failed
+ * (`retention_purges`; owner decision 2026-10-24 14). The API only reads them; the worker writes
+ * them in the transactions that delete what they count, and a failure's after its rollback.
  */
 @Injectable()
 export class RetentionPurgesService {
@@ -64,6 +65,7 @@ export class RetentionPurgesService {
         count: row.count,
         periodDays: row.periodDays,
         ranAt: row.ranAt.toISOString(),
+        outcome: row.outcome as RetentionPurge['outcome'],
       })),
       nextCursor:
         hasMore && last ? encodeKeyset({ createdAt: last.ranAt, id: last.id.toString() }) : null,

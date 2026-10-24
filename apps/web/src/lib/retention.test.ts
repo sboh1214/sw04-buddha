@@ -23,8 +23,9 @@ function record(
   kind: RetentionPurge['kind'],
   count: number,
   periodDays: number,
+  outcome: RetentionPurge['outcome'] = 'done',
 ): RetentionPurge {
-  return { id: String(id), kind, count, periodDays, ranAt };
+  return { id: String(id), kind, count, periodDays, ranAt, outcome };
 }
 
 describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
@@ -38,6 +39,9 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     expect(retentionPurgeKindLabel('nickname_holds')).toContain('30일');
     // The requests go by the name the admin screens give them (the list, its menu).
     expect(retentionPurgeKindLabel('approval_requests')).toBe(copy.adminAccountRequests);
+    // A withdrawn member's items still hidden, emptied (owner decision 2026-10-24 3).
+    expect(retentionPurgeKindLabel('hidden_posts')).toBe('숨긴 글 원문');
+    expect(retentionPurgeKindLabel('hidden_comments')).toBe('숨긴 댓글 원문');
   });
 
   it('says counts in 건 and the period in 일, with thousands grouped — 0 too', () => {
@@ -73,18 +77,21 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             label: copy.adminRetentionKindNicknameHolds,
             count: 3,
             periodDays: 30,
+            failed: false,
           },
           {
             kind: 'post_revisions',
             label: copy.adminRetentionKindPostRevisions,
             count: 512,
             periodDays: 90,
+            failed: false,
           },
           {
             kind: 'moderation_actions',
             label: copy.adminRetentionKindModerationActions,
             count: 2,
             periodDays: 1_825,
+            failed: false,
           },
           // The requests the actions came in by and those decided without one: one line.
           {
@@ -92,12 +99,14 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             label: copy.adminRetentionKindApprovalRequests,
             count: 3,
             periodDays: 1_825,
+            failed: false,
           },
           {
             kind: 'consent_records',
             label: copy.adminRetentionKindConsentRecords,
             count: 0,
             periodDays: 365,
+            failed: false,
           },
         ],
       },
@@ -109,6 +118,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             label: copy.adminRetentionKindNicknameHolds,
             count: 0,
             periodDays: 30,
+            failed: false,
           },
         ],
       },
@@ -134,6 +144,7 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
             label: copy.adminRetentionKindDeletedPosts,
             count: 1_007,
             periodDays: 90,
+            failed: false,
           },
         ],
       },
@@ -144,6 +155,32 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
       [['deleted_posts', 1_007]],
       [['reports', 4]],
     ]);
+  });
+
+  it('marks a kind the run gave up on as failed, with what its earlier batches deleted (owner decision 2026-10-24 14)', () => {
+    // As the worker writes them: two batches, then the failure (0); another kind failed at once.
+    const runs = retentionRuns([
+      record(4, LATER, 'consent_records', 0, 365),
+      record(3, LATER, 'deleted_posts', 0, 90, 'failed'),
+      record(2, LATER, 'deleted_posts', 500, 90),
+      record(1, LATER, 'post_revisions', 0, 90, 'failed'),
+      record(0, LATER, 'nickname_holds', 0, 30),
+    ]);
+    expect(runs[0]?.kinds.map(({ kind, count, failed }) => ({ kind, count, failed }))).toEqual([
+      { kind: 'nickname_holds', count: 0, failed: false },
+      { kind: 'post_revisions', count: 0, failed: true },
+      { kind: 'deleted_posts', count: 500, failed: true },
+      { kind: 'consent_records', count: 0, failed: false },
+    ]);
+    expect(copy.adminRetentionFailed).toBe('실패');
+    // Its count says it is what went before the error, so the 실패 beside the name does not make
+    // it read as a number of failures — '실패 500건', '실패 0건'.
+    expect(retentionCountText(500, true)).toBe('오류 전까지 500건');
+    expect(retentionCountText(0, true)).toBe('오류 전까지 0건');
+    expect(retentionCountText(1_012, true)).toBe(
+      `${copy.adminRetentionCountBeforeFailure} 1,012건`,
+    );
+    expect(retentionCountText(500, false)).toBe('500건');
   });
 
   it('keeps apart, within a run, batches of one kind under different periods', () => {
@@ -164,8 +201,13 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     expect(copy.adminRetentionSettingsNotice).toContain('승인됨');
     expect(copy.adminRetentionSettingsNotice).toContain('미정·설계 제안·시험값');
     expect(copy.adminRetentionSettingsNotice).toContain('30일');
-    // A missing line is not always an unapproved period: a kind that failed shows none either.
+    // A kind that failed has its line, marked 실패 (owner decision 2026-10-24 14).
     expect(copy.adminRetentionSettingsNotice).toContain('오류');
+    expect(copy.adminRetentionSettingsNotice).toContain('실패로 표시');
+    // A failure the database would not even record shows no 실패 (ADR-0087 7-21): no line, or
+    // only what went before.
+    expect(copy.adminRetentionSettingsNotice).toContain('실패 기록마저 남기지 못한 오류는');
+    expect(copy.adminRetentionSettingsNotice).toContain('줄이 없거나 실패 표시 없이');
     expect(copy.adminRetentionIntro).toContain('지운 내용은 남지 않습니다');
   });
 

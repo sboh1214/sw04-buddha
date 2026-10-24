@@ -15,7 +15,9 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  *   records, and from the deletion for what a live account deleted (decision 4 #184 «기간의 기준
  *   시각»). Edit history always counts from when the version was replaced, and a record still being
  *   processed is never deleted before its processing ends — its period then counts from the later
- *   of the withdrawal and the processing (decision 7).
+ *   of the withdrawal and the processing (decision 7). What a pending report or a pending account
+ *   restriction request is about keeps its deleted original and its edit history until it is
+ *   processed, decided or retracted (owner decisions 2026-10-24 4 and 12).
  * - The ledger and the operational records (`admin_actions`, the purge records below) are kept with
  *   no period (#57-18), and so are the watch events (ADR-0064), likes, posts that were not deleted
  *   and the start grants: nothing here names them.
@@ -45,9 +47,12 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  * - `deleted_posts`: 지운 글 원문 — what an author deleted (posts, 댓글 and 대댓글) and, with the same
  *   period (decision 7), the operator-only edit history of posts and comments, with the images only
  *   they used.
- * - `moderation_records`: 신고·제재 기록 — a withdrawn account's reports and the actions on a
- *   withdrawn member (with their end changes and their two-person approval requests); later the
- *   judgement objections (#175) join it.
+ * - `moderation_records`: 신고·제재 기록 — the reports a withdrawn account sent or a withdrawn member
+ *   received (owner decision 2026-10-24 1), the actions on a withdrawn member (with their end
+ *   changes and their two-person approval requests), and the content of a withdrawn member's post
+ *   or comment an operator still hides, emptied as its hiding goes (owner decision 2026-10-24 3);
+ *   later the judgement objections (#175) and #187's link flags join it (owner decision 2026-10-24
+ *   13).
  * - `removed_profile_items`: 운영자가 지운 프로필 항목 — the nickname, 소개 or image an operator took
  *   away (#37-10, `profile_item_removals`).
  */
@@ -69,7 +74,11 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  * - `post_revisions`, `comment_revisions`: earlier versions of posts and comments.
  * - `deleted_posts`, `deleted_comments`: deleted originals, emptied in place (the row stays: the
  *   placeholder of a deleted 댓글 with replies, the likes and the records name it).
- * - `reports`: reports a withdrawn account sent.
+ * - `reports`: reports a withdrawn account sent or a withdrawn member received.
+ * - `hidden_posts`, `hidden_comments`: a withdrawn member's posts and comments an operator still
+ *   hides, emptied in place the same way — they stay hidden — with their hidings, which the run
+ *   counts as `moderation_actions` (owner decision 2026-10-24 3): after the reports, which may name
+ *   a hiding.
  * - `removed_profile_items`: what an operator took away from a profile.
  * - `moderation_actions`: actions on a withdrawn member (each with its end changes).
  * - `approval_requests`: the account restriction requests about a withdrawn member.
@@ -82,6 +91,8 @@ export const RETENTION_PURGE_KINDS = [
   'deleted_posts',
   'deleted_comments',
   'reports',
+  'hidden_posts',
+  'hidden_comments',
   'removed_profile_items',
   'moderation_actions',
   'approval_requests',
@@ -103,6 +114,8 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   deleted_posts: 'deleted_posts',
   deleted_comments: 'deleted_posts',
   reports: 'moderation_records',
+  hidden_posts: 'moderation_records',
+  hidden_comments: 'moderation_records',
   removed_profile_items: 'removed_profile_items',
   moderation_actions: 'moderation_records',
   approval_requests: 'moderation_records',
@@ -124,14 +137,29 @@ export function retentionCutoffOf(now: Date, days: number): Date {
   return new Date(now.getTime() - days * DAY_MS);
 }
 
+/**
+ * What a purge record says of its kind (`retention_purges.outcome`; owner decision 2026-10-24 14):
+ * - `done`: a batch that committed what it counts, or the one 0 of a kind the run found nothing due
+ *   in.
+ * - `failed` (실패): the run gave the kind up — a batch's transaction rejected, rolled back with
+ *   what it would have deleted — and goes on to the next kind; `count` 0, and the batches before it
+ *   stand recorded as `done`. The next run tries the kind again.
+ */
+export const RETENTION_PURGE_OUTCOMES = ['done', 'failed'] as const;
+export type RetentionPurgeOutcome = (typeof RETENTION_PURGE_OUTCOMES)[number];
+export const retentionPurgeOutcomeSchema = z
+  .enum(RETENTION_PURGE_OUTCOMES)
+  .meta({ id: 'RetentionPurgeOutcome' });
+
 // ---- DTOs ---------------------------------------------------------------------------------------
 
 /**
  * One purge record (`GET /admin/retention-purges`): a run deleted `count` records of `kind` at
  * `ranAt` (the run's instant, the database clock), with the period it read (`periodDays`). A run
  * writes one for each batch that deleted something, in the transaction that deleted it, or one of
- * `count` 0 for a kind it processed and found nothing due in; a kind whose period is not approved
- * gets none. Never personal content.
+ * `count` 0 for a kind it processed and found nothing due in, or — `outcome` `failed` — one of
+ * `count` 0 for a kind it gave up on (owner decision 2026-10-24 14); a kind whose period is not
+ * approved gets none. Never personal content.
  */
 export const retentionPurgeSchema = z
   .object({
@@ -140,6 +168,7 @@ export const retentionPurgeSchema = z
     count: z.number().int().min(0),
     periodDays: z.number().int().min(1),
     ranAt: z.iso.datetime(),
+    outcome: retentionPurgeOutcomeSchema,
   })
   .meta({ id: 'RetentionPurge' });
 export type RetentionPurge = z.infer<typeof retentionPurgeSchema>;
