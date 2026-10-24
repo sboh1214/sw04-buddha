@@ -77,9 +77,11 @@ async function expectExploreLit(page: Page): Promise<void> {
 
 /**
  * Lets the admin page's toasts go before its next press. A toast pauses while the pointer rests
- * on the stack, and on a phone the stack — two refused publishes, three markets put in, a notice
- * and the publish here — covers the form the next step fills, so the pointer left on it by the
- * last press would hold them there for good and the press would wait on them.
+ * on the stack, and the stack — two refused publishes, three markets put in, a notice and the
+ * publish — grows over the button the next step presses (on a phone over most of the screen; how
+ * far down that button sits depends on everything above it, the admin menu's rows among them), so
+ * the pointer left on it by the last press would hold them there for good and the press would
+ * wait on them. Every press that comes right after toasts goes through here.
  */
 async function letToastsGo(page: Page): Promise<void> {
   await page.mouse.move(0, 0);
@@ -170,6 +172,7 @@ test.describe('테마', () => {
         copy.adminThemePublishHint,
       );
       const publishOnce = async () => {
+        await letToastsGo(adminPage);
         const answer = adminPage.waitForResponse(
           (response) =>
             response.request().method() === 'POST' &&
@@ -190,6 +193,7 @@ test.describe('테마', () => {
       await expect(markets.getByTestId('admin-theme-markets-empty')).toHaveText(
         copy.adminThemeMarketsEmpty,
       );
+      await letToastsGo(adminPage);
       await markets.getByTestId('admin-theme-market-search-input').fill(group);
       await markets.getByTestId('admin-theme-market-search-submit').click();
       await markets.getByTestId(`admin-theme-market-link-${draft.id}`).click();
@@ -204,6 +208,7 @@ test.describe('테마', () => {
 
       // --- the two open markets, put in with a click each.
       for (const market of [a, b]) {
+        await letToastsGo(adminPage);
         await markets.getByTestId(`admin-theme-market-link-${market.id}`).click();
         await expect(markets.getByTestId(`admin-theme-market-${market.id}`)).toContainText(
           market.title,
@@ -215,6 +220,7 @@ test.describe('테마', () => {
 
       // --- a notice, plain text with an address in it.
       const notices = adminPage.getByTestId('admin-theme-notices');
+      await letToastsGo(adminPage);
       await notices.getByTestId('theme-notice-new-title').fill(`일정 안내 ${group}`);
       await notices
         .getByTestId('theme-notice-new-body')
@@ -224,6 +230,7 @@ test.describe('테마', () => {
       await expect(notices.getByText(`일정 안내 ${group}`)).toBeVisible();
 
       // --- publish: now it has markets. A new address typed and not saved is not the theme's.
+      await letToastsGo(adminPage);
       await adminPage.getByTestId('theme-slug').fill(`${slug}-unsaved`);
       await expect(adminPage.getByTestId('theme-save')).toBeEnabled();
       expect(await publishOnce()).toBe(200);
@@ -362,6 +369,7 @@ test.describe('테마', () => {
       await expect(themeCard(page, themeId)).toContainText(renamed);
 
       // --- an edited notice says 수정됨 (owner decision 2026-10-19).
+      await letToastsGo(adminPage);
       await notices.getByRole('button', { name: copy.adminThemeNoticeEdit }).click();
       const editForm = notices.locator('form[data-testid^="theme-notice-edit-form-"]');
       await editForm.locator('textarea').fill(`고친 일정은 ${noticeUrl} 에서 봅니다.`);
@@ -372,6 +380,7 @@ test.describe('테마', () => {
       await expect(notice).toContainText('고친 일정은');
 
       // --- hidden behind its confirmation, off the page and kept for the admin; shown again.
+      await letToastsGo(adminPage);
       await notices.getByRole('button', { name: copy.adminThemeNoticeHide }).click();
       await adminPage.getByTestId('admin-theme-notice-hide-confirm').click();
       await expect(adminPage.getByText(copy.adminThemeNoticeHidden)).toBeVisible();
@@ -379,6 +388,7 @@ test.describe('테마', () => {
       await page.goto(`/themes/${slug}`);
       await expect(notice).toHaveCount(0);
       await expect(page.getByTestId('theme-notices-empty')).toHaveText(copy.themeNoticesEmpty);
+      await letToastsGo(adminPage);
       await notices.getByRole('button', { name: copy.adminThemeNoticeShow }).click();
       await expect(adminPage.getByText(copy.adminThemeNoticeShown)).toBeVisible();
       await expect(notices.getByText(copy.adminThemeNoticeHiddenTag)).toHaveCount(0);
@@ -388,6 +398,7 @@ test.describe('테마', () => {
 
       // --- b taken out behind its confirmation: its card and its result leave the page, a's
       // card stays (and keeps the theme publishable — it stays published either way).
+      await letToastsGo(adminPage);
       await markets.getByTestId(`admin-theme-market-unlink-${b.id}`).click();
       await adminPage.getByTestId('admin-theme-market-unlink-confirm').click();
       await expect(adminPage.getByText(copy.adminThemeMarketUnlinked)).toBeVisible();
@@ -399,6 +410,7 @@ test.describe('테마', () => {
       await expect(page.getByTestId('theme-results-empty')).toHaveText(copy.themeResultsEmpty);
 
       // --- unpublish, behind its confirmation: off every public place, the page a 404.
+      await letToastsGo(adminPage);
       await adminPage.getByTestId('theme-unpublish').click();
       await expect(adminPage.getByText(copy.adminThemeUnpublishBody)).toBeVisible();
       await adminPage.getByTestId('theme-unpublish-dialog-confirm').click();
