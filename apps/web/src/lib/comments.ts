@@ -667,8 +667,10 @@ function threadsById(pages: readonly CommentPage[]): Map<string, CommentThread> 
  *   ADR-0079 7-23, `withOwnFace`): the copy carried over is the one its write's answer brought, and
  *   no read brings it again until its page arrives, so a change made elsewhere — another tab,
  *   another device — would otherwise leave the old address on it (the file deleted at once) through
- *   every read, beside the member's other comments the read brought with the new one. A change in
- *   this tab patches it where it is (`storeAuthorImage`).
+ *   every read, beside the member's other comments the read brought with the new one. A read of
+ *   the pages that lands before `['me']`'s carries it over with the old image `['me']` still
+ *   holds; the write of `['me']` then puts the new one on it (`placedWithOwnFace`,
+ *   lib/query-client.ts). A change in this tab patches it where it is (`storeAuthorImage`).
  */
 export function keepPlacedComments(
   held: CommentPages | undefined,
@@ -767,6 +769,24 @@ export interface PlacedCommentsOwner {
  * account (`withOwnFace`) — in memory, by the entry, which the writes carry over as it is.
  */
 const ownImageCarried = new WeakMap<PlacedComment, string | null>();
+
+/**
+ * `pages` with the image `['me']` holds now (`own`) on the comments placed in them for its account,
+ * where it has changed since a write last carried them (`withOwnFace`) — for a write of `['me']`
+ * itself (lib/query-client.ts): a read of the comment pages that lands before `['me']`'s, after a
+ * change made in another tab, carried the placed copy over with the old image and brought the
+ * member's other comments with the new one, and no write of the pages follows `['me']`'s to put it
+ * right (ADR-0079 7-23). The same object when nothing changes.
+ */
+export function placedWithOwnFace(
+  pages: CommentPages,
+  own: PlacedCommentsOwner | undefined,
+): CommentPages {
+  const placed = pages.placed ?? [];
+  if (placed.length === 0) return pages;
+  const next = withOwnFace(pages.pages, placed, own);
+  return next === pages.pages ? pages : { ...pages, pages: next };
+}
 
 /**
  * `pages` with `own`'s image on each comment placed for `own` whose image `['me']` has changed

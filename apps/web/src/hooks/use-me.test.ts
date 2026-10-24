@@ -1654,4 +1654,130 @@ describe('the member’s faces the tab holds, after a profile image change (#141
       queryClient.clear();
     }
   });
+
+  it("puts it on them as `['me']` is read when a read of the pages landed first — both due on a focus, in either order — with no write of the pages after it: the data alone, no request (ADR-0079 7-23)", async () => {
+    const queryClient = getQueryClient();
+    const meWith = (imageUrl: string | null): Me => ({
+      ...following,
+      profile: { ...following.profile, imageUrl },
+    });
+    // `GET /me` as the browser reads it, answering the image the member has now.
+    let served = meWith(OLD);
+    const me = new QueryObserver(queryClient, {
+      queryKey: ME_QUERY_KEY,
+      queryFn: () => Promise.resolve(served),
+      retry: false,
+    });
+    const unsubscribes = [me.subscribe(() => undefined)];
+    // The server's first page: someone else's 댓글 C3, a 대댓글 R1 of the member's under it (more to
+    // read by '답글 더 보기'), more 댓글 after it — with the image the member has as it is read.
+    const firstPage = (image: string | null): CommentPage => ({
+      items: [
+        {
+          comment: comment(C3, face(OTHER, null)),
+          replies: [comment(R1, face(OWN, image), C3)],
+          repliesNextCursor: 'r1',
+        },
+      ],
+      nextCursor: 'c1',
+    });
+    // What the member's writes left: C1 at the end of the pages, R2 at the end of C3's 대댓글.
+    const placedFor = (accountId: string, image: string | null): CommentPages => ({
+      pages: [
+        {
+          items: [
+            {
+              ...firstPage(image).items[0]!,
+              replies: [...firstPage(image).items[0]!.replies, comment(R2, face(OWN, image), C3)],
+            },
+            { comment: comment(C1, face(OWN, image)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId },
+        { id: R2, threadId: C3, accountId },
+      ],
+    });
+    let reads = 0;
+    const observe = (post: string) => {
+      const observer = new InfiniteQueryObserver<
+        CommentPage,
+        Error,
+        CommentPages,
+        readonly unknown[],
+        string | undefined
+      >(queryClient, {
+        queryKey: postCommentsKey(post),
+        queryFn: () => {
+          reads += 1;
+          return Promise.resolve(commentPageRead(firstPage(served.profile.imageUrl)));
+        },
+        initialPageParam: undefined,
+        getNextPageParam: (last) => last.nextCursor ?? undefined,
+        retry: false,
+      });
+      unsubscribes.push(observer.subscribe(() => undefined));
+      return observer;
+    };
+    /** The member's faces `post`'s pages hold, as `[comment, imageUrl]`, in the order drawn. */
+    const faces = (post: string) => {
+      const pages = JSON.stringify(postCommentsKey(post));
+      return ownFaces(queryClient)
+        .filter(([where]) => where.startsWith(`${pages} `))
+        .map(([where, image]) => [where.slice(pages.length + 1), image]);
+    };
+    const all = (read: string | null, placed: string | null) => [
+      [R1, read],
+      [R2, placed],
+      [C1, placed],
+    ];
+    try {
+      await me.refetch();
+      queryClient.setQueryData(postCommentsKey(POST), placedFor(following.id, OLD));
+      queryClient.setQueryData(postCommentsKey(FORMER_POST), placedFor(otherMe.id, OLD));
+      const comments = observe(POST);
+      const formers = observe(FORMER_POST);
+      await comments.refetch();
+      await formers.refetch();
+      expect(faces(POST)).toEqual(all(OLD, OLD));
+
+      // Changed in another tab. The pages' read lands first: what it read carries the new image,
+      // the placed copies — carried over while `['me']` still holds the old one — do not.
+      served = meWith(NEW);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(all(NEW, OLD));
+      // `['me']`'s read lands, and nothing writes the pages after it: its write puts the image on
+      // them at once — without a read of the pages, the entry's time and stale mark as they were.
+      const before = queryClient.getQueryState(postCommentsKey(POST));
+      const readsBefore = reads;
+      await me.refetch();
+      expect(faces(POST)).toEqual(all(NEW, NEW));
+      const after = queryClient.getQueryState(postCommentsKey(POST));
+      expect(after?.dataUpdatedAt).toBe(before?.dataUpdatedAt);
+      expect(after?.isInvalidated).toBe(before?.isInvalidated);
+      expect(reads).toBe(readsBefore);
+      // A read of the pages after it keeps it.
+      await comments.refetch();
+      expect(faces(POST)).toEqual(all(NEW, NEW));
+      // Read again with the same image: nothing is written.
+      const held = queryClient.getQueryData(postCommentsKey(POST));
+      await me.refetch();
+      expect(queryClient.getQueryData(postCommentsKey(POST))).toBe(held);
+      // Deleted in the other tab, the pages read first again: none on them as `['me']` lands.
+      served = meWith(null);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(all(null, NEW));
+      await me.refetch();
+      expect(faces(POST)).toEqual(all(null, null));
+      // Placed for another account than `['me']`'s (its pages not read since): as written,
+      // whatever `['me']` reads.
+      expect(faces(FORMER_POST)).toEqual(all(OLD, OLD));
+    } finally {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      queryClient.clear();
+    }
+  });
 });

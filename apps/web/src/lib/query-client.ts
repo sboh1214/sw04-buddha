@@ -1,10 +1,17 @@
-import { QueryCache, QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
+import {
+  QueryCache,
+  QueryClient,
+  hashKey,
+  isServer,
+  replaceEqualDeep,
+} from '@tanstack/react-query';
 import { type Market, type Me, type Position, isApiError } from './api';
 import {
   type CommentPages,
   type PlacedCommentsOwner,
   COMMENT_PAGES_KEY,
   keepPlacedComments,
+  placedWithOwnFace,
 } from './comments';
 import {
   MARKETS_KEY,
@@ -111,7 +118,8 @@ function makeQueryClient() {
   // `['posts', 'comments']` never reaches `['posts', 'post', id]` or the lists. The writer's own
   // comments placed so take the profile image `['me']` holds once it has changed since they were
   // placed (#141, ADR-0079 7-23): read from this client as each write passes, so a `['me']` read
-  // since — a change made in another tab — reaches them on the next write of the pages.
+  // since — a change made in another tab — reaches them on the next write of the pages, and on the
+  // write of `['me']` itself (below).
   client.setQueryDefaults(COMMENT_PAGES_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(
@@ -122,6 +130,26 @@ function makeQueryClient() {
           placedCommentsOwner(client),
         ),
       ),
+  });
+  // And as `['me']` itself is written (ADR-0079 7-23): a read of the pages that lands before a read
+  // of `['me']` — both due on a window's focus, in either order — carries those comments over with
+  // the image `['me']` held then, the old one after a change made in another tab, while it brings
+  // the member's other comments with the new one; and no write of the pages need follow `['me']`'s.
+  // So each write of `['me']` — its read landing, `setQueryData` — puts the image it now holds on
+  // them where it changed, in every post's pages held: the data alone, as `storeAuthorImage` writes
+  // a face (its time, stale mark and a failed read's error kept, no request). A read of the pages
+  // on its way takes the placed copy from what is held as it lands, so it keeps the new image.
+  const meHash = hashKey(ME_KEY);
+  client.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || event.query.queryHash !== meHash) return;
+    if (event.action.type !== 'success' && event.action.type !== 'setState') return;
+    const own = placedCommentsOwner(client);
+    for (const query of client.getQueryCache().findAll({ queryKey: COMMENT_PAGES_KEY })) {
+      const held = query.state.data as CommentPages | undefined;
+      if (held === undefined) continue;
+      const next = placedWithOwnFace(held, own);
+      if (next !== held) query.setState({ data: next });
+    }
   });
   return client;
 }
