@@ -116,8 +116,9 @@ function BioFields({ bio, accountId }: { bio: string | null; accountId: string }
       // keepDirtyValues, as the time-zone card does: the form's resetOptions would keep the
       // submitted text as dirty instead of taking the saved one.
       reset({ bio: me.profile.bio ?? '' }, { keepDirtyValues: false });
-      // Saved: nothing an earlier trip to the step kept of the box is wanted back.
-      clearSessionProfileDraft('bio');
+      // Saved: nothing an earlier trip to the step kept of the box is wanted back — by this account:
+      // the tab may show another by now, whose own stays (ADR-0078 7-30).
+      clearSessionProfileDraft('bio', accountId);
       toaster.create({ type: 'success', title: next === null ? copy.bioCleared : copy.bioSaved });
       // The profile is the server's page alone (ADR-0078 7-12), but the router keeps the pages it
       // drew for Back and Forward whatever their age: without this, Back to the profile this

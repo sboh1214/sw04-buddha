@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { COMMENT_DRAFT_PREFIX, keepCommentDraft, readCommentDrafts } from './comment-drafts';
 import { POST_DRAFT_PREFIX, POST_DRAFT_TTL_MS, type DraftStorage } from './post-drafts';
@@ -293,10 +294,10 @@ describe('the profile drafts in the tab', () => {
     keepProfileDraft(storage, A, { kind: 'interests', categoryIds: [1] }, NOW);
     keepProfileDraft(storage, A, { kind: 'nickname', text: '새닉네임' }, NOW);
     keepCommentDraft(storage, { kind: 'comment', postId: 'p' }, A, '댓글', NOW);
-    clearProfileDraft(storage, 'bio');
+    clearProfileDraft(storage, 'bio', A);
     expect(readProfileDraft(storage, 'bio', A, NOW)).toBeNull();
     expect(readProfileDraft(storage, 'interests', A, NOW)).not.toBeNull();
-    clearProfileDraft(storage, 'nickname');
+    clearProfileDraft(storage, 'nickname', A);
     expect(readProfileDraft(storage, 'nickname', A, NOW)).toBeNull();
     expect(readProfileDraft(storage, 'interests', A, NOW)).not.toBeNull();
     keepProfileDraft(storage, A, { kind: 'nickname', text: '새닉네임' }, NOW);
@@ -306,13 +307,62 @@ describe('the profile drafts in the tab', () => {
     expect(readCommentDrafts(storage, 'p', A, NOW).comment).toBe('댓글');
   });
 
+  it('clears what the account that saved kept, never another’s: a save for A that lands after the tab switched to B leaves B’s draft (ADR-0078 7-30)', () => {
+    const storage = new MemoryStorage();
+    // B, now on the tab, kept each card on its way to the step; A's saves, sent before the switch,
+    // land now.
+    keepProfileDraft(storage, B, { kind: 'bio', text: 'B의 소개' }, NOW);
+    keepProfileDraft(storage, B, { kind: 'interests', categoryIds: [3] }, NOW);
+    keepProfileDraft(storage, B, { kind: 'nickname', text: 'B의닉네임' }, NOW);
+    for (const kind of ['bio', 'interests', 'nickname'] as const)
+      clearProfileDraft(storage, kind, A);
+    expect(readProfileDraft(storage, 'bio', B, NOW)).toEqual({ kind: 'bio', text: 'B의 소개' });
+    expect(readProfileDraft(storage, 'interests', B, NOW)).toEqual({
+      kind: 'interests',
+      categoryIds: [3],
+    });
+    expect(readProfileDraft(storage, 'nickname', B, NOW)).toEqual({
+      kind: 'nickname',
+      text: 'B의닉네임',
+    });
+    // B's own save of a card clears B's draft of it.
+    clearProfileDraft(storage, 'bio', B);
+    expect(readProfileDraft(storage, 'bio', B, NOW)).toBeNull();
+    expect(readProfileDraft(storage, 'nickname', B, NOW)).not.toBeNull();
+    // What is no draft goes, as a read would remove it.
+    storage.setItem(profileDraftStorageKey('nickname'), '{broken');
+    clearProfileDraft(storage, 'nickname', A);
+    expect(storage.getItem(profileDraftStorageKey('nickname'))).toBeNull();
+  });
+
+  it('is cleared by each card’s save and take-back for the account the card was drawn for, never the tab’s by then (ADR-0078 7-30)', () => {
+    // No component renders under node: the cards' wiring is pinned in their source — each save
+    // that lands clears its card's draft for the card's `accountId` (the body's
+    // `expectedAccountId`), and the take-back for the account it read the draft for.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const cards = [
+      ['bio', '../app/my/settings/bio-section.tsx'],
+      ['nickname', '../app/my/settings/nickname-form.tsx'],
+      ['interests', '../app/my/settings/interests-section.tsx'],
+    ] as const;
+    for (const [kind, file] of cards) {
+      const card = source(file);
+      expect(card).toContain(`clearSessionProfileDraft('${kind}', accountId);`);
+      expect(card).toContain('expectedAccountId: accountId');
+      expect(card).not.toMatch(/clearSessionProfileDraft\('[a-z]+'\)/);
+    }
+    expect(source('../hooks/use-profile-draft.ts')).toContain(
+      'clearSessionProfileDraft(kind, accountId);',
+    );
+  });
+
   it('never throws on a storage the browser refuses: it keeps and restores nothing', () => {
     expect(keepProfileDraft(refusing, A, { kind: 'bio', text: '소개' }, NOW)).toBe(false);
     expect(readProfileDraft(refusing, 'bio', A, NOW)).toBeNull();
     expect(keepProfileDraft(refusing, A, { kind: 'nickname', text: '닉네임' }, NOW)).toBe(false);
     expect(readProfileDraft(refusing, 'nickname', A, NOW)).toBeNull();
     expect(() => {
-      clearProfileDraft(refusing, 'bio');
+      clearProfileDraft(refusing, 'bio', A);
       clearProfileDrafts(refusing);
       sweepProfileDrafts(refusing, NOW);
     }).not.toThrow();

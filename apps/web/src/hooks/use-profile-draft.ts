@@ -47,7 +47,7 @@ export function useProfileDraftTakenBack<K extends ProfileDraftKind>(
     taken.current = true;
     const draft = readSessionProfileDraft(kind, accountId);
     if (draft === null) return;
-    clearSessionProfileDraft(kind);
+    clearSessionProfileDraft(kind, accountId);
     if (latest.current(draft)) {
       toaster.create({
         id: PROFILE_DRAFT_RESTORED_TOAST_ID,

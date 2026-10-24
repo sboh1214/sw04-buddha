@@ -131,8 +131,9 @@ function NicknameFields({ nickname, accountId }: { nickname: string; accountId: 
       // The account this screen shows (#58: PATCH /me names it, as every owner write does).
       await update.mutateAsync({ nickname: form.nickname, expectedAccountId: accountId });
       reset({ nickname: form.nickname });
-      // Saved: nothing an earlier trip to the step kept of the box is wanted back.
-      clearSessionProfileDraft('nickname');
+      // Saved: nothing an earlier trip to the step kept of the box is wanted back — by this account
+      // (bio-section.tsx, ADR-0078 7-30).
+      clearSessionProfileDraft('nickname', accountId);
       toaster.create({ type: 'success', title: copy.nicknameSaved });
       // Back to the profile (or to a post's byline) shows the new nickname (bio-section.tsx).
       router.refresh();

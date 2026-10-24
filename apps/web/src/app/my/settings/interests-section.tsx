@@ -123,8 +123,9 @@ function InterestsFields({ held, accountId }: { held: readonly number[]; account
     try {
       // The account the card shows, not the session's (`useSetInterestCategories` says why).
       await save.mutateAsync({ categoryIds: chosen, expectedAccountId: accountId });
-      // Saved: nothing an earlier trip to the step kept of the card is wanted back.
-      clearSessionProfileDraft('interests');
+      // Saved: nothing an earlier trip to the step kept of the card is wanted back — by this account
+      // (bio-section.tsx, ADR-0078 7-30).
+      clearSessionProfileDraft('interests', accountId);
       toaster.create({ type: 'success', title: copy.interestsSaved });
       // Back to the profile shows the new picks (bio-section.tsx says why). Here, not in the
       // hooks' shared write (`interestsWriteOptions`): the onboarding's step shares it and leaves

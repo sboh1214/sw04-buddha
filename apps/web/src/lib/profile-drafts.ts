@@ -26,8 +26,11 @@ import { bioToSend, interestsChanged } from './profile';
  * - Gone: once taken back (the card holds it again, unsaved) — or found with nothing to put back:
  *   the account has the same now, or the card holds an edit of its own made since it was drawn,
  *   which is not written over (`bioToRestore`, `interestsToRestore`, `nicknameToRestore`) — once a
- *   save of that card succeeds, when the account signs out in the tab, and PROFILE_DRAFT_TTL_MS
- *   after it was kept. A card holding nothing new as the page goes leaves what an earlier trip kept
+ *   save of that card by the account that kept it succeeds, when the account signs out in the tab,
+ *   and PROFILE_DRAFT_TTL_MS after it was kept. A save is the account's that sent it, whoever the
+ *   tab shows by the time it lands: one sent for A that lands after the tab switched to B leaves
+ *   what B kept (`clearProfileDraft` names the account — ADR-0078 7-30, as a post's draft does,
+ *   ADR-0073 9-48). A card holding nothing new as the page goes leaves what an earlier trip kept
  *   as it is.
  * - Only what the card shows: the 소개 box's text as typed, the ids of the categories picked among
  *   those offered, compared with the account's among those offered (a category operators retired
@@ -285,9 +288,26 @@ export function readProfileDraft<K extends ProfileDraftKind>(
   return draft as ProfileDraftOf<K>;
 }
 
-/** Removes what was kept for the card `kind`. */
-export function clearProfileDraft(storage: DraftStorage, kind: ProfileDraftKind): void {
-  tryRemove(storage, profileDraftStorageKey(kind));
+/**
+ * Removes what `accountId` kept for the card `kind`, and only that: another account's draft of the
+ * same card stays (anything that is no draft goes, as a read would remove it) — a save, or a take
+ * back, is the account's the card was drawn for, which may no longer be the tab's (ADR-0078 7-30).
+ */
+export function clearProfileDraft(
+  storage: DraftStorage,
+  kind: ProfileDraftKind,
+  accountId: string,
+): void {
+  const key = profileDraftStorageKey(kind);
+  let raw: string | null;
+  try {
+    raw = storage.getItem(key);
+  } catch {
+    return;
+  }
+  if (raw === null) return;
+  const stored = parseStored(raw, kind);
+  if (stored === null || stored.accountId === accountId) tryRemove(storage, key);
 }
 
 /** Removes every kept profile draft (signing out). */
@@ -320,9 +340,9 @@ export function readSessionProfileDraft<K extends ProfileDraftKind>(
   return storage === null ? null : readProfileDraft(storage, kind, accountId, Date.now());
 }
 
-export function clearSessionProfileDraft(kind: ProfileDraftKind): void {
+export function clearSessionProfileDraft(kind: ProfileDraftKind, accountId: string): void {
   const storage = sessionDrafts();
-  if (storage !== null) clearProfileDraft(storage, kind);
+  if (storage !== null) clearProfileDraft(storage, kind, accountId);
 }
 
 export function clearSessionProfileDrafts(): void {
