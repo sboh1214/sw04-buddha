@@ -39,6 +39,11 @@ import { useSession } from '@/lib/use-session';
  * says '없거나 삭제된 글입니다.' in the form's place — the form goes, as it does for a post hidden
  * meanwhile — and draws the server page again (`router.refresh`): the 404 a reload gets
  * (`notFound()`, page.tsx). A read that fails otherwise keeps the form and what is written in it.
+ * What is written goes with the form, and leaving no longer asks. That is a change: before, a save
+ * refused as NOT_FOUND left the form and its text on screen under the same sentence
+ * (`copy.errPostGone`). #48's comment boxes keep a refused text until it is closed (ADR-0074, owner
+ * decisions 2026-10-20 답 4 and 2026-10-21 답 1·2); whether this screen does too is the question in
+ * ADR-0073 결과 4.
  */
 export function EditScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
