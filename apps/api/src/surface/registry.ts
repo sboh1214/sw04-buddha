@@ -362,7 +362,7 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   },
   'GET /me/closure': {
     reason:
-      '본인 탈퇴의 확인 화면(#140, ADR-0069 결정 4 #140 «남은 Coin의 소멸과 되돌릴 수 없음을 한 화면에»): 세션 계정이 지금 탈퇴하면 소멸할 Coin(사용 가능 잔액, availableCoin)과 지금 탈퇴를 막는 것 — 관리자 권한, 정산되지 않은 계약, 진행 중인 결제·환불, 대기 주문의 까닭(refusals)과 서 있는 작성 제한·계정 제한의 종류와 끝(restriction) — 과 그 계정의 시작 Coin이 지급되었는지(startGrantReceived — 화면이 같은 번호의 재가입 안내를 보일지, ADR-0086의 오너 결정 2026-10-23 (3차) 답 9) 만. 다른 계정의 것은 없다',
+      '본인 탈퇴의 확인 화면(#140, ADR-0069 결정 4 #140 «남은 Coin의 소멸과 되돌릴 수 없음을 한 화면에»): 세션 계정이 지금 탈퇴하면 소멸할 Coin(사용 가능 잔액, availableCoin)과 지금 탈퇴를 막는 것 — 관리자 권한, 정산되지 않은 계약, 진행 중인 결제·환불, 대기 주문의 까닭(refusals)과 서 있는 작성 제한·계정 제한의 종류와 끝(restriction) — 과 그 계정의 시작 Coin이 지급되었는지(startGrantReceived — 화면이 같은 번호의 재가입 안내를 보일지, ADR-0086의 오너 결정 2026-10-23 (3차) 답 9), 그 계정이 낸 시장 제안 가운데 접수·검토 중인 것이 있는지(pendingProposals — 화면이 제안은 운영자가 그대로 처리하고 탈퇴한 뒤에는 볼 수 없다는 줄을 보일지, #77, ADR-0089의 오너 결정 2026-10-24) 만. 다른 계정의 것은 없다',
   },
   'POST /me/closure': {
     reason:

@@ -87,19 +87,25 @@ export interface ClosureLine {
  * (3차) 7, ADR-0086): what goes at once (#57-18) and, right under it, that the 본인확인 record —
  * number and real name — is kept for the retention period and then deleted (ADR-0070 2차 답 1, the
  * exception to «곧바로»); what stays — posts, comments and likes, bylined '탈퇴한 사용자' (#37-16,
- * #37-17); and, only for an account whose start Coin was paid (`startGrantReceived`, owner
- * decision 2026-10-23 (3차) 9), that the same number gets no start Coin again on a new sign-up
- * (#57-1). A grant still waiting is cancelled by the closure and its number may receive the start
- * Coin with the next account (owner decision 2026-10-18 on #70), so that account is told nothing,
- * and no other limit counted by number is mentioned.
+ * #37-17); only for an account with a market proposal still 접수 or 검토 (`pendingProposals`, #77's
+ * owner decision 2026-10-24, ADR-0089), right under what stays, that the operators process it as
+ * it is and that the member will not see it once closed (ADR-0069 decision 4 #140); and, only for
+ * an account whose start Coin was paid (`startGrantReceived`, owner decision 2026-10-23 (3차) 9),
+ * that the same number gets no start Coin again on a new sign-up (#57-1). A grant still waiting is
+ * cancelled by the closure and its number may receive the start Coin with the next account (owner
+ * decision 2026-10-18 on #70), so that account is told nothing, and no other limit counted by
+ * number is mentioned.
  */
 export function closureLines(
-  check: Pick<AccountClosureCheck, 'startGrantReceived'>,
+  check: Pick<AccountClosureCheck, 'startGrantReceived' | 'pendingProposals'>,
 ): readonly ClosureLine[] {
   return [
     { testId: 'closure-deleted', text: copy.closureDeleted },
     { testId: 'closure-phone-records', text: copy.closurePhoneRecords },
     { testId: 'closure-kept', text: copy.closureKept },
+    ...(check.pendingProposals
+      ? [{ testId: 'closure-proposals', text: copy.closureProposals }]
+      : []),
     ...(check.startGrantReceived
       ? [{ testId: 'closure-start-grant', text: copy.closureStartGrant }]
       : []),

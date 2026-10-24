@@ -30,7 +30,8 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  * period the same way: the period the owner decides for it — a new setting in
  * RETENTION_PERIOD_SETTINGS or an existing one's, whose description then names the kind too — a
  * purge kind here, and its step in the worker's job (docs/SETTINGS.md '보존기간 항목 등록하기').
- * #77's market proposals came so, with a setting of their own (owner decision 2026-10-24 13).
+ * #77's market proposals came so, with a setting of their own (ADR-0087's owner decision
+ * 2026-10-24 13).
  */
 
 /**

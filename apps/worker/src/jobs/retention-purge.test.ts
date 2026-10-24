@@ -717,7 +717,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect((await t.db.select().from(schema.reports)).map((row) => row.id)).toEqual([pending.id]);
   });
 
-  it('deletes a withdrawn account’s market proposals once processed, from the later of the withdrawal and the end of their processing; waiting ones and a live account’s stay (#77, owner decision 2026-10-24 13)', async () => {
+  it('deletes a withdrawn account’s market proposals once processed, from the later of the withdrawal and the end of their processing; waiting ones and a live account’s stay (#77, ADR-0087’s owner decision 2026-10-24 13)', async () => {
     const proposer = (await createUser(t.db)).user.id;
     const live = (await createUser(t.db)).user.id;
     const long = before(new Date(), 40);

@@ -15,6 +15,7 @@ import {
   freshTag,
   logOut,
   meOf,
+  openClosure,
   openSetPassword,
   setFirstPassword,
   signIn,
@@ -38,8 +39,10 @@ import {
  * and the way to 조치·신고 내역 while the 철회 stays open (#185·#139); an account with steps of its
  * onboarding left — a new one, or one a terms revision sent back to agree again — opens 내 제안 and
  * takes a 접수 proposal back, while its 시장 제안하기 still meets the gate (owner decision
- * 2026-10-20); and a member who closed the account (#140) stays on the operators' screens as
- * '탈퇴한 사용자', the proposal reviewed all the same.
+ * 2026-10-20); and a member whose 탈퇴 screen (#140) said, only once a proposal of theirs was 접수,
+ * that the operators process it as it is and that they will not see it (owner decision 2026-10-24)
+ * closes the account and stays on the operators' screens as '탈퇴한 사용자', the proposal reviewed
+ * all the same.
  *
  * Who may propose (onboarding, restrictions), the waiting limit, the exact edges of both limits,
  * the status machine against races and who sees what are the API's integration tests
@@ -554,20 +557,41 @@ test.describe('시장 제안', () => {
     await expect(page).toHaveURL('/onboarding?next=%2Fproposals%2Fnew');
   });
 
-  test('탈퇴한 회원의 제안은 운영자 화면에 탈퇴한 사용자로 남고 그대로 검토된다', async ({
+  test('접수 제안이 있는 회원의 탈퇴 화면만 운영자가 그대로 처리하며 탈퇴한 뒤에는 볼 수 없다고 말하고, 탈퇴한 회원의 제안은 운영자 화면에 탈퇴한 사용자로 남고 그대로 검토된다', async ({
     browser,
     page,
   }) => {
     const group = freshTag();
     await signUp(page, freshEmail());
+    // Nothing proposed: the 탈퇴 screen (#140) says nothing of proposals (owner decision
+    // 2026-10-24, ADR-0089).
+    await openClosure(page);
+    await expect(page.getByTestId('closure-kept')).toHaveText(copy.closureKept);
+    await expect(page.getByTestId('closure-proposals')).toHaveCount(0);
+
+    // A 접수 proposal: the line, right under what stays (ADR-0089 7-34 — this database pays no
+    // start Coin, so no start Coin's line follows it).
     const waiting = await proposeThroughApi(page, `E2E 탈퇴 ${group}`);
-    const me = await meOf(page.request);
-    // 탈퇴 (#140): a waiting proposal does not refuse it.
-    await dataOf(
-      await page.request.post('/api/v1/me/closure', {
-        data: { confirmation: '탈퇴', expectedAccountId: me.id },
-      }),
+    await openClosure(page);
+    await expect(page.getByTestId('closure-proposals')).toHaveText(copy.closureProposals);
+    const lines = page.getByTestId('closure-deleted').locator('xpath=../*');
+    expect(
+      await lines.evaluateAll((nodes) => nodes.map((node) => node.getAttribute('data-testid'))),
+    ).toEqual(['closure-deleted', 'closure-phone-records', 'closure-kept', 'closure-proposals']);
+
+    // It refuses nothing (ADR-0069 decision 4 #140): closed on the screen, home and signed out.
+    await expect(page.getByTestId('closure-blocked')).toHaveCount(0);
+    await page.getByTestId('closure-confirmation').fill('탈퇴');
+    const answer = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' &&
+        new URL(response.url()).pathname === '/api/v1/me/closure',
     );
+    await page.getByTestId('closure-submit').click();
+    const closed = await answer;
+    expect(closed.status(), await closed.text()).toBe(200);
+    await expect(page).toHaveURL('/');
+    expect((await page.request.get('/api/v1/me')).status()).toBe(401);
 
     const operator = await adminBrowser(browser);
     try {

@@ -4,6 +4,7 @@ import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   AUTH_USER_NAME,
+  PENDING_PROPOSAL_STATUSES,
   closedAccountEmail,
   serializeCoinAmount,
   type AccountClosureCheck,
@@ -109,10 +110,11 @@ interface Closed {
  *    an admin closes only once the role is revoked, and a request outlives its requester's role.
  *
  * What stays (#57-18): the ledger, orders, fills and positions, the watch events, the consent
- * records, posts and comments with their histories, likes, reports filed and received and actions
- * — reports still waiting are processed as any (decision 4 #140 «처리 중인 신고 … 그대로 검토»), the
- * member no longer seeing them. Migration 0043 checks at the commit that nothing of the deletions
- * was left (`profiles_closed_completely`).
+ * records, posts and comments with their histories, likes, reports filed and received and actions,
+ * market proposals (#77) — reports and proposals still waiting are processed as any (decision 4
+ * #140 «처리 중인 신고·이의·제안: 그대로 검토»), the member no longer seeing them, which the
+ * confirmation says to an account with a proposal waiting (`pendingProposals`). Migration 0043
+ * checks at the commit that nothing of the deletions was left (`profiles_closed_completely`).
  *
  * Asked twice at once (two tabs), the second waits for the first and answers what it did: the
  * closure runs once. After the commit the sessions are gone, so every later request is
@@ -146,7 +148,32 @@ export class AccountClosureService {
       refusals: await this.refusalsOf(this.db, userId, account.role),
       restriction: await restrictionInForce(this.db, userId),
       startGrantReceived: await this.startGrantReceived(userId),
+      pendingProposals: await this.pendingProposals(userId),
     };
+  }
+
+  /**
+   * Whether a market proposal of the account is still being processed — 접수 or 검토 (#77's owner
+   * decision 2026-10-24, ADR-0089): only then does the screen say that the operators process it as
+   * it is and that the member will not see it once closed (ADR-0069 decision 4 #140). A closure
+   * never waits for one (it is no refusal) and leaves the rows as they are. The account's own: the
+   * proposals of another account on the same number are that account's, which the member never
+   * saw. Read without locks like the rest of the check — a proposal made after the screen read it
+   * is processed all the same.
+   */
+  private async pendingProposals(userId: string): Promise<boolean> {
+    const { marketProposals } = schema;
+    const [pending] = await this.db
+      .select({ one: sql`1` })
+      .from(marketProposals)
+      .where(
+        and(
+          eq(marketProposals.userId, userId),
+          inArray(marketProposals.status, [...PENDING_PROPOSAL_STATUSES]),
+        ),
+      )
+      .limit(1);
+    return pending !== undefined;
   }
 
   /**

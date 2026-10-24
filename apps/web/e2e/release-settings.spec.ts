@@ -35,7 +35,8 @@ const RETENTION_ITEMS = [
   ['retention.deleted_posts', '지운 글 원문·수정 이력 보존기간'],
   ['retention.moderation_records', '신고·제재 기록 보존기간'],
   ['retention.removed_profile_items', '운영자가 지운 프로필 항목 보존기간'],
-  // #77 (owner decision 2026-10-24 13): a withdrawn account's market proposals, once processed.
+  // #77 (ADR-0087's owner decision 2026-10-24 13): a withdrawn account's market proposals, once
+  // processed.
   ['retention.market_proposals', '시장 제안 기록 보존기간'],
 ] as const;
 

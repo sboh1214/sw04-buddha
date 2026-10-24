@@ -52,7 +52,7 @@ describe('release settings registry', () => {
       'retention.deleted_posts',
       'retention.moderation_records',
       'retention.removed_profile_items',
-      // 시장 제안 기록 보존기간 (#77, owner decision 2026-10-24 13).
+      // 시장 제안 기록 보존기간 (#77, ADR-0087's owner decision 2026-10-24 13).
       'retention.market_proposals',
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
@@ -138,7 +138,7 @@ describe('release settings registry', () => {
     }
   });
 
-  it('names the market proposals’ period as the owner set it: a withdrawn account’s, once processed (#77, owner decision 2026-10-24 13)', () => {
+  it('names the market proposals’ period as the owner set it: a withdrawn account’s, once processed (#77, ADR-0087’s owner decision 2026-10-24 13)', () => {
     const definition = RETENTION_PERIOD_SETTINGS.market_proposals;
     expect(definition).toBe(MARKET_PROPOSALS_RETENTION_SETTING);
     expect(definition).toMatchObject({

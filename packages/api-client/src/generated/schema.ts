@@ -1655,7 +1655,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** What closing the account would do now: the Coin it forfeits, what refuses it, and whether the start Coin was paid to it — its number gets none again (탈퇴, #140) */
+        /** What closing the account would do now: the Coin it forfeits, what refuses it, whether the start Coin was paid to it — its number gets none again — and whether a market proposal of it is still being processed (탈퇴, #140; #77) */
         get: operations["getMyClosureCheck"];
         put?: never;
         /** Close the account (탈퇴, #140): type '탈퇴'; forfeits the Coin left, deletes the identifying data and ends every session */
@@ -2532,6 +2532,7 @@ export type components = {
         };
         AccountClosureCheck: {
             availableCoin: components["schemas"]["CoinAmount"];
+            pendingProposals: boolean;
             refusals: components["schemas"]["AccountClosureRefusal"][];
             restriction: components["schemas"]["RestrictedDetails"] | null;
             startGrantReceived: boolean;

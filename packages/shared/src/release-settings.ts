@@ -290,9 +290,9 @@ export const REMOVED_PROFILE_ITEMS_RETENTION_SETTING = defineReleaseSetting({
 });
 
 /**
- * 시장 제안 기록의 보존기간 (#77, ADR-0089; owner decision 2026-10-24 13, ADR-0087 결과 5): a withdrawn
- * account's market proposals (`market_proposals` — the form as submitted, the keyed hash of the
- * number, the status, the operators' reasons, memos and internal memo), deleted once this period
+ * 시장 제안 기록의 보존기간 (#77, ADR-0089; ADR-0087's owner decision 2026-10-24 13 and 결과 5): a
+ * withdrawn account's market proposals (`market_proposals` — the form as submitted, the keyed hash of
+ * the number, the status, the operators' reasons, memos and internal memo), deleted once this period
  * has passed since the later of the withdrawal and the end of their processing — the 채택 or 반려,
  * a market linked to a 채택 later, or the 철회 (ADR-0069 decision 7). One waiting for the operators
  * (접수, 검토) is never deleted: the operators still review it (decision 4 #140). A live account's

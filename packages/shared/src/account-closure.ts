@@ -97,8 +97,12 @@ export type AccountClosureNotAllowedDetails = z.infer<typeof accountClosureNotAl
  * no start Coin again on a new sign-up (#57-1). A grant still waiting is cancelled by the closure
  * and its number may receive the start Coin with the next account (owner decision 2026-10-18 on
  * #70), and an account that never had one (none asked yet, or its number's went to another
- * account — `number_used`) is told nothing either. Read as of now: the closure asks everything
- * again in its own transaction.
+ * account — `number_used`) is told nothing either. And whether the account has a market proposal
+ * still being processed (`pendingProposals` — 접수 or 검토, PENDING_PROPOSAL_STATUSES; #77's owner
+ * decision 2026-10-24, ADR-0089): only then does the screen say that the operators process what it
+ * proposed as it is and that the member will not see it once closed (ADR-0069 decision 4 #140
+ * «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다. 탈퇴한 본인은 볼 수 없다»). Read as of now: the
+ * closure asks everything again in its own transaction.
  */
 export const accountClosureCheckSchema = z
   .object({
@@ -107,6 +111,12 @@ export const accountClosureCheckSchema = z
     restriction: restrictedDetailsSchema.nullable(),
     /** The account's start grant was paid (`granted`): its number never gets one again. */
     startGrantReceived: z.boolean(),
+    /**
+     * A market proposal of the account is 접수 or 검토 (#77): the operators process it after the
+     * closure, out of the member's sight. Proposals decided or retracted, and another account's on
+     * the same number, do not count.
+     */
+    pendingProposals: z.boolean(),
   })
   .meta({ id: 'AccountClosureCheck' });
 export type AccountClosureCheck = z.infer<typeof accountClosureCheckSchema>;

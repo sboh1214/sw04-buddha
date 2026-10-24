@@ -1005,9 +1005,9 @@ const phoneVerificationRecords: Step = async (tx, { cutoff, limit }) => {
 };
 
 /**
- * A withdrawn account's market proposals (#77, ADR-0089; owner decision 2026-10-24 13 — their own
- * period, '시장 제안 기록'), once the period has passed since the later of the withdrawal and the end
- * of their processing: the 채택 or 반려 (`decided_at`), a market linked to a 채택 later
+ * A withdrawn account's market proposals (#77, ADR-0089; ADR-0087's owner decision 2026-10-24 13 —
+ * their own period, '시장 제안 기록'), once the period has passed since the later of the withdrawal
+ * and the end of their processing: the 채택 or 반려 (`decided_at`), a market linked to a 채택 later
  * (`market_linked_at`, owner decision 2026-10-19 8) or the 철회 (`retracted_at`) — ADR-0069 decision
  * 7 «처리 중이면 남기고, 탈퇴와 처리 가운데 늦은 쪽부터». One still waiting for the operators (접수,
  * 검토) is never taken: they review and decide it all the same (decision 4 #140), and its end is not

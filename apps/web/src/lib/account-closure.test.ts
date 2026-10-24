@@ -36,6 +36,7 @@ const check = (overrides: Partial<AccountClosureCheck> = {}): AccountClosureChec
   refusals: [],
   restriction: null,
   startGrantReceived: false,
+  pendingProposals: false,
   ...overrides,
 });
 
@@ -89,6 +90,38 @@ describe('the confirmation screen', () => {
     ]);
     // No other limit counted by number is mentioned (the same answer).
     expect(copy.closureStartGrant).not.toMatch(/한도|신고|좋아요|제안|빈도/);
+  });
+
+  it('tells only an account with a market proposal 접수 or 검토 that the operators process it and it will not see it (#77, owner decision 2026-10-24)', () => {
+    const line = { testId: 'closure-proposals', text: copy.closureProposals };
+    expect(copy.closureProposals).toBe(
+      '낸 시장 제안은 운영자가 그대로 처리하며, 탈퇴한 뒤에는 볼 수 없습니다.',
+    );
+    // 접수 or 검토 (the API's `pendingProposals`): right under what stays.
+    expect(closureLines(check({ pendingProposals: true }))).toEqual([
+      { testId: 'closure-deleted', text: copy.closureDeleted },
+      { testId: 'closure-phone-records', text: copy.closurePhoneRecords },
+      { testId: 'closure-kept', text: copy.closureKept },
+      line,
+    ]);
+    // None proposed, or every one decided or retracted (the API says false): nothing is said.
+    expect(closureLines(check({ pendingProposals: false }))).not.toContainEqual(line);
+    // With the start Coin's line too: the proposals' first, still right under what stays (what
+    // the closure leaves behind), then the start Coin's (a sign-up after it) — ADR-0089 7-34.
+    expect(
+      closureLines(check({ pendingProposals: true, startGrantReceived: true })).map(
+        (each) => each.testId,
+      ),
+    ).toEqual([
+      'closure-deleted',
+      'closure-phone-records',
+      'closure-kept',
+      'closure-proposals',
+      'closure-start-grant',
+    ]);
+    // Nothing of the proposal limits counted by number (owner decision 2026-10-19 15, the start
+    // Coin's line likewise).
+    expect(copy.closureProposals).not.toMatch(/한도|번호|건/);
   });
 
   it('writes the Coin the closure forfeits as every screen writes Coin (#57-16)', () => {

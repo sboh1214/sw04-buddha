@@ -46,7 +46,9 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  * and the way to 조치·신고 내역 (decision 4 #140 «제재 중 탈퇴») — what goes and what stays
  * (`closureLines`: the 본인확인 record kept for the retention period, and the start Coin not given
  * again to the same number only for an account that received it — owner decision 2026-10-23 (3차)
- * 7 and 9) and says that the closure is immediate and cannot be undone (#57-17). While something
+ * 7 and 9 — and, only for an account with a market proposal 접수 or 검토, that the operators process
+ * it as it is and the member will not see it once closed — #77's owner decision 2026-10-24) and
+ * says that the closure is immediate and cannot be undone (#57-17). While something
  * refuses it, the field and the button are off and the screen says why. The onboarding gate leaves
  * this screen to an account that has not finished its onboarding (owner decision 2026-10-23 (2차)
  * 3), which comes here by the small link at the bottom of every onboarding screen ((4차) 1); its
