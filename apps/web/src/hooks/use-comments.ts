@@ -1,6 +1,7 @@
 'use client';
 
 import {
+  notifyManager,
   useInfiniteQuery,
   useMutation,
   useQueryClient,
@@ -86,6 +87,13 @@ import { afterRefusal } from './use-posts';
  * reader's address limit (ADR-0074 7-28). A read whose answer has already arrived but not yet been
  * written can still land last — a window of a microtask, left as the disputes' is; the next read
  * puts it right.
+ *
+ * The three reads that read pages themselves and put them in after — a new 댓글's, a new 대댓글's
+ * and '답글 더 보기' — are not the query's, and no write cancels them. What they read can be older
+ * than a write that lands while they read: an edit or a deletion of a comment on those pages, a
+ * new 대댓글 or '답글 더 보기' of a thread on them. Each logs the writes from the moment it starts
+ * reading and does them again over its pages as it puts them in (`putReadPages`, Codex review on PR
+ * #220, round 4 — ADR-0074 7-34), so the pages keep every write that landed before them.
  *
  * The post's count moves with the write at once (`moveCommentCount`) and the post and the
  * community list's cards are then read again, which only confirms it — or finds the post gone,
@@ -244,9 +252,12 @@ async function readThreadsAgain(queryClient: QueryClient, postId: string) {
  * '답글 더 보기' (오너 결정 2026-10-21, ADR-0074): the next 50 대댓글 of the thread `threadId`,
  * read from the cursor the thread holds and written after its replies (`withMoreReplies` — unless
  * the thread was read again meanwhile, when its own cursor reads on). Nothing to read, nothing
- * asked. Written through `writePages`, as a write's answer is: a read of the pages on its way is
- * cancelled first — a 더 보기 the reader pressed among them, its button there to press again —
- * since it carries the pages from before and, landing after, would take these 대댓글 off again.
+ * asked. Written as a write's answer is: a read of the pages on its way is cancelled first — a
+ * 더 보기 the reader pressed among them, its button there to press again — since it carries the
+ * pages from before and, landing after, would take these 대댓글 off again; and the writes that
+ * landed while the page was read are done again over it (`putReadPages`, 7-34) — an edit or a
+ * deletion of the writer's own 대댓글 placed at the end of the thread, which the page may bring as
+ * it was.
  * NOT_FOUND says the 댓글 left every view (deleted with nothing under it any more, or its post
  * gone): the thread on screen is old, so the post and its comments are read again — the thread
  * goes, and a box or a draft on it with it, by the rules of a place gone — rather than a button
@@ -285,9 +296,12 @@ async function readMoreRepliesOnce(
   const from = heldRepliesCursor(queryClient, postId, threadId);
   if (from === null) return;
   let page: ReplyPage;
+  // The reader's writes that land while this reads, done again over what it read (7-34).
+  const log = logWritesFrom(queryClient, postId);
   try {
     page = await fetchReplyPage(threadId, from);
   } catch (error) {
+    stopLogging(queryClient, postId, log);
     if (isApiError(error, 'NOT_FOUND')) {
       await readThreadsAgain(queryClient, postId);
       return;
@@ -298,7 +312,13 @@ async function readMoreRepliesOnce(
     if (heldRepliesCursor(queryClient, postId, threadId) === from) throw error;
     return readMoreRepliesOnce(queryClient, postId, threadId, true);
   }
-  await writePages(queryClient, postId, (held) => withMoreReplies(held, threadId, from, page));
+  await putReadPages(
+    queryClient,
+    postId,
+    log,
+    (held) => withMoreReplies(held, threadId, from, page),
+    true,
+  );
 }
 
 /**
@@ -350,7 +370,9 @@ export function useMoreReplies(postId: string, threadId: string) {
  * the server's word, not a fallback: the 대댓글 was deleted meanwhile — by its author in another tab
  * — so the pages read are written as they are and the answer is not put back (Codex review on PR
  * #220): put back, it would show again, with an edit and a deletion the server can only answer
- * NOT_FOUND, until a later read.
+ * NOT_FOUND, until a later read. Whatever is put in, the writes that landed while the thread was
+ * read are done again over it (`putReadPages`, 7-34): the pages read can hold the writer's own
+ * 대댓글 placed at the end of the thread as it was before an edit or a deletion of it.
  */
 async function readOnReplies(
   queryClient: QueryClient,
@@ -367,6 +389,8 @@ async function readOnReplies(
   const pages: ReplyPage[] = [];
   // The thread read to its end, the answer on none of its pages: gone since it was written.
   let gone = false;
+  // The reader's writes that land while this reads, done again over what it read (7-34).
+  const log = logWritesFrom(queryClient, postId);
   if (from !== null) {
     try {
       let cursor: string | null = from;
@@ -385,16 +409,22 @@ async function readOnReplies(
       pages.length = 0;
     }
   }
-  await writePages(queryClient, postId, (held) => {
-    let next = held;
-    let cursor = from;
-    for (const page of pages) {
-      if (cursor === null) break;
-      next = withMoreReplies(next, threadId, cursor, page);
-      cursor = page.nextCursor;
-    }
-    return gone ? next : withNewComment(next, reply, writerOnScreen(queryClient, accountId));
-  });
+  await putReadPages(
+    queryClient,
+    postId,
+    log,
+    (held) => {
+      let next = held;
+      let cursor = from;
+      for (const page of pages) {
+        if (cursor === null) break;
+        next = withMoreReplies(next, threadId, cursor, page);
+        cursor = page.nextCursor;
+      }
+      return gone ? next : withNewComment(next, reply, writerOnScreen(queryClient, accountId));
+    },
+    true,
+  );
 }
 
 export function useComments(postId: string) {
@@ -436,15 +466,100 @@ function moveCommentCount(queryClient: QueryClient, postId: string, by: 1 | -1) 
   );
 }
 
-/** Writes into the pages held, once no read of them is on its way to undo it (see above). */
-async function writePages(
+/** What a write does to the pages held: a function of them, so it can be done again over others. */
+type PagesWrite = (held: CommentPages | undefined) => CommentPages | undefined;
+
+/**
+ * The writes of each post's pages that landed while a read toward a place was on its way, by query
+ * client and post — one log a read (`logWritesFrom`). The three reads that read the server's pages
+ * themselves, not through the query, and then put what they read into the pages held — a new 댓글's
+ * (`readOnToTheEnd`), a new 대댓글's (`readOnReplies`) and '답글 더 보기' (`readMoreReplies`) —
+ * cannot be cancelled by a write as the query's reads are (`writePages`), and what they bring was
+ * read before the writes that landed meanwhile: an edit, a deletion, another new 대댓글 or another
+ * '답글 더 보기' on a comment those pages hold too (Codex review on PR #220, round 4). Put in as
+ * read, it would bring back the old body or the deleted comment, or take the new 대댓글 off again.
+ * So each read logs the writes that land from the moment it starts, and does them again over its
+ * pages as it puts them in (`putReadPages`, ADR-0074 7-34).
+ */
+const writesWhileReading = new WeakMap<QueryClient, Map<string, Set<PagesWrite[]>>>();
+
+/** A log of the writes of `postId`'s pages from now on, until `putReadPages` (or `stopLogging`). */
+function logWritesFrom(queryClient: QueryClient, postId: string): PagesWrite[] {
+  let byPost = writesWhileReading.get(queryClient);
+  if (byPost === undefined) {
+    byPost = new Map();
+    writesWhileReading.set(queryClient, byPost);
+  }
+  let logs = byPost.get(postId);
+  if (logs === undefined) {
+    logs = new Set();
+    byPost.set(postId, logs);
+  }
+  const log: PagesWrite[] = [];
+  logs.add(log);
+  return log;
+}
+
+/** `log` closed: no write is added to it any more (again, harmlessly). */
+function stopLogging(queryClient: QueryClient, postId: string, log: PagesWrite[]) {
+  const byPost = writesWhileReading.get(queryClient);
+  const logs = byPost?.get(postId);
+  if (logs === undefined) return;
+  logs.delete(log);
+  if (logs.size === 0) byPost?.delete(postId);
+}
+
+/** `write` done on the pages held, and added to every log of a read of them still on its way. */
+function landWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
+  queryClient.setQueryData<CommentPages>(postCommentsKey(postId), write);
+  for (const log of writesWhileReading.get(queryClient)?.get(postId) ?? []) log.push(write);
+}
+
+/**
+ * Writes into the pages held, once no read of them is on its way to undo it (see above) — and into
+ * the log of every read toward a place still on its way, done again over what it reads (7-34).
+ */
+async function writePages(queryClient: QueryClient, postId: string, write: PagesWrite) {
+  await queryClient.cancelQueries({ queryKey: postCommentsKey(postId), exact: true });
+  landWrite(queryClient, postId, write);
+}
+
+/**
+ * What a read toward a place read (`put`) into the pages held, and then every write that landed
+ * while it read (`log`, from `logWritesFrom`) done again over them, in the order they landed: each
+ * is a function of the pages held — an edit's answer in place of its comment, a deletion's, a new
+ * 대댓글 at the end of its thread, a reply page after the cursor it was read from — so it does to
+ * what the read brought what it did to the pages it landed on, and does nothing again to what
+ * already has it (a page read after it landed; one the read did not touch). An edit's answer goes
+ * in only over the comment as published and edited no later (`withEditedComment`): a read since
+ * may know it deleted, hidden or edited again. Two writes, one notification: what the read brought
+ * goes in first, as a read's pages (`keepPlacedComments` settles the writer's own comments placed
+ * at the end against them), and the writes after it, as writes. `logged`: whether `put` itself
+ * goes into the logs of the other reads still on their way — a new 대댓글 and the reply page of
+ * '답글 더 보기' are writes of a thread over the pages held, and done again over another read's
+ * pages as any write is; a new 댓글's pages are what the server held when it read them, and done
+ * again over another read's, they would put that read's back as they were.
+ */
+async function putReadPages(
   queryClient: QueryClient,
   postId: string,
-  write: (held: CommentPages | undefined) => CommentPages | undefined,
+  log: PagesWrite[],
+  put: PagesWrite,
+  logged: boolean,
 ) {
   const key = postCommentsKey(postId);
   await queryClient.cancelQueries({ queryKey: key, exact: true });
-  queryClient.setQueryData<CommentPages>(key, write);
+  // From here to the end nothing else runs: a write after this lands on what is put in below.
+  stopLogging(queryClient, postId, log);
+  notifyManager.batch(() => {
+    if (logged) landWrite(queryClient, postId, put);
+    else queryClient.setQueryData<CommentPages>(key, put);
+    if (log.length > 0) {
+      queryClient.setQueryData<CommentPages>(key, (held) =>
+        log.reduce<CommentPages | undefined>((pages, write) => write(pages), held),
+      );
+    }
+  });
 }
 
 /**
@@ -471,7 +586,11 @@ async function writePages(
  * account that wrote it, while it is the one on screen as the 댓글 is put in, the read done (오너
  * 결정 2026-10-24, `keepPlacedComments`, `writerOnScreen`; ADR-0074 7-14). A read that reaches the
  * end without it — the 댓글 deleted meanwhile, in another tab — is the server's word: the pages
- * read are written as they are, and the answer is not put back.
+ * read are written as they are, and the answer is not put back. Either way — the pages read, or
+ * the last page held read again — the reader's writes that landed while this read are done again
+ * over them as they go in (`putReadPages`, Codex review on PR #220, round 4 — ADR-0074 7-34): an
+ * edit or a deletion of a comment on them, a new 대댓글 or '답글 더 보기' of a thread on them, which
+ * the pages, read before, would otherwise undo.
  */
 async function readOnToTheEnd(
   queryClient: QueryClient,
@@ -493,6 +612,8 @@ async function readOnToTheEnd(
   let cursor = held.pageParams[from] as string | undefined;
   // Whether the read came to the 댓글's page, or to the end of the 댓글: either is the server's.
   let done = false;
+  // The reader's writes that land while this reads, done again over what it read (7-34).
+  const log = logWritesFrom(queryClient, postId);
   try {
     while (!done && pages.length < COMMENT_READ_ON_PAGES) {
       const page: CommentPage = await queryFn({ pageParam: cursor, client: queryClient, budget });
@@ -509,30 +630,37 @@ async function readOnToTheEnd(
     // Failed, or COMMENT_READ_ON_PAGES read and the 댓글 not among them: as a read that failed,
     // save the last page held as read again — its cursor leaves 더 보기 there (see above).
     const [lastReadAgain] = pages;
-    await writePages(queryClient, postId, (current) =>
-      withNewComment(
-        current !== undefined && lastReadAgain !== undefined
-          ? {
-              ...current,
-              pages: [...current.pages.slice(0, from), lastReadAgain],
-              pageParams: [...current.pageParams.slice(0, from), pageParams[0]],
-            }
-          : current,
-        comment,
-        writerOnScreen(queryClient, accountId),
-      ),
+    await putReadPages(
+      queryClient,
+      postId,
+      log,
+      (current) =>
+        withNewComment(
+          current !== undefined && lastReadAgain !== undefined
+            ? {
+                ...current,
+                pages: [...current.pages.slice(0, from), lastReadAgain],
+                pageParams: [...current.pageParams.slice(0, from), pageParams[0]],
+              }
+            : current,
+          comment,
+          writerOnScreen(queryClient, accountId),
+        ),
+      false,
     );
     return;
   }
-  await writePages(
+  await putReadPages(
     queryClient,
     postId,
+    log,
     (current) =>
       current && {
         ...current,
         pages: [...current.pages.slice(0, from), ...pages],
         pageParams: [...current.pageParams.slice(0, from), ...pageParams],
       },
+    false,
   );
 }
 

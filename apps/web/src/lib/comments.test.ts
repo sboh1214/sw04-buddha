@@ -444,6 +444,42 @@ describe('an edit', () => {
     const more = pagesOf([[threadWithMore('a-50', comment('a'), comment('a1', 'a'))]]);
     expect(commentThreadsOf(withEditedComment(more, edited))[0]?.repliesNextCursor).toBe('a-50');
   });
+
+  it('goes in only over the comment as published and edited no later: done again over pages read since (ADR-0074 7-34), it keeps a deletion, a hiding or a later edit they know of', () => {
+    const answer = { ...comment('a1', 'a', '고친 답글'), editedAt: '2026-10-19T01:00:00.000Z' };
+    const later = { ...comment('a1', 'a', '또 고친 답글'), editedAt: '2026-10-19T02:00:00.000Z' };
+    const same = { ...comment('a1', 'a', '같은 때'), editedAt: answer.editedAt };
+    const replyOf = (pages: CommentPages | undefined) => commentThreadsOf(pages)[0]?.replies[0];
+    // Deleted or hidden since: the placeholder stays.
+    for (const state of ['deleted', 'hidden'] as const) {
+      const held = pagesOf([[thread(comment('a'), { state, id: 'a1' })]]);
+      expect(replyOf(withEditedComment(held, answer))).toEqual({ state, id: 'a1' });
+    }
+    expect(
+      commentThreadsOf(
+        withEditedComment(pagesOf([[thread({ state: 'deleted', id: 'a' })]]), {
+          ...comment('a', null, '고친 댓글'),
+          editedAt: answer.editedAt,
+        }),
+      )[0]?.comment,
+    ).toEqual({ state: 'deleted', id: 'a' });
+    // Edited again since: the later edit stays; one as old, or older, takes the answer.
+    expect(replyOf(withEditedComment(pagesOf([[thread(comment('a'), later)]]), answer))).toBe(
+      later,
+    );
+    expect(replyOf(withEditedComment(pagesOf([[thread(comment('a'), same)]]), answer))).toBe(
+      answer,
+    );
+    expect(
+      replyOf(withEditedComment(pagesOf([[thread(comment('a'), comment('a1', 'a'))]]), answer)),
+    ).toBe(answer);
+    // An answer with no '수정됨' does not go over a comment that has one.
+    expect(
+      replyOf(
+        withEditedComment(pagesOf([[thread(comment('a'), answer)]]), comment('a1', 'a', 'x')),
+      ),
+    ).toBe(answer);
+  });
 });
 
 describe('a deletion', () => {

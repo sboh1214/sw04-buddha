@@ -202,10 +202,28 @@ describe('a comment’s links', () => {
       words(`:${')'.repeat(700)}`),
     ]);
     expect(commentSegments(bodies[2]!)).toEqual([words(bodies[2]!)]);
-    // A generous budget for 60 calls: about 1 ms each now, about 75 ms each before.
-    const started = performance.now();
-    for (let round = 0; round < 20; round += 1) for (const body of bodies) commentSegments(body);
-    expect(performance.now() - started).toBeLessThan(1_500);
+    // Timed against a baseline, not the clock: the same bodies with letters for the closers — as
+    // long, as many candidates, each running to the end — cost what any body of that length does.
+    // Linear, the closers cost about two to three times that; counted again per dropped closer,
+    // about 150 times. Each round times both, one after the other, and the fastest round of each
+    // is compared: work elsewhere on the machine (other test runs in parallel) only ever adds time,
+    // so a wall-clock budget failed under load while the fastest rounds still tell the two apart.
+    const plain = bodies.map((body) => body.replaceAll(')', 'a'));
+    const timed = (texts: readonly string[]) => {
+      const started = performance.now();
+      for (const text of texts) commentSegments(text);
+      return performance.now() - started;
+    };
+    const LIMIT = 20;
+    let slowest = Infinity;
+    let baseline = Infinity;
+    for (let round = 0; round < 20; round += 1) {
+      slowest = Math.min(slowest, timed(bodies));
+      baseline = Math.min(baseline, timed(plain));
+      // Quadratic, a round is a second or more: three say so without running into the timeout.
+      if (round >= 2 && slowest > LIMIT * baseline) break;
+    }
+    expect(slowest).toBeLessThan(LIMIT * baseline);
   });
 
   it('gives back the text it was given, run by run', () => {

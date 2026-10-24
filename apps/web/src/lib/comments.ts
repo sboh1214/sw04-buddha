@@ -395,17 +395,32 @@ export function withNewComment(
     : withPlaced(next, { id: comment.id, threadId: parentId }, writer);
 }
 
-/** An edit's answer (`PUT /comments/:commentId`) in place of the comment it replaces. */
+/**
+ * An edit's answer (`PUT /comments/:commentId`) in place of the comment it replaces — as published
+ * and edited no later than the answer: the edit was done on a published comment, so one held as a
+ * placeholder was deleted or hidden after it, and one edited later was edited again after it. The
+ * pages held never know that of their own; a read toward a place does, whose pages the edit that
+ * landed while it read is done again over (`putReadPages`, hooks/use-comments.ts — ADR-0074 7-34).
+ */
 export function withEditedComment(
   pages: CommentPages | undefined,
   comment: PublishedComment,
 ): CommentPages | undefined {
-  const swap = (held: PostComment): PostComment => (held.id === comment.id ? comment : held);
+  const swap = (held: PostComment): PostComment =>
+    held.id === comment.id && held.state === 'published' && !editedAfter(held, comment)
+      ? comment
+      : held;
   return mapThreads(pages, (thread) => ({
     ...thread,
     comment: swap(thread.comment),
     replies: thread.replies.map(swap),
   }));
+}
+
+/** Whether `held` was edited after `answer` was — its '수정됨' later, or the answer's none. */
+function editedAfter(held: PublishedComment, answer: PublishedComment): boolean {
+  if (held.editedAt === null) return false;
+  return answer.editedAt === null || Date.parse(held.editedAt) > Date.parse(answer.editedAt);
 }
 
 /**

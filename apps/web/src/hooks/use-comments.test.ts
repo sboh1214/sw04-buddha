@@ -152,7 +152,7 @@ type RepliesRequest = { params: { path: { commentId: string }; query: { cursor: 
  * `signals` when given, the signal each request was sent with.
  */
 function getThreads(
-  pageOf: (request: CommentsRequest) => CommentPage,
+  pageOf: (request: CommentsRequest) => CommentPage | Promise<CommentPage>,
   repliesOf: (request: RepliesRequest) => ReplyPage | Promise<ReplyPage>,
   signals?: (AbortSignal | undefined)[],
 ) {
@@ -167,7 +167,7 @@ function getThreads(
     }
     const { params } = request as CommentsRequest;
     asked.push(`comments:${params.query.cursor ?? ''}`);
-    const page = pageOf(request);
+    const page = await pageOf(request);
     return answer(page.items, { nextCursor: page.nextCursor });
   });
   return asked;
@@ -2326,6 +2326,218 @@ describe('a read of the pages on its way when an answer lands', () => {
       // Only this post's pages: the other post's read is its own, and lands.
       expect(threadIds(queryClient, OTHER_POST)).toEqual([commentId, OLDER]);
       for (const stop of unsubscribe) stop();
+    });
+  }
+});
+
+describe('writes that land while a read toward a place reads (Codex review on PR #220, round 4 — ADR-0074 7-34)', () => {
+  // A new 댓글's read of its page, a new 대댓글's read of its thread and '답글 더 보기' read pages
+  // themselves, not through the query, so no write cancels them: what they read can be older than
+  // a write that lands meanwhile, and is put in with every such write done again over it.
+  /** A second 댓글 on the first page, which the reader deletes. */
+  const SECOND = 'e0d1c2b3-a4f5-4e6d-8c7b-6a5f4e3d2c1b';
+  /** The writer's own 대댓글 placed at the end of the thread above (오너 결정 2026-10-24). */
+  const PLACED = LATER[0]!;
+  const EDITED_AT = '2026-10-24T00:00:00.000Z';
+
+  /** The reader's edit of `id` — a 댓글, or a 대댓글 under the one above — answered as edited now. */
+  const edit = (queryClient: QueryClient, id: string, body: string, parentId: string | null) => {
+    vi.spyOn(api, 'PUT').mockResolvedValue(
+      answer({ ...published(id, parentId, body), editedAt: EDITED_AT }),
+    );
+    return new MutationObserver(
+      queryClient,
+      updateCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ commentId: id, body, expectedAccountId: 'user-1' });
+  };
+  /** The reader's deletion of `id`, which nothing hangs under. */
+  const remove = (queryClient: QueryClient, id: string) => {
+    vi.spyOn(api, 'POST').mockResolvedValue(answer({ id, placeholder: false }));
+    return new MutationObserver(
+      queryClient,
+      deleteCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ commentId: id, expectedAccountId: 'user-1' });
+  };
+  /** The reader's new `comment`, as the server answers it. */
+  const create = (queryClient: QueryClient, comment: PublishedComment) => {
+    vi.spyOn(api, 'POST').mockResolvedValue(answer(comment));
+    return new MutationObserver(
+      queryClient,
+      createCommentOptions(queryClient, POST, () => undefined),
+    ).mutate({ parentId: comment.parentId, body: comment.body, expectedAccountId: 'user-1' });
+  };
+  const firstThread = (queryClient: QueryClient) =>
+    commentThreadsOf(queryClient.getQueryData(postCommentsKey(post)))[0];
+  const bodyOf = (comment: CommentThread['comment'] | undefined) =>
+    comment?.state === 'published' ? comment.body : comment?.state;
+
+  it('a new 댓글’s read: an edit, a 대댓글 and a deletion that landed while its page was on its way stay on the page it read', async () => {
+    const queryClient = onScreen(seeded());
+    const firstPage = () => ({
+      items: [thread(published(commentId)), thread(published(SECOND))],
+      nextCursor: 'c2',
+    });
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), {
+      pages: [firstPage()],
+      pageParams: [undefined],
+    });
+    const read = onItsWay();
+    const asked = getComments(async ({ params }) => {
+      if (params.query.cursor !== undefined) {
+        return { items: [thread(published(OLDER)), thread(published(MINE))], nextCursor: null };
+      }
+      // Read as the server held it when the read left: before the writes below.
+      await read.arrived;
+      return firstPage();
+    });
+    const writing = create(queryClient, published(MINE));
+    await vi.waitFor(() => expect(asked).toHaveLength(1));
+    await edit(queryClient, commentId, '고친 댓글', null);
+    await create(queryClient, published(PLACED, commentId, '답글'));
+    await remove(queryClient, SECOND);
+    expect(threadIds(queryClient)).toEqual([commentId]);
+    read.arrive();
+    await writing;
+    expect(asked).toEqual([{}, { cursor: 'c2' }]);
+    // In its place, the page it read put in — and over it what the reader wrote meanwhile.
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(bodyOf(firstThread(queryClient)?.comment)).toBe('고친 댓글');
+    expect(firstThread(queryClient)?.replies.map((reply) => reply.id)).toEqual([PLACED]);
+    expect(placedHeld(queryClient)).toEqual([]);
+  });
+
+  it('a new 댓글’s read that fails after the first page: the last page held as read again keeps an edit and a deletion that landed meanwhile, the 댓글 placed after it', async () => {
+    const queryClient = onScreen(seeded());
+    const firstPage = () => ({
+      items: [thread(published(commentId)), thread(published(SECOND))],
+      nextCursor: 'c2',
+    });
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), {
+      pages: [firstPage()],
+      pageParams: [undefined],
+    });
+    const read = onItsWay();
+    const asked = getComments(async ({ params }) => {
+      if (params.query.cursor === undefined) return firstPage();
+      await read.arrived;
+      throw new TypeError('Failed to fetch');
+    });
+    const writing = create(queryClient, published(MINE));
+    await vi.waitFor(() => expect(asked).toHaveLength(2));
+    await edit(queryClient, commentId, '고친 댓글', null);
+    await remove(queryClient, SECOND);
+    read.arrive();
+    await writing;
+    expect(threadIds(queryClient)).toEqual([commentId, MINE]);
+    expect(bodyOf(firstThread(queryClient)?.comment)).toBe('고친 댓글');
+    expect(placedHeld(queryClient)).toEqual([`-:${MINE}`]);
+  });
+
+  it('a new 댓글’s read: ‘답글 더 보기’ pressed while it read keeps the 대댓글 it brought on the page the read put in', async () => {
+    const queryClient = onScreen(seededThread(replyIds(0, 2), 'r2'));
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), (pages) => ({
+      ...pages!,
+      pages: [{ ...pages!.pages[0]!, nextCursor: 'c2' }],
+    }));
+    const read = onItsWay();
+    const asked = getThreads(
+      async ({ params }) => {
+        // The first page as the screen held it: the thread's first two, nothing read on for it.
+        if (params.query.cursor === undefined) {
+          return { items: [threadAnswered(replyIds(0, 2), 'r2')], nextCursor: 'c2' };
+        }
+        await read.arrived;
+        return { items: [thread(published(OLDER)), thread(published(MINE))], nextCursor: null };
+      },
+      () => replyPage(replyIds(2, 4), null),
+    );
+    const writing = create(queryClient, published(MINE));
+    await vi.waitFor(() => expect(asked).toEqual(['comments:', 'comments:c2']));
+    await readMoreReplies(queryClient, POST, commentId);
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), null]);
+    read.arrive();
+    await writing;
+    expect(asked).toEqual(['comments:', 'comments:c2', `replies:${commentId}:r2`]);
+    expect(threadIds(queryClient)).toEqual([commentId, OLDER, MINE]);
+    expect(repliesHeld(queryClient)).toEqual([replyIds(0, 4), null]);
+  });
+
+  /**
+   * The thread above holding its first `first` 대댓글 and, at their end, the writer's own PLACED —
+   * its read had stopped short (오너 결정 2026-10-24) — with the server's 대댓글 r0…r3, PLACED and
+   * MINE, two a page; each reply page answers once the test lets it.
+   */
+  const holdingPlaced = (first = 2) => {
+    const cursor = `r${String(first)}`;
+    const queryClient = onScreen(seededThread(replyIds(0, first), cursor));
+    queryClient.setQueryData<CommentPages>(postCommentsKey(post), (pages) => ({
+      ...pages!,
+      pages: [
+        {
+          ...pages!.pages[0]!,
+          items: [
+            {
+              ...threadAnswered(replyIds(0, first), cursor),
+              replies: [...replyIds(0, first), PLACED].map((id) => published(id, commentId)),
+            },
+          ],
+        },
+      ],
+      placed: [{ id: PLACED, threadId: commentId, accountId: 'user-1' }],
+    }));
+    expect(placedHeld(queryClient)).toEqual([`${commentId}:${PLACED}`]);
+    const read = onItsWay();
+    const replies = fakeReplies(4, PLACED, [MINE]);
+    const asked = getThreads(
+      () => ({ items: [], nextCursor: null }),
+      async (request) => {
+        await read.arrived;
+        return replies(request);
+      },
+    );
+    return { queryClient, read, asked };
+  };
+
+  const placedWrites: [string, (queryClient: QueryClient) => Promise<unknown>, string[]][] = [
+    [
+      'an edit',
+      (queryClient) => edit(queryClient, PLACED, '고친 답글', commentId),
+      [...replyIds(0, 4), PLACED, MINE],
+    ],
+    ['a deletion', (queryClient) => remove(queryClient, PLACED), [...replyIds(0, 4), MINE]],
+  ];
+
+  for (const [name, write, after] of placedWrites) {
+    it(`a new 대댓글’s read of its thread: ${name} of the writer’s own 대댓글 placed at its end, landing while the thread was read, stays — the pages read hold it as it was`, async () => {
+      const { queryClient, read, asked } = holdingPlaced();
+      const writing = create(queryClient, published(MINE, commentId, '답글'));
+      await vi.waitFor(() => expect(asked).toEqual([`replies:${commentId}:r2`]));
+      await write(queryClient);
+      read.arrive();
+      await writing;
+      expect(asked).toEqual([`replies:${commentId}:r2`, `replies:${commentId}:r4`]);
+      expect(repliesHeld(queryClient)).toEqual([after, null]);
+      const placed = firstThread(queryClient)?.replies.find((reply) => reply.id === PLACED);
+      expect(placed === undefined ? undefined : bodyOf(placed)).toBe(
+        name === 'an edit' ? '고친 답글' : undefined,
+      );
+      expect(placedHeld(queryClient)).toEqual([]);
+    });
+
+    it(`‘답글 더 보기’: ${name} of the writer’s own 대댓글 placed at the thread’s end, landing while the page that brings it was read, stays`, async () => {
+      // The thread read up to PLACED's page: the next one brings it, and MINE (another's) after it.
+      const { queryClient, read, asked } = holdingPlaced(4);
+      const more = readMoreReplies(queryClient, POST, commentId);
+      await vi.waitFor(() => expect(asked).toEqual([`replies:${commentId}:r4`]));
+      await write(queryClient);
+      read.arrive();
+      await more;
+      expect(repliesHeld(queryClient)).toEqual([after, null]);
+      const placed = firstThread(queryClient)?.replies.find((reply) => reply.id === PLACED);
+      expect(placed === undefined ? undefined : bodyOf(placed)).toBe(
+        name === 'an edit' ? '고친 답글' : undefined,
+      );
+      expect(placedHeld(queryClient)).toEqual([]);
     });
   }
 });
