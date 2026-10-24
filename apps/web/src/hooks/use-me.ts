@@ -22,6 +22,7 @@ import {
   type UpdateTimeZoneBody,
 } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { logWriteForEveryPost } from '@/lib/comment-writes';
 import { COMMENT_PAGES_KEY, commentPagesWithAuthorImage } from '@/lib/comments';
 import { applyBalanceEvent } from '@/lib/market-live';
 import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
@@ -251,12 +252,26 @@ const AUTHOR_FACE_READS: readonly {
  * the write and land after it, putting the old face back: it is cancelled first, and a read of
  * every page held so cancelled is made again (not waited for) — the rule `writePages`
  * (use-comments.ts) keeps for a comment's write, a 더 보기 cancelled left to be pressed again.
+ *
+ * The comment section's three reads toward a place — a new 댓글's read to the end, a new 대댓글's
+ * read on, '답글 더 보기' — are not the query's and nothing cancels them: what they read before the
+ * change, put in after it, would bring the old address back (a new 댓글's read goes on after its
+ * write's answer, whatever screen the tab moved to — the profile's MY 설정 among them). So the
+ * change first goes into the log of every one of them on its way (lib/comment-writes.ts, ADR-0074
+ * 7-34), done again over what it puts in (ADR-0079 7-22): the same function of the pages held as
+ * the patch here — the member's faces only, the same again when done again — so its place in the
+ * order of the writes does not matter. First, before any of the waits below: a read landing during
+ * them must find it logged.
  */
 export async function storeAuthorImage(
   queryClient: QueryClient,
   publicId: string,
   imageUrl: string | null,
 ): Promise<void> {
+  logWriteForEveryPost(
+    queryClient,
+    (held) => held && commentPagesWithAuthorImage(held, publicId, imageUrl),
+  );
   const cache = queryClient.getQueryCache();
   await Promise.all(
     AUTHOR_FACE_READS.flatMap(({ queryKey, withImage }) =>

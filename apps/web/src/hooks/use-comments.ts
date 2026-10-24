@@ -20,6 +20,7 @@ import {
   unwrap,
 } from '@/lib/api';
 import { commentDraftLanded } from '@/lib/comment-drafts';
+import { type PagesWrite, logWrite, logWritesFrom, stopLogging } from '@/lib/comment-writes';
 import {
   COMMENT_READ_ON_PAGES,
   REPLY_READ_ON_PAGES,
@@ -467,54 +468,6 @@ function moveCommentCount(queryClient: QueryClient, postId: string, by: 1 | -1) 
     postKey(postId),
     (post) => post && { ...post, commentCount: Math.max(0, post.commentCount + by) },
   );
-}
-
-/** What a write does to the pages held: a function of them, so it can be done again over others. */
-export type PagesWrite = (held: CommentPages | undefined) => CommentPages | undefined;
-
-/**
- * The writes of each post's pages that landed while a read toward a place was on its way, by query
- * client and post — one log a read (`logWritesFrom`). The three reads that read the server's pages
- * themselves, not through the query, and then put what they read into the pages held — a new 댓글's
- * (`readOnToTheEnd`), a new 대댓글's (`readOnReplies`) and '답글 더 보기' (`readMoreReplies`) —
- * cannot be cancelled by a write as the query's reads are (`writePages`), and what they bring was
- * read before the writes that landed meanwhile: an edit, a deletion, another new 대댓글 or another
- * '답글 더 보기' on a comment those pages hold too (Codex review on PR #220, round 4). Put in as
- * read, it would bring back the old body or the deleted comment, or take the new 대댓글 off again.
- * So each read logs the writes that land from the moment it starts, and does them again over its
- * pages as it puts them in (`putReadPages`, ADR-0074 7-34).
- */
-const writesWhileReading = new WeakMap<QueryClient, Map<string, Set<PagesWrite[]>>>();
-
-/** A log of the writes of `postId`'s pages from now on, until `putReadPages` (or `stopLogging`). */
-function logWritesFrom(queryClient: QueryClient, postId: string): PagesWrite[] {
-  let byPost = writesWhileReading.get(queryClient);
-  if (byPost === undefined) {
-    byPost = new Map();
-    writesWhileReading.set(queryClient, byPost);
-  }
-  let logs = byPost.get(postId);
-  if (logs === undefined) {
-    logs = new Set();
-    byPost.set(postId, logs);
-  }
-  const log: PagesWrite[] = [];
-  logs.add(log);
-  return log;
-}
-
-/** `log` closed: no write is added to it any more (again, harmlessly). */
-function stopLogging(queryClient: QueryClient, postId: string, log: PagesWrite[]) {
-  const byPost = writesWhileReading.get(queryClient);
-  const logs = byPost?.get(postId);
-  if (logs === undefined) return;
-  logs.delete(log);
-  if (logs.size === 0) byPost?.delete(postId);
-}
-
-/** `write` added to every log of a read of `postId`'s pages still on its way (not done here). */
-function logWrite(queryClient: QueryClient, postId: string, write: PagesWrite) {
-  for (const log of writesWhileReading.get(queryClient)?.get(postId) ?? []) log.push(write);
 }
 
 /**

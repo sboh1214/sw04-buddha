@@ -1,6 +1,11 @@
 import { QueryCache, QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
-import { type Market, type Position, isApiError } from './api';
-import { type CommentPages, COMMENT_PAGES_KEY, keepPlacedComments } from './comments';
+import { type Market, type Me, type Position, isApiError } from './api';
+import {
+  type CommentPages,
+  type PlacedCommentsOwner,
+  COMMENT_PAGES_KEY,
+  keepPlacedComments,
+} from './comments';
 import {
   MARKETS_KEY,
   MARKET_KEY,
@@ -103,15 +108,40 @@ function makeQueryClient() {
   // a reconnection, a stale thread's read again), its 더 보기, or a new 댓글's read — and come
   // without it; this is the one place every one of those writes passes, so `keepPlacedComments`
   // carries it over here and puts it back, or settles it against what the read just brought.
-  // `['posts', 'comments']` never reaches `['posts', 'post', id]` or the lists.
+  // `['posts', 'comments']` never reaches `['posts', 'post', id]` or the lists. The writer's own
+  // comments placed so take the profile image `['me']` holds once it has changed since they were
+  // placed (#141, ADR-0079 7-23): read from this client as each write passes, so a `['me']` read
+  // since — a change made in another tab — reaches them on the next write of the pages.
   client.setQueryDefaults(COMMENT_PAGES_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(
         held,
-        keepPlacedComments(held as CommentPages | undefined, incoming as CommentPages),
+        keepPlacedComments(
+          held as CommentPages | undefined,
+          incoming as CommentPages,
+          placedCommentsOwner(client),
+        ),
       ),
   });
   return client;
+}
+
+/**
+ * `['me']` — `ME_QUERY_KEY` (hooks/use-me.ts), named here again: that is a client module, and this
+ * file runs on the server too (query-client.test.ts pins the two together).
+ */
+export const ME_KEY = ['me'] as const;
+
+/**
+ * The account `client` holds in `['me']`, as `keepPlacedComments` takes it; undefined while it holds
+ * none — or anything short of a profile: this runs on every write of every post's comment pages,
+ * and throwing there would lose the write.
+ */
+function placedCommentsOwner(client: QueryClient): PlacedCommentsOwner | undefined {
+  const me = client.getQueryData<Partial<Me>>(ME_KEY);
+  const profile = me?.profile;
+  if (me?.id === undefined || profile === undefined) return undefined;
+  return { accountId: me.id, publicId: profile.publicId, imageUrl: profile.imageUrl };
 }
 
 let browserQueryClient: QueryClient | undefined;

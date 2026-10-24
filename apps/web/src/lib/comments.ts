@@ -662,10 +662,18 @@ function threadsById(pages: readonly CommentPage[]): Map<string, CommentThread> 
  *   (`withMoreReplies`). A thread that left the view takes its own with it.
  * - Anything placed that no longer stands where a write left it — deleted by the writer
  *   (`withoutComment`) — is no longer placed.
+ * - Each one still placed for `own.accountId` — the account `['me']` holds, its own comments —
+ *   takes the profile image `['me']` holds once that has changed since it was placed (#141,
+ *   ADR-0079 7-23, `withOwnFace`): the copy carried over is the one its write's answer brought, and
+ *   no read brings it again until its page arrives, so a change made elsewhere — another tab,
+ *   another device — would otherwise leave the old address on it (the file deleted at once) through
+ *   every read, beside the member's other comments the read brought with the new one. A change in
+ *   this tab patches it where it is (`storeAuthorImage`).
  */
 export function keepPlacedComments(
   held: CommentPages | undefined,
   incoming: CommentPages,
+  own?: PlacedCommentsOwner,
 ): CommentPages {
   const read = new Set(incoming.pages.filter((page) => pagesRead.has(page)));
   for (const page of read) pagesRead.delete(page);
@@ -737,7 +745,65 @@ export function keepPlacedComments(
   const stillPlaced = placed.filter((entry) => kept.has(entry));
   return stillPlaced.length === 0
     ? { pages, pageParams: incoming.pageParams }
-    : { pages, pageParams: incoming.pageParams, placed: stillPlaced };
+    : {
+        pages: withOwnFace(pages, stillPlaced, own),
+        pageParams: incoming.pageParams,
+        placed: stillPlaced,
+      };
+}
+
+/**
+ * The account `['me']` holds, as `keepPlacedComments` reads it for the writer's own comments placed
+ * at the end of what is held: its id, its public id and its profile image's address (or null).
+ */
+export interface PlacedCommentsOwner {
+  accountId: string;
+  publicId: string;
+  imageUrl: string | null;
+}
+
+/**
+ * The profile image `['me']` held as a write of the pages last carried each comment placed for its
+ * account (`withOwnFace`) — in memory, by the entry, which the writes carry over as it is.
+ */
+const ownImageCarried = new WeakMap<PlacedComment, string | null>();
+
+/**
+ * `pages` with `own`'s image on each comment placed for `own` whose image `['me']` has changed
+ * since a write last carried it (`keepPlacedComments`, ADR-0079 7-23) — read again since, after a
+ * change made in another tab or on another device. Not one that merely differs: the copy placed is
+ * its write's answer — the server's face as it wrote it, or as it edited it since — and `['me']`
+ * may have been read before that (a change made in another tab, then a 댓글 written here within
+ * the 30 seconds `['me']` is not read again), so the first write that carries it leaves it as it
+ * came and notes the image `['me']` held then.
+ */
+function withOwnFace(
+  pages: CommentPage[],
+  placed: readonly PlacedComment[],
+  own: PlacedCommentsOwner | undefined,
+): CommentPage[] {
+  if (own === undefined) return pages;
+  const ids = new Set<string>();
+  for (const entry of placed) {
+    if (entry.accountId !== own.accountId) continue;
+    if (ownImageCarried.has(entry) && ownImageCarried.get(entry) !== own.imageUrl) {
+      ids.add(entry.id);
+    }
+    ownImageCarried.set(entry, own.imageUrl);
+  }
+  if (ids.size === 0) return pages;
+  const withImage = (comment: PostComment) =>
+    ids.has(comment.id) ? commentWithAuthorImage(comment, own.publicId, own.imageUrl) : comment;
+  return mapKept(pages, (page) => {
+    const items = mapKept(page.items, (thread) => {
+      const comment = withImage(thread.comment);
+      const replies = mapKept(thread.replies, withImage);
+      return comment === thread.comment && replies === thread.replies
+        ? thread
+        : { ...thread, comment, replies };
+    });
+    return items === page.items ? page : { ...page, items };
+  });
 }
 
 // ---- drafts -------------------------------------------------------------------------------------
