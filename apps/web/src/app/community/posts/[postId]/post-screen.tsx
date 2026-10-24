@@ -80,6 +80,14 @@ import { useSession } from '@/lib/use-session';
  * (오너 결정 2026-10-21 답 1; leaving asks while they are shown). Then — at once when there is
  * none — the server page is drawn again (`router.refresh`): it answers what a reload does, the 404
  * (`notFound()`, page.tsx). A read that fails otherwise keeps the post on screen.
+ *
+ * A post deleted with comments under it (#48) or hidden by an operator (#50) has not left: a read
+ * answers its placeholder, drawn at once in the post's place as a reload draws it, its market and
+ * its comments under it; the boxes that take no write there any more hold their texts with why
+ * ('삭제된 글에는 …', '운영 정책에 따라 숨긴 글에는 …', `goneBoxReason`) until they are closed, an
+ * edit of one's own comment stays (ADR-0074 7-6), and no 404 waits. A hiding cancelled brings the
+ * post back on the next read; the texts held stay until closed. The edit screen hears the same
+ * three reads the same way, its form held with why until closed (edit-screen.tsx, ADR-0081 7-29).
  */
 export function PostScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();

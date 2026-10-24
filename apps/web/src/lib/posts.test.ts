@@ -10,6 +10,7 @@ import { hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type Post, type PostAuthor, type PublishedPost } from './api';
+import { goneBoxReason } from './comments';
 import { isPrivateQueryKey } from './market-keys';
 import {
   COMMUNITY_PATH,
@@ -25,9 +26,14 @@ import {
   marketPostsKey,
   marketPostsQuery,
   nameInitial,
+  POST_EDIT_ON_SCREEN,
+  postEditClosed,
   postEditDeleted,
   postEditPath,
   postEditGoneAfter,
+  postEditHeldMessage,
+  postEditHidden,
+  postEditUnavailableMessage,
   postFirstLine,
   postGoneAfter,
   postHeadingElement,
@@ -288,37 +294,48 @@ describe('a post gone while its page is open (postGoneAfter, Codex review of #21
 });
 
 describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 2026-10-24, ADR-0073 9-52)', () => {
-  const onScreen = { gone: false, held: false };
+  const onScreen = POST_EDIT_ON_SCREEN;
 
   it('changes nothing while the post is there, whatever the form holds', () => {
-    expect(postEditGoneAfter(onScreen, { gone: false, formHolding: false })).toBe(onScreen);
-    expect(postEditGoneAfter(onScreen, { gone: false, formHolding: true })).toBe(onScreen);
+    expect(postEditGoneAfter(onScreen, { gone: false, hidden: false, formHolding: false })).toBe(
+      onScreen,
+    );
+    expect(postEditGoneAfter(onScreen, { gone: false, hidden: false, formHolding: true })).toBe(
+      onScreen,
+    );
   });
 
   it('keeps the form, held, when it holds something of the writer’s as the post goes; one holding nothing — or none on screen — is the 404 at once', () => {
-    expect(postEditGoneAfter(onScreen, { gone: true, formHolding: true })).toEqual({
+    expect(postEditGoneAfter(onScreen, { gone: true, hidden: false, formHolding: true })).toEqual({
       gone: true,
+      hidden: false,
       held: true,
     });
-    expect(postEditGoneAfter(onScreen, { gone: true, formHolding: false })).toEqual({
+    expect(postEditGoneAfter(onScreen, { gone: true, hidden: false, formHolding: false })).toEqual({
       gone: true,
+      hidden: false,
       held: false,
     });
   });
 
   it('is decided as the post goes: held until closed or until the form leaves the screen, and never held later', () => {
-    const held = { gone: true, held: true };
-    expect(postEditGoneAfter(held, { gone: true, formHolding: true })).toBe(held);
+    const held = { gone: true, hidden: false, held: true };
+    expect(postEditGoneAfter(held, { gone: true, hidden: false, formHolding: true })).toBe(held);
     // The form taken away under it (the gate's sign-in prompt for a session gone, say).
-    expect(postEditGoneAfter(held, { gone: true, formHolding: false })).toEqual({
+    expect(postEditGoneAfter(held, { gone: true, hidden: false, formHolding: false })).toEqual({
       gone: true,
+      hidden: false,
       held: false,
     });
     // Closed (닫기), or the 404 at once: a form saying it holds something afterwards changes
     // nothing.
-    const closed = { gone: true, held: false };
-    expect(postEditGoneAfter(closed, { gone: true, formHolding: true })).toBe(closed);
-    expect(postEditGoneAfter(closed, { gone: true, formHolding: false })).toBe(closed);
+    const closed = { gone: true, hidden: false, held: false };
+    expect(postEditGoneAfter(closed, { gone: true, hidden: false, formHolding: true })).toBe(
+      closed,
+    );
+    expect(postEditGoneAfter(closed, { gone: true, hidden: false, formHolding: false })).toBe(
+      closed,
+    );
   });
 
   it('hears a read that puts a deleted post’s placeholder in place of the post the screen had published as the post going: the API answers it, not NOT_FOUND, once comments hang under the post (#48, ADR-0074 7-35)', () => {
@@ -348,8 +365,8 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     const deleted: Post = { state: 'deleted', id, market: postMarket, commentCount: 1 };
     const hidden: Post = { state: 'hidden', id, market: postMarket, commentCount: 1 };
     expect(postEditDeleted(published, deleted)).toBe(true);
-    // Read again published (edited elsewhere, say), or hidden (#45-5's own refusal, as before):
-    // not deleted.
+    // Read again published (edited elsewhere, say), or hidden (#50 — heard apart, `postEditHidden`,
+    // below): not deleted.
     expect(postEditDeleted(published, { ...published, title: '다른 탭에서 고친 글' })).toBe(false);
     expect(postEditDeleted(published, hidden)).toBe(false);
     // Opened on the placeholder: nothing was published on this screen, and it shows the
@@ -358,14 +375,19 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     // Heard as NOT_FOUND is: the form held while it holds something of the writer's, the server
     // page at once otherwise.
     expect(
-      postEditGoneAfter(onScreen, { gone: postEditDeleted(published, deleted), formHolding: true }),
-    ).toEqual({ gone: true, held: true });
+      postEditGoneAfter(onScreen, {
+        gone: postEditDeleted(published, deleted),
+        hidden: postEditHidden(published, deleted),
+        formHolding: true,
+      }),
+    ).toEqual({ gone: true, hidden: false, held: true });
     expect(
       postEditGoneAfter(onScreen, {
         gone: postEditDeleted(published, deleted),
+        hidden: postEditHidden(published, deleted),
         formHolding: false,
       }),
-    ).toEqual({ gone: true, held: false });
+    ).toEqual({ gone: true, hidden: false, held: false });
   });
 
   it('is what the edit screen draws from: the form held, read-only, with the sentence and 닫기, and the 404 once closed', () => {
@@ -374,12 +396,12 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
     expect(edit).toContain('const [formHolding, setFormHolding] = useState(false);');
     expect(edit).toContain(
-      'const [state, setState] = useState<PostEditGone>({ gone: false, held: false });',
+      'const [state, setState] = useState<PostEditGone>(POST_EDIT_ON_SCREEN);',
     );
     expect(edit).toContain('const [notFound, setNotFound] = useState(false);');
     expect(edit).toContain('if (nowNotFound !== notFound) setNotFound(nowNotFound);');
     expect(edit).toMatch(
-      /const next = postEditGoneAfter\(state, \{\s*gone: nowNotFound \|\| postEditDeleted\(published, post\),\s*formHolding,\s*\}\);/,
+      /const next = postEditGoneAfter\(state, \{\s*gone: nowNotFound \|\| postEditDeleted\(published, post\),\s*hidden: postEditHidden\(published, post\),\s*formHolding,\s*\}\);/,
     );
     expect(edit).toContain('if (next !== state) setState(next);');
     // The server page drawn again once nothing is held — and again as NOT_FOUND follows the
@@ -405,10 +427,14 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(edit).toContain('!isOwnPost(shown.author, writer.publicId)');
     // The form hears the post gone, closes it, and says what it holds.
     expect(edit).toMatch(
-      /<EditForm\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+gone=\{gone\}\s+onClose=\{\(\) => setState\(\{ gone: true, held: false \}\)\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
+      /<EditForm\s+key=\{closings\}\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+held=\{held\}\s+heldMessage=\{postEditHeldMessage\(state\)\}\s+onClose=\{\(\) => \{\s*setState\(postEditClosed\(state\)\);\s*setClosings\(closings \+ 1\);\s*\}\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
     );
     expect(edit).toMatch(
-      /gone=\{gone\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,
+      /gone=\{held\}\s+goneMessage=\{heldMessage\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,
+    );
+    // A post not published in the form's place — once closed too — as a reload draws it.
+    expect(edit).toMatch(
+      /<EmptyState\s+message=\{postEditUnavailableMessage\(shown\.state\)\}\s+data-testid="post-edit-unavailable"/,
     );
 
     const form = source('../components/post/post-form.tsx');
@@ -422,7 +448,8 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(form).toContain('useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);');
     // The sentence on top; the title and the body read-only (selectable, never changed), and
     // nothing to send or discard.
-    expect(form).toContain('{gone && <GoneNotice />}');
+    expect(form).toContain('{gone && <GoneNotice message={goneMessage} />}');
+    expect(form).toContain('goneMessage = copy.errPostGone,');
     expect(form).toContain('{restored !== null && !gone && (');
     expect(form).toMatch(/readOnly=\{gone\}\s+disabled=\{pending && !gone\}/);
     expect(form).toMatch(/disabled=\{pending \|\| gone\}\s+readOnly=\{gone\}/);
@@ -432,7 +459,7 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(form).toMatch(
       /\{gone \? \(\s*(?:\/\/[^\n]*\n\s*)*<Button\s+key="close"[\s\S]*?onClick=\{onClose\}\s+data-testid="post-form-close"\s*>\s*\{copy\.close\}/,
     );
-    expect(form).toContain('<Alert.Description id={textId}>{copy.errPostGone}</Alert.Description>');
+    expect(form).toContain('<Alert.Description id={textId}>{message}</Alert.Description>');
     // The post going clears no draft of the tab: the form clears one only where a draft taken
     // back is taken in, or discarded.
     expect(form.match(/clearSessionPostDraft\(/g)).toHaveLength(2);
@@ -518,6 +545,245 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     );
     const form = readFileSync(new URL('../components/post/post-form.tsx', import.meta.url), 'utf8');
     expect(form).toMatch(/onReady=\{\(json\) => \{\s*baseline\.current = JSON\.stringify\(json\);/);
+  });
+});
+
+describe('an edit screen whose post an operator hides (postEditHidden, 오너 결정 2026-10-25 «숨김에도 글자를 남김», ADR-0081 7-29)', () => {
+  const postMarket = {
+    id: '6f1c0f5e-8a0e-4f8b-9d7e-2b1a3c4d5e6f',
+    slug: 'rate-cut',
+    title: '금리 인하',
+    status: 'open',
+    category: { slug: 'economy', nameKo: '경제' },
+  } as const;
+  const id = POST.toLowerCase();
+  const published: PublishedPost = {
+    state: 'published',
+    id,
+    title: '고칠 글',
+    body: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '근거 한 줄' }] }],
+    },
+    author: member(),
+    market: postMarket,
+    createdAt: '2026-10-19T00:00:00.000Z',
+    editedAt: null,
+    commentCount: 1,
+    likeCount: 0,
+  };
+  const hidden: Post = { state: 'hidden', id, market: postMarket, commentCount: 1 };
+  const deleted: Post = { state: 'deleted', id, market: postMarket, commentCount: 1 };
+  const heldHidden = { gone: false, hidden: true, held: true };
+  const closedHidden = { gone: false, hidden: true, held: false };
+  const heard = (now: { gone?: boolean; hidden?: boolean; formHolding: boolean }) => ({
+    gone: false,
+    hidden: false,
+    ...now,
+  });
+
+  it('hears a read that puts a hidden post’s placeholder in place of the post the screen had published — never on a screen opened on it, and never a deletion', () => {
+    expect(postEditHidden(published, hidden)).toBe(true);
+    // Opened on the hidden post: nothing was published on this screen — #45-5's refusal, as a
+    // reload draws it.
+    expect(postEditHidden(undefined, hidden)).toBe(false);
+    expect(postEditHidden(published, { ...published, title: '다른 탭에서 고친 글' })).toBe(false);
+    // A hidden post its author deleted is deleted (the API's `publicStateOf`).
+    expect(postEditHidden(published, deleted)).toBe(false);
+    expect(postEditDeleted(published, hidden)).toBe(false);
+  });
+
+  it('keeps the form, held, when it holds something of the writer’s as the post is hidden, under the refusal’s sentence; one holding nothing is the refusal at once (오너 결정 2026-10-25 «이대로» for #46)', () => {
+    const held = postEditGoneAfter(POST_EDIT_ON_SCREEN, heard({ hidden: true, formHolding: true }));
+    expect(held).toEqual(heldHidden);
+    expect(postEditHeldMessage(held)).toBe('운영 정책에 따라 숨긴 글은 고칠 수 없습니다.');
+    expect(postEditHeldMessage(held)).toBe(copy.errPostNotEditable);
+    expect(
+      postEditGoneAfter(POST_EDIT_ON_SCREEN, heard({ hidden: true, formHolding: false })),
+    ).toEqual(closedHidden);
+    // A deletion's held form says the deletion's.
+    expect(postEditHeldMessage({ gone: true, hidden: false, held: true })).toBe(copy.errPostGone);
+  });
+
+  it('is held until it is closed or the form leaves the screen — through a read that finds the hiding cancelled, too', () => {
+    const held = postEditGoneAfter(POST_EDIT_ON_SCREEN, heard({ hidden: true, formHolding: true }));
+    expect(postEditGoneAfter(held, heard({ hidden: true, formHolding: true }))).toBe(held);
+    // An operator cancelled the hiding meanwhile: the form stays as it is until it is closed.
+    expect(postEditGoneAfter(held, heard({ hidden: false, formHolding: true }))).toBe(held);
+    // The form taken away under it (the gate's sign-in prompt for a session gone, say).
+    expect(postEditGoneAfter(held, heard({ hidden: true, formHolding: false }))).toEqual(
+      closedHidden,
+    );
+    expect(postEditClosed(held)).toEqual(closedHidden);
+    expect(postEditClosed(closedHidden)).toBe(closedHidden);
+    expect(postEditClosed(POST_EDIT_ON_SCREEN)).toBe(POST_EDIT_ON_SCREEN);
+  });
+
+  it('closed, stays the hidden post’s refusal while the reads say it hidden, and is over once one does not: the form is the post’s again, and a later hiding holds again', () => {
+    // The closed form's last word ('holding') changes nothing: it is not taken up later.
+    expect(postEditGoneAfter(closedHidden, heard({ hidden: true, formHolding: true }))).toBe(
+      closedHidden,
+    );
+    expect(postEditGoneAfter(closedHidden, heard({ hidden: true, formHolding: false }))).toBe(
+      closedHidden,
+    );
+    expect(postEditGoneAfter(closedHidden, heard({ hidden: false, formHolding: false }))).toBe(
+      POST_EDIT_ON_SCREEN,
+    );
+    expect(
+      postEditGoneAfter(POST_EDIT_ON_SCREEN, heard({ hidden: true, formHolding: true })),
+    ).toEqual(heldHidden);
+  });
+
+  it('gives way to a deletion, which nothing undoes: a held form stays held under the deletion’s sentence and closes to what a reload of the deleted post draws; a closed one is that at once', () => {
+    const goneHeld = { gone: true, hidden: false, held: true };
+    const goneClosed = { gone: true, hidden: false, held: false };
+    expect(postEditGoneAfter(heldHidden, heard({ gone: true, formHolding: true }))).toEqual(
+      goneHeld,
+    );
+    expect(postEditGoneAfter(closedHidden, heard({ gone: true, formHolding: false }))).toEqual(
+      goneClosed,
+    );
+    // One read says one of them; were both heard, the deletion comes first, as on the API.
+    expect(
+      postEditGoneAfter(
+        POST_EDIT_ON_SCREEN,
+        heard({ gone: true, hidden: true, formHolding: true }),
+      ),
+    ).toEqual(goneHeld);
+    expect(postEditGoneAfter(goneClosed, heard({ hidden: true, formHolding: true }))).toBe(
+      goneClosed,
+    );
+  });
+
+  it('says in the form’s place what a reload of the edit screen says: the refusal for a hidden post, the placeholder for a deleted one', () => {
+    expect(postEditUnavailableMessage('hidden')).toBe(copy.errPostNotEditable);
+    expect(postEditUnavailableMessage('deleted')).toBe(copy.postDeletedPlaceholder);
+  });
+});
+
+describe('a post taken from under an open screen: one rule for its page and its edit screen (#46 postGoneAfter, #48 held texts, #50 hiding — ADR-0081 7-29)', () => {
+  const postMarket = {
+    id: '6f1c0f5e-8a0e-4f8b-9d7e-2b1a3c4d5e6f',
+    slug: 'rate-cut',
+    title: '금리 인하',
+    status: 'open',
+    category: { slug: 'economy', nameKo: '경제' },
+  } as const;
+  const id = POST.toLowerCase();
+  const published: PublishedPost = {
+    state: 'published',
+    id,
+    title: '열어 둔 글',
+    body: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '근거 한 줄' }] }],
+    },
+    author: member(),
+    market: postMarket,
+    createdAt: '2026-10-19T00:00:00.000Z',
+    editedAt: null,
+    commentCount: 1,
+    likeCount: 0,
+  };
+  const ok = { isError: false, error: null };
+  // What the query holds after each read, and how that read went: NOT_FOUND keeps the post read
+  // before; a placeholder is a 200.
+  const reads = [
+    {
+      name: 'deleted with nothing under it (NOT_FOUND)',
+      read: { isError: true, error: refusal(404, 'NOT_FOUND') },
+      data: published as Post,
+      page: copy.postNotFound,
+      box: copy.errPostGone,
+      held: copy.errPostGone,
+      closed: copy.postNotFound,
+    },
+    {
+      name: 'deleted with comments under it (#48)',
+      read: ok,
+      data: { state: 'deleted', id, market: postMarket, commentCount: 1 } as Post,
+      page: copy.postDeletedPlaceholder,
+      box: copy.commentClosedPostDeleted,
+      held: copy.errPostGone,
+      closed: copy.postDeletedPlaceholder,
+    },
+    {
+      name: 'hidden by an operator (#50)',
+      read: ok,
+      data: { state: 'hidden', id, market: postMarket, commentCount: 1 } as Post,
+      page: copy.postHiddenPlaceholder,
+      box: copy.commentClosedPostHidden,
+      held: copy.errPostNotEditable,
+      closed: copy.errPostNotEditable,
+    },
+  ];
+
+  it.each(reads)(
+    '$name: the page draws what a reload draws and holds the comment boxes’ texts with why; the edit screen holds its form with why, and closes to what a reload draws',
+    ({ read, data, page, box, held, closed }) => {
+      // The post page (post-screen.tsx): gone only on NOT_FOUND — it then waits for the texts it
+      // holds apart, and its 404 comes once they are closed; a placeholder is drawn at once in the
+      // post's place, its comments under it, as a reload draws it.
+      const gone = postGoneAfter(false, read);
+      expect(gone).toBe(data.state === 'published');
+      expect(gone ? copy.postNotFound : postPlaceholderMessage(data.state as 'deleted')).toBe(page);
+      // A new 댓글's box with text in it goes, and its text is held with why until it is closed
+      // (`goneBoxReason`, comments-section.tsx's `postState`).
+      expect(
+        goneBoxReason({ kind: 'post' }, { postState: gone ? 'gone' : data.state, threads: [] }),
+      ).toBe(box);
+
+      // The edit screen (edit-screen.tsx), its form holding something of the writer's.
+      const notFound = postGoneAfter(false, read);
+      const now = {
+        gone: notFound || postEditDeleted(published, data),
+        hidden: postEditHidden(published, data),
+      };
+      const state = postEditGoneAfter(POST_EDIT_ON_SCREEN, { ...now, formHolding: true });
+      expect(state.held).toBe(true);
+      expect(postEditHeldMessage(state)).toBe(held);
+      // 닫기 — and at once for a form holding nothing: what the screen draws in the form's place.
+      const shownAfter = (after: typeof state) =>
+        after.gone && !after.held && notFound
+          ? copy.postNotFound
+          : postEditUnavailableMessage(data.state as 'deleted');
+      const after = postEditClosed(state);
+      expect(after.held).toBe(false);
+      expect(shownAfter(after)).toBe(closed);
+      const atOnce = postEditGoneAfter(POST_EDIT_ON_SCREEN, { ...now, formHolding: false });
+      expect(atOnce.held).toBe(false);
+      expect(shownAfter(atOnce)).toBe(closed);
+      // A reload: the server's 404 for NOT_FOUND (page.tsx's `notFound()`), else a screen opened
+      // on the placeholder, which hears nothing taken from under it.
+      if (!notFound) {
+        const reloaded = postEditGoneAfter(POST_EDIT_ON_SCREEN, {
+          gone: postEditDeleted(undefined, data),
+          hidden: postEditHidden(undefined, data),
+          formHolding: false,
+        });
+        expect(reloaded).toBe(POST_EDIT_ON_SCREEN);
+        expect(postEditUnavailableMessage(data.state as 'deleted')).toBe(closed);
+      }
+    },
+  );
+
+  it('keeps the post through a read that fails otherwise, on both screens', () => {
+    const failed = { isError: true, error: refusal(503, 'INTERNAL') };
+    expect(postGoneAfter(false, failed)).toBe(false);
+    expect(
+      postEditGoneAfter(POST_EDIT_ON_SCREEN, {
+        gone: postGoneAfter(false, failed) || postEditDeleted(published, published),
+        hidden: postEditHidden(published, published),
+        formHolding: true,
+      }),
+    ).toBe(POST_EDIT_ON_SCREEN);
+  });
+
+  it('is written once for the post page: its comment section hears the post as the page holds it', () => {
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const section = source('../components/post/comments-section.tsx');
+    expect(section).toContain("const postState: CommentsPostState = gone ? 'gone' : post.state;");
   });
 });
 

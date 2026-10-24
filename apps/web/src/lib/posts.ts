@@ -495,6 +495,17 @@ export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): 
 }
 
 /**
+ * What the edit screen says in its form's place for a post that is not published (#45-5): for a
+ * hidden one the refusal, '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.' — the sentence of a save
+ * refused for it, and of a held form while the post is hidden under it (#50, ADR-0081 7-29) — and
+ * for one deleted with comments under it its placeholder, '삭제된 글입니다.' (#48). What a reload of
+ * the edit screen draws, and so what it draws once a held form is closed (`postEditClosed`).
+ */
+export function postEditUnavailableMessage(state: Exclude<PostState, 'published'>): string {
+  return state === 'hidden' ? copy.errPostNotEditable : postPlaceholderMessage(state);
+}
+
+/**
  * Whether a post page — or its edit screen — holds its post to be gone (ADR-0073 9-50, Codex review
  * of #219, round 5), from what it held before (`gone`) and the post's read as the query has it
  * now (`read`: its `isError` and `error`). The query keeps the post it last read through a read
@@ -502,7 +513,12 @@ export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): 
  * the post left every view — deleted with nothing under it (#45-5), never undone, the 404 a reload
  * gets — while any other failure (unreachable, a 5xx, a 429) says nothing about the post, and the
  * post read before stays on screen. Once gone, gone: a later read failing otherwise does not
- * bring the post back as it was last read.
+ * bring the post back as it was last read. A post deleted with comments under it (#48) or hidden
+ * by an operator (#50) has not left: a read answers its placeholder, which the post page draws in
+ * the post's place as a reload does, its comments under it — the boxes that take no write there
+ * any more hold their texts with why until closed (`goneBoxReason`), and no 404 waits — while the
+ * edit screen, whose form no placeholder can take, hears either apart (`postEditDeleted`,
+ * `postEditHidden`; ADR-0081 7-29).
  */
 export function postGoneAfter(gone: boolean, read: { isError: boolean; error: unknown }): boolean {
   return gone || (read.isError && isApiError(read.error, 'NOT_FOUND'));
@@ -524,14 +540,33 @@ export function postEditDeleted(published: PublishedPost | undefined, read: Post
 }
 
 /**
- * An edit screen whose post left every view (오너 결정 2026-10-24, ADR-0073 9-52) — or stands as its
- * placeholder, deleted with comments under it (#48, `postEditDeleted`): what it draws. The form
- * keeps what the writer had in it — the title and the body, which they can select and copy but no
- * longer change — with '없거나 삭제된 글입니다.' and 닫기, until they close it (`held`); then, and at
- * once when the form held nothing of theirs, the screen is the server's page as a reload draws it:
- * the 404, or the placeholder's '삭제된 글입니다.'. The rule of #48's comment boxes (ADR-0074, 오너
- * 결정 2026-10-20 답 4, 2026-10-21 답 1·2): a box going with a changed text is held with why until
- * it is closed, the page's 404 waits for it, and one holding nothing of the writer's is not.
+ * Whether a read has put a hidden post's placeholder in place of the post an edit screen had
+ * published (`published`) — an operator hid it while the form was open (#50, ADR-0081 7-29). The
+ * API answers that read with the placeholder (#45-5: '운영 정책에 따라 숨긴 글입니다' at the
+ * address, its comments under it), never NOT_FOUND, and refuses a save as POST_NOT_EDITABLE: the
+ * post is taken from under the form as a deletion takes it, and the screen keeps what its form
+ * held the same way (오너 결정 2026-10-25 «숨김에도 글자를 남김», `postEditGoneAfter`), saying
+ * that refusal's sentence. Unlike a deletion, a hiding is undone — an operator cancels it — so it
+ * is heard only while the reads say it. A post its author deleted is deleted, hidden or not
+ * (`publicStateOf`, the API): `postEditDeleted` hears that. A screen opened on the hidden post had
+ * no post published, and shows #45-5's refusal as a reload draws it.
+ */
+export function postEditHidden(published: PublishedPost | undefined, read: Post): boolean {
+  return published !== undefined && read.state === 'hidden';
+}
+
+/**
+ * An edit screen whose post was taken from under its form: it left every view (오너 결정
+ * 2026-10-24, ADR-0073 9-52), stands as its placeholder, deleted with comments under it (#48,
+ * `postEditDeleted`), or an operator hid it (#50, `postEditHidden`, 오너 결정 2026-10-25). What it
+ * draws: the form keeps what the writer had in it — the title and the body, which they can select
+ * and copy but no longer change — with why ('없거나 삭제된 글입니다.', or '운영 정책에 따라 숨긴
+ * 글은 고칠 수 없습니다.' for a hiding) and 닫기, until they close it (`held`); then, and at once
+ * when the form held nothing of theirs, the screen is the server's page as a reload draws it: the
+ * 404, the placeholder's '삭제된 글입니다.', or the hidden post's '운영 정책에 따라 숨긴 글은 고칠 수
+ * 없습니다.'. The rule of #48's comment boxes (ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답
+ * 1·2): a box going with a changed text is held with why until it is closed, the page's 404 waits
+ * for it, and one holding nothing of the writer's is not.
  */
 export interface PostEditGone {
   /**
@@ -539,26 +574,59 @@ export interface PostEditGone {
    * (`postEditDeleted`): no later read brings it back.
    */
   gone: boolean;
+  /**
+   * An operator hid the post under the form (`postEditHidden`), and no read since has said
+   * otherwise — held for that, or closed and the hidden post's refusal on screen. Never with
+   * `gone`: a deletion comes first, as on the API.
+   */
+  hidden: boolean;
   /** The form is on screen holding what the writer had in it, until they close it. */
   held: boolean;
 }
 
+/** An edit screen whose post is there: nothing taken from under the form. */
+export const POST_EDIT_ON_SCREEN: PostEditGone = { gone: false, hidden: false, held: false };
+
 /**
  * The edit screen's `PostEditGone` once `now` is heard: whether a read says the post is gone
- * (`postGoneAfter`, `postEditDeleted`), and whether the form holds something of the writer's
- * (`formHolding`, the form's own word as of its last render — a changed title or body, a draft
- * taken back, an upload on its way, and no save that landed: what leaving would lose). Held is
- * decided as the post goes, by what the form held then, and is never taken up later; it ends when
- * the writer closes it, or when the form leaves the screen under it (the session gone in another
- * tab, say: the gate's sign-in prompt in its place) — there is nothing left on screen to hold. The
- * same object when nothing changes.
+ * (`postGoneAfter`, `postEditDeleted`) or hidden (`postEditHidden`), and whether the form holds
+ * something of the writer's (`formHolding`, the form's own word as of its last render — a changed
+ * title or body, a draft taken back, an upload on its way, and no save that landed: what leaving
+ * would lose). Held is decided as the post goes, by what the form held then, and is never taken up
+ * later; it ends when the writer closes it (`postEditClosed`), or when the form leaves the screen
+ * under it (the session gone in another tab, say: the gate's sign-in prompt in its place) — there
+ * is nothing left on screen to hold. A deletion heard ends a hiding — the sentence becomes the
+ * deletion's, and closing is what a reload of the deleted post draws — and is never undone. A
+ * hiding held stays held through a read that finds it cancelled, until it is closed; closed, it is
+ * over once a read no longer says the post hidden — the form is the post's again, as a reload
+ * draws it, and a later hiding holds again what it holds then. The same object when nothing
+ * changes.
  */
 export function postEditGoneAfter(
   state: PostEditGone,
-  now: { gone: boolean; formHolding: boolean },
+  now: { gone: boolean; hidden: boolean; formHolding: boolean },
 ): PostEditGone {
-  if (!state.gone) return now.gone ? { gone: true, held: now.formHolding } : state;
-  return state.held && !now.formHolding ? { gone: true, held: false } : state;
+  if (state.gone) return state.held && !now.formHolding ? { ...state, held: false } : state;
+  if (now.gone) return { gone: true, hidden: false, held: now.formHolding };
+  if (state.hidden) {
+    if (state.held) return now.formHolding ? state : { ...state, held: false };
+    return now.hidden ? state : POST_EDIT_ON_SCREEN;
+  }
+  return now.hidden ? { gone: false, hidden: true, held: now.formHolding } : state;
+}
+
+/**
+ * Why a held form (`PostEditGone`) cannot be sent, at its top — the sentence of the save refused
+ * for it: '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.' for a hiding (POST_NOT_EDITABLE, #50),
+ * '없거나 삭제된 글입니다.' for a deletion (NOT_FOUND).
+ */
+export function postEditHeldMessage(state: PostEditGone): string {
+  return state.hidden ? copy.errPostNotEditable : copy.errPostGone;
+}
+
+/** 닫기 on a held form (`PostEditGone`): what the post now is, as a reload draws it. */
+export function postEditClosed(state: PostEditGone): PostEditGone {
+  return state.held ? { ...state, held: false } : state;
 }
 
 /** Search engines cut a description around here. */
