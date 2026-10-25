@@ -18,10 +18,13 @@ import {
   createModerationAction,
   createProposal,
   createUser,
+  createWriteLimitEvent,
 } from '@buddha/db/test';
 import {
   PROPOSAL_BACKGROUND_MAX,
   PROPOSAL_LIMITS,
+  WRITE_LIMITS,
+  WRITE_LIMIT_ACTIONS,
   proposalSchema,
   type Proposal,
   type ProposalLimitedDetails,
@@ -508,6 +511,42 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     const answers = await Promise.all([propose(form()), propose(form()), propose(form())]);
     expect(answers.map((res) => res.statusCode).sort()).toEqual([201, 201, 429]);
     expect(await rows()).toHaveLength(PROPOSAL_LIMITS.dailyProposals);
+  });
+
+  it('keeps its own two limits apart from #187’s write limits and repeated links (ADR-0089 결과 5)', async () => {
+    // The number at every one of #187's limits — posts, comments, edits, images — as
+    // WriteLimitsService records them.
+    for (const action of WRITE_LIMIT_ACTIONS) {
+      for (let i = 0; i < WRITE_LIMITS[action][0]!.limit; i += 1) {
+        await createWriteLimitEvent(t.db, { phoneHash, action });
+      }
+    }
+    const counted = async () =>
+      (
+        await t.db
+          .select()
+          .from(schema.writeLimitEvents)
+          .where(eq(schema.writeLimitEvents.phoneHash, phoneHash))
+      ).length;
+    const before = await counted();
+    // A proposal is neither a post nor a comment: those limits refuse none of the day's three, and
+    // the same link in each one's sources, three times over, is no repeated link (ADR-0069 decision
+    // 4 #77 «반복 링크 탐지는 적용하지 않는다») — nothing is counted or recorded for #187.
+    const link = 'https://spam.example/a';
+    for (let i = 0; i < PROPOSAL_LIMITS.dailyProposals; i += 1) {
+      const res = await propose(
+        form({ expectedSources: `${link} ${link} ${link}`, background: link }),
+      );
+      expect(res.statusCode, res.body).toBe(201);
+    }
+    expect(await counted()).toBe(before);
+    expect(await t.db.select().from(schema.linkUses)).toEqual([]);
+    expect(await t.db.select().from(schema.linkFlags)).toEqual([]);
+    // Its own daily limit, not #187's, refuses the fourth.
+    const refused = await propose(form());
+    expect(refused.statusCode).toBe(429);
+    expect(errorOf(refused).code).toBe('PROPOSAL_LIMITED');
+    expect((errorOf(refused).details as ProposalLimitedDetails).reason).toBe('daily');
   });
 
   // ---- 내 제안 ---------------------------------------------------------------------------
