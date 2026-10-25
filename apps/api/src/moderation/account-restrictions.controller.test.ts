@@ -396,11 +396,14 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       const holding = new Promise<void>((resolve) => {
         held = resolve;
       });
-      // Both requests' rows held: each approval takes its profile locks and parks on its request —
-      // the decision's own lock — and both go on together, to the decision's trigger, which locks
-      // the decider's profile (migration 0021). Locked as they came (the member's, then the
-      // decider's by the trigger), each would wait for the profile the other holds: a deadlock,
-      // one approval a 500.
+      // Both requests' rows held, so the two approvals wait together and are let go at once.
+      // Locked as they came (the member's profile by the approval, then the decider's by the
+      // decision's trigger, migration 0021), each would take its member's profile and park on its
+      // request — the decision's own lock — and both would go on together to the trigger, each
+      // waiting for the profile the other holds: a deadlock, one approval a 500. In one order
+      // (7-17) the two want the same two profiles, so the one that comes second waits on the
+      // first's profile locks while the first parks on its request; let go, they run one after
+      // the other.
       const holder = t.db.transaction(async (tx) => {
         await tx
           .select({ id: approvalRequests.id })
@@ -415,7 +418,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         await holding;
         const byThird = approve(onSecond.id, third);
         const bySecond = approve(onThird.id, second);
-        await waitForLockWaiter(observer, 'the two approvals behind their requests', 2);
+        await waitForLockWaiter(observer, 'the two approvals waiting on a lock', 2);
         release();
         await holder;
         answers = await Promise.all([byThird, bySecond]);
