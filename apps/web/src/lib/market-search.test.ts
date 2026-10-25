@@ -13,7 +13,9 @@ import {
   SEARCH_PATH,
   isMarketSearch,
   recentSearchPath,
+  type SearchBoxOwner,
   searchBoxKey,
+  searchBoxOwner,
   searchCategoryOptions,
   searchErrorMessage,
   searchFiltersFromSearchParams,
@@ -308,23 +310,80 @@ describe('searchToRecord', () => {
   });
 });
 
-describe('searchBoxKey', () => {
-  it('is one key for each term and account, so a box is drawn again when either changes (ADR-0091)', () => {
-    // The URL's term (Back, a second search) and the account the box records for: a draft typed
-    // for A — or before `GET /me` said whose it is — is never submitted for B.
+describe('searchBoxOwner and searchBoxKey', () => {
+  // The box's key over the `Me` ids it is drawn for, in order (`useSearchBoxTurn`): `undefined` is
+  // nobody known — `GET /me` pending or failed, SessionCacheGuard's reset, a sign-out. `from` is
+  // the last account the tab knew when the box was drawn.
+  const keysOver = (ids: (string | undefined)[], from?: string, term = '금리') => {
+    let owner: SearchBoxOwner = { accountId: from, turn: 0 };
+    return ids.map((id) => {
+      owner = searchBoxOwner(owner, id);
+      return searchBoxKey(owner.turn, term);
+    });
+  };
+
+  it('keeps the box through `GET /me`’s first answer (owner decision 2026-10-26 «첫 답 전에 친 글자는 남김»)', () => {
+    // A term typed before the tab knows any account stays once the first answer names one, and is
+    // that account's: the key does not change, so the box is not drawn again.
+    const [before, answered, again] = keysOver([undefined, 'user-a', 'user-a']);
+    expect(answered).toBe(before);
+    expect(again).toBe(before);
+    expect(searchBoxOwner({ accountId: undefined, turn: 0 }, 'user-a')).toEqual({
+      accountId: 'user-a',
+      turn: 0,
+    });
+  });
+
+  it('draws the box again when the account known turns into another (ADR-0091)', () => {
+    // In place, before the session does (ADR-0090 결정 4-2): a draft typed for A is never submitted,
+    // and recorded, for B.
+    const [first, a, b, backToA] = keysOver([undefined, 'user-a', 'user-b', 'user-a']);
+    expect(a).toBe(first);
+    expect(b).not.toBe(a);
+    expect(backToA).not.toBe(b);
+    expect(backToA).not.toBe(a);
+  });
+
+  it('draws it again for B even with nobody known between A and B', () => {
+    // SessionCacheGuard's reset puts `['me']` back to nothing before B's answer: that stretch is
+    // not a first answer, so A's draft does not wait in the box for B.
+    const [a, reset, b] = keysOver(['user-a', undefined, 'user-b']);
+    expect(reset).toBe(a);
+    expect(b).not.toBe(a);
+    // Nobody known (a failed `GET /me`, a sign-out) clears nothing, and A again is no turn.
+    const [, , aAgain] = keysOver(['user-a', undefined, 'user-a']);
+    expect(aAgain).toBe(a);
+  });
+
+  it('starts a box drawn while nobody is known as the last account the tab knew', () => {
+    // The search screen opened between the reset and B's answer: B is not the tab's first account.
+    const [drawn, b] = keysOver([undefined, 'user-b'], 'user-a');
+    expect(b).not.toBe(drawn);
+    const [, a] = keysOver([undefined, 'user-a'], 'user-a');
+    expect(a).toBe(drawn);
+  });
+
+  it('returns the same owner while nothing changes, so the box is not adjusted again', () => {
+    const owner: SearchBoxOwner = { accountId: 'user-a', turn: 2 };
+    expect(searchBoxOwner(owner, 'user-a')).toBe(owner);
+    expect(searchBoxOwner(owner, undefined)).toBe(owner);
+    expect(searchBoxOwner(owner, 'user-b')).toEqual({ accountId: 'user-b', turn: 3 });
+  });
+
+  it('is one key for each turn and term, so a box is drawn again when either changes', () => {
+    // The URL's term (Back, a second search) and the turn.
     const keys = [
-      searchBoxKey(undefined, undefined),
-      searchBoxKey('user-a', undefined),
-      searchBoxKey('user-b', undefined),
-      searchBoxKey(undefined, '금리'),
-      searchBoxKey('user-a', '금리'),
-      searchBoxKey('user-b', '금리'),
-      // A term that holds the separator, and an id that looks like one's start.
-      searchBoxKey(undefined, 'user-a|금리'),
-      searchBoxKey('user-a', '|금리'),
+      searchBoxKey(0, undefined),
+      searchBoxKey(1, undefined),
+      searchBoxKey(0, '금리'),
+      searchBoxKey(1, '금리'),
+      // A term that holds the separator, or looks like a turn's.
+      searchBoxKey(0, '1|금리'),
+      searchBoxKey(1, '|금리'),
+      searchBoxKey(10, '금리'),
     ];
     expect(new Set(keys).size).toBe(keys.length);
-    expect(searchBoxKey('user-a', '금리')).toBe(searchBoxKey('user-a', '금리'));
+    expect(searchBoxKey(1, '금리')).toBe(searchBoxKey(1, '금리'));
   });
 });
 

@@ -1,4 +1,4 @@
-import { type APIRequestContext, type Page } from '@playwright/test';
+import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   closeMarket,
@@ -7,6 +7,7 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  nextMeRead,
   signUp,
   switchAccountUnderScreen,
   switchMeBeforeSession,
@@ -28,8 +29,11 @@ import {
  * nothing of either: each write names the account the screen was drawn for and is refused; a
  * list whose `['me']` turned to another account before the session did is that account's own,
  * read afresh, before an entry can be deleted; and a term typed in either box for the one account
- * is gone from it once the box is the other's. A `GET /me` that fails without answering leaves the
- * list unread, said with 다시 시도 (ADR-0091).
+ * is gone from it once the box is the other's — in either order, and in a box opened while the
+ * tab waited for the other's `GET /me` too — while a term typed before
+ * `GET /me`'s first answer stays, and is that answer's account's (owner decision 2026-10-26 «첫 답
+ * 전에 친 글자는 남김»). A `GET /me` that fails without answering leaves the list unread, said with
+ * 다시 시도 (ADR-0091).
  */
 
 /**
@@ -74,6 +78,42 @@ async function searchFromHeader(page: Page, term: string): Promise<void> {
   const mobile = page.getByTestId('nav-search-mobile');
   await mobile.fill(term);
   await mobile.press('Enter');
+}
+
+/**
+ * The header's search field: the one in row 1 at md and up; below it the form its icon opens,
+ * opened here. Ask once the page has hydrated — the icon opens nothing before.
+ */
+async function headerBox(page: Page): Promise<Locator> {
+  const field = page.getByTestId('nav-search');
+  if (await field.isVisible()) return field;
+  await page.getByTestId('nav-search-toggle').click();
+  const mobile = page.getByTestId('nav-search-mobile');
+  await expect(mobile).toBeVisible();
+  return mobile;
+}
+
+/**
+ * Holds every `GET /me` the page sends from now until `release` is called. `asked` resolves once
+ * the first one is sent. Armed before the page is opened, that is its first read: the browser
+ * knows the session by then, so the page has hydrated and nothing on it knows the account yet.
+ * Armed on an open page before its session turns to another account, it is SessionCacheGuard's
+ * read after the reset, so nothing on the page knows any account until `release`.
+ */
+async function holdMeReads(page: Page): Promise<{ asked: Promise<unknown>; release: () => void }> {
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+  await page.route(isMeRead, async (route) => {
+    if (route.request().method() === 'GET') await released;
+    await route.fallback();
+  });
+  const asked = page.waitForRequest(
+    (request) => request.method() === 'GET' && isMeRead(new URL(request.url())),
+  );
+  return { asked, release };
 }
 
 /** Submits `term` from the search screen's own box. */
@@ -745,8 +785,8 @@ test.describe('시장 검색', () => {
     // session does, so SessionCacheGuard resets nothing. A box keeps what is typed in it — the
     // header's never remounts — and its submit records the term for the account the header shows
     // then: a term typed on A's screen, submitted once B is drawn, went into B's 최근 검색 with B's
-    // cookie (named the session's A it was refused before). Each box is drawn again for each
-    // account, so the term typed for A is gone.
+    // cookie (named the session's A it was refused before). Each box is drawn again when the
+    // account known turns into another (`useSearchBoxTurn`), so the term typed for A is gone.
     const otherContext = await browser.newContext();
     const shownContext = await browser.newContext();
     try {
@@ -778,6 +818,221 @@ test.describe('시장 검색', () => {
       expect(await recentOf(other.request)).toEqual([]);
       expect(await recentOf(shownContext.request)).toEqual([]);
     } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('`GET /me`의 첫 답 전에 검색창에 적은 검색어는 그 답 뒤에도 남고, 제출하면 그 답의 회원의 최근 검색으로 간다', async ({
+    page,
+  }) => {
+    // ADR-0091, owner decision 2026-10-26 «첫 답 전에 친 글자는 남김»: the first time the tab knows
+    // an account is no change of account — a term typed in either box before `GET /me`'s first
+    // answer stays, and is that account's. Drawing each box again for each account had cleared it
+    // on that answer (and moved the focus). Held here: the page's `GET /me` until released.
+    await signUp(page, freshEmail());
+    const a = await meOf(page.request);
+    const { asked, release } = await holdMeReads(page);
+    try {
+      await page.goto('/search');
+      await asked;
+      const typed = `a-${freshTag()}`;
+      const screenBox = page.getByTestId('search-input');
+      await screenBox.fill(typed);
+      const header = await headerBox(page);
+      await header.fill(typed);
+      // Nobody known yet: the header holds the chip's placeholder.
+      await expect(page.getByTestId('balance-chip')).toHaveCount(0);
+
+      release();
+      await expect(page.getByTestId('balance-chip')).toBeVisible();
+      await expect(screenBox).toHaveValue(typed);
+      await expect(header).toHaveValue(typed);
+
+      // Submitted now, it is recorded for the account that answer named.
+      const writes = historyWrites(page);
+      const answered = recorded(page);
+      await header.press('Enter');
+      expect((await answered).status()).toBe(200);
+      await expect(page).toHaveURL(`/search?q=${typed}`);
+      expect(writes).toEqual([
+        { path: '/api/v1/me/search-history', body: { query: typed, expectedAccountId: a.id } },
+      ]);
+      expect(await recentOf(page.request)).toEqual([typed]);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+    }
+  });
+
+  test('`GET /me`의 첫 답 전에 적어 그 답 뒤에도 남은 검색어도, 그 뒤 `GET /me`가 다른 회원으로 답하면 검색창에서 비워진다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091, owner decision 2026-10-26: what is kept through the first answer is the first
+    // account's, and goes once the account known turns into another — here in ADR-0090 결정 4-2's
+    // order, `['me']` turning from A to B in place before the session does (no reset).
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    let release: () => void = () => undefined;
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      await page.clock.install();
+      const held = await holdMeReads(page);
+      release = held.release;
+      await page.goto('/search');
+      await held.asked;
+      const typed = `a-${freshTag()}`;
+      const screenBox = page.getByTestId('search-input');
+      await screenBox.fill(typed);
+      const header = await headerBox(page);
+      await header.fill(typed);
+      release();
+      await expect(page.getByTestId('balance-chip')).toBeVisible();
+      await expect(screenBox).toHaveValue(typed);
+      await expect(header).toHaveValue(typed);
+
+      const writes = historyWrites(page);
+      await switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+      // B's screen: neither box holds what was typed for A.
+      await expect(screenBox).toHaveValue('');
+      await expect(header).toHaveValue('');
+
+      expect(writes).toEqual([]);
+      expect(await recentOf(other.request)).toEqual([]);
+      expect(await recentOf(shownContext.request)).toEqual([]);
+    } finally {
+      release();
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 다른 회원으로 바뀌어 화면이 그 회원의 것으로 다시 그려지면, 앞 계정에서 검색창에 적던 검색어는 비워져 그 회원의 최근 검색으로 가지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091, owner decision 2026-10-26: the other order. The session says B first and
+    // SessionCacheGuard's reset puts `['me']` back to nothing before B's answer comes — a stretch
+    // with nobody known that is no first answer: A's draft does not wait in the boxes for B's
+    // `Me`, whose submit would record it for B.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      await page.goto('/search');
+      await expect(page.getByTestId('balance-chip')).toBeVisible();
+      const typed = `a-${freshTag()}`;
+      const screenBox = page.getByTestId('search-input');
+      await screenBox.fill(typed);
+      const header = await headerBox(page);
+      await header.fill(typed);
+      await shownContext.addCookies(await page.context().cookies());
+
+      const writes = historyWrites(page);
+      // B's cookie in the tab, and the session read again on `visibilitychange` (better-auth's
+      // own refetch): the guard's reset, then `GET /me` with B's cookie.
+      const sessionRead = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/auth/get-session',
+      );
+      const meRead = nextMeRead(page);
+      await page.context().clearCookies();
+      await page.context().addCookies(await otherContext.cookies());
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      const session = (await (await sessionRead).json()) as { user?: { id?: string } } | null;
+      expect(session?.user?.id).toBe(b.id);
+      const drawn = (await (await meRead).json()) as { data: { id: string } };
+      expect(drawn.data.id).toBe(b.id);
+      await expect(screenBox).toHaveValue('');
+      await expect(header).toHaveValue('');
+
+      expect(writes).toEqual([]);
+      expect(await recentOf(other.request)).toEqual([]);
+      expect(await recentOf(shownContext.request)).toEqual([]);
+    } finally {
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 다른 회원으로 바뀐 뒤 그 회원의 `GET /me`가 답하기 전에 새로 연 검색창에 적은 검색어도, 그 답에 비워져 그 회원의 최근 검색으로 가지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 결정 5-10 (가): a box drawn while nobody is known — the search screen opened
+    // between SessionCacheGuard's reset and B's `GET /me`, the header's form its icon opens then
+    // (375px) — starts as the last account the tab knew, so B's answer is no first answer and the
+    // box starts again. The test above types only in boxes drawn while A was known, which hold A
+    // in their own state; these are drawn after the reset, from what the tab remembers. Held
+    // here: every `GET /me` from the cookie swap on — the first is the guard's read for B.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    let release: () => void = () => undefined;
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      await page.goto('/');
+      await expect(page.getByTestId('balance-chip')).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+
+      const writes = historyWrites(page);
+      const held = await holdMeReads(page);
+      release = held.release;
+      // B's cookie in the tab, and the session read again on `visibilitychange` (better-auth's
+      // own refetch): the guard's reset, then `GET /me` with B's cookie — held.
+      const sessionRead = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/auth/get-session',
+      );
+      await page.context().clearCookies();
+      await page.context().addCookies(await otherContext.cookies());
+      await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+      const session = (await (await sessionRead).json()) as { user?: { id?: string } } | null;
+      expect(session?.user?.id).toBe(b.id);
+      await held.asked;
+      // Nobody known: the header holds the chip's placeholder.
+      await expect(page.getByTestId('balance-chip')).toHaveCount(0);
+
+      // The search screen, opened now from the header's empty box (at 375px from the form its
+      // icon opens now), and then the header's box beside it (at 375px that form opened again).
+      await (await headerBox(page)).press('Enter');
+      await expect(page).toHaveURL(/\/search(\?q=)?$/);
+      const typed = `a-${freshTag()}`;
+      const screenBox = page.getByTestId('search-input');
+      await screenBox.fill(typed);
+      const header = await headerBox(page);
+      await header.fill(typed);
+      await expect(page.getByTestId('balance-chip')).toHaveCount(0);
+
+      const answer = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/v1/me' &&
+          response.request().method() === 'GET',
+      );
+      release();
+      const drawn = (await (await answer).json()) as { data: { id: string } };
+      expect(drawn.data.id).toBe(b.id);
+      await expect(page.getByTestId('balance-chip')).toBeVisible();
+      await expect(screenBox).toHaveValue('');
+      await expect(header).toHaveValue('');
+
+      expect(writes).toEqual([]);
+      expect(await recentOf(other.request)).toEqual([]);
+      expect(await recentOf(shownContext.request)).toEqual([]);
+    } finally {
+      release();
       await page.unrouteAll({ behavior: 'ignoreErrors' });
       await otherContext.close();
       await shownContext.close();

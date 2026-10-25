@@ -24,6 +24,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useCategories, useMarketSearch } from '@/hooks/use-markets';
 import { useMe } from '@/hooks/use-me';
+import { useSearchBoxTurn } from '@/hooks/use-search-box';
 import {
   useRecentSearches,
   useRecordSearch,
@@ -87,7 +88,7 @@ export function MarketSearch({
   const { groups, unlisted } = searchCategoryOptions(tree, filters.category);
   const { data: session, isPending: sessionPending } = useSession();
   // The account the screen was drawn for: a submitted term is recorded for it, and the box is
-  // drawn again for each (`SearchBox`).
+  // drawn again when it turns into another (`SearchBox`).
   const accountId = useMe().data?.id;
   const record = useRecordSearch(accountId);
   const body = searchScreenBody(filters, { pending: sessionPending, signedIn: session != null });
@@ -169,9 +170,11 @@ export function MarketSearch({
  * field holds at most `SEARCH_INPUT_MAX_LENGTH`, so whatever it holds is a term the screen
  * searches (lib/market-search.ts). It is uncontrolled and keyed on the term the URL carries, the
  * header box's rule (nav.tsx `SearchForm`): a navigation that replaced the term remounts it, and
- * a filter change keeps what is typed. It is keyed on the account the screen was drawn for too,
- * also the header box's rule (ADR-0091): a term typed for A is not B's to record. With no term it
- * takes the focus, since typing one is the only thing the screen asks for then.
+ * a filter change keeps what is typed. It is keyed on its turn too (`useSearchBoxTurn`), also the
+ * header box's rule (ADR-0091): a term typed for A is not B's to record, so the box starts again
+ * when the account known turns into another — but not on `GET /me`'s first answer, which keeps
+ * what was typed before it (owner decision 2026-10-26). With no term it takes the focus, since
+ * typing one is the only thing the screen asks for then.
  *
  * Its landmark and its field are named '고른 조건으로 검색' (`searchRefineLabel`), not the header's
  * '시장 검색': on this screen both search landmarks are on the page, and two of one role with one
@@ -184,10 +187,14 @@ function SearchBox({
   onSubmitted,
 }: {
   filters: SearchFilters;
-  /** The account a submitted term is recorded for: the `Me` the screen was drawn from. */
+  /**
+   * The account a submitted term is recorded for: the `Me` the screen was drawn from. The box
+   * starts again when it turns into another (`useSearchBoxTurn`).
+   */
   accountId: string | undefined;
   onSubmitted: (term: unknown) => void;
 }) {
+  const turn = useSearchBoxTurn(accountId);
   return (
     <Form
       action={SEARCH_PATH}
@@ -203,8 +210,8 @@ function SearchBox({
           <input key={name} type="hidden" name={name} value={value} />
         ))}
         <Input
-          // The term the URL carries, and the account it is typed for (`searchBoxKey`).
-          key={searchBoxKey(accountId, filters.q)}
+          // The term the URL carries, and the box's turn (`searchBoxKey`).
+          key={searchBoxKey(turn, filters.q)}
           name="q"
           type="search"
           defaultValue={filters.q ?? ''}

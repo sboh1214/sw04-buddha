@@ -388,21 +388,46 @@ describe('the account the recent searches are written for (ADR-0091)', () => {
     expect(screen).not.toMatch(/useSearchHistoryWrite\(\)\.accountId|\{ write, accountId \}/);
   });
 
-  it('draws both boxes again for each account, so a term typed for A is never recorded for B', () => {
+  it('draws both boxes again when the account turns into another, so a term typed for A is never recorded for B', () => {
     // `['me']` can turn from A to B under a box that stays mounted — the header's never remounts —
     // in place before the session does (ADR-0090 결정 4-2) or through SessionCacheGuard's reset;
     // the term typed on A's screen would then be submitted, and recorded, for B with B's cookie.
-    // Each box is keyed on its account as well as the URL's term (`searchBoxKey`). e2e
-    // search.spec.ts ('… 검색창에 적던 검색어 …') holds that order.
+    // Each box is keyed on its turn as well as the URL's term (`searchBoxKey`) — the turn of the
+    // account it records for (`useSearchBoxTurn`). e2e search.spec.ts ('… 검색창에 적던 검색어 …')
+    // holds both orders.
     const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
-    expect(source('../components/layout/nav.tsx')).toContain(
-      'key={searchBoxKey(accountId, initialTerm)}',
-    );
+    const nav = source('../components/layout/nav.tsx');
+    expect(nav).toContain('const turn = useSearchBoxTurn(accountId);');
+    expect(nav).toContain('key={searchBoxKey(turn, initialTerm)}');
     const screen = source('../app/search/market-search.tsx');
-    expect(screen).toContain('key={searchBoxKey(accountId, filters.q)}');
+    expect(screen).toContain('const turn = useSearchBoxTurn(accountId);');
+    expect(screen).toContain('key={searchBoxKey(turn, filters.q)}');
     expect(screen).toContain(
       '<SearchBox filters={filters} accountId={accountId} onSubmitted={record} />',
     );
+  });
+
+  it('keeps what was typed before `GET /me`’s first answer, and turns over the whole tab (owner decision 2026-10-26)', () => {
+    // «첫 답 전에 친 글자는 남김»: the box's turn moves only when the account known turns into
+    // another (`searchBoxOwner`, lib/market-search.test.ts), adjusted during render so B's screen
+    // is drawn with the box already empty. A box drawn while nobody is known starts as the last
+    // account the tab knew — written by an effect, never on the server — so only the tab's first
+    // account is a first answer. The effect is pinned whole: nobody known never erases it, and it
+    // runs on each account, not only on the box's mount (a header box mounts before `GET /me`
+    // answers). e2e search.spec.ts ('`GET /me`의 첫 답 전에 …', '… 새로 연 검색창 …') drives it.
+    const hook = readFileSync(new URL('./use-search-box.ts', import.meta.url), 'utf8');
+    expect(hook).toContain('accountId: lastKnownInTab,');
+    expect(hook).toContain('const current = searchBoxOwner(owner, accountId);');
+    expect(hook).toContain('if (current !== owner) setOwner(current);');
+    expect(hook).toContain(
+      [
+        '  useEffect(() => {',
+        '    if (accountId !== undefined) lastKnownInTab = accountId;',
+        '  }, [accountId]);',
+      ].join('\n'),
+    );
+    expect(hook.match(/lastKnownInTab =/g)).toHaveLength(1);
+    expect(hook).toContain('return current.turn;');
   });
 
   it('says the list could not be read when `GET /me` failed, rather than waiting for good', () => {
