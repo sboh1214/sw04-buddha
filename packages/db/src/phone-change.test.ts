@@ -2976,5 +2976,27 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     // What it does take, rolled back here: the hash alone, of the account's proposal.
     expect((await update(moveTo, [newHash, mineSettled.id], named)).rowCount).toBe(1);
     expect(await proposalRows()).toEqual(after);
+
+    // A withdrawn proposer's — no 본인확인 record — only from the old hash the change names (the
+    // reports' rule, reports_keep_record in schema.test.ts): not one under another hash, nor one
+    // under the old hash while the change names another. Made after the change, so its DO block
+    // has not moved them; the DO block's own WHERE holds it to the old hash, so only these
+    // statements see the trigger's.
+    const { user: gone } = await createUser(t.db);
+    const goneElsewhere = await createProposal(t.db, {
+      userId: gone.id,
+      phoneHash: randomPhoneHash(),
+    });
+    const goneOnOld = await createProposal(t.db, { userId: gone.id, phoneHash: oldHash });
+    const withGone = await proposalRows();
+    await expect(update(moveTo, [newHash, goneElsewhere.id], named)).rejects.toMatchObject(
+      refusal(keeps),
+    );
+    await expect(
+      update(moveTo, [newHash, goneOnOld.id], { ...named, old_hash: randomPhoneHash() }),
+    ).rejects.toMatchObject(refusal(keeps));
+    // Taken under the old hash it names, rolled back here.
+    expect((await update(moveTo, [newHash, goneOnOld.id], named)).rowCount).toBe(1);
+    expect(await proposalRows()).toEqual(withGone);
   });
 });
