@@ -9,7 +9,8 @@
 --   the 철회's time, and the operators' internal memo. The CHECKs tie each status to its columns.
 -- - A trigger keeps the submitted form as it was and moves the status only along the owner's
 --   steps (접수 → 검토 → 채택·반려, 접수 → 반려, 접수 → 철회; 채택, 반려 and 철회 final), with the one
---   later change of a 채택: a market linked to one that has none.
+--   later change of a 채택: a market linked to one that has none, and the one change of the
+--   number's hash: the operator's number change's (owner decision 2026-10-25, ADR-0089).
 -- - buddha_app keeps every privilege of the defaults: the row moves (UPDATE), and #184's worker
 --   deletes a withdrawn account's proposals once their processing has ended and their retention
 --   period — '시장 제안 기록 보존기간', `retention.market_proposals` — has passed (DELETE).
@@ -76,6 +77,16 @@ ALTER TABLE "retention_purges" ADD CONSTRAINT "retention_purges_kind_check" CHEC
 -- with no market takes one, with who and when (`market_linked_*`) — once, since it then has a
 -- market. A market that came with the 채택 is never replaced, and a move never records a link. The
 -- CHECKs of the table say which columns each status fills.
+-- The number's hash, which the limits count by (ADR-0069 decision 7), changes in one transaction
+-- only: the operator's change of the proposer's number (docs/OPERATIONS.md step 5,
+-- OPERATOR_PHONE_CHANGE_SQL — owner decision 2026-10-25 «신고처럼 옮김», ADR-0089), which moves
+-- the person's waiting and recent proposals to the new number's hash, as #50's reports_keep_record
+-- (migration 0039) takes it for the reports. Its SET LOCAL lines name the account and the two
+-- hashes; the trigger takes the change to the new hash they name, of a proposal of the account
+-- they name or of one under the old hash they name whose proposer has no 본인확인 record left (it
+-- withdrew: the account inherited it on that number), and nothing else of the row with it. The app
+-- names none of them, so none of its writes changes a hash. Which proposals move is the
+-- procedure's: the trigger allows, it does not choose.
 CREATE FUNCTION market_proposals_keep_record() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -86,11 +97,26 @@ BEGIN
     END IF;
     RETURN NEW;
   END IF;
-  IF (NEW.id, NEW.user_id, NEW.phone_hash, NEW.question, NEW.deadline, NEW.yes_condition,
-      NEW.expected_sources, NEW.background, NEW.category_id, NEW.created_at)
+  IF NEW.phone_hash IS DISTINCT FROM OLD.phone_hash THEN
+    IF (NEW.phone_hash = current_setting('phone_change.new_hash', true)
+        AND (OLD.user_id = current_setting('phone_change.user_id', true)
+          OR (OLD.phone_hash = current_setting('phone_change.old_hash', true)
+            AND NOT EXISTS (SELECT 1 FROM phone_verifications pv
+              WHERE pv.user_id = OLD.user_id)))) IS NOT TRUE THEN
+      RAISE EXCEPTION 'market proposal % keeps the number it was submitted with, but for the operator''s number change', OLD.id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    IF (to_jsonb(NEW) - 'phone_hash') IS DISTINCT FROM (to_jsonb(OLD) - 'phone_hash') THEN
+      RAISE EXCEPTION 'market proposal % changes its number''s hash alone', OLD.id
+        USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+  END IF;
+  IF (NEW.id, NEW.user_id, NEW.question, NEW.deadline, NEW.yes_condition, NEW.expected_sources,
+      NEW.background, NEW.category_id, NEW.created_at)
      IS DISTINCT FROM
-     (OLD.id, OLD.user_id, OLD.phone_hash, OLD.question, OLD.deadline, OLD.yes_condition,
-      OLD.expected_sources, OLD.background, OLD.category_id, OLD.created_at) THEN
+     (OLD.id, OLD.user_id, OLD.question, OLD.deadline, OLD.yes_condition, OLD.expected_sources,
+      OLD.background, OLD.category_id, OLD.created_at) THEN
     RAISE EXCEPTION 'market proposal %: what was submitted never changes', OLD.id
       USING ERRCODE = 'check_violation';
   END IF;

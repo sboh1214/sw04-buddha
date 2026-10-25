@@ -24,7 +24,10 @@ import { markets } from './markets.js';
  * - `phone_hash` is the keyed hash of the proposer's verified number when it proposed (HMAC under
  *   PHONE_HASH_KEY, apps/api identity/phone-hash.ts, ADR-0071): the pending and daily limits count
  *   by it, not by account, so an account made again on the same number carries on from the last
- *   one's count (ADR-0069 decision 7). Never shown to anyone, the proposer included.
+ *   one's count (ADR-0069 decision 7). Never shown to anyone, the proposer included. It changes
+ *   only in the operator's change of the proposer's number, which moves the person's waiting
+ *   proposals and those of the last 24 hours to the new number's hash (OPERATOR_PHONE_CHANGE_SQL,
+ *   owner decision 2026-10-25, ADR-0089) — the trigger takes it from that transaction alone.
  * - `deadline` is the date the result is to be known, a Korean calendar date.
  * - `review_started_*` is set by 검토 (and stays through the decision after it); `decided_*` by
  *   채택 or 반려; `retracted_at` by 철회. The admin screen shows who and when (검토 흐름·기록), and

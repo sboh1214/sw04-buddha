@@ -12,7 +12,9 @@
  *   names every ADR-0086 decision that lists that answer's fields (3, and 5's registry reason);
  * - ADR-0089 결과 1 repeats, as it stands, each clause ADR-0089 wrote into another ADR's status line;
  * - the 2026-10-24 table, which says its 결정 cell is the owner's words, holds them as the owner gave
- *   them (2026-10-24 20:19), the screen's line in them as copy.ts has it.
+ *   them (2026-10-24 20:19), the screen's line in them as copy.ts has it;
+ * - so does the 2026-10-25 table (2026-10-25 11:57), the owner's label «신고처럼 옮김» in it as given,
+ *   and the procedure it changed and ADR-0071's status line say what it decided.
  *
  * Static: it reads files, no database.
  */
@@ -124,13 +126,19 @@ const CLOSURE_PROPOSALS = (() => {
 })();
 
 describe('#77’s owner decisions in ADR-0089', () => {
-  it('reads ADR-0089’s own tables: 2026-10-19 (15 answers), 2026-10-20 (4) and 2026-10-24 (1)', () => {
-    expect([...OWN_TABLES.keys()]).toEqual(['2026-10-19', '2026-10-20', '2026-10-24']);
+  it('reads ADR-0089’s own tables: 2026-10-19 (15 answers), 2026-10-20 (4), 2026-10-24 (1) and 2026-10-25 (1)', () => {
+    expect([...OWN_TABLES.keys()]).toEqual([
+      '2026-10-19',
+      '2026-10-20',
+      '2026-10-24',
+      '2026-10-25',
+    ]);
     expect([...OWN_TABLES.get('2026-10-19')!.keys()]).toEqual(
       Array.from({ length: 15 }, (_, i) => i + 1),
     );
     expect([...OWN_TABLES.get('2026-10-20')!.keys()]).toEqual([1, 2, 3, 4]);
     expect([...OWN_TABLES.get('2026-10-24')!.keys()]).toEqual([1]);
+    expect([...OWN_TABLES.get('2026-10-25')!.keys()]).toEqual([1]);
   });
 
   it('cites another ADR’s answer of a day ADR-0089 has its own table for with that ADR’s name: a bare citation names an answer of ADR-0089’s own table', () => {
@@ -187,6 +195,30 @@ describe('#77’s owner decisions in ADR-0089', () => {
     );
   });
 
+  it('holds in the 2026-10-25 table the owner’s words as given, «신고처럼 옮김» among them, and says where it was built', () => {
+    const head = ADR_0089.split('\n').find((line) => line.startsWith('**오너 결정 2026-10-25'));
+    expect(head).toContain('결정 칸은 오너의 글 그대로다');
+    expect(head).toContain('(2026-10-25 11:57)');
+    // The answer of 2026-10-25 11:57 as written (only its issue tag, '[#77]', is left out): the
+    // owner's label in its « », what moves, and the parenthesis.
+    const [answer, topic, decision] = OWN_TABLES.get('2026-10-25')!.get(1)!;
+    expect(answer).toBe('1');
+    expect(topic).toBe('운영자의 번호 변경과 제안의 번호 해시');
+    expect(decision).toBe(
+      '운영자의 번호 변경 → 시장 제안도 «신고처럼 옮김»: 그 계정의 접수·검토 중인 제안, 지난 24시간의 제안, 옛 번호에서 탈퇴 계정으로부터 이어받은 것을 새 번호의 해시로 (한도가 사람을 따라감)',
+    );
+    // Built where the question said (b) would be: the procedure's fifth DO block and the trigger's
+    // narrow allowance (decision 2, 7-35), recorded on ADR-0071's status line, which owns the
+    // procedure, and repeated in 결과 1.
+    const storage = between(ADR_0089, '**2. 저장', '**3. 공유 규칙');
+    expect(storage).toContain('다섯째 `DO`');
+    expect(storage).toContain('`market_proposals_keep_record`');
+    const clause = clausesBy(statusLine(adr('0071')), '0089');
+    expect(clause).toHaveLength(1);
+    expect(clause[0]).toContain('ADR-0089의 오너 결정 2026-10-25 1 «신고처럼 옮김»');
+    expect(clause[0]).toContain("ADR-0083이 고친 '열 문장'은 열한 문장이다");
+  });
+
   it('opens decision 7 with every item chosen since the first build, the last one included', () => {
     const section = between(ADR_0089, '**7. 구현의 선택.**', '**8. 시험.**');
     const opening = section.split('\n')[0]!;
@@ -208,12 +240,13 @@ describe('#77’s owner decisions in ADR-0089', () => {
       for (let n = from; n <= to; n += 1) named.add(n);
     }
     // The items the first build chose are not listed; from the first range on, every one is —
-    // up to the last (7-34, chosen building the 2026-10-24 answer).
+    // up to the last (7-35, chosen building the 2026-10-25 answer).
     const firstRange = Math.min(...rangeStarts);
     for (let n = firstRange; n <= last; n += 1) {
       expect(named.has(n), `decision 7's opening does not name 7-${n}`).toBe(true);
     }
     expect(opening).toContain('오너 결정 2026-10-24를 구현하며 고른 것은 7-34다');
+    expect(opening).toContain('오너 결정 2026-10-25를 구현하며 고른 것은 7-35다');
   });
 
   it('says what 결과 4 says wherever it speaks of 결과 4: the preface, decision 7’s opening and 결과 3', () => {
@@ -304,7 +337,8 @@ describe('the closure check’s new field in ADR-0086’s status line (ADR-0089)
         ).toBe(true);
       }
     }
-    // ADR-0054, ADR-0043, ADR-0085, ADR-0086 (two) and ADR-0087.
-    expect(seen).toBe(6);
+    // ADR-0071 (owner decision 2026-10-25), ADR-0054, ADR-0043, ADR-0085, ADR-0086 (two) and
+    // ADR-0087.
+    expect(seen).toBe(7);
   });
 });

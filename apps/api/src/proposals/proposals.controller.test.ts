@@ -8,10 +8,12 @@
  * exempt, owner decision 2026-10-19), 철회 from 접수 only (signed in is enough, whatever the
  * onboarding — owner decision 2026-10-19), the reason and the market's link (once public) shown to
  * the proposer with the time of each status, and no operator or internal memo, and nobody else's
- * proposal reachable. Skips when TEST_* are unset.
+ * proposal reachable; an operator's change of the number takes the person's waiting and recent
+ * proposals to the new one (owner decision 2026-10-25). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
+  changePhoneAsOperator,
   completeOnboarding,
   createCategory,
   createMarket,
@@ -477,6 +479,66 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/proposals (integration)', () => {
     expect((errorOf(refused).details as ProposalLimitedDetails).reason).toBe('pending');
     // Its own 내 제안 is empty: the closed account's proposals are not the new account's.
     expect((await get('/api/v1/me/proposals', again)).json<ListPage>().data).toEqual([]);
+  });
+
+  it('takes the person’s waiting and recent proposals to the new number when an operator changes it, so both limits follow the person (owner decision 2026-10-25)', async () => {
+    // At both limits on the old number: five waiting (one of them through the API, today), three
+    // of the last 24 hours (that one, and two retracted and rejected since).
+    const old = Date.now() - 2 * DAY_MS;
+    for (let i = 0; i < PROPOSAL_LIMITS.pendingProposals - 1; i += 1) {
+      await createProposal(t.db, { userId: user.id, phoneHash, createdAt: new Date(old + i) });
+    }
+    await createProposal(t.db, {
+      userId: user.id,
+      phoneHash,
+      status: 'retracted',
+      createdAt: new Date(Date.now() - 3 * HOUR_MS),
+    });
+    await createProposal(t.db, {
+      userId: user.id,
+      phoneHash,
+      status: 'rejected',
+      createdAt: new Date(Date.now() - 2 * HOUR_MS),
+    });
+    expect((await propose(form())).statusCode).toBe(201);
+    // One settled and older than a day: no limit reads it again, so it keeps its hash.
+    const settled = await createProposal(t.db, {
+      userId: user.id,
+      phoneHash,
+      status: 'adopted',
+      createdAt: new Date(old - DAY_MS),
+    });
+    const [record] = await t.db
+      .select({ phone: schema.phoneVerifications.phone })
+      .from(schema.phoneVerifications)
+      .where(eq(schema.phoneVerifications.userId, user.id));
+    const hasher = t.app.get(PhoneHasher);
+    const newPhone = '01077778888';
+    const newHash = hasher.hash(newPhone);
+    // The doc's SQL as the operator runs it (docs/OPERATIONS.md): the hash moves, nothing else.
+    const before = await rows();
+    await changePhoneAsOperator(t.db, {
+      userId: user.id,
+      phone: newPhone,
+      hash: (digits) => hasher.hash(digits),
+    });
+    expect(await rows()).toEqual(
+      before.map((row) => (row.id === settled.id ? row : { ...row, phoneHash: newHash })),
+    );
+    // The account counts on: the waiting five refuse a sixth on the new number…
+    const pending = await propose(form());
+    expect(pending.statusCode).toBe(429);
+    expect((errorOf(pending).details as ProposalLimitedDetails).reason).toBe('pending');
+    // …and with one retracted, the day's three refuse a fourth.
+    const [waiting] = (await rows()).filter((row) => row.status === 'submitted');
+    expect((await retract(waiting!.id)).statusCode).toBe(200);
+    const daily = await propose(form());
+    expect(daily.statusCode).toBe(429);
+    expect((errorOf(daily).details as ProposalLimitedDetails).reason).toBe('daily');
+    // Another account verifies the old number: none of them is its — it proposes as anyone new.
+    const next = await signUpTestUser(t);
+    expect(await onboard(next, record!.phone)).toBe(phoneHash);
+    expect((await propose(form({}, next), next)).statusCode).toBe(201);
   });
 
   it('lets an operator’s account propose past both limits, as long as it is one (owner decision 2026-10-19)', async () => {

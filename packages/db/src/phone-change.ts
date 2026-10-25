@@ -8,7 +8,8 @@
  * phone-hash CLI, apps/api/src/identity/phone-hash-cli.ts — SQL cannot compute it without the
  * key), and `old_phone` and `old_hash`, the same for the number the account holds now, read with
  * OPERATOR_CURRENT_NUMBER_SQL and hashed by the same CLI (`--psql-old`, owner decisions 2026-10-21,
- * ADR-0076 — step 4 below — and 2026-10-22, ADR-0083 — step 6). The doc runs it only for a
+ * ADR-0076 — step 4 below — and 2026-10-22, ADR-0083 — step 6 — and 2026-10-25, ADR-0089 — step
+ * 7). The doc runs it only for a
  * request that came from the account's current email and passed sender authentication (the
  * operator's own mail provider's verdict, the topmost Authentication-Results line: SPF and DKIM
  * both passing for the sender's domain, or DMARC
@@ -28,8 +29,8 @@
  *    the change committed: the old number is read and hashed again, ADR-0076 7-24). `UPDATE 0`
  *    only says so: the transaction goes on, and the statements after it run. Step 3's DO block
  *    refuses it before any of them is kept (below), so neither the INSERT nor a hash of another
- *    number moving likes in step 4 or records in step 6 outlives it, a COMMIT typed after it
- *    included.
+ *    number moving likes in step 4, records in step 6 or proposals in step 7 outlives it, a COMMIT
+ *    typed after it included.
  *    `phone_verifications.phone` stays UNIQUE and digits only (its constraints — another
  *    account's verified number is a 23505 here), and `verified_at` keeps the member's own
  *    confirmation.
@@ -53,12 +54,12 @@
  *    column keeps it (`timestamptz(3)`), which another transaction's write would have to hit — the
  *    block raises (`refused: the account does not hold old_phone`). The transaction is aborted and
  *    a COMMIT answers ROLLBACK, as for every other refusal: nothing of the INSERT or of steps 4
- *    to 6 is kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for
+ *    to 7 is kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for
  *    an account with no grant, which step 2 has no row to refuse with (owner decision 2026-10-19
  *    3차, answer 4): it raises when the account has a 본인확인 record and a waiting grant of another
  *    account holds the new number. psql writes no variable into a dollar-quoted body, so the SET
- *    LOCAL lines hand it `user_id` and `new_hash` (and the likes', the reports' and the records'
- *    blocks `old_hash` too) for this transaction only. It reads what is committed: a cancellation or
+ *    LOCAL lines hand it `user_id` and `new_hash` (and the likes', the reports', the records' and
+ *    the proposals' blocks `old_hash` too) for this transaction only. It reads what is committed: a cancellation or
  *    payment of that grant still in flight is not waited for, and the change is refused until asked
  *    again (ADR-0071 7-26).
  * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한 번»
@@ -133,7 +134,29 @@
  *    it moves nothing. Nothing goes on the review list here: where the moved uses and the ones
  *    the new number held already make three items of a link, the account's next write of it puts
  *    them all on (LinkReviewService.record, ADR-0083 7-10).
- * 7. What now holds the new number: one row or none (the account has no grant yet). `this_account`
+ * 7. The account's market proposals (#77, owner decision 2026-10-25 «신고처럼 옮김», ADR-0089): the
+ *    two limits of a proposal — five waiting (접수·검토), three in the last 24 hours whatever became
+ *    of them — count per verified number too (ADR-0069 decision 7), so the proposals they read go
+ *    over to the new number's hash as the reports do (step 5): the account's waiting ones and
+ *    those of the last 24 hours (PENDING_PROPOSAL_STATUSES and PROPOSAL_LIMITS' window, as
+ *    ProposalsService counts them), under any hash but the new one, and the same of those it
+ *    inherited from a withdrawn account on the old number (rows under `old_hash` whose proposer
+ *    has no 본인확인 record left). The rest keep the hash they were submitted with; no limit reads
+ *    it again. Only the hash changes — the form, the status and its processing stay as they are —
+ *    and the proposals' keep-record trigger takes that change from this transaction alone: to the
+ *    hash its SET LOCAL names, for a proposal of the account it names or one under the old
+ *    number's hash whose proposer has withdrawn (`market_proposals_keep_record`, migration 0046).
+ *    No proposal of another live account is ever moved, and none is deleted or given way (the
+ *    likes' rule, ADR-0076 7-26): no rule holds one proposal per number, so the ones coming with
+ *    the account meet nothing under the new hash. Nothing else takes several proposals at once
+ *    but the worker's purge, which skips locked rows (an operator's move, memo or link and the
+ *    member's 철회 take one), so the one UPDATE takes them as it finds them — no lock in id order
+ *    first, as the reports need (ADR-0089 7-35). A fifth DO block with the same SET LOCAL values;
+ *    it answers `DO` and nothing to read. After step 1 as the likes are: a submission of the
+ *    account's in flight holds its 본인확인 row FOR SHARE (ProposalsService), commits first and is
+ *    moved, and a later one waits for the COMMIT and counts — and is stored — under the new hash.
+ *    Run again — the old number read again is the new one — it moves nothing.
+ * 8. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
  *    grant. It has none (`has_grant` f): it then gets no start Coin on this number while that row
@@ -261,6 +284,14 @@ DO $$BEGIN
     INSERT INTO link_uses (url, phone_hash, post_id, comment_id, used_at)
       SELECT url, current_setting('phone_change.new_hash'), post_id, comment_id, used_at FROM moved;
 END$$;
+DO $$BEGIN
+  UPDATE market_proposals p SET phone_hash = current_setting('phone_change.new_hash')
+    WHERE p.phone_hash <> current_setting('phone_change.new_hash')
+      AND (p.status IN ('submitted', 'reviewing') OR p.created_at > now() - interval '24 hours')
+      AND (p.user_id = current_setting('phone_change.user_id')
+        OR (p.phone_hash = current_setting('phone_change.old_hash')
+          AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = p.user_id)));
+END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,
     EXISTS (SELECT 1 FROM start_grants o
       WHERE o.user_id = :'user_id' AND o.cancelled_at IS NULL) AS has_grant
@@ -283,11 +314,12 @@ export const OPERATOR_ACCOUNT_LOOKUP_SQL = `SELECT u.id, pv.user_id IS NOT NULL 
   WHERE u.email = lower(:'sender');`;
 
 /**
- * Step 3, after the member's reply and before step 5 (owner decisions 2026-10-21, ADR-0076, and
- * 2026-10-22, ADR-0083): the number the account holds now — the old number — which the operator
- * types into the hash CLI's `--psql-old` for step 5's `old_phone` and `old_hash`. The change moves
- * the likes the account inherited from a withdrawn account on that number and the last day's
- * write-limit and link records under it, and SQL cannot hash it without the key. Read
+ * Step 3, after the member's reply and before step 5 (owner decisions 2026-10-21, ADR-0076,
+ * 2026-10-22, ADR-0083, and 2026-10-25, ADR-0089): the number the account holds now — the old
+ * number — which the operator types into the hash CLI's `--psql-old` for step 5's `old_phone` and
+ * `old_hash`. The change moves the likes, the reports and the market proposals the account
+ * inherited from a withdrawn account on that number and the last day's write-limit and link
+ * records under it, and SQL cannot hash it without the key. Read
  * only; `user_id` from the lookup. No row: no 본인확인 record (the lookup said `verified` f, or the
  * account withdrew since) — nothing to change. Read again for every run of step 5: after the
  * change it is the new number.

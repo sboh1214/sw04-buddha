@@ -6,8 +6,10 @@
  * written in — and what it carries along: the account's likes, its own and those it inherited on
  * its old number, onto the new number (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076),
  * and the hash of its pending reports and those of the last 24 hours, its own and those it
- * inherited on its old number (#50, owner decision 2026-10-21, ADR-0081), and the last 24 hours of
- * the old number's write-limit and link records (#187, owner decision 2026-10-22, ADR-0083).
+ * inherited on its old number (#50, owner decision 2026-10-21, ADR-0081), the last 24 hours of
+ * the old number's write-limit and link records (#187, owner decision 2026-10-22, ADR-0083), and
+ * the hash of its waiting market proposals and those of the last 24 hours, its own and those it
+ * inherited on its old number (#77, owner decision 2026-10-25 «신고처럼 옮김», ADR-0089).
  * The account lookup and the pre-check of the new number that come before any confirmation SMS
  * (step 1), and the read of the old number (step 3), are run the same way. The keyed hashes of
  * the new and the old number and the confirmation code come from the API's phone-hash CLI there
@@ -15,7 +17,7 @@
  * for a hash (this package has no key). Skips the database part when TEST_* are unset.
  */
 import { readFileSync } from 'node:fs';
-import { REPORT_WINDOW_HOURS } from '@buddha/shared';
+import { PENDING_PROPOSAL_STATUSES, PROPOSAL_LIMITS, REPORT_WINDOW_HOURS } from '@buddha/shared';
 import { and, eq, isNull, sql } from 'drizzle-orm';
 import { Client, type DatabaseError, type QueryResult } from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -28,6 +30,7 @@ import {
 import {
   commentLikes,
   linkUses,
+  marketProposals,
   phoneVerifications,
   postLikes,
   reports,
@@ -44,6 +47,7 @@ import {
   createPhoneVerification,
   createPost,
   createPostLike,
+  createProposal,
   createReport,
   createStartGrant,
   createUser,
@@ -103,9 +107,10 @@ const statementsIn = (text: string): string[] => splitPsqlStatements(text);
  * The DO blocks' bodies, what psql writes no variable into: the refusal of a waiting grant's number
  * (owner decision 2026-10-19 3차, answer 4), then the move of the account's likes (2026-10-20 and
  * 2026-10-21, ADR-0076), then the move of its reports' hash (2026-10-21, ADR-0081), then the move
- * of the old number's last day of write-limit and link records (2026-10-22, ADR-0083).
+ * of the old number's last day of write-limit and link records (2026-10-22, ADR-0083), then the
+ * move of its market proposals' hash (2026-10-25, ADR-0089).
  */
-const [DO_BODY = '', LIKES_BODY = '', REPORTS_BODY = '', RECORDS_BODY = ''] = [
+const [DO_BODY = '', LIKES_BODY = '', REPORTS_BODY = '', RECORDS_BODY = '', PROPOSALS_BODY = ''] = [
   ...OPERATOR_PHONE_CHANGE_SQL.matchAll(/\$\$([\s\S]*?)\$\$/g),
 ].map((m) => m[1]!);
 
@@ -135,6 +140,7 @@ const STATEMENTS = [
   'set',
   'set',
   'set',
+  'do',
   'do',
   'do',
   'do',
@@ -373,6 +379,48 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     // The last day only — the longest window of the limits and of the repetition rules — kept as
     // the windows keep it (a record exactly 24 hours old is out).
     expect(RECORDS_BODY.match(/> now\(\) - interval '24 hours'/g)).toHaveLength(2);
+    // The proposals' block (owner decision 2026-10-25 «신고처럼 옮김», ADR-0089) raises nothing
+    // either and gives no result to read. It reads the three values the reports' block reads and
+    // moves what the two limits read (ProposalsService): the waiting ones — the statuses of
+    // PENDING_PROPOSAL_STATUSES — and those of the daily window, PROPOSAL_LIMITS', kept as the
+    // window keeps it (one exactly 24 hours old is out); the account's own, and those under the
+    // old number's hash whose proposer has no 본인확인 record left (inherited, the likes' rule).
+    expect(PROPOSALS_BODY).toContain(
+      "UPDATE market_proposals p SET phone_hash = current_setting('phone_change.new_hash')",
+    );
+    expect(PROPOSALS_BODY).toContain(
+      `p.status IN (${PENDING_PROPOSAL_STATUSES.map((status) => `'${status}'`).join(', ')})`,
+    );
+    expect(PROPOSAL_LIMITS.dailyWindowSeconds % 3600).toBe(0);
+    expect(
+      PROPOSALS_BODY.split(
+        `p.created_at > now() - interval '${String(PROPOSAL_LIMITS.dailyWindowSeconds / 3600)} hours'`,
+      ),
+    ).toHaveLength(2);
+    expect([...PROPOSALS_BODY.matchAll(/interval '/g)]).toHaveLength(1);
+    expect(PROPOSALS_BODY).toContain(
+      'NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = p.user_id)',
+    );
+    expect(PROPOSALS_BODY).not.toContain('RAISE');
+    expect(variablesOf(PROPOSALS_BODY)).toEqual([]);
+    expect(
+      new Set(
+        [...PROPOSALS_BODY.matchAll(/current_setting\('([\w.]+)'(, true)?\)/g)].map((m) => m[0]),
+      ),
+    ).toEqual(
+      new Set([
+        "current_setting('phone_change.new_hash')",
+        "current_setting('phone_change.user_id')",
+        "current_setting('phone_change.old_hash')",
+      ]),
+    );
+    // One UPDATE of the hash alone: no proposal is deleted or given way to — no rule holds one
+    // per number — and the rows are not locked first (nothing else takes several, ADR-0089 7-35).
+    expect([...PROPOSALS_BODY.matchAll(/UPDATE /g)]).toHaveLength(1);
+    expect(PROPOSALS_BODY).toMatch(/SET phone_hash = [^,]+\n {4}WHERE/);
+    expect(PROPOSALS_BODY).not.toContain('DELETE');
+    expect(PROPOSALS_BODY).not.toContain('INSERT');
+    expect(PROPOSALS_BODY).not.toContain('FOR UPDATE');
     const statements = statementsIn(OPERATOR_PHONE_CHANGE_SQL);
     expect(statements.map((s) => /^\w+/.exec(s)![0].toLowerCase())).toEqual([...STATEMENTS]);
     expect(statements.slice(2, 5)).toEqual([
@@ -833,7 +881,7 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
       '살아 있는(본인확인 기록이 있는) 다른 계정의 신고는 옛 번호의 해시에 있든 새 번호의 해시에 있든 옮기지도 지우지도 않는다',
     );
     expect(sectionOf('**3. 새 번호와 옛 번호의 해시.**', '**4. psql.**')).toContain(
-      '이어받은 좋아요와 신고도 새 번호로 옮기고',
+      '이어받은 좋아요와 신고, 시장 제안도 새 번호로 옮기고',
     );
     // What the first commit said — the reports stay where they are, and it is asked — is gone, and
     // so is what said the inherited ones stay for want of the old number's hash.
@@ -867,17 +915,48 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(OPERATIONS).not.toContain('`link_uses`)은 옮기지 않는다');
   });
 
-  it('is recorded on the status line of ADR-0071, which owns it, as ten statements now', () => {
+  it('says the change carries the account’s waiting and recent market proposals to the new number, and the table reads the same', () => {
+    // Owner decision 2026-10-25 «신고처럼 옮김» (ADR-0089): the two limits of a proposal count per
+    // number, so the proposals they read — the waiting ones and those of the last 24 hours, the
+    // account's and those it inherited on the old number — take the new number's hash, and
+    // nothing else of them changes; a live account's are never touched.
+    const changes = sectionOf('**바뀌는 것.**', '**1. 요청 확인.**');
+    expect(changes).toContain(
+      '그 계정의 시장 제안(`market_proposals`, #77) 가운데 처리를 기다리는(접수·검토) 것과 지난 24시간에 낸 것이 새 번호의 해시로 옮겨진다(오너 결정 2026-10-25 «신고처럼 옮김», ADR-0089)',
+    );
+    expect(changes).toContain(
+      '그 계정이 같은 번호의 탈퇴한 계정에게서 이어받아 자기 한도에 세던 제안(옛 번호의 해시를 싣고 제안한 계정에 본인확인 기록이 없는 제안)',
+    );
+    expect(changes).toContain(
+      '살아 있는(본인확인 기록이 있는) 다른 계정의 제안은 옛 번호의 해시에 있든 새 번호의 해시에 있든 옮기지 않는다',
+    );
+    expect(changes).toContain('앱의 어떤 쓰기도 제안의 해시를 바꾸지 못한다');
+    expect(changes).toContain('5단계의 다섯째 `DO`가 하고, 결과는 `DO` 한 줄이라 읽을 것이 없다');
+    expect(OPERATIONS).toContain(
+      '`SET LOCAL` 세 줄은 계정 id와 새 번호·옛 번호의 해시를 다섯 `DO`에 넘긴다',
+    );
+    expect(OPERATIONS).toContain(
+      '다섯째 `DO`는 그 계정의 처리를 기다리는(접수·검토) 시장 제안과 지난 24시간의 제안을',
+    );
+    const donts = sectionOf('**하지 않는 것.**', '**로컬.**');
+    expect(donts).toContain('다섯 `DO`는 앞의 `SET LOCAL` 세 줄이 넘긴 값으로 보므로');
+    expect(donts).toContain('시장 제안을 옮기는 다섯째 `DO`를 빼면');
+    expect(donts).toContain('제안의 해시도 손으로 고치지 않는다');
+    // What said four DO blocks is gone.
+    expect(OPERATIONS).not.toContain('네 `DO`');
+  });
+
+  it('is recorded on the status line of ADR-0071, which owns it, as eleven statements now', () => {
     // ADR-0071 says step 5 is six statements (7-20, decision 8). ADR-0076 added the likes' DO
     // block, the old number's SET LOCAL line, the UPDATE's check of the old number and the first DO
-    // block's refusal of an `UPDATE 0`, ADR-0081 the reports' one and ADR-0083 the records' one,
-    // and each records so on ADR-0071's status line rather than rewriting it (ADR-0047 결과 1), so
-    // that a reader of ADR-0071 learns of the move of the likes, of the reports and of the records,
-    // and of the old number's two lines.
+    // block's refusal of an `UPDATE 0`, ADR-0081 the reports' one, ADR-0083 the records' one and
+    // ADR-0089 the proposals' one, and each records so on ADR-0071's status line rather than
+    // rewriting it (ADR-0047 결과 1), so that a reader of ADR-0071 learns of the move of the likes,
+    // of the reports, of the records and of the proposals, and of the old number's two lines.
     const start = DECISIONS.indexOf('\n## ADR-0071 ');
     const adr = DECISIONS.slice(start, DECISIONS.indexOf('\n## ADR-0072 ', start));
     const status = /^- 상태: (.+)$/m.exec(adr)?.[1] ?? '';
-    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(10);
+    expect(statementsIn(OPERATOR_PHONE_CHANGE_SQL)).toHaveLength(11);
     expect(status).toContain('일부 대체됨(ADR-0076: 결정 7-20의 5단계 한 트랜잭션');
     expect(status).toContain('둘째 `DO`');
     expect(status).toContain("'여섯 문장'은 여덟 문장이다");
@@ -895,6 +974,10 @@ describe('the operator phone change (docs/OPERATIONS.md)', () => {
     expect(status).toContain('일부 대체됨(ADR-0083: 결정 7-20의 5단계 한 트랜잭션');
     expect(status).toContain('넷째 `DO`');
     expect(status).toContain("ADR-0081이 고친 '아홉 문장'은 열 문장이다");
+    expect(status).toContain('일부 대체됨(ADR-0089: 결정 7-20의 5단계 한 트랜잭션');
+    expect(status).toContain('다섯째 `DO`');
+    expect(status).toContain('ADR-0089의 오너 결정 2026-10-25 1 «신고처럼 옮김»');
+    expect(status).toContain("ADR-0083이 고친 '열 문장'은 열한 문장이다");
   });
 
   it('turns psql’s ON_ERROR_ROLLBACK off just before it, so a refusal aborts it all', () => {
@@ -2600,5 +2683,298 @@ describe.skipIf(!hasTestDb())('the operator phone change (integration)', () => {
     expect((await recordRows()).map((row) => [row.phoneHash, row.what])).toEqual([
       [newHash, 'post'],
     ]);
+  });
+
+  /** Every market proposal, ordered by id for comparing. */
+  async function proposalRows() {
+    const rows = await t.db.select().from(marketProposals);
+    return rows.sort((x, y) => x.id.localeCompare(y.id));
+  }
+
+  /**
+   * What the two limits of a proposal count for a number's hash, as ProposalsService counts them
+   * (PROPOSAL_LIMITS): the waiting ones, and those of the last 24 hours whatever became of them.
+   */
+  async function proposalCounts(phoneHash: string) {
+    const rows = await t.db
+      .select({ status: marketProposals.status, createdAt: marketProposals.createdAt })
+      .from(marketProposals)
+      .where(eq(marketProposals.phoneHash, phoneHash));
+    const since = Date.now() - PROPOSAL_LIMITS.dailyWindowSeconds * 1_000;
+    const waiting: readonly string[] = PENDING_PROPOSAL_STATUSES;
+    return {
+      pending: rows.filter((row) => waiting.includes(row.status)).length,
+      daily: rows.filter((row) => row.createdAt.getTime() > since).length,
+    };
+  }
+
+  it('moves the hash of the account’s waiting proposals and those of the last 24 hours, and those it inherited on the old number, to the new number — so the limits count there', async () => {
+    // Owner decision 2026-10-25 «신고처럼 옮김» (ADR-0089): the two limits count per verified number
+    // (ADR-0069 decision 7), so the proposals they read go with the person — its waiting ones
+    // (접수·검토) and those of the last 24 hours, processed or not, its own under any hash and those
+    // it inherited from a withdrawn account on the old number — and nothing else of them changes.
+    const { user: admin } = await createUser(t.db, { role: 'admin' });
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const proposal = (
+      userId: string,
+      phoneHash: string,
+      createdAt: Date,
+      status: 'submitted' | 'reviewing' | 'adopted' | 'rejected' | 'retracted' = 'submitted',
+    ) => createProposal(t.db, { userId, phoneHash, createdAt, status, adminId: admin.id });
+    // The account's: three waiting for days (the pending limit reads them), one retracted two hours
+    // ago and one rejected 23 hours ago (the daily limit reads them), and one waiting under a
+    // number it held before (an older change): still the account's, the person's.
+    const own = [
+      await proposal(a.user.id, oldHash, ago(72)),
+      await proposal(a.user.id, oldHash, ago(60), 'reviewing'),
+      await proposal(a.user.id, oldHash, ago(48)),
+      await proposal(a.user.id, oldHash, ago(2), 'retracted'),
+      await proposal(a.user.id, oldHash, ago(23), 'rejected'),
+      await proposal(a.user.id, randomPhoneHash(), ago(50)),
+    ];
+    // Settled and older than a day — on either side of the window, a minute out: no limit reads
+    // them again, so they keep the hash they were submitted with.
+    const settled = [
+      await proposal(a.user.id, oldHash, ago(24, 1), 'adopted'),
+      await proposal(a.user.id, oldHash, ago(72), 'retracted'),
+    ];
+    // W held the old number and withdrew (no 본인확인 record left): A counted its waiting one and
+    // its recent one as the number's, and they go with A's; its settled one stays, as A's own
+    // does, and so does the one it left under another number.
+    const { user: w } = await createUser(t.db);
+    const inherited = [
+      await proposal(w.id, oldHash, ago(96), 'reviewing'),
+      await proposal(w.id, oldHash, ago(5), 'rejected'),
+    ];
+    const left = [
+      await proposal(w.id, oldHash, ago(96), 'adopted'),
+      await proposal(w.id, randomPhoneHash(), ago(1)),
+    ];
+    // Before: the old number holds both limits (four waiting, three of the day) — what an account
+    // verifying it next would count — and the new one holds nothing.
+    expect(await proposalCounts(oldHash)).toEqual({
+      pending: 4,
+      daily: PROPOSAL_LIMITS.dailyProposals,
+    });
+    expect(await proposalCounts(newHash)).toEqual({ pending: 0, daily: 0 });
+    const before = await proposalRows();
+
+    const vars = {
+      user_id: a.user.id,
+      new_phone: randomPhone(),
+      new_hash: newHash,
+      old_phone: (await phoneOf(a.user.id))!,
+      old_hash: oldHash,
+    };
+    // The proposals give the result table nothing to read: the same row, the same COMMIT.
+    expect(await change(vars)).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    const moved = new Set([...own, ...inherited].map((row) => row.id));
+    const expected = before.map((row) =>
+      moved.has(row.id) ? { ...row, phoneHash: newHash } : row,
+    );
+    // Only the hash changed, and only theirs: the settled ones and W's others stay as they were.
+    expect(
+      expected
+        .filter((row) => !moved.has(row.id))
+        .map((row) => row.id)
+        .sort(),
+    ).toEqual([...settled, ...left].map((row) => row.id).sort());
+    expect(await proposalRows()).toEqual(expected);
+    // The limits follow the person: on the new number A is at both — five waiting, three of the
+    // day — and the old number's next holder starts with none of it.
+    expect(await proposalCounts(newHash)).toEqual({
+      pending: PROPOSAL_LIMITS.pendingProposals,
+      daily: PROPOSAL_LIMITS.dailyProposals,
+    });
+    expect(await proposalCounts(oldHash)).toEqual({ pending: 0, daily: 0 });
+    // The same lines again: the number read again is the new one — `UPDATE 0`, refused, nothing
+    // moves back; and run with step 3's reading of it, nothing more moves.
+    expect(await change(vars)).toEqual(REFUSED_OLD_NUMBER);
+    expect(await proposalRows()).toEqual(expected);
+    expect(
+      await change({ user_id: a.user.id, new_phone: vars.new_phone, new_hash: newHash }),
+    ).toMatchObject({ updated: 1, next: 'COMMIT' });
+    expect(await proposalRows()).toEqual(expected);
+  });
+
+  it('moves no proposal when the change is refused, an old number the account does not hold included (a COMMIT typed after it too)', async () => {
+    const oldHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    await createProposal(t.db, { userId: a.user.id, phoneHash: oldHash });
+    // A withdrawn account's waiting proposal on another number: with that number's hash typed in
+    // as the old one, it would be inherited.
+    const { user: w } = await createUser(t.db);
+    const elsewhere = randomPhoneHash();
+    await createProposal(t.db, { userId: w.id, phoneHash: elsewhere });
+    const before = await proposalRows();
+    const old = { old_phone: (await phoneOf(a.user.id))!, old_hash: oldHash };
+    const { user: other } = await createUser(t.db);
+    const { phone: taken } = await createPhoneVerification(t.db, { userId: other.id });
+    expect(
+      await change({ user_id: a.user.id, new_phone: taken, new_hash: randomPhoneHash(), ...old }),
+    ).toEqual(REFUSED_VERIFIED);
+    const { n, phone: held } = await waitingHolder();
+    expect(await change({ user_id: a.user.id, new_phone: held, new_hash: n, ...old })).toEqual(
+      REFUSED_NO_GRANT,
+    );
+    const wrong = {
+      user_id: a.user.id,
+      new_phone: randomPhone(),
+      new_hash: randomPhoneHash(),
+      old_phone: randomPhone(),
+      old_hash: elsewhere,
+    };
+    expect(await change(wrong)).toEqual(REFUSED_OLD_NUMBER);
+    expect(await committedAnyway(wrong)).toEqual({ updated: 0, commit: 'ROLLBACK' });
+    expect(await proposalRows()).toEqual(before);
+  });
+
+  it('moves a proposal the account committed while the change waited on its record', async () => {
+    // ProposalsService holds the proposer's 본인확인 row FOR SHARE and stores the proposal under the
+    // hash of the number it read: the change's UPDATE waits for it, and the proposals' block, a
+    // later statement, sees the proposal and moves it — the limits cannot be passed meanwhile.
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const holder = await t.db.$client.connect();
+    let changed;
+    let committed = false;
+    try {
+      await holder.query('BEGIN');
+      await holder.query('SELECT 1 FROM phone_verifications WHERE user_id = $1 FOR SHARE', [
+        a.user.id,
+      ]);
+      await holder.query(
+        `INSERT INTO market_proposals (user_id, phone_hash, question, deadline, yes_condition,
+           expected_sources) VALUES ($1, $2, '질문', '2040-01-01', '조건', '출처')`,
+        [a.user.id, oldHash],
+      );
+      changed = change({
+        user_id: a.user.id,
+        new_phone: randomPhone(),
+        new_hash: newHash,
+        old_phone: (await phoneOf(a.user.id))!,
+        old_hash: oldHash,
+      });
+      expect(await psqlWaits()).toBe(true);
+      await holder.query('COMMIT');
+      committed = true;
+    } finally {
+      if (!committed) await holder.query('ROLLBACK');
+      holder.release();
+    }
+    expect(await changed).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    expect((await proposalRows()).map((row) => [row.userId, row.phoneHash])).toEqual([
+      [a.user.id, newHash],
+    ]);
+  });
+
+  it('never moves or rewrites a live account’s proposal, and the trigger takes no other change of a hash (the likes’ rule, ADR-0076 7-26)', async () => {
+    // Codex review on PR #222 (ADR-0076 7-26): a change moves what is the account's — its own and
+    // what it inherited from a withdrawn account on the old number — and nothing of another live
+    // account's. A live account holds a proposal under either hash only when its number changed
+    // outside this procedure (ADR-0076 7-19). Nothing gives way under the new hash: no rule holds
+    // one proposal per number.
+    const oldHash = randomPhoneHash();
+    const newHash = randomPhoneHash();
+    const a = await liker(oldHash);
+    const mine = await createProposal(t.db, { userId: a.user.id, phoneHash: oldHash });
+    const mineSettled = await createProposal(t.db, {
+      userId: a.user.id,
+      phoneHash: oldHash,
+      createdAt: ago(72),
+      status: 'retracted',
+    });
+    const liveOld = await liker(randomPhoneHash());
+    const liveOnOld = await createProposal(t.db, { userId: liveOld.user.id, phoneHash: oldHash });
+    const liveNew = await liker(randomPhoneHash());
+    const liveOnNew = await createProposal(t.db, { userId: liveNew.user.id, phoneHash: newHash });
+    // A withdrawn account's under the new number: it held that number; it stays, and A — the
+    // person on it from now on — counts it, as an account signing up on it again would.
+    const { user: withdrawn } = await createUser(t.db);
+    const withdrawnOnNew = await createProposal(t.db, { userId: withdrawn.id, phoneHash: newHash });
+    const before = await proposalRows();
+    expect(
+      await change({
+        user_id: a.user.id,
+        new_phone: randomPhone(),
+        new_hash: newHash,
+        old_phone: (await phoneOf(a.user.id))!,
+        old_hash: oldHash,
+      }),
+    ).toEqual({ updated: 1, inserted: 0, held: [], next: 'COMMIT' });
+    const after = await proposalRows();
+    expect(after).toEqual(
+      before.map((row) => (row.id === mine.id ? { ...row, phoneHash: newHash } : row)),
+    );
+    const hashes = new Map(after.map((row) => [row.id, row.phoneHash]));
+    expect(hashes.get(liveOnOld.id)).toBe(oldHash);
+    expect(hashes.get(liveOnNew.id)).toBe(newHash);
+    expect(hashes.get(withdrawnOnNew.id)).toBe(newHash);
+    expect(hashes.get(mineSettled.id)).toBe(oldHash);
+
+    // The keep-record trigger (migration 0046) takes a hash change from the number change's
+    // transaction alone — to the new hash its SET LOCAL lines name, of the account's proposal or a
+    // withdrawn proposer's under the old hash they name — and with nothing else of the row.
+    const keeps = 'keeps the number it was submitted with';
+    const alone = "changes its number's hash alone";
+    const update = async (
+      statement: string,
+      values: unknown[],
+      settings: { user_id: string; new_hash: string; old_hash: string } | null,
+    ) => {
+      const client = new Client({ connectionString: testDbUrls()!.appUrl });
+      await client.connect();
+      try {
+        await client.query('BEGIN');
+        if (settings !== null) {
+          for (const [name, value] of Object.entries(settings)) {
+            await client.query(`SELECT set_config('phone_change.${name}', $1, true)`, [value]);
+          }
+        }
+        return await client.query(statement, values);
+      } finally {
+        await client.query('ROLLBACK');
+        await client.end();
+      }
+    };
+    const named = { user_id: a.user.id, new_hash: newHash, old_hash: oldHash };
+    const moveTo = 'UPDATE market_proposals SET phone_hash = $1 WHERE id = $2';
+    const refusal = (message: string) => ({
+      code: '23514',
+      message: expect.stringContaining(message) as string,
+    });
+    // A live account's, under the old hash: never, though the change names that hash.
+    await expect(update(moveTo, [newHash, liveOnOld.id], named)).rejects.toMatchObject(
+      refusal(keeps),
+    );
+    // The account's own, to another hash than the one named; or with no change named — any write
+    // of the app's, whose connections name none.
+    await expect(update(moveTo, [randomPhoneHash(), mineSettled.id], named)).rejects.toMatchObject(
+      refusal(keeps),
+    );
+    await expect(update(moveTo, [newHash, mineSettled.id], null)).rejects.toMatchObject(
+      refusal(keeps),
+    );
+    await expect(update(moveTo, [oldHash, mine.id], null)).rejects.toMatchObject(refusal(keeps));
+    // The named hash and account, with more of the row: the hash moves alone.
+    for (const more of [
+      "internal_memo = '메모'",
+      "question = '다른 질문'",
+      "status = 'reviewing'",
+    ]) {
+      await expect(
+        update(
+          `UPDATE market_proposals SET phone_hash = $1, ${more} WHERE id = $2`,
+          [newHash, mineSettled.id],
+          named,
+        ),
+      ).rejects.toMatchObject(refusal(alone));
+    }
+    // What it does take, rolled back here: the hash alone, of the account's proposal.
+    expect((await update(moveTo, [newHash, mineSettled.id], named)).rowCount).toBe(1);
+    expect(await proposalRows()).toEqual(after);
   });
 });

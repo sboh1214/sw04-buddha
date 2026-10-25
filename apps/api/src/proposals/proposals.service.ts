@@ -38,7 +38,11 @@ const { marketProposals } = schema;
  *    #77 자격, #185 and #139).
  * 2. The account's 본인확인 record FOR SHARE, so its number cannot change or go until this
  *    commits, and the keyed hash of the number (PhoneHasher, ADR-0071): the limits count by it,
- *    across every account that verified the number (decision 7).
+ *    across every account that verified the number (decision 7). An operator's change of the
+ *    number (#57-3, OPERATOR_PHONE_CHANGE_SQL) waits for this submission, then moves the person's
+ *    waiting proposals and those of the last 24 hours — this one among them — to the new
+ *    number's hash, so the limits follow the person (owner decision 2026-10-25, ADR-0089); a
+ *    submission after it waits for its COMMIT and reads the new number.
  * 3. The number's own lock (`buddha:proposal`, the hash), taken before the limits are counted:
  *    two submissions on one number — two tabs, or two accounts the number verified one after
  *    another — count one after the other, so neither limit is passed by a race.
