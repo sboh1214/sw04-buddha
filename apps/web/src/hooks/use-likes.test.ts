@@ -20,7 +20,16 @@ import {
   commentThreadsOf,
   postCommentsKey,
 } from '@/lib/comments';
-import { commentLikeCount, myPostLikesKey, postLikeCount } from '@/lib/likes';
+import {
+  type LikeTarget,
+  commentLikeCount,
+  likeButtonView,
+  likePressAction,
+  likePressId,
+  likedIn,
+  myPostLikesKey,
+  postLikeCount,
+} from '@/lib/likes';
 import { communityPostsKey, postKey } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
@@ -29,7 +38,13 @@ import {
   readMoreReplies,
   updateCommentOptions,
 } from './use-comments';
-import { type LikeVariables, myPostLikesQueryOptions, updateLikeOptions } from './use-likes';
+import {
+  type LikeVariables,
+  likePressOptions,
+  likePressesOnTheWire,
+  myPostLikesQueryOptions,
+  updateLikeOptions,
+} from './use-likes';
 import { ME_QUERY_KEY } from './use-me';
 
 /**
@@ -528,6 +543,183 @@ describe('a press', () => {
     expect(pages.read).toHaveBeenCalledTimes(2);
     expect(commentCountOf(queryClient, commentId)).toBe(3);
     pages.unsubscribe();
+  });
+});
+
+describe('the presses of one target (ADR-0076 7-30)', () => {
+  const target: LikeTarget = { kind: 'comment', id: COMMENT };
+
+  /** A like button's presses of COMMENT, as `useLike` makes them: an observer of its own. */
+  const button = (
+    queryClient: QueryClient,
+    put: (variables: LikeVariables) => Promise<LikeState>,
+  ) =>
+    new MutationObserver(
+      queryClient,
+      likePressOptions(queryClient, POST, target, () => undefined, put),
+    );
+
+  /** What a button of `of` reads to wait, whichever button pressed (`useLike`'s `saving`). */
+  const presses = (queryClient: QueryClient, of: LikeTarget = target) =>
+    likePressesOnTheWire(queryClient, likePressId(POST, of));
+
+  /** The rung a button of COMMENT draws now (`useLike`). */
+  const drawn = (queryClient: QueryClient) =>
+    likeButtonView({
+      sessionPending: false,
+      signedIn: true,
+      mine: { isFetched: true, liked: likedIn(likesOf(queryClient), target) },
+      saving: presses(queryClient).onTheWire(),
+    });
+
+  it('keeps a button drawn anew while its press is on the wire waiting, and sends a press made anyway only once the first has settled, the first’s late answer not written over it', async () => {
+    const queryClient = seeded();
+    const like = deferred<LikeState>();
+    const unlike = deferred<LikeState>();
+    const put = vi.fn((variables: LikeVariables) =>
+      variables.liked ? like.promise : unlike.promise,
+    );
+    // The buttons drawn: COMMENT's, and the post's and the 대댓글's, told only of their own.
+    const told = { comment: 0, post: 0, reply: 0 };
+    const stop = [
+      presses(queryClient).subscribe(() => (told.comment += 1)),
+      presses(queryClient, { kind: 'post', id: POST }).subscribe(() => (told.post += 1)),
+      presses(queryClient, { kind: 'comment', id: REPLY }).subscribe(() => (told.reply += 1)),
+    ];
+    // The reader likes their own comment: on the wire, pressed and one more — its button told
+    // as the press is made.
+    const liking = button(queryClient, put).mutate(onComment(true));
+    expect(told.comment).toBe(1);
+    await settle();
+    expect(drawn(queryClient)).toEqual({ kind: 'toggle', pressed: true, press: 'wait' });
+
+    // 수정 opened and closed: the comment's button is drawn anew, with a new observer — idle,
+    // though the like is still on the wire. The press is still on the wire for the target, and
+    // the button still waits: a press sends nothing.
+    const again = button(queryClient, put);
+    expect(again.getCurrentResult().isPending).toBe(false);
+    expect(drawn(queryClient)).toEqual({ kind: 'toggle', pressed: true, press: 'wait' });
+    expect(likePressAction(drawn(queryClient), false)).toBeNull();
+    // Only COMMENT's: the post's button and the 대댓글's are not waiting on it.
+    expect(presses(queryClient, { kind: 'post', id: POST }).onTheWire()).toBe(false);
+    expect(presses(queryClient, { kind: 'comment', id: REPLY }).onTheWire()).toBe(false);
+
+    // An unlike made anyway (a press that beat the button's drawing) moves at once, and waits to
+    // be sent until the like has settled.
+    const unliking = again.mutate(onComment(false));
+    await settle();
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    expect(put).toHaveBeenCalledTimes(1);
+    // The like committed; its answer lands behind the unlike and is not written over it.
+    like.resolve({ liked: true, likeCount: 3 });
+    await liking;
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    expect(drawn(queryClient)).toEqual({ kind: 'toggle', pressed: false, press: 'wait' });
+    // Now the unlike is sent, after the like: the server takes them in the order pressed.
+    await settle();
+    expect(put).toHaveBeenCalledTimes(2);
+    expect(put.mock.calls.map(([variables]) => variables.liked)).toEqual([true, false]);
+    unlike.resolve({ liked: false, likeCount: 2 });
+    await unliking;
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    expect(drawn(queryClient)).toEqual({ kind: 'toggle', pressed: false, press: 'like' });
+    // Told of each press made and settled; the other targets' buttons never.
+    expect(told).toEqual({ comment: 4, post: 0, reply: 0 });
+    for (const unsubscribe of stop) unsubscribe();
+  });
+
+  it('sends the next press of the target once the first has failed, and ends on its answer', async () => {
+    const queryClient = seeded();
+    const like = deferred<LikeState>();
+    const unlike = deferred<LikeState>();
+    const put = vi.fn((variables: LikeVariables) =>
+      variables.liked ? like.promise : unlike.promise,
+    );
+    const liking = button(queryClient, put)
+      .mutate(onComment(true))
+      .catch((error: unknown) => error);
+    await settle();
+    const unliking = button(queryClient, put).mutate(onComment(false));
+    await settle();
+    expect(put).toHaveBeenCalledTimes(1);
+    // The like's answer was lost (it may have committed): the likes and the pages are read again
+    // for the server's word, and the unlike goes out after it.
+    like.reject(refusal(503, 'INTERNAL'));
+    expect(await liking).toBeInstanceOf(ApiError);
+    expect(invalidated(queryClient, myPostLikesKey(post))).toBe(true);
+    expect(invalidated(queryClient, postCommentsKey(post))).toBe(true);
+    await settle();
+    expect(put).toHaveBeenCalledTimes(2);
+    unlike.resolve({ liked: false, likeCount: 2 });
+    await unliking;
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    expect(presses(queryClient).onTheWire()).toBe(false);
+  });
+
+  it('leaves what a newer press showed when an older one fails or answers, and ends on the newest’s answer', async () => {
+    // Three presses of COMMENT made before any settled: a like, an unlike, a like again.
+    const queryClient = seeded();
+    const first = deferred<LikeState>();
+    const second = deferred<LikeState>();
+    const third = deferred<LikeState>();
+    const answers = [first.promise, second.promise, third.promise];
+    let sent = 0;
+    const put = vi.fn((_variables: LikeVariables) => answers[sent++]!);
+    const liking = button(queryClient, put)
+      .mutate(onComment(true))
+      .catch((error: unknown) => error);
+    await settle();
+    const unliking = button(queryClient, put).mutate(onComment(false));
+    await settle();
+    const likingAgain = button(queryClient, put).mutate(onComment(true));
+    await settle();
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    // The first fails: what it held (unliked, 2) is not put back over the newest's like.
+    first.reject(refusal(503, 'INTERNAL'));
+    expect(await liking).toBeInstanceOf(ApiError);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    // The second answers, sent after the first: not written either.
+    await settle();
+    second.resolve({ liked: false, likeCount: 2 });
+    await unliking;
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    // The newest, sent last, has the last word.
+    await settle();
+    third.resolve({ liked: true, likeCount: 3 });
+    await likingAgain;
+    expect(put.mock.calls.map(([variables]) => variables.liked)).toEqual([true, false, true]);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(commentCountOf(queryClient, commentId)).toBe(3);
+    expect(presses(queryClient).onTheWire()).toBe(false);
+  });
+
+  it('keeps the newest press’s answer when the answers of two presses cross, the older one landing last', async () => {
+    // The guard on its own (`updateLikeOptions`, without the scope that keeps a target's presses
+    // from crossing): the like committed first and the unlike after it, but the like's answer
+    // arrives after the unlike's. Written, it would put back the like and its count — with
+    // nothing read again to correct them.
+    const queryClient = seeded();
+    const like = deferred<LikeState>();
+    const unlike = deferred<LikeState>();
+    const liking = toggle(queryClient, () => like.promise).mutate(onComment(true));
+    await settle();
+    const unliking = toggle(queryClient, () => unlike.promise).mutate(onComment(false));
+    await settle();
+    unlike.resolve({ liked: false, likeCount: 2 });
+    await unliking;
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
+    like.resolve({ liked: true, likeCount: 3 });
+    await liking;
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(commentCountOf(queryClient, commentId)).toBe(2);
   });
 });
 

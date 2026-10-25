@@ -42,6 +42,16 @@ export const LIKES_KEY = ['likes'] as const;
 export const myPostLikesKey = (postId: string) =>
   [...LIKES_KEY, 'post', postId.toLowerCase()] as const;
 
+/**
+ * The presses of one target on the post page of `postId`, named once (ADR-0076 7-30): the
+ * mutation scope that sends them one after another (`likePressOptions`), and the entry that says
+ * one of them is on the wire whichever like button made it — so a button drawn again meanwhile, a
+ * comment's when its 수정 is opened and closed, still waits (`useLike`). By the lower-cased ids, as
+ * the routes take them. Not a query's key: nothing is cached under it.
+ */
+export const likePressId = (postId: string, target: LikeTarget) =>
+  [...LIKES_KEY, 'press', postId.toLowerCase(), target.kind, target.id.toLowerCase()].join(' ');
+
 // ---- what is liked -----------------------------------------------------------------------------
 
 /** What a like button is for: the post of the page, or a 댓글 or a 대댓글 under it. */
@@ -181,7 +191,11 @@ export interface LikeButtonInput {
    * first read failed; a later failed read keeps what the last good one said.
    */
   mine: { isFetched: boolean; liked: boolean | undefined };
-  /** A press of this button is on the wire. */
+  /**
+   * A press of this button's target is on the wire — whichever button made it (`likePressId`), so
+   * a button drawn again meanwhile (the comment's 수정 opened and closed) still waits (ADR-0076
+   * 7-30).
+   */
   saving: boolean;
 }
 

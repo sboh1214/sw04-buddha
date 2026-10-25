@@ -7,6 +7,7 @@ import {
   type QueryClient,
   type QueryKey,
 } from '@tanstack/react-query';
+import { useMemo, useSyncExternalStore } from 'react';
 import { meBelongsTo } from '@/hooks/use-me';
 import {
   type LikeState,
@@ -21,6 +22,7 @@ import {
   type LikeTarget,
   commentLikeCount,
   isStaleLikeRefusal,
+  likePressId,
   likedIn,
   movedLikeCount,
   myLikesUnreadable,
@@ -171,20 +173,115 @@ async function readAgain(queryClient: QueryClient, key: QueryKey): Promise<void>
 /**
  * What `onMutate` hands to the answer and the rollback: the reader's state of the target and its
  * count as they were before the press (`undefined` where the cache held none), the reads it
- * cancelled, and the count the press wrote last (`shown`, see `showCount`).
+ * cancelled, the count the press wrote last (`shown`, see `showCount`), and where it stands among
+ * the presses of its target (`order`, see `isNewestPress`; undefined where `onMutate` did not
+ * finish).
  */
 interface LikeSnapshot {
   liked: boolean | undefined;
   count: number | undefined;
   cancelled: { likes: boolean; count: boolean };
   shown: number | undefined;
+  order: number | undefined;
+}
+
+/**
+ * The like presses made through each query client (ADR-0076 7-30), by target (`likePressId`): the
+ * number of the newest press of each target pressed, how many of its presses are on the wire, and
+ * the buttons drawing it, told when that changes (`likePressesOnTheWire`).
+ *
+ * Kept here rather than read from the mutation cache (`useIsMutating`): there every button would
+ * listen to every event of the cache — each write's, and each render of a `useMutation` whose
+ * options are made anew, every like button's among them — and a post page draws a button per
+ * comment, some 2,000 with its threads opened (ADR-0074 7-28), so one render of the thread had
+ * every button look through the cache once for every other button: the comments' e2e of 30 reply
+ * pages timed out on it. Here a press tells the buttons of its own target only.
+ */
+interface LikePresses {
+  newest: Map<string, number>;
+  onTheWire: Map<string, number>;
+  drawn: Map<string, Set<() => void>>;
+}
+
+const likePresses = new WeakMap<QueryClient, LikePresses>();
+
+function pressesOf(queryClient: QueryClient): LikePresses {
+  let presses = likePresses.get(queryClient);
+  if (presses === undefined) {
+    presses = { newest: new Map(), onTheWire: new Map(), drawn: new Map() };
+    likePresses.set(queryClient, presses);
+  }
+  return presses;
+}
+
+/**
+ * A press of the target `id` made (`onMutate`, before anything is awaited — so in the order of the
+ * presses): one more on the wire, and its number, one past the newest.
+ */
+function pressMade(queryClient: QueryClient, id: string): number {
+  const presses = pressesOf(queryClient);
+  const order = (presses.newest.get(id) ?? 0) + 1;
+  presses.newest.set(id, order);
+  presses.onTheWire.set(id, (presses.onTheWire.get(id) ?? 0) + 1);
+  presses.drawn.get(id)?.forEach((tell) => tell());
+  return order;
+}
+
+/** A press of the target `id` settled (`onSettled`): one fewer on the wire. */
+function pressSettled(queryClient: QueryClient, id: string): void {
+  const presses = pressesOf(queryClient);
+  const left = (presses.onTheWire.get(id) ?? 1) - 1;
+  if (left > 0) presses.onTheWire.set(id, left);
+  else presses.onTheWire.delete(id);
+  presses.drawn.get(id)?.forEach((tell) => tell());
+}
+
+/**
+ * Whether a press of the target `id` (`likePressId`) is on the wire, whichever like button made
+ * it, as a store for `useSyncExternalStore`: `subscribe` tells a button when that changes — only
+ * the buttons of that target — and `onTheWire` says it.
+ */
+export function likePressesOnTheWire(queryClient: QueryClient, id: string) {
+  return {
+    subscribe: (tell: () => void) => {
+      const drawn = pressesOf(queryClient).drawn;
+      const buttons = drawn.get(id) ?? new Set<() => void>();
+      drawn.set(id, buttons);
+      buttons.add(tell);
+      return () => {
+        buttons.delete(tell);
+        if (buttons.size === 0 && drawn.get(id) === buttons) drawn.delete(id);
+      };
+    },
+    onTheWire: () => likePresses.get(queryClient)?.onTheWire.has(id) ?? false,
+  };
+}
+
+/**
+ * Whether `press` is still the newest press of `target` (ADR-0076 7-30). Only the newest writes
+ * the target's state and count — its answer, its rollback, its count again after a 더 보기: a
+ * press made after it showed where the reader went next, and its own answer or rollback is the
+ * last word (the presses of a target are sent one after another, `likePressOptions`, so it lands
+ * after this one's). An answer that lands behind a newer press is not written over it — the
+ * remounted button's case: a like still on the wire, and an unlike pressed meanwhile, whose state
+ * a late answer of the like would otherwise take back, with nothing read again to correct it.
+ */
+function isNewestPress(
+  queryClient: QueryClient,
+  postId: string,
+  target: LikeTarget,
+  press: LikeSnapshot,
+): boolean {
+  if (press.order === undefined) return true;
+  return likePresses.get(queryClient)?.newest.get(likePressId(postId, target)) === press.order;
 }
 
 /**
  * Writes `count` as the target's, and again once `more` — a 더 보기 on its way — has landed: its
  * pages were taken when it left and carry the counts from then. What is written again is the
  * count this press wrote last, so whichever of the press's writes registered first, the 더 보기
- * ends on the latest (the answer's, or the rollback's).
+ * ends on the latest (the answer's, or the rollback's) — and nothing once a newer press of the
+ * target was made, which writes its own again (`isNewestPress`).
  */
 function showCount(
   queryClient: QueryClient,
@@ -198,7 +295,8 @@ function showCount(
   writeCount(queryClient, postId, target, count);
   if (more === undefined) return;
   void more.then(() => {
-    if (press.shown !== undefined) writeCount(queryClient, postId, target, press.shown);
+    if (press.shown === undefined || !isNewestPress(queryClient, postId, target, press)) return;
+    writeCount(queryClient, postId, target, press.shown);
   });
 }
 
@@ -232,6 +330,12 @@ function showCount(
  * the watch button does): a press whose answer lands after the tab switched accounts
  * (SessionCacheGuard reset the cache) writes nothing into the other account's likes. The count is
  * public and is written either way.
+ *
+ * The answer and the rollback are written only by the newest press of the target
+ * (`isNewestPress`, ADR-0076 7-30): one that a newer press of the same target followed still makes
+ * its reads again, but leaves the state and the count to that newer press, whose answer lands
+ * after it. From `onMutate` to `onSettled` a press counts as on the wire for every button of its
+ * target (`likePressesOnTheWire`).
  */
 export function updateLikeOptions(
   queryClient: QueryClient,
@@ -249,6 +353,8 @@ export function updateLikeOptions(
   return {
     mutationFn: put,
     onMutate: async ({ target, liked }: LikeVariables): Promise<LikeSnapshot> => {
+      // Numbered before anything is awaited: in the order of the presses.
+      const order = pressMade(queryClient, likePressId(id, target));
       const [likes, counted] = await Promise.all([
         holdReads(queryClient, likesKey),
         holdReads(queryClient, countKey(id, target)),
@@ -260,6 +366,7 @@ export function updateLikeOptions(
         count,
         cancelled: { likes: likes.cancelled, count: counted.cancelled },
         shown: undefined,
+        order,
       };
       setLiked(target, liked);
       if (before !== undefined && count !== undefined) {
@@ -284,10 +391,18 @@ export function updateLikeOptions(
         count: undefined,
         cancelled: { likes: false, count: false },
         shown: undefined,
+        order: undefined,
       };
-      const counted = await holdReads(queryClient, countKey(id, target));
-      if (meBelongsTo(queryClient, expectedAccountId)) setLiked(target, state.liked);
-      showCount(queryClient, id, target, press, state.likeCount, counted.more);
+      // Behind a newer press of the target: its answer is the last word, and the reads of the
+      // count are left to it.
+      const newest = isNewestPress(queryClient, id, target, press);
+      const counted = newest
+        ? await holdReads(queryClient, countKey(id, target))
+        : { cancelled: false, more: undefined };
+      if (newest) {
+        if (meBelongsTo(queryClient, expectedAccountId)) setLiked(target, state.liked);
+        showCount(queryClient, id, target, press, state.likeCount, counted.more);
+      }
       const readLikes = press.cancelled.likes || isOnItsWay(queryClient, likesKey);
       const readPages = press.cancelled.count || counted.cancelled;
       await Promise.all([
@@ -307,8 +422,11 @@ export function updateLikeOptions(
       { target, expectedAccountId }: LikeVariables,
       snapshot: LikeSnapshot | undefined,
     ) => {
-      // No snapshot: `onMutate` did not finish, so nothing optimistic was written.
-      if (snapshot !== undefined) {
+      // No snapshot: `onMutate` did not finish, so nothing optimistic was written. Behind a newer
+      // press of the target, putting back what this one held would take that press back too:
+      // its answer or its rollback lands after this, and the reads below end on the server's
+      // word.
+      if (snapshot !== undefined && isNewestPress(queryClient, id, target, snapshot)) {
         if (snapshot.liked !== undefined && meBelongsTo(queryClient, expectedAccountId)) {
           setLiked(target, snapshot.liked);
         }
@@ -323,6 +441,33 @@ export function updateLikeOptions(
         : [likesKey, countKey(id, target)];
       await Promise.all(keys.map((key) => readAgain(queryClient, key)));
     },
+    // After the answer or the failure has done its writes and reads: the target's buttons wait
+    // until then, as a button's own observer did (`likePressesOnTheWire`).
+    onSettled: (_state: LikeState | undefined, _error: Error | null, { target }: LikeVariables) => {
+      pressSettled(queryClient, likePressId(id, target));
+    },
+  };
+}
+
+/**
+ * `updateLikeOptions` for the presses of one `target`, as a like button makes them (ADR-0076
+ * 7-30), in one scope per target (TanStack Query's mutation `scope`, named `likePressId`): a
+ * second press of the target, however it was made — a button waits while one is on the wire
+ * (`useLike`'s `saving`), but a press made before the button was drawn again gets through — is
+ * sent only once the first has settled. Its optimistic move shows at once and only its request
+ * waits, so the server takes the presses of a target in the order they were made and answers them
+ * in that order, and the newest's answer is the one that stays (`isNewestPress`).
+ */
+export function likePressOptions(
+  queryClient: QueryClient,
+  postId: string,
+  target: LikeTarget,
+  onSessionChanged: () => void,
+  put?: (variables: LikeVariables) => Promise<LikeState>,
+) {
+  return {
+    ...updateLikeOptions(queryClient, postId, onSessionChanged, put),
+    scope: { id: likePressId(postId, target) },
   };
 }
 
@@ -332,17 +477,29 @@ export function updateLikeOptions(
  * `expectedAccountId`. Until better-auth has said whose session this is, `sessionPending` is true
  * and `accountId` undefined; the button draws its count, unpressed, until then
  * (`likeButtonView`). Every button of the page shares the one read of the reader's likes.
+ *
+ * `saving` is whether a press of the target is on the wire — this button's, or one drawn before
+ * it (`likePressesOnTheWire`, ADR-0076 7-30). Not this button's `useMutation`: a comment's button
+ * is drawn anew when its 수정 is opened and closed, and its new `useMutation` starts idle while the
+ * press of the button before it is still on the wire. False on the server and through hydration,
+ * when nothing has been pressed.
  */
 export function useLike(postId: string, target: LikeTarget) {
   const queryClient = useQueryClient();
   const { data: session, isPending: sessionPending, refetch: refetchSession } = useSession();
   const mine = useQuery(myPostLikesQueryOptions(postId, session));
-  const toggle = useMutation(updateLikeOptions(queryClient, postId, () => void refetchSession()));
+  const toggle = useMutation(
+    likePressOptions(queryClient, postId, target, () => void refetchSession()),
+  );
+  const pressId = likePressId(postId, target);
+  const presses = useMemo(() => likePressesOnTheWire(queryClient, pressId), [queryClient, pressId]);
+  const saving = useSyncExternalStore(presses.subscribe, presses.onTheWire, () => false);
   return {
     sessionPending,
     signedIn: session != null,
     accountId: session?.user.id,
     mine: { isFetched: mine.isFetched, liked: likedIn(mine.data, target) },
+    saving,
     toggle,
   };
 }

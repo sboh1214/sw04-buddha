@@ -19,6 +19,7 @@ import {
   likeCountText,
   likeFailureMessage,
   likePressAction,
+  likePressId,
   likeRefusalMove,
   likedIn,
   likesUnreadableId,
@@ -132,6 +133,18 @@ describe('the key of what the reader liked', () => {
     expect(isPrivateQueryKey(postKey(post))).toBe(false);
     expect(isPrivateQueryKey(postCommentsKey(post))).toBe(false);
     expect(myPostLikesKey(post)[0]).not.toBe(POSTS_KEY[0]);
+  });
+
+  it('names the presses of each target apart, by the lower-cased ids (ADR-0076 7-30)', () => {
+    const comment = { kind: 'comment', id: COMMENT } as const;
+    expect(likePressId(POST, comment)).toBe(`likes press ${post} comment ${commentId}`);
+    expect(likePressId(post, { kind: 'comment', id: commentId })).toBe(likePressId(POST, comment));
+    expect(likePressId(POST, { kind: 'post', id: POST })).toBe(`likes press ${post} post ${post}`);
+    // Another target's presses are not this one's, the same id of another kind neither.
+    expect(likePressId(POST, { kind: 'comment', id: REPLY })).not.toBe(likePressId(POST, comment));
+    expect(likePressId(POST, { kind: 'comment', id: POST })).not.toBe(
+      likePressId(POST, { kind: 'post', id: POST }),
+    );
   });
 });
 

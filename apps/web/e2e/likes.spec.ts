@@ -301,6 +301,67 @@ test.describe('좋아요', () => {
     await expectToggle(commentLike(page, last), 2, true);
   });
 
+  test('자기 댓글의 좋아요를 보내는 동안 수정을 열었다 닫아 단추가 다시 그려져도 기다리고, 좋아요의 답이 온 뒤에야 취소를 보낸다', async ({
+    admin,
+    page,
+  }) => {
+    // PR #222 Codex 2차 리뷰 (ADR-0076 7-30): 수정 takes the comment's actions away and 취소
+    // draws them anew — a new like button, whose own `useMutation` starts idle while the like is
+    // still on the wire. It waits on every press of its target instead, so a press sends nothing
+    // until the like has settled.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(admin, market.id, `다시 그려지는 단추의 글 ${tag}`, tag);
+    const mine = await commentThroughApi(page.request, postId, null, `내 댓글 ${tag}`);
+    // The states the presses of the comment sent, the first held on the wire until let go.
+    const sent: boolean[] = [];
+    let letGo: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      letGo = resolve;
+    });
+    await page.route(`**/api/v1/comments/${mine}/like`, async (route) => {
+      sent.push((route.request().postDataJSON() as { liked: boolean }).liked);
+      if (sent.length === 1) await held;
+      await route.fallback();
+    });
+
+    await page.goto(`/community/posts/${postId}`);
+    const item = page.getByTestId(`comment-${mine}`);
+    const toggle = commentLike(page, mine);
+    await expectToggle(toggle, 0, false);
+    await toggle.click();
+    // On the wire: pressed, one more, and busy.
+    await expect(toggle).toHaveAttribute('aria-busy', 'true');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(toggle).toHaveText(likes(1));
+    await expect.poll(() => sent).toEqual([true]);
+
+    // 수정 opened — the actions, the like button among them, are gone — and closed unchanged.
+    await item.getByTestId('comment-edit').click();
+    await expect(item.getByTestId('comment-edit-form')).toBeVisible();
+    await expect(toggle).toHaveCount(0);
+    await item.getByTestId('comment-edit-form').getByTestId('comment-cancel').click();
+    await expect(item.getByTestId('comment-edit-form')).toHaveCount(0);
+    // Drawn anew, the button still waits for the like, and a press of it sends nothing.
+    await expect(toggle).toHaveAttribute('aria-busy', 'true');
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+    await expect(toggle).toHaveText(likes(1));
+    await toggle.click();
+
+    // The like lands: pressed at its count — not taken back by the press made while it waited.
+    letGo();
+    await expectToggle(toggle, 1, true);
+    expect(sent).toEqual([true]);
+    // Pressed now, it takes the like back.
+    await toggle.click();
+    await expectToggle(toggle, 0, false);
+    expect(sent).toEqual([true, false]);
+    await page.reload();
+    await expectToggle(toggle, 0, false);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
   test('로그인하지 않은 방문자는 좋아요 수를 읽고, 누르면 곧바로 이 글로 돌아오는 로그인 화면으로 간다', async ({
     admin,
     page,

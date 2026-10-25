@@ -58,11 +58,13 @@ import { postPath } from '@/lib/posts';
  * be pressed, and the page says why in one line (`LikesUnreadableNotice`), which each button names
  * as its description (owner decision 2026-10-20, answer 10).
  *
- * A member's press moves the toggle and the count at once (`updateLikeOptions`), and a failure
+ * A member's press moves the toggle and the count at once (`likePressOptions`), and a failure
  * puts both back with a toast saying which change did not happen. The toast is raised from the
  * write's promise, not from a per-call callback: a refusal that the comment was hidden or deleted
  * reads the thread again before the mutation settles, which takes this button away with the
- * observer such callbacks ride on (ADR-0074's lesson).
+ * observer such callbacks ride on (ADR-0074's lesson). For the same reason the button waits on
+ * every press of its target, not on its own observer's (`useLike`'s `saving`): drawn anew while a
+ * press is on the wire — a comment's 수정 opened and closed — it still waits (ADR-0076 7-30).
  */
 export function LikeButton({
   postId,
@@ -82,7 +84,9 @@ export function LikeButton({
     sessionPending: like.sessionPending,
     signedIn: like.signedIn,
     mine: like.mine,
-    saving: like.toggle.isPending,
+    // Any press of the target, not only this button's: a comment's button is drawn anew when its
+    // 수정 is opened and closed, while the press is still on the wire (ADR-0076 7-30).
+    saving: like.saving,
   });
   const look = target.kind === 'post' ? POST_LOOK : COMMENT_LOOK;
   const testId = target.kind === 'post' ? 'post-like' : 'comment-like';
