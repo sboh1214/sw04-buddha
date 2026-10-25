@@ -15,11 +15,12 @@
  * full chain (ADR-0087 결과 5): an object the store refuses stays queued for #46's clean-up, #48's
  * comment counts stay exact, #138's notice history is never touched, and another write's foreign
  * key check naming an item (a link flag) neither waits for the run nor is waited for. After PR
- * #233's review (ADR-0087 7-29): a report sent while the run waits for its post or comment keeps
- * that item's versions — the run asks what awaits an item once it holds it. The release
- * settings are changed the way the admin screen changes
- * them (a row and its record); the run's instant is moved past a period instead of backdating a
- * closure (a closed profile never changes, migration 0043). Skips when TEST_* are unset.
+ * #233's review (ADR-0087 7-29): a report sent while the run waits for its post, or holding the
+ * comment the run passes by, keeps that item's versions — the run asks what awaits an item once it
+ * holds it — and a reply to a 대댓글, which holds two comments, neither waits nor deadlocks. The
+ * release settings are changed the way the admin screen changes them (a row and its record); the
+ * run's instant is moved past a period instead of backdating a closure (a closed profile never
+ * changes, migration 0043). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -2477,14 +2478,16 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
 
   /**
    * Polls (bounded) until another backend of the test database waits on a heavyweight lock: the
-   * run queued on a row a test's transaction holds. pg_stat_activity's snapshot is dropped before
-   * each read, so a poll that began before the run reached the lock sees it arrive.
+   * run queued on a row a test's transaction holds — or until `ended` says the run is over, for a
+   * run that may pass the row by instead. pg_stat_activity's snapshot is dropped before each read,
+   * so a poll that began before the run reached the lock sees it arrive.
    */
-  async function lockWaiter(what: string): Promise<void> {
+  async function lockWaiter(what: string, ended: () => boolean = () => false): Promise<void> {
     const observer = await t.db.$client.connect();
     try {
       const started = Date.now();
       for (;;) {
+        if (ended()) return;
         await observer.query('SELECT pg_stat_clear_snapshot()');
         const { rows } = await observer.query<{ n: number }>(
           `SELECT count(*)::int AS n FROM pg_stat_activity
@@ -2605,7 +2608,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(await countsAt(later)).toMatchObject({ post_revisions: 1 });
   });
 
-  it('keeps a comment’s earlier versions when a report about the comment commits while the run waits for the comment’s lock — and lets them go once it is processed (PR #233 Codex review, ADR-0087 7-29)', async () => {
+  it('passes a comment by while a report about it is being sent, keeping its earlier versions — and lets them go once the report is processed (PR #233 Codex review, ADR-0087 7-29)', async () => {
     const author = (await createUser(t.db)).user.id;
     const reporter = (await createUser(t.db)).user.id;
     const replacedAt = before(new Date(), 100);
@@ -2614,22 +2617,26 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     const version = await commentRevision(comment.id, replacedAt);
     await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
     const due = after(replacedAt, 30);
+    const versions = async () =>
+      (await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id);
 
+    // The report holds the comment FOR SHARE: the versions' step takes its comments SKIP LOCKED, so
+    // the run passes this one by and ends while the report is still being written (with no lock it
+    // would delete the version; waiting for the lock, it would still wait here).
     const report = reportInFlight({ commentId: comment.id }, reporter, author);
     await report.held;
-    const running = within(run(due), 10);
     try {
-      // The versions' step locks the comment before it deletes: with no lock it would not wait.
-      await lockWaiter('the run behind the report on the comment');
+      await within(run(due), 10);
     } finally {
       await report.commit();
     }
-    await running;
-    expect((await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id)).toEqual([
-      version.id,
-    ]);
+    expect(await versions()).toEqual([version.id]);
     expect(await countsAt(due)).toMatchObject({ comment_revisions: 0 });
 
+    // Committed, the report keeps them (`nothingAwaits`) until it is processed.
+    const next = after(due, 1);
+    await run(next);
+    expect(await versions()).toEqual([version.id]);
     await t.db
       .update(schema.reports)
       .set({
@@ -2639,6 +2646,118 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
         dismissalReason: '기각',
       })
       .where(eq(schema.reports.commentId, comment.id));
+    const later = after(due, 2);
+    await run(later);
+    expect(await versions()).toEqual([]);
+    expect(await countsAt(later)).toMatchObject({ comment_revisions: 1 });
+  });
+
+  /**
+   * A 대댓글 being written under the 대댓글 `namedId`, as CommentsService.create writes it: the post
+   * held FOR SHARE, then the named 대댓글 (`lockParent`) — `held` settles there — and, once `commit()`
+   * is called, the named one's 댓글 `thread` FOR SHARE (the child first: not in id order) and the
+   * new 대댓글's row under it, committed.
+   */
+  function replyInFlight(
+    postId: string,
+    namedId: string,
+    thread: { id: string; createdAt: Date },
+    authorId: string,
+  ) {
+    let held = () => {};
+    const holding = new Promise<void>((resolve) => {
+      held = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const writing = t.db.transaction(async (tx) => {
+      const { posts, postComments } = schema;
+      await tx.select({ id: posts.id }).from(posts).where(eq(posts.id, postId)).for('share');
+      await tx
+        .select({ id: postComments.id })
+        .from(postComments)
+        .where(eq(postComments.id, namedId))
+        .for('share');
+      held();
+      await released;
+      await tx
+        .select({ id: postComments.id })
+        .from(postComments)
+        .where(eq(postComments.id, thread.id))
+        .for('share');
+      const [reply] = await tx
+        .insert(schema.postComments)
+        .values({
+          postId,
+          authorId,
+          parentId: thread.id,
+          parentCreatedAt: thread.createdAt,
+          body: '대댓글에 단 대댓글',
+        })
+        .returning();
+      return reply!;
+    });
+    return {
+      held: Promise.race([holding, writing]),
+      commit: async () => {
+        release();
+        return writing;
+      },
+    };
+  }
+
+  it('neither waits for nor deadlocks with a reply to a 대댓글, which holds the 대댓글 and then its 댓글: the versions’ step passes by a comment another write holds and takes the rest (ADR-0087 7-29)', async () => {
+    const author = (await createUser(t.db)).user.id;
+    const replier = (await createUser(t.db)).user.id;
+    const replacedAt = before(new Date(), 100);
+    const post = await createPost(t.db, { marketId, authorId: author });
+    // The 댓글's id below its 대댓글's (uuids order as their hex does): a run that waited for the
+    // comments of its versions in id order held the 댓글 while it waited for the 대댓글.
+    const [threadId, namedId] = [randomUUID(), randomUUID()].sort();
+    const [thread] = await t.db
+      .insert(schema.postComments)
+      .values({ id: threadId!, postId: post.id, authorId: author, body: '댓글' })
+      .returning();
+    const [named] = await t.db
+      .insert(schema.postComments)
+      .values({
+        id: namedId!,
+        postId: post.id,
+        authorId: author,
+        parentId: thread!.id,
+        parentCreatedAt: thread!.createdAt,
+        body: '대댓글',
+      })
+      .returning();
+    await commentRevision(thread!.id, replacedAt);
+    const namedVersion = await commentRevision(named!.id, replacedAt);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
+    const due = after(replacedAt, 30);
+
+    // The reply holds the named 대댓글; the run goes while it does. Once the run has ended — or
+    // queued on a lock, as a run waiting for both comments did — the reply takes the 댓글.
+    const reply = replyInFlight(post.id, named!.id, thread!, replier);
+    await reply.held;
+    let ended = false;
+    const running = within(run(due), 10).finally(() => {
+      ended = true;
+    });
+    let written: Awaited<ReturnType<typeof reply.commit>>;
+    try {
+      await lockWaiter('the run beside the reply', () => ended);
+    } finally {
+      written = await reply.commit();
+    }
+    // No kind failed (`run`) and the reply was written: no 40P01 on either side.
+    await running;
+    expect(written).toMatchObject({ parentId: thread!.id });
+    expect((await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id)).toEqual([
+      namedVersion.id,
+    ]);
+    expect(await countsAt(due)).toMatchObject({ comment_revisions: 1 });
+
     const later = after(due, 1);
     await run(later);
     expect(await t.db.select().from(schema.postCommentRevisions)).toEqual([]);

@@ -192,23 +192,37 @@ function nothingAwaits(on: 'post' | 'comment', column: SQLWrapper): SQL {
  * report, a like (FOR KEY SHARE) — nor do they wait for it: the run empties a row, it never deletes
  * one or changes its key, so a writer that holds the counts row of #48's trigger and the link locks
  * (7-13's chain) never queues behind the run, and the run never holds a row such a writer waits for
- * while it waits for another. The steps that select items skip what is locked (SKIP LOCKED); the
- * versions' steps wait for their items, in id order (`lockItems`), as the images' judgement always
- * did: no write holds two posts, or two comments, in a mode the run's lock waits for — each holds
- * the one item it is about — so none waits for another item the run holds (ADR-0087 7-29).
+ * while it waits for another. The steps that select items skip what is locked (SKIP LOCKED), and so
+ * does the comment versions' step (`lockItems`, `skipLocked`): a write may hold two comments — a
+ * reply to a 대댓글 holds that 대댓글 and then its 댓글, FOR SHARE, child first and so not in id order
+ * (CommentsService.lockParent) — and a run that waited for both in id order could hold the one
+ * while the reply, holding the other, waits for it (40P01). The post versions' step waits for its
+ * posts, in id order (`lockItems`), as the images' judgement always did: no write holds two posts
+ * in a mode the run's lock waits for — each holds the one post it is about — so none waits for
+ * another post the run holds (ADR-0087 7-29).
  */
 const ITEM_LOCK = 'no key update';
 
-/** Locks the posts or comments `ids` under ITEM_LOCK, in id order, waiting for each. */
-async function lockItems(tx: Tx, on: 'post' | 'comment', ids: string[]): Promise<void> {
-  if (ids.length === 0) return;
+/**
+ * Locks the posts or comments `ids` under ITEM_LOCK, in id order, and answers those it holds: all
+ * of them, waiting for each — or, with `skipLocked`, those no other transaction holds in a mode
+ * the lock conflicts with, waiting for none (ADR-0087 7-29).
+ */
+async function lockItems(
+  tx: Tx,
+  on: 'post' | 'comment',
+  ids: string[],
+  { skipLocked = false }: { skipLocked?: boolean } = {},
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
   const table = on === 'post' ? schema.posts : schema.postComments;
-  await tx
+  const rows = await tx
     .select({ id: table.id })
     .from(table)
     .where(inArray(table.id, ids))
     .orderBy(asc(table.id))
-    .for(ITEM_LOCK);
+    .for(ITEM_LOCK, skipLocked ? { skipLocked: true } : {});
+  return new Set(rows.map((row) => row.id));
 }
 
 /**
@@ -334,7 +348,14 @@ const postRevisions: Step = async (tx, { cutoff, limit }) => {
   return { selected: due.length, deleted: { post_revisions: deleted.length }, storageKeys };
 };
 
-/** The same for the earlier versions of comments (no images), their comments locked. */
+/**
+ * The same for the earlier versions of comments (no images) — but their comments are taken SKIP
+ * LOCKED, not waited for (`lockItems`, `skipLocked`): a reply to a 대댓글 holds that 대댓글 and then
+ * its 댓글, not in id order (CommentsService.lockParent), and a run waiting for both in id order
+ * deadlocked with it (ADR-0087 7-29). A comment another write holds — a reply, a like, an edit, a
+ * report or a request in flight — keeps its versions for the next run; those of the comments the
+ * step holds are deleted in a statement after the lock that asks again (`nothingAwaits`).
+ */
 const commentRevisions: Step = async (tx, { cutoff, limit }) => {
   const { postCommentRevisions: revisions } = schema;
   const due = await tx
@@ -344,19 +365,19 @@ const commentRevisions: Step = async (tx, { cutoff, limit }) => {
     .orderBy(asc(revisions.replacedAt), asc(revisions.id))
     .limit(limit);
   if (due.length === 0) return { selected: 0, deleted: { comment_revisions: 0 }, storageKeys: [] };
-  await lockItems(tx, 'comment', [...new Set(due.map((row) => row.commentId))]);
-  const deleted = await tx
-    .delete(revisions)
-    .where(
-      and(
-        inArray(
-          revisions.id,
-          due.map((row) => row.id),
-        ),
-        nothingAwaits('comment', revisions.commentId),
-      ),
-    )
-    .returning({ id: revisions.id });
+  const held = await lockItems(tx, 'comment', [...new Set(due.map((row) => row.commentId))], {
+    skipLocked: true,
+  });
+  const taken = due.filter((row) => held.has(row.commentId)).map((row) => row.id);
+  const deleted =
+    taken.length === 0
+      ? []
+      : await tx
+          .delete(revisions)
+          .where(and(inArray(revisions.id, taken), nothingAwaits('comment', revisions.commentId)))
+          .returning({ id: revisions.id });
+  // As the posts': the versions taken up, those of a comment another write holds left — a batch
+  // that deleted none of them ends the kind (`purgeExpiredRecords`).
   return {
     selected: due.length,
     deleted: { comment_revisions: deleted.length },
