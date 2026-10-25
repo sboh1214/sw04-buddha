@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   CONSENT_DOCUMENTS,
   CONSENT_ITEMS,
@@ -20,6 +21,7 @@ import {
   isRequiredConsent,
   marketingConsentBody,
   marketingConsentOn,
+  marketingSwitchOn,
   missingRequiredConsents,
   withAllConsents,
 } from './consent';
@@ -182,6 +184,42 @@ describe('MY 설정의 마케팅 정보 수신 (오너 결정 2026-10-19 (2차) 
       });
       expect(recordConsentsBodySchema.parse(body)).toEqual(body);
     }
+  });
+
+  it('shows the answer a press asked while it is out, and the account’s own otherwise — after a refusal too (ADR-0090)', () => {
+    const off = [answer('marketing', false)];
+    const on = [answer('marketing')];
+    // Pressed: the asked answer, whatever the account's is.
+    expect(marketingSwitchOn(off, true)).toBe(true);
+    expect(marketingSwitchOn(on, false)).toBe(false);
+    // Nothing asked — before any press, or a refusal dropped it: the server's answer.
+    expect(marketingSwitchOn(off, null)).toBe(false);
+    expect(marketingSwitchOn(on, null)).toBe(true);
+    expect(marketingSwitchOn([answer('marketing', true, 'draft-1999-01-01')], null)).toBe(false);
+  });
+
+  it('drives the card’s switch, which drops the asked answer on every refusal and on new answers (ADR-0090)', () => {
+    // No component renders under node: the card's wiring is pinned in its source. The switch is
+    // `marketingSwitchOn`'s answer — not the account's alone, which a refusal leaves where it was,
+    // so the switch's input stayed on the position the press gave it (checked, nothing recorded,
+    // the next press swallowed) — and every refusal drops what was asked before anything else.
+    // e2e onboarding.spec.ts and profile.spec.ts press it into a refusal.
+    const card = readFileSync(
+      new URL('../app/my/settings/marketing-section.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(card).toContain('const on = marketingSwitchOn(consents, asked);');
+    expect(card).toContain('checked={on}');
+    expect(card).toMatch(/setAsked\(agreed\);\s*try \{/);
+    expect(card).toMatch(/\} catch \(error\) \{\s*(?:\/\/[^\n]*\n\s*)*setAsked\(null\);/);
+    expect(card).not.toContain('marketingConsentOn(');
+    // And once the account's answers change — the success's own record reaching the card, or a
+    // refetch bringing another tab's — the asked answer goes too (ADR-0090 결정 4-4): kept, it
+    // would show the pressed position over the server's newer one and the next press would send
+    // that answer again. e2e onboarding.spec.ts brings another tab's answer in.
+    expect(card).toMatch(
+      /if \(consents !== shownConsents\) \{\s*setShownConsents\(consents\);\s*setAsked\(null\);\s*\}/,
+    );
   });
 });
 

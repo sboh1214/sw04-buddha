@@ -31,6 +31,14 @@ import { useSession } from '@/lib/use-session';
  * a mismatch with the 403 `isForAnotherAccount` recognises; every hook here then refetches the
  * session so SessionCacheGuard puts the real account on screen, as the wallet's do.
  *
+ * That account is the one of the `Me` the screen was drawn from — the stepper's `me.id` for the
+ * 본인확인 step, the card's `Me` for MY 설정's real name — which each screen passes in, never the
+ * session's: in the render between the session naming another account and SessionCacheGuard's
+ * reset (an effect) the session already says B while the screen still shows A's, and a body
+ * naming B would be taken with B's cookie — the name and the number typed on A's screen texted
+ * and verified for B, or B renamed (ADR-0090, as ADR-0078 7-29 did for the onboarding's other
+ * steps). So the hooks here offer no account of their own.
+ *
  * The cache writer and the mutations' options are exported apart from their hooks: apps/web runs
  * vitest under `environment: 'node'`, so a decision sealed in a hook body is one no unit test can
  * reach (use-phone-verification.test.ts).
@@ -175,35 +183,31 @@ export function updateRealNameOptions(
 }
 
 /**
- * The account the screen shows (`accountId`, the session's user id — the `useCharge` source),
- * which every form here sends as `expectedAccountId`, and `ready`, false until better-auth has
- * said whose session this is; the forms keep their submit disabled until then rather than send a
- * body with no account in it.
+ * What every write here is built with: the tab's query client, and the session asked for again —
+ * what a refusal as another account calls. No account: the body names the one of the `Me` the
+ * screen was drawn from, which the screen passes in (the file's header says why), so nothing here
+ * waits for the session either — the step and the card are drawn only once `GET /me` answered.
  */
-function useScreenAccount() {
+function useWriteParts() {
   const queryClient = useQueryClient();
-  const { data: session, refetch } = useSession();
-  const accountId = session?.user.id;
-  return { queryClient, accountId, refetchSession: () => void refetch() };
+  const { refetch } = useSession();
+  return { queryClient, refetchSession: () => void refetch() };
 }
 
-/** `requestCodeOptions` as /onboarding's mutation. */
+/** `requestCodeOptions` as /onboarding's mutation (the stepper's `me.id` in its body). */
 export function useRequestVerificationCode() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(requestCodeOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(requestCodeOptions(queryClient, refetchSession));
 }
 
-/** `confirmVerificationOptions` as /onboarding's mutation. */
+/** `confirmVerificationOptions` as /onboarding's mutation (the stepper's `me.id`). */
 export function useConfirmPhoneVerification() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(confirmVerificationOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(confirmVerificationOptions(queryClient, refetchSession));
 }
 
-/** `updateRealNameOptions` as the settings card's mutation. */
+/** `updateRealNameOptions` as the settings card's mutation (the card's `Me`'s id). */
 export function useUpdateRealName() {
-  const { queryClient, accountId, refetchSession } = useScreenAccount();
-  const mutation = useMutation(updateRealNameOptions(queryClient, refetchSession));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { queryClient, refetchSession } = useWriteParts();
+  return useMutation(updateRealNameOptions(queryClient, refetchSession));
 }

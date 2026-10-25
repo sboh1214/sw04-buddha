@@ -12,7 +12,7 @@ import { ConsentTextRegion } from '@/legal/consent-text-view';
 import { MARKETING_CONSENT_TEXT } from '@/legal/consent-texts';
 import { resolveLegalDocument } from '@/legal/document';
 import { type Me } from '@/lib/api';
-import { consentFailure, marketingConsentBody, marketingConsentOn } from '@/lib/consent';
+import { consentFailure, marketingConsentBody, marketingSwitchOn } from '@/lib/consent';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
@@ -25,8 +25,10 @@ const MARKETING_TEXT = resolveLegalDocument(MARKETING_CONSENT_TEXT);
  * the account's newest marketing answer — on while it is an agreement to a version that still
  * holds (`marketingConsentOn`) — and every change is `POST /me/consents` with that answer alone
  * (`marketingConsentBody`): a record of its own, with the time, the address and the browser, as the
- * consent step's. The text agreed to opens in place ('내용 보기'), and the time of the last change
- * shows in the member's time zone. Nothing sends marketing yet.
+ * consent step's. While that record is out the switch shows the answer asked, and after a refusal
+ * the account's answer again (`marketingSwitchOn`, ADR-0090). The text agreed to opens in place
+ * ('내용 보기'), and the time of the last change shows in the member's time zone. Nothing sends
+ * marketing yet.
  *
  * An account facing a re-consent alone stays on MY 설정 to clear its public items (#41,
  * ONBOARDING_EXEMPT_PAGES); its consent record is taken only with the items its consent step asks
@@ -68,7 +70,17 @@ function MarketingSwitch({
   const formatDate = useFormatDateTime();
   const [open, setOpen] = useState(false);
   const regionId = useId();
-  const on = marketingConsentOn(consents);
+  // The answer a press asked, shown from the press until the record settles (`marketingSwitchOn`):
+  // dropped on a refusal, and after a success once the answers it wrote reach the card — a new
+  // `consents` — so the switch never shows the old answer for a render in between. React's way of
+  // adjusting state to a prop, during render.
+  const [asked, setAsked] = useState<boolean | null>(null);
+  const [shownConsents, setShownConsents] = useState(consents);
+  if (consents !== shownConsents) {
+    setShownConsents(consents);
+    setAsked(null);
+  }
+  const on = marketingSwitchOn(consents, asked);
   const newest = consents.find((answer) => answer.item === 'marketing');
 
   const onChange = async (agreed: boolean) => {
@@ -76,6 +88,7 @@ function MarketingSwitch({
       step.toStep();
       return;
     }
+    setAsked(agreed);
     try {
       const me = await record.mutateAsync(marketingConsentBody(agreed, accountId));
       const answer = me.onboarding.consents.find((item) => item.item === 'marketing');
@@ -85,6 +98,8 @@ function MarketingSwitch({
         ...(answer === undefined ? {} : { description: formatDate(answer.recordedAt) }),
       });
     } catch (error) {
+      // Nothing was recorded: the account's answer again, the switch's input with it (ADR-0090).
+      setAsked(null);
       toaster.create({ type: 'error', title: consentFailure(error) });
     }
   };

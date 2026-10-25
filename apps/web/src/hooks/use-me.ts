@@ -604,17 +604,17 @@ export function updateTimeZoneOptions(
 }
 
 /**
- * `updateTimeZoneOptions` as the settings 시간대 card's mutation, plus the account the screen
- * shows (`accountId`, the session's user id — `useUpdateRealName`'s source), which the card sends
- * as `expectedAccountId`. `ready` is false until better-auth has said whose session this is; the
- * card keeps its save disabled until then.
+ * `updateTimeZoneOptions` as the settings 시간대 card's mutation. Its body names the account the
+ * card shows — the `Me` it was drawn from (`TimeZoneFields`' `accountId`), as the 소개 and
+ * nickname cards do — never the session's: in the render between the session naming another
+ * account and SessionCacheGuard's reset the session already says B while the card still shows A's
+ * zone, and a save naming B would switch B's times (ADR-0090). So it offers no account of its own,
+ * and nothing waits for the session: the card is drawn only once `GET /me` answered.
  */
 export function useUpdateTimeZone() {
   const queryClient = useQueryClient();
-  const { data: session, refetch: refetchSession } = useSession();
-  const accountId = session?.user.id;
-  const mutation = useMutation(updateTimeZoneOptions(queryClient, () => void refetchSession()));
-  return { ...mutation, accountId, ready: accountId !== undefined };
+  const { refetch: refetchSession } = useSession();
+  return useMutation(updateTimeZoneOptions(queryClient, () => void refetchSession()));
 }
 
 /** Query key rule from PLAN 11.5. */

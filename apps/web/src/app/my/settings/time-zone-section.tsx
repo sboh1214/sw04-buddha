@@ -22,9 +22,9 @@ import { SettingsSection } from './section';
  * choice follows the browser (nothing stored) and names the zone it follows today; then every
  * IANA zone the browser knows. Each zone reads as its IANA name and the Korean name the browser
  * gives it (`timeZoneLabel`, owner decision 2026-10-16); the values sent are the IANA names.
- * Saving writes `PUT /me/time-zone` for the account the card shows
- * (`expectedAccountId`), and the profile it answers goes into `['me']`, so the times elsewhere
- * switch as soon as it lands.
+ * Saving writes `PUT /me/time-zone` for the account the card shows — the `Me` it was drawn from
+ * (`expectedAccountId`, ADR-0090) — and the profile it answers goes into `['me']`, so the times
+ * elsewhere switch as soon as it lands.
  *
  * The fields are `ClientOnly`: the browser's zone and its list exist only in the browser, and the
  * server's render of this page must not name a zone (ADR-0063's rule for every first paint).
@@ -42,7 +42,7 @@ export function TimeZoneSection() {
       ) : (
         <ClientOnly fallback={<Skeleton height="10" />}>
           {/* Keyed by account: a tab that switched accounts starts from the new one's choice. */}
-          <TimeZoneFields key={me.id} picked={me.profile.timeZone} />
+          <TimeZoneFields key={me.id} picked={me.profile.timeZone} accountId={me.id} />
         </ClientOnly>
       )}
     </SettingsSection>
@@ -56,8 +56,13 @@ interface FormValues {
 /**
  * Seeded from the profile and kept in sync with later refetches without discarding a choice in
  * progress — the nickname card's arrangement (`values` + `keepDirtyValues`).
+ *
+ * A save names the account the card was drawn for (`accountId`, its `Me`'s id), never the
+ * session's: in the render between the session naming another account and SessionCacheGuard's
+ * reset the session already says B while the card still shows A's zone, and a zone sent as B's
+ * would switch B's times (ADR-0090). The server refuses it as another account's.
  */
-function TimeZoneFields({ picked }: { picked: string | null }) {
+function TimeZoneFields({ picked, accountId }: { picked: string | null; accountId: string }) {
   const update = useUpdateTimeZone();
   const browser = browserTimeZone();
   const options = useMemo(
@@ -78,13 +83,11 @@ function TimeZoneFields({ picked }: { picked: string | null }) {
   });
 
   const onSubmit = handleSubmit(async (form) => {
-    // The account the card shows rides along (`expectedAccountId`, A-PG-24). Unreachable while
-    // the button honours `ready`.
-    if (update.accountId === undefined) return;
+    // The account the card was drawn for rides along (`expectedAccountId`, A-PG-24).
     try {
       const me = await update.mutateAsync({
         timeZone: timeZoneFromSelect(form.timeZone),
-        expectedAccountId: update.accountId,
+        expectedAccountId: accountId,
       });
       // Explicitly not keepDirtyValues, as the real-name card does: the form's resetOptions would
       // otherwise keep the submitted value as dirty instead of taking the saved one.
@@ -124,7 +127,7 @@ function TimeZoneFields({ picked }: { picked: string | null }) {
             <Button
               type="submit"
               loading={update.isPending}
-              disabled={!isDirty || !update.ready}
+              disabled={!isDirty}
               data-testid="time-zone-save"
             >
               {copy.save}

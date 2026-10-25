@@ -262,7 +262,7 @@ function Stepper({
       step = (
         <Stack gap="4">
           <Text color="fg.muted">{copy.verificationIntro}</Text>
-          <VerificationStep />
+          <VerificationStep accountId={me.id} />
         </Stack>
       );
       break;

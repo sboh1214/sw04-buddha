@@ -920,6 +920,10 @@ test.describe('공개 프로필', () => {
       await expect(
         page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
       ).toBeVisible();
+      // Refused: the switch shows A's answer again — off, the box included (ADR-0090).
+      const marketingBox = marketing.getByRole('checkbox', { name: copy.consentMarketing });
+      await expect(marketingBox).toBeEnabled();
+      await expect(marketingBox).not.toBeChecked();
 
       expect(writes).toEqual([
         { categoryIds: [top.id], expectedAccountId: a.id },

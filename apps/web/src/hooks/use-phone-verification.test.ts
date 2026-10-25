@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ApiError, type Me, type PhoneVerification } from '@/lib/api';
@@ -580,5 +581,38 @@ describe('PUT /me/real-name (updateRealNameOptions)', () => {
       me.unsubscribe();
       queryClient.clear();
     }
+  });
+});
+
+describe('the account the writes name (ADR-0090)', () => {
+  it('is the one the 본인확인 step and the real-name card were drawn for, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the step and the
+    // card still show A's, and a body naming the session's account would be taken with B's cookie:
+    // A's name and number texted and verified for B, or B renamed. No component renders under node
+    // (the file's header), so the wiring is pinned in the sources: the hooks offer no account (no
+    // session id, no `ready`), the stepper hands the step its `me.id` and the 본인확인 card its
+    // `Me`'s id, and each sends that. e2e phone-verification.spec.ts ('탭의 계정이 …') drives both.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const hooks = source('./use-phone-verification.ts');
+    expect(hooks).not.toMatch(/user\.id|\baccountId\b|\bready\b/);
+    expect(source('../app/onboarding/onboarding-form.tsx')).toContain(
+      '<VerificationStep accountId={me.id} />',
+    );
+    const step = source('../app/onboarding/verification-step.tsx');
+    expect(step).toContain(
+      'export function VerificationStep({ accountId }: { accountId: string })',
+    );
+    expect(step.match(/expectedAccountId: accountId\b/g)).toHaveLength(2);
+    expect(step).not.toMatch(/\b(request|confirm)\.(accountId|ready)\b/);
+    // Keyed by that account too, as the other cards: `['me']` can turn to B in place before the
+    // session does (a focus refetch, a realtime resnapshot — no reset to empty it), and an unkeyed
+    // form would keep the name typed for A, 저장 on, now naming B. e2e phone-verification.spec.ts
+    // ('탭의 세션이 …') holds that order.
+    const card = source('../app/my/settings/verification-section.tsx');
+    expect(card).toContain(
+      '<VerifiedFields key={me.id} verification={me.verification} accountId={me.id} />',
+    );
+    expect(card).toContain('expectedAccountId: accountId,');
+    expect(card).not.toMatch(/\bupdate\.(accountId|ready)\b/);
   });
 });

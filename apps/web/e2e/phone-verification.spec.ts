@@ -10,10 +10,12 @@ import {
   freshEmail,
   freshPhone,
   logOut,
+  meOf,
   openSetPassword,
   signUp,
   smsCode,
   smsMessageIds,
+  switchAccountUnderScreen,
   test,
   tokenColour,
 } from './helpers';
@@ -28,7 +30,10 @@ import {
  * which may have texted the code and says so, as a warning, while its code is tried, and after
  * which an older code is answered as the last text that came for as long as the screen knows it
  * (owner decisions 2026-10-18). The happy path and the gate are onboarding.spec.ts's. The step is
- * the onboarding's second (#58): every test agrees to the consent on screen first.
+ * the onboarding's second (#58): every test agrees to the consent on screen first. A step, or MY
+ * 설정's real-name card, still showing the account a tab was signed in as after the tab switched to
+ * another names the account it shows and is refused (ADR-0090); a card whose `['me']` turned to
+ * another account before the session did starts again from that account's name.
  *
  * Every account and number is fresh, so the per-account and per-number limits never meet another
  * test's sends. The codes come from the API's development SMS sender through Mailpit.
@@ -596,5 +601,219 @@ test.describe('본인확인 인증번호 (#183)', () => {
     await expect(page.getByTestId('verification-code')).toHaveCount(0);
     await expect(page.getByTestId('verification-phone')).toBeEditable();
     await expect(page.getByTestId('verification-send')).toBeEnabled();
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 본인확인 단계가 화면에 남아 있으면 인증번호 받기와 본인확인 완료는 그 화면의 계정을 대어 거절되고, 어느 계정에도 문자를 보내거나 기록하지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0090 (the remaining sibling of PR #224's Codex fix, ADR-0078 7-29 (3)): in the render
+    // between the session naming B and SessionCacheGuard's reset the stepper still shows A's step
+    // while the session already says B, and a body naming the session's account would be taken
+    // with B's cookie — the name and the number typed on A's screen texted for B, a code verified
+    // as B's. The step names the stepper's account (`me.id`), so the server refuses both as another
+    // account's. That render is held here: B's cookie in this tab and the session read again, while
+    // `GET /me` still answers as A (`switchAccountUnderScreen`) — B at its own 본인확인 step, so a
+    // body naming B would have been taken.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await openVerificationStep(other);
+      const b = await meOf(other.request);
+      await openVerificationStep(page);
+      const a = await meOf(page.request);
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+      // The stepper drawn again from A's `Me` after the guard's reset: A's 본인확인 step.
+      await expect(page.getByTestId('verification-step')).toBeVisible();
+
+      const writes: { path: string; body: unknown }[] = [];
+      page.on('request', (request) => {
+        const path = new URL(request.url()).pathname;
+        if (request.method() === 'POST' && path.startsWith('/api/v1/me/phone-verification/')) {
+          writes.push({ path, body: request.postDataJSON() });
+        }
+      });
+      const answerOf = (path: string) =>
+        page.waitForResponse(
+          (response) =>
+            new URL(response.url()).pathname === path && response.request().method() === 'POST',
+        );
+
+      // 인증번호 받기 names A: refused with B's cookie, no text sent.
+      const phone = freshPhone();
+      await page.getByTestId('verification-real-name').fill(E2E_REAL_NAME);
+      await page.getByTestId('verification-phone').fill(phone);
+      let answered = answerOf('/api/v1/me/phone-verification/code');
+      await page.getByTestId('verification-send').click();
+      expect((await answered).status()).toBe(403);
+      await expect(noticeOf(page)).toHaveText(copy.sessionChanged);
+      await expect(page.getByTestId('verification-code')).toHaveCount(0);
+
+      // A code received before (a reload, another tab) entered on A's step: refused the same way.
+      await page.getByTestId('verification-enter-code').click();
+      await page.getByTestId('verification-code').fill('123456');
+      answered = answerOf('/api/v1/me/phone-verification/confirm');
+      await page.getByTestId('verification-confirm').click();
+      expect((await answered).status()).toBe(403);
+      await expect(noticeOf(page)).toHaveText(copy.sessionChanged);
+
+      expect(writes).toEqual([
+        {
+          path: '/api/v1/me/phone-verification/code',
+          body: { realName: E2E_REAL_NAME, phone, expectedAccountId: a.id },
+        },
+        {
+          path: '/api/v1/me/phone-verification/confirm',
+          body: { code: '123456', expectedAccountId: a.id },
+        },
+      ]);
+      // No text to the number; nothing recorded for B or for A.
+      expect(await smsMessageIds(phone)).toEqual([]);
+      const bAfter = await meOf(other.request);
+      expect(bAfter.verification).toBeNull();
+      expect(bAfter.onboarding).toEqual(b.onboarding);
+      const aAfter = await meOf(shownContext.request);
+      expect(aAfter.verification).toBeNull();
+      expect(aAfter.onboarding).toEqual(a.onboarding);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 MY 설정이 남아 있으면 실명 저장은 그 화면의 계정을 대어 거절되고, 어느 계정의 실명도 바뀌지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0090: the same render on MY 설정 — the 본인확인 card still shows A's record while the
+    // session already says B, and a save naming the session's account would rename B with the name
+    // typed on A's card. The card names the account of the `Me` it was drawn from, so the server
+    // refuses it as another account's.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await page.goto('/my/settings');
+      const card = page.getByTestId('settings-verification');
+      const name = card.getByTestId('verification-real-name');
+      await expect(name).toHaveValue(E2E_REAL_NAME);
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes: unknown[] = [];
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/v1/me/real-name') {
+          writes.push(request.postDataJSON());
+        }
+      });
+      // A's card, drawn again from A's `Me` after the guard's reset.
+      await expect(name).toHaveValue(E2E_REAL_NAME);
+      await name.fill('김바뀜');
+      const saved = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/v1/me/real-name',
+      );
+      await card.getByTestId('verification-real-name-save').click();
+      expect((await saved).status()).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+
+      expect(writes).toEqual([{ realName: '김바뀜', expectedAccountId: a.id }]);
+      // Nothing renamed, B or A.
+      expect((await meOf(other.request)).verification).toEqual(b.verification);
+      expect((await meOf(shownContext.request)).verification).toEqual(a.verification);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 계정을 말하는데 MY 설정의 `GET /me`가 다른 회원으로 답하면 실명 카드는 그 회원의 것으로 다시 그려지고, 앞 계정에 적던 실명은 남지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0090 결정 4-2: the reverse of `switchAccountUnderScreen`'s order. `['me']` turns from A
+    // to B in place, before the session does, so SessionCacheGuard resets nothing: a window-focus
+    // refetch of `GET /me` answered with B's cookie while better-auth's session still says A (its
+    // own focus refetch skips a tab back within 5 s; a realtime resnapshot does the same; two
+    // windows side by side tell nothing). Unkeyed, the card kept the name typed on A's card over
+    // B's, 저장 on, and the save named B — the `Me` now drawn — with B's cookie: B renamed with A's
+    // draft. Keyed by account, it starts again from B's own name. Held here: better-auth's answers
+    // come from A's jar, B's cookie is put in the tab, and the page's clock makes `['me']` older
+    // than its `staleTime` (30 s) for a focus refetch, as posts.spec.ts does.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      const renamed = await other.request.put('/api/v1/me/real-name', {
+        data: { realName: '박둘째', expectedAccountId: b.id },
+      });
+      expect(renamed.status(), await renamed.text()).toBe(200);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await page.clock.install();
+      await page.goto('/my/settings');
+      const card = page.getByTestId('settings-verification');
+      const name = card.getByTestId('verification-real-name');
+      const save = card.getByTestId('verification-real-name-save');
+      await expect(name).toHaveValue(E2E_REAL_NAME);
+      await name.fill('김바뀜');
+      await expect(save).toBeEnabled();
+
+      // The tab's session keeps saying A — its body only: a cookie A's answer set would put A
+      // back in the tab.
+      await shownContext.addCookies(await page.context().cookies());
+      await page.route(
+        (url) => url.pathname === '/api/auth/get-session',
+        async (route) => {
+          const answer = await shownContext.request.get(route.request().url());
+          await route.fulfill({ status: answer.status(), json: (await answer.json()) as unknown });
+        },
+      );
+      const writes: unknown[] = [];
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/v1/me/real-name') {
+          writes.push(request.postDataJSON());
+        }
+      });
+      await page.context().clearCookies();
+      await page.context().addCookies(await otherContext.cookies());
+      const meRead = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' &&
+          new URL(response.url()).pathname === '/api/v1/me',
+      );
+      await page.clock.fastForward('00:31');
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      const drawn = (await (await meRead).json()) as { data: { id: string } };
+      expect(drawn.data.id).toBe(b.id);
+
+      // B's card, from B's name: A's draft gone, nothing to save.
+      await expect(name).toHaveValue('박둘째');
+      await expect(save).toBeDisabled();
+      expect(writes).toEqual([]);
+      expect((await meOf(other.request)).verification?.realName).toBe('박둘째');
+      expect((await meOf(shownContext.request)).verification).toEqual(a.verification);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 });

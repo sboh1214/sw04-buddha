@@ -116,6 +116,22 @@ export function marketingConsentOn(answers: readonly ConsentAnswer[]): boolean {
 }
 
 /**
+ * What MY 설정's marketing switch shows (ADR-0090): the answer a press asked (`asked`) from the
+ * press until the record it sent settles — kept after a success until the answers it wrote reach
+ * the card — and otherwise, after a refusal included, the account's own (`marketingConsentOn`),
+ * the server's. The switch's input (zag's hidden checkbox) takes the asked position on the press
+ * and follows `checked` only when it changes, so a refusal that left the shown value where it was
+ * would leave the input on the asked position: checked although nothing was recorded, and the next
+ * press swallowed as no change.
+ */
+export function marketingSwitchOn(
+  answers: readonly ConsentAnswer[],
+  asked: boolean | null,
+): boolean {
+  return asked ?? marketingConsentOn(answers);
+}
+
+/**
  * `POST /me/consents` from MY 설정's marketing switch: the marketing answer alone, at the current
  * version (오너 결정 2026-10-19 (2차) 4) — each change a record of its own, with the time, the
  * address and the browser, as the consent step's.
