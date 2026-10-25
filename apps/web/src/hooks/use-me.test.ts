@@ -1780,4 +1780,131 @@ describe('the member’s faces the tab holds, after a profile image change (#141
       queryClient.clear();
     }
   });
+
+  for (const [how, leaving] of [
+    ['‘답글 더 보기’ brings the 대댓글 placed before it into its place', 'reply'],
+    ['더 보기 brings the 댓글 placed before it into its place', 'comment'],
+  ] as const) {
+    it(`keeps the image noted on the one still placed when an entry placed before it leaves — ${how}, which shifts it in \`placed\` and the query client's structural sharing copies it — so a change \`['me']\` reads after it reaches it, and every read of the pages keeps it (Codex 4368092473, ADR-0079 7-23)`, async () => {
+      const queryClient = getQueryClient();
+      const meWith = (imageUrl: string | null) =>
+        queryClient.setQueryData(ME_QUERY_KEY, {
+          ...following,
+          profile: { ...following.profile, imageUrl },
+        });
+      // The server's pages, with the image the member has as they are read: someone else's 댓글 C3
+      // with someone else's R1 and — behind 'r1', read on once '답글 더 보기' has read it — the
+      // member's R2; the member's C1 on the next page.
+      let served: string | null = OLD;
+      let threadReadOn = false;
+      const pageOf = (cursor: string | undefined): CommentPage =>
+        cursor === undefined
+          ? {
+              items: [
+                {
+                  comment: comment(C3, face(OTHER, null)),
+                  replies: [
+                    comment(R1, face(OTHER, OTHER_IMAGE), C3),
+                    ...(threadReadOn ? [comment(R2, face(OWN, served), C3)] : []),
+                  ],
+                  repliesNextCursor: threadReadOn ? null : 'r1',
+                },
+              ],
+              nextCursor: 'c1',
+            }
+          : {
+              items: [
+                { comment: comment(C1, face(OWN, served)), replies: [], repliesNextCursor: null },
+              ],
+              nextCursor: null,
+            };
+      // What the member's writes left, the one that leaves placed first: R2 at the end of C3's
+      // 대댓글, C1 at the end of the pages.
+      const r2 = { id: R2, threadId: C3, accountId: following.id };
+      const c1 = { id: C1, threadId: null, accountId: following.id };
+      meWith(OLD);
+      queryClient.setQueryData<CommentPages>(postCommentsKey(POST), {
+        pages: [
+          {
+            items: [
+              {
+                ...pageOf(undefined).items[0]!,
+                replies: [...pageOf(undefined).items[0]!.replies, comment(R2, face(OWN, OLD), C3)],
+              },
+              { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+            ],
+            nextCursor: 'c1',
+          },
+        ],
+        pageParams: [undefined],
+        placed: leaving === 'reply' ? [r2, c1] : [c1, r2],
+      });
+      const comments = new InfiniteQueryObserver<
+        CommentPage,
+        Error,
+        CommentPages,
+        readonly unknown[],
+        string | undefined
+      >(queryClient, {
+        queryKey: postCommentsKey(POST),
+        // Marked as a read's, as the browser's `queryFn` does (`commentPageRead`).
+        queryFn: ({ pageParam }) => Promise.resolve(commentPageRead(pageOf(pageParam))),
+        initialPageParam: undefined,
+        getNextPageParam: (last) => last.nextCursor ?? undefined,
+        retry: false,
+      });
+      const unsubscribe = comments.subscribe(() => undefined);
+      const held = () => queryClient.getQueryData<CommentPages>(postCommentsKey(POST))!;
+      /** The member's faces the pages hold, as `[comment, imageUrl]`, in the order drawn. */
+      const faces = () => {
+        const pages = JSON.stringify(postCommentsKey(POST));
+        return ownFaces(queryClient).map(([where, image]) => [
+          where.slice(pages.length + 1),
+          image,
+        ]);
+      };
+      try {
+        const staying = held().placed?.[1];
+        if (leaving === 'reply') {
+          vi.spyOn(api, 'GET').mockResolvedValue({
+            data: { data: [comment(R2, face(OWN, served), C3)], meta: { nextCursor: null } },
+            response: new Response(null, { status: 200 }),
+          } as never);
+          threadReadOn = true;
+          await readMoreReplies(queryClient, POST, C3);
+        } else {
+          await comments.fetchNextPage();
+        }
+        // The one placed before it is in its place; the one still placed stands first in `placed`,
+        // a copy of the entry held.
+        const still = leaving === 'reply' ? C1 : R2;
+        expect(held().placed?.map((entry) => entry.id)).toEqual([still]);
+        expect(held().placed?.[0]).not.toBe(staying);
+        expect(faces()).toEqual([
+          [R2, OLD],
+          [C1, OLD],
+        ]);
+        // Changed in another tab, `['me']` read again: the one still placed takes the new image at
+        // once; the one in its place is as its read brought it, until it is read again.
+        served = NEW;
+        meWith(NEW);
+        expect(faces()).toEqual([
+          [R2, leaving === 'reply' ? OLD : NEW],
+          [C1, leaving === 'reply' ? NEW : OLD],
+        ]);
+        // Every read of the pages after it: the one still placed put back with it.
+        for (let reads = 0; reads < 2; reads += 1) {
+          await comments.refetch();
+          expect(held().placed?.map((entry) => entry.id)).toEqual([still]);
+          expect(faces()).toEqual([
+            [R2, NEW],
+            [C1, NEW],
+          ]);
+        }
+      } finally {
+        unsubscribe();
+        queryClient.clear();
+      }
+    });
+  }
 });
