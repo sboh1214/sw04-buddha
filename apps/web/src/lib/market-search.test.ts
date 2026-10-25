@@ -13,6 +13,7 @@ import {
   SEARCH_PATH,
   isMarketSearch,
   recentSearchPath,
+  searchBoxKey,
   searchCategoryOptions,
   searchErrorMessage,
   searchFiltersFromSearchParams,
@@ -304,6 +305,26 @@ describe('searchToRecord', () => {
     for (const raw of ['', '   ', 'x'.repeat(101), 'a\u0000b', null, 7, new Blob(['금리'])]) {
       expect(searchToRecord(raw, 'user-a'), typeof raw).toBeUndefined();
     }
+  });
+});
+
+describe('searchBoxKey', () => {
+  it('is one key for each term and account, so a box is drawn again when either changes (ADR-0091)', () => {
+    // The URL's term (Back, a second search) and the account the box records for: a draft typed
+    // for A — or before `GET /me` said whose it is — is never submitted for B.
+    const keys = [
+      searchBoxKey(undefined, undefined),
+      searchBoxKey('user-a', undefined),
+      searchBoxKey('user-b', undefined),
+      searchBoxKey(undefined, '금리'),
+      searchBoxKey('user-a', '금리'),
+      searchBoxKey('user-b', '금리'),
+      // A term that holds the separator, and an id that looks like one's start.
+      searchBoxKey(undefined, 'user-a|금리'),
+      searchBoxKey('user-a', '|금리'),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(searchBoxKey('user-a', '금리')).toBe(searchBoxKey('user-a', '금리'));
   });
 });
 

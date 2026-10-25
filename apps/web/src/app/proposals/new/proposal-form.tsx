@@ -1,15 +1,27 @@
 'use client';
 
-import { Alert, Button, Field, Input, NativeSelect, Stack, Text, Textarea } from '@chakra-ui/react';
+import {
+  Alert,
+  Button,
+  Field,
+  Input,
+  NativeSelect,
+  Skeleton,
+  Stack,
+  Text,
+  Textarea,
+} from '@chakra-ui/react';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { RefusalText } from '@/components/moderation/refusal-text';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
+import { EmptyState } from '@/components/ui/empty-state';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
+import { useMe } from '@/hooks/use-me';
 import { useCreateProposal } from '@/hooks/use-proposals';
 import { CATEGORY_TRAIL_SEPARATOR } from '@/lib/category-label';
 import { groupCategories } from '@/lib/category-tree';
@@ -38,14 +50,64 @@ const schema = proposalFormSchema();
  * above the form — a writing or an account restriction with its end and the way to 조치·신고 내역
  * (#185, #139), a limit with when the next one may go, the screen out of date (the hook asked for
  * the session or `['me']` again, and the onboarding gate follows the latter).
+ *
+ * The proposal is the account's whose `Me` the screen was drawn from — the header's — which the
+ * submit names (`expectedAccountId`), never the session's: in the render between the session
+ * naming another account and SessionCacheGuard's reset the session already says B while the form
+ * is still A's, and a proposal naming B would be taken with B's cookie — B's, with the text typed
+ * on A's screen (ADR-0091). The server refuses it as another account's. So the form waits for
+ * `GET /me` (the write screens' rungs, `WriteGate`: a placeholder, and the profile's failure), and
+ * is keyed by that account: `['me']` can also turn from A to B in place, before the session does
+ * and so with no reset of SessionCacheGuard's (a window-focus refetch of `GET /me` answered with
+ * B's cookie ahead of better-auth's session refetch, a realtime resnapshot — ADR-0090 결정 4-2).
+ * Unkeyed, what was typed for A would stay, the submit now naming B with B's cookie; keyed, the
+ * form starts again empty for B.
+ *
+ * The refusal as another account's (`copy.sessionChanged`) is kept above the keyed form
+ * (`accountChanged`): the session read again on it says the account really signed in,
+ * SessionCacheGuard's reset then takes `['me']` back to waiting, and the form is drawn again for
+ * that account — which says why it started again, in the same place above the form.
  */
 export function ProposalForm() {
+  const me = useMe();
+  // The refusal as another account's, kept across the form drawn again (above).
+  const [accountChanged, setAccountChanged] = useState<Refusal | null>(null);
+  if (me.data !== undefined) {
+    // Keyed by the account it was drawn for (above).
+    return (
+      <ProposalFields
+        key={me.data.id}
+        accountId={me.data.id}
+        accountChanged={accountChanged}
+        onAccountChanged={setAccountChanged}
+      />
+    );
+  }
+  // Signed in, and `GET /me` failed without ever answering: whose proposal it would be is unknown,
+  // so nothing is offered (`usePostWriter`'s `failed`).
+  if (me.isLoggedIn && me.isError) {
+    return <EmptyState message={copy.errProfileLoad} data-testid="proposal-form-failed" />;
+  }
+  return <Skeleton height="320px" borderRadius="card" data-testid="proposal-form-pending" />;
+}
+
+function ProposalFields({
+  accountId,
+  accountChanged,
+  onAccountChanged,
+}: {
+  accountId: string;
+  /** A submit refused as another account's, on this form or the one drawn before it. */
+  accountChanged: Refusal | null;
+  onAccountChanged: (refusal: Refusal | null) => void;
+}) {
   const router = useRouter();
   const create = useCreateProposal();
   const categories = useCategories();
   // The member's time zone (ADR-0063): a restriction's end in the refusal is an absolute time.
   const format = useFormatDateTime();
-  const [notice, setNotice] = useState<Refusal | null>(null);
+  const [refused, setRefused] = useState<Refusal | null>(null);
+  const notice = refused ?? accountChanged;
   const noticeRef = useRef<HTMLDivElement>(null);
   // A refusal said above the form is out of sight from the submit button at its foot.
   useEffect(() => {
@@ -67,10 +129,11 @@ export function ProposalForm() {
   });
 
   const onSubmit = handleSubmit(async (values) => {
-    setNotice(null);
-    if (create.accountId === undefined) return; // the button waits for the session
+    setRefused(null);
+    onAccountChanged(null);
     try {
-      await create.mutateAsync(toCreateProposalBody(values, create.accountId));
+      // The account the form was drawn for rides along (`expectedAccountId`, A-PG-24).
+      await create.mutateAsync(toCreateProposalBody(values, accountId));
       toaster.create({ type: 'success', title: copy.proposalSubmitted });
       router.push(MY_PROPOSALS_PATH);
     } catch (error) {
@@ -79,7 +142,11 @@ export function ProposalForm() {
         setError(failure.field, { message: failure.message }, { shouldFocus: true });
         return;
       }
-      setNotice({ message: failure.message, restricted: failure.kind === 'restricted' });
+      const refusal = { message: failure.message, restricted: failure.kind === 'restricted' };
+      // Another account's: the form is about to be drawn again for the account really signed in,
+      // and says why there (`ProposalForm`).
+      if (failure.kind === 'session') onAccountChanged(refusal);
+      else setRefused(refusal);
     }
   });
 
@@ -182,7 +249,6 @@ export function ProposalForm() {
           type="submit"
           alignSelf="flex-start"
           loading={isSubmitting}
-          disabled={create.accountId === undefined}
           data-testid="proposal-submit"
         >
           {copy.proposalSubmit}

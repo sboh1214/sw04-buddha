@@ -1,10 +1,13 @@
+import { readFileSync } from 'node:fs';
 import { ACCOUNT_CLOSURE_REFUSALS, type ErrorCode } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
+import { closureCheckQueryOptions } from '@/hooks/use-account-closure';
 import {
   ACCOUNT_CLOSURE_KEY,
   CLOSURE_REFUSAL_TEXT,
   MY_CLOSURE_PATH,
+  accountClosureKey,
   afterClosureInOrder,
   closureBlockers,
   closureCoinText,
@@ -263,5 +266,64 @@ describe('after a closure', () => {
     finish();
     await done;
     expect(ran).toEqual(['signed out', 'onClosed']);
+  });
+});
+
+describe('the account a closure names (ADR-0091)', () => {
+  it('is the one the screen was drawn for, never the session’s, and the screen is keyed by it', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the screen still
+    // shows A's, and a closure naming the session's account would be taken with B's cookie: B closed
+    // on the '탈퇴' typed on A's screen. No component renders under node, so the wiring is pinned in
+    // the sources: the hook offers no account (no session id, no `ready`), the screen is handed its
+    // `Me`'s id and sends it, and is keyed by it — `['me']` can turn to B in place before the
+    // session does, and an unkeyed screen would keep the typed '탈퇴', now naming B — with its
+    // button waiting for the check read since it was drawn (A's stays in the cache until B's
+    // answers). e2e account-closure.spec.ts ('탭의 계정이 …', '탭의 세션이 …') drives both.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const hooks = source('../hooks/use-account-closure.ts');
+    const start = hooks.indexOf('export function useCloseAccount()');
+    expect(start).toBeGreaterThan(-1);
+    const hook = hooks.slice(start, hooks.indexOf('\n}\n', start));
+    expect(hook).not.toMatch(/user\.id|\baccountId\b|\bready\b/);
+    const screen = source('../app/my/settings/closure/account-closure.tsx');
+    expect(screen).toMatch(/<ClosureScreen\s+key=\{me\.data\.id\}\s+accountId=\{me\.data\.id\}/);
+    expect(screen).toContain('expectedAccountId: accountId }');
+    expect(screen).toContain('check.isSuccess && check.isFetchedAfterMount &&');
+    expect(screen).not.toMatch(/\bclose\.ready\b/);
+  });
+
+  it('reads the check of that account, and never offers the closure over a check that could not be read again', () => {
+    // The check names no owner: kept under one key, B's screen — `['me']` turned to B in place, or
+    // a read sent with A's cookie landing after B's screen was drawn — showed A's Coin and refusals.
+    // And `isFetchedAfterMount` alone also counts a read that FAILED since the screen was drawn,
+    // over the data held from before. e2e account-closure.spec.ts ('… 확인을 다시 읽지 못하면 …',
+    // '탭의 세션이 …') drives both.
+    expect(accountClosureKey('user-a')).toEqual(['me', 'closure', 'user-a']);
+    expect(isPrivateQueryKey(accountClosureKey('user-a'))).toBe(true);
+    expect(closureCheckQueryOptions('user-a').queryKey).toEqual(accountClosureKey('user-a'));
+    expect(closureCheckQueryOptions('user-a').staleTime).toBe(0);
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const screen = source('../app/my/settings/closure/account-closure.tsx');
+    expect(screen).toContain('const check = useClosureCheck(accountId);');
+    expect(screen).toContain('{check.data === undefined || check.isError ? (');
+  });
+
+  it('keeps the refusal as another account’s above the keyed screen, so the screen drawn again says why', () => {
+    // The refusal asks for the session again; once it names the account really signed in,
+    // SessionCacheGuard's reset takes `['me']` back to waiting and the screen is drawn again for it
+    // — a refusal kept in the screen would go with A's, and B's screen would start empty with no
+    // word of why. e2e account-closure.spec.ts ('… 세션이 아직 앞 계정을 말하는 채 …').
+    const screen = readFileSync(
+      new URL('../app/my/settings/closure/account-closure.tsx', import.meta.url),
+      'utf8',
+    );
+    const top = screen.slice(screen.indexOf('export function AccountClosure()'));
+    expect(top.slice(0, top.indexOf('\n}\n'))).toContain(
+      'const [accountChanged, setAccountChanged] = useState<Refusal | null>(null);',
+    );
+    expect(screen).toContain(
+      'if (isForAnotherAccount(error)) onAccountChanged(closureFailure(error, format));',
+    );
+    expect(screen).toContain('const refusal = failure ?? accountChanged;');
   });
 });

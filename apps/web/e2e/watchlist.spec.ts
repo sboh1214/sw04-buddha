@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test';
+import { type APIRequestContext, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   E2E_PASSWORD,
@@ -10,8 +10,11 @@ import {
   freshEmail,
   logOut,
   markDocument,
+  meOf,
   signUp,
   subscribed,
+  switchAccountUnderScreen,
+  switchMeBeforeSession,
   test,
   type TestMarket,
   watchThroughApi,
@@ -23,7 +26,11 @@ import {
  * page and back to the same market with nothing registered; a member's watch puts the market's
  * card in MY, newest first; an unwatch takes it out; an ended market stays with its status, its
  * card moving live and opening its detail; the summary previews the newest three. The state is
- * nobody's but the member's, so the detail's HTML carries none of it.
+ * nobody's but the member's, so the detail's HTML carries none of it. A tab whose account switched
+ * to another while it showed the detail sets nobody's watch: the press names the account the toggle
+ * was drawn for and is refused; and a toggle whose `['me']` turned to another account before the
+ * session did draws that account's own state, read afresh, before it can be pressed. A `GET /me`
+ * that fails leaves no button, as a state read that failed does (ADR-0091).
  */
 
 /** The detail's toggle, once it has left its placeholder. */
@@ -40,6 +47,24 @@ function cardIds(page: Page, scope: string): Promise<(string | null)[]> {
     .getByTestId(scope)
     .getByRole('article')
     .evaluateAll((cards) => cards.map((card) => card.getAttribute('data-testid')));
+}
+
+/** Whether the context's account watches the market (`GET /me/watchlist/:id`). */
+async function watchedBy(context: APIRequestContext, marketId: string): Promise<boolean> {
+  const response = await context.get(`/api/v1/me/watchlist/${marketId}`);
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as { data: { watched: boolean } }).data.watched;
+}
+
+/** Records every `PUT /me/watchlist/:id` body the page sends. */
+function watchWrites(page: Page): unknown[] {
+  const writes: unknown[] = [];
+  page.on('request', (request) => {
+    if (request.method() === 'PUT' && request.url().includes('/api/v1/me/watchlist/')) {
+      writes.push(request.postDataJSON());
+    }
+  });
+  return writes;
 }
 
 /** Presses the toggle and waits for the server's answer, so the next screen reads the new state. */
@@ -350,5 +375,154 @@ test.describe('관심 시장', () => {
     // on window (the document's event reaches it by bubbling; a synthetic one is sent there).
     await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
     await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('`GET /me`를 읽지 못하면 버튼을 보이지 않고, 다시 읽어 성공하면 그 계정의 상태로 보인다', async ({
+    page,
+    admin,
+  }) => {
+    // ADR-0091: the state is read for the account of the `Me` the detail was drawn from, so with
+    // `GET /me` failing it is never read — the rung of a state that could not be read (ADR-0064:
+    // nothing drawn) rather than the placeholder for good. Read again, the account's state.
+    await signUp(page, freshEmail());
+    const market = await createOpenMarket(admin);
+    await watchThroughApi(page, market.id);
+    let failures = 0;
+    const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+    await page.route(isMeRead, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      failures += 1;
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+      });
+    });
+
+    await openDetail(page, market.slug);
+    // The first read and its two retries (1 s, 2 s) have failed.
+    await expect.poll(() => failures, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+    await expect(page.getByTestId('watch-button-pending')).toHaveCount(0);
+    await expect(watchButton(page)).toHaveCount(0);
+
+    await page.unroute(isMeRead);
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'true');
+  });
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 시장 상세가 남아 있으면 관심 등록은 그 화면의 계정을 대어 거절되고, 어느 계정의 관심 시장도 바뀌지 않는다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset the toggle still shows A's state while the session already
+    // says B, and a press naming the session's account would be taken with B's cookie — B's watch
+    // set to the opposite of A's. The toggle names the account of the `Me` the detail was drawn
+    // from, so the server refuses it as another account's. That render is held here: B's cookie in
+    // this tab and the session read again, while `GET /me` and the state still answer as A
+    // (`switchAccountUnderScreen`).
+    const market = await createOpenMarket(admin);
+    const statePath = `/api/v1/me/watchlist/${market.id.toLowerCase()}`;
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await openDetail(page, market.slug);
+      await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'false');
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(
+        page,
+        shownContext.request,
+        { id: b.id, cookies: await otherContext.cookies() },
+        (request) => request.method() === 'GET' && new URL(request.url()).pathname === statePath,
+      );
+
+      const writes = watchWrites(page);
+      // A's toggle, drawn again from A's `Me` and A's state after the guard's reset.
+      await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'false');
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PUT' && new URL(response.url()).pathname === statePath,
+      );
+      await watchButton(page).click();
+      expect((await answered).status()).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+      await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'false');
+
+      expect(writes).toEqual([{ watched: true, expectedAccountId: a.id }]);
+      // Nobody watches it, B or A.
+      expect(await watchedBy(other.request, market.id)).toBe(false);
+      expect(await watchedBy(shownContext.request, market.id)).toBe(false);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 계정을 말하는데 시장 상세의 `GET /me`가 다른 회원으로 답하면 관심 등록은 그 회원의 상태를 읽을 때까지 자리표시로 돌아가고, 앞 계정의 상태로 누르지 않는다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. The state's answer names
+    // no owner: kept under one key for every account, the toggle went on showing A's state (not
+    // watched) under B's `Me`, and a press named B and sent A's opposite with B's cookie — B, who
+    // watches it, unwatched. Kept under the account on screen, it is B's own state, read afresh:
+    // the placeholder until it answers (held here), then B's.
+    const market = await createOpenMarket(admin);
+    const statePath = `/api/v1/me/watchlist/${market.id.toLowerCase()}`;
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await watchThroughApi(other, market.id);
+      await signUp(page, freshEmail());
+      await page.clock.install();
+      await openDetail(page, market.slug);
+      await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'false');
+
+      // The state's reads from here on, held until released.
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route(
+        (url) => url.pathname === statePath,
+        async (route) => {
+          if (route.request().method() === 'GET') await released;
+          await route.fallback();
+        },
+      );
+      const writes = watchWrites(page);
+      await switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      // B's state not read yet: the placeholder, and nothing to press.
+      await expect(page.getByTestId('watch-button-pending')).toBeVisible();
+      await expect(watchButton(page)).toHaveCount(0);
+      release();
+      // B's own state: watched.
+      await expect(watchButton(page)).toHaveAttribute('aria-pressed', 'true');
+
+      expect(writes).toEqual([]);
+      expect(await watchedBy(other.request, market.id)).toBe(true);
+      expect(await watchedBy(shownContext.request, market.id)).toBe(false);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 });

@@ -15,11 +15,15 @@ import {
   freshTag,
   logOut,
   meOf,
+  nextMeRead,
   openClosure,
   openSetPassword,
   setFirstPassword,
   signIn,
   signUp,
+  swapCookieUnderScreen,
+  switchAccountUnderScreen,
+  switchMeBeforeSession,
   test,
 } from './helpers';
 
@@ -46,6 +50,13 @@ import {
  *
  * 내 제안 keeps its rows when a 더 보기 fails and says so above the button (owner decision 2026-10-20
  * 7, ADR-0075 5-14 — as every 더 보기 list, restacked onto #47), its pages shaped here.
+ *
+ * A tab whose account switched to another while it showed the form or 내 제안 proposes and
+ * retracts nothing for either: the submit and the 철회 name the account the screen was drawn for
+ * and are refused — and when that refusal is what draws the form again for the other account, the
+ * form says why; a form, or a 철회 being confirmed, whose `['me']` turned to another account before
+ * the session did starts again for that one; and neither the form nor 철회 is offered before
+ * `GET /me` has said whose they are (ADR-0091).
  *
  * Who may propose (onboarding, restrictions), the waiting limit, the exact edges of both limits,
  * the status machine against races and who sees what are the API's integration tests
@@ -143,6 +154,24 @@ async function adminBrowser(browser: Browser): Promise<{ page: Page; close: () =
   const page = await context.newPage();
   await signIn(page, adminAccount.email, adminAccount.password);
   return { page, close: () => context.close() };
+}
+
+/** The questions of the account's proposals (`GET /me/proposals`), as the context's cookie reads them. */
+async function questionsOf(context: APIRequestContext): Promise<string[]> {
+  const items = await dataOf<Proposal[]>(await context.get(MY_PROPOSALS_API));
+  return items.map((row) => row.question);
+}
+
+/** Records every proposal write the page sends (`POST /me/proposals…`): its path and body. */
+function proposalWrites(page: Page): { path: string; body: unknown }[] {
+  const writes: { path: string; body: unknown }[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && path.startsWith(MY_PROPOSALS_API)) {
+      writes.push({ path, body: request.postDataJSON() });
+    }
+  });
+  return writes;
 }
 
 const item = (page: Page, id: string) => page.getByTestId(`my-proposal-${id}`);
@@ -679,5 +708,279 @@ test.describe('시장 제안', () => {
     await expect(page.getByTestId('my-proposals-more')).toHaveCount(0);
     await expect(moreFailed).toHaveCount(0);
     await expect(read).toHaveCount(1);
+  });
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 제안 양식이 남아 있으면 제출은 그 화면의 계정을 대어 거절되고, 어느 계정에도 제안이 생기지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset the form is still A's while the session already says B, and a
+    // proposal naming the session's account would be taken with B's cookie — B's 접수 proposal,
+    // with the text typed on A's screen. The form names the account of the `Me` it was drawn from,
+    // so the server refuses it as another account's. That render is held here: B's cookie in this
+    // tab and the session read again, while `GET /me` still answers as A
+    // (`switchAccountUnderScreen`) — B, a member who may propose, would have been taken.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await page.goto('/proposals/new');
+      await expect(page.getByTestId('proposal-form')).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes = proposalWrites(page);
+      // A's form, drawn again from A's `Me` after the guard's reset.
+      await expect(page.getByTestId('proposal-question')).toHaveValue('');
+      const question = `E2E 탭이 바뀐 뒤의 제안 ${freshTag()}`;
+      await fillForm(page, question, koreanDateIn(7));
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === MY_PROPOSALS_API,
+      );
+      await page.getByTestId('proposal-submit').click();
+      expect((await answered).status()).toBe(403);
+      await expect(page.getByTestId('proposal-form-error')).toHaveText(copy.sessionChanged);
+      await expect(page).toHaveURL('/proposals/new');
+
+      expect(writes).toEqual([
+        {
+          path: MY_PROPOSALS_API,
+          body: expect.objectContaining({ question, expectedAccountId: a.id }) as unknown,
+        },
+      ]);
+      // No proposal, B's or A's.
+      expect(await questionsOf(other.request)).not.toContain(question);
+      expect(await questionsOf(shownContext.request)).not.toContain(question);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 내 제안이 남아 있으면 철회는 그 화면의 계정을 대어 거절되고, 제안은 접수 그대로다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091: the same render on 내 제안 — the list is still A's (`GET /me/proposals`, held as A
+    // here, names no owner) while the session already says B, and a 철회 naming the session's
+    // account would go with B's cookie. It names MY's `Me`'s account, so the server refuses it as
+    // another account's (named B it would only miss — a 철회 is the proposer's own — and be told
+    // the proposal is gone).
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      const mine = await proposeThroughApi(page, `E2E 철회할 제안 ${freshTag()}`);
+      await page.goto('/my/proposals');
+      const retract = page.getByTestId(`my-proposal-retract-${mine.id}`);
+      await expect(retract).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(
+        page,
+        shownContext.request,
+        { id: b.id, cookies: await otherContext.cookies() },
+        (request) =>
+          request.method() === 'GET' && new URL(request.url()).pathname === MY_PROPOSALS_API,
+      );
+
+      const writes = proposalWrites(page);
+      // A's list, drawn again from A's `Me` and A's proposals after the guard's reset.
+      await expect(statusOf(page, mine.id)).toHaveText(copy.proposalStatusSubmitted);
+      await retract.click();
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === `${MY_PROPOSALS_API}/${mine.id}/retract`,
+      );
+      await page.getByTestId('my-proposal-retract-confirm').click();
+      expect((await answered).status()).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+
+      expect(writes).toEqual([
+        { path: `${MY_PROPOSALS_API}/${mine.id}/retract`, body: { expectedAccountId: a.id } },
+      ]);
+      // Still 접수, on screen and for A.
+      await expect(statusOf(page, mine.id)).toHaveText(copy.proposalStatusSubmitted);
+      const held = await dataOf<Proposal[]>(await shownContext.request.get(MY_PROPOSALS_API));
+      expect(held.find((row) => row.id === mine.id)?.status).toBe('submitted');
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 다른 회원으로 답하면 제안 양식은 비어 다시 그려지고 내 제안의 철회 확인은 닫혀, 앞 계정에 적거나 고른 것으로 아무것도 보내지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. Unkeyed, the form kept
+    // what was typed for A with the submit on, and the submit named B — the `Me` now drawn — with
+    // B's cookie: B's proposal, A's text; and the 철회 confirmation opened on A's proposal stayed
+    // open, to name B. Keyed by account, both start again for B.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      const to = { id: b.id, cookies: await otherContext.cookies() };
+      await signUp(page, freshEmail());
+      const mine = await proposeThroughApi(page, `E2E 확인을 열어 둔 제안 ${freshTag()}`);
+      const asA = await page.context().cookies();
+      await page.clock.install();
+      const writes = proposalWrites(page);
+
+      // --- the form, typed for A.
+      await page.goto('/proposals/new');
+      await fillForm(page, `E2E 앞 계정에 적던 제안 ${freshTag()}`, koreanDateIn(7));
+      await switchMeBeforeSession(page, shownContext, to);
+      // B's form, empty: what was typed for A is gone.
+      await expect(page.getByTestId('proposal-question')).toHaveValue('');
+      await expect(page.getByTestId('proposal-yes-condition')).toHaveValue('');
+      await expect(page.getByTestId('proposal-expected-sources')).toHaveValue('');
+
+      // --- A again, on 내 제안 with the 철회 of A's proposal being confirmed.
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await page.context().clearCookies();
+      await page.context().addCookies(asA);
+      await page.goto('/my/proposals');
+      await page.getByTestId(`my-proposal-retract-${mine.id}`).click();
+      const confirm = page.getByTestId('my-proposal-retract-confirm');
+      await expect(confirm).toBeVisible();
+      await switchMeBeforeSession(page, shownContext, to);
+      // B's list: the confirmation opened for A's proposal is gone.
+      await expect(confirm).toHaveCount(0);
+
+      expect(writes).toEqual([]);
+      expect(await questionsOf(other.request)).toEqual([]);
+      const held = await dataOf<Proposal[]>(await shownContext.request.get(MY_PROPOSALS_API));
+      expect(held.map((row) => [row.id, row.status])).toEqual([[mine.id, 'submitted']]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+  test('탭의 세션이 아직 앞 계정을 말하는 채 제안이 다른 회원의 쿠키로 가면 거절되고, 양식이 그 회원의 것으로 다시 그려진 뒤에도 거절의 까닭이 남는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091, the order two windows side by side take (SessionCacheGuard's header: no
+    // `visibilitychange`, so nothing in this tab reads the session again): B's cookie is in the tab
+    // while its session and `['me']` still say A. The submit names A and is refused as another
+    // account's, and the refusal's own session read is the first to say B — the guard's reset then
+    // takes `['me']` back to waiting and the form is drawn again, empty, for B. The refusal is kept
+    // above the keyed form, so B's form says why it started again.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await shownContext.addCookies(await page.context().cookies());
+      await page.goto('/proposals/new');
+      const question = `E2E 쿠키가 바뀐 뒤의 제안 ${freshTag()}`;
+      await fillForm(page, question, koreanDateIn(7));
+
+      const writes = proposalWrites(page);
+      await swapCookieUnderScreen(page, await otherContext.cookies());
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === MY_PROPOSALS_API,
+      );
+      const meRead = nextMeRead(page);
+      await page.getByTestId('proposal-submit').click();
+      expect((await answered).status()).toBe(403);
+      // The guard's reset, and `GET /me` read again: B's form.
+      const drawn = (await (await meRead).json()) as { data: Me };
+      expect(drawn.data.id).toBe(b.id);
+      await expect(page.getByTestId('proposal-question')).toHaveValue('');
+      await expect(page.getByTestId('proposal-form-error')).toHaveText(copy.sessionChanged);
+      await expect(page).toHaveURL('/proposals/new');
+
+      expect(writes).toEqual([
+        {
+          path: MY_PROPOSALS_API,
+          body: expect.objectContaining({ question, expectedAccountId: a.id }) as unknown,
+        },
+      ]);
+      expect(await questionsOf(other.request)).not.toContain(question);
+      expect(await questionsOf(shownContext.request)).not.toContain(question);
+    } finally {
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('제안 양식과 내 제안의 철회는 내 정보(`GET /me`)를 읽기 전에는 서지 않고, 읽지 못하면 양식이 까닭을 말한다', async ({
+    page,
+  }) => {
+    // ADR-0091: the form and 철회 name the account of the `Me` the screen was drawn from, so they
+    // wait for `GET /me`. 내 제안's list waits for the session alone and can come first; a 철회
+    // opened then could only send nothing and would close as the list is drawn again for the
+    // account (it is keyed by it), so it is off until then. A `GET /me` that fails without ever
+    // answering leaves the form's place saying it could not read the profile.
+    await signUp(page, freshEmail());
+    const mine = await proposeThroughApi(page, `E2E 내 정보를 기다리는 제안 ${freshTag()}`);
+
+    // `GET /me` held.
+    let release: () => void = () => undefined;
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+    await page.route(isMeRead, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      await released;
+      await route.continue().catch(() => undefined); // the tab may have dropped it meanwhile
+    });
+    await page.goto('/proposals/new');
+    await expect(page.getByTestId('proposal-form-pending')).toBeVisible();
+    await expect(page.getByTestId('proposal-form')).toHaveCount(0);
+    await page.goto('/my/proposals');
+    const retract = page.getByTestId(`my-proposal-retract-${mine.id}`);
+    await expect(retract).toBeVisible();
+    await expect(retract).toBeDisabled();
+    release();
+    await expect(retract).toBeEnabled();
+    await page.unroute(isMeRead);
+
+    // `GET /me` failing, every read and its retries.
+    let failures = 0;
+    await page.route(isMeRead, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      failures += 1;
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+      });
+    });
+    await page.goto('/proposals/new');
+    await expect.poll(() => failures, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+    await expect(page.getByTestId('proposal-form-failed')).toContainText(copy.errProfileLoad);
+    await expect(page.getByTestId('proposal-form')).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

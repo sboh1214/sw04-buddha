@@ -189,12 +189,13 @@ export function searchScreenBody(
 /**
  * What a submitted search box records (`POST /me/search-history`), or `undefined` for nothing:
  * the term trimmed and bounded as `GET /markets?q=` takes it, by a signed-in member — the account
- * the screen shows is `accountId`, sent as `expectedAccountId` — and nothing for a visitor, a
- * session not yet known, or a blank, over-long or NUL term (ADR-0061 decision 3: a signed-out
- * search is not recorded; a term the list would not search is not a search). A SUBMIT asks this,
- * and so does a recent search picked from the list, with its stored term — a new search of it, so
- * it moves to the top (owner decision 2026-10-16, ADR-0066). A filter, an order, a page of the
- * same search or a search opened by its address records nothing (ADR-0066).
+ * the screen shows is `accountId` (its `Me`'s id, ADR-0091), sent as `expectedAccountId` — and
+ * nothing for a visitor, an account not yet known, or a blank, over-long or NUL term (ADR-0061
+ * decision 3: a signed-out search is not recorded; a term the list would not search is not a
+ * search). A SUBMIT asks this, and so does a recent search picked from the list, with its stored
+ * term — a new search of it, so it moves to the top (owner decision 2026-10-16, ADR-0066). A
+ * filter, an order, a page of the same search or a search opened by its address records nothing
+ * (ADR-0066).
  */
 export function searchToRecord(
   raw: unknown,
@@ -204,6 +205,19 @@ export function searchToRecord(
   const term = marketSearchTermSchema.safeParse(raw);
   if (!term.success || term.data.includes('\u0000')) return undefined;
   return { query: term.data, expectedAccountId: accountId };
+}
+
+/**
+ * The key of a search box's field (nav.tsx `SearchForm`, the search screen's `SearchBox`): the
+ * term the URL carries, and the account the box was drawn for — the `Me` its submit records the
+ * term for (`searchToRecord`), `undefined` for a visitor and until `GET /me` has answered. A draft
+ * typed for one account is never submitted for another (ADR-0091): `['me']` can turn from A to B
+ * under a box that stays mounted — in place, before the session does (ADR-0090 결정 4-2), or
+ * through SessionCacheGuard's reset — and the box then starts again empty. One key for each pair:
+ * an id holds no '|', so the first one splits them.
+ */
+export function searchBoxKey(accountId: string | undefined, term: string | undefined): string {
+  return `${accountId ?? ''}|${term ?? ''}`;
 }
 
 /**

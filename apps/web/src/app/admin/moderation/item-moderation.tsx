@@ -14,10 +14,11 @@ import {
 import { adminMediaPath } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { type ReactNode, useState } from 'react';
+import { type ReactNode } from 'react';
 import { PostBody } from '@/components/post/post-body';
 import { copy } from '@/copy';
 import { useAdminCommentModeration, useAdminPostModeration } from '@/hooks/use-admin-moderation';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import {
   type AdminCommentModeration,
   type AdminPostComment,
@@ -55,7 +56,6 @@ import {
   accountRestrictDialog,
   dismissDialog,
   restrictDialog,
-  useOperatorId,
 } from './moderation-parts';
 
 /**
@@ -379,7 +379,8 @@ function Page({
 
 export function PostModeration({ postId }: { postId: string }) {
   const query = useAdminPostModeration(postId);
-  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  // Held for the admin on screen: a dialog opened on A's page is not B's to send (ADR-0091).
+  const [dialog, setDialog] = useHeldForOperator<DialogSpec>();
   return (
     <Stack gap="5" data-testid="admin-post-moderation">
       <BackLink />
@@ -504,7 +505,8 @@ function PostView({
 
 export function CommentModeration({ commentId }: { commentId: string }) {
   const query = useAdminCommentModeration(commentId);
-  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  // Held for the admin on screen: a dialog opened on A's page is not B's to send (ADR-0091).
+  const [dialog, setDialog] = useHeldForOperator<DialogSpec>();
   return (
     <Stack gap="5" data-testid="admin-comment-moderation">
       <BackLink />

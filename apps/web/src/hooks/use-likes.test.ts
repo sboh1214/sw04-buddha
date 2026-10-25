@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   InfiniteQueryObserver,
   MutationObserver,
@@ -61,6 +62,8 @@ const post = POST.toLowerCase();
 const COMMENT = '6F9619FF-8B86-D011-B42D-00C04FC964FF';
 const commentId = COMMENT.toLowerCase();
 const REPLY = 'd3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11';
+/** The account the page shows, which every press here names unless it says otherwise. */
+const ACCOUNT = 'user-1';
 
 const published = (
   id: string,
@@ -118,13 +121,13 @@ function seeded(
   });
   const pages: CommentPages = { pages: [firstPage(2, nextCursor)], pageParams: [undefined] };
   queryClient.setQueryData(postCommentsKey(post), pages);
-  queryClient.setQueryData(myPostLikesKey(post), likes);
+  queryClient.setQueryData(myPostLikesKey(post, ACCOUNT), likes);
   queryClient.setQueryData(communityPostsKey({}), { pages: [], pageParams: [] });
   return queryClient;
 }
 
 const likesOf = (queryClient: QueryClient) =>
-  queryClient.getQueryData<MyPostLikes>(myPostLikesKey(post));
+  queryClient.getQueryData<MyPostLikes>(myPostLikesKey(post, ACCOUNT));
 const postCountOf = (queryClient: QueryClient) =>
   postLikeCount(queryClient.getQueryData<Post>(postKey(post)));
 const commentCountOf = (queryClient: QueryClient, id: string) =>
@@ -206,13 +209,13 @@ afterEach(() => {
 });
 
 describe('the reader’s likes', () => {
-  it('are one private read per post, by the lower-cased id, once a session exists', async () => {
-    const options = myPostLikesQueryOptions(POST, { user: {} });
-    expect(options.queryKey).toEqual(['likes', 'post', post]);
+  it('are one private read per post and account on screen, by the lower-cased id, once that account is known (ADR-0091)', async () => {
+    const options = myPostLikesQueryOptions(POST, ACCOUNT);
+    expect(options.queryKey).toEqual(['likes', 'post', post, ACCOUNT]);
     expect(options.enabled).toBe(true);
-    // Signed out or not known yet: never asked (the route needs the cookie).
-    expect(myPostLikesQueryOptions(POST, null).enabled).toBe(false);
-    expect(myPostLikesQueryOptions(POST).enabled).toBe(false);
+    // Signed out, or `GET /me` not answered yet: never asked (the route needs the cookie, and
+    // whose likes they would be is unknown).
+    expect(myPostLikesQueryOptions(POST, undefined).enabled).toBe(false);
     const likes = { postLiked: true, likedCommentIds: [commentId] };
     const get = vi.spyOn(api, 'GET').mockResolvedValue(answer(likes));
     await expect(options.queryFn()).resolves.toEqual(likes);
@@ -246,6 +249,40 @@ describe('the reader’s likes', () => {
   });
 });
 
+describe('the account the toggles draw and name (ADR-0091)', () => {
+  const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+
+  it('is the one of the `Me` the post page was drawn from, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the toggles still
+    // show A's likes, and a press naming the session's account would be taken with B's cookie: B's
+    // like set to the opposite of A's. No component renders under node, so the wiring is pinned
+    // in the sources: the hooks offer no account (no session id), the button and the page's line
+    // hand them the page's writer — the `Me` the post and comment writes name — which keys the
+    // likes (above), and a press sends that. e2e likes.spec.ts ('탭의 계정이 …', '탭의 세션이 …')
+    // drives both orders.
+    expect(source('./use-likes.ts')).not.toMatch(/user\.id|\bmeBelongsTo\b/);
+    const button = source('../components/post/like-button.tsx');
+    expect(button).toContain('const { accountId } = writer;');
+    expect(button).toContain('useLike(postId, target, accountId, writer.failed)');
+    expect(button).toContain('expectedAccountId: accountId');
+    expect(button).toContain('useMyLikesUnreadable(postId, writer.accountId, writer.failed)');
+    expect(button.match(/const writer = usePostWriter\(\);/g)).toHaveLength(2);
+    expect(button).not.toMatch(/\blike\.accountId\b/);
+  });
+
+  it('counts a `GET /me` that failed without ever answering as likes that could not be read', () => {
+    // Whose likes they would be is unknown, so none is read: without this the toggles stood on
+    // the pending rung for good, a press doing nothing and nothing said. They take the unreadable
+    // likes' rung instead — the count, a button that cannot be pressed, and the page's line saying
+    // why (owner decision 2026-10-20, answer 10). e2e likes.spec.ts ('좋아요는 GET /me의 답을 …').
+    const hooks = source('./use-likes.ts');
+    expect(hooks).toContain(
+      'mine: { isFetched: mine.isFetched || accountFailed, liked: likedIn(mine.data, target) },',
+    );
+    expect(hooks).toContain('isFetched: mine.isFetched || accountFailed,');
+  });
+});
+
 describe('a press', () => {
   it('moves a comment’s toggle and count at once, then takes the server’s count', async () => {
     const queryClient = seeded();
@@ -265,7 +302,7 @@ describe('a press', () => {
     // A comment's like reads nothing again: the answer is in the pages, and the post's own count
     // and the cards are not a comment's.
     expect(invalidated(queryClient, postCommentsKey(post))).toBe(false);
-    expect(invalidated(queryClient, myPostLikesKey(post))).toBe(false);
+    expect(invalidated(queryClient, myPostLikesKey(post, ACCOUNT))).toBe(false);
     expect(invalidated(queryClient, postKey(post))).toBe(false);
     expect(invalidated(queryClient, communityPostsKey({}))).toBe(false);
   });
@@ -306,7 +343,7 @@ describe('a press', () => {
     expect(commentCountOf(queryClient, REPLY)).toBe(1);
     // Read again, so the screen ends on the server's word (a write that committed before its
     // answer was lost shows up there).
-    expect(invalidated(queryClient, myPostLikesKey(post))).toBe(true);
+    expect(invalidated(queryClient, myPostLikesKey(post, ACCOUNT))).toBe(true);
     expect(invalidated(queryClient, postCommentsKey(post))).toBe(true);
     // Not a refusal that says the page is stale: the post is not read again.
     expect(invalidated(queryClient, postKey(post))).toBe(false);
@@ -384,23 +421,44 @@ describe('a press', () => {
     }
   });
 
-  it('answered after the tab changed accounts writes the count but not the other account’s likes', async () => {
+  it('writes only the likes of the account it named, never another account’s, and the count either way (ADR-0091)', async () => {
+    // The press names the account whose likes the toggles drew, and every write of the reader's
+    // state — the optimistic one, the answer, the rollback — goes into that account's entry: B's,
+    // read after `['me']` turned to B (in place, or after SessionCacheGuard's reset), is left
+    // alone. One entry for both — the key before ADR-0091 — would carry A's press into B's toggle.
     const queryClient = seeded();
+    const others = () => queryClient.getQueryData<MyPostLikes>(myPostLikesKey(post, 'user-2'));
+    queryClient.setQueryData<MyPostLikes>(myPostLikesKey(post, 'user-2'), {
+      postLiked: false,
+      likedCommentIds: [],
+    });
     const sent = deferred<LikeState>();
     const press = toggle(queryClient, () => sent.promise);
     const done = press.mutate(onComment(true, COMMENT, 'user-1'));
     await settle();
-    // SessionCacheGuard reset the cache for user-2, whose likes were read afresh.
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(others()?.likedCommentIds).toEqual([]);
+    // The tab switched to user-2 while the press was out.
     queryClient.setQueryData<Partial<Me>>(ME_QUERY_KEY, { id: 'user-2' });
-    queryClient.setQueryData<MyPostLikes>(myPostLikesKey(post), {
-      postLiked: false,
-      likedCommentIds: [],
-    });
     sent.resolve({ liked: true, likeCount: 3 });
     await done;
-    expect(likesOf(queryClient)?.likedCommentIds).toEqual([]);
+    expect(likesOf(queryClient)?.likedCommentIds).toEqual([commentId]);
+    expect(others()?.likedCommentIds).toEqual([]);
     // The count is public: the same for whoever reads it.
     expect(commentCountOf(queryClient, commentId)).toBe(3);
+
+    // A failure landing then puts user-1's state back, and leaves user-2's alone.
+    queryClient.setQueryData<MyPostLikes>(myPostLikesKey(post, 'user-2'), {
+      postLiked: true,
+      likedCommentIds: [],
+    });
+    await expect(
+      toggle(queryClient, () => Promise.reject(refusal(503, 'INTERNAL'))).mutate(
+        onPost(true, 'user-1'),
+      ),
+    ).rejects.toBeInstanceOf(ApiError);
+    expect(likesOf(queryClient)?.postLiked).toBe(false);
+    expect(others()?.postLiked).toBe(true);
   });
 
   it('is not undone by a read of the reader’s likes that left before it, which is made again after the answer', async () => {
@@ -413,7 +471,7 @@ describe('a press', () => {
       .mockReturnValueOnce(stale.promise)
       .mockResolvedValue({ postLiked: false, likedCommentIds: [commentId] });
     const observer = new QueryObserver<MyPostLikes>(queryClient, {
-      queryKey: myPostLikesKey(post),
+      queryKey: myPostLikesKey(post, ACCOUNT),
       queryFn: read,
       retry: false,
     });
@@ -444,7 +502,7 @@ describe('a press', () => {
       .mockReturnValueOnce(stale.promise)
       .mockResolvedValue({ postLiked: false, likedCommentIds: [commentId] });
     const observer = new QueryObserver<MyPostLikes>(queryClient, {
-      queryKey: myPostLikesKey(post),
+      queryKey: myPostLikesKey(post, ACCOUNT),
       queryFn: read,
       retry: false,
     });
@@ -649,7 +707,7 @@ describe('the presses of one target (ADR-0076 7-30)', () => {
     // for the server's word, and the unlike goes out after it.
     like.reject(refusal(503, 'INTERNAL'));
     expect(await liking).toBeInstanceOf(ApiError);
-    expect(invalidated(queryClient, myPostLikesKey(post))).toBe(true);
+    expect(invalidated(queryClient, myPostLikesKey(post, ACCOUNT))).toBe(true);
     expect(invalidated(queryClient, postCommentsKey(post))).toBe(true);
     await settle();
     expect(put).toHaveBeenCalledTimes(2);
@@ -1102,7 +1160,7 @@ describe('a comment’s press while a new 댓글’s read to the end is on its w
     const queryClient = seeded();
     // The post page, watching the pages and the reader's likes: a read of them asked for is made.
     const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
-    const mine = new QueryObserver(queryClient, myPostLikesQueryOptions(POST, { user: {} }));
+    const mine = new QueryObserver(queryClient, myPostLikesQueryOptions(POST, ACCOUNT));
     const unsubscribe = [comments.subscribe(() => undefined), mine.subscribe(() => undefined)];
     vi.spyOn(api, 'POST').mockResolvedValue(answer(published(MINE, 0)));
     // The pages as the server holds them once the like committed: COMMENT at '좋아요 3'.

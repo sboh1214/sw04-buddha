@@ -14,9 +14,9 @@ import {
 import { isAutoNickname } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { useState } from 'react';
 import { copy } from '@/copy';
 import { useAdminProfileModeration, useAdminUserModeration } from '@/hooks/use-admin-moderation';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { type AdminUserModeration, isApiError } from '@/lib/api';
 import {
   ADMIN_REPORTS_PATH,
@@ -42,7 +42,6 @@ import {
   accountRestrictDialog,
   dismissDialog,
   restrictDialog,
-  useOperatorId,
 } from './moderation-parts';
 
 /**
@@ -75,7 +74,8 @@ export function ProfileModeration({ publicId }: { publicId: string }) {
 }
 
 function MemberModeration({ query }: { query: ReturnType<typeof useAdminUserModeration> }) {
-  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  // Held for the admin on screen: a dialog opened on A's page is not B's to send (ADR-0091).
+  const [dialog, setDialog] = useHeldForOperator<DialogSpec>();
   return (
     <Stack gap="5" data-testid="admin-user-moderation">
       <ChakraLink asChild alignSelf="flex-start" fontSize="sm" color="fg.muted">

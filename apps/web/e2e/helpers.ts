@@ -3,6 +3,7 @@ import {
   test as base,
   type APIRequestContext,
   type APIResponse,
+  type BrowserContext,
   type Cookie,
   type Locator,
   type Page,
@@ -735,6 +736,73 @@ export async function switchAccountUnderScreen(
   } finally {
     page.off('response', onSession);
   }
+}
+
+/**
+ * The tab's cookie becomes another account's — what another window signing in as that account
+ * leaves it with — and nothing is read again: no `visibilitychange`, so better-auth's session and
+ * `['me']` still say the account the page shows. The order two windows side by side take
+ * (SessionCacheGuard's header): the next write the page sends names the account it shows with the
+ * other account's cookie, and the refusal's own session read is the first to say the other
+ * account — SessionCacheGuard's reset, and the screen drawn again for that account, come after the
+ * refusal (ADR-0091). `switchAccountUnderScreen` holds the other order: the session read again
+ * first.
+ */
+export async function swapCookieUnderScreen(page: Page, cookies: Cookie[]): Promise<void> {
+  await page.context().clearCookies();
+  await page.context().addCookies(cookies);
+}
+
+/**
+ * The answer to the first `GET /me` the page sends from now on — never one already on its way, which
+ * still carries the cookie the tab had when it was sent. For a spec that changes the tab's cookie
+ * and then makes `['me']` read again (ADR-0090 결정 4-2's order): the answer it waits for is the
+ * new cookie's.
+ */
+export function nextMeRead(page: Page): Promise<Response> {
+  const sent = new Set<Request>();
+  const onRequest = (request: Request) => {
+    if (request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/me') {
+      sent.add(request);
+    }
+  };
+  page.on('request', onRequest);
+  return page
+    .waitForResponse((response) => sent.has(response.request()))
+    .finally(() => page.off('request', onRequest));
+}
+
+/**
+ * ADR-0090 결정 4-2's order, the reverse of `switchAccountUnderScreen`'s: `['me']` turns from the
+ * account the page shows to `to` in place, before the session does, so SessionCacheGuard resets
+ * nothing — a window-focus refetch of `GET /me` answered with `to`'s cookie while better-auth's
+ * session still says the shown account. Held as phone-verification.spec.ts holds it: better-auth's
+ * answers keep coming from `shown`'s jar (given the page's cookies here — its body only, since a
+ * cookie the shown account's answer set would put that account back in the tab), `to`'s cookie
+ * goes into the tab, and the page's clock — installed (`page.clock.install()`) before the page was
+ * opened — makes `['me']` older than its `staleTime` (30 s) for the focus refetch. Resolves once
+ * `GET /me` has answered as `to`; the get-session route stays until the spec unroutes it.
+ */
+export async function switchMeBeforeSession(
+  page: Page,
+  shown: BrowserContext,
+  to: { id: string; cookies: Cookie[] },
+): Promise<void> {
+  await shown.addCookies(await page.context().cookies());
+  await page.route(
+    (url) => url.pathname === '/api/auth/get-session',
+    async (route) => {
+      const answer = await shown.request.get(route.request().url());
+      await route.fulfill({ status: answer.status(), json: (await answer.json()) as unknown });
+    },
+  );
+  await page.context().clearCookies();
+  await page.context().addCookies(to.cookies);
+  const meRead = nextMeRead(page);
+  await page.clock.fastForward('00:31');
+  await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+  const drawn = (await (await meRead).json()) as { data: Me };
+  expect(drawn.data.id).toBe(to.id);
 }
 
 /** The first seed admin, for a spec that needs a second signed-in browser without a second mailbox. */

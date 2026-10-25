@@ -5,6 +5,7 @@ import { discountPercent, formatKrw, formatCoin, parseCoinAmount } from '@buddha
 import { useEffect, useRef } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import {
   isChargeInProgress,
   isStaleCatalogue,
@@ -44,9 +45,19 @@ function chargeErrorTitle(error: unknown): string {
  * `highlightPackageId` is `/my/wallet?package=`, the package the public `/charge` page sent the
  * visitor to buy (ADR-0044): that card is marked and scrolled to, and buying stays a click of
  * its own.
+ *
+ * A purchase names the account the wallet was drawn for — the balance card's `Me`, read here from
+ * the same `['me']` — never the session's (`useCharge`, ADR-0091): in the render between the
+ * session naming another account and SessionCacheGuard's reset the wallet still shows A's balance,
+ * and a click sent as B's would charge B with B's cookie. The server refuses it as another
+ * account's. The buy buttons wait for that account (`GET /me`), as they waited for the session.
+ * The cards are the public catalogue and hold nothing typed, so they are not drawn again per
+ * account: a click after `['me']` turned to B in place (ADR-0090 결정 4-2) names B, whose balance
+ * the card above then shows.
  */
 export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string }) {
   const packages = useChargePackages();
+  const accountId = useMe().data?.id;
   const charge = useCharge();
   const highlighted = useRef<HTMLDivElement>(null);
   const scrolled = useRef(false);
@@ -58,9 +69,10 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
     highlighted.current.scrollIntoView({ block: 'center' });
   }, [packages.data]);
 
-  async function buy(pack: ChargePackage) {
+  async function buy(pack: ChargePackage, expectedAccountId: string) {
     try {
-      const result = await charge.mutateAsync(pack);
+      // The account the wallet was drawn for rides along (`expectedAccountId`, A-M2-11).
+      const result = await charge.mutateAsync({ pack, expectedAccountId });
       toaster.create({
         type: 'success',
         title: copy.chargeDone,
@@ -101,7 +113,7 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
             {packages.data.map((pack) => {
               const amountCoin = parseCoinAmount(pack.amountCoin);
               const discount = discountPercent(amountCoin, pack.priceKrw);
-              const busy = charge.isPending && charge.variables?.id === pack.id;
+              const busy = charge.isPending && charge.variables?.pack.id === pack.id;
               const chosen = pack.id === highlightPackageId;
               return (
                 <HStack
@@ -137,9 +149,11 @@ export function ChargeForm({ highlightPackageId }: { highlightPackageId?: string
                     </Text>
                   </Stack>
                   <Button
-                    onClick={() => void buy(pack)}
+                    onClick={() => {
+                      if (accountId !== undefined) void buy(pack, accountId);
+                    }}
                     loading={busy}
-                    disabled={(charge.isPending && !busy) || !charge.ready}
+                    disabled={(charge.isPending && !busy) || accountId === undefined}
                     data-testid={`charge-buy-${pack.id}`}
                   >
                     {copy.chargeSubmit}

@@ -4,10 +4,10 @@ import { Alert, Button, HStack, Heading, Skeleton, Stack, Text } from '@chakra-u
 import { type AccountRestrictionRequestQueue } from '@buddha/shared';
 import type { Route } from 'next';
 import NextLink from 'next/link';
-import { useState } from 'react';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminAccountRequests } from '@/hooks/use-admin-moderation';
+import { useHeldForOperator } from '@/hooks/use-operator';
 import { adminAccountRequestQueuePath, moderationRows } from '@/lib/moderation';
 import { type DialogSpec, ModerationDialog, ModerationNav, RequestRows } from '../moderation-parts';
 
@@ -42,7 +42,8 @@ const QUEUES: readonly { queue: AccountRestrictionRequestQueue; label: string; e
  */
 export function AdminAccountRequests({ queue }: { queue: AccountRestrictionRequestQueue }) {
   const list = useAdminAccountRequests(queue);
-  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  // Held for the admin on screen: a dialog opened on A's page is not B's to send (ADR-0091).
+  const [dialog, setDialog] = useHeldForOperator<DialogSpec>();
   const rows = moderationRows(list.data?.pages);
   return (
     <Stack gap="5" data-testid="admin-account-requests">

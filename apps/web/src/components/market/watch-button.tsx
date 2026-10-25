@@ -5,6 +5,7 @@ import type { Route } from 'next';
 import { usePathname, useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import { useWatch } from '@/hooks/use-watchlist';
 import { loginPathBackTo } from '@/lib/next-path';
 import { watchButtonView, watchFailureMessage, watchPressAction } from '@/lib/watchlist';
@@ -24,14 +25,25 @@ import { watchButtonView, watchFailureMessage, watchPressAction } from '@/lib/wa
  * page told to come back here (`loginPathBackTo`); nothing is remembered, so the visitor presses
  * again once back (the owner's choice). A signed-in press moves the toggle at once
  * (`updateWatchOptions`), and a failure puts it back with a toast saying which change failed.
+ *
+ * The state drawn and the account a press names are those of the `Me` the screen was drawn from —
+ * the header's (`useMe`, no request of its own) — never the session's: in the render between the
+ * session naming another account and SessionCacheGuard's reset the session already says B while
+ * the toggle still shows A's state, and a press naming B would set B's watch to the opposite of
+ * A's (ADR-0091). The server refuses it as another account's. The state is kept under that account
+ * (`watchStateKey`), so a `['me']` turned to B in place — before the session, with no reset —
+ * draws B's own state, read afresh, rather than A's.
  */
 export function WatchButton({ marketId }: { marketId: string }) {
-  const watch = useWatch(marketId);
+  const me = useMe();
+  const accountId = me.data?.id;
+  const watch = useWatch(marketId, accountId);
   const router = useRouter();
   const pathname = usePathname();
   const view = watchButtonView({
     sessionPending: watch.sessionPending,
     signedIn: watch.signedIn,
+    profileFailed: me.isLoggedIn && me.isError && accountId === undefined,
     state: watch.state,
     saving: watch.toggle.isPending,
   });
@@ -51,11 +63,11 @@ export function WatchButton({ marketId }: { marketId: string }) {
       router.push(loginPathBackTo(pathname) as Route);
       return;
     }
-    // The toggle is drawn signed in only once the session named the account.
-    const accountId = watch.accountId;
+    // The toggle is drawn signed in only once its state was read for the account on screen.
     if (accountId === undefined) return;
     const { watched } = action;
     watch.toggle.mutate(
+      // The account whose state the toggle drew rides along (`expectedAccountId`, A-PG-24).
       { marketId, watched, expectedAccountId: accountId },
       {
         onError: (error) => {

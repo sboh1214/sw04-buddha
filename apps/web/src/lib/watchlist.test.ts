@@ -15,6 +15,7 @@ import {
 const settled: WatchButtonInput = {
   sessionPending: false,
   signedIn: true,
+  profileFailed: false,
   state: { isFetched: true, data: { watched: false } },
   saving: false,
 };
@@ -53,6 +54,22 @@ describe('watchButtonView (#89, ADR-0064)', () => {
 
   it('waits for the first read of a signed-in reader’s state', () => {
     expect(watchButtonView({ ...settled, state: unanswered })).toEqual({ kind: 'placeholder' });
+  });
+
+  it('draws nothing while `GET /me` failed without answering: whose state it is is unknown (ADR-0091)', () => {
+    // The state is read for the account the screen shows; with no profile there is none to read,
+    // as after a failed read of the state — whatever an entry may still hold.
+    for (const state of [answered(true), answered(false), answered(undefined), unanswered]) {
+      expect(watchButtonView({ ...settled, profileFailed: true, state })).toEqual({
+        kind: 'hidden',
+      });
+    }
+    // A visitor's toggle never asks it.
+    expect(watchButtonView({ ...settled, signedIn: false, profileFailed: true })).toEqual({
+      kind: 'toggle',
+      pressed: false,
+      press: 'login',
+    });
   });
 
   it('toggles: an unpressed press watches, a pressed one unwatches', () => {

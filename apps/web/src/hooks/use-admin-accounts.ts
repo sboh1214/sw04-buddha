@@ -128,7 +128,8 @@ function useRefreshAdminAccounts() {
 
 /**
  * `POST /admin/admins`: make an account an admin, with a reason, as the admin on screen
- * (`expectedAccountId`, `screenAccountId` when submitted).
+ * (`expectedAccountId` — the dialog's `useOperatorId`, the `Me` the screen is drawn from, never
+ * the session's: ADR-0091). The hook offers no account of its own.
  */
 export function useGrantAdmin() {
   const { refresh, onError } = useRefreshAdminAccounts();
@@ -143,7 +144,7 @@ export function useGrantAdmin() {
 export interface RevokeAdminVariables {
   userId: string;
   reason: string;
-  /** The admin the screen shows (`screenAccountId` when submitted); the server checks it. */
+  /** The admin on screen (the dialog's `useOperatorId`, ADR-0091); the server checks it. */
   expectedAccountId: string;
 }
 

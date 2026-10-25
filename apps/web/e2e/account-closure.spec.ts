@@ -11,11 +11,14 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  nextMeRead,
   openClosure,
   openSetPassword,
   setFirstPassword,
   signIn,
   signUp,
+  swapCookieUnderScreen,
+  switchAccountUnderScreen,
   test,
 } from './helpers';
 
@@ -54,7 +57,13 @@ import {
  * - a member under a writing restriction, and an admin, find the screen saying why it cannot close
  *   now — the restriction with its end and the way to 조치·신고 내역, the admin role until it is
  *   revoked — with the field and the button off, and the API refuses it as well; lifted, the
- *   member's screen offers the closure again.
+ *   member's screen offers the closure again;
+ * - a tab whose account switched to another while it showed the screen closes nobody: the closure
+ *   names the account the screen was drawn for and is refused — and when that refusal is what
+ *   draws the screen again for the other account, the screen says why — and a screen whose
+ *   `['me']` turned to another account before the session did starts again empty for that one and
+ *   waits for its own check; a check that could not be read again never lets the closure go over
+ *   the one read before (ADR-0091).
  *
  * Every rule's branch (the deletion and the kept set, the forfeiture's ledger, each refusal, the
  * locks, the database's own checks, the private-data guard) is the API's and the database's tests
@@ -613,5 +622,260 @@ test.describe('탈퇴', () => {
     await expect(page.getByTestId('closure-blocked')).toHaveCount(0);
     await page.getByTestId('closure-confirmation').fill('탈퇴');
     await expect(page.getByTestId('closure-submit')).toBeEnabled();
+  });
+
+  /** Records every `POST /me/closure` body the page sends. */
+  function closureWrites(page: Page): unknown[] {
+    const writes: unknown[] = [];
+    page.on('request', (request) => {
+      if (request.method() === 'POST' && new URL(request.url()).pathname === '/api/v1/me/closure') {
+        writes.push(request.postDataJSON());
+      }
+    });
+    return writes;
+  }
+
+  test("탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 탈퇴 화면이 남아 있으면 '탈퇴'는 그 화면의 계정을 대어 거절되고, 어느 계정도 닫히지 않는다", async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset the screen still shows A's Coin and refusals while the session
+    // already says B, and a closure naming the session's account would be taken with B's cookie —
+    // B closed on the '탈퇴' typed on A's screen, at once and for good. The screen names the account
+    // of the `Me` it was drawn from, so the server refuses it as another account's. That render is
+    // held here: B's cookie in this tab and the session read again, while `GET /me` and the check
+    // still answer as A (`switchAccountUnderScreen`) — B, a member nothing keeps from closing,
+    // would have been closed.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await openClosure(page);
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(
+        page,
+        shownContext.request,
+        { id: b.id, cookies: await otherContext.cookies() },
+        (request) =>
+          request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/me/closure',
+      );
+
+      const writes = closureWrites(page);
+      // A's screen, drawn again from A's `Me` and A's check after the guard's reset.
+      await expect(page.getByTestId('closure-coin')).toBeVisible();
+      await page.getByTestId('closure-confirmation').fill('탈퇴');
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/me/closure',
+      );
+      await page.getByTestId('closure-submit').click();
+      expect((await answered).status()).toBe(403);
+      await expect(page.getByTestId('closure-error')).toHaveText(copy.sessionChanged);
+      await expect(page).toHaveURL('/my/settings/closure');
+
+      expect(writes).toEqual([{ confirmation: '탈퇴', expectedAccountId: a.id }]);
+      // Neither closed: both still answer `GET /me` as themselves.
+      expect((await meOf(other.request)).id).toBe(b.id);
+      expect((await meOf(shownContext.request)).id).toBe(a.id);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test("탭의 세션이 아직 앞 계정을 말하는데 탈퇴 화면의 `GET /me`가 다른 회원으로 답하면 화면은 그 회원의 것으로 비어 다시 그려지고, 그 회원의 확인을 읽기 전에는 '탈퇴'를 받지 않는다", async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. Unkeyed, the screen kept
+    // the '탈퇴' typed on A's screen with the button on, and the next press named B — the `Me` now
+    // drawn — with B's cookie: B closed. Keyed by account, it starts again empty for B; and since
+    // the check names no owner, it is kept under the account too: B's screen waits for B's own
+    // check, drawing nothing of A's meanwhile. Held as in phone-verification.spec.ts:
+    // better-auth's answers come from A's jar, B's cookie is put in the tab, and the page's clock
+    // makes `['me']` older than its `staleTime` (30 s); B's check is held until the end.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await page.clock.install();
+      await openClosure(page);
+      const confirmation = page.getByTestId('closure-confirmation');
+      const submit = page.getByTestId('closure-submit');
+      await confirmation.fill('탈퇴');
+      await expect(submit).toBeEnabled();
+
+      // The tab's session keeps saying A — its body only: a cookie A's answer set would put A
+      // back in the tab.
+      await shownContext.addCookies(await page.context().cookies());
+      await page.route(
+        (url) => url.pathname === '/api/auth/get-session',
+        async (route) => {
+          const answer = await shownContext.request.get(route.request().url());
+          await route.fulfill({ status: answer.status(), json: (await answer.json()) as unknown });
+        },
+      );
+      // B's check, held: what the screen holds until it answers is A's.
+      let releaseCheck: () => void = () => undefined;
+      const checkReleased = new Promise<void>((resolve) => {
+        releaseCheck = resolve;
+      });
+      let checkHeld = false;
+      await page.route(
+        (url) => url.pathname === '/api/v1/me/closure',
+        async (route) => {
+          if (route.request().method() !== 'GET') return route.fallback();
+          checkHeld = true;
+          await checkReleased;
+          await route.fallback();
+        },
+      );
+      const writes = closureWrites(page);
+      await page.context().clearCookies();
+      await page.context().addCookies(await otherContext.cookies());
+      const meRead = nextMeRead(page);
+      await page.clock.fastForward('00:31');
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      const drawn = (await (await meRead).json()) as { data: { id: string } };
+      expect(drawn.data.id).toBe(b.id);
+
+      // B's screen waits for B's own check: nothing of A's — the Coin, the '탈퇴' typed, the
+      // button — is drawn under B's `Me`.
+      await expect.poll(() => checkHeld).toBe(true);
+      await expect(page.getByTestId('account-closure')).toBeVisible();
+      await expect(page.getByTestId('closure-coin')).toHaveCount(0);
+      await expect(confirmation).toHaveCount(0);
+      await expect(submit).toHaveCount(0);
+      const checkRead = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' &&
+          new URL(response.url()).pathname === '/api/v1/me/closure',
+      );
+      releaseCheck();
+      expect((await checkRead).status()).toBe(200);
+      // B's screen, empty: the '탈퇴' typed on A's is gone, and the button waits for it again.
+      await expect(page.getByTestId('closure-coin')).toBeVisible();
+      await expect(confirmation).toHaveValue('');
+      await expect(submit).toBeDisabled();
+      await confirmation.fill('탈퇴');
+      await expect(submit).toBeEnabled();
+
+      expect(writes).toEqual([]);
+      expect((await meOf(other.request)).id).toBe(b.id);
+      expect((await meOf(shownContext.request)).id).toBe(a.id);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+  test("탭의 세션이 아직 앞 계정을 말하는 채 '탈퇴'가 다른 회원의 쿠키로 가면 거절되고, 화면이 그 회원의 것으로 다시 그려진 뒤에도 거절의 까닭이 그 자리에 남는다", async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091, the order two windows side by side take (SessionCacheGuard's header: no
+    // `visibilitychange`, so nothing in this tab reads the session again): B's cookie is in the tab
+    // while its session and `['me']` still say A. The press names A, the server refuses it as
+    // another account's, and the refusal's own session read is the first to say B — the guard's
+    // reset then takes `['me']` back to waiting, and the screen is drawn again, empty, for B. The
+    // refusal is kept above the keyed screen, so B's screen says why it started again; kept in
+    // the screen it went with A's, and a member who took the press for a glitch could type
+    // '탈퇴' again — on B's screen, closing B.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await shownContext.addCookies(await page.context().cookies());
+      await openClosure(page);
+      const confirmation = page.getByTestId('closure-confirmation');
+      const submit = page.getByTestId('closure-submit');
+      await confirmation.fill('탈퇴');
+      await expect(submit).toBeEnabled();
+
+      const writes = closureWrites(page);
+      await swapCookieUnderScreen(page, await otherContext.cookies());
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' &&
+          new URL(response.url()).pathname === '/api/v1/me/closure',
+      );
+      const meRead = nextMeRead(page);
+      await submit.click();
+      expect((await answered).status()).toBe(403);
+      // The guard's reset, and `GET /me` read again: B's screen.
+      const drawn = (await (await meRead).json()) as { data: { id: string } };
+      expect(drawn.data.id).toBe(b.id);
+      await expect(page.getByTestId('closure-coin')).toBeVisible();
+      await expect(confirmation).toHaveValue('');
+      await expect(page.getByTestId('closure-error')).toHaveText(copy.sessionChanged);
+      await expect(submit).toBeDisabled();
+      await expect(page).toHaveURL('/my/settings/closure');
+
+      expect(writes).toEqual([{ confirmation: '탈퇴', expectedAccountId: a.id }]);
+      expect((await meOf(other.request)).id).toBe(b.id);
+      expect((await meOf(shownContext.request)).id).toBe(a.id);
+    } finally {
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test("탈퇴 화면을 다시 열 때 확인을 다시 읽지 못하면 앞서 읽은 Coin과 막는 것으로 '탈퇴'를 받지 않고, 다시 읽은 뒤에 받는다", async ({
+    page,
+  }) => {
+    // ADR-0091: the button waits for a check read since the screen was drawn. TanStack's
+    // `isFetchedAfterMount` also counts a read that FAILED since then, over the check held from
+    // before — so alone it let the closure go over an amount that could not be read again. The
+    // screen opened again by its links (one tab: the check read first stays in the cache), its
+    // read failing every time, says so with 다시 시도 instead of the amount held.
+    await signUp(page, freshEmail());
+    await openClosure(page);
+    await page.getByTestId('closure-back').click();
+    await expect(page).toHaveURL('/my/settings');
+
+    let failures = 0;
+    const isCheck = (url: URL) => url.pathname === '/api/v1/me/closure';
+    await page.route(isCheck, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      failures += 1;
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+      });
+    });
+    const writes = closureWrites(page);
+    await page.getByTestId('settings-closure-open').click();
+    await expect(page).toHaveURL('/my/settings/closure');
+    // The read and its two retries (1 s, 2 s) have failed.
+    await expect.poll(() => failures, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+    const failed = page.getByTestId('closure-check-failed');
+    await expect(failed).toContainText(copy.closureCheckFailed);
+    await expect(page.getByTestId('closure-coin')).toHaveCount(0);
+    await expect(page.getByTestId('closure-submit')).toHaveCount(0);
+
+    // Read again: the screen, and the button once '탈퇴' is typed.
+    await page.unroute(isCheck);
+    await failed.getByRole('button', { name: copy.retry }).click();
+    await expect(page.getByTestId('closure-coin')).toBeVisible();
+    await page.getByTestId('closure-confirmation').fill('탈퇴');
+    await expect(page.getByTestId('closure-submit')).toBeEnabled();
+    expect(writes).toEqual([]);
   });
 });

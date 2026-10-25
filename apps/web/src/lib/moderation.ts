@@ -788,10 +788,11 @@ export function moderationRows<Row>(
 // ---- operators ---------------------------------------------------------------------------------
 
 /**
- * Whether what a page is about concerns the signed-in operator — their post, comment or profile:
- * its reports and actions are another operator's (decision 4 #50 «다른 운영자만»). Unknown
- * (undefined) while the session is; the screen offers nothing until it knows. The server refuses
- * it whatever the screen thinks (`own`).
+ * Whether what a page is about concerns the operator on screen — their post, comment or profile:
+ * its reports and actions are another operator's (decision 4 #50 «다른 운영자만»). `operatorId` is
+ * the operator of the `Me` the page was drawn from (`useOperatorId`, ADR-0091); unknown
+ * (undefined) until `GET /me` has said who that is, and the screen offers nothing until then. The
+ * server refuses it whatever the screen thinks (`own`).
  */
 export function concernsOperator(
   userId: string,
@@ -1298,7 +1299,8 @@ export function accountRequestMootText(moot: AccountRestrictionMoot | null): str
  * another admin decides (APPROVAL_NOT_ALLOWED `requester` on the server, in every environment) and
  * they may retract it (owner decision 2026-10-23); `own` — it is about them (`own`), its asking and
  * deciding admins withheld from them; `closed` — decided or retracted, nothing more. Undefined
- * while the session is unknown: the screen offers nothing until it knows.
+ * for a pending request until `GET /me` has said which operator is on screen (`useOperatorId`,
+ * ADR-0091): the screen offers nothing until it knows.
  */
 export type RequestStanding = 'decide' | 'requester' | 'own' | 'closed';
 
@@ -1353,20 +1355,27 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
 /**
  * What a refused operator action says: under the field it is about (the explanation, the record's
  * reason), or in the dialog — MODERATION_NOT_ALLOWED by its reason (the page is out of date for
- * all but `own`, and the hook reads it again either way), the target gone, the cookie of another
- * account, a session that ended or an account no longer an admin (sending again cannot help, as
- * the admin role dialogs say, `adminRoleChangeRefusal`), more reports named than one dismissal
- * takes, a 감경's end the server could not read or a term it does not take (#185), a request that
- * never reached the API. A 감경 or a lift refused by the restriction's state (`not_restriction`,
- * `ended`, `not_earlier`, `end_passed`) is MODERATION_NOT_ALLOWED's with the rest.
+ * all but `own`, and the hook reads it again either way), the target gone, a session that ended
+ * or an account no longer an admin (sending again cannot help, as the admin role dialogs say,
+ * `adminRoleChangeRefusal`), more reports named than one dismissal takes, a 감경's end the server
+ * could not read or a term it does not take (#185), a request that never reached the API. A 감경
+ * or a lift refused by the restriction's state (`not_restriction`, `ended`, `not_earlier`,
+ * `end_passed`) is MODERATION_NOT_ALLOWED's with the rest.
+ *
+ * The cookie of another account (`toast`) closes the dialog with a toast instead, as the role
+ * dialog's does (`adminRoleChangeRefusal`, ADR-0091): the dialog was opened by the operator the
+ * page was drawn for, the hook asks for the session again, and once it names the operator really
+ * signed in the page drops the dialog (`useHeldForOperator`) — said inside it, the refusal would
+ * go with it.
  */
 export type ModerationFailure =
   | { kind: 'field'; field: 'note' | 'reason' | 'endsAt' | 'memo'; message: string }
-  | { kind: 'alert'; message: string };
+  | { kind: 'alert'; message: string }
+  | { kind: 'toast'; message: string };
 
 export function moderationFailure(error: unknown): ModerationFailure {
   const alert = (message: string): ModerationFailure => ({ kind: 'alert', message });
-  if (isForAnotherAccount(error)) return alert(copy.sessionChanged);
+  if (isForAnotherAccount(error)) return { kind: 'toast', message: copy.sessionChanged };
   if (isApiError(error, 'UNAUTHENTICATED')) return alert(copy.errUnauthenticated);
   // Not the account check above: AdminGuard's, once another admin revoked this one's role.
   if (isApiError(error, 'FORBIDDEN')) return alert(copy.adminOnly);

@@ -1,4 +1,4 @@
-import { type Page } from '@playwright/test';
+import { type APIRequestContext, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
   closeMarket,
@@ -6,7 +6,10 @@ import {
   expect,
   freshEmail,
   freshTag,
+  meOf,
   signUp,
+  switchAccountUnderScreen,
+  switchMeBeforeSession,
   test,
 } from './helpers';
 
@@ -21,6 +24,12 @@ import {
  * search (owner decision 2026-10-16) — is recorded, never a filter change, never a visitor's
  * search. The server draws the first page of results when there are any, so the HTML holds them
  * without JavaScript (owner decision 2026-10-16); 'no results' and a failure are the browser's.
+ * A tab whose account switched to another while it showed the screen records, deletes and clears
+ * nothing of either: each write names the account the screen was drawn for and is refused; a
+ * list whose `['me']` turned to another account before the session did is that account's own,
+ * read afresh, before an entry can be deleted; and a term typed in either box for the one account
+ * is gone from it once the box is the other's. A `GET /me` that fails without answering leaves the
+ * list unread, said with 다시 시도 (ADR-0091).
  */
 
 /**
@@ -84,6 +93,41 @@ function headerHtml(html: string): string {
 /** The market cards in a page's server render, by their `data-testid`, in order. */
 function cardIdsIn(html: string): string[] {
   return [...html.matchAll(/data-testid="(market-card-[0-9a-f-]{36})"/g)].map((match) => match[1]!);
+}
+
+/** A recorded search straight at the API with the context's cookie. */
+async function recordThroughApi(context: APIRequestContext, query: string): Promise<void> {
+  const me = await meOf(context);
+  const response = await context.post('/api/v1/me/search-history', {
+    data: { query, expectedAccountId: me.id },
+  });
+  expect(response.status(), await response.text()).toBe(200);
+}
+
+/** The ids of the context's account's recent searches (`GET /me/search-history`), newest first. */
+async function recentIds(context: APIRequestContext): Promise<string[]> {
+  const response = await context.get('/api/v1/me/search-history');
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as { data: { id: string }[] }).data.map((row) => row.id);
+}
+
+/** The context's account's recent searches (`GET /me/search-history`), newest first. */
+async function recentOf(context: APIRequestContext): Promise<string[]> {
+  const response = await context.get('/api/v1/me/search-history');
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as { data: { query: string }[] }).data.map((row) => row.query);
+}
+
+/** Records every search-history write the page sends (`POST /me/search-history…`). */
+function historyWrites(page: Page): { path: string; body: unknown }[] {
+  const writes: { path: string; body: unknown }[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && path.startsWith('/api/v1/me/search-history')) {
+      writes.push({ path, body: request.postDataJSON() });
+    }
+  });
+  return writes;
 }
 
 /** Resolves on the next recorded search (`POST /me/search-history`); arm it before the submit. */
@@ -551,5 +595,225 @@ test.describe('시장 검색', () => {
     expect(nothing).toContain('data-testid="markets-skeleton"');
     expect(nothing).not.toContain('data-testid="markets-empty"');
     expect(nothing).not.toContain(copy.marketsSearchEmpty);
+  });
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 검색 화면이 남아 있으면 최근 검색의 삭제·전체 삭제와 검색의 기록은 그 화면의 계정을 대어 거절되고, 어느 계정의 최근 검색도 바뀌지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset the screen still shows A's recent searches while the session
+    // already says B, and a write naming the session's account would be taken with B's cookie —
+    // B's history cleared from A's list, a term searched on A's screen recorded for B. Each names
+    // the account of the `Me` the screen was drawn from, so the server refuses it as another
+    // account's. That render is held here: B's cookie in this tab and the session read again,
+    // while `GET /me` and the recent list still answer as A (`switchAccountUnderScreen`).
+    const theirs = `b-${freshTag()}`;
+    const mine = `a-${freshTag()}`;
+    const searched = `a-${freshTag()}`;
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await recordThroughApi(other.request, theirs);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await recordThroughApi(page.request, mine);
+      await page.goto('/search');
+      await expect(recent(page).getByTestId('recent-search-link')).toHaveText([mine]);
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(
+        page,
+        shownContext.request,
+        { id: b.id, cookies: await otherContext.cookies() },
+        (request) =>
+          request.method() === 'GET' &&
+          new URL(request.url()).pathname === '/api/v1/me/search-history',
+      );
+
+      const writes = historyWrites(page);
+      const toast = page.locator('[data-scope="toast"]').getByText(copy.sessionChanged);
+      const answerOf = (path: string) =>
+        page.waitForResponse(
+          (response) =>
+            response.request().method() === 'POST' && new URL(response.url()).pathname === path,
+        );
+      // A's list, drawn again from A's `Me` and A's searches after the guard's reset.
+      await expect(recent(page).getByTestId('recent-search-link')).toHaveText([mine]);
+      const entry = (await recentIds(shownContext.request))[0];
+      let answered = answerOf(`/api/v1/me/search-history/${entry}/delete`);
+      await recent(page)
+        .getByRole('button', { name: `${mine} ${copy.recentSearchDelete}` })
+        .click();
+      expect((await answered).status()).toBe(403);
+      await expect(toast).toBeVisible();
+      await expect(recent(page).getByTestId('recent-search-link')).toHaveText([mine]);
+      answered = answerOf('/api/v1/me/search-history/clear');
+      await page.getByTestId('recent-searches-clear').click();
+      expect((await answered).status()).toBe(403);
+      await expect(recent(page).getByTestId('recent-search-link')).toHaveText([mine]);
+      // A search from the screen's box goes ahead; its record is refused.
+      answered = answerOf('/api/v1/me/search-history');
+      await searchOnScreen(page, searched);
+      expect((await answered).status()).toBe(403);
+      await expect(page).toHaveURL(`/search?q=${searched}`);
+
+      expect(writes).toEqual([
+        {
+          path: `/api/v1/me/search-history/${entry}/delete`,
+          body: { expectedAccountId: a.id },
+        },
+        { path: '/api/v1/me/search-history/clear', body: { expectedAccountId: a.id } },
+        { path: '/api/v1/me/search-history', body: { query: searched, expectedAccountId: a.id } },
+      ]);
+      // Nothing deleted, cleared or recorded, for B or for A.
+      expect(await recentOf(other.request)).toEqual([theirs]);
+      expect(await recentOf(shownContext.request)).toEqual([mine]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 계정을 말하는데 검색 화면의 `GET /me`가 다른 회원으로 답하면 최근 검색은 그 회원의 것을 읽을 때까지 비고, 앞 계정의 목록으로 지우지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. The list's answer names
+    // no owner: kept under one key for every account, the screen went on showing A's searches
+    // under B's `Me`, and its 전체 삭제 named B with B's cookie — B's history cleared from A's
+    // list. Kept under the account on screen, it is B's own list, read afresh: nothing to delete
+    // until it answers (held here), then B's.
+    const theirs = `b-${freshTag()}`;
+    const mine = `a-${freshTag()}`;
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await recordThroughApi(other.request, theirs);
+      await signUp(page, freshEmail());
+      await recordThroughApi(page.request, mine);
+      await page.clock.install();
+      await page.goto('/search');
+      await expect(recent(page).getByTestId('recent-search-link')).toHaveText([mine]);
+
+      // The recent list's reads from here on, held until released.
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route(
+        (url) => url.pathname === '/api/v1/me/search-history',
+        async (route) => {
+          if (route.request().method() === 'GET') await released;
+          await route.fallback();
+        },
+      );
+      const writes = historyWrites(page);
+      await switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      // B's list not read yet: none of A's entries, and nothing to delete.
+      await expect(recent(page)).toHaveCount(0);
+      await expect(page.getByTestId('recent-searches-clear')).toHaveCount(0);
+      release();
+      // B's own list.
+      await expect(recent(page).getByTestId('recent-search-link')).toHaveText([theirs]);
+
+      expect(writes).toEqual([]);
+      expect(await recentOf(other.request)).toEqual([theirs]);
+      expect(await recentOf(shownContext.request)).toEqual([mine]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+  test('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 다른 회원으로 답하면 검색창에 적던 검색어는 비워져, 그 회원의 최근 검색으로 가지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing. A box keeps what is typed in it — the
+    // header's never remounts — and its submit records the term for the account the header shows
+    // then: a term typed on A's screen, submitted once B is drawn, went into B's 최근 검색 with B's
+    // cookie (named the session's A it was refused before). Each box is drawn again for each
+    // account, so the term typed for A is gone.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      await page.clock.install();
+      await page.goto('/search');
+      await sessionKnown(page, true);
+      const typed = `a-${freshTag()}`;
+      const screenBox = page.getByTestId('search-input');
+      await screenBox.fill(typed);
+      // The header's field at md and up; below it the box is behind its icon, closed.
+      const header = page.getByTestId('nav-search');
+      const headerOpen = await header.isVisible();
+      if (headerOpen) await header.fill(typed);
+
+      const writes = historyWrites(page);
+      await switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+      // B's screen: neither box holds what was typed for A.
+      await expect(screenBox).toHaveValue('');
+      if (headerOpen) await expect(header).toHaveValue('');
+
+      expect(writes).toEqual([]);
+      expect(await recentOf(other.request)).toEqual([]);
+      expect(await recentOf(shownContext.request)).toEqual([]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('`GET /me`를 읽지 못하면 최근 검색은 못 읽었다고 말하고, 다시 시도로 읽으면 목록을 보인다', async ({
+    page,
+  }) => {
+    // ADR-0091: the list is the account's whose `Me` the screen was drawn from, read only once
+    // that is known. A `GET /me` that fails without ever answering left it on its skeleton for good
+    // — no error, no 다시 시도 — so it is the list's failure rung, saying the profile could not be
+    // read, and 다시 시도 reads `GET /me` again.
+    await signUp(page, freshEmail());
+    const mine = `a-${freshTag()}`;
+    await recordThroughApi(page.request, mine);
+    let failures = 0;
+    const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+    await page.route(isMeRead, async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      failures += 1;
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+      });
+    });
+    await page.goto('/search');
+    // The first read and its two retries (1 s, 2 s) have failed.
+    await expect.poll(() => failures, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+    const failed = page.getByTestId('recent-searches-error');
+    await expect(failed).toContainText(copy.errProfileLoad);
+    await expect(recent(page)).toHaveCount(0);
+
+    await page.unroute(isMeRead);
+    await failed.getByRole('button', { name: copy.retry }).click();
+    await expect(recent(page).getByTestId('recent-search-link')).toHaveText([mine]);
+    await expect(failed).toHaveCount(0);
   });
 });

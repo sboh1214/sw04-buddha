@@ -23,6 +23,7 @@ import { ProposeMarketEntry } from '@/components/proposals/propose-market-entry'
 import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useCategories, useMarketSearch } from '@/hooks/use-markets';
+import { useMe } from '@/hooks/use-me';
 import {
   useRecentSearches,
   useRecordSearch,
@@ -36,6 +37,7 @@ import {
   SEARCH_PATH,
   isMarketSearch,
   recentSearchPath,
+  searchBoxKey,
   searchCategoryOptions,
   searchErrorMessage,
   searchFormFields,
@@ -60,7 +62,9 @@ import { PILL_SELECT, SORT_LABEL } from '../market-filters';
  * afresh. A submitted term is recorded for a signed-in member (`useRecordSearch`), and so is a
  * recent search picked from the list, as a new search (owner decision 2026-10-16, ADR-0066: "새
  * 검색으로 기록") — a filter, an order or 더 보기 changes the URL or the page and records nothing,
- * and neither does a search opened by its address (ADR-0066).
+ * and neither does a search opened by its address (ADR-0066). The record, the recent list and its
+ * deletes are the account's whose `Me` the screen was drawn from — the header's — never the
+ * session's (use-search-history.ts, ADR-0091).
  */
 export function MarketSearch({
   filters,
@@ -82,7 +86,10 @@ export function MarketSearch({
   const tree = groupCategories(categories.data ?? seeded ?? []);
   const { groups, unlisted } = searchCategoryOptions(tree, filters.category);
   const { data: session, isPending: sessionPending } = useSession();
-  const record = useRecordSearch();
+  // The account the screen was drawn for: a submitted term is recorded for it, and the box is
+  // drawn again for each (`SearchBox`).
+  const accountId = useMe().data?.id;
+  const record = useRecordSearch(accountId);
   const body = searchScreenBody(filters, { pending: sessionPending, signedIn: session != null });
   const go = (next: SearchFilters) => router.push(searchPath(next) as Route);
 
@@ -93,7 +100,7 @@ export function MarketSearch({
         {copy.searchTitle}
       </Heading>
 
-      <SearchBox filters={filters} onSubmitted={record} />
+      <SearchBox filters={filters} accountId={accountId} onSubmitted={record} />
 
       <HStack gap="2" flexWrap="wrap" data-testid="search-filters">
         <PillSelect
@@ -162,8 +169,9 @@ export function MarketSearch({
  * field holds at most `SEARCH_INPUT_MAX_LENGTH`, so whatever it holds is a term the screen
  * searches (lib/market-search.ts). It is uncontrolled and keyed on the term the URL carries, the
  * header box's rule (nav.tsx `SearchForm`): a navigation that replaced the term remounts it, and
- * a filter change keeps what is typed. With no term it takes the focus, since typing one is the
- * only thing the screen asks for then.
+ * a filter change keeps what is typed. It is keyed on the account the screen was drawn for too,
+ * also the header box's rule (ADR-0091): a term typed for A is not B's to record. With no term it
+ * takes the focus, since typing one is the only thing the screen asks for then.
  *
  * Its landmark and its field are named '고른 조건으로 검색' (`searchRefineLabel`), not the header's
  * '시장 검색': on this screen both search landmarks are on the page, and two of one role with one
@@ -172,9 +180,12 @@ export function MarketSearch({
  */
 function SearchBox({
   filters,
+  accountId,
   onSubmitted,
 }: {
   filters: SearchFilters;
+  /** The account a submitted term is recorded for: the `Me` the screen was drawn from. */
+  accountId: string | undefined;
   onSubmitted: (term: unknown) => void;
 }) {
   return (
@@ -192,7 +203,8 @@ function SearchBox({
           <input key={name} type="hidden" name={name} value={value} />
         ))}
         <Input
-          key={filters.q ?? ''}
+          // The term the URL carries, and the account it is typed for (`searchBoxKey`).
+          key={searchBoxKey(accountId, filters.q)}
           name="q"
           type="search"
           defaultValue={filters.q ?? ''}
@@ -292,7 +304,10 @@ function SearchResults({ search, now }: { search: Search; now: number | undefine
  * the background, as a box's does, and the link navigates at once. Each entry shows its term only
  * (owner decision 2026-10-16, ADR-0066: the time it was searched is not shown). Private and
  * client-only: the root is in `PRIVATE_QUERY_ROOTS`. The ladder is the session-gated lists'
- * (`sessionListSection`): a session that ends under the screen shows the prompt instead.
+ * (`sessionListSection`): a session that ends under the screen shows the prompt instead. The list
+ * is the account's whose `Me` the screen was drawn from, read once `GET /me` has answered
+ * (ADR-0091); one that failed without ever answering leaves the list unread, said as its failure —
+ * `copy.errProfileLoad`, with 다시 시도 reading `GET /me` again — rather than a skeleton for good.
  */
 function RecentSearches({
   filters,
@@ -302,10 +317,17 @@ function RecentSearches({
   /** Records the entry's term as a new search (`useRecordSearch`). */
   onPicked: (term: unknown) => void;
 }) {
-  const recent = useRecentSearches();
-  const { write, accountId } = useSearchHistoryWrite();
+  // The account the screen was drawn for: its list is drawn, and every delete names it.
+  const me = useMe();
+  const accountId = me.data?.id;
+  // Signed in, and `GET /me` failed without ever answering: whose list it is is unknown, so none
+  // is read (`usePostWriter`'s `failed`).
+  const meFailed = me.isLoggedIn && me.isError && accountId === undefined;
+  const recent = useRecentSearches(accountId);
+  const write = useSearchHistoryWrite();
   const entries = recent.data ?? [];
   const section = sessionListSection(recent, entries.length);
+  const body = meFailed ? 'failed' : section.body;
   const press = (change: SearchHistoryWrite) => {
     write.mutate(change, {
       onError: (error) => {
@@ -314,7 +336,7 @@ function RecentSearches({
     });
   };
 
-  if (section.body === 'signedOut') {
+  if (body === 'signedOut') {
     return <EmptyState message={copy.searchPrompt} data-testid="search-prompt" />;
   }
   return (
@@ -328,7 +350,7 @@ function RecentSearches({
         <Heading as="h3" textStyle="titleLg" id="recent-searches-title">
           {copy.recentSearches}
         </Heading>
-        {section.body === 'rows' && accountId !== undefined && (
+        {body === 'rows' && accountId !== undefined && (
           <Button
             size="xs"
             variant="ghost"
@@ -350,21 +372,27 @@ function RecentSearches({
           </Button>
         </Alert.Root>
       )}
-      {section.body === 'pending' ? (
+      {body === 'pending' ? (
         <Skeleton height="120px" borderRadius="card" />
-      ) : section.body === 'failed' ? (
+      ) : body === 'failed' ? (
         <Stack gap="2" align="flex-start" data-testid="recent-searches-error">
           <Alert.Root status="error" role="alert">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{searchErrorMessage(recent.error)}</Alert.Description>
+              <Alert.Description>
+                {meFailed ? copy.errProfileLoad : searchErrorMessage(recent.error)}
+              </Alert.Description>
             </Alert.Content>
           </Alert.Root>
-          <Button size="sm" variant="outline" onClick={() => void recent.refetch()}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void (meFailed ? me.refetch() : recent.refetch())}
+          >
             {copy.retry}
           </Button>
         </Stack>
-      ) : section.body === 'empty' ? (
+      ) : body === 'empty' ? (
         <EmptyState message={copy.recentSearchesEmpty} data-testid="recent-searches-empty" />
       ) : (
         <Box as="ul" listStyleType="none" data-testid="recent-searches-list">

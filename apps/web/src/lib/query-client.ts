@@ -99,7 +99,7 @@ function makeQueryClient() {
   // MY's 관심 시장 holds the same cards in the same page shape (#89, ADR-0064), and the socket
   // writes them the same way (realtime-provider.tsx), so a refetch that left before a trade or
   // a close must not roll a card back either. `['watchlist', 'pages']` and never the root:
-  // `['watchlist', 'market', id]` is a `WatchState`, which this join would mangle.
+  // `['watchlist', 'market', id, accountId]` is a `WatchState`, which this join would mangle.
   client.setQueryDefaults(WATCHLIST_PAGES_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(

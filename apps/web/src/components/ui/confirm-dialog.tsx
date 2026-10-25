@@ -12,6 +12,8 @@ export interface ConfirmDialogProps {
   title: string;
   confirmLabel: string;
   loading: boolean;
+  /** The confirm button off while what it would send is not known yet (the cancel stays). */
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   children: ReactNode;
 }
@@ -32,6 +34,7 @@ export function ConfirmDialog({
   title,
   confirmLabel,
   loading,
+  confirmDisabled = false,
   onConfirm,
   children,
 }: ConfirmDialogProps) {
@@ -68,6 +71,7 @@ export function ConfirmDialog({
               <Button
                 size="sm"
                 loading={loading}
+                disabled={confirmDisabled}
                 onClick={onConfirm}
                 data-testid={`${testId}-confirm`}
               >

@@ -16,12 +16,13 @@ import {
 import { useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type ReactNode, useState } from 'react';
 import { RefusalText } from '@/components/moderation/refusal-text';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useClosureCheck, useCloseAccount } from '@/hooks/use-account-closure';
+import { useMe } from '@/hooks/use-me';
 import { forgetAccountInTab } from '@/hooks/use-sign-out';
 import {
   afterClosureInOrder,
@@ -31,6 +32,7 @@ import {
   closureLines,
   isClosureConfirmed,
 } from '@/lib/account-closure';
+import { isForAnotherAccount } from '@/lib/api';
 import { signOut } from '@/lib/auth-client';
 import { MY_SETTINGS_PATH } from '@/lib/my';
 import { type Refusal } from '@/lib/restriction';
@@ -54,8 +56,28 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  * 3), which comes here by the small link at the bottom of every onboarding screen ((4차) 1); its
  * way back to MY 설정, and to 조치·신고 내역, sends such an account through the steps it has
  * left as every MY screen does ((4차) 2). The button waits for '탈퇴' typed exactly
- * (`isClosureConfirmed`, the API's own rule) and for the session to say which account the screen
- * shows.
+ * (`isClosureConfirmed`, the API's own rule) and for the check read since the screen was drawn.
+ *
+ * The account that closes is the one of the `Me` the screen was drawn from — the header's, MY's —
+ * which the closure names (`expectedAccountId`), never the session's: in the render between the
+ * session naming another account and SessionCacheGuard's reset the session already says B while
+ * the screen still shows A's, and a closure naming B would be taken with B's cookie — B closed on
+ * the '탈퇴' typed on A's screen (ADR-0091). The server refuses it as another account's. So the
+ * screen waits for `GET /me` (MY's skeleton, its error rung when the profile did not arrive), and
+ * is keyed by that account: `['me']` can also turn from A to B in place, before the session does
+ * and so with no reset of SessionCacheGuard's (a window-focus refetch of `GET /me` answered with
+ * B's cookie ahead of better-auth's session refetch, a realtime resnapshot — ADR-0090 결정 4-2).
+ * Unkeyed, the '탈퇴' typed on A's screen would stay, the button on, now naming B with B's cookie,
+ * over A's Coin and refusals; keyed, the screen starts again empty for B. The check is kept under
+ * that account too (`accountClosureKey` — its answer names no owner), so B's screen waits for B's
+ * own check rather than showing A's; and the button waits for a check read since the screen was
+ * drawn that succeeded (`isSuccess && isFetchedAfterMount`) — a check that could not be read again
+ * is the error rung with 다시 시도, never the amount read before.
+ *
+ * The refusal as another account's (`copy.sessionChanged`) is kept above the keyed screen
+ * (`AccountClosure`'s `accountChanged`): the session read again on it says the account really
+ * signed in, SessionCacheGuard's reset then takes `['me']` back to waiting, and the screen is
+ * drawn again for that account — which says why it started again, in the same place.
  *
  * Closed, the screen says so at once (the session is gone, so MY's signed-out rung must not take
  * its place), then the cookie is cleared — which tells the other tabs (`afterClosureInOrder`) —
@@ -68,10 +90,46 @@ import { LoadFailed, SessionEnded, useSessionEnded } from '../../portfolio';
  */
 export function AccountClosure() {
   const [closed, setClosed] = useState(false);
+  // The refusal as another account's, kept across the screen drawn again for the account really
+  // signed in (the file's header).
+  const [accountChanged, setAccountChanged] = useState<Refusal | null>(null);
   const ended = useSessionEnded();
+  const me = useMe();
   if (closed) return <Closed />;
   if (ended) return <SessionEnded />;
-  return <ClosureScreen onClosed={() => setClosed(true)} />;
+  if (me.data === undefined) {
+    return (
+      <ClosureFrame>
+        {me.isPending || me.isFetching ? (
+          <Skeleton height="48" />
+        ) : (
+          <LoadFailed message={copy.errProfileLoad} onRetry={() => void me.refetch()} />
+        )}
+      </ClosureFrame>
+    );
+  }
+  // Keyed by the account it was drawn for (the file's header).
+  return (
+    <ClosureScreen
+      key={me.data.id}
+      accountId={me.data.id}
+      accountChanged={accountChanged}
+      onAccountChanged={setAccountChanged}
+      onClosed={() => setClosed(true)}
+    />
+  );
+}
+
+/** The screen's heading over what it shows. */
+function ClosureFrame({ children }: { children: ReactNode }) {
+  return (
+    <Stack gap="6" data-testid="account-closure">
+      <Heading as="h3" size="lg">
+        {copy.closureTitle}
+      </Heading>
+      {children}
+    </Stack>
+  );
 }
 
 /** What the screen says between the closure's answer and home. */
@@ -90,29 +148,48 @@ function Closed() {
   );
 }
 
-function ClosureScreen({ onClosed }: { onClosed: () => void }) {
-  const check = useClosureCheck();
+function ClosureScreen({
+  accountId,
+  accountChanged,
+  onAccountChanged,
+  onClosed,
+}: {
+  accountId: string;
+  /** A closure refused as another account's, on this screen or the one drawn before it. */
+  accountChanged: Refusal | null;
+  onAccountChanged: (refusal: Refusal | null) => void;
+  onClosed: () => void;
+}) {
+  const check = useClosureCheck(accountId);
   const close = useCloseAccount();
   const format = useFormatDateTime();
   const queryClient = useQueryClient();
   const router = useRouter();
   const [typed, setTyped] = useState('');
   const [failure, setFailure] = useState<Refusal | null>(null);
+  const refusal = failure ?? accountChanged;
 
   const blockers = check.data === undefined ? [] : closureBlockers(check.data, format);
   const blocked = blockers.length > 0;
   const confirmed = isClosureConfirmed(typed);
+  // A check read since this screen was drawn, and the last read a success: one held from before,
+  // or held through a read that failed since, is not the Coin and refusals of now.
   const canSubmit =
-    check.data !== undefined && !blocked && confirmed && close.ready && !close.isPending;
+    check.isSuccess && check.isFetchedAfterMount && !blocked && confirmed && !close.isPending;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (!canSubmit) return;
     setFailure(null);
+    onAccountChanged(null);
     try {
-      await close.mutateAsync(typed);
+      // The account the screen was drawn for rides along (`expectedAccountId`, A-PG-24).
+      await close.mutateAsync({ confirmation: typed, expectedAccountId: accountId });
     } catch (error) {
-      setFailure(closureFailure(error, format));
+      // Another account's: the screen is about to be drawn again for the account really signed
+      // in, and says why there (the file's header).
+      if (isForAnotherAccount(error)) onAccountChanged(closureFailure(error, format));
+      else setFailure(closureFailure(error, format));
       return;
     }
     onClosed();
@@ -120,7 +197,7 @@ function ClosureScreen({ onClosed }: { onClosed: () => void }) {
       signOut,
       onClosed: () => {
         // Everything, as 로그아웃 does (`forgetAccountInTab`, use-sign-out.ts): the browser's
-        // QueryClient outlives the account and none of its keys carries whose it was, and the
+        // QueryClient outlives the account and few of its keys carry whose it was, and the
         // post, comment and MY 설정 drafts an onboarding step kept in this tab — the step's
         // '탈퇴하기' leads here — go with the account that wrote them (ADR-0086 7-20).
         forgetAccountInTab(queryClient);
@@ -132,11 +209,8 @@ function ClosureScreen({ onClosed }: { onClosed: () => void }) {
   }
 
   return (
-    <Stack gap="6" data-testid="account-closure">
-      <Heading as="h3" size="lg">
-        {copy.closureTitle}
-      </Heading>
-      {check.data === undefined ? (
+    <ClosureFrame>
+      {check.data === undefined || check.isError ? (
         check.isError ? (
           // MY's error rung: announced (role="alert"), its 다시 시도 outside the announcement.
           <Box data-testid="closure-check-failed">
@@ -199,12 +273,12 @@ function ClosureScreen({ onClosed }: { onClosed: () => void }) {
                       data-testid="closure-confirmation"
                     />
                   </Field.Root>
-                  {failure !== null && (
+                  {refusal !== null && (
                     <Alert.Root status="error" role="alert" data-testid="closure-error">
                       <Alert.Indicator />
                       <Alert.Content>
                         <Alert.Description>
-                          <RefusalText message={failure.message} restricted={failure.restricted} />
+                          <RefusalText message={refusal.message} restricted={refusal.restricted} />
                         </Alert.Description>
                       </Alert.Content>
                     </Alert.Root>
@@ -231,6 +305,6 @@ function ClosureScreen({ onClosed }: { onClosed: () => void }) {
           </Card.Body>
         </Card.Root>
       )}
-    </Stack>
+    </ClosureFrame>
   );
 }

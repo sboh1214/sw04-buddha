@@ -6,9 +6,9 @@ import {
   useQuery,
   useQueryClient,
   type QueryClient,
+  type QueryKey,
   type QueryState,
 } from '@tanstack/react-query';
-import { meBelongsTo } from '@/hooks/use-me';
 import { type UpdateWatchBody, type WatchState, api, isForAnotherAccount, unwrap } from '@/lib/api';
 import {
   WATCHLIST_PAGES_KEY,
@@ -23,7 +23,8 @@ import { useSession } from '@/lib/use-session';
  * 관심 시장 (#89, ADR-0064): MY's list, the home's 관심 시장 view (#63, ADR-0065) and the detail's
  * button. All are private — the root is in `PRIVATE_QUERY_ROOTS`, so none is ever dehydrated into
  * a page — and all wait for the session like `useOrders` (use-portfolio.ts): the routes need the
- * cookie, and a signed-out request would take a 401 the retry rule refuses to retry.
+ * cookie, and a signed-out request would take a 401 the retry rule refuses to retry. The button's
+ * state waits for the account the screen shows, which keys it (`watchStateKey`, ADR-0091).
  *
  * The query and mutation options are exported apart from the hooks so they can be tested under
  * the node runner (use-watchlist.test.ts), as use-phone-verification.ts does.
@@ -83,16 +84,20 @@ export function useWatchlist(filters: WatchlistFilters = {}) {
   };
 }
 
-/** `GET /me/watchlist/:marketId`: whether the caller watches this market. */
-export function watchStateQueryOptions(marketId: string, session?: SessionLike) {
+/**
+ * `GET /me/watchlist/:marketId`: whether the caller watches this market — kept under the account
+ * the screen shows (`accountId`, the `Me` it was drawn from: `watchStateKey`), and read only once
+ * that account is known, so never for a visitor.
+ */
+export function watchStateQueryOptions(marketId: string, accountId: string | undefined) {
   const id = marketId.toLowerCase();
   return {
-    queryKey: watchStateKey(id),
+    queryKey: watchStateKey(id, accountId),
     queryFn: async (): Promise<WatchState> =>
       unwrap(
         await api.GET('/api/v1/me/watchlist/{marketId}', { params: { path: { marketId: id } } }),
       ).data,
-    enabled: session != null,
+    enabled: accountId !== undefined,
   };
 }
 
@@ -128,10 +133,9 @@ interface WatchSnapshot {
  */
 function restoreRead(
   queryClient: QueryClient,
-  marketId: string,
+  key: QueryKey,
   entry: QueryState<WatchState> | undefined,
 ) {
-  const key = watchStateKey(marketId);
   if (entry === undefined) {
     queryClient.removeQueries({ queryKey: key, exact: true });
     return;
@@ -164,36 +168,36 @@ function restoreRead(
  *   (it is usually not mounted here, so that only marks it stale for MY), and the state is read
  *   again so the screen ends on the server's word, whatever the answer was.
  *
- * The writes are scoped to the account the press was sent for, the `expectedAccountId` the server
- * compared with the cookie: no key under `['watchlist']` says whose it is, so `['me']` — which
- * does (`meBelongsTo`) — is asked. A press whose answer lands after the tab switched accounts
- * (SessionCacheGuard reset the cache) writes nothing into the other account's state; the
- * invalidations still run, and they ask with the cookie.
+ * Every write is into the state of the account the press was sent for — the `expectedAccountId`
+ * the server compared with the cookie, and the account of the entry the toggle drew
+ * (`watchStateKey`): a press whose answer lands after the tab switched accounts writes nothing
+ * into the state another account's screen draws. The list's invalidation still runs, and it asks
+ * with the cookie.
  */
 export function updateWatchOptions(
   queryClient: QueryClient,
   onSessionChanged: () => void,
   put: (variables: WatchVariables) => Promise<WatchState> = putWatch,
 ) {
-  const settle = async ({ marketId }: WatchVariables) => {
+  const keyOf = ({ marketId, expectedAccountId }: WatchVariables) =>
+    watchStateKey(marketId, expectedAccountId);
+  const settle = async (variables: WatchVariables) => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: WATCHLIST_PAGES_KEY }),
-      queryClient.invalidateQueries({ queryKey: watchStateKey(marketId), exact: true }),
+      queryClient.invalidateQueries({ queryKey: keyOf(variables), exact: true }),
     ]);
   };
   return {
     mutationFn: put,
     onMutate: async (variables: WatchVariables): Promise<WatchSnapshot> => {
-      const key = watchStateKey(variables.marketId);
+      const key = keyOf(variables);
       await queryClient.cancelQueries({ queryKey: key, exact: true });
       const entry = queryClient.getQueryState<WatchState>(key);
       queryClient.setQueryData<WatchState>(key, { watched: variables.watched });
       return { entry };
     },
     onSuccess: async (state: WatchState, variables: WatchVariables) => {
-      if (meBelongsTo(queryClient, variables.expectedAccountId)) {
-        queryClient.setQueryData<WatchState>(watchStateKey(variables.marketId), state);
-      }
+      queryClient.setQueryData<WatchState>(keyOf(variables), state);
       await settle(variables);
     },
     onError: async (
@@ -203,12 +207,12 @@ export function updateWatchOptions(
     ) => {
       if (isForAnotherAccount(error)) onSessionChanged();
       // No snapshot: `onMutate` did not finish, so no optimistic state was written.
-      if (snapshot !== undefined && meBelongsTo(queryClient, variables.expectedAccountId)) {
+      if (snapshot !== undefined) {
         const previous = snapshot.entry?.data;
         if (previous === undefined) {
-          restoreRead(queryClient, variables.marketId, snapshot.entry);
+          restoreRead(queryClient, keyOf(variables), snapshot.entry);
         } else {
-          queryClient.setQueryData<WatchState>(watchStateKey(variables.marketId), previous);
+          queryClient.setQueryData<WatchState>(keyOf(variables), previous);
         }
       }
       await settle(variables);
@@ -217,21 +221,18 @@ export function updateWatchOptions(
 }
 
 /**
- * The detail's button: the caller's state for one market and its toggle, plus the account the
- * screen shows (the session's user id), which a press sends as `expectedAccountId`. Until
- * better-auth has said whose session this is, `sessionPending` is true and `accountId` undefined;
- * the button draws its placeholder until then (`watchButtonView`).
+ * The detail's button: the state of one market for the account the screen shows (`accountId`, the
+ * `Me` it was drawn from — which a press sends as `expectedAccountId`), and its toggle. Never the
+ * session's account: in the render between the session naming another account and
+ * SessionCacheGuard's reset the session already says B while the toggle still shows A's state, and
+ * a press naming B would set B's watch to the opposite of A's (ADR-0091). So it offers no account
+ * of its own; the state waits for that account to be known, and `sessionPending` and `signedIn`
+ * only say whether anybody is signed in (`watchButtonView`).
  */
-export function useWatch(marketId: string) {
+export function useWatch(marketId: string, accountId: string | undefined) {
   const queryClient = useQueryClient();
   const { data: session, isPending: sessionPending, refetch: refetchSession } = useSession();
-  const state = useQuery(watchStateQueryOptions(marketId, session));
+  const state = useQuery(watchStateQueryOptions(marketId, accountId));
   const toggle = useMutation(updateWatchOptions(queryClient, () => void refetchSession()));
-  return {
-    state,
-    toggle,
-    sessionPending,
-    signedIn: session != null,
-    accountId: session?.user.id,
-  };
+  return { state, toggle, sessionPending, signedIn: session != null };
 }

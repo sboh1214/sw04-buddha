@@ -9,6 +9,7 @@ import { copy } from '@/copy';
 import { useLike, useMyLikesUnreadable } from '@/hooks/use-likes';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
+import { usePostWriter } from '@/hooks/use-posts';
 import type { Me } from '@/lib/api';
 import {
   type LikeButtonView,
@@ -42,21 +43,31 @@ import { postPath } from '@/lib/posts';
  * is remembered for after the login, and the reader presses again. A member with an onboarding
  * step left — one facing a re-consent alone, whom the gate lets stay on the post page — goes to
  * that step, coming back to this post (`useOnboardingEntry`'s `entryPath`), and the press is not
- * sent (owner decision 2026-10-20, answer 1); the server would refuse it (`OnboardedGuard`). A
- * press before `GET /me` has said so is sent: on a hard load the gate's `GET /me` and this page's
- * read of the reader's likes both wait for the session alone and go out together, the likes may
- * answer first, and a `GET /me` retried after a 5xx leaves the toggle standing for seconds. The
- * server refuses it (ONBOARDING_REQUIRED), the refusal reads `['me']` again (`afterRefusal`) before
- * the press's promise rejects, and the press then goes where `likeRefusalMove` says: to the step,
- * with no toast — or nowhere while the gate takes the account there — and the toast only when
- * `['me']` names no step to go to (owner decisions 2026-10-20 answer 1 and 2026-10-21, ADR-0076
- * 7-25). The button is one element on every rung — the server's HTML and the hydrating render are
- * the pending rung, and a visitor's turns into the signed-out one once the session answers, so a
- * keyboard focus a visitor already put on it stays.
+ * sent (owner decision 2026-10-20, answer 1); the server would refuse it (`OnboardedGuard`). The
+ * toggle stands only once `GET /me` has answered (below), so that step is known at the press; a
+ * revision published while the page is open is still refused by the server
+ * (ONBOARDING_REQUIRED), the refusal reads `['me']` again (`afterRefusal`) before the press's
+ * promise rejects, and the press then goes where `likeRefusalMove` says: to the step, with no
+ * toast — or nowhere while the gate takes the account there — and the toast only when `['me']`
+ * names no step to go to (owner decisions 2026-10-20 answer 1 and 2026-10-21, ADR-0076 7-25). The
+ * button is one element on every rung — the server's HTML and the hydrating render are the pending
+ * rung, and a visitor's turns into the signed-out one once the session answers, so a keyboard
+ * focus a visitor already put on it stays.
+ *
+ * The likes drawn and the account a press names are those of the `Me` the page was drawn from
+ * (`usePostWriter`, which the page's post and comment writes name too), never the session's: in
+ * the render between the session naming another account and SessionCacheGuard's reset the session
+ * already says B while the toggles still show A's likes, and a press naming B would set B's like
+ * to the opposite of A's (ADR-0091). The server refuses it as another account's. The likes are
+ * kept under that account (`myPostLikesKey`), so a `['me']` turned to B in place — before the
+ * session, with no reset — draws B's own likes, read afresh, rather than A's; and the toggles wait
+ * on the pending rung until `GET /me` has answered.
  *
  * When the reader's likes could not be read, every button of the page shows its count and cannot
  * be pressed, and the page says why in one line (`LikesUnreadableNotice`), which each button names
- * as its description (owner decision 2026-10-20, answer 10).
+ * as its description (owner decision 2026-10-20, answer 10). So too when `GET /me` failed without
+ * ever answering (`usePostWriter`'s `failed`): whose likes they would be is unknown, so none can
+ * be read (ADR-0091).
  *
  * A member's press moves the toggle and the count at once (`likePressOptions`), and a failure
  * puts both back with a toast saying which change did not happen. The toast is raised from the
@@ -76,7 +87,9 @@ export function LikeButton({
   /** The public count of the post or the comment, as the page holds it. */
   count: number;
 }) {
-  const like = useLike(postId, target);
+  const writer = usePostWriter();
+  const { accountId } = writer;
+  const like = useLike(postId, target, accountId, writer.failed);
   const { stepLeft, entryPath } = useOnboardingEntry();
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -103,11 +116,11 @@ export function LikeButton({
       router.push(entryPath(postPath(postId)) as Route);
       return;
     }
-    // The toggle is drawn only once the session named the account.
-    const accountId = like.accountId;
+    // The toggle is drawn only once its likes were read for the account on screen.
     if (accountId === undefined) return;
     const { liked } = action;
     void like.toggle
+      // The account whose likes the toggle drew rides along (`expectedAccountId`, A-PG-24).
       .mutateAsync({ target, liked, expectedAccountId: accountId })
       .catch((error: unknown) => {
         // `['me']` as the refusal read it again — not as this render saw it — and the page now.
@@ -162,7 +175,8 @@ export function LikesUnreadableNotice({
   /** Whether the line may show here at all; the region stays mounted either way. */
   show?: boolean;
 }) {
-  const unreadable = useMyLikesUnreadable(postId) && show;
+  const writer = usePostWriter();
+  const unreadable = useMyLikesUnreadable(postId, writer.accountId, writer.failed) && show;
   return (
     <Box
       role="status"

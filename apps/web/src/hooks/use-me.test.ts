@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   InfiniteQueryObserver,
   MutationObserver,
@@ -2193,5 +2194,33 @@ describe('the member’s faces the tab holds, after a profile image change (#141
     } finally {
       queryClient.clear();
     }
+  });
+});
+
+describe('the first password’s account (ADR-0091)', () => {
+  it('is the one /set-password and MY 설정’s password card were drawn for, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset both forms still
+    // show A's, and a body naming the session's account would be taken with B's cookie: B's first
+    // password, typed on A's screen. No component renders under node, so the wiring is pinned in
+    // the sources: the hook offers no account (no session id, no `ready`), each form is handed its
+    // `Me`'s id and sends it, and MY 설정's card is keyed by it as /set-password's form already was —
+    // `['me']` can turn to B in place before the session does (no reset to empty it), and an
+    // unkeyed card would keep the password typed for A, now naming B. e2e onboarding.spec.ts
+    // ('탭의 계정이 …', '탭의 세션이 …') drives both.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const hooks = source('./use-me.ts');
+    const start = hooks.indexOf('export function useSetPassword()');
+    expect(start).toBeGreaterThan(-1);
+    const hook = hooks.slice(start, hooks.indexOf('\n}\n', start));
+    expect(hook).not.toMatch(/user\.id|\baccountId\b|\bready\b/);
+    const page = source('../app/set-password/set-password-form.tsx');
+    expect(page).toContain('<SetPasswordFields key={me.id} next={next} accountId={me.id} />');
+    expect(page).toContain('expectedAccountId: accountId,');
+    expect(page).not.toMatch(/setPassword\.ready/);
+    const card = source('../app/my/settings/password-form.tsx');
+    expect(card).toContain('<SetPasswordFields key={me.id} accountId={me.id} />');
+    expect(card).toContain('<ChangePasswordFields key={me.id} />');
+    expect(card).toContain('expectedAccountId: accountId }');
+    expect(card).not.toMatch(/setPassword\.ready/);
   });
 });

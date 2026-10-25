@@ -1902,8 +1902,11 @@ describe('operators', () => {
       field: 'reason',
       message: copy.errModerationRecordRequired,
     });
+    // Another account's cookie closes the dialog with a toast: the page drops the dialog once the
+    // session names the operator really signed in, and an alert inside it would go with it
+    // (ADR-0091).
     expect(moderationFailure(otherAccount)).toEqual({
-      kind: 'alert',
+      kind: 'toast',
       message: copy.sessionChanged,
     });
     // Sending again cannot help: the session ended, or another admin revoked this one's role.

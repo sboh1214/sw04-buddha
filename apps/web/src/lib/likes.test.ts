@@ -123,16 +123,18 @@ const refusal = (status: number, code: string, details?: unknown) =>
   } as never);
 
 describe('the key of what the reader liked', () => {
-  it('is one private entry per post, by the lower-cased id, apart from the public posts root', () => {
-    expect(myPostLikesKey(POST)).toEqual(['likes', 'post', post]);
-    expect(myPostLikesKey(POST)).toEqual(myPostLikesKey(post));
+  it('is one private entry per post and account on screen, by the lower-cased id, apart from the public posts root', () => {
+    expect(myPostLikesKey(POST, 'user-1')).toEqual(['likes', 'post', post, 'user-1']);
+    expect(myPostLikesKey(POST, 'user-1')).toEqual(myPostLikesKey(post, 'user-1'));
+    // Each account's likes are an entry of their own (ADR-0091): the ones read for A are never B's.
+    expect(myPostLikesKey(POST, 'user-2')).not.toEqual(myPostLikesKey(POST, 'user-1'));
     // Never fetched on the server nor dehydrated into the HTML: whose like is nobody else's.
-    expect(isPrivateQueryKey(myPostLikesKey(POST))).toBe(true);
+    expect(isPrivateQueryKey(myPostLikesKey(POST, 'user-1'))).toBe(true);
     expect(isPrivateQueryKey(LIKES_KEY)).toBe(true);
     // The counts are public and stay under the posts' root, which the server seeds.
     expect(isPrivateQueryKey(postKey(post))).toBe(false);
     expect(isPrivateQueryKey(postCommentsKey(post))).toBe(false);
-    expect(myPostLikesKey(post)[0]).not.toBe(POSTS_KEY[0]);
+    expect(myPostLikesKey(post, 'user-1')[0]).not.toBe(POSTS_KEY[0]);
   });
 
   it('names the presses of each target apart, by the lower-cased ids (ADR-0076 7-30)', () => {

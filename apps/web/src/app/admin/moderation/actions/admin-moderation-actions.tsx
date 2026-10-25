@@ -1,10 +1,10 @@
 'use client';
 
 import { Alert, Button, Heading, Skeleton, Stack } from '@chakra-ui/react';
-import { useState } from 'react';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminModerationActions } from '@/hooks/use-admin-moderation';
+import { useHeldForOperator } from '@/hooks/use-operator';
 import { moderationRows } from '@/lib/moderation';
 import { ActionRows, type DialogSpec, ModerationDialog, ModerationNav } from '../moderation-parts';
 
@@ -19,7 +19,8 @@ import { ActionRows, type DialogSpec, ModerationDialog, ModerationNav } from '..
  */
 export function AdminModerationActions() {
   const list = useAdminModerationActions();
-  const [dialog, setDialog] = useState<DialogSpec | null>(null);
+  // Held for the admin on screen: a dialog opened on A's page is not B's to send (ADR-0091).
+  const [dialog, setDialog] = useHeldForOperator<DialogSpec>();
   const rows = moderationRows(list.data?.pages);
   return (
     <Stack gap="5" data-testid="admin-moderation-actions">
