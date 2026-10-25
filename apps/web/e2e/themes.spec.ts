@@ -29,6 +29,9 @@ import {
  * the page follows each. Unpublishing takes the theme off every one of those places, and its page
  * is a 404.
  *
+ * The admin's theme list keeps its rows when a 더 보기 fails and says so above the button (owner
+ * decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list), its pages shaped here.
+ *
  * The status boundaries, the list's order and the voided markets are the API's integration
  * tests' (themes.controller.test.ts): no product path voids a market yet (M8), and the order is
  * checked against themes of chosen dates where no other spec's themes share the list, which the
@@ -36,6 +39,17 @@ import {
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A server error as the API's envelope says it (discussion.spec.ts's): the client retries it twice. */
+const SERVER_ERROR = {
+  status: 500,
+  contentType: 'application/json',
+  body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+};
+
+/** The admin's theme list (`GET /admin/themes`), and the cursor this spec puts after its first page. */
+const ADMIN_THEMES = '/api/v1/admin/themes';
+const NEXT_CURSOR = 'e2e-second-page';
 const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
 /** The Korean date `days` from today, `YYYY-MM-DD`: what the admin's date inputs take. */
@@ -435,5 +449,66 @@ test.describe('테마', () => {
     await page.goto(`/markets/${a.slug}`);
     await expect(page.getByTestId('market-detail')).toBeVisible();
     await expect(page.getByTestId('market-themes')).toHaveCount(0);
+  });
+
+  test('관리자 테마 목록의 더 보기가 실패하면 읽은 테마는 남고 그 버튼 위에 오류를 보인다', async ({
+    admin,
+    page,
+  }) => {
+    // A theme of this run's, so the first page has a row whatever else the shared database holds.
+    const tag = freshTag();
+    const created = await admin.post(ADMIN_THEMES, {
+      data: {
+        slug: `e2e-theme-more-${tag}`,
+        name: `E2E 테마 더 보기 ${tag}`,
+        intro: `더 보기 ${tag}`,
+        startDate: koreanDate(1),
+        endDate: koreanDate(2),
+      },
+    });
+    expect(created.ok()).toBe(true);
+    const theme = ((await created.json()) as { data: { id: string } }).data;
+    // The first page as the API answers it, with a cursor after it — one 더 보기 to press —, and
+    // the page after it refused.
+    const isList = (url: URL) => url.pathname === ADMIN_THEMES;
+    const isNextPage = (url: URL) => isList(url) && url.searchParams.get('cursor') === NEXT_CURSOR;
+    await page.route(isList, async (route) => {
+      if (isNextPage(new URL(route.request().url()))) return route.fulfill(SERVER_ERROR);
+      const response = await route.fetch();
+      const body = (await response.json()) as { meta: Record<string, unknown> };
+      return route.fulfill({
+        response,
+        json: { ...body, meta: { ...body.meta, nextCursor: NEXT_CURSOR } },
+      });
+    });
+    await signIn(page, adminAccount.email, adminAccount.password);
+    await page.goto('/admin/themes');
+    const row = page.getByTestId(`admin-theme-${theme.id}`);
+    await expect(row).toBeVisible();
+    const names = page.getByTestId('admin-themes-list').getByRole('link');
+    const read = await names.count();
+
+    // A 더 보기 that fails keeps the themes read so far and says so right above the button, in the
+    // first read's words (owner decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list).
+    await page.getByTestId('admin-themes-more').click();
+    const moreFailed = page.getByTestId('admin-themes-more-failed');
+    await expect(moreFailed).toHaveText(copy.errUnknown);
+    await expect(moreFailed).toHaveAttribute('role', 'alert');
+    await expect(
+      page.locator('[data-testid="admin-themes-more-failed"] + [data-testid="admin-themes-more"]'),
+    ).toHaveCount(1);
+    await expect(names).toHaveCount(read);
+    await expect(row).toBeVisible();
+    await expect(page.getByTestId('admin-themes-more')).toBeEnabled();
+
+    // 더 보기 again, answered with the last page: the notice goes, and the button with it.
+    await page.unroute(isList);
+    await page.route(isNextPage, (route) =>
+      route.fulfill({ json: { data: [], meta: { nextCursor: null } } }),
+    );
+    await page.getByTestId('admin-themes-more').click();
+    await expect(page.getByTestId('admin-themes-more')).toHaveCount(0);
+    await expect(moreFailed).toHaveCount(0);
+    await expect(names).toHaveCount(read);
   });
 });

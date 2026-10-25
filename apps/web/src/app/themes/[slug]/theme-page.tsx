@@ -16,6 +16,7 @@ import NextLink from 'next/link';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useTheme, useThemeMarkets, useThemeResults } from '@/hooks/use-themes';
 import { type Theme, type ThemeNotice } from '@/lib/api';
@@ -190,7 +191,9 @@ function LinkedText({ text }: { text: string }) {
 /**
  * 결과 목록 (ADR-0069 decision 4): the theme's markets that are 판정 완료·정산 완료·무효, each with
  * its status label, its result — YES, NO or 무효 — and when it was decided, the latest first. The
- * markets' own outcome only: nobody's trades, performance or PnL. A row opens its market.
+ * markets' own outcome only: nobody's trades, performance or PnL. A row opens its market. A 더 보기
+ * that failed keeps the rows read so far and says so above its button (`LoadMoreFailed`, the first
+ * read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기 list).
  */
 function ThemeResults({ themeId }: { themeId: string }) {
   const results = useThemeResults(themeId);
@@ -257,16 +260,23 @@ function ThemeResults({ themeId }: { themeId: string }) {
             </HStack>
           ))}
           {results.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={results.isFetchingNextPage}
-              onClick={() => void results.fetchNextPage()}
-              data-testid="theme-results-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={results}
+                message={copy.errUnknown}
+                data-testid="theme-results-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={results.isFetchingNextPage}
+                onClick={() => void results.fetchNextPage()}
+                data-testid="theme-results-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

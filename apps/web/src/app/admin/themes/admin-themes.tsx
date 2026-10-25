@@ -17,6 +17,7 @@ import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ADMIN_THEMES_KEY, applyAdminTheme, useAdminThemes } from '@/hooks/use-admin-themes';
@@ -35,6 +36,9 @@ import { ThemeFormFields } from './theme-form-fields';
 /**
  * 테마 (#81, ADR-0088) for admins: 테마 만들기, then every theme, published or not, the newest
  * first, 20 a page — each with its status, its publication and its period, opening its detail.
+ * A 더 보기 that failed keeps the themes read so far and says so above its button
+ * (`LoadMoreFailed`, the first read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075
+ * 5-14, as every 더 보기 list); only a first read that failed (`isLoadingError`) shows the error.
  */
 export function AdminThemes() {
   const themes = useAdminThemes();
@@ -90,16 +94,23 @@ export function AdminThemes() {
             </HStack>
           ))}
           {themes.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={themes.isFetchingNextPage}
-              onClick={() => void themes.fetchNextPage()}
-              data-testid="admin-themes-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={themes}
+                message={copy.errUnknown}
+                data-testid="admin-themes-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={themes.isFetchingNextPage}
+                onClick={() => void themes.fetchNextPage()}
+                data-testid="admin-themes-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

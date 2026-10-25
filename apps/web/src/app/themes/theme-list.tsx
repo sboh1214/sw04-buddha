@@ -3,6 +3,7 @@
 import { Alert, Button, Grid, Skeleton, Stack } from '@chakra-ui/react';
 import { THEME_GRID_COLUMNS, ThemeCard } from '@/components/theme/theme-card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useThemeList } from '@/hooks/use-themes';
 import { listSection } from '@/lib/query-client';
@@ -12,7 +13,9 @@ const SKELETON_ROWS = [0, 1, 2];
 /**
  * The public theme list's cards, 20 a page with 더 보기, in the API's order. The rungs are every
  * list's (`listSection`): skeleton, a first load that failed with 다시 시도, the empty notice, the
- * cards, and a notice above them when a later refresh failed.
+ * cards, and a notice above them when a later refresh failed. A 더 보기 that failed keeps the cards
+ * read so far and says so above its button (`LoadMoreFailed`, the first read's `copy.errUnknown` —
+ * owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기 list).
  */
 export function ThemeList() {
   const themes = useThemeList();
@@ -56,16 +59,23 @@ export function ThemeList() {
             ))}
           </Grid>
           {themes.hasNextPage && (
-            <Button
-              alignSelf="center"
-              variant="outline"
-              borderRadius="pill"
-              loading={themes.isFetchingNextPage}
-              onClick={() => void themes.fetchNextPage()}
-              data-testid="themes-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={themes}
+                message={copy.errUnknown}
+                data-testid="themes-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                variant="outline"
+                borderRadius="pill"
+                loading={themes.isFetchingNextPage}
+                onClick={() => void themes.fetchNextPage()}
+                data-testid="themes-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </>
       )}

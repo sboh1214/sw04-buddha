@@ -24,6 +24,7 @@ import NextLink from 'next/link';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useAdminRelatedSearch } from '@/hooks/use-admin-markets';
@@ -363,7 +364,10 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
  * when, each taken out after a confirmation; and the picker that finds markets by title (`GET
  * /admin/markets?q=`, the 관련 시장 picker's own request and rules) and puts one in with a click.
  * Free composition (ADR-0069 decision 4, '편성 규칙'): any status, no cap, a market in any number
- * of themes. Putting in or taking out changes nothing of the market (N05 §7).
+ * of themes. Putting in or taking out changes nothing of the market (N05 §7). The picker's 더 보기
+ * that failed keeps the results read so far and says so above its button (`LoadMoreFailed`, the
+ * first read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as 관련 시장's
+ * picker on the market detail).
  */
 function ThemeMarketsPanel({ themeId }: { themeId: string }) {
   const queryClient = useQueryClient();
@@ -566,16 +570,23 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
                     </HStack>
                   ))}
                   {searchSection.more && (
-                    <Button
-                      alignSelf="center"
-                      size="sm"
-                      variant="ghost"
-                      loading={search.isFetchingNextPage}
-                      onClick={() => void search.fetchNextPage()}
-                      data-testid="admin-theme-market-search-more"
-                    >
-                      {copy.loadMore}
-                    </Button>
+                    <>
+                      <LoadMoreFailed
+                        list={search}
+                        message={copy.errUnknown}
+                        data-testid="admin-theme-market-search-more-failed"
+                      />
+                      <Button
+                        alignSelf="center"
+                        size="sm"
+                        variant="ghost"
+                        loading={search.isFetchingNextPage}
+                        onClick={() => void search.fetchNextPage()}
+                        data-testid="admin-theme-market-search-more"
+                      >
+                        {copy.loadMore}
+                      </Button>
+                    </>
                   )}
                 </Stack>
               )}
