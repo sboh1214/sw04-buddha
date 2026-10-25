@@ -122,7 +122,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `ACCOUNT_CLOSED` | 409 | 본인이 탈퇴한 계정이다(#140). 그 계정의 원장은 탈퇴 소멸에서 끝나므로 운영자의 잔액 조정을 받지 않고, 다시 로그인하지 못하고 프로필이 바뀌지 않으므로 관리자 권한 부여도 받지 않는다. |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (138개)
+## 오퍼레이션 (156개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -362,7 +362,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/comments/{commentId}/reports` | Report a 댓글 or a 대댓글. One reason (기타 needs a description). Refused: one’s own (own), the same person’s report on it still pending (duplicate), a deleted placeholder or a hidden item (deleted, hidden), and more than 20 in 24 hours per person (REPORT_LIMITED, none for an operator). Nothing is hidden by a report; an operator decides. Answers the report as the reporter’s list shows it | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `REPORT_NOT_ALLOWED`, `RATE_LIMITED`, `REPORT_LIMITED` |
 | POST | `/api/v1/profiles/{publicId}/reports` | Report a member’s public profile (its nickname, image and 소개). An unknown public id is NOT_FOUND, as the profile. One reason (기타 needs a description). Refused: one’s own (own), the same person’s report on it still pending (duplicate), and more than 20 in 24 hours per person (REPORT_LIMITED, none for an operator). Nothing is hidden by a report; an operator decides. Answers the report as the reporter’s list shows it | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `REPORT_NOT_ALLOWED`, `RATE_LIMITED`, `REPORT_LIMITED` |
 
-## 스키마 (221개)
+## 스키마 (234개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
