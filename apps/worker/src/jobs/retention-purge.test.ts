@@ -14,7 +14,9 @@
  * failed kind's record (14) — and #187's repeated-link review list (13). At the restack onto the
  * full chain (ADR-0087 결과 5): an object the store refuses stays queued for #46's clean-up, #48's
  * comment counts stay exact, #138's notice history is never touched, and another write's foreign
- * key check naming an item (a link flag) neither waits for the run nor is waited for. The release
+ * key check naming an item (a link flag) neither waits for the run nor is waited for. After PR
+ * #233's review (ADR-0087 7-29): a report sent while the run waits for its post or comment keeps
+ * that item's versions — the run asks what awaits an item once it holds it. The release
  * settings are changed the way the admin screen changes
  * them (a row and its record); the run's instant is moved past a period instead of backdating a
  * closure (a closed profile never changes, migration 0043). Skips when TEST_* are unset.
@@ -41,6 +43,7 @@ import {
   createWatch,
   hasTestDb,
   randomPhone,
+  randomPhoneHash,
   setReleaseSetting,
   type TestDb,
 } from '@buddha/db/test';
@@ -2471,6 +2474,176 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     (await t.db.select().from(schema.mediaDeletions)).sort((a, b) =>
       a.storageKey.localeCompare(b.storageKey),
     );
+
+  /**
+   * Polls (bounded) until another backend of the test database waits on a heavyweight lock: the
+   * run queued on a row a test's transaction holds. pg_stat_activity's snapshot is dropped before
+   * each read, so a poll that began before the run reached the lock sees it arrive.
+   */
+  async function lockWaiter(what: string): Promise<void> {
+    const observer = await t.db.$client.connect();
+    try {
+      const started = Date.now();
+      for (;;) {
+        await observer.query('SELECT pg_stat_clear_snapshot()');
+        const { rows } = await observer.query<{ n: number }>(
+          `SELECT count(*)::int AS n FROM pg_stat_activity
+             WHERE datname = current_database() AND pid <> pg_backend_pid()
+               AND wait_event_type = 'Lock'`,
+        );
+        if (rows[0]!.n >= 1) return;
+        if (Date.now() - started > 5_000) throw new Error(`${what}: nothing waits on a lock`);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    } finally {
+      observer.release();
+    }
+  }
+
+  /**
+   * A pending report on a post or a comment being sent, as ReportsService writes it: the item held
+   * FOR SHARE, then the report's row — not committed until `commit()`. `held` settles once both are
+   * in its transaction.
+   */
+  function reportInFlight(
+    target: { postId: string } | { commentId: string },
+    reporterId: string,
+    reportedUserId: string,
+  ) {
+    let held = () => {};
+    const holding = new Promise<void>((resolve) => {
+      held = resolve;
+    });
+    let release = () => {};
+    const released = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const writing = t.db.transaction(async (tx) => {
+      if ('postId' in target) {
+        await tx
+          .select({ id: schema.posts.id })
+          .from(schema.posts)
+          .where(eq(schema.posts.id, target.postId))
+          .for('share');
+      } else {
+        await tx
+          .select({ id: schema.postComments.id })
+          .from(schema.postComments)
+          .where(eq(schema.postComments.id, target.commentId))
+          .for('share');
+      }
+      await tx.insert(schema.reports).values({
+        targetType: 'postId' in target ? 'post' : 'comment',
+        postId: 'postId' in target ? target.postId : null,
+        commentId: 'commentId' in target ? target.commentId : null,
+        reporterId,
+        reportedUserId,
+        reporterPhoneHash: randomPhoneHash(),
+        reason: 'spam',
+      });
+      held();
+      await released;
+    });
+    return {
+      held: Promise.race([holding, writing]),
+      commit: async () => {
+        release();
+        await writing;
+      },
+    };
+  }
+
+  it('keeps a post’s earlier versions, and the images only they used, when a report about the post commits while the run waits for the post’s lock — and lets them go once it is processed (PR #233 Codex review, ADR-0087 7-29)', async () => {
+    const author = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const replacedAt = before(new Date(), 100);
+    const oldPicture = await image(author);
+    const post = await createPost(t.db, { marketId, authorId: author, title: '고친 글' });
+    await t.db.insert(schema.postImages).values({ postId: post.id, mediaId: oldPicture.id });
+    const version = await postRevision(post.id, replacedAt, [oldPicture.id]);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
+    const due = after(replacedAt, 30);
+
+    // The report holds the post FOR SHARE: the run, which chose the version while the report was
+    // not yet committed, queues on the post's lock and asks again once it has it.
+    const report = reportInFlight({ postId: post.id }, reporter, author);
+    await report.held;
+    const running = within(run(due), 10);
+    try {
+      await lockWaiter('the run behind the report on the post');
+    } finally {
+      await report.commit();
+    }
+    await running;
+    expect((await t.db.select().from(schema.postRevisions)).map((row) => row.id)).toEqual([
+      version.id,
+    ]);
+    expect(await mediaIds()).toEqual([oldPicture.id]);
+    expect(
+      (
+        await t.db.select().from(schema.postImages).where(eq(schema.postImages.postId, post.id))
+      ).map((row) => row.mediaId),
+    ).toEqual([oldPicture.id]);
+    expect(storage.objects.has(oldPicture.storageKey)).toBe(true);
+    expect(await queuedKeys()).toEqual([]);
+    expect(await countsAt(due)).toMatchObject({ post_revisions: 0 });
+
+    await t.db
+      .update(schema.reports)
+      .set({
+        status: 'dismissed',
+        resolvedAt: new Date(),
+        resolvedBy: admin,
+        dismissalReason: '기각',
+      })
+      .where(eq(schema.reports.postId, post.id));
+    const later = after(due, 1);
+    await run(later);
+    expect(await t.db.select().from(schema.postRevisions)).toEqual([]);
+    expect(await mediaIds()).toEqual([]);
+    expect(storage.objects.has(oldPicture.storageKey)).toBe(false);
+    expect(await countsAt(later)).toMatchObject({ post_revisions: 1 });
+  });
+
+  it('keeps a comment’s earlier versions when a report about the comment commits while the run waits for the comment’s lock — and lets them go once it is processed (PR #233 Codex review, ADR-0087 7-29)', async () => {
+    const author = (await createUser(t.db)).user.id;
+    const reporter = (await createUser(t.db)).user.id;
+    const replacedAt = before(new Date(), 100);
+    const post = await createPost(t.db, { marketId, authorId: author });
+    const comment = await createComment(t.db, { postId: post.id, authorId: author });
+    const version = await commentRevision(comment.id, replacedAt);
+    await setPeriod(DELETED_POSTS_RETENTION_SETTING, 30);
+    const due = after(replacedAt, 30);
+
+    const report = reportInFlight({ commentId: comment.id }, reporter, author);
+    await report.held;
+    const running = within(run(due), 10);
+    try {
+      // The versions' step locks the comment before it deletes: with no lock it would not wait.
+      await lockWaiter('the run behind the report on the comment');
+    } finally {
+      await report.commit();
+    }
+    await running;
+    expect((await t.db.select().from(schema.postCommentRevisions)).map((row) => row.id)).toEqual([
+      version.id,
+    ]);
+    expect(await countsAt(due)).toMatchObject({ comment_revisions: 0 });
+
+    await t.db
+      .update(schema.reports)
+      .set({
+        status: 'dismissed',
+        resolvedAt: new Date(),
+        resolvedBy: admin,
+        dismissalReason: '기각',
+      })
+      .where(eq(schema.reports.commentId, comment.id));
+    const later = after(due, 1);
+    await run(later);
+    expect(await t.db.select().from(schema.postCommentRevisions)).toEqual([]);
+    expect(await countsAt(later)).toMatchObject({ comment_revisions: 1 });
+  });
 
   it('queues each object’s key with its row’s deletion and unqueues it once the store has removed it (#46, ADR-0087 7-12)', async () => {
     const author = (await createUser(t.db)).user.id;

@@ -155,6 +155,18 @@ const RESTRICTION_CHANGE_KINDS = [
  * cancellation of a restriction about it (`moderation_actions.post_id` / `comment_id`): owner
  * decision 2026-10-24 12 «결정될 때까지 남김». A decision or a retraction ends the wait (the request
  * is no longer `pending`); the period still counts from the deletion or the replacement.
+ *
+ * It sees what had committed when its statement started — never a report or a request still being
+ * written. Each of those holds its item until it commits: a report FOR SHARE (ReportsService), an
+ * apply its subject FOR NO KEY UPDATE (`subjectOf`), a shorten, lift or cancellation the item its
+ * restriction cites FOR SHARE (AccountRestrictionService.requestChange). So a step decides only
+ * about an item it holds under ITEM_LOCK, which conflicts with all three, and asks this again in a
+ * statement after the one that took the lock (`awaitingNothing`, or the versions' deletion): under
+ * READ COMMITTED a locking statement judges the other tables by the snapshot it started with —
+ * whatever committed while it waited, or between that start and its reaching the row, it does not
+ * see — and the next statement's snapshot does (ADR-0087 7-29; the API's `claimImages` reads after
+ * its lock for the same reason). A report or request that comes after the lock waits for the
+ * run's commit and is about what the run left.
  */
 function nothingAwaits(on: 'post' | 'comment', column: SQLWrapper): SQL {
   const { reports, approvalRequests: requests, moderationActions: actions } = schema;
@@ -173,14 +185,50 @@ function nothingAwaits(on: 'post' | 'comment', column: SQLWrapper): SQL {
  * UPDATE takes — never FOR UPDATE (ADR-0083 7-13 and 결과 5, ADR-0087 7-27). It still waits for, and
  * is waited for by, every write that changes the row or hangs under it: an author's edit
  * (`lockOwnPost`/`lockOwnComment`, FOR NO KEY UPDATE), an operator's hiding or action on it (#50's
- * ITEM_LOCK, the same), a comment or a like written under it (FOR SHARE). It does not wait for the
- * foreign key checks of another write naming it — #187's `link_uses` and `link_flags` rows, a reply,
- * a report, a like (FOR KEY SHARE) — nor do they wait for it: the run empties a row, it never deletes
+ * ITEM_LOCK, the same), a comment or a like written under it (FOR SHARE) — and every write that makes
+ * it awaited (`nothingAwaits`): a report on it (FOR SHARE), an account restriction request citing
+ * it (an apply's subject FOR NO KEY UPDATE, a change's FOR SHARE). It does not wait for the foreign
+ * key checks of another write naming it — #187's `link_uses` and `link_flags` rows, a reply, a
+ * report, a like (FOR KEY SHARE) — nor do they wait for it: the run empties a row, it never deletes
  * one or changes its key, so a writer that holds the counts row of #48's trigger and the link locks
  * (7-13's chain) never queues behind the run, and the run never holds a row such a writer waits for
- * while it waits for another. The selecting steps also skip what is locked (SKIP LOCKED).
+ * while it waits for another. The steps that select items skip what is locked (SKIP LOCKED); the
+ * versions' steps wait for their items, in id order (`lockItems`), as the images' judgement always
+ * did: no write holds two posts, or two comments, in a mode the run's lock waits for — each holds
+ * the one item it is about — so none waits for another item the run holds (ADR-0087 7-29).
  */
 const ITEM_LOCK = 'no key update';
+
+/** Locks the posts or comments `ids` under ITEM_LOCK, in id order, waiting for each. */
+async function lockItems(tx: Tx, on: 'post' | 'comment', ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  const table = on === 'post' ? schema.posts : schema.postComments;
+  await tx
+    .select({ id: table.id })
+    .from(table)
+    .where(inArray(table.id, ids))
+    .orderBy(asc(table.id))
+    .for(ITEM_LOCK);
+}
+
+/**
+ * Of `ids` — posts or comments the step holds under ITEM_LOCK — those nothing awaits, asked in a
+ * statement after the one that took the locks (`nothingAwaits`, ADR-0087 7-29): a report or a
+ * request that committed while the step waited, or before the step reached the row, holds its item.
+ */
+async function awaitingNothing(
+  tx: Tx,
+  on: 'post' | 'comment',
+  ids: string[],
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set();
+  const table = on === 'post' ? schema.posts : schema.postComments;
+  const rows = await tx
+    .select({ id: table.id })
+    .from(table)
+    .where(and(inArray(table.id, ids), nothingAwaits(on, table.id)));
+  return new Set(rows.map((row) => row.id));
+}
 
 /**
  * The post images of `postIds` that no version of their post shows any more — not the post as it
@@ -193,12 +241,7 @@ const ITEM_LOCK = 'no key update';
 async function dropUnusedPostImages(tx: Tx, postIds: string[]): Promise<string[]> {
   if (postIds.length === 0) return [];
   const { posts, postImages, postRevisions, mediaObjects } = schema;
-  await tx
-    .select({ id: posts.id })
-    .from(posts)
-    .where(inArray(posts.id, postIds))
-    .orderBy(asc(posts.id))
-    .for(ITEM_LOCK);
+  await lockItems(tx, 'post', postIds);
   const unused = await tx
     .delete(postImages)
     .where(
@@ -254,52 +297,68 @@ const nicknameHolds: Step = async (tx, { cutoff, limit }) => {
  * report about the post or an account restriction request citing it waits: its processing or its
  * decision reads them (`nothingAwaits`). A withdrawn member's post an operator still hides loses
  * the versions this has not taken yet when its content is emptied, whatever their age
- * (`hiddenPosts`, owner decision 2026-10-24 (2차) 2). buddha_app holds no UPDATE of the table, so
- * no row lock: nothing but this job ever changes or deletes a version, and it runs one at a time.
+ * (`hiddenPosts`, owner decision 2026-10-24 (2차) 2). The versions due are chosen first, then their
+ * posts locked (ITEM_LOCK, in id order, waiting — `lockItems`), and the versions deleted in a
+ * statement after the lock that asks again (`nothingAwaits`): a report or a request in flight on a
+ * post holds it until it commits, and then keeps its versions and the images they show (ADR-0087
+ * 7-29). buddha_app holds no UPDATE of the versions' table, so no lock of their rows: nothing but
+ * this job ever changes or deletes a version, and it runs one at a time.
  */
 const postRevisions: Step = async (tx, { cutoff, limit }) => {
   const { postRevisions: revisions } = schema;
+  const due = await tx
+    .select({ id: revisions.id, postId: revisions.postId })
+    .from(revisions)
+    .where(and(lte(revisions.replacedAt, cutoff), nothingAwaits('post', revisions.postId)))
+    .orderBy(asc(revisions.replacedAt), asc(revisions.id))
+    .limit(limit);
+  if (due.length === 0) return { selected: 0, deleted: { post_revisions: 0 }, storageKeys: [] };
+  await lockItems(tx, 'post', [...new Set(due.map((row) => row.postId))]);
   const deleted = await tx
     .delete(revisions)
     .where(
-      inArray(
-        revisions.id,
-        tx
-          .select({ id: revisions.id })
-          .from(revisions)
-          .where(and(lte(revisions.replacedAt, cutoff), nothingAwaits('post', revisions.postId)))
-          .orderBy(asc(revisions.replacedAt), asc(revisions.id))
-          .limit(limit),
+      and(
+        inArray(
+          revisions.id,
+          due.map((row) => row.id),
+        ),
+        nothingAwaits('post', revisions.postId),
       ),
     )
     .returning({ postId: revisions.postId });
   const storageKeys = await dropUnusedPostImages(tx, [
     ...new Set(deleted.map((row) => row.postId)),
   ]);
-  return { selected: deleted.length, deleted: { post_revisions: deleted.length }, storageKeys };
+  // The versions taken up: those a report or a request came to hold under the lock are left, and
+  // a batch that deleted none of them ends the kind (`purgeExpiredRecords`).
+  return { selected: due.length, deleted: { post_revisions: deleted.length }, storageKeys };
 };
 
-/** The same for the earlier versions of comments, which have no images. */
+/** The same for the earlier versions of comments (no images), their comments locked. */
 const commentRevisions: Step = async (tx, { cutoff, limit }) => {
   const { postCommentRevisions: revisions } = schema;
+  const due = await tx
+    .select({ id: revisions.id, commentId: revisions.commentId })
+    .from(revisions)
+    .where(and(lte(revisions.replacedAt, cutoff), nothingAwaits('comment', revisions.commentId)))
+    .orderBy(asc(revisions.replacedAt), asc(revisions.id))
+    .limit(limit);
+  if (due.length === 0) return { selected: 0, deleted: { comment_revisions: 0 }, storageKeys: [] };
+  await lockItems(tx, 'comment', [...new Set(due.map((row) => row.commentId))]);
   const deleted = await tx
     .delete(revisions)
     .where(
-      inArray(
-        revisions.id,
-        tx
-          .select({ id: revisions.id })
-          .from(revisions)
-          .where(
-            and(lte(revisions.replacedAt, cutoff), nothingAwaits('comment', revisions.commentId)),
-          )
-          .orderBy(asc(revisions.replacedAt), asc(revisions.id))
-          .limit(limit),
+      and(
+        inArray(
+          revisions.id,
+          due.map((row) => row.id),
+        ),
+        nothingAwaits('comment', revisions.commentId),
       ),
     )
     .returning({ id: revisions.id });
   return {
-    selected: deleted.length,
+    selected: due.length,
     deleted: { comment_revisions: deleted.length },
     storageKeys: [],
   };
@@ -371,7 +430,9 @@ async function deleteCommentRevisionsOf(tx: Tx, commentIds: string[]): Promise<n
  * withdrawn author (decision 4 #184: the later of the two, GREATEST ignoring a NULL `closed_at`) —
  * emptied in place, then the images only they used. The row stays: comments under it, likes,
  * reports and actions name it, and the public placeholder reads `deleted_at`. Not while a report
- * about it or an account restriction request citing it waits (`nothingAwaits`).
+ * about it or an account restriction request citing it waits (`nothingAwaits` — asked again once the
+ * post is locked, `awaitingNothing`: a request in flight holds it, and one that committed before the
+ * lock was reached is seen).
  */
 const deletedPosts: Step = async (tx, { cutoff, now, limit }) => {
   const { posts, profiles } = schema;
@@ -391,10 +452,15 @@ const deletedPosts: Step = async (tx, { cutoff, now, limit }) => {
     .orderBy(asc(posts.deletedAt), asc(posts.id))
     .limit(limit)
     .for(ITEM_LOCK, { of: posts, skipLocked: true });
-  const ids = due.map((row) => row.id);
+  const clear = await awaitingNothing(
+    tx,
+    'post',
+    due.map((row) => row.id),
+  );
+  const ids = due.map((row) => row.id).filter((id) => clear.has(id));
   await emptyPosts(tx, ids, now);
   const storageKeys = await dropUnusedPostImages(tx, ids);
-  return { selected: ids.length, deleted: { deleted_posts: ids.length }, storageKeys };
+  return { selected: due.length, deleted: { deleted_posts: ids.length }, storageKeys };
 };
 
 /** Deleted 댓글 and 대댓글, as deleted posts: emptied in place once their period has passed. */
@@ -416,9 +482,14 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
     .orderBy(asc(postComments.deletedAt), asc(postComments.id))
     .limit(limit)
     .for(ITEM_LOCK, { of: postComments, skipLocked: true });
-  const ids = due.map((row) => row.id);
+  const clear = await awaitingNothing(
+    tx,
+    'comment',
+    due.map((row) => row.id),
+  );
+  const ids = due.map((row) => row.id).filter((id) => clear.has(id));
   await emptyComments(tx, ids, now);
-  return { selected: ids.length, deleted: { deleted_comments: ids.length }, storageKeys: [] };
+  return { selected: due.length, deleted: { deleted_comments: ids.length }, storageKeys: [] };
 };
 
 /**
@@ -438,7 +509,8 @@ const deletedComments: Step = async (tx, { cutoff, now, limit }) => {
  * `reports`, under the same rule from its processing). The action is locked FOR UPDATE (it is
  * deleted), then its post FOR NO KEY UPDATE (ITEM_LOCK — not FOR UPDATE, so another write's foreign
  * key check naming the post, a #187 link flag's, neither waits for the run nor is waited for), each
- * skipped while taken (SKIP LOCKED waits for neither) and the post checked again under its lock: a
+ * skipped while taken (SKIP LOCKED waits for neither) and the post checked again under its lock —
+ * its own columns by the locking statement, what awaits it by the next (`awaitingNothing`): a
  * cancellation in flight keeps both until it commits — the post shown again, the next run passes it
  * by — and one that comes after waits on the action and then finds it gone. A hidden post takes no
  * edit (POST_NOT_EDITABLE) and its author has withdrawn, so no version is added meanwhile.
@@ -486,8 +558,12 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
           )
           .orderBy(asc(posts.id))
           .for(ITEM_LOCK, { skipLocked: true });
-  const lockedIds = new Set(locked.map((row) => row.id));
-  const due = candidates.filter((row) => lockedIds.has(row.id));
+  const clear = await awaitingNothing(
+    tx,
+    'post',
+    locked.map((row) => row.id),
+  );
+  const due = candidates.filter((row) => clear.has(row.id));
   const ids = due.map((row) => row.id);
   await emptyPosts(tx, ids, now);
   const revisions = await deletePostRevisionsOf(tx, ids);
@@ -515,7 +591,8 @@ const hiddenPosts: Step = async (tx, { cutoff, now, limit }) => {
 
 /**
  * The same for a withdrawn member's 댓글 and 대댓글 an operator still hides, with their edit history
- * (counted as `comment_revisions`; no images) — the action FOR UPDATE, then the comment ITEM_LOCK.
+ * (counted as `comment_revisions`; no images) — the action FOR UPDATE, then the comment ITEM_LOCK,
+ * then what awaits it asked again (`awaitingNothing`).
  * Emptying one changes neither `deleted_at` nor `hidden_at`: #48's counter (`post_comment_counts`,
  * whose trigger follows those two and `post_id`) is left as it was — a hidden comment is not counted
  * before nor after (ADR-0087 7-28).
@@ -563,8 +640,12 @@ const hiddenComments: Step = async (tx, { cutoff, now, limit }) => {
           )
           .orderBy(asc(postComments.id))
           .for(ITEM_LOCK, { skipLocked: true });
-  const lockedIds = new Set(locked.map((row) => row.id));
-  const due = candidates.filter((row) => lockedIds.has(row.id));
+  const clear = await awaitingNothing(
+    tx,
+    'comment',
+    locked.map((row) => row.id),
+  );
+  const due = candidates.filter((row) => clear.has(row.id));
   const ids = due.map((row) => row.id);
   await emptyComments(tx, ids, now);
   const revisions = await deleteCommentRevisionsOf(tx, ids);
