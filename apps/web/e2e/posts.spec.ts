@@ -60,8 +60,9 @@ import {
  * post's and a card's — but asked for three times at most (ADR-0073 결과 5, Codex review of #219).
  * A post its author deletes in another tab turns its open page into the 404 once a read says it is
  * gone — a read that fails otherwise keeps the post — and its open edit screen too, once a save is
- * refused for it (ADR-0073 9-50); an image still uploading there then lands in nothing, the held
- * body left as it was (9-53).
+ * refused for it (ADR-0073 9-50); an image still uploading there then goes into the held body
+ * after the selected line, the line as it was, and the files waiting their turn are not sent
+ * (오너 결정 2026-10-25 (2차), 9-53).
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -184,6 +185,24 @@ const toastsOf = (page: Page) => page.locator('body > [data-scope="toast"][data-
 
 /** Long enough for a request the screen would send next (a batch's next upload) to have left. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 1_000));
+
+/**
+ * The editor made and taking keys: editable, and TipTap's `create` run (its root element keeps the
+ * editor — for tests, TipTap says). A step that types into it at once and relies on the form
+ * counting that as a change waits for this, not on how soon the editor shows its text.
+ */
+async function editorReady(editor: Locator): Promise<void> {
+  await expect(editor).toHaveAttribute('contenteditable', 'true');
+  await expect
+    .poll(() =>
+      editor.evaluate(
+        (root) =>
+          (root as HTMLElement & { editor?: { isInitialized?: boolean } }).editor?.isInitialized ===
+          true,
+      ),
+    )
+    .toBe(true);
+}
 
 /** `ms` of the page's own wait gone by, for what the screen shows in the middle of it. */
 const partOf = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -1797,6 +1816,10 @@ test.describe('근거 글', () => {
     const title = page.getByTestId('post-title-input');
     const editor = page.getByTestId('post-editor-content');
     await expect(editor).toContainText('남길 근거');
+    // The body alone is changed here: what the form holds is that change, so the keys go to an
+    // editor that is made (the form takes its baseline as the editor is mounted, before any key —
+    // a key before TipTap's `create` once went into it).
+    await editorReady(editor);
     await editor.click();
     await page.keyboard.press('End');
     await page.keyboard.type(' 쓰던 근거');
@@ -1830,14 +1853,15 @@ test.describe('근거 글', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('수정 화면에서 이미지를 올리는 사이 글이 다른 탭에서 지워지면, 그 뒤에 올라온 이미지는 고칠 수 없게 남은 본문에 들어가지 않고 기다리던 파일도 보내지 않는다', async ({
+  test('수정 화면에서 이미지를 올리는 사이 글이 다른 탭에서 지워지면, 그 뒤에 올라온 이미지는 고칠 수 없게 남은 본문의 고른 줄 뒤에 들어가고(그 줄은 그대로) 기다리던 파일은 보내지 않는다', async ({
     admin,
     page,
   }) => {
-    // Codex review of #219, round 6 (ADR-0073 9-53): the held form's editor is locked (9-52),
-    // which stops the writer but not an upload's own insert — one landing after the post went put
-    // its image in the held body, over the line selected when it was picked. The upload waits
-    // here until let go, past the read that finds the post gone (the page's clock and a focus, as
+    // 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (ADR-0073 9-53): the held form's editor is
+    // locked (9-52), which stops the writer but not an upload's own insert — one landing after the
+    // post went put its image over the line selected when it was picked (Codex review of #219,
+    // round 6). It goes in after that line now, and nothing more is sent. The upload waits here
+    // until let go, past the read that finds the post gone (the page's clock and a focus, as
     // above).
     const market = await createOpenMarket(admin);
     await signUp(page, freshEmail());
@@ -1877,20 +1901,35 @@ test.describe('근거 글', () => {
     await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
     await expect(editor).toHaveAttribute('contenteditable', 'false');
 
-    // The upload lands: nothing goes in — the selected line is still there to copy — and the file
-    // waiting its turn is never sent. Nothing is said: no file failed.
+    // The upload lands: its image goes in after the selected line, drawn from its preview — the
+    // line is still there, as it was, to copy — and the file waiting its turn is never sent.
+    // Nothing is said: no file failed.
     await held.shift()!.continue();
     await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
     await settle();
-    await expect(editor.locator('img')).toHaveCount(0);
-    await expect(editor).toContainText('올리던 근거 출처');
-    await expect(page.getByTestId('post-body-images')).toContainText('0 / 10');
+    await expect(editor.locator('img')).toHaveCount(1);
+    await expect(editor.locator('img')).toHaveAttribute('src', /^data:image\//);
+    // The line, the image, and the empty line the editor keeps after a body ending in an image.
+    expect(
+      await editor.evaluate((root) =>
+        Array.from(root.children, (child) =>
+          child.tagName === 'IMG' ? '[image]' : (child.textContent ?? ''),
+        ),
+      ),
+    ).toEqual(['올리던 근거 출처', '[image]', '']);
+    await expect(editor.locator('p em')).toHaveText('올리던 근거');
+    await expect(editor.locator('p a')).toHaveText('출처');
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+    // The selection left where it was.
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(
+      '올리던 근거',
+    );
+    await expect(page.getByTestId('post-body-images')).toContainText('1 / 10');
     expect(uploads).toBe(1);
     await expect(toastsOf(page).getByText(copy.errImageUpload)).toHaveCount(0);
     await expect(page.getByTestId('post-title-input')).toHaveValue(`올리던 글 ${tag}`);
-    // Held for the upload alone, the form now holds nothing of the writer's, yet stays under the
-    // sentence with 닫기 (and asks on leaving): dropping the image is the current choice, asked of
-    // the owner with the other ways (ADR-0073 9-53, 결과 4) — this test changes with the answer.
+    // Held with the image it took, under the sentence, until 닫기.
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
     await page.getByTestId('post-form-close').click();
     await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
     await expect(page).toHaveURL(edit);

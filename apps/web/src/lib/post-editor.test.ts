@@ -6,6 +6,8 @@ import {
   POST_TITLE_MAX_LENGTH,
   sanitizePostDocument,
 } from '@buddha/shared';
+import { Fragment, type Node as ProseMirrorNode, Schema, Slice } from '@tiptap/pm/model';
+import { AllSelection, NodeSelection, type Selection, TextSelection } from '@tiptap/pm/state';
 import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
@@ -24,6 +26,7 @@ import {
   createUploadQueue,
   draftChanged,
   editorImageIds,
+  heldImagePosition,
   imagePrecheck,
   imageRefusalMessage,
   imageUploadErrorMessage,
@@ -544,12 +547,13 @@ describe('uploadImageBatch', () => {
   /**
    * A batch over `files` whose slots were taken, each send answered by `answer` (a thrown error, or
    * nothing for an upload that lands and is placed): what each step saw, what went into the
-   * document, and the slots it holds while each file is sent.
+   * document ('<name>, held' for an image put in after the selection of a held form), and the slots
+   * it holds while each file is sent.
    */
   async function run(
     files: { name: string; size: number; type: string }[],
     answer: (name: string) => Error | undefined,
-    options: { alive?: () => boolean } = {},
+    options: { alive?: () => boolean; held?: () => boolean } = {},
   ) {
     const slots = createImageSlots();
     expect(slots.take(0, files.length)).toBe(true);
@@ -559,13 +563,14 @@ describe('uploadImageBatch', () => {
     const failed = vi.fn();
     await uploadImageBatch(files, slots, createUploadQueue(), {
       alive: options.alive ?? (() => true),
+      held: options.held ?? (() => false),
       send: async (sending, place) => {
         sent.push(sending.name);
         heldWhileSending.push(slots.inFlight);
         await Promise.resolve();
         const error = answer(sending.name);
         if (error !== undefined) throw error;
-        if (place(() => inserted.push(sending.name))) {
+        if (place((held) => inserted.push(held ? `${sending.name}, held` : sending.name))) {
           // Placed: the document counts it, the slot is back before the send settles.
           heldWhileSending.push(slots.inFlight);
         }
@@ -653,44 +658,96 @@ describe('uploadImageBatch', () => {
     expect(result.slots.inFlight).toBe(0);
   });
 
-  it('puts nothing in for an upload that lands once the editor takes no more images, and sends nothing more (Codex review of #219, round 6)', async () => {
-    // The post goes while 'b' is on its way: the form is held read-only (ADR-0073 9-52), the
-    // editor locked — which a programmatic insert would pass, over the text held to be copied.
-    let locked = false;
+  it('puts an upload that lands once the form is held in, told so, and sends nothing more (오너 결정 2026-10-25 (2차), 9-53)', async () => {
+    // The post goes while 'b' is on its way: the form is held read-only (ADR-0073 9-52). The
+    // landed image goes in — after what is selected (`insert` is told it is held,
+    // `heldImagePosition`), never over the text held to be copied (Codex review of #219, round
+    // 6) — and the file waiting its turn is not sent.
+    let held = false;
     const result = await run(
       [file('a'), file('b'), file('c')],
       (name) => {
-        if (name === 'b') locked = true;
+        if (name === 'b') held = true;
         return undefined;
       },
-      { alive: () => !locked },
+      { held: () => held },
     );
-    // 'a' went in before; 'b' landed (its upload stays on the API unused, cleaned up after 24
-    // hours) and went nowhere; 'c' was never sent. Nothing is said: no file failed.
     expect(result.sent).toEqual(['a', 'b']);
-    expect(result.inserted).toEqual(['a']);
+    expect(result.inserted).toEqual(['a', 'b, held']);
+    // Nothing is said: no file failed.
     expect(result.failed).not.toHaveBeenCalled();
-    // Every slot back: 'a' counted in the document, the other two free.
+    // Every slot back: 'a' and 'b' counted in the document, the other eight free.
     expect(result.slots.inFlight).toBe(0);
-    expect(result.slots.take(1, POST_IMAGES_MAX - 1)).toBe(true);
+    expect(result.slots.take(2, POST_IMAGES_MAX - 2)).toBe(true);
   });
 
-  it('puts nothing in for the only file of a batch locked while it uploads', async () => {
-    let locked = false;
+  it('puts the only file of a batch held while it uploads in, its slot back once it is in', async () => {
+    let held = false;
     const result = await run(
       [file('only')],
       () => {
-        locked = true;
+        held = true;
         return undefined;
       },
-      { alive: () => !locked },
+      { held: () => held },
     );
     expect(result.sent).toEqual(['only']);
-    expect(result.inserted).toEqual([]);
-    // Taken while it went up, given back when nothing went in.
-    expect(result.heldWhileSending).toEqual([1]);
+    expect(result.inserted).toEqual(['only, held']);
+    // Taken while it went up, given back as the image went in.
+    expect(result.heldWhileSending).toEqual([1, 0]);
     expect(result.slots.inFlight).toBe(0);
     expect(result.failed).not.toHaveBeenCalled();
+  });
+
+  it('puts nothing in for an upload that lands once the editor is gone, held or not', async () => {
+    for (const held of [false, true]) {
+      let gone = false;
+      const result = await run(
+        [file('only'), file('never')],
+        () => {
+          gone = true;
+          return undefined;
+        },
+        { alive: () => !gone, held: () => held && gone },
+      );
+      // Its upload stays on the API unused (cleaned up after 24 hours); nothing more is sent.
+      expect(result.sent).toEqual(['only']);
+      expect(result.inserted).toEqual([]);
+      expect(result.heldWhileSending).toEqual([2]);
+      expect(result.slots.inFlight).toBe(0);
+      expect(result.failed).not.toHaveBeenCalled();
+    }
+  });
+
+  it('sends nothing of a batch waiting its turn once the form is held, and gives its slots back', async () => {
+    const slots = createImageSlots();
+    const queue = createUploadQueue();
+    const failed = vi.fn();
+    let held = false;
+    const sent: string[] = [];
+    const inserted: string[] = [];
+    const steps = {
+      alive: () => true,
+      held: () => held,
+      send: async (
+        sending: { name: string },
+        place: (insert: (held: boolean) => void) => boolean,
+      ) => {
+        sent.push(sending.name);
+        await Promise.resolve();
+        held = true;
+        place((heldNow) => inserted.push(heldNow ? `${sending.name}, held` : sending.name));
+      },
+      failed,
+    };
+    expect(slots.take(0, 3)).toBe(true);
+    const first = uploadImageBatch([file('landing')], slots, queue, steps);
+    const waiting = uploadImageBatch([file('next'), file('nor')], slots, queue, steps);
+    await Promise.all([first, waiting]);
+    expect(sent).toEqual(['landing']);
+    expect(inserted).toEqual(['landing, held']);
+    expect(failed).not.toHaveBeenCalled();
+    expect(slots.inFlight).toBe(0);
   });
 
   /** A send that waits until let go: the sends in flight, and the most there were at once. */
@@ -699,7 +756,10 @@ describe('uploadImageBatch', () => {
     let inFlight = 0;
     let most = 0;
     const sent: string[] = [];
-    const send = async (sending: { name: string }, place: (insert: () => void) => boolean) => {
+    const send = async (
+      sending: { name: string },
+      place: (insert: (held: boolean) => void) => boolean,
+    ) => {
       sent.push(sending.name);
       inFlight += 1;
       most = Math.max(most, inFlight);
@@ -742,7 +802,7 @@ describe('uploadImageBatch', () => {
         names.map((name) => file(name)),
         slots,
         queue,
-        { alive: () => true, send: sends.send, failed },
+        { alive: () => true, held: () => false, send: sends.send, failed },
       );
     });
     await letEachGo(sends, batches);
@@ -761,7 +821,11 @@ describe('uploadImageBatch', () => {
     const sent: string[] = [];
     const steps = {
       alive: () => alive,
-      send: async (sending: { name: string }, place: (insert: () => void) => boolean) => {
+      held: () => false,
+      send: async (
+        sending: { name: string },
+        place: (insert: (held: boolean) => void) => boolean,
+      ) => {
         sent.push(sending.name);
         await Promise.resolve();
         if (sending.name === 'refused') throw NOT_AN_IMAGE;
@@ -784,6 +848,128 @@ describe('uploadImageBatch', () => {
     expect(sent).toEqual(['refused', 'next', 'last']);
     expect(failed.mock.calls).toEqual([[NOT_AN_IMAGE]]);
     expect(slots.inFlight).toBe(0);
+  });
+});
+
+describe('heldImagePosition', () => {
+  // The editor's blocks as far as where an image may stand goes — TipTap's content expressions: a
+  // list item starts with its line, a quote holds blocks, an image is a block of its own.
+  const schema = new Schema({
+    nodes: {
+      doc: { content: 'block+' },
+      paragraph: { group: 'block', content: 'inline*' },
+      blockquote: { group: 'block', content: 'block+' },
+      bulletList: { group: 'block', content: 'listItem+' },
+      listItem: { content: 'paragraph block*' },
+      image: { group: 'block', atom: true, attrs: { mediaId: { default: null } } },
+      text: { group: 'inline' },
+    },
+  });
+  const line = (text: string) => schema.node('paragraph', null, [schema.text(text)]);
+  const picture = (mediaId: string) => schema.node('image', { mediaId });
+  const imageType = schema.nodes.image;
+  const page = schema.node('doc', null, [
+    line('첫 줄'),
+    line('둘째 줄'),
+    schema.node('bulletList', null, [
+      schema.node('listItem', null, [line('항목')]),
+      schema.node('listItem', null, [line('다음 항목')]),
+    ]),
+    schema.node('blockquote', null, [line('인용')]),
+    picture('있던'),
+  ]);
+
+  /** Where a line's text starts and ends. */
+  function lineAt(doc: ProseMirrorNode, text: string): { start: number; end: number } {
+    let found: { start: number; end: number } | undefined;
+    doc.descendants((node, pos) => {
+      if (found === undefined && node.isTextblock && node.textContent === text) {
+        found = { start: pos + 1, end: pos + 1 + node.content.size };
+      }
+    });
+    if (found === undefined) throw new Error(`no line ${text}`);
+    return found;
+  }
+
+  /** The document as lines, images ('[id]') and what holds them. */
+  const outline = (node: ProseMirrorNode): unknown =>
+    node.isTextblock
+      ? node.textContent
+      : node.type === imageType
+        ? `[${String(node.attrs.mediaId)}]`
+        : { [node.type.name]: node.children.map(outline) };
+
+  /** The document once the landed image goes where `heldImagePosition` says. */
+  function landed(doc: ProseMirrorNode, selection: Selection) {
+    const at = heldImagePosition(selection, imageType);
+    return (
+      outline(doc.replace(at, at, Slice.maxOpen(Fragment.from(picture('새'))))) as {
+        doc: unknown[];
+      }
+    ).doc;
+  }
+
+  it('puts the image after the selected line, never over it (오너 결정 2026-10-25 (2차), 9-53)', () => {
+    const first = lineAt(page, '첫 줄');
+    const rest = [
+      '둘째 줄',
+      { bulletList: [{ listItem: ['항목'] }, { listItem: ['다음 항목'] }] },
+      { blockquote: ['인용'] },
+      '[있던]',
+    ];
+    // The line as ProseMirror selects it on a triple click, and as the browser does in the held
+    // editor (9-52) — through to the next line's start: after the selected line either way.
+    expect(landed(page, TextSelection.create(page, first.start, first.end))).toEqual([
+      '첫 줄',
+      '[새]',
+      ...rest,
+    ]);
+    expect(
+      landed(page, TextSelection.create(page, first.start, lineAt(page, '둘째 줄').start)),
+    ).toEqual(['첫 줄', '[새]', ...rest]);
+    // A part of the line, or the caret in it: after the whole line, which is not split.
+    expect(landed(page, TextSelection.create(page, first.start + 1, first.start + 2))).toEqual([
+      '첫 줄',
+      '[새]',
+      ...rest,
+    ]);
+    const second = lineAt(page, '둘째 줄');
+    expect(landed(page, TextSelection.create(page, second.start + 2))).toEqual([
+      '첫 줄',
+      '둘째 줄',
+      '[새]',
+      ...rest.slice(1),
+    ]);
+  });
+
+  it('stays within a list item or a quote, after the line, and after a selected image', () => {
+    const item = lineAt(page, '항목');
+    const list = (first: unknown[]) => ({
+      bulletList: [{ listItem: first }, { listItem: ['다음 항목'] }],
+    });
+    expect(landed(page, TextSelection.create(page, item.start, item.end))[2]).toEqual(
+      list(['항목', '[새]']),
+    );
+    // Through to the next item's line: after the selected one, within its item.
+    expect(
+      landed(page, TextSelection.create(page, item.start, lineAt(page, '다음 항목').start))[2],
+    ).toEqual(list(['항목', '[새]']));
+    const quote = lineAt(page, '인용');
+    expect(landed(page, TextSelection.create(page, quote.start, quote.end))[3]).toEqual({
+      blockquote: ['인용', '[새]'],
+    });
+    // An image selected (one that went in before it): after it.
+    const imageAt = page.content.size - picture('있던').nodeSize;
+    expect(landed(page, NodeSelection.create(page, imageAt)).slice(-2)).toEqual(['[있던]', '[새]']);
+    // Everything: at the end.
+    expect(landed(page, new AllSelection(page)).slice(-1)).toEqual(['[새]']);
+  });
+
+  it('puts it after an image the selection runs past to the next line’s start', () => {
+    const doc = schema.node('doc', null, [line('앞'), picture('있던'), line('뒤')]);
+    expect(
+      landed(doc, TextSelection.create(doc, lineAt(doc, '앞').start, lineAt(doc, '뒤').start)),
+    ).toEqual(['앞', '[있던]', '[새]', '뒤']);
   });
 });
 
@@ -909,6 +1095,7 @@ describe('the editor’s line, each file sent with its copy (uploadImageBatch ov
     const failed = vi.fn();
     await uploadImageBatch(files, slots, createUploadQueue(), {
       alive: () => true,
+      held: () => false,
       send: async (sending) => {
         // The network gone: every upload fails before its copy is drawn.
         await uploadWithPreview(
@@ -1021,7 +1208,7 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
     });
   });
 
-  it('sends nothing more once the editor has gone, or been locked for good, during the wait', async () => {
+  it('sends nothing more once the editor has gone, or its form been held, during the wait', async () => {
     const first = busy(2);
     const result = await retrying([first, 'never sent'], () => false);
     expect(result.sends).toBe(1);
@@ -1041,6 +1228,7 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
       let refusals = 2;
       const batch = uploadImageBatch([file('busy'), file('next')], slots, createUploadQueue(), {
         alive: () => true,
+        held: () => false,
         send: async (sending, place) => {
           await sendRetrying(
             () => {

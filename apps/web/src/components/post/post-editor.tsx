@@ -36,7 +36,7 @@ import {
 import StarterKit from '@tiptap/starter-kit';
 import { useQueryClient } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
@@ -48,6 +48,7 @@ import {
   POST_TEXT_COLOR_OPTIONS,
   countEditorDocument,
   createUploadQueue,
+  heldImagePosition,
   imageRefusalMessage,
   imageUploadErrorMessage,
   isPostTextColor,
@@ -248,7 +249,8 @@ export interface PostEditorProps {
   /**
    * The editor's JSON once it is made, before any change: what the form compares a change with to
    * tell a draft from the document it started from (the editor fills in attributes the stored
-   * body leaves out, so the stored body itself is no baseline).
+   * body leaves out, so the stored body itself is no baseline). Told as the editor is mounted —
+   * before its view is on the page, so before any key can reach it.
    */
   onReady?: (json: unknown) => void;
   /** The account on screen, which an upload names; no upload while it is unknown. */
@@ -267,7 +269,9 @@ export interface PostEditorProps {
   /**
    * The edit screen's post left every view, and the form holds what the writer had in it (오너
    * 결정 2026-10-24, ADR-0073 9-52): the body is there to select and copy, never to change — the
-   * form passes `disabled` with it, and the editor says it is read-only to assistive tech.
+   * form passes `disabled` with it, and the editor says it is read-only to assistive tech. Held
+   * so, the editor sends no more files, and an upload already on its way goes in after what is
+   * selected (오너 결정 2026-10-25 (2차), 9-53).
    */
   readOnly?: boolean;
   /** Whether the body is over a limit (the form's counts): the editor says so to assistive tech. */
@@ -300,6 +304,8 @@ export function PostEditor({
    * file (`boundedPreviewOf`) — and, for a draft taken back, with the copies it kept.
    */
   const [previews] = useState(() => new Map<string, string>(Object.entries(initialPreviews ?? {})));
+  // The editors whose baseline was told (`onMount`): once each, as its view is made.
+  const [settled] = useState(() => new WeakSet<Editor>());
   const editor = useEditor({
     // Next renders this component on the server too; the editor exists in the browser only.
     immediatelyRender: false,
@@ -349,7 +355,13 @@ export function PostEditor({
         mousedown: (view) => !view.editable,
       },
     },
-    onCreate: ({ editor: made }) => {
+    // The baseline as the view is made (`mount`, in TipTap's constructor), not on `create`, which
+    // TipTap runs a task later: by then the view may be on the page, and a key pressed before it —
+    // the editor shown, the text typed at once — went into the baseline and counted as no change,
+    // so a form whose post went could hold nothing for it (ADR-0073 9-52).
+    onMount: ({ editor: made }) => {
+      if (settled.has(made)) return;
+      settled.add(made);
       // Settled first: StarterKit's trailing node adds an empty paragraph after a body that ends in
       // anything else (a heading, an image, a table — a body the API took from elsewhere) on the
       // editor's first transaction of any kind, a focus too. Run now, outside the undo history, the
@@ -384,6 +396,14 @@ export function PostEditor({
     editor?.setEditable(!disabled);
   }, [editor, disabled]);
 
+  // Whether the form holds this editor read-only, its post gone (`readOnly`, ADR-0073 9-52), as an
+  // upload reads it when its turn comes or it lands: the held state itself, never the editor's lock
+  // (`isEditable`), which a send in flight sets too. From the commit that draws the form held.
+  const heldRef = useRef(readOnly);
+  useLayoutEffect(() => {
+    heldRef.current = readOnly;
+  }, [readOnly]);
+
   // The body's state for assistive tech, on ProseMirror's element as a field's would be on its
   // input. Set on the element itself: the `attributes` above are read when the editor is made, and
   // ProseMirror leaves alone the attributes it did not set.
@@ -413,16 +433,17 @@ export function PostEditor({
 
   const insertImages = async (files: File[]) => {
     if (editor === null || accountId === undefined) return;
-    // Whether the editor takes an image: there (the writer has not left, the gate has not taken the
-    // form away) and not locked (`isEditable` — a send in flight, or the post gone and the form
-    // held read-only, ADR-0073 9-52). Locking stops the writer, never a program: an image inserted
-    // into a locked editor goes in all the same, over the text it holds to be copied (Codex review
-    // of #219, round 6). So every step of an upload asks — its batch's start, each file's turn, a
-    // wait to send again, and the upload landed, before its image goes in (`uploadImageBatch`,
-    // 9-53).
-    const takesImages = () => !editor.isDestroyed && editor.isEditable;
+    // Whether the editor is there: the writer has not left, the gate has not taken the form away.
+    const alive = () => !editor.isDestroyed;
+    // Whether the form is held read-only, its post gone (ADR-0073 9-52): it sends no more files —
+    // no batch's start, no file's turn, no send again after a 429 — and an upload already on its
+    // way goes in after what is selected, never over it (`uploadImageBatch`, 오너 결정 2026-10-25
+    // (2차) «남긴 양식에 넣음», 9-53). The held state, not the lock: a send in flight locks the
+    // editor too, and drops or stops nothing.
+    const held = () => heldRef.current;
+    const sendsMore = () => alive() && !held();
     // A pick whose dialog was open as the post went takes nothing, as a drop does not.
-    if (!takesImages()) return;
+    if (!sendsMore()) return;
     // A file the precheck refuses is said at once and takes no slot; the others take theirs beside
     // the document's images and the uploads still on their way (`takeImageBatch`): a batch picked
     // or dropped while another uploads cannot pass the limit together with it.
@@ -436,10 +457,10 @@ export function PostEditor({
     }
     if (batch.sending.length === 0) return;
     // One file after another, behind the files of the editor's other batches; a refusal about the
-    // account, or an editor that takes no more images by a file's turn, ends the batch
-    // (`uploadImageBatch`).
+    // account, or an editor gone or held by a file's turn, ends the batch (`uploadImageBatch`).
     await uploadImageBatch(batch.sending, slots, sends, {
-      alive: takesImages,
+      alive,
+      held,
       send: async (file, place) => {
         changeUploads(1);
         try {
@@ -453,19 +474,35 @@ export function PostEditor({
             (picked) =>
               sendRetrying(() => upload(picked, accountId), {
                 sleep: pause,
-                alive: takesImages,
+                alive: sendsMore,
               }),
             boundedPreviewOf,
           );
-          // Only while the editor takes images (`place`): landed after the post went, nothing goes
-          // in — nor is its preview kept, nor handed to the form for a draft.
-          const placed = place(() => {
+          // Only while the editor is there (`place`): landed after it went, nothing goes in — nor
+          // is its preview kept, nor handed to the form for a draft.
+          const placed = place((heldNow) => {
             if (preview !== undefined) previews.set(uploaded.id, preview);
+            const { selection } = editor.state;
+            const image = editor.schema.nodeFromJSON({
+              type: 'image',
+              attrs: { mediaId: uploaded.id },
+            });
+            if (heldNow) {
+              // The form held read-only (9-52): the image goes in after what is selected, the text
+              // held to be copied left as it is (`heldImagePosition`) — and so are the selection
+              // and the focus, wherever the writer has them.
+              editor
+                .chain()
+                .insertContentAt(heldImagePosition(selection, image.type), image, {
+                  updateSelection: false,
+                })
+                .run();
+              return;
+            }
             // After an image goes in, the selection is that image (a node selection, which is where
             // ProseMirror puts the cursor after an atom at the end): the next one goes after it
             // rather than replacing it, so every image of a batch stays — and so does an image the
             // writer had selected. A text selection is replaced, as typing over it would.
-            const { selection } = editor.state;
             editor
               .chain()
               .focus()
@@ -473,12 +510,13 @@ export function PostEditor({
                 selection instanceof NodeSelection
                   ? selection.to
                   : { from: selection.from, to: selection.to },
-                { type: 'image', attrs: { mediaId: uploaded.id } },
+                image,
               )
               .run();
           });
-          // Drawn before the image went in, so the form has it — for a draft it keeps — before
-          // this upload stops counting (the `finally` below) and the form may send.
+          // Drawn before the image went in, so the form has it — for a draft it keeps, a held
+          // form's too (9-52) — before this upload stops counting (the `finally` below) and the
+          // form may send.
           if (placed && preview !== undefined) onPreview?.(uploaded.id, preview);
         } finally {
           changeUploads(-1);
@@ -489,8 +527,8 @@ export function PostEditor({
       // while the gate takes the account to its step, the draft kept in the tab — a toast would
       // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
       // gate stays, and it says what a refused send says (owner decision 2026-10-21
-      // answer 6). An upload given up for the editor gone, or locked for good, while it waited
-      // says nothing. Any other is said: that file's failure alone.
+      // answer 6). An upload given up for the editor gone, or held, while it waited says
+      // nothing. Any other is said: that file's failure alone.
       failed: (error) => {
         const message = imageUploadErrorMessage(error, gateMoves());
         if (message !== undefined) toaster.create({ type: 'error', title: message });

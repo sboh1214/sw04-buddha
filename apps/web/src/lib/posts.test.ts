@@ -336,34 +336,69 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(editor).toContain('mousedown: (view) => !view.editable,');
   });
 
-  it('puts no upload in the form it holds: every step of an upload asks whether the editor is locked (Codex review of #219, round 6, 9-53)', () => {
+  it('puts an upload landing in the form it holds in after the selection, and sends no more files: the held state, not the lock (오너 결정 2026-10-25 (2차), 9-53)', () => {
     // Locking stops the writer, not `insertContentAt`: an upload landing after the post went put
-    // its image in the held text — over a line selected when it was picked. `uploadImageBatch`
-    // places an image only while `alive` says so (post-editor.test.ts); here, that the editor's
-    // `alive` is its lock and that the insert goes through `place`.
+    // its image over a line selected when it was picked (Codex review of #219, round 6). Now it
+    // goes in after what is selected (`heldImagePosition`, post-editor.test.ts), and no file
+    // leaves after it; `uploadImageBatch` tells `insert` whether the form is held and stops the
+    // turns (post-editor.test.ts). Here, that the editor's `held` is the form's `readOnly` — never
+    // `isEditable`, which a send in flight sets too — and that the inserts go through `place`.
     const editor = readFileSync(
       new URL('../components/post/post-editor.tsx', import.meta.url),
       'utf8',
     );
-    expect(editor).toContain('const takesImages = () => !editor.isDestroyed && editor.isEditable;');
+    expect(editor).toContain('const heldRef = useRef(readOnly);');
+    expect(editor).toMatch(
+      /useLayoutEffect\(\(\) => \{\s*heldRef\.current = readOnly;\s*\}, \[readOnly\]\);/,
+    );
+    expect(editor).toContain('const alive = () => !editor.isDestroyed;');
+    expect(editor).toContain('const held = () => heldRef.current;');
+    expect(editor).toContain('const sendsMore = () => alive() && !held();');
+    expect(editor).not.toMatch(/editor\.isEditable|\.isEditable\(/);
     // A pick whose dialog was open as the post went, each file's turn, and a wait to send again.
-    expect(editor).toContain('if (!takesImages()) return;');
-    expect(editor.match(/alive: takesImages,/g)).toHaveLength(2);
-    // The only insert, its preview with it, inside `place`; the form hears of the preview only
-    // for an image that went in.
-    const place = editor.indexOf('const placed = place(() => {');
+    expect(editor).toContain('if (!sendsMore()) return;');
+    expect(editor).toMatch(/uploadImageBatch\(batch\.sending, slots, sends, \{\s*alive,\s*held,/);
+    expect(editor).toContain('alive: sendsMore,');
+    // The inserts, the preview with them, inside `place`: held, after the selection, the selection
+    // and the focus left as they are; else over a text selection, as before. The form hears of the
+    // preview only for an image that went in.
+    const place = editor.indexOf('const placed = place((heldNow) => {');
     const preview = editor.indexOf(
       'if (placed && preview !== undefined) onPreview?.(uploaded.id, preview);',
     );
     expect(place).toBeGreaterThan(-1);
     expect(preview).toBeGreaterThan(place);
-    expect(editor.match(/insertContentAt\(/g)).toHaveLength(1);
-    const insert = editor.indexOf('insertContentAt(');
-    expect(insert).toBeGreaterThan(place);
-    expect(insert).toBeLessThan(preview);
+    const placing = editor.slice(place, preview);
+    expect(editor.match(/insertContentAt\(/g)).toHaveLength(2);
+    expect(placing.match(/insertContentAt\(/g)).toHaveLength(2);
+    expect(placing).toMatch(
+      /if \(heldNow\) \{[\s\S]*?editor\s*\.chain\(\)\s*\.insertContentAt\(heldImagePosition\(selection, image\.type\), image, \{\s*updateSelection: false,\s*\}\)\s*\.run\(\);\s*return;\s*\}/,
+    );
+    expect(placing.match(/\.focus\(\)/g)).toHaveLength(1);
+    expect(placing.indexOf('.focus()')).toBeGreaterThan(placing.indexOf('return;'));
     expect(editor.match(/previews\.set\(uploaded\.id, preview\)/g)).toHaveLength(1);
-    expect(editor.indexOf('previews.set(uploaded.id, preview)')).toBeGreaterThan(place);
-    expect(editor.indexOf('previews.set(uploaded.id, preview)')).toBeLessThan(insert);
+    expect(placing.indexOf('previews.set(uploaded.id, preview)')).toBeGreaterThan(-1);
+    expect(placing.indexOf('previews.set(uploaded.id, preview)')).toBeLessThan(
+      placing.indexOf('insertContentAt('),
+    );
+    // A drop and the toolbar stay shut while the editor is locked, held or sending.
+    expect(editor).toContain('if (!disabled) void insertImages(files);');
+  });
+
+  it('takes the body’s baseline as the editor is mounted, before any key can reach it (ADR-0073 9-52)', () => {
+    // TipTap runs `create` a task after it makes the view, which may be on the page by then: a key
+    // pressed before it went into the baseline and counted as no change, so a form whose post went
+    // could hold nothing for it. `mount` runs as the view is made, in TipTap's constructor.
+    const editor = readFileSync(
+      new URL('../components/post/post-editor.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(editor).not.toContain('onCreate');
+    expect(editor).toMatch(
+      /onMount: \(\{ editor: made \}\) => \{\s*if \(settled\.has\(made\)\) return;\s*settled\.add\(made\);[\s\S]*?made\.view\.dispatch\(made\.state\.tr\.setMeta\('addToHistory', false\)\);\s*onReady\?\.\(made\.getJSON\(\)\);\s*\},/,
+    );
+    const form = readFileSync(new URL('../components/post/post-form.tsx', import.meta.url), 'utf8');
+    expect(form).toMatch(/onReady=\{\(json\) => \{\s*baseline\.current = JSON\.stringify\(json\);/);
   });
 });
 
