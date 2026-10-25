@@ -53,9 +53,11 @@ import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } fr
  * failing — until the last is closed, then its 404 (owner decisions 2026-10-21). An edit screen
  * whose post is deleted in another tab with a comment under it — its read now the placeholder, not
  * NOT_FOUND — keeps the title and the body written in it, read-only, until 닫기, then shows the
- * placeholder a reload draws (오너 결정 2026-10-24, ADR-0073 9-52; ADR-0074 7-35). The depth rule,
- * the placeholders' rules, the counts, the permissions and the link safety are the API's and the
- * shared package's tests; this walks the screens.
+ * placeholder a reload draws (오너 결정 2026-10-24, ADR-0073 9-52; ADR-0074 7-35) — an image on its
+ * way as the post went going in after the line selected, the file after it never sent (오너 결정
+ * 2026-10-25 (2차), ADR-0073 9-53). The depth rule, the placeholders' rules, the counts, the
+ * permissions and the link safety are the API's and the shared package's tests; this walks the
+ * screens.
  */
 
 /**
@@ -208,6 +210,12 @@ async function commentThroughApi(
   expect(res.status(), await res.text()).toBe(201);
   return ((await res.json()) as { data: { id: string } }).data.id;
 }
+
+/** A 1×1 PNG for the edit screen's picker, as posts.spec.ts sends. */
+const PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 /** The comment `id` as the thread draws it. */
 const commentOf = (page: Page, id: string) => page.getByTestId(`comment-${id}`);
@@ -2465,6 +2473,91 @@ test.describe('댓글·대댓글', () => {
     await expect(page).toHaveURL(plain.edit);
     expect(asked).toHaveLength(1);
     expect(saves).toBe(1);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('댓글이 달린 글이 수정 화면에서 이미지를 올리는 사이 다른 탭에서 지워지면, 그 뒤에 올라온 이미지는 고칠 수 없게 남은 본문의 고른 줄 뒤에 들어가고(그 줄은 그대로) 기다리던 파일은 보내지 않으며, 닫기 뒤에는 자리표시다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (ADR-0073 9-53) on the form held for a post
+    // deleted with a comment under it (ADR-0074 7-35) — its read the placeholder, not NOT_FOUND:
+    // the same form, held read-only by the same `gone`, so an upload on its way as the post goes
+    // lands after the selected line, and the file waiting its turn is never sent (posts.spec.ts's
+    // twenty-second, for a post gone from every view). The upload waits until let go, past the
+    // read that finds the placeholder (the page's clock and a focus, as above).
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    await signUp(page, freshEmail());
+    await page.clock.install();
+    const postId = await postThroughApi(page.request, market.id, `올리던 글 ${tag}`, '올리던 근거');
+    await commentThroughApi(page.request, postId, null, `올리던 글의 댓글 ${tag}`);
+    const edit = `/community/posts/${postId}/edit`;
+    const held: Route[] = [];
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', (route) => {
+      uploads += 1;
+      held.push(route);
+    });
+    await page.goto(edit);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toContainText('올리던 근거');
+    // The line selected, then two images picked: the first goes up, the second waits its turn.
+    await editor.locator('p').first().click({ clickCount: 3 });
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(
+      '올리던 근거',
+    );
+    await page.getByTestId('post-editor-file').setInputFiles(
+      [1, 2].map((n) => ({
+        name: `evidence-${String(n)}.png`,
+        mimeType: 'image/png',
+        buffer: PNG,
+      })),
+    );
+    await expect.poll(() => held.length).toBe(1);
+    await expect(page.getByTestId('post-editor-uploading')).toBeVisible();
+
+    // Deleted in another tab — it stays as its placeholder — and read again on a focus: the upload
+    // on its way is something to keep (ADR-0073 9-52), so the form stays, locked, under the
+    // sentence.
+    const other = await page.context().newPage();
+    await other.goto(`/community/posts/${postId}`);
+    await other.getByTestId('post-delete').click();
+    await other.getByTestId('post-delete-confirm').click();
+    await expect(other).toHaveURL('/community');
+    const read = await other.request.get(`/api/v1/posts/${postId}`);
+    expect(((await read.json()) as { data: { state: string } }).data.state).toBe('deleted');
+    await other.close();
+    await page.clock.fastForward('00:31');
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+
+    // The upload lands: its image goes in after the selected line, which stays as it was, selected
+    // to copy — and the file waiting its turn is never sent.
+    await held.shift()!.continue();
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    await expect(editor.locator('img')).toHaveCount(1);
+    // The line, the image, and the empty line the editor keeps after a body ending in an image.
+    expect(
+      await editor.evaluate((root) =>
+        Array.from(root.children, (child) =>
+          child.tagName === 'IMG' ? '[image]' : (child.textContent ?? ''),
+        ),
+      ),
+    ).toEqual(['올리던 근거', '[image]', '']);
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(
+      '올리던 근거',
+    );
+    await expect(page.getByTestId('post-body-images')).toContainText('1 / 10');
+    expect(uploads).toBe(1);
+    await expect(page.getByTestId('post-edit-unavailable')).toHaveCount(0);
+    // Held with the image it took until 닫기 — then the placeholder a reload draws.
+    await page.getByTestId('post-form-close').click();
+    await expect(page.getByTestId('post-edit-unavailable')).toHaveText(copy.postDeletedPlaceholder);
+    await expect(page.getByRole('heading', { name: '404' })).toHaveCount(0);
+    await expect(page).toHaveURL(edit);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });
