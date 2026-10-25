@@ -5,8 +5,9 @@
  * - a bare '오너 결정 <date> N' in ADR-0089 names an answer of ADR-0089's own table of that date —
  *   so another ADR's answer of a day ADR-0089 also has a table for (ADR-0087's 2026-10-24 11·13)
  *   carries its ADR, and an 'ADR-0089 오너 결정 <date> N' anywhere names an answer that exists;
- * - decision 7's opening names every item chosen since the first build, up to the last one, and
- *   says what 결과 4 says (no question left);
+ * - decision 7's opening names every item chosen since the first build, up to the last one;
+ * - wherever ADR-0089 speaks of 결과 4 — the preface, decision 7's opening, 결과 3 — it says what
+ *   결과 4 says: no question left, or that the questions are there (the preface with their number);
  * - where ADR-0089 adds `pendingProposals` to `GET /me/closure`'s answer, ADR-0086's status line
  *   names every ADR-0086 decision that lists that answer's fields (3, and 5's registry reason);
  * - ADR-0089 결과 1 repeats, as it stands, each clause ADR-0089 wrote into another ADR's status line;
@@ -186,7 +187,7 @@ describe('#77’s owner decisions in ADR-0089', () => {
     );
   });
 
-  it('opens decision 7 with every item chosen since the first build, the last one included, and with 결과 4’s answer', () => {
+  it('opens decision 7 with every item chosen since the first build, the last one included', () => {
     const section = between(ADR_0089, '**7. 구현의 선택.**', '**8. 시험.**');
     const opening = section.split('\n')[0]!;
     const items = section
@@ -213,11 +214,40 @@ describe('#77’s owner decisions in ADR-0089', () => {
       expect(named.has(n), `decision 7's opening does not name 7-${n}`).toBe(true);
     }
     expect(opening).toContain('오너 결정 2026-10-24를 구현하며 고른 것은 7-34다');
+  });
 
-    // 결과 4 has no question left, and the opening says so instead of sending the reader there.
-    expect(ADR_0089).toContain('**4. 오너에게 물을 것.** 없다.');
-    expect(opening).toContain('결과 4에 남은 질문은 없다');
-    expect(opening).not.toMatch(/물을 것은 결과 4에 있다/);
+  it('says what 결과 4 says wherever it speaks of 결과 4: the preface, decision 7’s opening and 결과 3', () => {
+    const lines = ADR_0089.split('\n');
+    const lineStarting = (start: string) => {
+      const found = lines.filter((line) => line.startsWith(start));
+      expect(found, `one line starting "${start}"`).toHaveLength(1);
+      return found[0]!;
+    };
+    const result4 = between(ADR_0089, '**4. 오너에게 물을 것.**', '**5. 알려진 한계');
+    const questions = result4.split('\n').filter((line) => /^\d+\. \*\*/.test(line));
+    const preface = lineStarting('이슈 번호와 기획 인용 표기는');
+    const opening = lineStarting('**7. 구현의 선택.**');
+    const result3 = lineStarting('**3. 오너가 할 일.**');
+
+    if (result4.startsWith('**4. 오너에게 물을 것.** 없다.')) {
+      expect(questions).toEqual([]);
+      expect(preface).toContain('물을 것은 결과 4에 남긴다(지금은 없다)');
+      for (const text of [opening, result3]) {
+        expect(text).toContain('결과 4에 남은 질문은 없다');
+        expect(text).not.toMatch(/물을 것은 결과 4에 있다|결과 4의 질문에 답한다/);
+      }
+      return;
+    }
+    // Questions left (2026-10-25: the operator's number change and the proposals' hash): each is
+    // numbered and ends with what is done now, and every place sends the reader there.
+    expect(result4).toContain('지금 동작은 질문의 마지막 문장이다.');
+    expect(questions.length).toBeGreaterThan(0);
+    for (const question of questions) expect(question).toMatch(/ — 지금은 [^—]+다\.$/);
+    const count = ['하나', '둘', '셋', '넷', '다섯'][questions.length - 1];
+    expect(preface).toContain(`물을 것은 결과 4에 남긴다(지금은 ${count} — `);
+    expect(opening).toContain('아직 물을 것은 결과 4에 있다');
+    expect(result3).toContain('결과 4의 질문에 답한다');
+    for (const text of [preface, opening, result3]) expect(text).not.toContain('남은 질문은 없다');
   });
 });
 
