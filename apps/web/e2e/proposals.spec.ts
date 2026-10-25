@@ -44,10 +44,24 @@ import {
  * closes the account and stays on the operators' screens as '탈퇴한 사용자', the proposal reviewed
  * all the same.
  *
+ * 내 제안 keeps its rows when a 더 보기 fails and says so above the button (owner decision 2026-10-20
+ * 7, ADR-0075 5-14 — as every 더 보기 list, restacked onto #47), its pages shaped here.
+ *
  * Who may propose (onboarding, restrictions), the waiting limit, the exact edges of both limits,
  * the status machine against races and who sees what are the API's integration tests
  * (proposals.controller.test.ts, admin-proposals.controller.test.ts, private-data.test.ts).
  */
+
+/** A server error as the API's envelope says it (discussion.spec.ts's): the client retries it twice. */
+const SERVER_ERROR = {
+  status: 500,
+  contentType: 'application/json',
+  body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+};
+
+/** 내 제안's list (`GET /me/proposals`), and the cursor a spec puts after its first page. */
+const MY_PROPOSALS_API = '/api/v1/me/proposals';
+const NEXT_CURSOR = 'e2e-second-page';
 
 /** `{ data }` out of the PLAN 7 success envelope, with the body in the message on a failure. */
 async function dataOf<T>(response: APIResponse): Promise<T> {
@@ -616,5 +630,54 @@ test.describe('시장 제안', () => {
     } finally {
       await operator.close();
     }
+  });
+
+  test('내 제안의 더 보기가 실패하면 읽은 제안은 남고 그 버튼 위에 오류를 보인다', async ({
+    page,
+  }) => {
+    await signUp(page, freshEmail());
+    const proposal = await proposeThroughApi(page, `E2E 제안 더 보기 ${freshTag()}`);
+    // The first page as the API answers it, with a cursor after it — one 더 보기 to press —, and
+    // the page after it refused.
+    const isList = (url: URL) => url.pathname === MY_PROPOSALS_API;
+    const isNextPage = (url: URL) => isList(url) && url.searchParams.get('cursor') === NEXT_CURSOR;
+    await page.route(isList, async (route) => {
+      if (isNextPage(new URL(route.request().url()))) return route.fulfill(SERVER_ERROR);
+      const response = await route.fetch();
+      const body = (await response.json()) as { meta: Record<string, unknown> };
+      return route.fulfill({
+        response,
+        json: { ...body, meta: { ...body.meta, nextCursor: NEXT_CURSOR } },
+      });
+    });
+    await page.goto('/my/proposals');
+    await expect(item(page, proposal.id)).toBeVisible();
+    const read = page
+      .getByTestId('my-proposals-list')
+      .locator('[data-testid^="my-proposal-status-"]');
+    await expect(read).toHaveCount(1);
+
+    // A 더 보기 that fails keeps the proposals read so far and says so right above the button, in
+    // the first read's words (owner decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list).
+    await page.getByTestId('my-proposals-more').click();
+    const moreFailed = page.getByTestId('my-proposals-more-failed');
+    await expect(moreFailed).toHaveText(copy.errUnknown);
+    await expect(moreFailed).toHaveAttribute('role', 'alert');
+    await expect(
+      page.locator('[data-testid="my-proposals-more-failed"] + [data-testid="my-proposals-more"]'),
+    ).toHaveCount(1);
+    await expect(read).toHaveCount(1);
+    await expect(item(page, proposal.id)).toBeVisible();
+    await expect(page.getByTestId('my-proposals-more')).toBeEnabled();
+
+    // 더 보기 again, answered with the last page: the notice goes, and the button with it.
+    await page.unroute(isList);
+    await page.route(isNextPage, (route) =>
+      route.fulfill({ json: { data: [], meta: { nextCursor: null } } }),
+    );
+    await page.getByTestId('my-proposals-more').click();
+    await expect(page.getByTestId('my-proposals-more')).toHaveCount(0);
+    await expect(moreFailed).toHaveCount(0);
+    await expect(read).toHaveCount(1);
   });
 });

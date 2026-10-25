@@ -9,8 +9,9 @@ import { SRC, screenSources } from '@/test/screen-text';
  * market grid, the theme list and a theme's results (#81), MY's lists (조치·신고 내역's two too,
  * #50), the admin lists (the report queue and the action log too, #50, #187's review list of
  * repeated links, its rows and a row's entries, #139's account restriction requests, #184's
- * retention records, and #81's themes and a theme's market picker) and the market picker (the
- * write screen's and the community list's market filter) — each draws `LoadMoreFailed` first in its 더 보기 button's own condition
+ * retention records, #81's themes and a theme's market picker, and #77's proposals and a proposal's
+ * market picker), MY's 내 제안 (#77) and the market picker (the write screen's and the community
+ * list's market filter) — each draws `LoadMoreFailed` first in its 더 보기 button's own condition
  * (`… && (<>`), so the two come and go together and a list with no 더 보기 says nothing (5-14(c));
  * on the list the button pages; with that list's own first-read failure message (5-14(a)). No
  * DOM under node, so the sources are read, per list: one more 더 보기 written without the notice,
@@ -136,6 +137,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/notices/admin-notices.tsx',
         'app/admin/notices/notice-history.tsx',
         'app/admin/payments/admin-payments.tsx',
+        'app/admin/proposals/[id]/market-picker.tsx',
+        'app/admin/proposals/admin-proposals.tsx',
         'app/admin/reports/admin-reports.tsx',
         'app/admin/retention/admin-retention-purges.tsx',
         'app/admin/settings/admin-release-settings.tsx',
@@ -147,6 +150,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/markets/[slug]/market-discussion.tsx',
         'app/my/moderation/my-moderation.tsx',
         'app/my/portfolio.tsx',
+        'app/my/proposals/my-proposals.tsx',
         'app/my/wallet/ledger-list.tsx',
         'app/my/wallet/payment-history.tsx',
         'app/my/watchlist/watchlist.tsx',
@@ -229,6 +233,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useAdminNoticeRevisions',
         'useAdminNotices',
         'useAdminPayments',
+        'useAdminProposals',
         'useAdminRelatedSearch',
         'useAdminReportQueue',
         'useAdminRoleChanges',
@@ -240,6 +245,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useMarketSearch',
         'useMarkets',
         'useMyModerationActions',
+        'useMyProposals',
         'useMyReports',
         'useOrders',
         'usePayments',

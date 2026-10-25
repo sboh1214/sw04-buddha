@@ -123,9 +123,10 @@ export interface OnboardingExemptPage {
 }
 
 /**
- * The pages exempt for a login-only action. Later issues add theirs here: #77 the proposal list
- * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
- * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
+ * The pages exempt for a login-only action. #77's 내 제안 (`/my/proposals`, the 철회 of a 접수
+ * proposal) is not one: the owner opened it to every account with a step left, not to a re-consent
+ * alone (owner decision 2026-10-20, ADR-0089), so it is in ONBOARDING_EXEMPT_PATHS beside the 탈퇴
+ * screen. #48's comment deletion lives on the post page, whose comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
  * do its 좋아요 (#49, components/post/like-button.tsx). #41's MY 설정 clears the public profile's
  * 소개 and drops its interest categories, and deletes its image (#141, ADR-0079); a new 소개, a
  * category added, a new image, a nickname change (owner decision 2026-10-22 answer 1) and the

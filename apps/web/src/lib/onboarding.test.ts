@@ -32,6 +32,7 @@ import {
   withInterest,
   type Onboarding,
 } from './onboarding';
+import { MY_PROPOSALS_PATH } from './proposals';
 
 /** A consent answer as `GET /me` lists it. */
 const agreed = (item: 'terms' | 'privacy' | 'age' | 'marketing', value = true) => ({
@@ -386,6 +387,9 @@ describe('needsOnboarding', () => {
       // MY 요약, whose last card links to it, stays gated.
       expect(needsOnboarding('/my', onboarding)).toBe(true);
     }
+    // Every such account's, as the 탈퇴 screen — never a page only a re-consent opens (ADR-0089).
+    expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_PROPOSALS_PATH);
+    expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_PROPOSALS_PATH);
   });
 
   it('never redirects while the answer is unknown, or once nothing is left', () => {

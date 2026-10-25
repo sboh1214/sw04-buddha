@@ -14,6 +14,7 @@ import {
 } from '@chakra-ui/react';
 import NextLink from 'next/link';
 import { useState } from 'react';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminRelatedSearch } from '@/hooks/use-admin-markets';
 import { type MarketSummary } from '@/lib/api';
@@ -47,7 +48,9 @@ export function AdminMarketLine({
  * (`GET /admin/markets?q=`), the 관련 시장 panel's search (ADR-0068) with its query, its rules for
  * the term and its results ladder (`relatedSearchSection`: no rows of an earlier term stand under
  * a new one, so 선택 never picks a market the submitted search did not find). Once picked, the
- * market stands alone with 다시 고르기.
+ * market stands alone with 다시 고르기. A 더 보기 that failed keeps the results read so far and says
+ * so above its button (`LoadMoreFailed`, the first read's `copy.errUnknown` — owner decision
+ * 2026-10-20 7, ADR-0075 5-14, as every 더 보기 list).
  */
 export function MarketPicker({
   label,
@@ -176,15 +179,23 @@ export function MarketPicker({
               </HStack>
             ))}
             {section.more && (
-              <Button
-                alignSelf="center"
-                size="sm"
-                variant="ghost"
-                loading={search.isFetchingNextPage}
-                onClick={() => void search.fetchNextPage()}
-              >
-                {copy.loadMore}
-              </Button>
+              <>
+                <LoadMoreFailed
+                  list={search}
+                  message={copy.errUnknown}
+                  data-testid={`${testId}-more-failed`}
+                />
+                <Button
+                  alignSelf="center"
+                  size="sm"
+                  variant="ghost"
+                  loading={search.isFetchingNextPage}
+                  onClick={() => void search.fetchNextPage()}
+                  data-testid={`${testId}-more`}
+                >
+                  {copy.loadMore}
+                </Button>
+              </>
             )}
           </Stack>
         ))}

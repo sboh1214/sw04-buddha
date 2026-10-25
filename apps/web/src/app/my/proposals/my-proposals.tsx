@@ -19,6 +19,7 @@ import { useState } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMyProposals, useRetractProposal } from '@/hooks/use-proposals';
@@ -90,7 +91,10 @@ export function MyProposalsPreview({ limit }: { limit: number }) {
  * read differently from the page (ADR-0054). The rows and 더 보기 are `watchlistRows`' rule: the
  * page has every proposal with 더 보기 while there is a next page, the preview the newest `limit`
  * and no 더 보기. The ladder is the other MY lists' (`listSection`): skeleton, error and 다시 시도,
- * empty, rows, and a refresh that failed after the rows exist keeps them under a notice.
+ * empty, rows, and a refresh that failed after the rows exist keeps them under a notice. A 더 보기
+ * that failed keeps the proposals read so far and says so above its button (`LoadMoreFailed`, the
+ * first read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기
+ * list); the preview has no 더 보기, so it says nothing of one.
  */
 function ProposalsBody({ proposals, limit }: { proposals: Proposals; limit?: number }) {
   const { rows, more } = watchlistRows(proposals.data?.pages, proposals.hasNextPage, limit);
@@ -156,16 +160,23 @@ function ProposalsBody({ proposals, limit }: { proposals: Proposals; limit?: num
             />
           ))}
           {more && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={proposals.isFetchingNextPage}
-              onClick={() => void proposals.fetchNextPage()}
-              data-testid="my-proposals-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={proposals}
+                message={copy.errUnknown}
+                data-testid="my-proposals-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={proposals.isFetchingNextPage}
+                onClick={() => void proposals.fetchNextPage()}
+                data-testid="my-proposals-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

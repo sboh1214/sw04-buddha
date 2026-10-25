@@ -13,7 +13,8 @@ export const metadata: Metadata = { title: `${copy.proposalNewTitle} | ${copy.ap
  * screen, told to come back here (a fixed `next`: nothing of the request travels). An account with
  * an onboarding step left meets the onboarding gate here like on every page (#57-8: proposing is
  * for an account that finished it — the server's `OnboardedGuard` keeps the action); a restricted
- * account (#139, #185) is refused by the server when it submits, through the hook those PRs fill.
+ * account (#185, #139) is refused by the server when it submits (RESTRICTED, ProposalRestrictions —
+ * ADR-0085 결과 5), the form naming the restriction and its end.
  * Reading `cookies()` through `getServerSession()` marks the route dynamic.
  */
 export default async function NewProposalPage() {

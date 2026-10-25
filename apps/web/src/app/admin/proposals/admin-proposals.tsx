@@ -15,6 +15,7 @@ import {
 import { PROPOSAL_STATUSES, type ProposalStatus } from '@buddha/shared';
 import NextLink from 'next/link';
 import { useState } from 'react';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminProposals } from '@/hooks/use-admin-proposals';
 import { formatKst } from '@/lib/datetime';
@@ -30,7 +31,10 @@ import {
  * of the five), 20 per page with 더 보기. Each row: the question (to its detail), the status, the
  * proposer's nickname, the date its result is known and when it was proposed — in KST, as every
  * admin time (ADR-0063). The proposer is named here and on the detail only: the operators see who
- * proposed, nobody else does (ADR-0069 decision 4 #77 공개 범위).
+ * proposed, nobody else does (ADR-0069 decision 4 #77 공개 범위). A 더 보기 that failed keeps the
+ * proposals read so far and says so above its button (`LoadMoreFailed`, the first read's
+ * `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기 list); only a
+ * first read that failed (`isLoadingError`) shows the error.
  */
 export function AdminProposals() {
   const [status, setStatus] = useState<ProposalStatus | ''>('');
@@ -61,7 +65,7 @@ export function AdminProposals() {
 
       {proposals.isPending ? (
         <Skeleton height="24" />
-      ) : proposals.isError && rows.length === 0 ? (
+      ) : proposals.isLoadingError ? (
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
           <Alert.Content>
@@ -115,16 +119,23 @@ export function AdminProposals() {
             </Stack>
           ))}
           {proposals.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={proposals.isFetchingNextPage}
-              onClick={() => void proposals.fetchNextPage()}
-              data-testid="admin-proposals-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={proposals}
+                message={copy.errUnknown}
+                data-testid="admin-proposals-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={proposals.isFetchingNextPage}
+                onClick={() => void proposals.fetchNextPage()}
+                data-testid="admin-proposals-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}
