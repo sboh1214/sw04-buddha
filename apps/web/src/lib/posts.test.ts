@@ -499,9 +499,10 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(editor).toContain('if (!sendsMore()) return;');
     expect(editor).toMatch(/uploadImageBatch\(batch\.sending, slots, sends, \{\s*alive,\s*held,/);
     // A wait to send again: the file on its way is sent again in a held form too (오너 결정
-    // 2026-10-25 (2차) «남긴 양식에 넣음»), given up only by an editor gone.
+    // 2026-10-25 (2차) «남긴 양식에 넣음»), given up only by an editor gone — as the image of what
+    // the editor writes (`imagePurpose`, #185: a post's or a notice's).
     expect(editor).toMatch(
-      /sendRetrying\(\(\) => upload\(picked, accountId\), \{\s*sleep: pause,\s*alive,\s*\}\)/,
+      /sendRetrying\(\(\) => upload\(picked, accountId, imagePurpose\), \{\s*sleep: pause,\s*alive,\s*\}\)/,
     );
     expect(editor).not.toContain('alive: sendsMore');
     expect(editor.match(/sendsMore\(\)/g)).toHaveLength(1);
