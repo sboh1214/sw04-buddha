@@ -543,8 +543,8 @@ describe('takeImageBatch', () => {
 describe('uploadImageBatch', () => {
   /**
    * A batch over `files` whose slots were taken, each send answered by `answer` (a thrown error, or
-   * nothing for an upload that lands and is placed): what each step saw, and the slots it holds
-   * while each file is sent.
+   * nothing for an upload that lands and is placed): what each step saw, what went into the
+   * document, and the slots it holds while each file is sent.
    */
   async function run(
     files: { name: string; size: number; type: string }[],
@@ -554,23 +554,25 @@ describe('uploadImageBatch', () => {
     const slots = createImageSlots();
     expect(slots.take(0, files.length)).toBe(true);
     const sent: string[] = [];
+    const inserted: string[] = [];
     const heldWhileSending: number[] = [];
     const failed = vi.fn();
     await uploadImageBatch(files, slots, createUploadQueue(), {
       alive: options.alive ?? (() => true),
-      send: async (sending, placed) => {
+      send: async (sending, place) => {
         sent.push(sending.name);
         heldWhileSending.push(slots.inFlight);
         await Promise.resolve();
         const error = answer(sending.name);
         if (error !== undefined) throw error;
-        placed();
-        // Placed: the document counts it, the slot is back before the send settles.
-        heldWhileSending.push(slots.inFlight);
+        if (place(() => inserted.push(sending.name))) {
+          // Placed: the document counts it, the slot is back before the send settles.
+          heldWhileSending.push(slots.inFlight);
+        }
       },
       failed,
     });
-    return { slots, sent, heldWhileSending, failed };
+    return { slots, sent, inserted, heldWhileSending, failed };
   }
 
   it('gives each file’s slot back however it ends: placed, or failed', async () => {
@@ -584,6 +586,7 @@ describe('uploadImageBatch', () => {
     );
     // A refusal about the file, or the network, leaves the rest of the batch going.
     expect(result.sent).toEqual(['placed', 'not-an-image', 'down', 'last']);
+    expect(result.inserted).toEqual(['placed', 'last']);
     expect(result.failed.mock.calls).toEqual([[NOT_AN_IMAGE], [expect.any(TypeError)]]);
     // Four taken; the first placed gives one back at once, each failure its own before the next.
     expect(result.heldWhileSending).toEqual([4, 3, 3, 2, 1, 0]);
@@ -633,18 +636,61 @@ describe('uploadImageBatch', () => {
   });
 
   it('sends nothing more once the editor is gone, and gives the unsent files’ slots back', async () => {
-    // Asked as each file's turn comes: there for the first, gone before the second.
+    // Asked as each file's turn comes, and as each lands: there for the first, gone before the
+    // second.
     let asked = 0;
     const result = await run([file('a'), file('b'), file('c')], () => undefined, {
       alive: () => {
         asked += 1;
-        return asked === 1;
+        return asked <= 2;
       },
     });
     expect(result.sent).toEqual(['a']);
-    expect(asked).toBe(2);
+    expect(result.inserted).toEqual(['a']);
+    // Asked at the turn of 'a', as it landed, and at the turn of 'b'.
+    expect(asked).toBe(3);
     expect(result.failed).not.toHaveBeenCalled();
     expect(result.slots.inFlight).toBe(0);
+  });
+
+  it('puts nothing in for an upload that lands once the editor takes no more images, and sends nothing more (Codex review of #219, round 6)', async () => {
+    // The post goes while 'b' is on its way: the form is held read-only (ADR-0073 9-52), the
+    // editor locked — which a programmatic insert would pass, over the text held to be copied.
+    let locked = false;
+    const result = await run(
+      [file('a'), file('b'), file('c')],
+      (name) => {
+        if (name === 'b') locked = true;
+        return undefined;
+      },
+      { alive: () => !locked },
+    );
+    // 'a' went in before; 'b' landed (its upload stays on the API unused, cleaned up after 24
+    // hours) and went nowhere; 'c' was never sent. Nothing is said: no file failed.
+    expect(result.sent).toEqual(['a', 'b']);
+    expect(result.inserted).toEqual(['a']);
+    expect(result.failed).not.toHaveBeenCalled();
+    // Every slot back: 'a' counted in the document, the other two free.
+    expect(result.slots.inFlight).toBe(0);
+    expect(result.slots.take(1, POST_IMAGES_MAX - 1)).toBe(true);
+  });
+
+  it('puts nothing in for the only file of a batch locked while it uploads', async () => {
+    let locked = false;
+    const result = await run(
+      [file('only')],
+      () => {
+        locked = true;
+        return undefined;
+      },
+      { alive: () => !locked },
+    );
+    expect(result.sent).toEqual(['only']);
+    expect(result.inserted).toEqual([]);
+    // Taken while it went up, given back when nothing went in.
+    expect(result.heldWhileSending).toEqual([1]);
+    expect(result.slots.inFlight).toBe(0);
+    expect(result.failed).not.toHaveBeenCalled();
   });
 
   /** A send that waits until let go: the sends in flight, and the most there were at once. */
@@ -653,13 +699,13 @@ describe('uploadImageBatch', () => {
     let inFlight = 0;
     let most = 0;
     const sent: string[] = [];
-    const send = async (sending: { name: string }, placed: () => void) => {
+    const send = async (sending: { name: string }, place: (insert: () => void) => boolean) => {
       sent.push(sending.name);
       inFlight += 1;
       most = Math.max(most, inFlight);
       await new Promise<void>((resolve) => waiting.push(resolve));
       inFlight -= 1;
-      placed();
+      place(() => undefined);
     };
     return {
       send,
@@ -715,12 +761,12 @@ describe('uploadImageBatch', () => {
     const sent: string[] = [];
     const steps = {
       alive: () => alive,
-      send: async (sending: { name: string }, placed: () => void) => {
+      send: async (sending: { name: string }, place: (insert: () => void) => boolean) => {
         sent.push(sending.name);
         await Promise.resolve();
         if (sending.name === 'refused') throw NOT_AN_IMAGE;
+        place(() => undefined);
         if (sending.name === 'last') alive = false;
-        placed();
       },
       failed,
     };
@@ -975,7 +1021,7 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
     });
   });
 
-  it('sends nothing more once the editor has gone during the wait', async () => {
+  it('sends nothing more once the editor has gone, or been locked for good, during the wait', async () => {
     const first = busy(2);
     const result = await retrying([first, 'never sent'], () => false);
     expect(result.sends).toBe(1);
@@ -995,7 +1041,7 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
       let refusals = 2;
       const batch = uploadImageBatch([file('busy'), file('next')], slots, createUploadQueue(), {
         alive: () => true,
-        send: async (sending, placed) => {
+        send: async (sending, place) => {
           await sendRetrying(
             () => {
               sent.push(sending.name);
@@ -1013,7 +1059,7 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
               alive: () => true,
             },
           );
-          placed();
+          place(() => undefined);
         },
         failed,
       });

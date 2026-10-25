@@ -371,13 +371,14 @@ export function uploadRetryWaitMs(error: unknown): number | undefined {
 
 /**
  * An upload given up while it waited to be sent again: the editor went meanwhile (the writer left,
- * or the onboarding gate took the form away), so no one would place its image. It says nothing
+ * or the onboarding gate took the form away), or was locked for good — its post gone, the form
+ * held read-only (ADR-0073 9-52·9-53) — so no one would place its image. It says nothing
  * (`imageUploadErrorMessage`) — as the files a batch never sends once the editor is gone — and
  * `refused` is the 429 it waited on.
  */
 export class UploadAbandoned extends Error {
   constructor(readonly refused: unknown) {
-    super('The editor went while the upload waited to be sent again');
+    super('The editor took no more images while the upload waited to be sent again');
     this.name = 'UploadAbandoned';
   }
 }
@@ -386,7 +387,7 @@ export class UploadAbandoned extends Error {
 export interface UploadRetrySteps {
   /** Resolves after `ms` (`pause` on the page; a fake in the tests). */
   sleep(ms: number): Promise<void>;
-  /** False once the editor is gone: nothing more is sent. */
+  /** False once the editor takes no more images (`ImageBatchSteps.alive`): nothing more is sent. */
   alive(): boolean;
 }
 
@@ -505,15 +506,18 @@ export function createUploadQueue(): UploadQueue {
 /** What `uploadImageBatch` does with each file (components/post/post-editor.tsx). */
 export interface ImageBatchSteps<F> {
   /**
-   * False once the editor is gone (the onboarding gate took the form away): nothing more leaves —
-   * asked as each file's turn comes.
+   * False once the editor takes no more images: gone (the writer left, or the onboarding gate took
+   * the form away), or locked — its post gone and the form held read-only, to be copied and never
+   * changed (ADR-0073 9-52·9-53). Nothing more leaves, and nothing more goes in: asked as each
+   * file's turn comes, and again as each upload lands, before its image would go in (`place`).
    */
   alive(): boolean;
   /**
-   * Sends one file and puts its image in the document, calling `placed` once the image is there
-   * (the document counts it from then on); settles when the file is done with.
+   * Sends one file and has `place` put its image in the document: `place(insert)` runs `insert`
+   * only while the editor takes images (`alive`) — the document counts the image from then on —
+   * and says whether it did. Settles when the file is done with.
    */
-  send(file: F, placed: () => void): Promise<void>;
+  send(file: F, place: (insert: () => void) => boolean): Promise<void>;
   /** A send that failed. */
   failed(error: unknown): void;
 }
@@ -526,10 +530,15 @@ export interface ImageBatchSteps<F> {
  * onboarding only when the gate stays — `imageUploadErrorMessage`), the account's state already
  * put on screen by the upload (`postImageUploader`) — and so does an editor gone by a file's turn;
  * the files not sent give their slots back at once. Sending on would have every later file refused
- * alike, each refusal reading the account again, on the page the gate moved to. Any other failure
- * is that file's alone (a refused image, the network, the API still busy — RATE_LIMITED — after the
- * file was sent again (`sendRetrying`, inside `send`), a body cut for idling or for its deadline):
- * the batch goes on.
+ * alike, each refusal reading the account again, on the page the gate moved to. An upload that
+ * lands once the editor takes no more images — its post gone and the form held read-only
+ * (ADR-0073 9-53) — puts nothing in: a locked editor still takes a programmatic insert, which
+ * would change the text held for copying (an image over a selected line replaced it, Codex review
+ * of #219, round 6). Its slot comes back, the files after it are not sent (each turn asks), and
+ * the upload stays on the API unused, removed after 24 hours as any upload no post took (9-11).
+ * Any other failure is that file's alone (a refused image, the network, the API still busy —
+ * RATE_LIMITED — after the file was sent again (`sendRetrying`, inside `send`), a body cut for
+ * idling or for its deadline): the batch goes on.
  */
 export async function uploadImageBatch<F>(
   files: readonly F[],
@@ -550,8 +559,14 @@ export async function uploadImageBatch<F>(
           held = false;
           slots.give();
         };
+        const place = (insert: () => void): boolean => {
+          if (!steps.alive()) return false;
+          insert();
+          giveBack();
+          return true;
+        };
         try {
-          await steps.send(file, giveBack);
+          await steps.send(file, place);
           return 'next';
         } catch (error) {
           steps.failed(error);

@@ -335,6 +335,36 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     // Selected by the browser while locked: ProseMirror's triple click selected nothing there.
     expect(editor).toContain('mousedown: (view) => !view.editable,');
   });
+
+  it('puts no upload in the form it holds: every step of an upload asks whether the editor is locked (Codex review of #219, round 6, 9-53)', () => {
+    // Locking stops the writer, not `insertContentAt`: an upload landing after the post went put
+    // its image in the held text — over a line selected when it was picked. `uploadImageBatch`
+    // places an image only while `alive` says so (post-editor.test.ts); here, that the editor's
+    // `alive` is its lock and that the insert goes through `place`.
+    const editor = readFileSync(
+      new URL('../components/post/post-editor.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(editor).toContain('const takesImages = () => !editor.isDestroyed && editor.isEditable;');
+    // A pick whose dialog was open as the post went, each file's turn, and a wait to send again.
+    expect(editor).toContain('if (!takesImages()) return;');
+    expect(editor.match(/alive: takesImages,/g)).toHaveLength(2);
+    // The only insert, its preview with it, inside `place`; the form hears of the preview only
+    // for an image that went in.
+    const place = editor.indexOf('const placed = place(() => {');
+    const preview = editor.indexOf(
+      'if (placed && preview !== undefined) onPreview?.(uploaded.id, preview);',
+    );
+    expect(place).toBeGreaterThan(-1);
+    expect(preview).toBeGreaterThan(place);
+    expect(editor.match(/insertContentAt\(/g)).toHaveLength(1);
+    const insert = editor.indexOf('insertContentAt(');
+    expect(insert).toBeGreaterThan(place);
+    expect(insert).toBeLessThan(preview);
+    expect(editor.match(/previews\.set\(uploaded\.id, preview\)/g)).toHaveLength(1);
+    expect(editor.indexOf('previews.set(uploaded.id, preview)')).toBeGreaterThan(place);
+    expect(editor.indexOf('previews.set(uploaded.id, preview)')).toBeLessThan(insert);
+  });
 });
 
 describe('a post page’s metadata', () => {

@@ -413,6 +413,16 @@ export function PostEditor({
 
   const insertImages = async (files: File[]) => {
     if (editor === null || accountId === undefined) return;
+    // Whether the editor takes an image: there (the writer has not left, the gate has not taken the
+    // form away) and not locked (`isEditable` — a send in flight, or the post gone and the form
+    // held read-only, ADR-0073 9-52). Locking stops the writer, never a program: an image inserted
+    // into a locked editor goes in all the same, over the text it holds to be copied (Codex review
+    // of #219, round 6). So every step of an upload asks — its batch's start, each file's turn, a
+    // wait to send again, and the upload landed, before its image goes in (`uploadImageBatch`,
+    // 9-53).
+    const takesImages = () => !editor.isDestroyed && editor.isEditable;
+    // A pick whose dialog was open as the post went takes nothing, as a drop does not.
+    if (!takesImages()) return;
     // A file the precheck refuses is said at once and takes no slot; the others take theirs beside
     // the document's images and the uploads still on their way (`takeImageBatch`): a batch picked
     // or dropped while another uploads cannot pass the limit together with it.
@@ -426,10 +436,11 @@ export function PostEditor({
     }
     if (batch.sending.length === 0) return;
     // One file after another, behind the files of the editor's other batches; a refusal about the
-    // account, or the editor gone by a file's turn, ends the batch (`uploadImageBatch`).
+    // account, or an editor that takes no more images by a file's turn, ends the batch
+    // (`uploadImageBatch`).
     await uploadImageBatch(batch.sending, slots, sends, {
-      alive: () => !editor.isDestroyed,
-      send: async (file, placed) => {
+      alive: takesImages,
+      send: async (file, place) => {
         changeUploads(1);
         try {
           // The preview is drawn while the file goes up, and only it is kept (`boundedPreviewOf`).
@@ -442,31 +453,33 @@ export function PostEditor({
             (picked) =>
               sendRetrying(() => upload(picked, accountId), {
                 sleep: pause,
-                alive: () => !editor.isDestroyed,
+                alive: takesImages,
               }),
             boundedPreviewOf,
           );
-          if (preview !== undefined) previews.set(uploaded.id, preview);
-          // After an image goes in, the selection is that image (a node selection, which is where
-          // ProseMirror puts the cursor after an atom at the end): the next one goes after it rather
-          // than replacing it, so every image of a batch stays — and so does an image the writer
-          // had selected. A text selection is replaced, as typing over it would.
-          const { selection } = editor.state;
-          editor
-            .chain()
-            .focus()
-            .insertContentAt(
-              selection instanceof NodeSelection
-                ? selection.to
-                : { from: selection.from, to: selection.to },
-              { type: 'image', attrs: { mediaId: uploaded.id } },
-            )
-            .run();
-          // The document counts it from here.
-          placed();
+          // Only while the editor takes images (`place`): landed after the post went, nothing goes
+          // in — nor is its preview kept, nor handed to the form for a draft.
+          const placed = place(() => {
+            if (preview !== undefined) previews.set(uploaded.id, preview);
+            // After an image goes in, the selection is that image (a node selection, which is where
+            // ProseMirror puts the cursor after an atom at the end): the next one goes after it
+            // rather than replacing it, so every image of a batch stays — and so does an image the
+            // writer had selected. A text selection is replaced, as typing over it would.
+            const { selection } = editor.state;
+            editor
+              .chain()
+              .focus()
+              .insertContentAt(
+                selection instanceof NodeSelection
+                  ? selection.to
+                  : { from: selection.from, to: selection.to },
+                { type: 'image', attrs: { mediaId: uploaded.id } },
+              )
+              .run();
+          });
           // Drawn before the image went in, so the form has it — for a draft it keeps — before
           // this upload stops counting (the `finally` below) and the form may send.
-          if (preview !== undefined) onPreview?.(uploaded.id, preview);
+          if (placed && preview !== undefined) onPreview?.(uploaded.id, preview);
         } finally {
           changeUploads(-1);
         }
@@ -476,8 +489,8 @@ export function PostEditor({
       // while the gate takes the account to its step, the draft kept in the tab — a toast would
       // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
       // gate stays, and it says what a refused send says (owner decision 2026-10-21
-      // answer 6). An upload given up for the editor gone while it waited says nothing. Any other
-      // is said: that file's failure alone.
+      // answer 6). An upload given up for the editor gone, or locked for good, while it waited
+      // says nothing. Any other is said: that file's failure alone.
       failed: (error) => {
         const message = imageUploadErrorMessage(error, gateMoves());
         if (message !== undefined) toaster.create({ type: 'error', title: message });

@@ -60,7 +60,8 @@ import {
  * post's and a card's — but asked for three times at most (ADR-0073 결과 5, Codex review of #219).
  * A post its author deletes in another tab turns its open page into the 404 once a read says it is
  * gone — a read that fails otherwise keeps the post — and its open edit screen too, once a save is
- * refused for it (ADR-0073 9-50).
+ * refused for it (ADR-0073 9-50); an image still uploading there then lands in nothing, the held
+ * body left as it was (9-53).
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -1826,6 +1827,70 @@ test.describe('근거 글', () => {
     await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
     await expect(page).toHaveURL(plainEdit);
     await expect(page.getByTestId('post-form-gone')).toHaveCount(0);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('수정 화면에서 이미지를 올리는 사이 글이 다른 탭에서 지워지면, 그 뒤에 올라온 이미지는 고칠 수 없게 남은 본문에 들어가지 않고 기다리던 파일도 보내지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    // Codex review of #219, round 6 (ADR-0073 9-53): the held form's editor is locked (9-52),
+    // which stops the writer but not an upload's own insert — one landing after the post went put
+    // its image in the held body, over the line selected when it was picked. The upload waits
+    // here until let go, past the read that finds the post gone (the page's clock and a focus, as
+    // above).
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const tag = freshTag();
+    await page.clock.install();
+    const postId = await postThroughApi(page.request, market.id, `올리던 글 ${tag}`, '올리던 근거');
+    const edit = `/community/posts/${postId}/edit`;
+    const held: Route[] = [];
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', (route) => {
+      uploads += 1;
+      held.push(route);
+    });
+    await page.goto(edit);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toContainText('올리던 근거 출처');
+    // The line selected, then two images picked: the first goes up to take its place, the second
+    // waits its turn.
+    await editor.locator('p').first().click({ clickCount: 3 });
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(
+      '올리던 근거',
+    );
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(2));
+    await expect.poll(() => held.length).toBe(1);
+    await expect(page.getByTestId('post-editor-uploading')).toBeVisible();
+
+    // Deleted in another tab, and read again on a focus: an upload on its way is something to
+    // keep (9-52), so the form stays, locked, under the sentence.
+    const other = await page.context().newPage();
+    await other.goto(`/community/posts/${postId}`);
+    await other.getByTestId('post-delete').click();
+    await other.getByTestId('post-delete-confirm').click();
+    await expect(other).toHaveURL('/community');
+    await other.close();
+    await page.clock.fastForward('00:31');
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+
+    // The upload lands: nothing goes in — the selected line is still there to copy — and the file
+    // waiting its turn is never sent. Nothing is said: no file failed.
+    await held.shift()!.continue();
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    await settle();
+    await expect(editor.locator('img')).toHaveCount(0);
+    await expect(editor).toContainText('올리던 근거 출처');
+    await expect(page.getByTestId('post-body-images')).toContainText('0 / 10');
+    expect(uploads).toBe(1);
+    await expect(toastsOf(page).getByText(copy.errImageUpload)).toHaveCount(0);
+    await expect(page.getByTestId('post-title-input')).toHaveValue(`올리던 글 ${tag}`);
+    await page.getByTestId('post-form-close').click();
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(edit);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });
