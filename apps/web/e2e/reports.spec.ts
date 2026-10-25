@@ -102,13 +102,14 @@ async function commentThroughApi(
 }
 
 /**
- * Waits until the post editor has taken what "changed" is measured from. TipTap emits `create` —
- * which the form hears (`onReady`) for that baseline, components/post/post-form.tsx — in a
- * `setTimeout(0)` once the editor is drawn, and under the page's installed clock that timer can
- * come after the text shows and after a quick click and type. A body typed before it lands in the
- * baseline, and the form says it holds nothing of the writer's (`onHoldingChange`): a step whose
- * only change is the body waits for this first. `isInitialized` is TipTap's own word for it, on
- * the editor ProseMirror's element carries (`editor`).
+ * Waits until the post editor is made: TipTap's `create` run (`isInitialized`, on the editor
+ * ProseMirror's element carries — `editor`). The form takes what "changed" is measured from as the
+ * editor's view is made, before it is on the page (`onMount`, ADR-0073 9-54 — found as this step
+ * failed now and then: taken on `create`, a `setTimeout(0)` later, under the page's installed clock
+ * it came after the text showed and a quick click and type, the body typed went into the baseline,
+ * and the form said it held nothing of the writer's). A step whose only change is the body still
+ * types once this is so, as #46's own does (posts.spec.ts `editorReady`): not on how soon the
+ * editor shows its text.
  */
 async function editorReady(editor: Locator): Promise<void> {
   await expect
@@ -1143,7 +1144,7 @@ test.describe('신고와 운영 처리', () => {
     const focusedEdit = `/community/posts/${focused}/edit`;
     await page.goto(focusedEdit);
     await expect(editor).toContainText('포커스의 근거');
-    // Only the body changes here: typed once the editor has its baseline (`editorReady`).
+    // Only the body changes here: typed once the editor is made (`editorReady`).
     await editorReady(editor);
     await editor.click();
     await page.keyboard.press('End');

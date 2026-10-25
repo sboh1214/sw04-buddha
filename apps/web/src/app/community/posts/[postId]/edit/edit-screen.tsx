@@ -64,7 +64,9 @@ import { useSession } from '@/lib/use-session';
  * same way (오너 결정 2026-10-25 «숨김에도 글자를 남김», ADR-0081 7-29): the save is refused as
  * POST_NOT_EDITABLE, and the read after it — or a focus — answers the hidden post's placeholder
  * (`postEditHidden`). The form stays as above, read-only under '운영 정책에 따라 숨긴 글은 고칠 수
- * 없습니다.' — the refusal's own sentence — with 닫기; closed, or at once when it held nothing of
+ * 없습니다.' — the refusal's own sentence — with 닫기, and its images as a deletion holds them (the
+ * same `held`, the editor's `readOnly`): no next file is sent, and an upload already on its way
+ * goes in after what is selected (ADR-0073 9-53); closed, or at once when it held nothing of
  * the writer's, the screen is that sentence in the form's place, as a reload of a hidden post's
  * edit screen draws it (#45-5). The query holds that answer, the server page's own, so nothing is
  * drawn again. A hiding is undone when an operator cancels it: a held form stays until it is
