@@ -15,7 +15,8 @@
 --   period — '시장 제안 기록 보존기간', `retention.market_proposals` — has passed (DELETE).
 -- - retention_purges_kind_check: the purge records take the new kind `market_proposals` (#184's
 --   RETENTION_PURGE_KINDS, ADR-0087 결과 5; owner decision 2026-10-24 13) — the generated drop and
---   add of the CHECK, the list as before with the kind at its end.
+--   add of the CHECK, the list as before (0044's, with #187's `link_flags`) with the kind at its
+--   end.
 CREATE TYPE "public"."market_proposal_rejection_reason" AS ENUM('duplicate', 'ambiguous_criteria', 'prohibited_topic', 'other');--> statement-breakpoint
 CREATE TYPE "public"."market_proposal_status" AS ENUM('submitted', 'reviewing', 'adopted', 'rejected', 'retracted');--> statement-breakpoint
 CREATE TABLE "market_proposals" (
@@ -64,7 +65,7 @@ CREATE INDEX "market_proposals_phone_hash_created_at_idx" ON "market_proposals" 
 CREATE INDEX "market_proposals_phone_hash_pending_idx" ON "market_proposals" USING btree ("phone_hash") WHERE "market_proposals"."status" IN ('submitted', 'reviewing');--> statement-breakpoint
 CREATE INDEX "market_proposals_created_at_id_idx" ON "market_proposals" USING btree ("created_at" desc,"id" desc);--> statement-breakpoint
 CREATE INDEX "market_proposals_status_created_at_id_idx" ON "market_proposals" USING btree ("status","created_at" desc,"id" desc);--> statement-breakpoint
-ALTER TABLE "retention_purges" ADD CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'consent_records', 'phone_verification_records', 'market_proposals'));--> statement-breakpoint
+ALTER TABLE "retention_purges" ADD CONSTRAINT "retention_purges_kind_check" CHECK ("retention_purges"."kind" IN ('nickname_holds', 'post_revisions', 'comment_revisions', 'deleted_posts', 'deleted_comments', 'reports', 'hidden_posts', 'hidden_comments', 'removed_profile_items', 'moderation_actions', 'approval_requests', 'link_flags', 'consent_records', 'phone_verification_records', 'market_proposals'));--> statement-breakpoint
 -- Hand-edited: what was submitted never changes, and the status moves only along the owner's steps
 -- (ADR-0069 decision 4 #77; PROPOSAL_TRANSITIONS in @buddha/shared), whoever writes — the API checks
 -- the same under the row lock and never asks for anything else. A proposal is inserted 접수

@@ -1655,7 +1655,7 @@ export interface CreateProposalInput {
 /**
  * A market proposal (#77) as the API's steps leave it: inserted 접수, then moved along the owner's
  * steps to `status` — 검토 for 채택 (and for 반려 unless `rejectUnreviewed`), then the decision, or
- * 철회 — one UPDATE per step, which the table's trigger holds to those steps (migration 0044). Only
+ * 철회 — one UPDATE per step, which the table's trigger holds to those steps (migration 0046). Only
  * the row: no `admin_actions` rows, which the API writes beside each move.
  */
 export async function createProposal(db: Db, input: CreateProposalInput) {

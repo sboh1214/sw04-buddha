@@ -325,10 +325,10 @@
       "breakpoints": true
     },
     {
-      "idx": 44,
+      "idx": 46,
       "version": "7",
-      "when": 1792833039172,
-      "tag": "0044_market_proposals",
+      "when": 1792891060885,
+      "tag": "0046_market_proposals",
       "breakpoints": true
     }
   ]
