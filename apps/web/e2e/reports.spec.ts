@@ -102,6 +102,27 @@ async function commentThroughApi(
 }
 
 /**
+ * Waits until the post editor has taken what "changed" is measured from. TipTap emits `create` —
+ * which the form hears (`onReady`) for that baseline, components/post/post-form.tsx — in a
+ * `setTimeout(0)` once the editor is drawn, and under the page's installed clock that timer can
+ * come after the text shows and after a quick click and type. A body typed before it lands in the
+ * baseline, and the form says it holds nothing of the writer's (`onHoldingChange`): a step whose
+ * only change is the body waits for this first. `isInitialized` is TipTap's own word for it, on
+ * the editor ProseMirror's element carries (`editor`).
+ */
+async function editorReady(editor: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      editor.evaluate(
+        (element) =>
+          (element as HTMLElement & { editor?: { isInitialized?: boolean } }).editor
+            ?.isInitialized === true,
+      ),
+    )
+    .toBe(true);
+}
+
+/**
  * The queue's entry, shown: the pending half lists the target waiting longest first, and an
  * earlier run's reports — or another test's, filed at the same time — may wait before it, so 더 보기
  * until it is there. The entry and 더 보기 are on screen together whenever a page after this one
@@ -1122,6 +1143,8 @@ test.describe('신고와 운영 처리', () => {
     const focusedEdit = `/community/posts/${focused}/edit`;
     await page.goto(focusedEdit);
     await expect(editor).toContainText('포커스의 근거');
+    // Only the body changes here: typed once the editor has its baseline (`editorReady`).
+    await editorReady(editor);
     await editor.click();
     await page.keyboard.press('End');
     await page.keyboard.type(' 쓰던 근거');
