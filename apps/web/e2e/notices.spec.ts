@@ -24,7 +24,9 @@ import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test 
  * typed in this tab, as a post's draft: the screen opened again after the step takes it back, says
  * so, and offers to discard it, asked first (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20) — an
  * edit's draft is saved against the version it was typed on, so a save made meanwhile still
- * refuses it.
+ * refuses it. The edit form locked while 최신 내용 불러오기 reads still takes an image landing
+ * meanwhile and sends the file after it: only a form held read-only stops them (ADR-0073 9-53),
+ * and a notice's form never is.
  *
  * The pinned set is the service's, one for every spec: both projects share one database, and the
  * limit and the area's order are about every notice pinned there. So the pinning runs once, in the
@@ -1273,6 +1275,102 @@ test.describe('운영 공지 (#138)', () => {
     await home.click();
     await expect(page).toHaveURL('/');
     expect(asked).toEqual([]);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('최신 내용을 불러오는 동안 잠긴 수정 양식에도 올라온 이미지는 들어가고 기다리던 파일도 올라가며, 불러오지 못하면 그 이미지와 함께 남는다', async ({
+    admin,
+    secondAdmin,
+    page,
+  }) => {
+    // The edit form locks its editor while 최신 내용 불러오기 reads the notice (`reloading`, passed
+    // as `pending`): a lock of the moment, not a form held read-only. The editor knows a held form
+    // by the `readOnly` the form passes (ADR-0073 9-52·9-53), which a notice's form never does — a
+    // notice is not deleted — so an upload landing during the read goes in as it would, and the
+    // file waiting its turn is sent. (On #46's earlier reading of the editor's lock — Codex's
+    // sixth review of #219 — the image was dropped and the next file never sent.) The read is held
+    // until both are in, then fails: the form stays, with them.
+    const tag = freshTag();
+    const id = await noticeThroughApi(admin, `불러오는 사이 올린 공지 ${tag}`);
+    await signIn(page, adminAccount.email, adminAccount.password);
+    await page.goto(`/admin/notices/${id}`);
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    await expect(titleInput).toHaveValue(`불러오는 사이 올린 공지 ${tag}`);
+    await expect(editor).toContainText(`불러오는 사이 올린 공지 ${tag} 본문`);
+    // Another admin saves meanwhile: this save is refused, 최신 내용 불러오기 beside the refusal.
+    await dataOf(
+      await secondAdmin.put(`${NOTICES}/${id}`, {
+        data: {
+          title: `다른 운영자가 고친 제목 ${tag}`,
+          body: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '다른 본문' }] }],
+          },
+          expectedEditedAt: null,
+        },
+      }),
+    );
+    const typed = `내가 고친 제목 ${tag}`;
+    await titleInput.fill(typed);
+    await page.getByTestId('post-submit').click();
+    await expect(page.getByTestId('post-form-error')).toContainText(copy.errNoticeEditConflict);
+    // The screen's own read after the refusal is done (the state card says '수정됨').
+    await expect(page.getByTestId('admin-notice-pin-card')).toContainText(copy.postEdited);
+
+    // Two images picked at the end of the body: the first goes up and is held; the second waits.
+    const held: Route[] = [];
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', (route) => {
+      uploads += 1;
+      held.push(route);
+    });
+    await editor.click();
+    await page.keyboard.press('End');
+    await page.getByTestId('post-editor-file').setInputFiles(
+      [1, 2].map((n) => ({
+        name: `notice-${String(n)}.png`,
+        mimeType: 'image/png',
+        buffer: PNG,
+      })),
+    );
+    await expect.poll(() => held.length).toBe(1);
+    await expect(page.getByTestId('post-editor-uploading')).toBeVisible();
+
+    // 최신 내용 불러오기, its read held: the form is locked while it reads.
+    const noticeRead = (url: URL) => url.pathname === `/api/v1/admin/notices/${id}`;
+    const reads: Route[] = [];
+    let failing = false;
+    await page.route(noticeRead, (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      if (failing) return route.fulfill(SERVER_ERROR);
+      reads.push(route);
+    });
+    await page.getByTestId('admin-notice-reload').click();
+    await expect.poll(() => reads.length).toBe(1);
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+
+    // The upload lands during the lock: its image goes in, and the next file is sent and goes in.
+    await held.shift()!.continue();
+    await expect(editor.locator('img')).toHaveCount(1);
+    await expect.poll(() => held.length).toBe(1);
+    await held.shift()!.continue();
+    await expect(editor.locator('img')).toHaveCount(2);
+    await expect(page.getByTestId('post-editor-uploading')).toHaveCount(0);
+    expect(uploads).toBe(2);
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+
+    // The read fails: said once, the form kept — the title typed, the refusal, both images — and
+    // unlocked.
+    failing = true;
+    await reads.shift()!.fulfill(SERVER_ERROR);
+    await expect(page.getByText(copy.errUnknown)).toHaveCount(1);
+    await expect(editor).toHaveAttribute('contenteditable', 'true');
+    await expect(titleInput).toHaveValue(typed);
+    await expect(page.getByTestId('post-form-error')).toContainText(copy.errNoticeEditConflict);
+    await expect(editor.locator('img')).toHaveCount(2);
+    await expect(editor).toContainText(`불러오는 사이 올린 공지 ${tag} 본문`);
+    await expect(page.getByTestId('post-body-images')).toContainText('2 / 10');
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });
