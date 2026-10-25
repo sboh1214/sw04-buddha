@@ -1907,4 +1907,132 @@ describe('the member’s faces the tab holds, after a profile image change (#141
       }
     });
   }
+
+  it("cancels a 더 보기 on its way as `['me']` puts its image on them — the 더 보기 brings the pages held as it left, with the image they carried then — and leaves it to press again; a read of every page on its way is let land, as it takes them from what is held (the review of Codex 4368092473, ADR-0079 7-23)", async () => {
+    const queryClient = getQueryClient();
+    const meWith = (imageUrl: string | null) =>
+      queryClient.setQueryData(ME_QUERY_KEY, {
+        ...following,
+        profile: { ...following.profile, imageUrl },
+      });
+    // The server's pages: someone else's 댓글 C3 with someone else's R1 (the member's R2 behind
+    // 'r1'), and behind 'c1' someone else's C2, more after it (the member's C1 further on).
+    const pageOf = (cursor: string | undefined): CommentPage =>
+      cursor === undefined
+        ? {
+            items: [
+              {
+                comment: comment(C3, face(OTHER, null)),
+                replies: [comment(R1, face(OTHER, OTHER_IMAGE), C3)],
+                repliesNextCursor: 'r1',
+              },
+            ],
+            nextCursor: 'c1',
+          }
+        : {
+            items: [
+              { comment: comment(C2, face(OTHER, null)), replies: [], repliesNextCursor: null },
+            ],
+            nextCursor: 'c2',
+          };
+    // What the member's writes left: C1 at the end of the pages, R2 at the end of C3's 대댓글.
+    meWith(OLD);
+    queryClient.setQueryData<CommentPages>(postCommentsKey(POST), {
+      pages: [
+        {
+          items: [
+            {
+              ...pageOf(undefined).items[0]!,
+              replies: [...pageOf(undefined).items[0]!.replies, comment(R2, face(OWN, OLD), C3)],
+            },
+            { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId: following.id },
+        { id: R2, threadId: C3, accountId: following.id },
+      ],
+    });
+    const reads: { cursor: string | undefined; read: ReturnType<typeof deferred<CommentPage>> }[] =
+      [];
+    const comments = new InfiniteQueryObserver<
+      CommentPage,
+      Error,
+      CommentPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: postCommentsKey(POST),
+      queryFn: ({ pageParam }) => {
+        const read = deferred<CommentPage>();
+        reads.push({ cursor: pageParam, read });
+        // Marked as a read's, as the browser's `queryFn` does (`commentPageRead`).
+        return read.promise.then(commentPageRead);
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = comments.subscribe(() => undefined);
+    /** The member's faces the pages hold, as `[comment, imageUrl]`, in the order drawn. */
+    const faces = () => {
+      const pages = JSON.stringify(postCommentsKey(POST));
+      return ownFaces(queryClient).map(([where, image]) => [where.slice(pages.length + 1), image]);
+    };
+    const both = (image: string | null) => [
+      [R2, image],
+      [C1, image],
+    ];
+    try {
+      // A 더 보기 leaves; changed in another tab, `['me']` is read again before it lands.
+      void comments.fetchNextPage();
+      await settle();
+      expect(reads.map(({ cursor }) => cursor)).toEqual(['c1']);
+      meWith(NEW);
+      await settle();
+      expect(faces()).toEqual(both(NEW));
+      // The 더 보기 was cancelled, not made again: its button is there to press.
+      expect(comments.getCurrentResult()).toMatchObject({
+        isFetchingNextPage: false,
+        hasNextPage: true,
+      });
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(1);
+      // Its answer lands late, beside the pages held as it left — the old image on the placed
+      // ones: nothing changes.
+      reads[0]!.read.resolve(pageOf('c1'));
+      await settle();
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(1);
+      expect(faces()).toEqual(both(NEW));
+      // Pressed again, it brings its page, and the placed ones stay with the new image.
+      void comments.fetchNextPage();
+      await settle();
+      reads[1]!.read.resolve(pageOf('c1'));
+      await settle();
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(2);
+      expect(faces()).toEqual(both(NEW));
+
+      // A read of every page held leaves; deleted in another tab, `['me']` is read again before
+      // it lands: the placed ones take it at once, and the read goes on — not cancelled and made
+      // again — and lands with them as held.
+      void comments.refetch();
+      await settle();
+      meWith(null);
+      expect(faces()).toEqual(both(null));
+      expect(comments.getCurrentResult().isFetching).toBe(true);
+      reads[2]!.read.resolve(pageOf(undefined));
+      await settle();
+      reads[3]!.read.resolve(pageOf('c1'));
+      await settle();
+      expect(comments.getCurrentResult().isFetching).toBe(false);
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(2);
+      expect(faces()).toEqual(both(null));
+      expect(reads.map(({ cursor }) => cursor)).toEqual(['c1', 'c1', undefined, 'c1']);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
 });
