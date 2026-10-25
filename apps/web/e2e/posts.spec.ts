@@ -1888,6 +1888,9 @@ test.describe('근거 글', () => {
     expect(uploads).toBe(1);
     await expect(toastsOf(page).getByText(copy.errImageUpload)).toHaveCount(0);
     await expect(page.getByTestId('post-title-input')).toHaveValue(`올리던 글 ${tag}`);
+    // Held for the upload alone, the form now holds nothing of the writer's, yet stays under the
+    // sentence with 닫기 (and asks on leaving): dropping the image is the current choice, asked of
+    // the owner with the other ways (ADR-0073 9-53, 결과 4) — this test changes with the answer.
     await page.getByTestId('post-form-close').click();
     await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
     await expect(page).toHaveURL(edit);

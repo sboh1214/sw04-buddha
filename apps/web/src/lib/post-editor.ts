@@ -175,8 +175,9 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * account to its step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and
  * the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21), and when
  * the gate stays — that read failed — says what a refused send says (owner decision 2026-10-21
- * answer 6); an upload given up while it waited to be sent again, the editor gone meanwhile
- * (`UploadAbandoned`), says nothing, as the files a batch never sends once the editor is gone;
+ * answer 6); an upload given up while it waited to be sent again, the editor gone, or locked for
+ * good (its post gone, the form held read-only, ADR-0073 9-53), meanwhile (`UploadAbandoned`),
+ * says nothing, as the files a batch never sends once the editor takes no more images;
  * anything else is a failed upload, said apart from an unreachable server — the API busy (a 429:
  * the uploads it receives, the account's three in flight, its memory, the conversion queue) still
  * after the editor sent it again (`sendRetrying`, owner decision 2026-10-22 (2차) answer 3), and a
@@ -405,9 +406,9 @@ export function pause(ms: number): Promise<void> {
  * send is the outcome — the image, or the refusal the editor says as that file's failure
  * (`imageUploadErrorMessage`, as before). The whole of it is one upload to the editor: the file
  * keeps its turn in the editor's line (`createUploadQueue` — the next file waits) and its count
- * among the uploads, so '올리는 중' stays up and the form holds its send meanwhile. An editor gone
- * by the end of a wait sends nothing more (`UploadAbandoned`). Any other refusal is the outcome at
- * once, as before.
+ * among the uploads, so '올리는 중' stays up and the form holds its send meanwhile. An editor gone,
+ * or locked for good (its post gone, the form held read-only, ADR-0073 9-53), by the end of a wait
+ * sends nothing more (`UploadAbandoned`). Any other refusal is the outcome at once, as before.
  */
 export async function sendRetrying<T>(send: () => Promise<T>, steps: UploadRetrySteps): Promise<T> {
   let retried = 0;
@@ -528,17 +529,21 @@ export interface ImageBatchSteps<F> {
  * gives each file's slot back however it ends: placed in the document, or failed. A refusal about
  * the account (`refusesImageBatch`) ends the batch — handed to `failed` once (said once; for the
  * onboarding only when the gate stays — `imageUploadErrorMessage`), the account's state already
- * put on screen by the upload (`postImageUploader`) — and so does an editor gone by a file's turn;
- * the files not sent give their slots back at once. Sending on would have every later file refused
- * alike, each refusal reading the account again, on the page the gate moved to. An upload that
- * lands once the editor takes no more images — its post gone and the form held read-only
- * (ADR-0073 9-53) — puts nothing in: a locked editor still takes a programmatic insert, which
- * would change the text held for copying (an image over a selected line replaced it, Codex review
- * of #219, round 6). Its slot comes back, the files after it are not sent (each turn asks), and
- * the upload stays on the API unused, removed after 24 hours as any upload no post took (9-11).
- * Any other failure is that file's alone (a refused image, the network, the API still busy —
- * RATE_LIMITED — after the file was sent again (`sendRetrying`, inside `send`), a body cut for
- * idling or for its deadline): the batch goes on.
+ * put on screen by the upload (`postImageUploader`) — and so does an editor that takes no more
+ * images by a file's turn (gone, or locked for good — its post gone, the form held read-only,
+ * ADR-0073 9-53); the files not sent give their slots back at once. Sending on would have every
+ * later file refused alike, each refusal reading the account again, on the page the gate moved to.
+ * An upload that lands once the editor takes no more images — its post gone and the form held
+ * read-only (ADR-0073 9-53) — puts nothing in: a locked editor still takes a programmatic insert,
+ * which would change the text held for copying (an image over a selected line replaced it, Codex
+ * review of #219, round 6). Its slot comes back, the files after it are not sent (each turn
+ * asks), and the upload stays on the API unused, removed after 24 hours as any upload no post
+ * took (9-11). Dropping that image, rather than putting it in without replacing the selection, is
+ * this implementation's choice, asked of the owner (ADR-0073 결과 4): a form held only for the
+ * upload then holds nothing of the writer's, yet keeps 닫기 and asks on leaving. Any other
+ * failure is that file's alone (a refused image, the network, the API still busy — RATE_LIMITED —
+ * after the file was sent again (`sendRetrying`, inside `send`), a body cut for idling or for its
+ * deadline): the batch goes on.
  */
 export async function uploadImageBatch<F>(
   files: readonly F[],
