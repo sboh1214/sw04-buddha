@@ -10,7 +10,7 @@ import { markets } from './markets.js';
  *
  * A theme is unpublished and never deleted (the owner's '공개 뒤' row), and a notice is hidden and
  * never deleted (owner decision 2026-10-19): buddha_app holds no DELETE on `themes` or
- * `theme_notices` (migration 0043). Taking a market out of a theme deletes its `theme_markets`
+ * `theme_notices` (migration 0045). Taking a market out of a theme deletes its `theme_markets`
  * row, as an unlink does in `market_links` (ADR-0068). The history of every write — who and when,
  * no reason — is `admin_actions` (the `theme_*` types), written in the same transaction as the
  * change.

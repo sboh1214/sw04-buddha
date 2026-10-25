@@ -6444,7 +6444,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(columns).toEqual([{ column: 'review_action_id', privilege: 'UPDATE' }]);
       // Migration 0044 (#184): the purge records are operational records, kept with no period.
       expect(privs('retention_purges')).toEqual(['INSERT', 'SELECT']);
-      // Migration 0043 (#81): a theme is unpublished and a notice hidden, in place, never
+      // Migration 0045 (#81): a theme is unpublished and a notice hidden, in place, never
       // deleted; a market taken out of a theme deletes its row (the history is admin_actions).
       expect(privs('themes')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
       expect(privs('theme_notices')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
