@@ -6,7 +6,8 @@
  * asked nor is the member approves it, with a reason, and then in the approval's transaction (the
  * term counted from the approval, read after every lock it waited on); a rejection does nothing;
  * neither the one who asked nor the member decides; a request the restriction outgrew — one approved
- * just before it included — is refused on approval and rejected instead. Under it the
+ * just before it included — is refused on approval and rejected instead; two approvals at once
+ * whose deciders are each other's members both go through, with no deadlock. Under it the
  * member's public profile items take no new value (RESTRICTED, kind `account`, clearing open) and
  * an order is refused by the trading check #119 calls (`assertCanTrade`), while writing, likes,
  * reports, the 관심 등록, the balance and every record stay as they were; a term ends by itself;
@@ -377,6 +378,63 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
         ).statusCode,
       ).toBe(400);
       expect((await approve(randomUUID())).statusCode).toBe(404);
+    });
+
+    it('approves two requests at once whose deciders are each other’s members, without a deadlock: an approval locks the member’s and the decider’s profiles first, in one order (7-17)', async () => {
+      // `admin` asks to restrict `second` and `third`; each of them approves the one about the other
+      // (an operator's restriction is decided by a third admin, 7-15).
+      const third = await anAdmin();
+      const onSecond = requestOf(await ask(7, second));
+      const onThird = requestOf(await ask(3, third));
+      const { approvalRequests } = schema;
+      const observer = await t.db.$client.connect();
+      let release = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let held = () => {};
+      const holding = new Promise<void>((resolve) => {
+        held = resolve;
+      });
+      // Both requests' rows held: each approval takes its profile locks and parks on its request —
+      // the decision's own lock — and both go on together, to the decision's trigger, which locks
+      // the decider's profile (migration 0021). Locked as they came (the member's, then the
+      // decider's by the trigger), each would wait for the profile the other holds: a deadlock,
+      // one approval a 500.
+      const holder = t.db.transaction(async (tx) => {
+        await tx
+          .select({ id: approvalRequests.id })
+          .from(approvalRequests)
+          .where(inArray(approvalRequests.id, [onSecond.id, onThird.id]))
+          .for('update');
+        held();
+        await gate;
+      });
+      let answers: Res[];
+      try {
+        await holding;
+        const byThird = approve(onSecond.id, third);
+        const bySecond = approve(onThird.id, second);
+        await waitForLockWaiter(observer, 'the two approvals behind their requests', 2);
+        release();
+        await holder;
+        answers = await Promise.all([byThird, bySecond]);
+      } finally {
+        release();
+        observer.release();
+      }
+      const [aboutSecond, aboutThird] = answers.map((answer) => decisionOf(answer));
+      expect(aboutSecond!.request).toMatchObject({
+        status: 'approved',
+        decidedBy: { id: third.id },
+      });
+      expect(aboutThird!.request).toMatchObject({
+        status: 'approved',
+        decidedBy: { id: second.id },
+      });
+      expect((await accountActions()).map((row) => row.userId).sort()).toEqual(
+        [second.id, third.id].sort(),
+      );
     });
   });
 

@@ -253,11 +253,12 @@ export class AccountRestrictionService {
    * `POST /admin/moderation/account-restriction-requests/:requestId/approve`: another admin approves
    * the request, with a reason, and what it asked for is done in the same transaction, at the
    * approval's instant (ADR-0056 decision 1-7):
-   * - `apply`: the member's profile locked FOR UPDATE first — every order (#119's `assertCanTrade`)
-   *   and every public item write hold or lock it until they commit — so the restriction holds
-   *   from this commit with nothing slipping past; then its subject (re-checked: the member's) and
-   *   the restriction, ending `days` after the approval (or 무기한), with the pending reports on the
-   *   subject resolved (조치함). A member restricted already keeps the one that ends later.
+   * - `apply`: the member's profile locked FOR UPDATE first (with the deciding admin's, in
+   *   account-id order — see below) — every order (#119's `assertCanTrade`) and every public item
+   *   write hold or lock it until they commit — so the restriction holds from this commit with
+   *   nothing slipping past; then its subject (re-checked: the member's) and the restriction,
+   *   ending `days` after the approval (or 무기한), with the pending reports on the subject
+   *   resolved (조치함). A member restricted already keeps the one that ends later.
    * - `shorten`, `lift`: the restriction's end brought forward to the end asked for, or to now —
    *   the change recorded as the asking operator's, with its approval.
    * - `cancel`: the restriction cancelled at once, as the asking operator's, with its approval.
@@ -269,7 +270,10 @@ export class AccountRestrictionService {
    * change of the restriction approved first — which then leaves this one `ended` or `cancelled`
    * rather than writing an end, or a cancellation, timed before it (ADR-0085 7-14). The admin-roles
    * lock comes first, shared, as the decision takes it: a role grant takes it exclusively and then
-   * the grantee's profile row, so the profile after it keeps the one order (no deadlock).
+   * the grantee's profile row, so the profiles after it keep the one order (no deadlock). Then the
+   * profiles, in account-id order (`lockProfiles`, 7-17): the deciding admin's, which the
+   * decision's trigger locks again, and an `apply`'s member's — so two approvals whose deciders are
+   * each other's members do not deadlock — and then the rows they come before.
    *
    * Refused: no such request of #139 (NOT_FOUND), the member deciding about themselves (`own`), the
    * one who asked (APPROVAL_NOT_ALLOWED `requester`), one decided already (`decided`), and what the
@@ -285,6 +289,7 @@ export class AccountRestrictionService {
       const { request, change, memberId } = await this.decidable(tx, deciderId, requestId);
       // Every lock first, then the decision and its instant (see above).
       await lockAdminRoles(tx, 'shared');
+      await this.lockProfiles(tx, deciderId, change === 'apply' ? memberId : null);
       const locked =
         change === 'apply'
           ? { change, apply: await this.lockApply(tx, request, memberId) }
@@ -469,8 +474,38 @@ export class AccountRestrictionService {
   }
 
   /**
-   * What an `apply`'s approval waits on, before its decision (see `approve`): the member's profile
-   * FOR UPDATE, then its subject (re-checked: the member's) — the order an edit of it takes them in.
+   * The profiles an approval locks, before any other row of it (see `approve`; ADR-0085 7-17): the
+   * deciding admin's FOR SHARE — the lock migration 0021's `approval_requests_keep_record` takes on
+   * it when the decision is written, which then finds it held — and, for an `apply`, the member's
+   * FOR UPDATE (`ModerationService.lockProfile`: NOT_FOUND for no such member), the two in
+   * account-id order. Taken as they came (the member's here, the decider's by the trigger), two
+   * approvals whose deciders are each other's members — A approving a request about B while B
+   * approves one about A — would each hold the profile the other's trigger waits for: a deadlock,
+   * one of them a 500. A 감경, a lift or a cancellation locks no member's profile (it only opens what
+   * the restriction closed), so its approval takes the decider's alone, still before the
+   * restriction's row: every approval takes its profiles first, in that one order.
+   */
+  private async lockProfiles(tx: Tx, deciderId: string, memberId: string | null): Promise<void> {
+    const locks: { userId: string; member: boolean }[] = [{ userId: deciderId, member: false }];
+    if (memberId !== null) locks.push({ userId: memberId, member: true });
+    locks.sort((a, b) => (a.userId < b.userId ? -1 : a.userId > b.userId ? 1 : 0));
+    for (const { userId, member } of locks) {
+      if (member) {
+        await this.moderation.lockProfile(tx, userId);
+      } else {
+        await tx
+          .select({ userId: schema.profiles.userId })
+          .from(schema.profiles)
+          .where(eq(schema.profiles.userId, userId))
+          .for('share');
+      }
+    }
+  }
+
+  /**
+   * What an `apply`'s approval waits on after the profiles (`lockProfiles` — the member's FOR
+   * UPDATE among them), before its decision (see `approve`): its subject (re-checked: the
+   * member's) — after the member's profile, the order an edit of it takes them in.
    */
   private async lockApply(
     tx: Tx,
@@ -478,7 +513,6 @@ export class AccountRestrictionService {
     memberId: string,
   ): Promise<LockedApply> {
     const payload = this.payloadOf(applyPayloadSchema, request);
-    await this.moderation.lockProfile(tx, memberId);
     const subject = await this.moderation.subjectOf(
       tx,
       memberId,
