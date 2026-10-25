@@ -7,7 +7,13 @@ import {
   sanitizePostDocument,
 } from '@buddha/shared';
 import { Fragment, type Node as ProseMirrorNode, Schema, Slice } from '@tiptap/pm/model';
-import { AllSelection, NodeSelection, type Selection, TextSelection } from '@tiptap/pm/state';
+import {
+  AllSelection,
+  EditorState,
+  NodeSelection,
+  type Selection,
+  TextSelection,
+} from '@tiptap/pm/state';
 import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
@@ -30,6 +36,7 @@ import {
   imagePrecheck,
   imageRefusalMessage,
   imageUploadErrorMessage,
+  insertHeldImage,
   isPostTextColor,
   linkInputHref,
   pastedLinkHref,
@@ -971,6 +978,98 @@ describe('heldImagePosition', () => {
       landed(doc, TextSelection.create(doc, lineAt(doc, '앞').start, lineAt(doc, '뒤').start)),
     ).toEqual(['앞', '[있던]', '[새]', '뒤']);
   });
+
+  describe('insertHeldImage', () => {
+    /** The editor's transaction once the landed image goes in over `selection` of `doc`. */
+    const insert = (doc: ProseMirrorNode, selection: Selection) =>
+      insertHeldImage(EditorState.create({ doc, selection }).tr, picture('새'));
+
+    /** The images a selection holds. */
+    function imagesIn(selection: Selection): string[] {
+      const ids: string[] = [];
+      selection.$from.doc.nodesBetween(selection.from, selection.to, (node) => {
+        if (node.type === imageType) ids.push(String(node.attrs.mediaId));
+      });
+      return ids;
+    }
+
+    it('keeps a selection through to the next line’s start off the image: its line, as picked (ADR-0073 9-53)', () => {
+      // The browser's triple click in the held editor (9-52): the line, through to the next one's
+      // start. As ProseMirror maps it, its end moves past the image going in before it — the
+      // highlight and a copy took the image in.
+      const first = lineAt(page, '첫 줄');
+      const second = lineAt(page, '둘째 줄');
+      const picked = TextSelection.create(page, first.start, second.start);
+      const tr = insert(page, picked);
+      expect((outline(tr.doc) as { doc: unknown[] }).doc.slice(0, 3)).toEqual([
+        '첫 줄',
+        '[새]',
+        '둘째 줄',
+      ]);
+      expect(imagesIn(picked.map(tr.doc, tr.mapping))).toEqual(['새']);
+      // Kept to the line instead: from its start to its end, the image after it not selected.
+      expect(tr.selection).toBeInstanceOf(TextSelection);
+      expect({ anchor: tr.selection.anchor, head: tr.selection.head }).toEqual({
+        anchor: first.start,
+        head: first.end,
+      });
+      expect(imagesIn(tr.selection)).toEqual([]);
+      expect(tr.doc.textBetween(tr.selection.from, tr.selection.to)).toBe('첫 줄');
+      // Picked the other way round, kept the other way round.
+      const back = insert(page, TextSelection.create(page, second.start, first.start));
+      expect({ anchor: back.selection.anchor, head: back.selection.head }).toEqual({
+        anchor: first.end,
+        head: first.start,
+      });
+    });
+
+    it('keeps lines, and a list item’s line, selected through to the next block’s start', () => {
+      // Two lines, through to the list's first item: both lines, the image after them.
+      const first = lineAt(page, '첫 줄');
+      const second = lineAt(page, '둘째 줄');
+      const lines = insert(
+        page,
+        TextSelection.create(page, first.start, lineAt(page, '항목').start),
+      );
+      expect({ from: lines.selection.from, to: lines.selection.to }).toEqual({
+        from: first.start,
+        to: second.end,
+      });
+      expect(imagesIn(lines.selection)).toEqual([]);
+      // An item's line through to the next item's: the line, the image after it within the item.
+      const item = lineAt(page, '항목');
+      const inItem = insert(
+        page,
+        TextSelection.create(page, item.start, lineAt(page, '다음 항목').start),
+      );
+      expect({ from: inItem.selection.from, to: inItem.selection.to }).toEqual({
+        from: item.start,
+        to: item.end,
+      });
+      expect(imagesIn(inItem.selection)).toEqual([]);
+    });
+
+    it('leaves alone a selection ending before the image, and a selected image', () => {
+      // ProseMirror's triple click, within the line: the image goes in after it, nothing moves.
+      const first = lineAt(page, '첫 줄');
+      const within = insert(page, TextSelection.create(page, first.start, first.end));
+      expect({ from: within.selection.from, to: within.selection.to }).toEqual({
+        from: first.start,
+        to: first.end,
+      });
+      // The caret where it was.
+      const caret = insert(page, TextSelection.create(page, first.start + 1));
+      expect({ from: caret.selection.from, to: caret.selection.to }).toEqual({
+        from: first.start + 1,
+        to: first.start + 1,
+      });
+      // An image selected: still that image, the new one after it.
+      const imageAt = page.content.size - picture('있던').nodeSize;
+      const node = insert(page, NodeSelection.create(page, imageAt));
+      expect(node.selection).toBeInstanceOf(NodeSelection);
+      expect(imagesIn(node.selection)).toEqual(['있던']);
+    });
+  });
 });
 
 describe('createUploadQueue', () => {
@@ -1208,7 +1307,7 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
     });
   });
 
-  it('sends nothing more once the editor has gone, or its form been held, during the wait', async () => {
+  it('sends nothing more once the editor has gone during the wait', async () => {
     const first = busy(2);
     const result = await retrying([first, 'never sent'], () => false);
     expect(result.sends).toBe(1);
@@ -1264,6 +1363,58 @@ describe('an upload the API asks to send again later (owner decision 2026-10-22 
       // The third send took it, then the next file went.
       expect(sent).toEqual(['busy', 'busy', 'busy', 'next']);
       expect(failed).not.toHaveBeenCalled();
+      expect(slots.inFlight).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('sends the file again once its form is held during the wait, and puts it in, told so; the next file is not sent (오너 결정 2026-10-25 (2차), 9-53)', async () => {
+    // The post goes while the file waits out its 429: the form is held read-only (ADR-0073 9-52).
+    // The wait is of the upload on its way — '올리는 중' kept (owner decision 2026-10-22 (2차)
+    // answer 3) — so it is sent again as the editor does (`alive` — the editor there, never
+    // whether the form is held) and goes in after what is selected; the file waiting its turn is
+    // the one not sent. Giving it up said nothing and put nothing in, and a form held for it
+    // alone held nothing of the writer's.
+    vi.useFakeTimers();
+    try {
+      const slots = createImageSlots();
+      expect(slots.take(0, 2)).toBe(true);
+      const sent: string[] = [];
+      const inserted: string[] = [];
+      const failed = vi.fn();
+      let held = false;
+      const alive = () => true;
+      const batch = uploadImageBatch([file('busy'), file('next')], slots, createUploadQueue(), {
+        alive,
+        held: () => held,
+        send: async (sending, place) => {
+          await sendRetrying(
+            () => {
+              sent.push(sending.name);
+              return sent.length === 1 ? Promise.reject(busy(2)) : Promise.resolve();
+            },
+            {
+              sleep: (ms) =>
+                new Promise((resolve) => {
+                  setTimeout(resolve, ms);
+                }),
+              alive,
+            },
+          );
+          place((heldNow) => inserted.push(heldNow ? `${sending.name}, held` : sending.name));
+        },
+        failed,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sent).toEqual(['busy']);
+      held = true;
+      await vi.advanceTimersByTimeAsync(2_000);
+      await batch;
+      expect(sent).toEqual(['busy', 'busy']);
+      expect(inserted).toEqual(['busy, held']);
+      expect(failed).not.toHaveBeenCalled();
+      // Both slots back: the image in the document, the next file never sent.
       expect(slots.inFlight).toBe(0);
     } finally {
       vi.useRealTimers();

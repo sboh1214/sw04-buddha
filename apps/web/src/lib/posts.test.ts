@@ -339,10 +339,12 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
   it('puts an upload landing in the form it holds in after the selection, and sends no more files: the held state, not the lock (오너 결정 2026-10-25 (2차), 9-53)', () => {
     // Locking stops the writer, not `insertContentAt`: an upload landing after the post went put
     // its image over a line selected when it was picked (Codex review of #219, round 6). Now it
-    // goes in after what is selected (`heldImagePosition`, post-editor.test.ts), and no file
-    // leaves after it; `uploadImageBatch` tells `insert` whether the form is held and stops the
-    // turns (post-editor.test.ts). Here, that the editor's `held` is the form's `readOnly` — never
-    // `isEditable`, which a send in flight sets too — and that the inserts go through `place`.
+    // goes in after what is selected, the selection kept to what it held (`insertHeldImage`,
+    // post-editor.test.ts), and no file leaves after it; `uploadImageBatch` tells `insert` whether
+    // the form is held and stops the turns (post-editor.test.ts). Here, that the editor's `held`
+    // is the form's `readOnly` — never `isEditable`, which a send in flight sets too — that a
+    // send again after a 429 asks only whether the editor is there (the upload on its way), and
+    // that the inserts go through `place`.
     const editor = readFileSync(
       new URL('../components/post/post-editor.tsx', import.meta.url),
       'utf8',
@@ -355,13 +357,19 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(editor).toContain('const held = () => heldRef.current;');
     expect(editor).toContain('const sendsMore = () => alive() && !held();');
     expect(editor).not.toMatch(/editor\.isEditable|\.isEditable\(/);
-    // A pick whose dialog was open as the post went, each file's turn, and a wait to send again.
+    // A pick whose dialog was open as the post went, and each file's turn.
     expect(editor).toContain('if (!sendsMore()) return;');
     expect(editor).toMatch(/uploadImageBatch\(batch\.sending, slots, sends, \{\s*alive,\s*held,/);
-    expect(editor).toContain('alive: sendsMore,');
+    // A wait to send again: the file on its way is sent again in a held form too (오너 결정
+    // 2026-10-25 (2차) «남긴 양식에 넣음»), given up only by an editor gone.
+    expect(editor).toMatch(
+      /sendRetrying\(\(\) => upload\(picked, accountId\), \{\s*sleep: pause,\s*alive,\s*\}\)/,
+    );
+    expect(editor).not.toContain('alive: sendsMore');
+    expect(editor.match(/sendsMore\(\)/g)).toHaveLength(1);
     // The inserts, the preview with them, inside `place`: held, after the selection, the selection
-    // and the focus left as they are; else over a text selection, as before. The form hears of the
-    // preview only for an image that went in.
+    // kept to what it held and the focus left as it is (`insertHeldImage`); else over a text
+    // selection, as before. The form hears of the preview only for an image that went in.
     const place = editor.indexOf('const placed = place((heldNow) => {');
     const preview = editor.indexOf(
       'if (placed && preview !== undefined) onPreview?.(uploaded.id, preview);',
@@ -369,17 +377,19 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(place).toBeGreaterThan(-1);
     expect(preview).toBeGreaterThan(place);
     const placing = editor.slice(place, preview);
-    expect(editor.match(/insertContentAt\(/g)).toHaveLength(2);
-    expect(placing.match(/insertContentAt\(/g)).toHaveLength(2);
+    expect(editor.match(/insertContentAt\(/g)).toHaveLength(1);
+    expect(placing.match(/insertContentAt\(/g)).toHaveLength(1);
+    expect(editor.match(/insertHeldImage\(/g)).toHaveLength(1);
     expect(placing).toMatch(
-      /if \(heldNow\) \{[\s\S]*?editor\s*\.chain\(\)\s*\.insertContentAt\(heldImagePosition\(selection, image\.type\), image, \{\s*updateSelection: false,\s*\}\)\s*\.run\(\);\s*return;\s*\}/,
+      /if \(heldNow\) \{[\s\S]*?editor\s*\.chain\(\)\s*\.command\(\(\{ tr \}\) => \{\s*insertHeldImage\(tr, image\);\s*return true;\s*\}\)\s*\.run\(\);\s*return;\s*\}/,
     );
     expect(placing.match(/\.focus\(\)/g)).toHaveLength(1);
     expect(placing.indexOf('.focus()')).toBeGreaterThan(placing.indexOf('return;'));
+    expect(placing.indexOf('insertContentAt(')).toBeGreaterThan(placing.indexOf('return;'));
     expect(editor.match(/previews\.set\(uploaded\.id, preview\)/g)).toHaveLength(1);
     expect(placing.indexOf('previews.set(uploaded.id, preview)')).toBeGreaterThan(-1);
     expect(placing.indexOf('previews.set(uploaded.id, preview)')).toBeLessThan(
-      placing.indexOf('insertContentAt('),
+      placing.indexOf('insertHeldImage('),
     );
     // A drop and the toolbar stay shut while the editor is locked, held or sending.
     expect(editor).toContain('if (!disabled) void insertImages(files);');

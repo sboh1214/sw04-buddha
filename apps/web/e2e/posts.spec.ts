@@ -61,8 +61,9 @@ import {
  * A post its author deletes in another tab turns its open page into the 404 once a read says it is
  * gone — a read that fails otherwise keeps the post — and its open edit screen too, once a save is
  * refused for it (ADR-0073 9-50); an image still uploading there then goes into the held body
- * after the selected line, the line as it was, and the files waiting their turn are not sent
- * (오너 결정 2026-10-25 (2차), 9-53).
+ * after the selected line, the line as it was — one waiting out a 429 too, sent again — and the
+ * files waiting their turn are not sent (오너 결정 2026-10-25 (2차), 9-53); a line selected in
+ * the held body stays selected, without the image.
  * The allow-list, the image checks, the permissions and the paging are the API's and the shared
  * package's tests; this walks the screens.
  */
@@ -1928,6 +1929,133 @@ test.describe('근거 글', () => {
     expect(uploads).toBe(1);
     await expect(toastsOf(page).getByText(copy.errImageUpload)).toHaveCount(0);
     await expect(page.getByTestId('post-title-input')).toHaveValue(`올리던 글 ${tag}`);
+    // Held with the image it took, under the sentence, until 닫기.
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await page.getByTestId('post-form-close').click();
+    await expect(page.getByRole('heading', { name: '404' })).toBeVisible();
+    await expect(page).toHaveURL(edit);
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('수정 화면에서 429 뒤 다시 올리기를 기다리던 이미지는 그사이 글이 다른 탭에서 지워져도 다시 올라가 남은 본문에 들어가고, 고칠 수 없는 본문에서 세 번 눌러 고른 줄은 그 이미지를 고르지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    // 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (ADR-0073 9-53): a file waiting out a 429 is
+    // the upload on its way — '올리는 중' kept (owner decision 2026-10-22 (2차) answer 3) — so a
+    // form held meanwhile still sends it again and takes its image; it was given up, saying
+    // nothing, the form held for it alone holding nothing of the writer's. And the browser's
+    // triple click in the held editor (9-52) selects through to the next line's start: the image
+    // going in after the line moved the selection's end past it, over the image.
+    const market = await createOpenMarket(admin);
+    await signUp(page, freshEmail());
+    const tag = freshTag();
+    await page.clock.install();
+    const postId = await postThroughApi(
+      page.request,
+      market.id,
+      `기다리던 글 ${tag}`,
+      '기다리던 근거',
+      [{ type: 'paragraph', content: [{ type: 'text', text: '둘째 줄' }] }],
+    );
+    const edit = `/community/posts/${postId}/edit`;
+    const held: Route[] = [];
+    let uploads = 0;
+    await page.route('**/api/v1/media/images**', (route) => {
+      uploads += 1;
+      held.push(route);
+    });
+    await page.goto(edit);
+    const editor = page.getByTestId('post-editor-content');
+    await expect(editor).toContainText('둘째 줄');
+    // Two images picked: the first goes up, the second waits its turn.
+    await page.getByTestId('post-editor-file').setInputFiles(pngFiles(2));
+    await expect.poll(() => held.length).toBe(1);
+    const uploading = page.getByTestId('post-editor-uploading');
+    await expect(uploading).toBeVisible();
+
+    // Deleted in another tab, and read again on a focus while the first send is out: the form
+    // stays, locked, under the sentence (an upload on its way is something to keep, 9-52).
+    const other = await page.context().newPage();
+    await other.goto(`/community/posts/${postId}`);
+    await other.getByTestId('post-delete').click();
+    await other.getByTestId('post-delete-confirm').click();
+    await expect(other).toHaveURL('/community');
+    await other.close();
+    await page.clock.fastForward('00:31');
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
+    await expect(editor).toHaveAttribute('contenteditable', 'false');
+
+    // The send comes back refused for the moment: the API busy, to be sent again in 2 seconds.
+    await held.shift()!.fulfill({
+      status: 429,
+      headers: { 'retry-after': '2' },
+      json: {
+        error: {
+          code: 'RATE_LIMITED',
+          message: 'The server is short of memory for uploads; send it again',
+          details: { retryAfterSeconds: 2 },
+        },
+      },
+    });
+    // The first line selected in the held editor, as the browser selects it there: through to
+    // the next line's start.
+    await editor.locator('p').first().click({ clickCount: 3 });
+    expect(
+      await editor.evaluate((root) => {
+        const { selection } = (
+          root as HTMLElement & {
+            editor: {
+              state: {
+                selection: { $to: { parentOffset: number; parent: { textContent: string } } };
+              };
+            };
+          }
+        ).editor.state;
+        return { offset: selection.$to.parentOffset, line: selection.$to.parent.textContent };
+      }),
+    ).toEqual({ offset: 0, line: '둘째 줄' });
+    expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toContain(
+      '기다리던 근거 출처',
+    );
+
+    // The wait out, the file is sent again, still uploading; it lands: its image goes in after
+    // the selected line, and the file waiting its turn is never sent. Nothing is said.
+    await page.clock.fastForward('00:02');
+    await expect.poll(() => held.length).toBe(1);
+    expect(uploads).toBe(2);
+    await expect(uploading).toBeVisible();
+    await held.shift()!.continue();
+    await expect(uploading).toHaveCount(0);
+    await settle();
+    await expect(editor.locator('img')).toHaveCount(1);
+    await expect(editor.locator('img')).toHaveAttribute('src', /^data:image\//);
+    expect(
+      await editor.evaluate((root) =>
+        Array.from(root.children, (child) =>
+          child.tagName === 'IMG' ? '[image]' : (child.textContent ?? ''),
+        ),
+      ),
+    ).toEqual(['기다리던 근거 출처', '[image]', '둘째 줄']);
+    // The line still selected, and the image not: the page's selection is the line's.
+    expect(
+      await editor.evaluate((root) => {
+        const selection = window.getSelection();
+        const image = root.querySelector('img');
+        return {
+          text: selection?.toString() ?? '',
+          image:
+            selection !== null &&
+            selection.rangeCount > 0 &&
+            image !== null &&
+            selection.getRangeAt(0).intersectsNode(image),
+        };
+      }),
+    ).toEqual({ text: '기다리던 근거 출처', image: false });
+    await expect(page.getByTestId('post-body-images')).toContainText('1 / 10');
+    expect(uploads).toBe(2);
+    await expect(toastsOf(page).locator('[data-part="root"]')).toHaveCount(0);
     // Held with the image it took, under the sentence, until 닫기.
     await expect(page.getByTestId('post-form-gone')).toHaveText(copy.errPostGone);
     await page.getByTestId('post-form-close').click();

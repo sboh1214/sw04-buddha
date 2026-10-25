@@ -48,9 +48,9 @@ import {
   POST_TEXT_COLOR_OPTIONS,
   countEditorDocument,
   createUploadQueue,
-  heldImagePosition,
   imageRefusalMessage,
   imageUploadErrorMessage,
+  insertHeldImage,
   isPostTextColor,
   linkInputHref,
   pastedLinkHref,
@@ -435,11 +435,11 @@ export function PostEditor({
     if (editor === null || accountId === undefined) return;
     // Whether the editor is there: the writer has not left, the gate has not taken the form away.
     const alive = () => !editor.isDestroyed;
-    // Whether the form is held read-only, its post gone (ADR-0073 9-52): it sends no more files —
-    // no batch's start, no file's turn, no send again after a 429 — and an upload already on its
-    // way goes in after what is selected, never over it (`uploadImageBatch`, 오너 결정 2026-10-25
-    // (2차) «남긴 양식에 넣음», 9-53). The held state, not the lock: a send in flight locks the
-    // editor too, and drops or stops nothing.
+    // Whether the form is held read-only, its post gone (ADR-0073 9-52): it sends no next file —
+    // no batch's start, no file's turn — and an upload already on its way goes on, sent again
+    // after a 429 as it would be, and goes in after what is selected, never over it
+    // (`uploadImageBatch`, 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음», 9-53). The held state,
+    // not the lock: a send in flight locks the editor too, and drops or stops nothing.
     const held = () => heldRef.current;
     const sendsMore = () => alive() && !held();
     // A pick whose dialog was open as the post went takes nothing, as a drop does not.
@@ -468,13 +468,14 @@ export function PostEditor({
           // A failed upload is said once its copy has settled too, so the line decodes one file
           // at a time however fast the uploads fail. A 429 that asks to wait is waited out and the
           // file sent again, twice at most, still counted as uploading (`sendRetrying`, owner
-          // decision 2026-10-22 (2차) answer 3).
+          // decision 2026-10-22 (2차) answer 3) — the same upload, so a form held meanwhile still
+          // sends it again and takes its image (9-53); only an editor gone gives it up.
           const { uploaded, preview } = await uploadWithPreview(
             file,
             (picked) =>
               sendRetrying(() => upload(picked, accountId), {
                 sleep: pause,
-                alive: sendsMore,
+                alive,
               }),
             boundedPreviewOf,
           );
@@ -482,23 +483,24 @@ export function PostEditor({
           // is its preview kept, nor handed to the form for a draft.
           const placed = place((heldNow) => {
             if (preview !== undefined) previews.set(uploaded.id, preview);
-            const { selection } = editor.state;
             const image = editor.schema.nodeFromJSON({
               type: 'image',
               attrs: { mediaId: uploaded.id },
             });
             if (heldNow) {
               // The form held read-only (9-52): the image goes in after what is selected, the text
-              // held to be copied left as it is (`heldImagePosition`) — and so are the selection
-              // and the focus, wherever the writer has them.
+              // held to be copied left as it is — and so are the selection, kept to what it held,
+              // and the focus, wherever the writer has them (`insertHeldImage`).
               editor
                 .chain()
-                .insertContentAt(heldImagePosition(selection, image.type), image, {
-                  updateSelection: false,
+                .command(({ tr }) => {
+                  insertHeldImage(tr, image);
+                  return true;
                 })
                 .run();
               return;
             }
+            const { selection } = editor.state;
             // After an image goes in, the selection is that image (a node selection, which is where
             // ProseMirror puts the cursor after an atom at the end): the next one goes after it
             // rather than replacing it, so every image of a batch stays — and so does an image the
@@ -527,8 +529,8 @@ export function PostEditor({
       // while the gate takes the account to its step, the draft kept in the tab — a toast would
       // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
       // gate stays, and it says what a refused send says (owner decision 2026-10-21
-      // answer 6). An upload given up for the editor gone, or held, while it waited says
-      // nothing. Any other is said: that file's failure alone.
+      // answer 6). An upload given up for the editor gone while it waited says nothing. Any
+      // other is said: that file's failure alone.
       failed: (error) => {
         const message = imageUploadErrorMessage(error, gateMoves());
         if (message !== undefined) toaster.create({ type: 'error', title: message });

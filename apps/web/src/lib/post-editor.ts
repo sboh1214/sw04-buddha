@@ -11,8 +11,8 @@ import {
   type ImageRefusal,
   type PostTextColor,
 } from '@buddha/shared';
-import { type NodeType } from '@tiptap/pm/model';
-import { NodeSelection, Selection } from '@tiptap/pm/state';
+import { type Node as ProseMirrorNode, type NodeType } from '@tiptap/pm/model';
+import { NodeSelection, Selection, TextSelection, type Transaction } from '@tiptap/pm/state';
 import { copy } from '@/copy';
 import { isApiError, isApiUnreachable, isForAnotherAccount } from './api';
 
@@ -177,9 +177,9 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * account to its step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and
  * the form keeps its draft in the tab, as for a refused send (owner decision 2026-10-21), and when
  * the gate stays — that read failed — says what a refused send says (owner decision 2026-10-21
- * answer 6); an upload given up while it waited to be sent again, the editor gone, or held (its
- * post gone, the form kept read-only, ADR-0073 9-53), meanwhile (`UploadAbandoned`), says nothing,
- * as the files a batch never sends once the editor sends no more;
+ * answer 6); an upload given up while it waited to be sent again, the editor gone meanwhile
+ * (`UploadAbandoned`), says nothing, as the files a batch never sends once the editor sends no
+ * more;
  * anything else is a failed upload, said apart from an unreachable server — the API busy (a 429:
  * the uploads it receives, the account's three in flight, its memory, the conversion queue) still
  * after the editor sent it again (`sendRetrying`, owner decision 2026-10-22 (2차) answer 3), and a
@@ -374,9 +374,10 @@ export function uploadRetryWaitMs(error: unknown): number | undefined {
 
 /**
  * An upload given up while it waited to be sent again: the editor went meanwhile (the writer left,
- * or the onboarding gate took the form away), or was held — its post gone, the form kept read-only
- * (ADR-0073 9-52·9-53), which sends nothing more. It says nothing (`imageUploadErrorMessage`) — as
- * the files a batch never sends then — and `refused` is the 429 it waited on.
+ * or the onboarding gate took the form away). It says nothing (`imageUploadErrorMessage`) — as the
+ * files a batch never sends then — and `refused` is the 429 it waited on. A form held meanwhile —
+ * its post gone, kept read-only (ADR-0073 9-52·9-53) — gives up nothing: the wait is of the upload
+ * on its way, sent again and put in as any that lands then (`sendRetrying`).
  */
 export class UploadAbandoned extends Error {
   constructor(readonly refused: unknown) {
@@ -390,8 +391,8 @@ export interface UploadRetrySteps {
   /** Resolves after `ms` (`pause` on the page; a fake in the tests). */
   sleep(ms: number): Promise<void>;
   /**
-   * False once the editor sends no more files — gone, or held (`ImageBatchSteps`' `alive` and
-   * `held`): nothing more is sent.
+   * False once the editor is gone (`ImageBatchSteps`' `alive`): the file is not sent again. Never
+   * whether the form is held — the file waiting is the upload on its way, not a next one.
    */
   alive(): boolean;
 }
@@ -410,9 +411,12 @@ export function pause(ms: number): Promise<void> {
  * send is the outcome — the image, or the refusal the editor says as that file's failure
  * (`imageUploadErrorMessage`, as before). The whole of it is one upload to the editor: the file
  * keeps its turn in the editor's line (`createUploadQueue` — the next file waits) and its count
- * among the uploads, so '올리는 중' stays up and the form holds its send meanwhile. An editor gone,
- * or held (its post gone, the form kept read-only, ADR-0073 9-53), by the end of a wait sends
- * nothing more (`UploadAbandoned`). Any other refusal is the outcome at once, as before.
+ * among the uploads, so '올리는 중' stays up and the form holds its send meanwhile. An editor gone
+ * by the end of a wait sends nothing more (`UploadAbandoned`). A form held by then — its post gone,
+ * kept read-only (ADR-0073 9-52) — still sends the file again: it is the upload on its way, which
+ * goes into the held form once it lands (오너 결정 2026-10-25 (2차) «남긴 양식에 넣음», 9-53); the
+ * files after it are the ones not sent (`uploadImageBatch`). Any other refusal is the outcome at
+ * once, as before.
  */
 export async function sendRetrying<T>(send: () => Promise<T>, steps: UploadRetrySteps): Promise<T> {
   let retried = 0;
@@ -518,11 +522,12 @@ export interface ImageBatchSteps<F> {
   alive(): boolean;
   /**
    * True once the editor's post is gone and the form kept read-only, to be copied and never
-   * changed (ADR-0073 9-52): nothing more leaves — no file's turn comes, nor a send again after a
-   * 429 — but an upload already on its way goes in as it lands, after what is selected rather than
-   * over it (`place` hands `insert` true; 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음», 9-53). The
-   * held state itself, never the editor's lock of the moment: an editor locked while something is
-   * sent is not held, and drops or stops nothing.
+   * changed (ADR-0073 9-52): no next file leaves — no file's turn comes — but an upload already on
+   * its way goes on, sent again after a 429 as it would be (`sendRetrying` — one upload to the
+   * editor), and goes in as it lands, after what is selected rather than over it (`place` hands
+   * `insert` true; 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음», 9-53). The held state itself,
+   * never the editor's lock of the moment: an editor locked while something is sent is not held,
+   * and drops or stops nothing.
    */
   held(): boolean;
   /**
@@ -546,14 +551,15 @@ export interface ImageBatchSteps<F> {
  * a file's turn (gone, or held — its post gone, the form kept read-only, ADR-0073 9-53); the files
  * not sent give their slots back at once. Sending on would have every later file refused alike,
  * each refusal reading the account again, on the page the gate moved to. An upload that lands once
- * the form is held still goes in — 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (9-53) — but
- * `insert` is told so, and puts the image after what is selected, never over it: the text is held
- * to be copied (an image over a selected line replaced it, Codex review of #219, round 6). The
- * files after it are not sent (each turn asks). An upload that lands once the editor is gone puts
- * nothing in: its slot comes back, and the upload stays on the API unused, removed after 24 hours
- * as any upload no post took (9-11). Any other failure is that file's alone (a refused image, the
- * network, the API still busy — RATE_LIMITED — after the file was sent again (`sendRetrying`,
- * inside `send`), a body cut for idling or for its deadline): the batch goes on.
+ * the form is held still goes in — 오너 결정 2026-10-25 (2차) «남긴 양식에 넣음» (9-53), one sent
+ * again after a 429 meanwhile too (`sendRetrying`) — but `insert` is told so, and puts the image
+ * after what is selected, never over it: the text is held to be copied (an image over a selected
+ * line replaced it, Codex review of #219, round 6). The files after it are not sent (each turn
+ * asks). An upload that lands once the editor is gone puts nothing in: its slot comes back, and
+ * the upload stays on the API unused, removed after 24 hours as any upload no post took (9-11).
+ * Any other failure is that file's alone (a refused image, the network, the API still busy —
+ * RATE_LIMITED — after the file was sent again (`sendRetrying`, inside `send`), a body cut for
+ * idling or for its deadline): the batch goes on.
  */
 export async function uploadImageBatch<F>(
   files: readonly F[],
@@ -620,6 +626,35 @@ export function heldImagePosition(selection: Selection, image: NodeType): number
     if ($after.parent.canReplaceWith($after.index(), $after.index(), image)) return $after.pos;
   }
   return end.pos;
+}
+
+/**
+ * Puts `image` into a held form's document — `tr`, the editor's transaction — where
+ * `heldImagePosition` says, and keeps the selection off it (ADR-0073 9-53): the focus is not moved,
+ * nor the image selected. ProseMirror maps a selection through what goes in, and an image going in
+ * before its end moves the end past it: a selection through to the next line's start — the
+ * browser's triple click in the held editor (9-52) — then took the image in, and the view, which
+ * writes its selection back to the page read-only or not, showed it over the image and a copy
+ * took it. Such a selection ends instead at the last text before the image — the end of the
+ * selected line — anchor and head the way round they were: the line stays selected, the image is
+ * not. (One run through an earlier image to the next line's start ends before that image too: a
+ * text selection ends in text, never between two images.) Any other selection — one ending
+ * before the image, a selected node — is left as ProseMirror maps it.
+ */
+export function insertHeldImage(tr: Transaction, image: ProseMirrorNode): Transaction {
+  const { selection } = tr;
+  const at = heldImagePosition(selection, image.type);
+  tr.insert(at, image);
+  if (!(selection instanceof TextSelection) || selection.empty || at > selection.to) return tr;
+  // Its start is a text position before `at` (the image goes in between blocks), where the insert
+  // left it; its end, the last text position before the image.
+  const lineEnd = Selection.findFrom(tr.doc.resolve(at), -1, true);
+  const end = Math.max(selection.from, lineEnd === null ? selection.from : lineEnd.from);
+  return tr.setSelection(
+    selection.head < selection.anchor
+      ? TextSelection.create(tr.doc, end, selection.from)
+      : TextSelection.create(tr.doc, selection.from, end),
+  );
 }
 
 /**
