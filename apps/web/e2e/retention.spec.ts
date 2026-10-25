@@ -1,6 +1,7 @@
 import type { APIRequestContext, APIResponse, Page, Route } from '@playwright/test';
 import type {
   AdminCommentModeration,
+  AdminLinkFlag,
   AdminPostModeration,
   AdminUserModeration,
   RetentionPurge,
@@ -27,8 +28,10 @@ import {
  * beside its name, its count '오류 전까지 N건' (owner decision 2026-10-24 14); a member reads
  * nothing. And the operators' pages of a deleted original the retention emptied say so, and when —
  * as they do of a withdrawn member's hidden post it emptied, still hidden and without its earlier
- * versions (owner decisions 2026-10-24 3 and (2차) 2) — and a profile action whose removed item it
- * deleted names the item and says it is gone.
+ * versions (owner decisions 2026-10-24 3 and (2차) 2) — #187's repeated-link review list, which
+ * keeps its entries longer (ADR-0087 7-26), names an entry whose post or comment it emptied as the
+ * report queue does, the link still leading to the item's page, and a profile action whose removed
+ * item it deleted names the item and says it is gone.
  *
  * The purge itself cannot run here: it runs once a day (04:30 KST) and deletes only what an approved
  * period has kept — records days old, under a value that would stay in the e2e database and delete
@@ -39,8 +42,8 @@ import {
  * 04:30 KST during an e2e run would have written its rows of 0), and against answers this spec
  * shapes in the browser (`page.route`) — the runs and the pages a real purge would give, an
  * emptied original's moderation answers built from the real ones of a post and a comment the member
- * deleted, and a member's answer with a 소개 clearing's removed item gone — the way
- * account-closure.spec.ts shows the start grant's line.
+ * deleted (and the review list's entries of them), and a member's answer with a 소개 clearing's
+ * removed item gone — the way account-closure.spec.ts shows the start grant's line.
  */
 
 const PURGES = '/api/v1/admin/retention-purges';
@@ -489,6 +492,87 @@ test.describe('보존기간 처리 (#184)', () => {
     await expect(page.getByTestId('moderation-purged-at')).toHaveText(
       `${copy.adminModerationPurgedAt}${PURGED_SHOWN}`,
     );
+  });
+
+  test('반복 링크 검토 목록에 남은 항목의 글·댓글을 보존기간이 지나 비우면 그 항목은 신고 목록처럼 이름이 있는 링크로 그 운영 화면에 이어진다', async ({
+    page,
+    admin,
+  }) => {
+    // A member puts one address into a post and two 댓글 within the day — all three go on #187's
+    // review list — and deletes the post and one 댓글. The list keeps its entries for the 신고·제재
+    // period from the flag (ADR-0087 7-26); the deleted originals' own period may end first.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const url = `https://example.com/e2e-retention-links/${tag}`;
+    await signUp(page, freshEmail());
+    const postId = await postThroughApi(page.request, market.id, `링크 글 ${tag}`, `근거 ${url}`);
+    const keptId = await commentThroughApi(page.request, postId, `남길 댓글 ${tag} ${url}`);
+    const goneId = await commentThroughApi(page.request, postId, `지울 댓글 ${tag} ${url}`);
+    await deleteThroughApi(page.request, `/api/v1/comments/${goneId}`);
+    await deleteThroughApi(page.request, `/api/v1/posts/${postId}`);
+    await logOut(page);
+    await signIn(page, adminAccount.email, adminAccount.password);
+
+    // As the API answers once the retention emptied the post and the 댓글 (link-review.test.ts):
+    // the entries stay, with no title and no text left.
+    const emptied = new Set([goneId, postId]);
+    await page.route(
+      (address) => address.pathname === '/api/v1/admin/link-flags/items',
+      async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as { data: AdminLinkFlag[] };
+        await route.fulfill({
+          response,
+          json: {
+            ...body,
+            data: body.data.map((flag) =>
+              emptied.has(flag.target.commentId ?? flag.target.postId)
+                ? { ...flag, target: { ...flag.target, excerpt: '' } }
+                : flag,
+            ),
+          },
+        });
+      },
+    );
+    await page.route(
+      (address) => address.pathname === `/api/v1/admin/moderation/comments/${goneId}`,
+      async (route) => {
+        const response = await route.fetch();
+        const body = (await response.json()) as { data: AdminCommentModeration };
+        await route.fulfill({
+          response,
+          json: { ...body, data: { ...body.data, body: '', purgedAt: PURGED_AT } },
+        });
+      },
+    );
+
+    await page.goto('/admin/moderation/link-flags');
+    const row = page.locator(`[data-testid="admin-link-flag-group"][data-url="${url}"]`);
+    await expect(page.getByTestId('admin-link-flag-group').first()).toBeVisible();
+    for (let more = 0; more < 10 && (await row.count()) === 0; more += 1) {
+      await page.getByTestId('admin-link-flags-more').click();
+    }
+    await row.getByTestId('admin-link-flag-toggle').click();
+    const item = (path: string) =>
+      row.locator(`[data-testid="admin-link-flag-item"][href="${path}"]`);
+    // Named as the report queue names them (`queueEntryText`): the 댓글 by what became of it, the
+    // post '제목 없음' — never an empty link; the live 댓글 by what it says.
+    const gone = item(`/admin/moderation/comments/${goneId}`);
+    const emptiedPost = item(`/admin/moderation/posts/${postId}`);
+    await expect(gone).toHaveText(copy.adminModerationPurgedLine);
+    await expect(emptiedPost).toHaveText(copy.adminModerationUntitled);
+    await expect(item(`/admin/moderation/comments/${keptId}`)).toHaveText(
+      `남길 댓글 ${tag} ${url}`,
+    );
+    // Each a link one can click, not the zero-width anchor of an empty text.
+    for (const link of [gone, emptiedPost]) {
+      expect((await link.boundingBox())?.width ?? 0).toBeGreaterThan(0);
+    }
+
+    // It leads to the 댓글's page, which says it was emptied.
+    await gone.click();
+    await expect(page).toHaveURL(`/admin/moderation/comments/${goneId}`);
+    await expect(page.getByTestId('moderation-purged')).toHaveText(copy.adminModerationPurged);
   });
 
   test('탈퇴한 회원의 숨긴 채로 남은 글을 보존기간이 지나 비우면 운영자 화면에서 숨김 상태 그대로 원문과 이전 내용 대신 그 안내와 비운 때로 보인다', async ({

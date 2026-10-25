@@ -62,6 +62,20 @@ export function linkFlagItemPath(target: AdminLinkFlag['target']): string {
 }
 
 /**
+ * The name of the entry's link to that page: the item as it is now — a post's title or the start
+ * of its text, a comment's start (`target.excerpt`). A post or a comment #184's retention emptied
+ * (a deleted original, or a withdrawn member's still-hidden one — owner decision 2026-10-24 3) has
+ * none, while its entry stays until the 신고·제재 period from its flag or its mark (ADR-0087 7-26);
+ * it is named as #50's report queue names it (`queueEntryText`) — a post '제목 없음', a comment
+ * '보존기간이 지나 지운 원문' — so the link, the entry's only way to the item, still has a name. A
+ * live item's text is never blank (a post must have some, a comment `post_comments_body_check`).
+ */
+export function linkFlagItemText(target: AdminLinkFlag['target']): string {
+  if (target.excerpt !== '') return target.excerpt;
+  return target.kind === 'comment' ? copy.adminModerationPurgedLine : copy.adminModerationUntitled;
+}
+
+/**
  * A group's key on the screen: its mark in the reviewed list (one row per mark), its link and rule
  * in the default list (one row per both).
  */

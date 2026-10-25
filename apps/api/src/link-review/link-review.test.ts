@@ -15,9 +15,10 @@
  * item's own author a page at a time, admins only; and the mark '확인함' (owner decision
  * 2026-10-22) — its admin_actions record, a blank note none, the reviewed list, entries after
  * `through` and a fourth use left on the default list, two operators at once marking once (the
- * second waiting on the first's entries and finding none left). Earlier uses and entries are
- * recorded straight into `link_uses` and `link_flags` at the times a case needs. Skips when
- * TEST_* are unset.
+ * second waiting on the first's entries and finding none left); and a post and a comment #184's
+ * retention emptied keeping their entries, each its own item with no text left (ADR-0087 7-26).
+ * Earlier uses and entries are recorded straight into `link_uses` and `link_flags` at the times a
+ * case needs. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -775,6 +776,66 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     expect(authorOf(comment.id)).toEqual(await publicFace(other));
     expect(authorOf(post.id)).toEqual(await publicFace(author));
     expect(authorOf(elsewhere.id)).toEqual(await publicFace(third));
+  });
+
+  it('keeps the entries of a post and a comment #184’s retention emptied, each its own item with no text left and its deletion (ADR-0087 7-26)', async () => {
+    const admin = await anAdmin();
+    const post = await writePost(linkedDoc(LINK));
+    const kept = await writeComment(post.id, `댓글 ${LINK}`);
+    const gone = await writeComment(post.id, `지울 댓글 ${LINK}`);
+    const deletedAt = new Date(Date.now() - MINUTE_MS);
+    const purgedAt = new Date();
+    await t.db
+      .update(schema.postComments)
+      .set({ deletedAt })
+      .where(eq(schema.postComments.id, gone.id));
+    await t.db.update(schema.posts).set({ deletedAt }).where(eq(schema.posts.id, post.id));
+    // As the worker's retention.purge leaves them once the 지운 글 원문 period has passed — the
+    // list's own (신고·제재 기록, from the flag) has not: the rows stay, emptied (migration 0044).
+    await t.db
+      .update(schema.postComments)
+      .set({ body: '', purgedAt })
+      .where(eq(schema.postComments.id, gone.id));
+    await t.db
+      .update(schema.posts)
+      .set({
+        title: null,
+        body: { type: 'doc', content: [] },
+        bodyText: '',
+        imageIds: [],
+        purgedAt,
+      })
+      .where(eq(schema.posts.id, post.id));
+
+    // Still three entries: the item, its kind and its page's ids, with nothing of what it said —
+    // the screen names it by that (`linkFlagItemText`).
+    const entries = await readAllItems(admin, LINK, 'same_account');
+    const byTarget = new Map(
+      entries.map((entry) => [entry.target.commentId ?? entry.target.postId, entry.target]),
+    );
+    expect(byTarget.size).toBe(3);
+    expect(byTarget.get(gone.id)).toMatchObject({
+      kind: 'comment',
+      postId: post.id,
+      commentId: gone.id,
+      excerpt: '',
+      deletedAt: deletedAt.toISOString(),
+      hiddenAt: null,
+      author: await publicFace(author),
+    });
+    expect(byTarget.get(post.id)).toMatchObject({
+      kind: 'post',
+      postId: post.id,
+      commentId: null,
+      excerpt: '',
+      deletedAt: deletedAt.toISOString(),
+    });
+    // A live one under the emptied post says what it says.
+    expect(byTarget.get(kept.id)).toMatchObject({
+      kind: 'comment',
+      excerpt: `댓글 ${LINK}`,
+      deletedAt: null,
+    });
   });
 
   it('orders the groups by their latest entry and a group’s entries newest first, paging through both', async () => {
