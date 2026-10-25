@@ -1059,6 +1059,22 @@ describe('the appeal guidance (#186, ADR-0084)', () => {
       }
     }
   });
+
+  it('is not on a hidden post’s edit screen, which says the hiding’s refusal and the way to 조치·신고 내역 alone', () => {
+    // 오너 결정 2026-10-25 «링크를 둠» («제한 거절 문구와 같은 꼴»): under '운영 정책에 따라 숨긴 글은
+    // 고칠 수 없습니다.' — wherever the edit screen says it: in the form's place, atop a form held
+    // as the post is hidden under it (#50, ADR-0081 7-29) and under the form for a refused save —
+    // the link of a restriction's refusal (`RestrictedModerationLink`, above), and no more: the
+    // appeal's guidance and its deadline are 조치·신고 내역's, once (답 4). The screen, its form, the
+    // link it draws and the held form's notice say nothing of the appeal, nor does the sentence.
+    const screen = 'app/community/posts/[postId]/edit/edit-screen.tsx';
+    expectNoAppeal(screen, 'HiddenModerationLink', false);
+    expectNoAppeal(screen, 'EditScreen', true);
+    expectNoAppeal(screen, 'EditForm', true);
+    expectNoAppeal('components/post/post-form.tsx', 'GoneNotice', false);
+    expect(copy.errPostNotEditable).not.toContain('이의');
+    expect(copy.errPostNotEditable).not.toContain(BUSINESS_INFO.email);
+  });
 });
 
 describe('the warning banner (owner decision 2026-10-21)', () => {

@@ -117,6 +117,13 @@ export interface PostFormProps {
    * for it.
    */
   goneMessage?: string;
+  /**
+   * What the notice offers under its sentence while `gone`, if anything: for a hiding, the way to
+   * 조치·신고 내역 — as under the refusal's own line (`errorAction`) and in the form's place once
+   * closed (오너 결정 2026-10-25 «링크를 둠», #186, ADR-0084; the edit screen's
+   * `HiddenModerationLink`). Outside the sentence that names the notice.
+   */
+  goneAction?: ReactNode;
   /** 닫기, while `gone`: the writer is done with what the form held. */
   onClose?: () => void;
   /**
@@ -202,11 +209,12 @@ export interface NoticeFormOptions {
  * comment boxes keep a text whose place went (오너 결정 2026-10-24, ADR-0073 9-52; 2026-10-25 for a
  * hiding, ADR-0081 7-29; ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답 1·2): the title and
  * the body stay on screen, read-only — selectable and copyable, never changed or sent — under
- * '없거나 삭제된 글입니다.', or '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.' for a hiding
- * (`GoneNotice`, `goneMessage`), and 닫기 takes the button's place; leaving still asks
- * first, and the draft the onboarding gate would keep is kept as before — the post going clears
- * nothing. The screen decides it as the post goes, by what the form said it held
- * (`onHoldingChange`): a form holding nothing of the writer's is not kept.
+ * '없거나 삭제된 글입니다.', or '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.' for a hiding with the
+ * way to 조치·신고 내역 under it (`GoneNotice`, `goneMessage`, `goneAction` — 오너 결정 2026-10-25
+ * «링크를 둠», ADR-0084), and 닫기 takes the button's place; leaving still asks first, and the
+ * draft the onboarding gate would keep is kept as before — the post going clears nothing. The
+ * screen decides it as the post goes, by what the form said it held (`onHoldingChange`): a form
+ * holding nothing of the writer's is not kept.
  *
  * Focus: the notice is focused when the form is drawn with a draft taken back — it appears with
  * its text already in it, which a live region may not announce, and the reader lands on it with
@@ -354,6 +362,7 @@ function PostFormFields({
   onSubmit,
   gone = false,
   goneMessage = copy.errPostGone,
+  goneAction,
   onClose,
   onHoldingChange,
   notice,
@@ -476,7 +485,7 @@ function PostFormFields({
       }}
       data-testid="post-form"
     >
-      {gone && <GoneNotice message={goneMessage} />}
+      {gone && <GoneNotice message={goneMessage} action={goneAction} />}
       {restored !== null && !gone && (
         <Alert.Root
           ref={noticeRef}
@@ -633,13 +642,15 @@ function PostFormFields({
  * '없거나 삭제된 글입니다.' at the top of a form whose post left every view (오너 결정 2026-10-24,
  * ADR-0073 9-52) — the reason #48 puts at the top of a comment text it holds, in the words of a
  * save refused for it (`copy.errPostGone`), or of one refused for a post an operator hid under the
- * form (`copy.errPostNotEditable`, #50, ADR-0081 7-29: `message`). The focus comes here only when
- * it has fallen to the page — the controls a save in flight disabled took it with them — and the
- * sentence, the notice's name, is read out then; otherwise the focus stays where the writer has it
- * and the sentence is an alert, read out as it appears. Decided as it first appears, on the client
- * only (the server's HTML never holds it), as #48's held texts decide it (ADR-0074 7-25).
+ * form (`copy.errPostNotEditable`, #50, ADR-0081 7-29: `message`) — with, for that one, the way
+ * to 조치·신고 내역 under it (`action`, 오너 결정 2026-10-25 «링크를 둠», #186, ADR-0084), outside
+ * the sentence that names the notice. The focus comes here only when it has fallen to the page —
+ * the controls a save in flight disabled took it with them — and the sentence, the notice's name,
+ * is read out then; otherwise the focus stays where the writer has it and the notice is an alert,
+ * read out as it appears. Decided as it first appears, on the client only (the server's HTML never
+ * holds it), as #48's held texts decide it (ADR-0074 7-25).
  */
-function GoneNotice({ message }: { message: string }) {
+function GoneNotice({ message, action }: { message: string; action?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
   const textId = useId();
   const [takesFocus] = useState(
@@ -662,6 +673,7 @@ function GoneNotice({ message }: { message: string }) {
       <Alert.Indicator />
       <Alert.Content>
         <Alert.Description id={textId}>{message}</Alert.Description>
+        {action}
       </Alert.Content>
     </Alert.Root>
   );

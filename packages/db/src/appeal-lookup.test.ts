@@ -566,26 +566,34 @@ describe('what the appeal procedure leaves to the operator (owner decision 2026-
   it('records the owner’s answer as a table of its own, apart from the implementation’s choices', () => {
     const adr = adr0084();
     // The tables keep their names; the sixth is the third round of 2026-10-23 — one row, the
-    // owner's answer.
+    // owner's answer — and the seventh the answer after the restack of 2026-10-25 (the hidden
+    // post's edit screen, «링크를 둠»), one row too.
     const tables = [
       '**오너 결정 2026-10-22.**',
       '**오너 결정 2026-10-22 (2차).**',
       '**오너 결정 2026-10-23.**',
       '**오너 결정 2026-10-23 (2차).**',
       '**오너 결정 2026-10-23 (3차).**',
+      '**오너 결정 2026-10-25.**',
     ].map((name) => adr.indexOf(name));
     for (const index of tables) expect(index).toBeGreaterThan(-1);
     expect([...tables].sort((a, b) => a - b)).toEqual(tables);
     const third = tables[4]!;
-    const table = adr.slice(third, adr.indexOf('\n\n브리프가 정한 것:', third));
+    const seventh = tables[5]!;
+    const table = adr.slice(third, seventh);
     expect(table.match(/^\| 오너 결정 2026-10-23 \(3차\) +\|/gm)).toHaveLength(1);
     expect(table).toContain(
       '남은 드문 경우(결과 4의 12\\~16)는 운영자의 판단에 맡김 — 규칙이 정하지 않은 경우 운영자가 회원에게 유리하게 판단해 처리하고, 그 판단과 까닭을 메일함 메모에 남김.',
     );
     // How the principle went into the procedure is this PR's choice, in 6-8 — not in the table.
     expect(table).toContain('그 원칙을 절차에 옮긴 방법은 오너의 답이 아니라 구현의 선택이다(6-8)');
-    expect(adr.indexOf('**6. 구현의 선택.**')).toBeGreaterThan(third);
-    expect(adr).toContain('·2026-10-23 (2차)·2026-10-23 (3차))\n');
+    const last = adr.slice(seventh, adr.indexOf('\n\n브리프가 정한 것:', seventh));
+    expect(last.match(/^\| 오너 결정 2026-10-25 +\|/gm)).toHaveLength(1);
+    expect(last).toContain(
+      "숨겨진 글의 수정 화면에도 '조치·신고 내역 보기' 링크를 «링크를 둠» (제한 거절 문구와 같은 꼴).",
+    );
+    expect(adr.indexOf('**6. 구현의 선택.**')).toBeGreaterThan(seventh);
+    expect(adr).toContain('·2026-10-23 (2차)·2026-10-23 (3차)·2026-10-25)\n');
   });
 
   it('asks the owner nothing more: 결과 4 is none, the five once asked answered by the principle', () => {

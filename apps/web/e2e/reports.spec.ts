@@ -71,7 +71,10 @@ import {
  *   남김», ADR-0081 7-29): the refused save — or a focus — keeps the title and the body read-only
  *   under the refusal's sentence, leaving asks, and 닫기 is the hidden post's refusal a reload
  *   draws (at once for a form holding nothing); a hiding cancelled while the form is held keeps it
- *   until 닫기, and then the form is the post's afresh; the post page draws the hidden post's
+ *   until 닫기, and then the form is the post's afresh; wherever the screen says the hiding's
+ *   refusal — in the form's place, atop a held form, under the form for a save whose read after
+ *   it failed — the way to 조치·신고 내역 is under it, nothing of the appeal, and it leads there
+ *   (owner decision 2026-10-25 «링크를 둠», #186); the post page draws the hidden post's
  *   placeholder at once and holds a typed 댓글 with why, no 404 waiting.
  *
  * Every report a test files is processed before it ends, so a persistent database's queue does not
@@ -355,6 +358,19 @@ function shownNav(page: Page): Locator {
   return width < 768
     ? page.getByTestId('bottom-tabs')
     : page.getByRole('navigation', { name: copy.navPrimary });
+}
+
+/**
+ * The edit screen's refusal for a hidden post where `where` says it — in the form's place, atop a
+ * held form, or under the form — and under it the way to 조치·신고 내역, the link a restriction's
+ * refusal has (오너 결정 2026-10-25 «링크를 둠», #186, ADR-0084): nothing of the appeal.
+ */
+async function expectHiddenRefusal(where: Locator): Promise<void> {
+  await expect(where).toHaveText(`${copy.errPostNotEditable}${copy.myModerationOpen}`);
+  const link = where.getByTestId('post-edit-hidden-moderation');
+  await expect(link).toHaveAttribute('href', '/my/moderation');
+  await expect(link).toHaveText(copy.myModerationOpen);
+  await expect(where).not.toContainText('이의');
 }
 
 /** A nickname nobody has: a prefix and the run's random tail, within the 20 characters. */
@@ -1301,7 +1317,7 @@ test.describe('신고와 운영 처리', () => {
     }
   });
 
-  test('작성자가 글을 고치는 사이 운영자가 그 글을 숨기면 수정 화면은 쓰던 제목·본문을 숨김의 문장과 함께 고칠 수 없게 남겨 떠날 때 묻고, 닫기 뒤에는 새로 고침과 같은 숨긴 글의 화면이며, 고친 것이 없는 화면은 곧바로 그 화면이고, 글 화면은 숨긴 글의 자리표시를 곧바로 그리며 쓰던 댓글을 까닭과 남긴다', async ({
+  test('작성자가 글을 고치는 사이 운영자가 그 글을 숨기면 수정 화면은 쓰던 제목·본문을 숨김의 문장과 함께 고칠 수 없게 남겨 떠날 때 묻고, 닫기 뒤에는 새로 고침과 같은 숨긴 글의 화면이며, 고친 것이 없는 화면은 곧바로 그 화면이고, 그 문장 아래에는 어디서나 조치·신고 내역 링크가 있으며, 글 화면은 숨긴 글의 자리표시를 곧바로 그리며 쓰던 댓글을 까닭과 남긴다', async ({
     admin,
     page,
     browser,
@@ -1311,7 +1327,10 @@ test.describe('신고와 운영 처리', () => {
     // is refused (POST_NOT_EDITABLE) and the read after it — or a focus — answers the hidden post's
     // placeholder: the form keeps what was written, read-only, under '운영 정책에 따라 숨긴 글은 고칠
     // 수 없습니다.', with 닫기; closed — at once for a form holding nothing of the writer's — the
-    // screen is that sentence in the form's place, as a reload draws it. The post page reads the
+    // screen is that sentence in the form's place, as a reload draws it. Wherever the screen says
+    // that sentence — in the form's place, atop the held form, under the form for a refused save
+    // whose read after it failed — the way to 조치·신고 내역 is under it (오너 결정 2026-10-25
+    // «링크를 둠», #186, ADR-0084), where the hiding is listed. The post page reads the
     // same post the same way: its placeholder at once, a new 댓글's text held with why, no 404.
     // The page's clock makes a read older than `staleTime` (30 s) without waiting (posts.spec.ts).
     const market = await createOpenMarket(admin);
@@ -1369,7 +1388,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(editor).toContainText('덧붙인 근거');
     await hide(saved);
     await page.getByTestId('post-submit').click();
-    await expect(heldForm).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(heldForm);
     expect(saves).toBe(1);
     await expect(title).toHaveValue(`고친 제목 ${tag}`);
     await expect(title).not.toBeEditable();
@@ -1403,7 +1422,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(editor).toContainText('덧붙인 근거');
     // 닫기: asking nothing, the hidden post's refusal a reload draws — not the 404.
     await page.getByTestId('post-form-close').click();
-    await expect(unavailable).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(unavailable);
     await expect(heldForm).toHaveCount(0);
     await expect(title).toHaveCount(0);
     await expect(page.getByTestId('post-edit-gone')).toHaveCount(0);
@@ -1411,7 +1430,17 @@ test.describe('신고와 운영 처리', () => {
     await expect(page).toHaveURL(savedEdit);
     expect(asked).toHaveLength(1);
     expect((await page.reload())?.status()).toBe(200);
-    await expect(unavailable).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(unavailable);
+    // The link: 조치·신고 내역, where the hiding is listed with how to appeal it.
+    await unavailable.getByTestId('post-edit-hidden-moderation').click();
+    await expect(page).toHaveURL('/my/moderation');
+    await expectAppealGuidance(page);
+    const savedHiding = page
+      .getByTestId('my-actions-list')
+      .locator('article')
+      .filter({ hasText: `고칠 글 ${tag}` });
+    await expect(savedHiding.getByTestId('my-action-type')).toHaveText(copy.moderationActionHide);
+    await expect(savedHiding.getByTestId('my-action-subject')).toHaveText(`고칠 글 ${tag}`);
 
     // --- a line added to the body, the post hidden, and a focus reads it again: kept the same way —
     // nothing was sent. The hiding cancelled meanwhile, the form stays as it is until it is closed;
@@ -1433,7 +1462,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(editor).toContainText('쓰던 근거');
     const focusedHiding = await hide(focused);
     await refocus();
-    await expect(heldForm).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(heldForm);
     await expect(title).toHaveValue(`포커스로 읽을 글 ${tag}`);
     await expect(title).not.toBeEditable();
     await expect(editor).toContainText('쓰던 근거');
@@ -1444,7 +1473,7 @@ test.describe('신고와 운영 처리', () => {
     await cancelHiding(focusedHiding);
     await refocus();
     await settle();
-    await expect(heldForm).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(heldForm);
     await expect(editor).toContainText('쓰던 근거');
     await page.getByTestId('post-form-close').click();
     await expect(heldForm).toHaveCount(0);
@@ -1456,6 +1485,34 @@ test.describe('신고와 운영 처리', () => {
     await expect(page.getByTestId('post-submit')).toBeVisible();
     expect(asked).toHaveLength(1);
 
+    // --- the same post hidden again under a changed title, and the read after the refused save
+    // failing: the form stays as it was, the refusal's own line under it — the same sentence, the
+    // same link under it. A focus that reads the hidden post then holds the form as above.
+    // (The same post: a fourth of the member's own within ten minutes is WRITE_LIMITED, #187.)
+    await title.fill(`읽지 못한 제목 ${tag}`);
+    await hide(focused);
+    let failReads = true;
+    await page.route(new RegExp(`/api/v1/posts/${focused}$`, 'i'), (route) =>
+      failReads && route.request().method() === 'GET' ? route.abort() : route.fallback(),
+    );
+    await page.getByTestId('post-submit').click();
+    const refused = page.getByTestId('post-form-error');
+    await expectHiddenRefusal(refused);
+    expect(saves).toBe(2);
+    await expect(heldForm).toHaveCount(0);
+    await expect(unavailable).toHaveCount(0);
+    await expect(title).toHaveValue(`읽지 못한 제목 ${tag}`);
+    await expect(title).toBeEditable();
+    failReads = false;
+    await refocus();
+    await expectHiddenRefusal(heldForm);
+    await expect(refused).toHaveCount(0);
+    await expect(title).toHaveValue(`읽지 못한 제목 ${tag}`);
+    await expect(title).not.toBeEditable();
+    await page.getByTestId('post-form-close').click();
+    await expectHiddenRefusal(unavailable);
+    expect(asked).toHaveLength(1);
+
     // --- nothing changed: nothing of the writer's to keep, the refusal at once.
     const plain = await postThroughApi(page.request, market.id, `그냥 둔 글 ${tag}`, '그냥 근거');
     const plainEdit = `/community/posts/${plain}/edit`;
@@ -1463,7 +1520,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(title).toHaveValue(`그냥 둔 글 ${tag}`);
     await hide(plain);
     await refocus();
-    await expect(unavailable).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(unavailable);
     await expect(title).toHaveCount(0);
     await expect(heldForm).toHaveCount(0);
     await expect(page).toHaveURL(plainEdit);
@@ -1515,7 +1572,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(page.getByTestId('post-title')).toHaveText(`글 화면의 글 ${tag}`);
     await expect(page.getByTestId('comment-composer')).toBeVisible();
     expect(asked).toHaveLength(1);
-    expect(saves).toBe(1);
+    expect(saves).toBe(2);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });
