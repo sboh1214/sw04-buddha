@@ -13,7 +13,7 @@ import {
   useState,
 } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
-import { toaster } from '@/components/ui/toaster';
+import { toastAfterCommit } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
@@ -533,7 +533,8 @@ export function useCommentDraftsTakenBack(
     if (state.reads === said.current) return;
     said.current = state.reads;
     if (takenFor !== null) clearSessionCommentDrafts(id, takenFor);
-    toaster.create({
+    // Raised once the effects are over: the toaster's flushSync cannot run in them (ADR-0092 8-37).
+    toastAfterCommit({
       id: `comment-drafts-restored:${id}`,
       type: 'info',
       title: copy.commentDraftRestored,

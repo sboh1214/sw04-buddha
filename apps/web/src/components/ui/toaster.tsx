@@ -15,6 +15,22 @@ export const toaster = createToaster({
   pauseOnPageIdle: true,
 });
 
+/**
+ * A toast raised while React runs effects — from an effect's body, or from a callback one calls —
+ * stored once the effects are over. The toast group keeps its list with React's `flushSync` (zag's
+ * `sync` bindable), which React cannot run during its commit: in development it logs 'flushSync was
+ * called from inside a lifecycle method' once for each subscriber of the store (the comment
+ * drafts taken back after an account switch, ADR-0092 8-37). A microtask later the commit is over —
+ * still in the same task, before the browser paints and before any event or network callback — so
+ * the toast says the same thing at the same moment, with the same id. Only the toast waits: what the
+ * effect decides (that it was said, the draft taken out of the tab) stays where it is.
+ */
+export function toastAfterCommit(options: Parameters<typeof toaster.create>[0]): void {
+  queueMicrotask(() => {
+    toaster.create(options);
+  });
+}
+
 /** Renders the toast region; mounted once in Provider. (Chakra v3 "toaster" snippet.) */
 export function Toaster() {
   return (

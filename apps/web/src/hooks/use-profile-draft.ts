@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useRef } from 'react';
-import { toaster } from '@/components/ui/toaster';
+import { toastAfterCommit } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
   type ProfileDraftKind,
@@ -49,7 +49,9 @@ export function useProfileDraftTakenBack<K extends ProfileDraftKind>(
     if (draft === null) return;
     clearSessionProfileDraft(kind, accountId);
     if (latest.current(draft)) {
-      toaster.create({
+      // Raised once the effects are over: the toaster's flushSync cannot run in them (ADR-0092
+      // 8-37).
+      toastAfterCommit({
         id: PROFILE_DRAFT_RESTORED_TOAST_ID,
         type: 'info',
         title: copy.profileDraftRestored,
