@@ -398,9 +398,11 @@ describe('a notice’s form is drawn for the admin on screen, and what A typed i
     expect(form).toContain('      key: draftKey,\n      accountId,\n      keepOnAccountTurn,\n');
     expect(form).toContain('readSessionPostDraft(draftKey, accountId)');
     expect(form.match(/clearSessionPostDraft\(kept\.key, kept\.accountId\);/g)).toHaveLength(2);
-    // The hook keeps it as the form goes, `['me']` naming another account then.
+    // The hook keeps it as the form goes with a turn of the tab's account: `['me']` naming
+    // another, or — `['me']` emptied by SessionCacheGuard's reset — the session naming another, or
+    // the writer after `['me']` did (ADR-0092 결정 10, 8-36, 오너 결정 2026-10-26 21:00 답 1).
     const hook = source('../hooks/use-post-draft.ts');
-    expect(hook).toContain('const accountTurned = me.id !== last.accountId;');
+    expect(hook).toContain('const accountTurned = goesWithAccountTurn(last.accountId, me?.id);');
     expect(hook).toContain('if (accountTurned && last.keepOnAccountTurn !== true) return false;');
   });
 });

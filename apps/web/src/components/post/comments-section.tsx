@@ -554,7 +554,12 @@ export function CommentsSection({
   // apart, the drafts no box took yet, and the texts on their way (a box gone with its write in
   // flight — its refusal, heard after the turn, is not heard). In a layout effect: it runs before the
   // boxes the turn takes away keep their own texts (their passive cleanups), so a box's text wins
-  // over a held text of the same box, as when the page goes to a step.
+  // over a held text of the same box, as when the page goes to a step. So do they when the session
+  // turns to another account first (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도
+  // A의 초안으로»): SessionCacheGuard's reset empties `['me']`, nobody is on screen in this render,
+  // and the account the tab is for now is the one the session names — and when it turns to the
+  // writer after `['me']` did, the reset taking away what was just drawn for the writer, to draw it
+  // again (8-36; `goesWithAccountTurn`, lib/session-account.ts).
   const drawnFor = useRef<SectionTexts>({
     postId: post.id,
     accountId: viewerAccountId,

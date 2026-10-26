@@ -13,6 +13,7 @@ import {
   postDraftMoment,
   shouldKeepPostDraft,
 } from '@/lib/post-drafts';
+import { goesWithAccountTurn } from '@/lib/session-account';
 
 /** A mounted form's draft as of its last render: what its screen would keep. */
 export interface HeldPostDraft extends Omit<PostDraft, 'previews'> {
@@ -23,8 +24,10 @@ export interface HeldPostDraft extends Omit<PostDraft, 'previews'> {
    * The form is drawn for its writer alone — its screen keys it by `accountId` (a notice's forms,
    * and a post's write and edit forms) — so `['me']` turning to another account in place takes it
    * away, and it keeps what it holds for its writer then (`keepHeldPostDraft`; ADR-0092, 오너 결정
-   * 2026-10-26 17:21 답 2 «A의 것으로 1시간 보관», 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»).
-   * Absent, only the onboarding gate's move keeps it.
+   * 2026-10-26 17:21 답 2 «A의 것으로 1시간 보관», 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로») —
+   * as does the session turning to another account first, SessionCacheGuard's reset taking it away
+   * with `['me']` empty (21:00 답 1 «정순서에서도 A의 초안으로»), or to its writer after `['me']` did
+   * (8-36). Absent, only the onboarding gate's move keeps it.
    */
   keepOnAccountTurn?: boolean;
   /**
@@ -79,24 +82,30 @@ export function heldPostDraftAt(
  * What a form going away does with `last`, its draft as of its last render, given `me` — `GET /me`
  * as the cache holds it now: keeps it in this tab, for its writer only, when the gate is taking
  * that account to a step left, or — a form drawn for its writer alone (`keepOnAccountTurn`) — when
- * `me` is another account: the account on screen turned in place, and the form drawn for it is
- * another (`shouldKeepPostDraft`). `me` absent — SessionCacheGuard's reset, a sign-out — keeps
- * nothing. A write of the screen that account sent and that landed after `last`'s moment counts as
- * saved (`postDraftLandedSince`): its success is being handled and has not reached the form yet —
- * the form, locked since it sent, holds what was sent (`heldPostDraftAt`). Once the form shows the
- * success, what it holds is measured from what was sent (`hasDraft`). Whether it kept it.
+ * it goes with a turn of the tab's account (`goesWithAccountTurn`, `shouldKeepPostDraft`): `me` is
+ * another — the account on screen turned in place, and the form drawn for it is another — or, `me`
+ * absent, the session names another, SessionCacheGuard's reset having emptied `['me']` (the forward
+ * order, ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»), or names the
+ * writer in that reset, `['me']` having turned to the writer first — the form, a draft it took back
+ * among what it holds, is drawn for the writer again once `GET /me` answers and takes it back
+ * (8-36). `me` absent with the session naming nobody (a sign-out) or the writer with no reset under
+ * way keeps nothing. A write of the screen that account sent and that landed after `last`'s moment
+ * counts as saved (`postDraftLandedSince`): its success is being handled and has not reached the
+ * form yet — the form, locked since it sent, holds what was sent (`heldPostDraftAt`). Once the form
+ * shows the success, what it holds is measured from what was sent (`hasDraft`). Whether it kept it.
  */
 export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): boolean {
-  if (last.accountId === undefined || me === undefined) return false;
-  const accountTurned = me.id !== last.accountId;
+  if (last.accountId === undefined) return false;
+  const accountTurned = goesWithAccountTurn(last.accountId, me?.id);
   if (accountTurned && last.keepOnAccountTurn !== true) return false;
   const saved = postDraftLandedSince(last.key, last.accountId, last.moment);
   if (
     !shouldKeepPostDraft({
       hasDraft: last.hasDraft,
       saved,
-      // Another account's steps are not the writer's.
-      onboarding: accountTurned ? undefined : me.onboarding,
+      // Another account's steps are not the writer's; with `['me']` empty no step is known (with no
+      // turn: a sign-out, or nothing heard — nothing kept).
+      onboarding: accountTurned ? undefined : me?.onboarding,
       accountTurned,
     })
   ) {
@@ -128,7 +137,10 @@ export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): bo
  * lib/onboarding.ts), and a notice's forms keep their drafts the same way (#138, 오너 결정
  * 2026-10-21 (3차), ADR-0077) — and, drawn for the account on screen, as `['me']` turning to
  * another account in place takes them away (`keepOnAccountTurn`: a notice's forms, ADR-0092 답 2;
- * a post's write and edit forms, 답 3).
+ * a post's write and edit forms, 답 3), or SessionCacheGuard's reset does as the session turns to
+ * another account first — or to the writer after `['me']` did: `['me']` is empty then, and the
+ * account the session now names, and the reset under way, are heard from the guard
+ * (`goesWithAccountTurn`, lib/session-account.ts — ADR-0092 결정 10, 8-36, 21:00 답 1).
  */
 export function useKeepPostDraftForOnboarding(draft: HeldPostDraft, pending: boolean): void {
   const queryClient = useQueryClient();

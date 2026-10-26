@@ -1717,7 +1717,10 @@ describe('the comment boxes drawn for the account on screen (ADR-0092, 오너 �
     );
     // The texts the section drew for the writer — shown apart, on their way, taken back — are kept
     // as the writer's, in a layout effect — before the boxes the turn takes away keep their own
-    // (theirs win) — and before it moves on.
+    // (theirs win) — and before it moves on. With nobody on screen — SessionCacheGuard's reset —
+    // the account given is none, and whether they go with a turn is the session's to say
+    // (`goesWithAccountTurn` in `keepSectionTextsForTurn`, ADR-0092 결정 10, 8-36, 오너 결정
+    // 2026-10-26 21:00 답 1).
     expect(section).toMatch(
       /useLayoutEffect\(\(\) => \{\s+keepSectionTextsForTurn\(drawnFor\.current, viewerAccountId\);\s+drawnFor\.current = \{\s+postId: post\.id,\s+accountId: viewerAccountId,\s+held: heldTexts\.held,\s+awaiting,\s+drafts,\s+moment: commentDraftMoment\(\),\s+\};\s+\}\);/,
     );

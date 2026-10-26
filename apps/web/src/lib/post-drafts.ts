@@ -175,9 +175,18 @@ export function hasDraftToKeep(state: {
 export function shouldKeepPostDraft(state: {
   hasDraft: boolean;
   saved: boolean;
-  /** The writer's onboarding, as `['me']` says it now; undefined when `['me']` names another. */
+  /**
+   * The writer's onboarding, as `['me']` says it now; undefined when `['me']` names another or is
+   * empty.
+   */
   onboarding: Onboarding | undefined;
-  /** A form drawn for its writer went because the account on screen turned to another. */
+  /**
+   * A form drawn for its writer went with a turn of the tab's account (`goesWithAccountTurn`,
+   * lib/session-account.ts): `['me']` turned to another in place, or the session did first and
+   * SessionCacheGuard's reset took the form away — or the session turned to the writer after
+   * `['me']` did, and that reset took away the form just drawn for the writer (ADR-0092 결정 10,
+   * 8-36).
+   */
   accountTurned?: boolean;
 }): boolean {
   return (

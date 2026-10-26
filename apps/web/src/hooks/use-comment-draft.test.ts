@@ -10,6 +10,11 @@ import {
 } from '@/lib/comment-drafts';
 import { type HeldText } from '@/lib/comments';
 import {
+  accountForgottenInTab,
+  sessionAccountHeard,
+  sessionAccountTurned,
+} from '@/lib/session-account';
+import {
   type CommentBoxDraft,
   type SectionTexts,
   commentBoxLeaves,
@@ -59,6 +64,9 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.unstubAllGlobals();
+  // Nobody heard from the session and no reset under way (lib/session-account.ts), as before the
+  // forward order's tests.
+  accountForgottenInTab();
 });
 
 /** `GET /me` for `id`, with `nextStep` left. */
@@ -206,7 +214,7 @@ describe('a comment box going as the account on screen turns to another (ADR-009
     ]);
   });
 
-  it('keeps nothing with nothing typed, closed, or a write of it landed; nor with no `Me` in the cache (SessionCacheGuard’s reset, a sign-out)', () => {
+  it('keeps nothing with nothing typed, closed, or a write of it landed; nor with no `Me` in the cache and no other account in the session (a sign-out)', () => {
     expect(commentBoxLeaves(going({ text: ' ' }), b, false)).toBe('dropped');
     expect(commentBoxLeaves(going({ closed: true }), b, false)).toBe('dropped');
     const landed = going({ pending: true });
@@ -234,6 +242,150 @@ describe('a comment box going as the account on screen turns to another (ADR-009
     expect([...readCommentDrafts(storage, POST, 'account-b', Date.now()).replies]).toEqual([
       [PARENT, 'B가 쓰던 답글'],
     ]);
+  });
+});
+
+describe('a comment box going in SessionCacheGuard’s reset as the session turns to another account first (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+  // The forward order: the session names B first, and the guard's reset empties `['me']` — and the
+  // post page's comments with it — so A's boxes go with no `Me` in the cache. Each hears from the
+  // guard whom the session now names (`sessionAccountTurned`, recorded before the reset —
+  // lib/session-account.ts): B, not its writer — so it keeps what A typed as A's draft, whatever
+  // its write and its place, and leaves the section nothing, as when `['me']` turns first. A
+  // sign-out — the session naming nobody — and the session naming the writer with no reset for it
+  // under way still keep nothing, as before.
+  const going = (partial: Partial<CommentBoxDraft & { closed: boolean }> = {}) => ({
+    closed: false,
+    ...box(partial),
+  });
+  const boxes: Partial<CommentBoxDraft>[] = [
+    { key: { kind: 'comment', postId: POST }, text: 'A가 쓰던 댓글', place: { kind: 'post' } },
+    {},
+    {
+      key: { kind: 'edit', postId: POST, commentId: PARENT, threadId: PARENT },
+      text: 'A가 고치던 댓글',
+      initial: '댓글',
+      place: { kind: 'comment', commentId: PARENT, threadId: PARENT },
+    },
+  ];
+
+  it('keeps what A typed in each box as A’s, which B never reads, and leaves the section nothing', () => {
+    sessionAccountTurned('account-b');
+    for (const partial of boxes) {
+      for (const write of [{}, { pending: true }, { refused: true }]) {
+        for (const placeGone of [false, true]) {
+          storage.items.clear();
+          const last = going({ ...partial, ...write });
+          expect(commentBoxLeaves(last, undefined, placeGone)).toBe('dropped');
+          expect([...storage.items.keys()]).toEqual([
+            commentDraftStorageKey(last.key, 'account-a'),
+          ]);
+          expect(readCommentDrafts(storage, POST, 'account-b', Date.now())).toBe(NO_COMMENT_DRAFTS);
+          const theirs = readCommentDrafts(storage, POST, 'account-a', Date.now());
+          const text =
+            last.key.kind === 'comment'
+              ? theirs.comment
+              : last.key.kind === 'reply'
+                ? theirs.replies.get(PARENT)
+                : theirs.edits.get(PARENT);
+          expect(text).toBe(last.text);
+        }
+      }
+    }
+    storage.items.clear();
+    expect(keepHeldCommentDraft(box(), undefined)).toBe(true);
+    expect([...readCommentDrafts(storage, POST, 'account-a', Date.now()).replies]).toEqual([
+      [PARENT, '쓰던 답글'],
+    ]);
+  });
+
+  it('keeps nothing with nothing typed, closed, or a write of it landed — and nothing, the box left to the section as before, as the session names nobody or the writer', () => {
+    sessionAccountHeard('account-b');
+    expect(commentBoxLeaves(going({ text: ' ' }), undefined, false)).toBe('dropped');
+    expect(commentBoxLeaves(going({ closed: true }), undefined, false)).toBe('dropped');
+    const landed = going({ pending: true });
+    commentDraftLanded(landed.key, 'account-a');
+    expect(commentBoxLeaves(landed, undefined, false)).toBe('dropped');
+    expect(storage.items.size).toBe(0);
+    for (const heard of [null, 'account-a']) {
+      sessionAccountHeard(heard);
+      expect(commentBoxLeaves(going(), undefined, false)).toBe('none');
+      expect(commentBoxLeaves(going({ refused: true }), undefined, true)).toBe('refused');
+      expect(keepHeldCommentDraft(box(), undefined)).toBe(false);
+    }
+    expect(storage.items.size).toBe(0);
+  });
+});
+
+describe('a comment box going in SessionCacheGuard’s reset as the session catches up with the account `GET /me` turned to first (ADR-0092 8-36, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로» — 어느 순서로 바뀌든)', () => {
+  // A comes back to the tab the session turned to B: one `visibilitychange` reads both again, and
+  // `GET /me` answers A first — A's boxes are drawn and take back A's drafts, out of the tab — then
+  // the session says A, and the guard's reset empties `['me']` and the comments: A's boxes go again,
+  // with no `Me` in the cache and the session naming their writer. They go with the turn: each
+  // keeps what it holds as A's draft and leaves the section nothing, and A's boxes, drawn again
+  // once `GET /me` answers, take it back. Without the reset under way — a sign-out's own clearing —
+  // the session naming the writer still keeps nothing.
+  const going = (partial: Partial<CommentBoxDraft & { closed: boolean }> = {}) => ({
+    closed: false,
+    ...box(partial),
+  });
+  const boxes: Partial<CommentBoxDraft>[] = [
+    { key: { kind: 'comment', postId: POST }, text: 'A가 되살린 댓글', place: { kind: 'post' } },
+    {},
+    {
+      key: { kind: 'edit', postId: POST, commentId: PARENT, threadId: PARENT },
+      text: 'A가 되살린 수정',
+      initial: '댓글',
+      place: { kind: 'comment', commentId: PARENT, threadId: PARENT },
+    },
+  ];
+
+  it('keeps what A’s box holds as A’s while the reset for A is under way, whatever its write and its place, and leaves the section nothing', () => {
+    sessionAccountTurned('account-b')();
+    const settled = sessionAccountTurned('account-a');
+    for (const partial of boxes) {
+      for (const write of [{}, { pending: true }, { refused: true }]) {
+        for (const placeGone of [false, true]) {
+          storage.items.clear();
+          const last = going({ ...partial, ...write });
+          expect(commentBoxLeaves(last, undefined, placeGone)).toBe('dropped');
+          expect([...storage.items.keys()]).toEqual([
+            commentDraftStorageKey(last.key, 'account-a'),
+          ]);
+          const kept = readCommentDrafts(storage, POST, 'account-a', Date.now());
+          const text =
+            last.key.kind === 'comment'
+              ? kept.comment
+              : last.key.kind === 'reply'
+                ? kept.replies.get(PARENT)
+                : kept.edits.get(PARENT);
+          expect(text).toBe(last.text);
+          expect(readCommentDrafts(storage, POST, 'account-b', Date.now())).toBe(NO_COMMENT_DRAFTS);
+        }
+      }
+    }
+    // Drawn again for A, `['me']` answering: no turn — A's own leave keeps nothing.
+    storage.items.clear();
+    expect(commentBoxLeaves(going(), me('account-a', null), false)).toBe('none');
+    expect(storage.items.size).toBe(0);
+    settled();
+  });
+
+  it('keeps nothing with nothing typed, closed, or a write of it landed — and, the reset over or the tab’s account forgotten, nothing: the box left to the section as before', () => {
+    const settled = sessionAccountTurned('account-a');
+    expect(commentBoxLeaves(going({ text: ' ' }), undefined, false)).toBe('dropped');
+    expect(commentBoxLeaves(going({ closed: true }), undefined, false)).toBe('dropped');
+    const landed = going({ pending: true });
+    commentDraftLanded(landed.key, 'account-a');
+    expect(commentBoxLeaves(landed, undefined, false)).toBe('dropped');
+    expect(storage.items.size).toBe(0);
+    settled();
+    expect(commentBoxLeaves(going(), undefined, false)).toBe('none');
+    expect(keepHeldCommentDraft(box(), undefined)).toBe(false);
+    sessionAccountTurned('account-a');
+    accountForgottenInTab();
+    expect(commentBoxLeaves(going({ refused: true }), undefined, true)).toBe('refused');
+    expect(keepHeldCommentDraft(box(), undefined)).toBe(false);
+    expect(storage.items.size).toBe(0);
   });
 });
 
@@ -459,7 +611,7 @@ describe('what the comment section keeps as it goes', () => {
     expect(readCommentDrafts(storage, POST, 'account-b', Date.now())).toBe(NO_COMMENT_DRAFTS);
   });
 
-  it('keeps nothing as nobody was or is on screen — SessionCacheGuard’s reset, a sign-out, `GET /me` not answered — nor for the same account', () => {
+  it('keeps nothing as nobody was or is on screen — a sign-out, `GET /me` not answered — nor for the same account', () => {
     expect(keepSectionTextsForTurn(section, undefined)).toBe(false);
     expect(keepSectionTextsForTurn({ ...section, accountId: undefined }, 'account-b')).toBe(false);
     expect(keepSectionTextsForTurn(section, 'account-a')).toBe(false);
@@ -526,6 +678,69 @@ describe('what the comment section keeps as it goes', () => {
     // Not for a step: what goes there is what the section shows (ADR-0074 7-23·7-24).
     storage.items.clear();
     expect(keepSectionTextsForStep(drawn, me('account-a', 'consent'))).toBe(false);
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('keeps A’s texts as A’s when SessionCacheGuard’s reset empties the profile as the session turns to B first — in the layout effect with nobody on screen, or as the section goes — and nothing for a sign-out or A’s own session (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1)', () => {
+    // The reset's render draws the section for nobody: the layout effect passes no account, and the
+    // one the tab is for now is the one the session names (`goesWithAccountTurn`), as the cleanup
+    // finds it.
+    sessionAccountTurned('account-b');
+    expect(keepSectionTextsForTurn(section, undefined)).toBe(true);
+    expect(keptForA()).toEqual(ALL_OF_A);
+    expect(readCommentDrafts(storage, POST, 'account-b', Date.now())).toBe(NO_COMMENT_DRAFTS);
+    storage.items.clear();
+    expect(keepSectionTextsAsItGoes(section, undefined)).toBe(true);
+    expect(keptForA()).toEqual(ALL_OF_A);
+    storage.items.clear();
+    // The texts on their way go with A too: their refusal, heard after the reset, is not heard.
+    const onTheirWay: SectionTexts = {
+      ...section,
+      held: [],
+      drafts: NO_COMMENT_DRAFTS,
+      awaiting: [{ id: 'box-1', place: { kind: 'post' }, text: '보내는 중이던 댓글' }],
+      moment: commentDraftMoment(),
+    };
+    expect(keepSectionTextsForTurn(onTheirWay, undefined)).toBe(true);
+    expect(keptForA().comment).toBe('보내는 중이던 댓글');
+    storage.items.clear();
+    // The session naming nobody (a sign-out), or A with no reset under way (the tab's sign-out
+    // emptying the cache first): nothing.
+    accountForgottenInTab();
+    for (const heard of [null, 'account-a']) {
+      sessionAccountHeard(heard);
+      expect(keepSectionTextsForTurn(section, undefined)).toBe(false);
+      expect(keepSectionTextsAsItGoes(section, undefined)).toBe(false);
+      expect(keepSectionTextsForTurn(onTheirWay, undefined)).toBe(false);
+    }
+    expect(storage.items.size).toBe(0);
+  });
+
+  it('keeps A’s texts as A’s when the session catches up with A after `GET /me` turned to A first, the reset taking away what the section drew for A — drafts just taken back among them — and nothing once that reset is over (ADR-0092 8-36)', () => {
+    sessionAccountTurned('account-b')();
+    const settled = sessionAccountTurned('account-a');
+    // The reset's render: the layout effect with nobody on screen, or the section going.
+    expect(keepSectionTextsForTurn(section, undefined)).toBe(true);
+    expect(keptForA()).toEqual(ALL_OF_A);
+    storage.items.clear();
+    expect(keepSectionTextsAsItGoes(section, undefined)).toBe(true);
+    expect(keptForA()).toEqual(ALL_OF_A);
+    storage.items.clear();
+    const onTheirWay: SectionTexts = {
+      ...section,
+      held: [],
+      drafts: NO_COMMENT_DRAFTS,
+      awaiting: [{ id: 'box-1', place: { kind: 'post' }, text: '보내는 중이던 댓글' }],
+      moment: commentDraftMoment(),
+    };
+    expect(keepSectionTextsForTurn(onTheirWay, undefined)).toBe(true);
+    expect(keptForA().comment).toBe('보내는 중이던 댓글');
+    storage.items.clear();
+    // Drawn again for A: no turn.
+    expect(keepSectionTextsForTurn(section, 'account-a')).toBe(false);
+    settled();
+    expect(keepSectionTextsForTurn(section, undefined)).toBe(false);
+    expect(keepSectionTextsAsItGoes(section, undefined)).toBe(false);
     expect(storage.items.size).toBe(0);
   });
 });

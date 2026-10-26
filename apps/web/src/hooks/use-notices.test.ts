@@ -25,6 +25,11 @@ import {
   readPostDraft,
 } from '@/lib/post-drafts';
 import { getQueryClient } from '@/lib/query-client';
+import {
+  accountForgottenInTab,
+  sessionAccountHeard,
+  sessionAccountTurned,
+} from '@/lib/session-account';
 import { ME_QUERY_KEY } from './use-me';
 import {
   adminNoticeActionsInfiniteQueryOptions,
@@ -1044,7 +1049,7 @@ describe('a notice’s draft as the admin on screen turns to another (ADR-0092, 
     }
   });
 
-  it('keeps nothing for a form not drawn per admin, with nothing typed, whose write landed, or with no `Me` in the cache — nor on the same admin’s own leave', () => {
+  it('keeps nothing for a form not drawn per admin, with nothing typed, whose write landed, or with no `Me` in the cache and no other admin in the session — nor on the same admin’s own leave', () => {
     const storage = tabStorage();
     vi.stubGlobal('window', { sessionStorage: storage });
     const theirs = typedBy(newKey, 'admin-1', 'A가 쓰던 공지');
@@ -1058,7 +1063,8 @@ describe('a notice’s draft as the admin on screen turns to another (ADR-0092, 
     expect(keepHeldPostDraft({ ...theirs, keepOnAccountTurn: false }, b)).toBe(false);
     // Nothing to lose.
     expect(keepHeldPostDraft({ ...theirs, hasDraft: false }, b)).toBe(false);
-    // SessionCacheGuard's reset or a sign-out: `['me']` is empty as the form goes.
+    // `['me']` empty as the form goes, and no other account heard from the session (a sign-out;
+    // SessionCacheGuard's reset for another account keeps it — the forward order, below).
     expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
     // The same admin, nothing left: a link or Back asked first.
     expect(keepHeldPostDraft(theirs, a)).toBe(false);
@@ -1115,6 +1121,109 @@ describe('a notice’s draft as the admin on screen turns to another (ADR-0092, 
       expect(readPostDraft(storage, key, 'admin-1', Date.now())).toBeNull();
       expect(readPostDraft(storage, key, 'admin-2', Date.now())?.title).toBe('B가 쓰던 공지');
       clearPostDraft(storage, key, 'admin-2');
+    }
+  });
+});
+
+describe('a notice’s draft as the session turns to another admin first (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+  // The forward order: the session names B first, and SessionCacheGuard's reset empties `['me']` —
+  // the notice screens put their placeholder in place of A's form in that very render
+  // (`NoticeWriterGate`), so A's form goes with no `Me` in the cache. It hears from the guard whom
+  // the session now names (`sessionAccountTurned`, recorded before the reset —
+  // lib/session-account.ts) and keeps what A typed as A's draft for the hour, as when `['me']`
+  // turns first; B's form reads none of it, and A's, drawn again once A is back, takes it back.
+  const newKey = { kind: 'notice-new' } as const;
+  const editKey = { kind: 'notice-edit', noticeId: notice } as const;
+  const screens: { key: PostDraftKey; version?: string | null }[] = [
+    { key: newKey },
+    { key: editKey, version: '2026-10-20T01:00:00.000Z' },
+    { key: editKey, version: null },
+  ];
+  const typedBy = (key: PostDraftKey, accountId: string, version?: string | null) =>
+    heldPostDraftAt(
+      undefined,
+      {
+        key,
+        accountId,
+        keepOnAccountTurn: true,
+        hasDraft: true,
+        title: `${accountId}가 쓰던 공지`,
+        body: { type: 'doc', content: [] },
+        previews: new Map(),
+        ...(version === undefined ? {} : { version }),
+      },
+      false,
+    );
+  afterEach(() => {
+    accountForgottenInTab();
+  });
+
+  it('keeps what A typed as A’s — an edit’s with the version it was typed on — when the reset empties the profile for B, which B never reads, and A takes back', () => {
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      sessionAccountTurned('admin-2');
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', version), undefined)).toBe(true);
+      expect(storage.length).toBe(1);
+      expect(storage.key(0)).toBe(postDraftStorageKey(key, 'admin-1'));
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      // B's form, empty, goes as the session turns back to A: nothing of B's to keep.
+      sessionAccountTurned('admin-1');
+      expect(
+        keepHeldPostDraft({ ...typedBy(key, 'admin-2', version), hasDraft: false }, undefined),
+      ).toBe(false);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toEqual({
+        title: 'admin-1가 쓰던 공지',
+        body: { type: 'doc', content: [] },
+        previews: {},
+        ...(version === undefined ? {} : { version }),
+      });
+    }
+  });
+
+  it('keeps nothing as the session names nobody (a sign-out) or the writer still, nor for a form not drawn per admin, with nothing typed, or whose write landed', () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const theirs = typedBy(newKey, 'admin-1');
+    // Nothing heard yet, nobody signed in: no account to keep it for but the writer's own leave.
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    sessionAccountHeard(null);
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    // The session names the writer: `['me']` emptied without a turn (the sign-out's own clearing
+    // before the session says nobody) — a link or Back asked first.
+    sessionAccountHeard('admin-1');
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    sessionAccountHeard('admin-2');
+    expect(keepHeldPostDraft({ ...theirs, keepOnAccountTurn: undefined }, undefined)).toBe(false);
+    expect(keepHeldPostDraft({ ...theirs, hasDraft: false }, undefined)).toBe(false);
+    expect(storage.length).toBe(0);
+    postDraftLanded(newKey, 'admin-1');
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    expect(storage.length).toBe(0);
+  });
+
+  it('keeps what A’s form holds — the draft it took back among it — as A’s while the session catches up with A, `GET /me` having named A first, and A’s form drawn again takes it back; nothing once that reset is over (ADR-0092 8-36)', () => {
+    // A back in the tab: `GET /me` answers A before the session, A's form is drawn and takes A's
+    // draft out of the tab; the session then says A, and the reset empties `['me']` —
+    // `NoticeWriterGate` puts its placeholder in place of A's form, which goes holding that draft.
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      sessionAccountTurned('admin-2')();
+      const settled = sessionAccountTurned('admin-1');
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', version), undefined)).toBe(true);
+      expect(storage.length).toBe(1);
+      expect(storage.key(0)).toBe(postDraftStorageKey(key, 'admin-1'));
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toEqual({
+        title: 'admin-1가 쓰던 공지',
+        body: { type: 'doc', content: [] },
+        previews: {},
+        ...(version === undefined ? {} : { version }),
+      });
+      settled();
+      storage.removeItem(postDraftStorageKey(key, 'admin-1'));
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', version), undefined)).toBe(false);
+      expect(storage.length).toBe(0);
     }
   });
 });

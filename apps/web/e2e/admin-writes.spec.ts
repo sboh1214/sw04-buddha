@@ -23,6 +23,8 @@ import {
   signUp,
   switchAccountUnderScreen,
   switchMeBeforeSession,
+  switchMeThenSessionTo,
+  switchSessionTo,
   test,
 } from './helpers';
 
@@ -1507,6 +1509,236 @@ test.describe('탭의 세션이 아직 앞 관리자를 말하는데 `GET /me`�
         (await dataOf<{ title: string }>(await admin.get(`/api/v1/admin/notices/${notice.id}`)))
           .title,
       ).toBe(original);
+    } finally {
+      await close();
+    }
+  });
+});
+
+/**
+ * The forward order with nothing held (`switchSessionTo`, ADR-0092 결정 10): the first seed admin
+ * (A) opens `path` with the page's clock installed; once `ready` says the screen is drawn the spec
+ * types what it holds, and `toB` turns the tab's session to the second seed admin (B) first —
+ * SessionCacheGuard's reset empties `['me']`, and `GET /me` answers as B — and `toA` back the same
+ * way; `toAMeFirst` back in the mixed order instead (`switchMeThenSessionTo`, ADR-0092 8-36).
+ * Answers both admins, `toB`, `toA`, `toAMeFirst` and a cleanup for the `finally`.
+ */
+async function aThenBBySession(
+  browser: Browser,
+  page: Page,
+  secondAdmin: APIRequestContext,
+  path: string,
+  ready: () => Promise<void>,
+): Promise<{
+  a: Me;
+  b: Me;
+  toB: () => Promise<void>;
+  toA: () => Promise<void>;
+  toAMeFirst: (between?: () => Promise<void>) => Promise<void>;
+  close: () => Promise<void>;
+}> {
+  const otherContext: BrowserContext = await browser.newContext();
+  const close = () => otherContext.close();
+  try {
+    const other = await otherContext.newPage();
+    const b = await meOf(secondAdmin);
+    await signIn(other, secondAdminAccount.email, secondAdminAccount.password);
+    await signIn(page, adminAccount.email, adminAccount.password);
+    const a = await meOf(page.request);
+    expect(a.id).not.toBe(b.id);
+    const aCookies = await page.context().cookies();
+    const bCookies = await otherContext.cookies();
+    await page.clock.install();
+    await page.goto(path);
+    await ready();
+    const toB = () => switchSessionTo(page, { id: b.id, cookies: bCookies });
+    const toA = () => switchSessionTo(page, { id: a.id, cookies: aCookies });
+    const toAMeFirst = (between?: () => Promise<void>) =>
+      switchMeThenSessionTo(page, { id: a.id, cookies: aCookies }, between);
+    return { a, b, toB, toA, toAMeFirst, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+test.describe('탭의 세션이 먼저 다른 관리자를 말하는 공지 양식 — 정순서 (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+  // The forward order: the session names B first, and SessionCacheGuard's reset empties `['me']` —
+  // `NoticeWriterGate` puts its placeholder in place of A's form in that very render — then
+  // `GET /me` answers as B. Before this, A's text went with the reset. Now A's form, going, hears
+  // from the guard that the session names B and keeps what A typed in this tab as A's draft for the
+  // hour, as when `['me']` turns first (17:21 답 2): B's form reads none of it, nothing is sent as B,
+  // and A, with the session back, takes it back with the restore notice — also when `GET /me` names
+  // A again before the session does, and the session's reset then takes away the form just drawn
+  // for A with that text in it (8-36).
+
+  test('공지 쓰기에서 앞 관리자가 쓰던 공지는 세션이 다른 관리자로 바뀌면 빈 양식으로 다시 그려지고 아무것도 보내지 않으며, 앞 관리자의 것으로 두었다가 세션이 돌아오면 되살린다', async ({
+    browser,
+    page,
+    secondAdmin,
+  }) => {
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const { a, toB, toA, close } = await aThenBBySession(
+      browser,
+      page,
+      secondAdmin,
+      '/admin/notices/new',
+      () => expect(titleInput).toBeEditable(),
+    );
+    try {
+      const tag = freshTag();
+      const title = `앞 관리자가 쓰던 공지 ${tag}`;
+      await titleInput.fill(title);
+      await editor.click();
+      await page.keyboard.type(`앞 관리자가 쓰던 안내 ${tag}`);
+      const writes = adminWrites(page);
+
+      // --- the session says B first: B's own form, empty and on; A's text kept as A's.
+      await toB();
+      await expect(titleInput).toBeEditable();
+      await expect(titleInput).toHaveValue('');
+      await expect(editor).not.toContainText(tag);
+      await expect(restored).toHaveCount(0);
+      await expect.poll(() => draftsInTab(page)).toEqual([`buddha.postDraft:notice-new@${a.id}`]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- the session says A again: A's text taken back, said so.
+      await toA();
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(title);
+      await expect(editor).toContainText(`앞 관리자가 쓰던 안내 ${tag}`);
+      await expect.poll(() => draftsInTab(page)).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('공지 수정에서 앞 관리자가 고치던 것은 세션이 다른 관리자로 바뀌면 공지 그대로 다시 그려지고, 세션이 돌아오면 그 판과 함께 되살린다', async ({
+    browser,
+    page,
+    admin,
+    secondAdmin,
+  }) => {
+    const tag = freshTag();
+    const original = `E2E 정순서 공지 ${tag}`;
+    const notice = await dataOf<{ id: string }>(
+      await admin.post('/api/v1/admin/notices', {
+        data: {
+          expectedAccountId: await accountIdOf(admin),
+          title: original,
+          body: {
+            type: 'doc',
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: '저장된 안내' }] }],
+          },
+        },
+      }),
+    );
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const { a, toB, toA, close } = await aThenBBySession(
+      browser,
+      page,
+      secondAdmin,
+      `/admin/notices/${notice.id}`,
+      async () => {
+        await expect(titleInput).toHaveValue(original);
+        await expect(titleInput).toBeEditable();
+      },
+    );
+    try {
+      const typed = `앞 관리자가 고치던 제목 ${tag}`;
+      await titleInput.fill(typed);
+      const writes = adminWrites(page);
+
+      // --- the session says B first: the notice as saved, nothing of A's; A's kept with the
+      // version it was typed on (never edited — null).
+      await toB();
+      await expect(titleInput).toHaveValue(original);
+      await expect(editor).toContainText('저장된 안내');
+      await expect(restored).toHaveCount(0);
+      const key = `buddha.postDraft:notice-edit:${notice.id}@${a.id}`;
+      await expect.poll(() => draftsInTab(page)).toEqual([key]);
+      const kept = await page.evaluate((storageKey) => sessionStorage.getItem(storageKey), key);
+      expect(JSON.parse(kept ?? '{}')).toMatchObject({
+        accountId: a.id,
+        title: typed,
+        opened: null,
+      });
+      expect(writes).toEqual([]);
+
+      // --- A again: taken back.
+      await toA();
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(typed);
+      await expect.poll(() => draftsInTab(page)).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(
+        (await dataOf<{ title: string }>(await admin.get(`/api/v1/admin/notices/${notice.id}`)))
+          .title,
+      ).toBe(original);
+    } finally {
+      await close();
+    }
+  });
+
+  test('공지 쓰기에서 세션이 다른 관리자로 바뀐 뒤 앞 관리자가 돌아올 때 `GET /me`가 세션보다 먼저 앞 관리자를 말해도, 되살린 공지는 세션의 되돌리기 뒤에도 양식에 남는다 (ADR-0092 8-36)', async ({
+    browser,
+    page,
+    secondAdmin,
+  }) => {
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const { a, toB, toAMeFirst, close } = await aThenBBySession(
+      browser,
+      page,
+      secondAdmin,
+      '/admin/notices/new',
+      () => expect(titleInput).toBeEditable(),
+    );
+    try {
+      const tag = freshTag();
+      const title = `앞 관리자가 쓰던 공지 ${tag}`;
+      await titleInput.fill(title);
+      await editor.click();
+      await page.keyboard.type(`앞 관리자가 쓰던 안내 ${tag}`);
+      const writes = adminWrites(page);
+
+      // --- the session says B first: A's text kept as A's.
+      await toB();
+      await expect(titleInput).toBeEditable();
+      await expect(titleInput).toHaveValue('');
+      await expect.poll(() => draftsInTab(page)).toEqual([`buddha.postDraft:notice-new@${a.id}`]);
+
+      // --- A back, `GET /me` answering before the session: A's form, A's text taken back out of
+      // the tab — then the session says A, and its reset takes that form away and draws it again.
+      await toAMeFirst(async () => {
+        await expect(restored).toContainText(copy.postDraftRestored);
+        await expect(titleInput).toHaveValue(title);
+        await expect.poll(() => draftsInTab(page)).toEqual([]);
+      });
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(title);
+      await expect(editor).toContainText(`앞 관리자가 쓰던 안내 ${tag}`);
+      await expect.poll(() => draftsInTab(page)).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
     } finally {
       await close();
     }

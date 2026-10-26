@@ -8,6 +8,7 @@ import { signOut } from '@/lib/auth-client';
 import { clearAllSessionCommentDrafts } from '@/lib/comment-drafts';
 import { clearSessionPostDrafts } from '@/lib/post-drafts';
 import { clearSessionProfileDrafts } from '@/lib/profile-drafts';
+import { accountForgottenInTab } from '@/lib/session-account';
 
 /** What `signOutInOrder` runs, in its order. */
 export interface SignOutSteps {
@@ -66,9 +67,14 @@ export async function signOutInOrder(steps: SignOutSteps): Promise<void> {
  * So are the post, comment and MY 설정 drafts an onboarding step kept in this tab
  * (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts — owner decisions 2026-10-22
  * answer 3 and (2nd) answer 2, the nickname's too): each is its writer's only, and whoever signs in
- * next here never sees one — nor does a closed account's text stay behind it.
+ * next here never sees one — nor does a closed account's text stay behind it. Nor does a form or a
+ * comment box going after this, before SessionCacheGuard hears the session name nobody, keep one:
+ * the tab is nobody's from now on (`accountForgottenInTab`, lib/session-account.ts — ADR-0092 8-32).
  */
 export function forgetAccountInTab(queryClient: QueryClient): void {
+  // Nobody's from now on: a form or a comment box going after this keeps nothing, whatever the
+  // session still says until SessionCacheGuard hears it name nobody (lib/session-account.ts).
+  accountForgottenInTab();
   queryClient.clear();
   clearSessionPostDrafts();
   clearAllSessionCommentDrafts();

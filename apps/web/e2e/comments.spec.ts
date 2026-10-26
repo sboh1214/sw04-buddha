@@ -7,6 +7,7 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  membersSwitchingSessions,
   membersTurningInPlace,
   signUp,
   test,
@@ -2780,6 +2781,177 @@ test.describe('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 �
       await expect(held.getByTestId('comment-held-text')).toHaveValue(text);
       await expect(restoredToasts(page)).toHaveCount(1);
       await expect.poll(() => commentDraftsInTab(page)).toEqual({});
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+test.describe('탭의 세션이 먼저 다른 회원을 말하는 글 화면의 댓글 상자 — 정순서 (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+  // The forward order: the session names B first and SessionCacheGuard's reset empties `['me']`
+  // and the comments — A's new 댓글 box gives way to its placeholder and A's 답글 and 수정 boxes go
+  // with the threads, in that very render — then `GET /me` answers as B. Before this, A's texts went
+  // with the reset (nobody on screen, nothing kept, nothing held for B). Now each box, going, hears
+  // from the guard that the session names B, and keeps what A typed as A's draft of that box, as when
+  // `['me']` turns first (17:21 답 3): B's page reads none of it, nothing is sent as B, and A, with
+  // the session back, gets each back in its box, said once — also when `GET /me` names A again
+  // before the session does, and the session's reset then takes away the boxes just drawn for A
+  // with those texts in them (8-36). A link's leave keeps nothing, as ever.
+
+  test('앞 계정이 쓰던 새 댓글·답글·수정은 세션이 다른 회원으로 바뀌면 빈 상자와 닫힌 답글·수정으로 다시 그려지고 아무것도 보내지 않으며, 앞 계정의 것으로 두었다가 세션이 돌아오면 그 상자들에 되살리고, 링크로 떠나는 것은 그대로 묻고 아무것도 두지 않는다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const { asked, answers } = dialogs(page);
+    const { a, open, toB, toA, close } = await membersSwitchingSessions(browser, page);
+    try {
+      const postId = await postThroughApi(admin, market.id, `세션이 바뀌는 글 ${tag}`, tag);
+      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const composer = page.getByTestId('comment-composer');
+      const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+      const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+      await open(`/community/posts/${postId}`);
+
+      // --- A's three boxes, each with text.
+      await composer.getByTestId('comment-input').fill(`앞 계정의 새 댓글 ${tag}`);
+      await commentOf(page, theirs).getByTestId('comment-reply').click();
+      await replyBox.getByTestId('comment-input').fill(`앞 계정의 답글 ${tag}`);
+      await commentOf(page, mine).getByTestId('comment-edit').click();
+      await editForm.getByTestId('comment-input').fill(`앞 계정이 고친 댓글 ${tag}`);
+      const writes: string[] = [];
+      page.on('request', (request) => {
+        const { pathname } = new URL(request.url());
+        if (request.method() === 'GET') return;
+        if (pathname.startsWith('/api/v1/posts/') || pathname.startsWith('/api/v1/comments/')) {
+          writes.push(`${request.method()} ${pathname}`);
+        }
+      });
+
+      // --- the session says B first: B's empty box, no 답글 or 수정 open, nothing held apart; A's
+      // kept as A's.
+      await toB();
+      await expect(composer.getByTestId('comment-input')).toBeEditable();
+      await expect(composer.getByTestId('comment-input')).toHaveValue('');
+      await expect(composer.getByTestId('comment-draft-restored')).toHaveCount(0);
+      await expect(commentOf(page, mine)).toContainText(`앞 계정의 댓글 ${tag}`);
+      await expect(replyBox).toHaveCount(0);
+      await expect(editForm).toHaveCount(0);
+      // B is not the author: no 수정 on A's comment.
+      await expect(commentOf(page, mine).getByTestId('comment-edit')).toHaveCount(0);
+      await expect(page.getByTestId('comment-held')).toHaveCount(0);
+      const prefix = `buddha.commentDraft:${postId}`;
+      await expect
+        .poll(() => commentDraftsInTab(page))
+        .toEqual({
+          [`${prefix}:comment@${a.id}`]: `앞 계정의 새 댓글 ${tag}`,
+          [`${prefix}:reply:${theirs}@${a.id}`]: `앞 계정의 답글 ${tag}`,
+          [`${prefix}:edit:${mine}@${a.id}`]: `앞 계정이 고친 댓글 ${tag}`,
+        });
+      await expect(restoredToasts(page)).toHaveCount(0);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- the session says A again: each box open with A's text, said under it and once in a
+      // toast; the tab holds nothing more (B typed nothing).
+      await toA();
+      await expect(composer.getByTestId('comment-input')).toHaveValue(`앞 계정의 새 댓글 ${tag}`);
+      await expect(composer.getByTestId('comment-draft-restored')).toHaveText(
+        copy.commentDraftRestored,
+      );
+      await expect(replyBox.getByTestId('comment-input')).toHaveValue(`앞 계정의 답글 ${tag}`);
+      await expect(replyBox.getByTestId('comment-draft-restored')).toBeVisible();
+      await expect(editForm.getByTestId('comment-input')).toHaveValue(`앞 계정이 고친 댓글 ${tag}`);
+      await expect(editForm.getByTestId('comment-draft-restored')).toBeVisible();
+      await expect(restoredToasts(page)).toHaveCount(1);
+      await expect.poll(() => commentDraftsInTab(page)).toEqual({});
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- a link's leave, as ever: asked first, and once left nothing is kept.
+      const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+      answers.push(true);
+      await home.click();
+      await expect(page).toHaveURL('/');
+      expect(asked).toEqual([`confirm: ${copy.postLeaveConfirm}`]);
+      expect(await commentDraftsInTab(page)).toEqual({});
+      expect(writes).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('세션이 다른 회원으로 바뀐 뒤 앞 계정이 돌아올 때 `GET /me`가 세션보다 먼저 앞 계정을 말해도, 되살린 새 댓글·답글·수정은 세션의 되돌리기 뒤에도 그 상자들에 남고 알림은 한 번이다 (ADR-0092 8-36)', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const { asked } = dialogs(page);
+    const { a, open, toB, toAMeFirst, close } = await membersSwitchingSessions(browser, page);
+    try {
+      const postId = await postThroughApi(admin, market.id, `세션이 따라잡는 글 ${tag}`, tag);
+      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const composer = page.getByTestId('comment-composer');
+      const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+      const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+      await open(`/community/posts/${postId}`);
+
+      // --- A's three boxes, each with text.
+      await composer.getByTestId('comment-input').fill(`앞 계정의 새 댓글 ${tag}`);
+      await commentOf(page, theirs).getByTestId('comment-reply').click();
+      await replyBox.getByTestId('comment-input').fill(`앞 계정의 답글 ${tag}`);
+      await commentOf(page, mine).getByTestId('comment-edit').click();
+      await editForm.getByTestId('comment-input').fill(`앞 계정이 고친 댓글 ${tag}`);
+      const writes: string[] = [];
+      page.on('request', (request) => {
+        const { pathname } = new URL(request.url());
+        if (request.method() === 'GET') return;
+        if (pathname.startsWith('/api/v1/posts/') || pathname.startsWith('/api/v1/comments/')) {
+          writes.push(`${request.method()} ${pathname}`);
+        }
+      });
+
+      // --- the session says B first: A's kept as A's.
+      await toB();
+      await expect(composer.getByTestId('comment-input')).toHaveValue('');
+      await expect(replyBox).toHaveCount(0);
+      await expect(editForm).toHaveCount(0);
+      const prefix = `buddha.commentDraft:${postId}`;
+      const keptForA = {
+        [`${prefix}:comment@${a.id}`]: `앞 계정의 새 댓글 ${tag}`,
+        [`${prefix}:reply:${theirs}@${a.id}`]: `앞 계정의 답글 ${tag}`,
+        [`${prefix}:edit:${mine}@${a.id}`]: `앞 계정이 고친 댓글 ${tag}`,
+      };
+      await expect.poll(() => commentDraftsInTab(page)).toEqual(keptForA);
+
+      // --- A back, `GET /me` answering before the session: A's boxes, A's texts taken back out of
+      // the tab — then the session says A, and its reset takes the boxes away and draws them again.
+      const textsInBoxes = async () => {
+        await expect(composer.getByTestId('comment-input')).toHaveValue(`앞 계정의 새 댓글 ${tag}`);
+        await expect(composer.getByTestId('comment-draft-restored')).toHaveText(
+          copy.commentDraftRestored,
+        );
+        await expect(replyBox.getByTestId('comment-input')).toHaveValue(`앞 계정의 답글 ${tag}`);
+        await expect(replyBox.getByTestId('comment-draft-restored')).toBeVisible();
+        await expect(editForm.getByTestId('comment-input')).toHaveValue(
+          `앞 계정이 고친 댓글 ${tag}`,
+        );
+        await expect(editForm.getByTestId('comment-draft-restored')).toBeVisible();
+        await expect.poll(() => commentDraftsInTab(page)).toEqual({});
+      };
+      await toAMeFirst(textsInBoxes);
+      await textsInBoxes();
+      // Taken back twice — in place, then after the reset — and said once.
+      await expect(restoredToasts(page)).toHaveCount(1);
+      await expect(page.getByTestId('comment-held')).toHaveCount(0);
       expect(writes).toEqual([]);
       expect(asked).toEqual([]);
     } finally {

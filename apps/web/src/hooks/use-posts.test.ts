@@ -30,6 +30,11 @@ import {
   postKey,
 } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
+import {
+  accountForgottenInTab,
+  sessionAccountHeard,
+  sessionAccountTurned,
+} from '@/lib/session-account';
 import { ME_QUERY_KEY } from './use-me';
 import {
   type HeldPostDraft,
@@ -894,6 +899,93 @@ describe('the writes', () => {
     );
     expect(keepHeldPostDraft({ ...last, accountId: undefined }, undefined)).toBe(false);
     expect(readPostDraft(storage, key, 'user-1', Date.now())).toBeNull();
+  });
+
+  it('the write and edit forms, drawn for the account on screen, keep their writer’s draft as SessionCacheGuard’s reset takes them away for another account the session names first — and nothing for a sign-out or the writer’s own session (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+    // The forward order: `['me']` is empty as `WriteGate` puts its placeholder in place of the
+    // form; the account the session now names is heard from the guard (lib/session-account.ts).
+    try {
+      for (const key of [
+        { kind: 'new', marketId: MARKET },
+        { kind: 'edit', postId: POST },
+      ] as const) {
+        const storage = tabStorage();
+        vi.stubGlobal('window', { sessionStorage: storage });
+        const last: HeldPostDraftAt = {
+          key,
+          accountId: 'user-1',
+          keepOnAccountTurn: true,
+          hasDraft: true,
+          title: '쓰던 제목',
+          body: { type: 'doc', content: [] },
+          previews: new Map(),
+          moment: postDraftMoment(),
+        };
+        sessionAccountHeard(null);
+        expect(keepHeldPostDraft(last, undefined)).toBe(false);
+        // The session naming the writer with no reset under way: the tab's sign-out emptying the
+        // cache before the session says nobody.
+        sessionAccountHeard('user-1');
+        expect(keepHeldPostDraft(last, undefined)).toBe(false);
+        expect(storage.length).toBe(0);
+        sessionAccountTurned('user-2');
+        // A form not drawn per account keeps only on the gate's move.
+        expect(keepHeldPostDraft({ ...last, keepOnAccountTurn: undefined }, undefined)).toBe(false);
+        expect(storage.length).toBe(0);
+        expect(keepHeldPostDraft(last, undefined)).toBe(true);
+        expect(readPostDraft(storage, key, 'user-2', Date.now())).toBeNull();
+        expect(readPostDraft(storage, key, 'user-1', Date.now())?.title).toBe('쓰던 제목');
+      }
+    } finally {
+      accountForgottenInTab();
+    }
+  });
+
+  it('the write and edit forms keep their writer’s draft — one taken back just before among it — as SessionCacheGuard’s reset takes them away while the session catches up with the writer `GET /me` turned to first, and the form drawn again takes it back; nothing once that reset is over or the tab forgot its account (ADR-0092 8-36, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+    // A back in the tab the session turned to B: `GET /me` answers A first, A's form is drawn and
+    // takes A's draft out of the tab (`PostForm`), then the session says A and the guard's reset
+    // empties `['me']` — `WriteGate` puts its placeholder in place of A's form, which goes holding
+    // the draft it took back (`hasDraft`: restored).
+    try {
+      for (const key of [
+        { kind: 'new', marketId: MARKET },
+        { kind: 'edit', postId: POST },
+      ] as const) {
+        const storage = tabStorage();
+        vi.stubGlobal('window', { sessionStorage: storage });
+        const last: HeldPostDraftAt = {
+          key,
+          accountId: 'user-1',
+          keepOnAccountTurn: true,
+          hasDraft: true,
+          title: '되살린 제목',
+          body: { type: 'doc', content: [] },
+          previews: new Map(),
+          moment: postDraftMoment(),
+        };
+        sessionAccountTurned('user-2')();
+        const settled = sessionAccountTurned('user-1');
+        // A form not drawn per account keeps only on the gate's move.
+        expect(keepHeldPostDraft({ ...last, keepOnAccountTurn: undefined }, undefined)).toBe(false);
+        expect(storage.length).toBe(0);
+        expect(keepHeldPostDraft(last, undefined)).toBe(true);
+        expect(readPostDraft(storage, key, 'user-2', Date.now())).toBeNull();
+        expect(readPostDraft(storage, key, 'user-1', Date.now())?.title).toBe('되살린 제목');
+        clearPostDraft(storage, key, 'user-1');
+        // Drawn again for A, `['me']` answering: A's own leave keeps nothing.
+        expect(
+          keepHeldPostDraft(last, { id: 'user-1', onboarding: { nextStep: null } } as Me),
+        ).toBe(false);
+        settled();
+        expect(keepHeldPostDraft(last, undefined)).toBe(false);
+        sessionAccountTurned('user-1');
+        accountForgottenInTab();
+        expect(keepHeldPostDraft(last, undefined)).toBe(false);
+        expect(storage.length).toBe(0);
+      }
+    } finally {
+      accountForgottenInTab();
+    }
   });
 
   it('a deletion drops the held page and marks the lists stale', async () => {

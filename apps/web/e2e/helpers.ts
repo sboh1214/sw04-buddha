@@ -10,6 +10,7 @@ import {
   type Page,
   type Request,
   type Response,
+  type Route,
 } from '@playwright/test';
 import type { AdminMarket, Category, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
@@ -98,15 +99,19 @@ const ADMIN_VERIFY_POLL_MS = 2_000;
 
 /**
  * What a run says when the service-wide limit refuses its codes: every send stays as an
- * account's 본인확인 기록 (ADR-0070), so a persistent database counts the sends of every run of
- * the last 24 hours against the service's five hundred — about eighty a full run (both
- * projects).
+ * account's 본인확인 기록 (ADR-0070), so a database counts the sends of every run of the last 24
+ * hours against the service's five hundred — a fixed owner value. A full run sends some five
+ * hundred across both projects (about half each), so the whole suite runs one project at a time
+ * with the sends deleted in between: CI does (`.github/workflows/ci.yml`, ADR-0092 결과 2), and so
+ * does a full local run on an isolated e2e database (README).
  */
 const SERVICE_LIMIT_HELP =
   'the service-wide limit of 500 verification codes in 24 hours (ADR-0070) is reached in this ' +
-  "database, which keeps every earlier run's sends: on an isolated e2e database delete them " +
-  '(`DELETE FROM phone_verification_codes`, as the migration role) or wait until the oldest is ' +
-  '24 hours old';
+  "database, which keeps every earlier run's sends — a full run sends some five hundred, so run " +
+  'one project at a time (`--project=mobile-375`, then `--project=desktop-1280`, as CI does): on ' +
+  'an isolated e2e database delete them before each (`DELETE FROM phone_verification_codes` and ' +
+  '`DELETE FROM phone_verification_refused_sends`, as the migration role) or wait until the ' +
+  'oldest is 24 hours old';
 
 /** PLAN 13 M4 AC 1: 한 브라우저의 변화가 다른 브라우저의 카드·상세에 1초 내 반영된다. */
 export const REALTIME_BUDGET_MS = 1_000;
@@ -889,6 +894,148 @@ export async function membersTurningInPlace(
       expect(drawn.data.id).toBe(a.id);
     };
     return { a, b, other, open, toB, toA, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
+}
+
+/**
+ * The forward order with nothing held (SessionCacheGuard's own, ADR-0092 결정 10): `to`'s cookie
+ * goes into the tab — what another window signing in as `to` leaves it with — and the session is
+ * read again on the `visibilitychange` better-auth refetches it on, so SessionCacheGuard resets the
+ * cache and `GET /me` is read again with that cookie: the screen is `to`'s. Unlike
+ * `switchAccountUnderScreen`, which answers `GET /me` as the account shown, nothing is routed. The
+ * page's clock — installed (`page.clock.install()`) before the page was opened — moves past
+ * better-auth's limit of one focus refetch in 5 s first (`FOCUS_REFETCH_RATE_LIMIT_SECONDS`), so a
+ * spec can turn the session there and back. Resolves once the session said `to` and `GET /me`
+ * answered for it.
+ */
+export async function switchSessionTo(
+  page: Page,
+  to: { id: string; cookies: Cookie[] },
+): Promise<void> {
+  await page.clock.fastForward('00:06');
+  await page.context().clearCookies();
+  await page.context().addCookies(to.cookies);
+  const sessionRead = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === '/api/auth/get-session',
+  );
+  const meRead = nextMeRead(page);
+  await page.evaluate(() => document.dispatchEvent(new Event('visibilitychange')));
+  const session = (await (await sessionRead).json()) as { user?: { id?: string } } | null;
+  expect(session?.user?.id).toBe(to.id);
+  const drawn = (await (await meRead).json()) as { data: Me };
+  expect(drawn.data.id).toBe(to.id);
+}
+
+/**
+ * The return in the mixed order (ADR-0092 8-36), as a browser brings it: `to`'s cookie goes into the
+ * tab — `to` signed in again in another window — and one `visibilitychange`, dispatched as a
+ * browser dispatches it (bubbling from the document to the window), makes better-auth read the
+ * session again (its listener is the document's) and TanStack Query read the stale `['me']` again
+ * (its focus listener is the window's). The page's clock — installed (`page.clock.install()`)
+ * before the page was opened — moves past `['me']`'s `staleTime` (30 s) first, and so past
+ * better-auth's 5 s limit. The session's answer is held until `GET /me` has answered as `to`:
+ * `['me']` turns in place first and the screen is drawn for `to` — `between` looks at it then —
+ * and only then does the session say `to`, so SessionCacheGuard resets the cache for the account
+ * already on screen and `GET /me` is read again. Resolves once that read has answered.
+ */
+export async function switchMeThenSessionTo(
+  page: Page,
+  to: { id: string; cookies: Cookie[] },
+  between: () => Promise<void> = () => Promise.resolve(),
+): Promise<void> {
+  await page.clock.fastForward('00:31');
+  await page.context().clearCookies();
+  await page.context().addCookies(to.cookies);
+  const isSessionRead = (url: URL) => url.pathname === '/api/auth/get-session';
+  const isMeRead = (request: Request) =>
+    request.method() === 'GET' && new URL(request.url()).pathname === '/api/v1/me';
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const hold = async (route: Route) => {
+    await released;
+    await route.continue().catch(() => undefined);
+  };
+  await page.route(isSessionRead, hold);
+  // The reads of `GET /me` sent once the session has answered: the reset's.
+  let sessionAnswered = false;
+  const afterSession = new Set<Request>();
+  const onResponse = (response: Response) => {
+    if (isSessionRead(new URL(response.url()))) sessionAnswered = true;
+  };
+  const onRequest = (request: Request) => {
+    if (sessionAnswered && isMeRead(request)) afterSession.add(request);
+  };
+  page.on('response', onResponse);
+  page.on('request', onRequest);
+  try {
+    const meRead = nextMeRead(page);
+    await page.evaluate(() =>
+      document.dispatchEvent(new Event('visibilitychange', { bubbles: true })),
+    );
+    const drawn = (await (await meRead).json()) as { data: Me };
+    expect(drawn.data.id).toBe(to.id);
+    await between();
+    const sessionRead = page.waitForResponse((response) => isSessionRead(new URL(response.url())));
+    const meAgain = page.waitForResponse((response) => afterSession.has(response.request()));
+    release();
+    const session = (await (await sessionRead).json()) as { user?: { id?: string } } | null;
+    expect(session?.user?.id).toBe(to.id);
+    const again = (await (await meAgain).json()) as { data: Me };
+    expect(again.data.id).toBe(to.id);
+  } finally {
+    release();
+    page.off('response', onResponse);
+    page.off('request', onRequest);
+    await page.unroute(isSessionRead, hold);
+  }
+}
+
+/**
+ * Two members in the forward order (`switchSessionTo`), for a screen drawn for the account on
+ * screen: A signed up on `page`, B in a browser context of its own. `open` installs the page's
+ * clock and opens `path` as A; `toB` turns the tab's session to B first — SessionCacheGuard's reset
+ * empties `['me']`, and `GET /me` answers as B — and `toA` back the same way; `toAMeFirst` back in
+ * the mixed order instead (`switchMeThenSessionTo` — `GET /me` answers A before the session does,
+ * `between` looking at the screen then). `close` ends B's context. A spec makes what `path` shows
+ * between the two.
+ */
+export async function membersSwitchingSessions(
+  browser: Browser,
+  page: Page,
+): Promise<{
+  a: Me;
+  b: Me;
+  open: (path: string) => Promise<void>;
+  toB: () => Promise<void>;
+  toA: () => Promise<void>;
+  toAMeFirst: (between?: () => Promise<void>) => Promise<void>;
+  close: () => Promise<void>;
+}> {
+  const otherContext = await browser.newContext();
+  const close = () => otherContext.close();
+  try {
+    const other = await otherContext.newPage();
+    await signUp(other, freshEmail());
+    const b = await meOf(other.request);
+    await signUp(page, freshEmail());
+    const a = await meOf(page.request);
+    expect(a.id).not.toBe(b.id);
+    const aCookies = await page.context().cookies();
+    const bCookies = await otherContext.cookies();
+    const open = async (path: string) => {
+      await page.clock.install();
+      await page.goto(path);
+    };
+    const toB = () => switchSessionTo(page, { id: b.id, cookies: bCookies });
+    const toA = () => switchSessionTo(page, { id: a.id, cookies: aCookies });
+    const toAMeFirst = (between?: () => Promise<void>) =>
+      switchMeThenSessionTo(page, { id: a.id, cookies: aCookies }, between);
+    return { a, b, open, toB, toA, toAMeFirst, close };
   } catch (error) {
     await close();
     throw error;

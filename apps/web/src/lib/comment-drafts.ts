@@ -157,9 +157,18 @@ function boxOf(
 export function shouldKeepCommentDraft(state: {
   hasDraft: boolean;
   saved: boolean;
-  /** The writer's onboarding, as `['me']` says it now; undefined when `['me']` names another. */
+  /**
+   * The writer's onboarding, as `['me']` says it now; undefined when `['me']` names another or is
+   * empty.
+   */
   onboarding: Onboarding | undefined;
-  /** The box's writer is no longer the account on screen: `['me']` turned to another in place. */
+  /**
+   * The box went with a turn of the tab's account (`goesWithAccountTurn`, lib/session-account.ts):
+   * `['me']` turned from its writer to another in place, or the session did first and
+   * SessionCacheGuard's reset took the box away — or the session turned to its writer after
+   * `['me']` did, and that reset took away the box just drawn for the writer (ADR-0092 결정 10,
+   * 8-36).
+   */
   accountTurned?: boolean;
 }): boolean {
   return (

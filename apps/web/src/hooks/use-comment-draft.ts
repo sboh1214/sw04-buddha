@@ -41,6 +41,7 @@ import {
   commentTextChanged,
 } from '@/lib/comments';
 import { type AwaitingText, type GoingBoxWrite } from '@/lib/held-comment-texts';
+import { goesWithAccountTurn } from '@/lib/session-account';
 
 /**
  * What the comment section does with a box that goes (components/post/held-comment-text.tsx, rules
@@ -127,27 +128,31 @@ const held = new Map<string, GoingCommentBox>();
  * What a box going away does with `last`, its state as of its last render, given `me` — `GET /me`
  * as the cache holds it now: keeps its text in this tab, for its writer only, when `me` names a
  * step left of the writer — the page going to that step, or going any other way while it is left
- * (ADR-0074 7-23·7-24) — or when `me` is another account: the account on screen turned from the
- * writer to another in place, and the section draws its boxes for the account on screen
- * (`accountTurned`, `shouldKeepCommentDraft`; ADR-0092, 오너 결정 2026-10-26 17:21 답 3). `me`
- * absent — SessionCacheGuard's reset, a sign-out — keeps nothing. A write of the box that landed
- * after that render counts as saved (`commentDraftLandedSince` — a write that account sent).
- * Whether it kept it. A box of the writer still on screen keeps it only when its place took it still
- * as it went (`commentBoxLeaves`): one the page took away in place is shown apart instead.
+ * (ADR-0074 7-23·7-24) — or when it goes with a turn of the tab's account (`goesWithAccountTurn`):
+ * `me` is another — the account on screen turned from the writer to another in place, and the
+ * section draws its boxes for the account on screen (`accountTurned`, `shouldKeepCommentDraft`;
+ * ADR-0092, 오너 결정 2026-10-26 17:21 답 3) — or, `me` absent, the session names another,
+ * SessionCacheGuard's reset having emptied `['me']` (the forward order, ADR-0092 결정 10, 21:00 답 1
+ * «정순서에서도 A의 초안으로»), or names the writer in that reset, `['me']` having turned to the
+ * writer first (8-36). `me` absent with the session naming nobody (a sign-out) or the writer with no
+ * reset under way keeps nothing. A write of the box that landed after that render counts as saved
+ * (`commentDraftLandedSince` — a write that account sent). Whether it kept it. A box of the writer
+ * still on screen keeps it only when its place took it still as it went (`commentBoxLeaves`): one
+ * the page took away in place is shown apart instead.
  */
 export function keepHeldCommentDraft(
   last: CommentBoxDraft & { moment: number },
   me: Me | undefined,
 ): boolean {
-  if (me === undefined) return false;
-  const accountTurned = me.id !== last.accountId;
+  const accountTurned = goesWithAccountTurn(last.accountId, me?.id);
   const saved = commentDraftLandedSince(last.key, last.accountId, last.moment);
   if (
     !shouldKeepCommentDraft({
       hasDraft: commentTextChanged(last.text, last.initial),
       saved,
-      // Another account's steps are not the writer's.
-      onboarding: accountTurned ? undefined : me.onboarding,
+      // Another account's steps are not the writer's; with `['me']` empty no step is known (with no
+      // turn: a sign-out, or nothing heard — nothing kept).
+      onboarding: accountTurned ? undefined : me?.onboarding,
       accountTurned,
     })
   ) {
@@ -173,13 +178,17 @@ export function keepHeldCommentDraft(
  * both shown and kept — the section keeps what it shows when the page does go to the step
  * (`keepSectionTextsForStep`), and a text the writer closed before does not come back after it.
  *
- * A box that goes because the account on screen turned from its writer to another in place — `me`
- * another account: the section draws its boxes for the account on screen (ADR-0092, 오너 결정
- * 2026-10-26 17:21 답 3) — leaves the section nothing: the text is the writer's, who is not on
- * screen, and is kept as the writer's draft (`keepHeldCommentDraft`), its write in flight or
- * refused or none, whatever its place says — back on the post page, the writer gets it in its box,
- * or apart with why its place takes it no more (`resolveCommentDrafts`). The section, told of the
- * other account in the same render, would not hear it anyway (lib/held-comment-texts.ts).
+ * A box that goes with a turn of the tab's account (`goesWithAccountTurn`) — `me` another account:
+ * the account on screen turned in place, and the section draws its boxes for the account on screen
+ * (ADR-0092, 오너 결정 2026-10-26 17:21 답 3); or `me` absent with the session naming another:
+ * SessionCacheGuard's reset took it away as the session turned first (결정 10, 21:00 답 1
+ * «정순서에서도 A의 초안으로»); or `me` absent in that reset with the session naming the writer,
+ * `['me']` having turned to the writer first (8-36) — leaves the section nothing: the text is the
+ * writer's, who is not on screen, and is kept as the writer's draft (`keepHeldCommentDraft`), its
+ * write in flight or refused or none, whatever its place says — back on the post page, the writer
+ * gets it in its box, or apart with why its place takes it no more (`resolveCommentDrafts`). The
+ * section, told of the other account — or of nobody — in the same render, would not hear it anyway
+ * (lib/held-comment-texts.ts).
  */
 export function commentBoxLeaves(
   last: GoingCommentBox,
@@ -189,7 +198,7 @@ export function commentBoxLeaves(
   if (last.closed || commentDraftLandedSince(last.key, last.accountId, last.moment))
     return 'dropped';
   if (!commentTextChanged(last.text, last.initial)) return 'dropped';
-  if (me !== undefined && me.id !== last.accountId) {
+  if (goesWithAccountTurn(last.accountId, me?.id)) {
     keepHeldCommentDraft(last, me);
     return 'dropped';
   }
@@ -219,8 +228,14 @@ export function keepSectionTextsForStep(section: SectionTexts, me: Me | undefine
 
 /**
  * What the comment section keeps as the account on screen turns from `section.accountId` — whose
- * texts `section` holds, as the section last drew them — to `accountNow`, another account, in place
- * (`['me']` naming another account before the session does, ADR-0090 결정 4-2): the texts it showed
+ * texts `section` holds, as the section last drew them — given `meId`, `GET /me`'s account as the
+ * section draws now or as the cache holds it: to another account in place (`meId` another —
+ * `['me']` naming another account before the session does, ADR-0090 결정 4-2), or — `['me']`
+ * emptied by SessionCacheGuard's reset — to the account the session turned to first (the forward
+ * order, ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1), or in that reset as the session turns
+ * to `section.accountId` itself, `['me']` having turned to it first: the section is drawn for it
+ * again once `GET /me` answers, and what it held — drafts it had just taken back among it — goes
+ * with the reset (8-36; `goesWithAccountTurn`): the texts it showed
  * apart and the drafts taken back that no box took yet, each as the writer's draft of the box it
  * stood for, as a step keeps them (`keepSectionTextsForStep`) — and the texts still on their way
  * (`awaiting`: a box gone with its write in flight, its refusal not heard yet — the refusal, heard
@@ -229,18 +244,15 @@ export function keepSectionTextsForStep(section: SectionTexts, me: Me | undefine
  * `commentDraftLanded`). The section, drawn for the account now on screen, holds none of them any
  * more (lib/held-comment-texts.ts starts afresh), and the writer, on screen again, gets each back in
  * its box or apart with why (ADR-0092, 오너 결정 2026-10-26 17:21 답 3 «이 PR에서 함께, 적던 것은 A의
- * 초안으로»). Nothing when nobody was on screen or nobody is now — SessionCacheGuard's reset, a
- * sign-out, a `GET /me` not answered yet — nor for the same account. Run before the boxes the turn
+ * 초안으로»). Nothing when nobody was on screen or nobody is now — a sign-out, a `GET /me` not
+ * answered yet — nor for the same account with no reset under way. Run before the boxes the turn
  * takes away keep theirs (a layout effect, before their passive cleanups; or the section's own
  * cleanup, `keepSectionTextsAsItGoes`, which React runs before theirs): a box's own text, kept after
  * this, wins over a held text of the same box, as when the page goes to a step. Whether it kept any.
  */
-export function keepSectionTextsForTurn(
-  section: SectionTexts,
-  accountNow: string | undefined,
-): boolean {
+export function keepSectionTextsForTurn(section: SectionTexts, meId: string | undefined): boolean {
   const { accountId } = section;
-  if (accountId === undefined || accountNow === undefined || accountNow === accountId) return false;
+  if (accountId === undefined || !goesWithAccountTurn(accountId, meId)) return false;
   let kept = keepSectionTexts(section, accountId);
   const postId = section.postId.toLowerCase();
   for (const { place, text } of section.awaiting) {
@@ -253,12 +265,14 @@ export function keepSectionTextsForTurn(
 
 /**
  * What the comment section keeps as it goes, given `me` — `GET /me` as the cache holds it now: its
- * texts for a step left of the account on screen (`keepSectionTextsForStep`), or — `me` naming
- * another account — as the account on screen turns (`keepSectionTextsForTurn`). The turn's own
- * render can take the section away before ever drawing it for the other account: the onboarding
- * gate puts its placeholder in place of the post page for an account with a first onboarding step
- * left (the page is exempt for a re-consent alone), so the layout effect that keeps them on a turn
- * never runs (ADR-0092 8-26). Whether it kept any.
+ * texts for a step left of the account on screen (`keepSectionTextsForStep`), or — going with a
+ * turn of the tab's account (`goesWithAccountTurn`: `me` naming another, or `me` emptied by
+ * SessionCacheGuard's reset with the session naming another or, `['me']` having turned to it first,
+ * the account on screen, ADR-0092 결정 10, 8-36) — as the account on screen turns
+ * (`keepSectionTextsForTurn`). The turn's own render can take the section away before ever drawing
+ * it for the other account: the onboarding gate puts its placeholder in place of the post page for
+ * an account with a first onboarding step left (the page is exempt for a re-consent alone), so the
+ * layout effect that keeps them on a turn never runs (ADR-0092 8-26). Whether it kept any.
  */
 export function keepSectionTextsAsItGoes(section: SectionTexts, me: Me | undefined): boolean {
   return keepSectionTextsForStep(section, me) || keepSectionTextsForTurn(section, me?.id);
@@ -321,7 +335,9 @@ export type CommentBoxDialogRef = RefCallback<HTMLDivElement>;
  *   decides, with what it held at its last render and what `['me']` says now, as a post form's
  *   (hooks/use-post-draft.ts). So does going because `['me']` turned from the writer to another
  *   account in place — the section draws its boxes for the account on screen — for the writer, who
- *   gets it back on the post page (ADR-0092, 오너 결정 2026-10-26 17:21 답 3).
+ *   gets it back on the post page (ADR-0092, 오너 결정 2026-10-26 17:21 답 3); and going in
+ *   SessionCacheGuard's reset as the session turned to another account first, or to the writer
+ *   after `['me']` did (`goesWithAccountTurn`, 결정 10, 8-36, 21:00 답 1).
  * - Going otherwise hands its text to the section (`CommentBoxGoing`), which shows it with why it
  *   cannot be sent until the writer closes it: while its write is in flight or refused (답 4), and
  *   with no write when its thread or its post changed under it (2026-10-21 답 2).
@@ -472,7 +488,10 @@ interface TakenBack {
  * went into says so beside it. A later read — a step done in another tab while this page stayed
  * open — adds what it finds. `take` drops the ones a box has taken, or that are shown apart;
  * `reads` counts the reads that found some (the section reads the thread again for each before
- * placing them).
+ * placing them). A read while the toast of the one before is still up says it in that toast rather
+ * than in a second one: `['me']` naming the writer again before the session does takes the drafts
+ * back, and the session's reset a moment later takes them away again with the boxes and draws them
+ * for the writer once more (ADR-0092 8-36) — one taking back, as the writer sees it.
  */
 export function useCommentDraftsTakenBack(
   postId: string,
@@ -514,7 +533,11 @@ export function useCommentDraftsTakenBack(
     if (state.reads === said.current) return;
     said.current = state.reads;
     if (takenFor !== null) clearSessionCommentDrafts(id, takenFor);
-    toaster.create({ type: 'info', title: copy.commentDraftRestored });
+    toaster.create({
+      id: `comment-drafts-restored:${id}`,
+      type: 'info',
+      title: copy.commentDraftRestored,
+    });
   }, [state.reads, id, takenFor]);
   const take = useCallback(
     (keys: readonly CommentDraftKey[]) => {

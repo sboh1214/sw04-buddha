@@ -2,6 +2,7 @@
 
 import { useQueryClient } from '@tanstack/react-query';
 import { useEffect, useRef } from 'react';
+import { sessionAccountHeard, sessionAccountTurned } from '@/lib/session-account';
 import { useSession } from '@/lib/use-session';
 
 /** The account a session answer stands for: its user id, or null for "signed out". */
@@ -47,6 +48,17 @@ export function sessionIdentityChanged(
  * 결정 4-2), with no reset here, and one entry for both would draw A's under B's name. The guard
  * resets them with every other entry all the same.
  *
+ * The reset empties `['me']`, and the screens drawn for the account on screen put placeholders in
+ * place of that account's notice and post forms and comment boxes in the very render: what the
+ * account had typed there is kept in this tab as its draft for the hour and taken back when it is on
+ * screen again (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로») — each
+ * of them, going, hears from `sessionAccountTurned`, recorded before the reset, that the session now
+ * names another account (lib/session-account.ts). So does what was drawn for the account the
+ * session turned to, `['me']` having named it first — that account back in the tab, `GET /me`
+ * answering before the session: the reset takes away what was just drawn for it, a draft it had
+ * just taken back among it, and it is kept for that account and drawn again with it (8-36). The
+ * reset counts as under way until its reads settle. A session naming nobody keeps nothing.
+ *
  * `resetQueries`, not `clear`: clearing removes the queries but leaves mounted observers
  * holding the detached data with nothing to re-render them, so an open /my/wallet would keep
  * showing the old ledger. A reset puts every query back to its initial state and refetches
@@ -69,7 +81,17 @@ export function SessionCacheGuard() {
     if (identity === undefined) return;
     const previous = seen.current;
     seen.current = identity;
-    if (sessionIdentityChanged(previous, identity)) void queryClient.resetQueries();
+    if (!sessionIdentityChanged(previous, identity)) {
+      sessionAccountHeard(identity);
+      return;
+    }
+    // Heard before the reset, and the reset recorded until its reads settle: a form, a comment box
+    // or the comment section going in the render the reset causes — `['me']` empty — keeps what it
+    // holds for the account it was drawn for when the session now names another, or names that
+    // account itself, `['me']` having turned to it first (lib/session-account.ts, ADR-0092 결정 10,
+    // 8-36).
+    const settled = sessionAccountTurned(identity);
+    void queryClient.resetQueries().then(settled, settled);
   }, [identity, queryClient]);
 
   return null;
