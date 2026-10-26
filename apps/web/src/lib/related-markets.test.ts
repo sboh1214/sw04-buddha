@@ -181,6 +181,16 @@ describe('relatedLinkErrorMessage', () => {
     }
   });
 
+  it('says the session changed when the cookie is another account’s (ADR-0092)', () => {
+    expect(
+      relatedLinkErrorMessage(
+        apiError(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBe(copy.sessionChanged);
+  });
+
   it('says the market is gone for NOT_FOUND, and falls back for the rest', () => {
     expect(relatedLinkErrorMessage(apiError(404, 'NOT_FOUND'))).toBe(copy.adminMarketNotFound);
     expect(relatedLinkErrorMessage(apiError(400, 'VALIDATION_ERROR'))).toBe(copy.errUnknown);

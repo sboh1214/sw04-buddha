@@ -127,8 +127,10 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
   const errorOf = (res: { json: <U>() => U }) => res.json<ErrorBody>().error;
 
-  const create = (payload: unknown, who: TestUser = admin) =>
-    send('POST', '/admin/notices', who, payload);
+  // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
+  // names another.
+  const create = (payload: object, who: TestUser = admin) =>
+    send('POST', '/admin/notices', who, { expectedAccountId: who.id, ...payload });
   const created = async (title = '점검 안내', body: unknown = doc('내일 새벽 점검합니다')) => {
     const res = await create({ title, body });
     expect(res.statusCode, res.body).toBe(201);
@@ -153,12 +155,14 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     opened?: string | null,
   ) =>
     send('PUT', `/admin/notices/${id}`, who, {
+      expectedAccountId: who.id,
       ...payload,
       expectedEditedAt: opened === undefined ? await versionOf(id) : opened,
     });
-  const pin = (id: string, who: TestUser = admin) => send('POST', `/admin/notices/${id}/pin`, who);
-  const unpin = (id: string, who: TestUser = admin) =>
-    send('POST', `/admin/notices/${id}/unpin`, who);
+  const pin = (id: string, who: TestUser = admin, shown = who.id) =>
+    send('POST', `/admin/notices/${id}/pin`, who, { expectedAccountId: shown });
+  const unpin = (id: string, who: TestUser = admin, shown = who.id) =>
+    send('POST', `/admin/notices/${id}/unpin`, who, { expectedAccountId: shown });
 
   /** The fixed area as anyone reads it: ids in order, each card checked against its schema. */
   async function pinnedIds(cookie?: string): Promise<string[]> {
@@ -294,6 +298,59 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     expect(await t.db.select().from(schema.notices)).toEqual(before);
     expect(await actions()).toEqual(actionsBefore);
     expect(await pinnedIds()).toEqual([]);
+  });
+
+  it('refuses a write, an edit, a pin and an unpin that name another admin than the cookie’s, before anything is read (ADR-0092)', async () => {
+    const notice = await created();
+    const pinned = await created('고정된 공지');
+    expect((await pin(pinned.id)).statusCode).toBe(200);
+    const before = {
+      notices: await t.db.select().from(schema.notices),
+      revisions: await t.db.select().from(schema.noticeRevisions),
+      actions: await actions(),
+    };
+    // The screen still shows `admin` while the tab's cookie is `otherAdmin`'s.
+    const shown = { expectedAccountId: admin.id };
+    const attempts = [
+      () => create({ title: '다른 운영자', body: doc('x'), ...shown }, otherAdmin),
+      () => edit(notice.id, { title: '다른 운영자', body: doc('x'), ...shown }, otherAdmin),
+      () => pin(notice.id, otherAdmin, admin.id),
+      () => unpin(pinned.id, otherAdmin, admin.id),
+    ];
+    for (const attempt of attempts) {
+      const res = await attempt();
+      expect(res.statusCode, res.body).toBe(403);
+      expect(errorOf(res).code).toBe('FORBIDDEN');
+      expect((errorOf(res).details as { path: string[] }[])[0]?.path).toEqual([
+        'expectedAccountId',
+      ]);
+    }
+    // No account at all: a validation error naming the field.
+    const unnamed = [
+      await send('POST', '/admin/notices', admin, { title: '이름 없음', body: doc('x') }),
+      await send('PUT', `/admin/notices/${notice.id}`, admin, {
+        title: '이름 없음',
+        body: doc('x'),
+        expectedEditedAt: null,
+      }),
+      await send('POST', `/admin/notices/${notice.id}/pin`, admin, {}),
+      await send('POST', `/admin/notices/${pinned.id}/unpin`, admin, {}),
+    ];
+    for (const res of unnamed) {
+      expect(res.statusCode, res.body).toBe(400);
+      expect((errorOf(res).details as { path: string[] }[]).map((detail) => detail.path)).toEqual([
+        ['expectedAccountId'],
+      ]);
+    }
+    expect({
+      notices: await t.db.select().from(schema.notices),
+      revisions: await t.db.select().from(schema.noticeRevisions),
+      actions: await actions(),
+    }).toEqual(before);
+    expect(await pinnedIds()).toEqual([pinned.id]);
+    // The cookie's own account is taken.
+    expect((await pin(notice.id, otherAdmin)).statusCode).toBe(200);
+    expect((await actions()).at(-1)).toMatchObject({ type: 'notice_pin', adminId: otherAdmin.id });
   });
 
   // ---- writing ---------------------------------------------------------------------------------
@@ -684,6 +741,7 @@ describe.skipIf(!hasTestInfra)('notices (integration)', () => {
     const unsaid = await send('PUT', `/admin/notices/${notice.id}`, admin, {
       title: 'x',
       body: doc('x'),
+      expectedAccountId: admin.id,
     });
     expect(unsaid.statusCode).toBe(400);
     expect((errorOf(unsaid).details as { path: string[] }[])[0]?.path).toEqual([

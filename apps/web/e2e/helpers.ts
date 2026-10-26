@@ -510,6 +510,21 @@ export async function meOf(context: APIRequestContext): Promise<Me> {
   return unwrap<Me>(await context.get('/api/v1/me'));
 }
 
+const accountIds = new WeakMap<APIRequestContext, Promise<string>>();
+
+/**
+ * The account `context` is signed in as, read once per context: what an admin write straight at
+ * the API names as the admin on screen (`expectedAccountId`, ADR-0092), as the screens do.
+ */
+export function accountIdOf(context: APIRequestContext): Promise<string> {
+  let id = accountIds.get(context);
+  if (id === undefined) {
+    id = meOf(context).then((me) => me.id);
+    accountIds.set(context, id);
+  }
+  return id;
+}
+
 /**
  * The consent step through the API: every item at its current version (consent-versions.ts), the
  * required ones agreed and the optional marketing one as `marketing` says (declined by default).
@@ -891,7 +906,9 @@ export async function createOpenMarket(
 ): Promise<TestMarket> {
   const draft = await createDraftMarket(admin, options);
   const open = await unwrap<AdminMarket>(
-    await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
+    await admin.post(`/api/v1/admin/markets/${draft.id}/open`, {
+      data: { expectedAccountId: await accountIdOf(admin) },
+    }),
   );
   return { ...draft, id: open.id, slug: open.slug };
 }
@@ -928,6 +945,7 @@ export async function createDraftMarket(
         imageUrl: null,
         closeAt: new Date(Date.now() + CLOSE_IN_MS).toISOString(),
         slug: `e2e-${tag}`,
+        expectedAccountId: await accountIdOf(admin),
       },
     }),
   );
@@ -988,7 +1006,11 @@ export async function closeMarket(
   admin: APIRequestContext,
   marketId: string,
 ): Promise<AdminMarket> {
-  return unwrap<AdminMarket>(await admin.post(`/api/v1/admin/markets/${marketId}/close`));
+  return unwrap<AdminMarket>(
+    await admin.post(`/api/v1/admin/markets/${marketId}/close`, {
+      data: { expectedAccountId: await accountIdOf(admin) },
+    }),
+  );
 }
 
 /**

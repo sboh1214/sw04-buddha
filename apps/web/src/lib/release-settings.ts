@@ -10,6 +10,7 @@ import * as z from 'zod';
 import { copy } from '@/copy';
 import {
   isApiError,
+  isForAnotherAccount,
   type ReleaseSetting,
   type ReleaseSettingChangeBody,
   type ReleaseSettingState,
@@ -170,15 +171,26 @@ export function releaseSettingFormDefaults(item: ReleaseSetting): ReleaseSetting
   };
 }
 
-/** The request body for a form that passed `releaseSettingFormSchema`: no value while 미정. */
+/**
+ * The request body for a form that passed `releaseSettingFormSchema`: no value while 미정. And the
+ * admin on screen, who changes it (`useOperatorId`, ADR-0092: the server refuses another account's).
+ */
 export function toReleaseSettingChangeBody(
   values: ReleaseSettingFormValues,
   valueSchema: ValueSchema,
+  operatorId: string,
 ): ReleaseSettingChangeBody {
-  if (values.status === 'undecided') return { status: values.status, reason: values.reason };
+  if (values.status === 'undecided') {
+    return { status: values.status, reason: values.reason, expectedAccountId: operatorId };
+  }
   const parsed = parseReleaseSettingValueText(values.value, valueSchema);
   if (!parsed.ok) throw new Error('the release setting form was sent with an unreadable value');
-  return { status: values.status, value: parsed.value, reason: values.reason };
+  return {
+    status: values.status,
+    value: parsed.value,
+    reason: values.reason,
+    expectedAccountId: operatorId,
+  };
 }
 
 /**
@@ -211,7 +223,9 @@ export function releaseSettingFormUnchanged(
  *   (another admin made it first, or the item's schema made the value the stored one: the item
  *   already is what the admin asked for), `error` otherwise. `keepDialog` only when the request
  *   never came back (nothing was decided, so the admin may send it again); an answer from the API
- *   closes it, and the list is refreshed to what the server now holds.
+ *   closes it, and the list is refreshed to what the server now holds — the cookie of another
+ *   account too (`copy.sessionChanged`: nothing was changed, and the session is asked again,
+ *   whose reset reads everything — ADR-0092).
  */
 export type ReleaseSettingChangeRefusal =
   | { field: 'reason' | 'value'; message: string }
@@ -233,6 +247,9 @@ export function releaseSettingChangeRefusal(error: unknown): ReleaseSettingChang
   }
   if (isApiError(error, 'UNAUTHENTICATED')) {
     return { toast: copy.errUnauthenticated, tone: 'error', keepDialog: false };
+  }
+  if (isForAnotherAccount(error)) {
+    return { toast: copy.sessionChanged, tone: 'error', keepDialog: false };
   }
   if (isApiError(error, 'FORBIDDEN')) {
     return { toast: copy.adminOnly, tone: 'error', keepDialog: false };

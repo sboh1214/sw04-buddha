@@ -21,6 +21,7 @@ import {
   type UpdateNoticeBody,
   api,
   isApiError,
+  isForAnotherAccount,
   unwrap,
 } from '@/lib/api';
 import {
@@ -38,6 +39,7 @@ import {
   noticeEditConflict,
 } from '@/lib/notices';
 import { postDraftLanded } from '@/lib/post-drafts';
+import { useSession } from '@/lib/use-session';
 
 /**
  * 운영 공지 (#138, ADR-0077): the community list's fixed area, and the admin screens' lists, notice
@@ -234,13 +236,20 @@ async function afterNoticeWrite(queryClient: QueryClient, notice: AdminNotice): 
  * what this screen does not show yet; an edit another save overtook, whoever made it
  * (NOTICE_EDIT_CONFLICT, `noticeId` given), reads that notice, its records and versions and the
  * lists again, so the screen shows what was saved meanwhile — the form keeps what is typed (it
- * holds its own draft).
+ * holds its own draft). The cookie of another account (`isForAnotherAccount` — every write names
+ * the admin on screen, ADR-0092) asks for the session again instead (`onSessionChanged`), so
+ * SessionCacheGuard empties the cache and the screen shows who is really signed in.
  */
 async function afterNoticeRefusal(
   queryClient: QueryClient,
   error: Error,
+  onSessionChanged: () => void,
   noticeId?: string,
 ): Promise<void> {
+  if (isForAnotherAccount(error)) {
+    onSessionChanged();
+    return;
+  }
   if (noticeId !== undefined && noticeEditConflict(error)) {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: adminNoticeKey(noticeId) }),
@@ -261,18 +270,19 @@ async function afterNoticeRefusal(
 
 /**
  * The admin whose form sends a write — `NoticeWriterGate`'s `accountId`, the account the form was
- * drawn for — held by the client only: the request's body is the notice's (`CreateNoticeBody`,
- * `UpdateNoticeBody`), and `mutationFn` takes it out before it sends. A landing is that account's
- * (`postDraftLanded`, ADR-0073 9-48): the tab may be another's by the time it lands. Not the
- * account read as the success lands — the tab's by then, maybe another's, the gap 9-48 closes —
- * nor one added to the API's body, whose contract the landing has no part in (ADR-0077 8-20).
+ * drawn for. The request names it as the admin on screen (`expectedAccountId`, ADR-0092: the
+ * server refuses another account's cookie), and a landing is that account's (`postDraftLanded`,
+ * ADR-0073 9-48): the tab may be another's by the time it lands. Not the account read as the
+ * success lands — the tab's by then, maybe another's, the gap 9-48 closes — nor the one the
+ * session says: the landing reads this variable, not the body (ADR-0077 8-20).
  */
 interface NoticeWriter {
   accountId: string;
 }
 
 /** A new notice: its title and body, and the admin whose form sends it. */
-export interface CreateNoticeVariables extends CreateNoticeBody, NoticeWriter {}
+export interface CreateNoticeVariables
+  extends Omit<CreateNoticeBody, 'expectedAccountId'>, NoticeWriter {}
 
 /**
  * `POST /admin/notices`: a new notice, not pinned (pinning is its own action and record). A draft
@@ -282,18 +292,19 @@ export interface CreateNoticeVariables extends CreateNoticeBody, NoticeWriter {}
  * flight or its success is handled. Both for that admin only (`accountId`): another account's
  * draft and form of the screen, the tab changed hands meanwhile, are left as they are.
  */
-export function createNoticeOptions(queryClient: QueryClient) {
+export function createNoticeOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
-    mutationFn: async ({
-      accountId: _accountId,
-      ...body
-    }: CreateNoticeVariables): Promise<AdminNotice> =>
-      unwrap(await api.POST('/api/v1/admin/notices', { body })).data,
+    mutationFn: async ({ accountId, ...fields }: CreateNoticeVariables): Promise<AdminNotice> =>
+      unwrap(
+        await api.POST('/api/v1/admin/notices', {
+          body: { ...fields, expectedAccountId: accountId },
+        }),
+      ).data,
     onSuccess: (notice: AdminNotice, { accountId }: CreateNoticeVariables) => {
       postDraftLanded({ kind: 'notice-new' }, accountId);
       return afterNoticeWrite(queryClient, notice);
     },
-    onError: (error: Error) => afterNoticeRefusal(queryClient, error),
+    onError: (error: Error) => afterNoticeRefusal(queryClient, error, onSessionChanged),
   };
 }
 
@@ -302,7 +313,8 @@ export function createNoticeOptions(queryClient: QueryClient) {
  * opened from (`expectedEditedAt`, the notice's `editedAt` then — null when never edited), and the
  * admin whose form sends it.
  */
-export interface UpdateNoticeVariables extends UpdateNoticeBody, NoticeWriter {
+export interface UpdateNoticeVariables
+  extends Omit<UpdateNoticeBody, 'expectedAccountId'>, NoticeWriter {
   noticeId: string;
 }
 
@@ -317,17 +329,17 @@ export interface UpdateNoticeVariables extends UpdateNoticeBody, NoticeWriter {
  * screen stays on the form after a save: a landing counted for the wrong account would leave its
  * draft unkept, or keep the one just saved.
  */
-export function updateNoticeOptions(queryClient: QueryClient) {
+export function updateNoticeOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
     mutationFn: async ({
       noticeId,
-      accountId: _accountId,
-      ...body
+      accountId,
+      ...fields
     }: UpdateNoticeVariables): Promise<AdminNoticeUpdateResult> =>
       unwrap(
         await api.PUT('/api/v1/admin/notices/{noticeId}', {
           params: { path: { noticeId: noticeId.toLowerCase() } },
-          body,
+          body: { ...fields, expectedAccountId: accountId },
         }),
       ).data,
     onSuccess: (
@@ -338,8 +350,14 @@ export function updateNoticeOptions(queryClient: QueryClient) {
       return afterNoticeWrite(queryClient, result.notice);
     },
     onError: (error: Error, variables: UpdateNoticeVariables) =>
-      afterNoticeRefusal(queryClient, error, variables.noticeId),
+      afterNoticeRefusal(queryClient, error, onSessionChanged, variables.noticeId),
   };
+}
+
+/** A 고정 or a 고정 해제: the notice, and the admin on screen who presses it (ADR-0092). */
+export interface PinNoticeVariables {
+  noticeId: string;
+  expectedAccountId: string;
 }
 
 /**
@@ -347,37 +365,57 @@ export function updateNoticeOptions(queryClient: QueryClient) {
  * while NOTICE_PIN_LIMIT are pinned is refused (NOTICE_PIN_LIMIT_REACHED) and none is unpinned to
  * make room. Pinning a pinned notice, or unpinning one that is not, changes nothing.
  */
-export function pinNoticeOptions(queryClient: QueryClient, action: 'pin' | 'unpin') {
+export function pinNoticeOptions(
+  queryClient: QueryClient,
+  action: 'pin' | 'unpin',
+  onSessionChanged: () => void,
+) {
   return {
-    mutationFn: async (noticeId: string): Promise<AdminNotice> => {
-      const params = { params: { path: { noticeId: noticeId.toLowerCase() } } };
+    mutationFn: async ({
+      noticeId,
+      expectedAccountId,
+    }: PinNoticeVariables): Promise<AdminNotice> => {
+      const request = {
+        params: { path: { noticeId: noticeId.toLowerCase() } },
+        body: { expectedAccountId },
+      };
       return unwrap(
         action === 'pin'
-          ? await api.POST('/api/v1/admin/notices/{noticeId}/pin', params)
-          : await api.POST('/api/v1/admin/notices/{noticeId}/unpin', params),
+          ? await api.POST('/api/v1/admin/notices/{noticeId}/pin', request)
+          : await api.POST('/api/v1/admin/notices/{noticeId}/unpin', request),
       ).data;
     },
     onSuccess: (notice: AdminNotice) => afterNoticeWrite(queryClient, notice),
-    onError: (error: Error) => afterNoticeRefusal(queryClient, error),
+    onError: (error: Error) => afterNoticeRefusal(queryClient, error, onSessionChanged),
   };
+}
+
+/** The session asked again on the refusal that the cookie is another account's (ADR-0092). */
+function useRefetchSession(): () => void {
+  const { refetch } = useSession();
+  return () => void refetch();
 }
 
 export function useCreateNotice() {
   const queryClient = useQueryClient();
-  return useMutation(createNoticeOptions(queryClient));
+  const onSessionChanged = useRefetchSession();
+  return useMutation(createNoticeOptions(queryClient, onSessionChanged));
 }
 
 export function useUpdateNotice() {
   const queryClient = useQueryClient();
-  return useMutation(updateNoticeOptions(queryClient));
+  const onSessionChanged = useRefetchSession();
+  return useMutation(updateNoticeOptions(queryClient, onSessionChanged));
 }
 
 export function usePinNotice() {
   const queryClient = useQueryClient();
-  return useMutation(pinNoticeOptions(queryClient, 'pin'));
+  const onSessionChanged = useRefetchSession();
+  return useMutation(pinNoticeOptions(queryClient, 'pin', onSessionChanged));
 }
 
 export function useUnpinNotice() {
   const queryClient = useQueryClient();
-  return useMutation(pinNoticeOptions(queryClient, 'unpin'));
+  const onSessionChanged = useRefetchSession();
+  return useMutation(pinNoticeOptions(queryClient, 'unpin', onSessionChanged));
 }

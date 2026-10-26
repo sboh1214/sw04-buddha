@@ -14,9 +14,9 @@ import { copy } from '@/copy';
 import {
   type AdminMarket,
   type Category,
-  type CreateMarketBody,
+  type CreateMarketFields,
   type ResolveMarketBody,
-  type UpdateMarketBody,
+  type UpdateMarketFields,
 } from './api';
 import { isoToKstLocal, kstLocalToIso } from './datetime';
 
@@ -177,19 +177,29 @@ export type ResolveMarketFormValues = z.input<typeof resolveMarketFormSchema>;
 /** What the schema hands the submit handler: a result, always. */
 export type ResolveMarketFormOutput = z.output<typeof resolveMarketFormSchema>;
 
-/** Only for values `resolveMarketFormSchema` accepted: trimmed, blanks to null. */
-export function toResolveMarketBody(values: ResolveMarketFormOutput): ResolveMarketBody {
+/**
+ * Only for values `resolveMarketFormSchema` accepted: trimmed, blanks to null — and the admin on
+ * screen, who judges (`useOperatorId`, ADR-0092: the server refuses another account's).
+ */
+export function toResolveMarketBody(
+  values: ResolveMarketFormOutput,
+  operatorId: string,
+): ResolveMarketBody {
   return {
     result: values.result,
     note: orNull(values.note),
     evidenceUrl: orNull(values.evidenceUrl),
+    expectedAccountId: operatorId,
   };
 }
 
 const orNull = (value: string): string | null => (value.trim() === '' ? null : value.trim());
 
-/** Only for values `marketFormSchema` accepted: `closeAt` parses and `categoryId` is digits. */
-export function toCreateMarketBody(values: MarketFormValues): CreateMarketBody {
+/**
+ * Only for values `marketFormSchema` accepted: `closeAt` parses and `categoryId` is digits. The
+ * fields alone — the 미리보기 draws them too; the press adds the admin on screen (ADR-0092).
+ */
+export function toCreateMarketBody(values: MarketFormValues): CreateMarketFields {
   return {
     title: values.title.trim(),
     description: orNull(values.description),
@@ -206,15 +216,16 @@ export function toCreateMarketBody(values: MarketFormValues): CreateMarketBody {
  * The PATCH body: only the fields that differ from the prefilled `original`, so an unchanged
  * close time in the past is never sent and the API's per-status refusals (design 3.4) are
  * only met by a field the admin actually touched. The slug is not editable here.
- * `{}` when nothing changed; the caller must not send that (the API refuses an empty update).
+ * `{}` when nothing changed; the caller must not send that (the API refuses an update that names no
+ * field beside the admin, which the press adds — ADR-0092).
  */
 export function toUpdateMarketBody(
   values: MarketFormValues,
   original: MarketFormValues,
-): UpdateMarketBody {
+): UpdateMarketFields {
   const next = toCreateMarketBody(values);
   const before = toCreateMarketBody(original);
-  const body: UpdateMarketBody = {};
+  const body: UpdateMarketFields = {};
   if (next.title !== before.title) body.title = next.title;
   if (next.description !== before.description) body.description = next.description;
   if (next.rules !== before.rules) body.rules = next.rules;

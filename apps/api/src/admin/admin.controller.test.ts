@@ -275,11 +275,14 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       ['PATCH', '/api/v1/admin/coupons/not-a-uuid'],
     ];
     for (const [method, url] of routes) {
+      // The admin on screen named (ADR-0092), so the refusal is the path's alone.
       const res = await t.app.inject({
         method: method as 'PATCH' | 'DELETE',
-        url,
+        url: method === 'PATCH' ? url : `${url}?expectedAccountId=${admin.id}`,
         headers: { ...jsonHeaders, cookie: admin.cookie },
-        ...(method === 'PATCH' ? { payload: { isActive: false } } : {}),
+        ...(method === 'PATCH'
+          ? { payload: { isActive: false, expectedAccountId: admin.id } }
+          : {}),
       });
       expect({ url, status: res.statusCode }).toEqual({ url, status: 400 });
       expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });

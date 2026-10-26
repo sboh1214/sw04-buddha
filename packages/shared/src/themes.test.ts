@@ -36,6 +36,8 @@ const ID = 'a1b2c3d4-0000-4000-8000-000000000001';
 
 /** A period as the admin enters it (owner decision 2026-10-19): two Korean dates, both in it. */
 const PERIOD = { startDate: '2026-10-20', endDate: '2026-11-03' };
+/** The admin on screen, which every admin write on a theme names (ADR-0092). */
+const account = { expectedAccountId: 'admin-1' } as const;
 
 describe('koreanDateAt', () => {
   it('is the date in Korea: the UTC date until 15:00 UTC, the next one from then', () => {
@@ -92,6 +94,7 @@ describe('createThemeBodySchema', () => {
     name: ' 노벨상 주간 ',
     intro: '\n수상자를 맞히는 시장 모음\n',
     ...PERIOD,
+    ...account,
   };
 
   it('takes an address, a name, an introduction and a period, trimmed at the ends', () => {
@@ -100,6 +103,7 @@ describe('createThemeBodySchema', () => {
       name: '노벨상 주간',
       intro: '수상자를 맞히는 시장 모음',
       ...PERIOD,
+      ...account,
     });
     // Line breaks inside the introduction are kept.
     expect(createThemeBodySchema.parse({ ...body, intro: '첫 줄\n둘째 줄' }).intro).toBe(
@@ -108,7 +112,14 @@ describe('createThemeBodySchema', () => {
   });
 
   it('requires every field, none blank, within its length (owner decision 2026-10-19)', () => {
-    for (const key of ['slug', 'name', 'intro', 'startDate', 'endDate'] as const) {
+    for (const key of [
+      'slug',
+      'name',
+      'intro',
+      'startDate',
+      'endDate',
+      'expectedAccountId',
+    ] as const) {
       const rest: Record<string, string> = { ...body };
       delete rest[key];
       expect(createThemeBodySchema.safeParse(rest).success, key).toBe(false);
@@ -172,8 +183,8 @@ describe('createThemeBodySchema', () => {
       for (const date of ['', '2026-02-30', '2026-1-1', '1999-02-30', '2101-13-01', '9999-99-99']) {
         for (const result of [
           createThemeBodySchema.safeParse({ ...body, [field]: date }),
-          updateThemeBodySchema.safeParse({ ...PERIOD, [field]: date }),
-          updateThemeBodySchema.safeParse({ [field]: date }),
+          updateThemeBodySchema.safeParse({ ...PERIOD, [field]: date, ...account }),
+          updateThemeBodySchema.safeParse({ [field]: date, ...account }),
         ]) {
           const issues = result.error?.issues.map((issue) => [issue.path, issue.message]);
           expect(issues, `${field} ${date}`).toHaveLength(1);
@@ -191,13 +202,17 @@ describe('createThemeBodySchema', () => {
     ] as const) {
       expect(
         updateThemeBodySchema
-          .safeParse({ [field]: date })
+          .safeParse({ [field]: date, ...account })
           .error?.issues.map((issue) => [issue.path, issue.message]),
         `${field} ${date}`,
       ).toEqual([[[field], THEME_DATE_OUT_OF_RANGE]]);
     }
-    expect(updateThemeBodySchema.safeParse({ startDate: THEME_DATE_MIN }).success).toBe(true);
-    expect(updateThemeBodySchema.safeParse({ endDate: THEME_DATE_MAX }).success).toBe(true);
+    expect(updateThemeBodySchema.safeParse({ startDate: THEME_DATE_MIN, ...account }).success).toBe(
+      true,
+    );
+    expect(updateThemeBodySchema.safeParse({ endDate: THEME_DATE_MAX, ...account }).success).toBe(
+      true,
+    );
   });
 });
 
@@ -223,18 +238,36 @@ describe('themeSlugSchema (owner decision 2026-10-19)', () => {
 
 describe('updateThemeBodySchema', () => {
   it('takes any one field, and refuses an empty body', () => {
-    expect(updateThemeBodySchema.parse({ name: '새 이름' })).toEqual({ name: '새 이름' });
-    expect(updateThemeBodySchema.parse({ endDate: PERIOD.endDate })).toEqual({
-      endDate: PERIOD.endDate,
+    expect(updateThemeBodySchema.parse({ name: '새 이름', ...account })).toEqual({
+      name: '새 이름',
+      ...account,
     });
-    expect(updateThemeBodySchema.parse({ slug: 'new-address' })).toEqual({ slug: 'new-address' });
-    expect(updateThemeBodySchema.safeParse({}).success).toBe(false);
+    expect(updateThemeBodySchema.parse({ endDate: PERIOD.endDate, ...account })).toEqual({
+      endDate: PERIOD.endDate,
+      ...account,
+    });
+    expect(updateThemeBodySchema.parse({ slug: 'new-address', ...account })).toEqual({
+      slug: 'new-address',
+      ...account,
+    });
+    // The account is always there, so it is no field: a body of it alone is empty.
+    const empty = updateThemeBodySchema.safeParse({ ...account });
+    expect(empty.error?.issues.map((issue) => issue.message)).toEqual([
+      'at least one field is required',
+    ]);
+  });
+
+  it('requires the admin on screen (ADR-0092)', () => {
+    expect(
+      updateThemeBodySchema.safeParse({ name: '새 이름' }).error?.issues.map((issue) => issue.path),
+    ).toEqual([['expectedAccountId']]);
   });
 
   it('checks the period when both halves come, naming endDate with the refusal the web reads', () => {
     const result = updateThemeBodySchema.safeParse({
       startDate: PERIOD.endDate,
       endDate: PERIOD.startDate,
+      ...account,
     });
     expect(result.error?.issues.map((issue) => [issue.path, issue.message])).toEqual([
       [[THEME_REFUSALS.endBeforeStart.field], THEME_REFUSALS.endBeforeStart.message],
@@ -244,26 +277,41 @@ describe('updateThemeBodySchema', () => {
 
 describe('notice bodies', () => {
   it('take a title and a plain-text body, both required to create, either to edit', () => {
-    expect(createThemeNoticeBodySchema.parse({ title: ' 안내 ', body: '내용\n둘째 줄 ' })).toEqual({
-      title: '안내',
-      body: '내용\n둘째 줄',
-    });
-    expect(createThemeNoticeBodySchema.safeParse({ title: '안내' }).success).toBe(false);
-    expect(createThemeNoticeBodySchema.safeParse({ title: ' ', body: '내용' }).success).toBe(false);
+    expect(
+      createThemeNoticeBodySchema.parse({ title: ' 안내 ', body: '내용\n둘째 줄 ', ...account }),
+    ).toEqual({ title: '안내', body: '내용\n둘째 줄', ...account });
+    expect(createThemeNoticeBodySchema.safeParse({ title: '안내', ...account }).success).toBe(
+      false,
+    );
+    expect(
+      createThemeNoticeBodySchema.safeParse({ title: ' ', body: '내용', ...account }).success,
+    ).toBe(false);
     expect(
       createThemeNoticeBodySchema.safeParse({
         title: '가'.repeat(THEME_NOTICE_TITLE_MAX + 1),
         body: '내용',
+        ...account,
       }).success,
     ).toBe(false);
     expect(
       createThemeNoticeBodySchema.safeParse({
         title: '안내',
         body: '가'.repeat(THEME_NOTICE_BODY_MAX + 1),
+        ...account,
       }).success,
     ).toBe(false);
-    expect(updateThemeNoticeBodySchema.parse({ body: '고친 내용' })).toEqual({ body: '고친 내용' });
-    expect(updateThemeNoticeBodySchema.safeParse({}).success).toBe(false);
+    expect(updateThemeNoticeBodySchema.parse({ body: '고친 내용', ...account })).toEqual({
+      body: '고친 내용',
+      ...account,
+    });
+    expect(updateThemeNoticeBodySchema.safeParse({ ...account }).success).toBe(false);
+  });
+
+  it('name the admin on screen (ADR-0092)', () => {
+    expect(createThemeNoticeBodySchema.safeParse({ title: '안내', body: '내용' }).success).toBe(
+      false,
+    );
+    expect(updateThemeNoticeBodySchema.safeParse({ body: '고친 내용' }).success).toBe(false);
   });
 });
 
@@ -278,10 +326,12 @@ describe('the other request shapes', () => {
   });
 
   it('links one market by id, lower-cased on the way in', () => {
-    expect(linkThemeMarketBodySchema.parse({ marketId: ID.toUpperCase() })).toEqual({
+    expect(linkThemeMarketBodySchema.parse({ marketId: ID.toUpperCase(), ...account })).toEqual({
       marketId: ID,
+      ...account,
     });
-    expect(linkThemeMarketBodySchema.safeParse({ marketId: 'x' }).success).toBe(false);
+    expect(linkThemeMarketBodySchema.safeParse({ marketId: 'x', ...account }).success).toBe(false);
+    expect(linkThemeMarketBodySchema.safeParse({ marketId: ID }).success).toBe(false);
   });
 });
 

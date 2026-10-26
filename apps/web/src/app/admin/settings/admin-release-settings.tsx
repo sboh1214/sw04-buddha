@@ -34,6 +34,7 @@ import {
   useReleaseSettingChanges,
   useReleaseSettings,
 } from '@/hooks/use-admin-release-settings';
+import { useOperatorId } from '@/hooks/use-operator';
 import { nicknameShown } from '@/lib/account-closure';
 import { type ReleaseSetting, type ReleaseSettingChange } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -220,10 +221,13 @@ function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void
  * change is refused), with 바뀐 내용이 없습니다 beside it. Pinned while the request runs, as the
  * admin confirmation dialogs are: the admin must see how the change ended. A refused reason or
  * value is shown under its field and the dialog stays; any other answer closes it over a
- * refreshed list (`releaseSettingChangeRefusal`).
+ * refreshed list (`releaseSettingChangeRefusal`). The change names the admin on screen
+ * (`useOperatorId`, ADR-0092), so 저장 waits for `GET /me`; the cookie of another account is
+ * refused and closes the dialog with `copy.sessionChanged`.
  */
 function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => void }) {
   const change = useChangeReleaseSetting();
+  const operatorId = useOperatorId();
   const schema = useMemo(() => releaseSettingFormSchema(item.valueSchema), [item.valueSchema]);
   const input = releaseSettingValueInput(item.valueSchema);
   const {
@@ -243,8 +247,9 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
   const loading = change.isPending;
 
   const submit = handleSubmit((values) => {
+    if (operatorId === undefined) return;
     change.mutate(
-      { key: item.key, body: toReleaseSettingChangeBody(values, item.valueSchema) },
+      { key: item.key, body: toReleaseSettingChangeBody(values, item.valueSchema, operatorId) },
       {
         onSuccess: () => {
           toaster.create({ type: 'success', title: copy.adminReleaseSettingSaved });
@@ -417,7 +422,7 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
               <Button
                 size="sm"
                 loading={loading}
-                disabled={unchanged}
+                disabled={unchanged || operatorId === undefined}
                 aria-describedby={unchanged ? unchangedId : undefined}
                 onClick={() => void submit()}
                 data-testid="release-setting-submit"

@@ -15,6 +15,7 @@ import {
   type CursorQuery,
   type UpdateThemeBody,
   type UpdateThemeNoticeBody,
+  type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { and, count, desc, eq, inArray } from 'drizzle-orm';
 import { keysetPredicate } from '../common/keyset.js';
@@ -110,7 +111,10 @@ export class ThemeAdminService {
    * `POST /admin/themes`: a new theme, unpublished, and its `theme_create` record. A slug another
    * theme has is VALIDATION_ERROR naming `slug` (the unique index decides).
    */
-  async create(adminId: string, body: CreateThemeBody): Promise<AdminTheme> {
+  async create(
+    adminId: string,
+    body: WithoutExpectedAccount<CreateThemeBody>,
+  ): Promise<AdminTheme> {
     try {
       return await this.db.transaction(async (tx) => {
         const now = await clockTimestamp(tx);
@@ -146,7 +150,11 @@ export class ThemeAdminService {
    * before it starts is refused naming the half the body sent (`endDate` when it sent both).
    * Only the fields that change are written and recorded, before and after.
    */
-  async update(adminId: string, themeId: string, body: UpdateThemeBody): Promise<AdminTheme> {
+  async update(
+    adminId: string,
+    themeId: string,
+    body: WithoutExpectedAccount<UpdateThemeBody>,
+  ): Promise<AdminTheme> {
     try {
       return await this.db.transaction(async (tx) => {
         const current = await this.lockTheme(tx, themeId);
@@ -270,7 +278,7 @@ export class ThemeAdminService {
   async createNotice(
     adminId: string,
     themeId: string,
-    body: CreateThemeNoticeBody,
+    body: WithoutExpectedAccount<CreateThemeNoticeBody>,
   ): Promise<AdminTheme> {
     return this.db.transaction(async (tx) => {
       await this.requireTheme(tx, themeId);
@@ -300,7 +308,7 @@ export class ThemeAdminService {
     adminId: string,
     themeId: string,
     noticeId: string,
-    body: UpdateThemeNoticeBody,
+    body: WithoutExpectedAccount<UpdateThemeNoticeBody>,
   ): Promise<AdminTheme> {
     return this.db.transaction(async (tx) => {
       const notice = await this.lockNotice(tx, themeId, noticeId);

@@ -29,7 +29,9 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ADMIN_MARKETS_KEY, useCategories } from '@/hooks/use-admin-markets';
-import { api, unwrap } from '@/lib/api';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
+import { type CreateMarketBody, api, unwrap } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
   MARKET_STATUS_LABEL,
@@ -193,12 +195,16 @@ export function AdminMarkets() {
 
 /**
  * 시장 만들기 → a draft (design 3.4). On success the admin lands on the detail page, where
- * 열기 is: a draft cannot be opened from here, and the rules it may still lack live there.
+ * 열기 is: a draft cannot be opened from here, and the rules it may still lack live there. The
+ * draft is made as the admin on screen (`useOperatorId`, ADR-0092): 만들기 waits for `GET /me`,
+ * and the cookie of another account is refused (`copy.sessionChanged`, the session asked again).
  */
 function CreateMarketCard() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const categories = useCategories();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
 
   const form = useForm<MarketFormValues>({
     resolver: zodResolver(createSchema),
@@ -211,8 +217,8 @@ function CreateMarketCard() {
   } = form;
 
   const create = useMutation({
-    mutationFn: async (values: MarketFormValues) =>
-      unwrap(await api.POST('/api/v1/admin/markets', { body: toCreateMarketBody(values) })).data,
+    mutationFn: async (body: CreateMarketBody) =>
+      unwrap(await api.POST('/api/v1/admin/markets', { body })).data,
     onSuccess: async (market) => {
       toaster.create({
         type: 'success',
@@ -223,6 +229,7 @@ function CreateMarketCard() {
       router.push(`/admin/markets/${market.id}`);
     },
     onError: (error) => {
+      sessionChanged(error);
       // A taken slug or a retired category lands on its field (design §4); the rest — and a
       // VALIDATION_ERROR naming nothing the form has — is the toast.
       const fieldError = marketFormError(error);
@@ -237,7 +244,10 @@ function CreateMarketCard() {
   // Reset only on success (the coupon screen's rule): a refused form keeps what was typed.
   // Nothing to reset here either — the page navigates away.
   const submit = handleSubmit(async (values) => {
-    await create.mutateAsync(values).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await create
+      .mutateAsync({ ...toCreateMarketBody(values), expectedAccountId: operatorId })
+      .catch(() => undefined); // reported by onError
   });
 
   return (
@@ -266,6 +276,7 @@ function CreateMarketCard() {
                 size="sm"
                 alignSelf="flex-start"
                 loading={isSubmitting}
+                disabled={operatorId === undefined}
                 data-testid="market-create"
               >
                 {copy.adminMarketCreate}

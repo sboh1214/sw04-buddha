@@ -2735,6 +2735,7 @@ export type components = {
             reviewedAt: string;
         };
         AdminLinkFlagReviewBody: {
+            expectedAccountId: string;
             note?: string;
             /** @enum {string} */
             outcome: "no_issue" | "actioned";
@@ -3212,6 +3213,7 @@ export type components = {
             status?: "open" | "closed";
         };
         AdoptProposalBody: {
+            expectedAccountId: string;
             market?: components["schemas"]["ProposalAdoptionMarket"] | null;
             memo?: string | null;
         };
@@ -3357,6 +3359,7 @@ export type components = {
         CouponCode: string;
         CreateChargePackageBody: {
             amountCoin: components["schemas"]["CoinAmount"];
+            expectedAccountId: string;
             /** @default true */
             isActive: boolean;
             priceKrw: number;
@@ -3373,6 +3376,7 @@ export type components = {
         CreateCouponBody: {
             amountCoin: components["schemas"]["CoinAmount"];
             code?: components["schemas"]["CouponCode"];
+            expectedAccountId: string;
             /** Format: date-time */
             expiresAt?: string | null;
             maxRedemptions?: number | null;
@@ -3383,6 +3387,7 @@ export type components = {
             /** Format: date-time */
             closeAt: string;
             description?: string | null;
+            expectedAccountId: string;
             /** Format: uri */
             imageUrl?: string | null;
             resolutionSource?: string | null;
@@ -3393,6 +3398,7 @@ export type components = {
         CreateNoticeBody: {
             /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
             body: unknown;
+            expectedAccountId: string;
             /** @description Required, one line, at most 100 characters */
             title: string;
         };
@@ -3424,6 +3430,7 @@ export type components = {
         CreateThemeBody: {
             /** Format: date */
             endDate: string;
+            expectedAccountId: string;
             intro: string;
             name: string;
             slug: string;
@@ -3432,6 +3439,7 @@ export type components = {
         };
         CreateThemeNoticeBody: {
             body: string;
+            expectedAccountId: string;
             title: string;
         };
         CursorQuery: {
@@ -3478,6 +3486,9 @@ export type components = {
                 details?: unknown;
                 message: string;
             };
+        };
+        ExpectedAccountBody: {
+            expectedAccountId: string;
         };
         Fill: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -3541,13 +3552,16 @@ export type components = {
             providerId: string;
         };
         LinkProposalMarketBody: {
+            expectedAccountId: string;
             market: components["schemas"]["ProposalAdoptionMarket"];
         };
         LinkRelatedMarketBody: {
+            expectedAccountId: string;
             /** Format: uuid */
             marketId: string;
         };
         LinkThemeMarketBody: {
+            expectedAccountId: string;
             /** Format: uuid */
             marketId: string;
         };
@@ -4140,6 +4154,7 @@ export type components = {
             type: "existing";
         };
         ProposalInternalMemoBody: {
+            expectedAccountId: string;
             memo: string | null;
         };
         ProposalMarket: {
@@ -4259,6 +4274,7 @@ export type components = {
         RejectProposalBody: {
             /** Format: uuid */
             duplicateMarketId?: string | null;
+            expectedAccountId: string;
             explanation: string;
             reason: components["schemas"]["ProposalRejectionReason"];
         };
@@ -4293,6 +4309,7 @@ export type components = {
             reason: string;
         };
         ReleaseSettingChangeBody: {
+            expectedAccountId: string;
             reason: string;
             status: components["schemas"]["ReleaseSettingStatus"];
             value?: unknown;
@@ -4370,6 +4387,7 @@ export type components = {
         ResolveMarketBody: {
             /** Format: uri */
             evidenceUrl?: string | null;
+            expectedAccountId: string;
             note?: string | null;
             /** @enum {string} */
             result: "YES" | "NO";
@@ -4502,6 +4520,7 @@ export type components = {
         };
         UpdateChargePackageBody: {
             amountCoin?: components["schemas"]["CoinAmount"];
+            expectedAccountId: string;
             isActive?: boolean;
             priceKrw?: number;
             sortOrder?: number;
@@ -4512,6 +4531,7 @@ export type components = {
             expectedAccountId: string;
         };
         UpdateCouponBody: {
+            expectedAccountId: string;
             /** Format: date-time */
             expiresAt?: string | null;
             isActive?: boolean;
@@ -4527,6 +4547,7 @@ export type components = {
             /** Format: date-time */
             closeAt?: string;
             description?: string | null;
+            expectedAccountId: string;
             /** Format: uri */
             imageUrl?: string | null;
             resolutionSource?: string | null;
@@ -4541,6 +4562,7 @@ export type components = {
         UpdateNoticeBody: {
             /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
             body: unknown;
+            expectedAccountId: string;
             /** Format: date-time */
             expectedEditedAt: string | null;
             /** @description Required, one line, at most 100 characters */
@@ -4560,6 +4582,7 @@ export type components = {
         UpdateThemeBody: {
             /** Format: date */
             endDate?: string;
+            expectedAccountId: string;
             intro?: string;
             name?: string;
             slug?: string;
@@ -4568,6 +4591,7 @@ export type components = {
         };
         UpdateThemeNoticeBody: {
             body?: string;
+            expectedAccountId: string;
             title?: string;
         };
         UpdateTimeZoneBody: {
@@ -5124,7 +5148,9 @@ export interface operations {
     };
     adminDeleteChargePackage: {
         parameters: {
-            query?: never;
+            query: {
+                expectedAccountId: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -6042,7 +6068,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -6119,7 +6149,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -6356,7 +6390,9 @@ export interface operations {
     };
     adminUnlinkRelatedMarket: {
         parameters: {
-            query?: never;
+            query: {
+                expectedAccountId: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -8924,7 +8960,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -9152,7 +9192,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -9862,7 +9906,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -10887,7 +10935,9 @@ export interface operations {
     };
     adminUnlinkThemeMarket: {
         parameters: {
-            query?: never;
+            query: {
+                expectedAccountId: string;
+            };
             header?: never;
             path: {
                 id: string;
@@ -11136,7 +11186,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -11214,7 +11268,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -11291,7 +11349,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {
@@ -11368,7 +11430,11 @@ export interface operations {
             };
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
         responses: {
             200: {
                 headers: {

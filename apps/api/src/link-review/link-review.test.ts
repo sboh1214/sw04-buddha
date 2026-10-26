@@ -194,7 +194,10 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     } while (cursor !== null);
     return entries;
   };
-  /** An operator's mark '확인함' on `group`, as the screen sends it (`through` its latest time). */
+  /**
+   * An operator's mark '확인함' on `group`, as the screen sends it (`through` its latest time, the
+   * admin on screen — `who`, unless `body` names another, ADR-0092).
+   */
   const markGroup = (group: AdminLinkFlagGroup, body: Record<string, unknown>, who: TestUser) =>
     t.app.inject({
       method: 'POST',
@@ -204,6 +207,7 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
         url: group.url,
         reason: group.reason,
         through: group.latestFlaggedAt,
+        expectedAccountId: who.id,
         ...body,
       }),
     });
@@ -1067,6 +1071,57 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     const [action] = await t.db.select().from(schema.adminActions);
     expect(action!.payload).toMatchObject({ outcome: 'no_issue', note: null });
     expect((await readGroups(admin, 'reviewed')).map((row) => row.review?.note)).toEqual([null]);
+  });
+
+  it('refuses a mark that names another admin than the cookie’s before anything is read or written (ADR-0092)', async () => {
+    const admin = await anAdmin();
+    const other = await anAdmin();
+    const post = await writePost(linkedDoc(LINK));
+    await writeComment(post.id, LINK);
+    await writeComment(post.id, LINK);
+    const [group] = await readGroups(admin);
+    // The screen still shows `admin` while the tab's cookie is `other`'s: refused naming the
+    // field, and nothing is marked or recorded under either.
+    const res = await markGroup(
+      group!,
+      { outcome: 'no_issue', expectedAccountId: admin.id },
+      other,
+    );
+    expect(res.statusCode, res.body).toBe(403);
+    const error = res.json<{
+      error: { code: string; details?: { path: (string | number)[] }[] };
+    }>().error;
+    expect(error.code).toBe('FORBIDDEN');
+    expect(error.details?.[0]?.path).toEqual(['expectedAccountId']);
+    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+    expect((await t.db.select().from(schema.linkFlags)).map((row) => row.reviewActionId)).toEqual([
+      null,
+      null,
+      null,
+    ]);
+    expect(await readGroups(admin)).toEqual([group]);
+    // No account named: a validation error naming the field.
+    const missing = await markGroup(
+      group!,
+      { outcome: 'no_issue', expectedAccountId: undefined },
+      admin,
+    );
+    expect(missing.statusCode, missing.body).toBe(400);
+    expect(
+      missing
+        .json<{ error: { code: string; details?: { path: (string | number)[] }[] } }>()
+        .error.details?.map((detail) => detail.path),
+    ).toEqual([['expectedAccountId']]);
+    // The cookie's own account is taken.
+    const own = await markGroup(
+      group!,
+      { outcome: 'no_issue', expectedAccountId: other.id },
+      other,
+    );
+    expect(own.statusCode, own.body).toBe(201);
+    expect((await t.db.select().from(schema.adminActions)).map((row) => row.adminId)).toEqual([
+      other.id,
+    ]);
   });
 
   it('marks a group once when two operators mark it at once: the second waits for the first and finds nothing left', async () => {

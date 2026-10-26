@@ -359,16 +359,17 @@ describe.skipIf(!hasTestInfra)('/api/v1 writing restriction (integration)', () =
       expect(await stored()).toBe(0);
       // A notice's image goes up, and the notice that holds it is written, edited and pinned.
       const image = dataOf<{ id: string }>(await uploadAs(second, 'notice'), 201);
-      const admin2 = (method: 'POST' | 'PUT', url: string, payload?: unknown) =>
+      // As `second`, naming that admin as the one on screen (ADR-0092).
+      const admin2 = (method: 'POST' | 'PUT', url: string, payload: object = {}) =>
         t.app.inject({
           method,
           url: `/api/v1${url}`,
           headers: {
             origin: TRUSTED_ORIGIN,
             cookie: second.cookie,
-            ...(payload === undefined ? {} : { 'content-type': 'application/json' }),
+            'content-type': 'application/json',
           },
-          ...(payload === undefined ? {} : { payload: JSON.stringify(payload) }),
+          payload: JSON.stringify({ ...payload, expectedAccountId: second.id }),
         });
       const withImage = {
         type: 'doc',

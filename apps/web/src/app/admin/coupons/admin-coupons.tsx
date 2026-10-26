@@ -20,6 +20,8 @@ import * as z from 'zod';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import { api, isApiError, unwrap, type Coupon } from '@/lib/api';
 import { formatKst, kstLocalToIso } from '@/lib/datetime';
 import { boundedInteger, optionalCouponCode } from '@/lib/form-schema';
@@ -41,8 +43,15 @@ const schema = z.object({
 });
 type FormValues = z.infer<typeof schema>;
 
+/**
+ * 쿠폰 (ADR-0026; off the nav while paid Coin is off, ADR-0049): issue and stop or resume. Both
+ * name the admin on screen (`useOperatorId`, ADR-0092), so they wait for `GET /me`; the cookie of
+ * another account is refused (`copy.sessionChanged`) and the session asked again.
+ */
 export function AdminCoupons() {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   // Cursor-paginated, 20 per page (PLAN 7). Unlike the user list this screen has no search,
   // so without 더 보기 a coupon past the first page — and its 중지 toggle — is unreachable,
   // and an admin issuing them one click at a time reaches 20 quickly.
@@ -62,7 +71,7 @@ export function AdminCoupons() {
   const rows = coupons.data?.pages.flatMap((page) => page.items) ?? [];
 
   const create = useMutation({
-    mutationFn: async (values: FormValues) =>
+    mutationFn: async ({ values, by }: { values: FormValues; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/coupons', {
           body: {
@@ -71,6 +80,7 @@ export function AdminCoupons() {
             maxRedemptions: values.maxRedemptions ? Number(values.maxRedemptions) : null,
             expiresAt: kstLocalToIso(values.expiresAt),
             memo: values.memo || null,
+            expectedAccountId: by,
           },
         }),
       ).data,
@@ -82,22 +92,30 @@ export function AdminCoupons() {
     onError: (error) =>
       toaster.create({
         type: 'error',
-        title: isApiError(error, 'VALIDATION_ERROR') ? copy.errCouponInvalid : copy.errUnknown,
+        title: sessionChanged(error)
+          ? copy.sessionChanged
+          : isApiError(error, 'VALIDATION_ERROR')
+            ? copy.errCouponInvalid
+            : copy.errUnknown,
       }),
   });
 
   const toggle = useMutation({
-    mutationFn: async (coupon: Coupon) =>
+    mutationFn: async ({ coupon, by }: { coupon: Coupon; by: string }) =>
       unwrap(
         await api.PATCH('/api/v1/admin/coupons/{id}', {
           params: { path: { id: coupon.id } },
-          body: { isActive: !coupon.isActive },
+          body: { isActive: !coupon.isActive, expectedAccountId: by },
         }),
       ).data,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ADMIN_COUPONS_KEY });
     },
-    onError: () => toaster.create({ type: 'error', title: copy.errUnknown }),
+    onError: (error) =>
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error) ? copy.sessionChanged : copy.errUnknown,
+      }),
   });
 
   const {
@@ -115,7 +133,8 @@ export function AdminCoupons() {
   // onError is unactionable. The catch stays because the form discards this promise
   // (`void submit(e)`), so a rethrow would surface as an unhandled rejection.
   const submit = handleSubmit(async (values) => {
-    await create.mutateAsync(values).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await create.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
   });
 
   return (
@@ -170,6 +189,7 @@ export function AdminCoupons() {
                 size="sm"
                 alignSelf="flex-start"
                 loading={isSubmitting}
+                disabled={operatorId === undefined}
                 data-testid="coupon-create"
               >
                 {copy.adminCouponCreate}
@@ -223,8 +243,11 @@ export function AdminCoupons() {
               <Button
                 size="xs"
                 variant="outline"
-                loading={toggle.isPending && toggle.variables?.id === coupon.id}
-                onClick={() => toggle.mutate(coupon)}
+                loading={toggle.isPending && toggle.variables?.coupon.id === coupon.id}
+                disabled={operatorId === undefined}
+                onClick={() => {
+                  if (operatorId !== undefined) toggle.mutate({ coupon, by: operatorId });
+                }}
                 data-testid={`coupon-toggle-${coupon.id}`}
               >
                 {coupon.isActive ? copy.adminCouponDisable : copy.adminCouponEnable}

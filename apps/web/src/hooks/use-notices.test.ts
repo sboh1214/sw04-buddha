@@ -96,6 +96,9 @@ function tabStorage(): DraftStorage {
   };
 }
 
+/** A write's `onSessionChanged` where the cookie stays the screen's (ADR-0092). */
+const sessionUnchanged = () => undefined;
+
 describe('the fixed area', () => {
   it('asks for the pinned notices under its public key, which the community page dehydrates', async () => {
     const get = vi
@@ -405,18 +408,26 @@ describe('the writes', () => {
     return () => keys.map((key) => queryClient.getQueryState(key)?.isInvalidated);
   }
 
-  it('a new notice is sent with its title and body only, held under its key, and every list is stale', async () => {
+  it('a new notice is sent with its title and body and the admin whose form sent it, held under its key, and every list is stale', async () => {
     const queryClient = getQueryClient();
     const stale = held(queryClient);
     const send = vi.spyOn(api, 'POST').mockResolvedValue(answer(adminNotice));
-    await new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+    await new MutationObserver(
+      queryClient,
+      createNoticeOptions(queryClient, sessionUnchanged),
+    ).mutate({
       title: '점검 안내',
       body: { type: 'doc', content: [] },
       accountId: 'admin-1',
     });
-    // The admin whose form sent it is the client's, for its landing (ADR-0073 9-48): not sent.
+    // The admin whose form sent it is the admin on screen the write names (ADR-0092), and its
+    // landing's (ADR-0073 9-48).
     expect(send).toHaveBeenCalledWith('/api/v1/admin/notices', {
-      body: { title: '점검 안내', body: { type: 'doc', content: [] } },
+      body: {
+        title: '점검 안내',
+        body: { type: 'doc', content: [] },
+        expectedAccountId: 'admin-1',
+      },
     });
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
     expect(stale()).toEqual([true, true, true, true, true]);
@@ -427,19 +438,20 @@ describe('the writes', () => {
     const stale = held(queryClient);
     const edited = { ...adminNotice, title: '고친 안내', editedAt: '2026-10-20T01:00:00.000Z' };
     const put = vi.spyOn(api, 'PUT').mockResolvedValue(answer({ notice: edited, changed: true }));
-    const result = await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate(
-      {
-        noticeId: NOTICE,
-        title: '고친 안내',
-        body: {},
-        expectedEditedAt: null,
-        accountId: 'admin-1',
-      },
-    );
-    // Nor is it in an edit's body.
+    const result = await new MutationObserver(
+      queryClient,
+      updateNoticeOptions(queryClient, sessionUnchanged),
+    ).mutate({
+      noticeId: NOTICE,
+      title: '고친 안내',
+      body: {},
+      expectedEditedAt: null,
+      accountId: 'admin-1',
+    });
+    // An edit names it too.
     expect(put).toHaveBeenCalledWith('/api/v1/admin/notices/{noticeId}', {
       params: { path: { noticeId: notice } },
-      body: { title: '고친 안내', body: {}, expectedEditedAt: null },
+      body: { title: '고친 안내', body: {}, expectedEditedAt: null, expectedAccountId: 'admin-1' },
     });
     // The answer, whether this save changed it, is the screen's; the cache holds the notice alone,
     // and the notice's records and versions are read again (the edit added one of each).
@@ -467,7 +479,10 @@ describe('the writes', () => {
 
       const edited = { ...adminNotice, title: '고친 안내', editedAt: '2026-10-20T01:00:00.000Z' };
       vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer({ notice: edited, changed: true }));
-      await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+      await new MutationObserver(
+        queryClient,
+        updateNoticeOptions(queryClient, sessionUnchanged),
+      ).mutate({
         noticeId: NOTICE,
         title: '고친 안내',
         body: {},
@@ -491,15 +506,16 @@ describe('the writes', () => {
     const queryClient = getQueryClient();
     queryClient.setQueryData(adminNoticeKey(notice), adminNotice);
     vi.spyOn(api, 'PUT').mockResolvedValue(answer({ notice: adminNotice, changed: false }));
-    const result = await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate(
-      {
-        noticeId: NOTICE,
-        title: adminNotice.title,
-        body: {},
-        expectedEditedAt: null,
-        accountId: 'admin-1',
-      },
-    );
+    const result = await new MutationObserver(
+      queryClient,
+      updateNoticeOptions(queryClient, sessionUnchanged),
+    ).mutate({
+      noticeId: NOTICE,
+      title: adminNotice.title,
+      body: {},
+      expectedEditedAt: null,
+      accountId: 'admin-1',
+    });
     expect(result.changed).toBe(false);
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
   });
@@ -519,7 +535,7 @@ describe('the writes', () => {
       }),
     );
     await expect(
-      new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+      new MutationObserver(queryClient, updateNoticeOptions(queryClient, sessionUnchanged)).mutate({
         noticeId: NOTICE,
         title: '내 수정',
         body: {},
@@ -541,17 +557,28 @@ describe('the writes', () => {
       .mockResolvedValueOnce(answer(adminNotice));
 
     let stale = held(queryClient);
-    await new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'pin')).mutate(NOTICE);
+    await new MutationObserver(
+      queryClient,
+      pinNoticeOptions(queryClient, 'pin', sessionUnchanged),
+    ).mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' });
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(pinned);
     expect(stale()).toEqual([true, true, true, true, true]);
 
     stale = held(queryClient);
-    await new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'unpin')).mutate(NOTICE);
+    await new MutationObserver(
+      queryClient,
+      pinNoticeOptions(queryClient, 'unpin', sessionUnchanged),
+    ).mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' });
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
     expect(stale()).toEqual([true, true, true, true, true]);
+    // Each names the admin on screen (ADR-0092).
+    const request = {
+      params: { path: { noticeId: notice } },
+      body: { expectedAccountId: 'admin-1' },
+    };
     expect(send.mock.calls).toEqual([
-      ['/api/v1/admin/notices/{noticeId}/pin', { params: { path: { noticeId: notice } } }],
-      ['/api/v1/admin/notices/{noticeId}/unpin', { params: { path: { noticeId: notice } } }],
+      ['/api/v1/admin/notices/{noticeId}/pin', request],
+      ['/api/v1/admin/notices/{noticeId}/unpin', request],
     ]);
   });
 
@@ -565,7 +592,10 @@ describe('the writes', () => {
     queryClient.setQueryData(ME_QUERY_KEY, {});
     const unsubscribe = me.subscribe(() => undefined);
     const send = vi.spyOn(api, 'POST');
-    const pin = new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'pin'));
+    const pin = new MutationObserver(
+      queryClient,
+      pinNoticeOptions(queryClient, 'pin', sessionUnchanged),
+    );
     try {
       const stale = held(queryClient);
       send.mockRejectedValueOnce(
@@ -575,7 +605,9 @@ describe('the writes', () => {
           details: { limit: 3 },
         }),
       );
-      await expect(pin.mutate(NOTICE)).rejects.toBeInstanceOf(ApiError);
+      await expect(
+        pin.mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' }),
+      ).rejects.toBeInstanceOf(ApiError);
       expect(stale().slice(0, 3)).toEqual([true, true, true]);
       // Nothing was answered, so nothing is held under the notice's key.
       expect(queryClient.getQueryData(adminNoticeKey(notice))).toBeUndefined();
@@ -584,10 +616,58 @@ describe('the writes', () => {
       send.mockRejectedValueOnce(
         new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' } as never),
       );
-      await expect(pin.mutate(NOTICE)).rejects.toBeInstanceOf(ApiError);
+      await expect(
+        pin.mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' }),
+      ).rejects.toBeInstanceOf(ApiError);
       expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(true);
     } finally {
       unsubscribe();
+    }
+  });
+
+  it('the cookie of another account asks for the session again and reads nothing else (ADR-0092)', async () => {
+    const queryClient = getQueryClient();
+    const refused = () =>
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'This session belongs to a different account than the one on screen',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      });
+    vi.spyOn(api, 'POST').mockRejectedValue(refused());
+    vi.spyOn(api, 'PUT').mockRejectedValue(refused());
+    const writes = [
+      (changed: () => void) =>
+        new MutationObserver(queryClient, createNoticeOptions(queryClient, changed)).mutate({
+          title: '점검 안내',
+          body: {},
+          accountId: 'admin-1',
+        }),
+      (changed: () => void) =>
+        new MutationObserver(queryClient, updateNoticeOptions(queryClient, changed)).mutate({
+          noticeId: NOTICE,
+          title: '고친 안내',
+          body: {},
+          expectedEditedAt: null,
+          accountId: 'admin-1',
+        }),
+      (changed: () => void) =>
+        new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'pin', changed)).mutate({
+          noticeId: NOTICE,
+          expectedAccountId: 'admin-1',
+        }),
+      (changed: () => void) =>
+        new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'unpin', changed)).mutate({
+          noticeId: NOTICE,
+          expectedAccountId: 'admin-1',
+        }),
+    ];
+    for (const write of writes) {
+      const stale = held(queryClient);
+      const changed = vi.fn();
+      await expect(write(changed)).rejects.toBeInstanceOf(ApiError);
+      expect(changed).toHaveBeenCalledTimes(1);
+      // The session's reset reads everything: nothing is invalidated here.
+      expect(stale()).toEqual([false, false, false, false, false]);
     }
   });
 });
@@ -610,7 +690,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
     const send = vi
       .spyOn(api, 'POST')
       .mockRejectedValueOnce(new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' }));
-    const write = new MutationObserver(queryClient, createNoticeOptions(queryClient));
+    const write = new MutationObserver(
+      queryClient,
+      createNoticeOptions(queryClient, sessionUnchanged),
+    );
     const body = { title: '쓰던 공지', body: {}, accountId: 'admin-1' };
     await expect(write.mutate(body)).rejects.toBeInstanceOf(ApiError);
     expect(readPostDraft(storage, newKey, 'admin-1', now)).toEqual(draft);
@@ -630,7 +713,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         details: { editedAt: EDITED_AT },
       }),
     );
-    const edit = new MutationObserver(queryClient, updateNoticeOptions(queryClient));
+    const edit = new MutationObserver(
+      queryClient,
+      updateNoticeOptions(queryClient, sessionUnchanged),
+    );
     const variables = {
       noticeId: NOTICE,
       title: '쓰던 공지',
@@ -667,7 +753,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         stays: false,
         send: (queryClient) => {
           vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(adminNotice));
-          return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            createNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             title: '쓰던 공지',
             body: {},
             accountId: 'admin-1',
@@ -683,7 +772,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           vi.spyOn(api, 'PUT').mockResolvedValueOnce(
             answer({ notice: { ...adminNotice, editedAt: SAVED_AT }, changed: true }),
           );
-          return new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            updateNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             noticeId: NOTICE,
             title: '쓰던 공지',
             body: {},
@@ -791,7 +883,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         key: newKey,
         send: (queryClient, accountId) => {
           vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(adminNotice));
-          return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            createNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             title: '쓰던 공지',
             body: {},
             accountId,
@@ -805,7 +900,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           vi.spyOn(api, 'PUT').mockResolvedValueOnce(
             answer({ notice: { ...adminNotice, editedAt: EDITED_AT }, changed: true }),
           );
-          return new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            updateNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             noticeId: NOTICE,
             title: '쓰던 공지',
             body: {},

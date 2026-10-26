@@ -116,12 +116,14 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
 
   const get = (url: string, cookie = admin.cookie) =>
     t.app.inject({ method: 'GET', url, headers: { cookie } });
-  const patch = (key: string, payload: Record<string, unknown>, cookie = admin.cookie) =>
+  // A change names the admin on screen (ADR-0092): `who`'s own account unless the payload names
+  // another.
+  const patch = (key: string, payload: Record<string, unknown>, who: TestUser = admin) =>
     t.app.inject({
       method: 'PATCH',
       url: `${BASE}/${key}`,
-      headers: { ...jsonHeaders, cookie },
-      payload,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
     });
 
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
@@ -558,6 +560,44 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
     expect(await settingRows()).toMatchObject([{ status: 'test', value: 24 }]);
     expect(await records()).toHaveLength(1);
   });
+
+  it('refuses a change that names another admin than the cookie’s, or none, before the item is read (ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    await patch(hours.key, { status: 'test', value: 24, reason: '시험' });
+    const before = { rows: await settingRows(), records: await records() };
+    // The screen still shows `admin` while the tab's cookie is `other`'s — on an unknown key
+    // too: refused before the key is looked up.
+    for (const key of [hours.key, 'test.unknown']) {
+      const refused = await patch(
+        key,
+        { status: 'approved', value: 72, reason: '다른 운영자', expectedAccountId: admin.id },
+        other,
+      );
+      expect(refused.statusCode, refused.body).toBe(403);
+      expect(errorOf(refused).code).toBe('FORBIDDEN');
+      expect(errorOf(refused).details?.[0]?.path).toEqual(['expectedAccountId']);
+    }
+    // No account at all: a validation error naming the field.
+    const unnamed = await patch(hours.key, {
+      status: 'approved',
+      value: 72,
+      reason: '이름 없음',
+      expectedAccountId: undefined,
+    });
+    expect(unnamed.statusCode, unnamed.body).toBe(400);
+    expect(errorOf(unnamed).details?.map((detail) => detail.path)).toEqual([['expectedAccountId']]);
+    expect({ rows: await settingRows(), records: await records() }).toEqual(before);
+    // The cookie's own account is taken, and recorded as the one who changed it.
+    const own = await patch(hours.key, { status: 'approved', value: 72, reason: '승인' }, other);
+    expect(own.statusCode, own.body).toBe(200);
+    expect((await records()).at(-1)?.adminId).toBe(other.id);
+  });
 });
 
 describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
@@ -638,7 +678,12 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       method: 'PATCH',
       url: `${BASE}/grant.start_coin`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { status: 'test', value: 10_000, reason: '내부 시험값' },
+      payload: {
+        status: 'test',
+        value: 10_000,
+        reason: '내부 시험값',
+        expectedAccountId: admin.id,
+      },
     });
     expect(change.statusCode).toBe(200);
     expect(await settings.get(START_COIN_SETTING)).toEqual({
@@ -652,7 +697,7 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         method: 'PATCH',
         url: `${BASE}/grant.start_coin`,
         headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload: { status: 'approved', value, reason: '잘못된 값' },
+        payload: { status: 'approved', value, reason: '잘못된 값', expectedAccountId: admin.id },
       });
       expect(refused.statusCode, String(value)).toBe(400);
     }
@@ -666,7 +711,12 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       method: 'PATCH',
       url: `${BASE}/${key}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { status: 'proposal', value: 1_095, reason: '설계 제안' },
+      payload: {
+        status: 'proposal',
+        value: 1_095,
+        reason: '설계 제안',
+        expectedAccountId: admin.id,
+      },
     });
     expect(change.statusCode).toBe(200);
     // Read with its status: the worker applies only an approved one (ADR-0069 decision 7).
@@ -680,7 +730,7 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         method: 'PATCH',
         url: `${BASE}/${key}`,
         headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload: { status: 'approved', value, reason: '잘못된 값' },
+        payload: { status: 'approved', value, reason: '잘못된 값', expectedAccountId: admin.id },
       });
       expect(refused.statusCode, String(value)).toBe(400);
     }

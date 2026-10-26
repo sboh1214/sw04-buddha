@@ -48,12 +48,14 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  const create = (payload: Record<string, unknown>, cookie = admin.cookie) =>
+  // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
+  // names another.
+  const create = (payload: Record<string, unknown>, who: TestUser = admin) =>
     t.app.inject({
       method: 'POST',
       url: '/api/v1/admin/charge-packages',
-      headers: { ...jsonHeaders, cookie },
-      payload,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
     });
 
   it('creates a package whose price is below face value (the discount)', async () => {
@@ -78,7 +80,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { priceKrw: 9_000, sortOrder: 5 },
+      payload: { expectedAccountId: admin.id, priceKrw: 9_000, sortOrder: 5 },
     });
     expect(patched.statusCode).toBe(200);
     expect(patched.json<{ data: ChargePackage }>().data).toMatchObject({
@@ -91,7 +93,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { isActive: false },
+      payload: { expectedAccountId: admin.id, isActive: false },
     });
     expect(retired.json<{ data: ChargePackage }>().data.isActive).toBe(false);
 
@@ -112,7 +114,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { priceKrw: 10_001 },
+      payload: { expectedAccountId: admin.id, priceKrw: 10_001 },
     });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
@@ -129,7 +131,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
 
     const deleted = await t.app.inject({
       method: 'DELETE',
-      url: `/api/v1/admin/charge-packages/${pack.id}`,
+      url: `/api/v1/admin/charge-packages/${pack.id}?expectedAccountId=${admin.id}`,
       headers: { cookie: admin.cookie },
     });
     expect(deleted.statusCode).toBe(204);
@@ -140,7 +142,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
 
     const missing = await t.app.inject({
       method: 'DELETE',
-      url: `/api/v1/admin/charge-packages/${pack.id}`,
+      url: `/api/v1/admin/charge-packages/${pack.id}?expectedAccountId=${admin.id}`,
       headers: { cookie: admin.cookie },
     });
     expect(missing.statusCode).toBe(404);
@@ -157,13 +159,13 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { priceKrw: 18_000 },
+      payload: { expectedAccountId: admin.id, priceKrw: 18_000 },
     });
     expect(patched.statusCode).toBe(200);
 
     const removed = await t.app.inject({
       method: 'DELETE',
-      url: `/api/v1/admin/charge-packages/${pack.id}`,
+      url: `/api/v1/admin/charge-packages/${pack.id}?expectedAccountId=${admin.id}`,
       headers: { cookie: admin.cookie },
     });
     expect(removed.statusCode).toBe(204);
@@ -194,7 +196,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { priceKrw: 20_000 }, // above the face value the row still holds
+      payload: { expectedAccountId: admin.id, priceKrw: 20_000 }, // above the face value the row still holds
     });
     expect(refused.statusCode).toBe(400);
     expect(refused.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
@@ -274,7 +276,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/charge-packages/${pack.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { isActive: false },
+      payload: { expectedAccountId: admin.id, isActive: false },
     });
     await settle(); // and let the patch reach its read
     release();
@@ -286,14 +288,73 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
   });
 
   it('is closed to members', async () => {
-    expect((await create({ amountCoin: '5000', priceKrw: 4900 }, member.cookie)).statusCode).toBe(
-      403,
-    );
+    expect((await create({ amountCoin: '5000', priceKrw: 4900 }, member)).statusCode).toBe(403);
     const list = await t.app.inject({
       method: 'GET',
       url: '/api/v1/admin/charge-packages',
       headers: { cookie: member.cookie },
     });
     expect(list.statusCode).toBe(403);
+  });
+
+  it('refuses an add, an edit or a removal that names another admin than the cookie’s, or none, before anything is read (ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    const pack = await createTestPackage(t.db, { amountCoin: 10_000n, priceKrw: 9_700 });
+    const before = await t.db.select().from(schema.chargePackages);
+    const writes = (shown: string | undefined, who: TestUser) => [
+      () =>
+        t.app.inject({
+          method: 'POST',
+          url: '/api/v1/admin/charge-packages',
+          headers: { ...jsonHeaders, cookie: who.cookie },
+          payload: { amountCoin: '5000', priceKrw: 4900, expectedAccountId: shown },
+        }),
+      () =>
+        t.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/admin/charge-packages/${pack.id}`,
+          headers: { ...jsonHeaders, cookie: who.cookie },
+          payload: { isActive: false, expectedAccountId: shown },
+        }),
+      () =>
+        t.app.inject({
+          method: 'DELETE',
+          url: `/api/v1/admin/charge-packages/${pack.id}${shown === undefined ? '' : `?expectedAccountId=${shown}`}`,
+          headers: { origin: jsonHeaders.origin, cookie: who.cookie },
+        }),
+    ];
+    type Refusal = { error: { code: string; details?: { path: (string | number)[] }[] } };
+    // The screen still shows `admin` while the tab's cookie is `other`'s.
+    for (const write of writes(admin.id, other)) {
+      const res = await write();
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json<Refusal>().error.code).toBe('FORBIDDEN');
+      expect(res.json<Refusal>().error.details?.[0]?.path).toEqual(['expectedAccountId']);
+    }
+    // No account at all: a validation error naming the field (the removal's in its query).
+    for (const write of writes(undefined, admin)) {
+      const res = await write();
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json<Refusal>().error.details?.map((detail) => detail.path)).toEqual([
+        ['expectedAccountId'],
+      ]);
+    }
+    expect(await t.db.select().from(schema.chargePackages)).toEqual(before);
+    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+    // The cookie's own account is taken, each write recorded as its.
+    const statuses: number[] = [];
+    for (const write of writes(other.id, other)) statuses.push((await write()).statusCode);
+    expect(statuses).toEqual([201, 200, 204]);
+    expect((await t.db.select().from(schema.adminActions)).map((row) => row.adminId)).toEqual([
+      other.id,
+      other.id,
+      other.id,
+    ]);
   });
 });

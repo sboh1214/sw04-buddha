@@ -17,6 +17,7 @@ import {
   type MarketSummary,
   type ResolveMarketBody,
   type UpdateMarketBody,
+  type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { and, desc, eq, ilike, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
@@ -188,7 +189,10 @@ export class MarketAdminService {
    * N02 §5). The slug is the admin's or derived from the title; a taken slug is a
    * VALIDATION_ERROR naming `slug` (the unique index decides).
    */
-  async create(adminId: string, body: CreateMarketBody): Promise<AdminMarket> {
+  async create(
+    adminId: string,
+    body: WithoutExpectedAccount<CreateMarketBody>,
+  ): Promise<AdminMarket> {
     return this.db.transaction((tx) => this.createIn(tx, adminId, body));
   }
 
@@ -199,7 +203,11 @@ export class MarketAdminService {
    * the market, its `created` event and its `market_create` record — and the same refusals; a draft
    * is not public, so nothing is published or scheduled.
    */
-  async createIn(tx: Tx, adminId: string, body: CreateMarketBody): Promise<AdminMarket> {
+  async createIn(
+    tx: Tx,
+    adminId: string,
+    body: WithoutExpectedAccount<CreateMarketBody>,
+  ): Promise<AdminMarket> {
     const closeAt = new Date(body.closeAt);
     const slug = body.slug ?? generateSlug(body.title);
     // Every instant this service writes or compares comes from the database clock, read
@@ -282,7 +290,11 @@ export class MarketAdminService {
    * (`joinMarket`, market-live.ts), so without it a viewer would keep the old text and close
    * time until something else made it refetch (A-M4-36).
    */
-  async update(adminId: string, id: string, body: UpdateMarketBody): Promise<AdminMarket> {
+  async update(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<UpdateMarketBody>,
+  ): Promise<AdminMarket> {
     const { market, moved, closeMoved, now } = await this.db.transaction(async (tx) => {
       const current = await this.lockedRow(tx, id);
       if (current.status === 'open') {
@@ -497,7 +509,11 @@ export class MarketAdminService {
    * No price tick is written: the chart ends at the last trade, and a settlement is not a
    * price (PRICE_TICK_TRIGGERS 'resolve' stays unused — Q-M5).
    */
-  async resolve(adminId: string, id: string, body: ResolveMarketBody): Promise<AdminMarket> {
+  async resolve(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<ResolveMarketBody>,
+  ): Promise<AdminMarket> {
     const { market, now } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
       const current = await this.lockedRow(tx, id);

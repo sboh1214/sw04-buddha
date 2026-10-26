@@ -373,14 +373,24 @@ describe('resolveMarketFormSchema', () => {
 });
 
 describe('toResolveMarketBody', () => {
-  it('sends the result with blanks as null and text trimmed', () => {
-    expect(toResolveMarketBody({ result: 'NO', note: '', evidenceUrl: '  ' })).toEqual({
+  it('sends the result with blanks as null and text trimmed, as the admin on screen', () => {
+    expect(toResolveMarketBody({ result: 'NO', note: '', evidenceUrl: '  ' }, 'admin-1')).toEqual({
       result: 'NO',
       note: null,
       evidenceUrl: null,
+      // ADR-0092: the server refuses a 판정 made under another account's cookie.
+      expectedAccountId: 'admin-1',
     });
     expect(
-      toResolveMarketBody({ result: 'YES', note: ' 공식 발표 ', evidenceUrl: 'https://e.com/a ' }),
-    ).toEqual({ result: 'YES', note: '공식 발표', evidenceUrl: 'https://e.com/a' });
+      toResolveMarketBody(
+        { result: 'YES', note: ' 공식 발표 ', evidenceUrl: 'https://e.com/a ' },
+        'admin-1',
+      ),
+    ).toEqual({
+      result: 'YES',
+      note: '공식 발표',
+      evidenceUrl: 'https://e.com/a',
+      expectedAccountId: 'admin-1',
+    });
   });
 });

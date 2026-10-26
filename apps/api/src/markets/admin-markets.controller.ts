@@ -16,6 +16,8 @@ import {
   adminMarketSchema,
   adminRelatedMarketSchema,
   createMarketBodySchema,
+  expectedAccountBodySchema,
+  expectedAccountQuerySchema,
   linkRelatedMarketBodySchema,
   marketSummarySchema,
   resolveMarketBodySchema,
@@ -25,6 +27,8 @@ import {
   type AdminMarketListQuery,
   type AdminRelatedMarket,
   type CreateMarketBody,
+  type ExpectedAccountBody,
+  type ExpectedAccountQuery,
   type LinkRelatedMarketBody,
   type MarketSummary,
   type ResolveMarketBody,
@@ -33,6 +37,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -46,6 +51,12 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * fills `request.auth` (401 without a session, 403 for a foreign Origin on a mutation),
  * AdminGuard reads the role (403 for a member), OnboardedGuard refuses an admin that has not
  * finished the onboarding (409 ONBOARDING_REQUIRED, ADR-0072).
+ *
+ * Every write names the admin the screen shows (`expectedAccountId` — in the body, or the query
+ * of an unlink, whose DELETE has no body; assertExpectedAccount, ADR-0092): a mismatch with the
+ * cookie is refused (403 FORBIDDEN naming the field) before anything is read, locked or written,
+ * so a market is never created, edited, opened, closed, judged or linked as an admin the user is
+ * not looking at. The services are handed the rest of the body: the account is never stored.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -103,13 +114,15 @@ export class AdminMarketsController {
   })
   @ApiData(adminRelatedMarketSchema.array())
   // VALIDATION_ERROR names `marketId` for the market itself; NOT_FOUND names it for an unknown
-  // one (an unknown market in the path is a plain NOT_FOUND).
+  // one (an unknown market in the path is a plain NOT_FOUND). FORBIDDEN names `expectedAccountId`
+  // for another account's (as on every write here).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminLinkRelatedMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: linkRelatedMarketBodySchema }) body: LinkRelatedMarketBody,
   ): Promise<AdminRelatedMarket[]> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.related.link(admin.id, id, body.marketId);
   }
 
@@ -129,7 +142,9 @@ export class AdminMarketsController {
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Param('relatedMarketId', { schema: uuidParamSchema }) relatedMarketId: string,
+    @Query({ schema: expectedAccountQuerySchema }) query: ExpectedAccountQuery,
   ): Promise<AdminRelatedMarket[]> {
+    assertExpectedAccount(admin.id, query.expectedAccountId);
     return this.related.unlink(admin.id, id, relatedMarketId);
   }
 
@@ -157,7 +172,10 @@ export class AdminMarketsController {
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createMarketBodySchema }) body: CreateMarketBody,
   ): Promise<AdminMarket> {
-    return this.markets.create(admin.id, body);
+    // The fields alone: the `created` event keeps them as sent.
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.markets.create(admin.id, fields);
   }
 
   @Patch(':id')
@@ -182,7 +200,9 @@ export class AdminMarketsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: updateMarketBodySchema }) body: UpdateMarketBody,
   ): Promise<AdminMarket> {
-    return this.markets.update(admin.id, id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.markets.update(admin.id, id, fields);
   }
 
   @Post(':id/open')
@@ -204,7 +224,9 @@ export class AdminMarketsController {
   adminOpenMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminMarket> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.markets.open(admin.id, id);
   }
 
@@ -223,7 +245,9 @@ export class AdminMarketsController {
   adminCloseMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminMarket> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.markets.close(admin.id, id);
   }
 
@@ -242,6 +266,8 @@ export class AdminMarketsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: resolveMarketBodySchema }) body: ResolveMarketBody,
   ): Promise<AdminMarket> {
-    return this.markets.resolve(admin.id, id, body);
+    const { expectedAccountId, ...judgement } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.markets.resolve(admin.id, id, judgement);
   }
 }

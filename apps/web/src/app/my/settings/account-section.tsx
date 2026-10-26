@@ -9,6 +9,7 @@ import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
+import { useAuthSessionChanged } from '@/hooks/use-session-changed';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { MY_SETTINGS_PATH } from '@/lib/my';
 import { ProfileUnavailable } from './profile-unavailable';
@@ -39,14 +40,32 @@ export function AccountSection() {
       {isPending || !me ? (
         <ProfileUnavailable />
       ) : (
-        <AccountFields email={me.email} emailVerified={me.emailVerified} />
+        <AccountFields accountId={me.id} email={me.email} emailVerified={me.emailVerified} />
       )}
     </SettingsSection>
   );
 }
 
-function AccountFields({ email, emailVerified }: { email: string; emailVerified: boolean }) {
+/**
+ * A change of address names the account the card was drawn for (`accountId`, its `Me`'s id) beside
+ * better-auth's own body, and the API's hook compares it with the cookie's (ADR-0092): in the render
+ * between the session naming B and SessionCacheGuard's reset the card is still A's while the cookie
+ * is B's, and a change taken with B's cookie would mail B's address a confirmation naming the
+ * address typed for A. Refused, nothing is mailed and the session is asked for again. 인증 메일 다시
+ * 보내기 needs no account: it names the address on the card, and better-auth mails a signed-in
+ * request only to its own account's address (another is EMAIL_MISMATCH).
+ */
+function AccountFields({
+  accountId,
+  email,
+  emailVerified,
+}: {
+  accountId: string;
+  email: string;
+  emailVerified: boolean;
+}) {
   const noEmail = isNoEmailAddress(email);
+  const sessionChanged = useAuthSessionChanged();
 
   const resend = useMutation({
     mutationFn: async () => {
@@ -70,9 +89,16 @@ function AccountFields({ email, emailVerified }: { email: string; emailVerified:
       setError('newEmail', { message: copy.errEmailSame });
       return;
     }
-    const { error } = await authClient.changeEmail({ newEmail, callbackURL: CALLBACK });
+    const { error } = await authClient.changeEmail(
+      { newEmail, callbackURL: CALLBACK },
+      // better-auth's body has no account; the client merges this one into it.
+      { body: { expectedAccountId: accountId } },
+    );
     if (error) {
-      toaster.create({ type: 'error', title: authErrorMessage(error) });
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error) ? copy.sessionChanged : authErrorMessage(error),
+      });
       return;
     }
     toaster.create({

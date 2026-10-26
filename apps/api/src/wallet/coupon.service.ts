@@ -10,6 +10,7 @@ import {
   type CreateCouponBody,
   type LedgerEntry,
   type UpdateCouponBody,
+  type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
@@ -177,7 +178,7 @@ export class CouponService {
     });
   }
 
-  async create(adminId: string, input: CreateCouponBody): Promise<Coupon> {
+  async create(adminId: string, input: WithoutExpectedAccount<CreateCouponBody>): Promise<Coupon> {
     const code = input.code ?? generateCode();
     if (!COUPON_CODE_PATTERN.test(code)) {
       throw new AppError('VALIDATION_ERROR', {
@@ -220,7 +221,11 @@ export class CouponService {
     }
   }
 
-  async update(adminId: string, id: string, input: UpdateCouponBody): Promise<Coupon> {
+  async update(
+    adminId: string,
+    id: string,
+    input: WithoutExpectedAccount<UpdateCouponBody>,
+  ): Promise<Coupon> {
     return this.db.transaction(async (tx) => {
       // Locked: the cap check below reads `redeemedCount`, and `redeem` increments it under
       // the same row lock, so a redemption cannot slip in between the check and the UPDATE.

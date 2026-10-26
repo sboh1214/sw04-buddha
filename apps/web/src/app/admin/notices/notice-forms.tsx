@@ -27,6 +27,7 @@ import {
   useUnpinNotice,
   useUpdateNotice,
 } from '@/hooks/use-notices';
+import { useOperatorId } from '@/hooks/use-operator';
 import { usePostWriter } from '@/hooks/use-posts';
 import { type AdminNotice } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -136,7 +137,8 @@ export function AdminNoticeNew() {
               if (title === null) return; // the form sends nothing without a title
               setRefusal(undefined);
               create.mutate(
-                // The admin the form is drawn for, whose landing the write's is (not sent).
+                // The admin the form is drawn for: the write names it (`expectedAccountId`,
+                // ADR-0092) and its landing is that admin's.
                 { title, body, accountId },
                 {
                   onSuccess: () => {
@@ -253,12 +255,15 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
 
 /**
  * Whether the notice is pinned and since when, with 고정 or 고정 해제 and — while it is pinned —
- * 공지 보기.
+ * 공지 보기. Both name the admin on screen (`useOperatorId`, ADR-0092), so they wait for
+ * `GET /me`; the cookie of another account is refused (`copy.sessionChanged`) and the session
+ * asked again.
  */
 function PinCard({ notice }: { notice: AdminNotice }) {
   const pin = usePinNotice();
   const unpin = useUnpinNotice();
-  const busy = pin.isPending || unpin.isPending;
+  const operatorId = useOperatorId();
+  const busy = pin.isPending || unpin.isPending || operatorId === undefined;
   const onError = (error: Error) =>
     toaster.create({ type: 'error', title: noticeWriteErrorMessage(error) });
   const pinned = notice.pinnedAt !== null;
@@ -301,13 +306,17 @@ function PinCard({ notice }: { notice: AdminNotice }) {
                 variant="outline"
                 loading={unpin.isPending}
                 disabled={busy}
-                onClick={() =>
-                  unpin.mutate(notice.id, {
-                    onSuccess: () =>
-                      toaster.create({ type: 'success', title: copy.adminNoticeUnpinnedToast }),
-                    onError,
-                  })
-                }
+                onClick={() => {
+                  if (operatorId === undefined) return;
+                  unpin.mutate(
+                    { noticeId: notice.id, expectedAccountId: operatorId },
+                    {
+                      onSuccess: () =>
+                        toaster.create({ type: 'success', title: copy.adminNoticeUnpinnedToast }),
+                      onError,
+                    },
+                  );
+                }}
                 data-testid="admin-notice-unpin"
               >
                 {copy.adminNoticeUnpin}
@@ -317,13 +326,17 @@ function PinCard({ notice }: { notice: AdminNotice }) {
                 size="sm"
                 loading={pin.isPending}
                 disabled={busy}
-                onClick={() =>
-                  pin.mutate(notice.id, {
-                    onSuccess: () =>
-                      toaster.create({ type: 'success', title: copy.adminNoticePinnedToast }),
-                    onError,
-                  })
-                }
+                onClick={() => {
+                  if (operatorId === undefined) return;
+                  pin.mutate(
+                    { noticeId: notice.id, expectedAccountId: operatorId },
+                    {
+                      onSuccess: () =>
+                        toaster.create({ type: 'success', title: copy.adminNoticePinnedToast }),
+                      onError,
+                    },
+                  );
+                }}
                 data-testid="admin-notice-pin"
               >
                 {copy.adminNoticePin}
@@ -426,7 +439,8 @@ function EditForm({
             title,
             body,
             expectedEditedAt: version === undefined ? opened : version,
-            // The admin the form is drawn for, whose landing the save's is (not sent).
+            // The admin the form is drawn for: the save names it (`expectedAccountId`,
+            // ADR-0092) and its landing is that admin's.
             accountId,
           },
           {

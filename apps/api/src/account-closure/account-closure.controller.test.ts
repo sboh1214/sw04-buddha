@@ -1513,7 +1513,12 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
             'content-type': 'application/json',
             cookie: who.cookie,
           },
-          payload: JSON.stringify({ title, body: text(title), expectedEditedAt }),
+          payload: JSON.stringify({
+            title,
+            body: text(title),
+            expectedEditedAt,
+            expectedAccountId: who.id,
+          }),
         });
       // `second` writes a notice and edits it, `admin` edits it after; `second` marks a group of
       // the repeated-link review list (a member's three posts with one link, same_account).

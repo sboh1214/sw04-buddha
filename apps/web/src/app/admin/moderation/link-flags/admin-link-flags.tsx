@@ -48,6 +48,8 @@ import {
   linkFlagWrittenAt,
   toLinkFlagReviewBody,
 } from '@/lib/admin-link-flags';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import { type AdminLinkFlag, type AdminLinkFlagGroup, api, unwrap } from '@/lib/api';
 import { ADMIN_MODERATION_ACTIONS_PATH, adminUserModerationPath } from '@/lib/moderation';
 import { readFailed } from '@/lib/query-client';
@@ -431,6 +433,9 @@ function LinkFlagEntry({ flag }: { flag: AdminLinkFlag }) {
  * lists are read again (`onMarked` first, so the focus finds its way once they are). A request
  * that never came back decided nothing: the toast, and the dialog stays with the outcome and the
  * note for the operator to send again (`linkFlagReviewKeepsDialog`, as the other admin dialogs).
+ * The mark names the admin on screen (`useOperatorId`, ADR-0092), so 확인함 waits for `GET /me`;
+ * the cookie of another account is refused — the toast says so (`copy.sessionChanged`), the dialog
+ * closes and the session is asked again, which reads everything again (`useSessionChanged`).
  */
 function ReviewDialog({
   group,
@@ -442,14 +447,16 @@ function ReviewDialog({
   onMarked: () => void;
 }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const [outcome, setOutcome] = useState<LinkFlagReviewOutcome | null>(null);
   const [note, setNote] = useState('');
   const refresh = () => queryClient.invalidateQueries({ queryKey: ADMIN_LINK_FLAGS_KEY });
   const review = useMutation({
-    mutationFn: async (chosen: LinkFlagReviewOutcome) =>
+    mutationFn: async ({ chosen, by }: { chosen: LinkFlagReviewOutcome; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/link-flags/reviews', {
-          body: toLinkFlagReviewBody(group, chosen, note),
+          body: toLinkFlagReviewBody(group, chosen, note, by),
         }),
       ).data,
     onSuccess: async () => {
@@ -463,6 +470,8 @@ function ReviewDialog({
       if (linkFlagReviewKeepsDialog(error)) return;
       onMarked();
       onClose();
+      // Another account's cookie: the session's reset reads everything again.
+      if (sessionChanged(error)) return;
       await refresh();
     },
   });
@@ -549,9 +558,11 @@ function ReviewDialog({
               <Button
                 size="sm"
                 loading={loading}
-                disabled={outcome === null}
+                disabled={outcome === null || operatorId === undefined}
                 onClick={() => {
-                  if (outcome !== null) review.mutate(outcome);
+                  if (outcome !== null && operatorId !== undefined) {
+                    review.mutate({ chosen: outcome, by: operatorId });
+                  }
                 }}
                 data-testid="admin-link-flag-review-confirm"
               >

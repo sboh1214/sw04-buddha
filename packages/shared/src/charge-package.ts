@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { coinAmountInputSchema, coinAmountSchema } from './api/coin-amount.js';
 import { uuidSchema } from './api/uuid.js';
+import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 
 /**
  * A charge package: the only way a user buys Coin (owner decision 2026-09-04). The KRW price is
@@ -78,28 +79,34 @@ const priceRefinement = {
   path: ['priceKrw'],
 };
 
+/**
+ * `POST /admin/charge-packages`, as the admin on screen (`expectedAccountId`, ADR-0092 — the edit
+ * names it too, and the removal in its query).
+ */
 export const createChargePackageBodySchema = z
   .object({
     ...packageFields,
     sortOrder: packageFields.sortOrder.default(0),
     isActive: packageFields.isActive.default(true),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .refine(priceWithinFaceValue, priceRefinement)
   .meta({ id: 'CreateChargePackageBody' });
 export type CreateChargePackageBody = z.infer<typeof createChargePackageBodySchema>;
 
-/** PATCH: every field optional, but a price/amount pair still has to stay within face value. */
+/**
+ * PATCH: every field optional — at least one beside the account — but a price/amount pair still
+ * has to stay within face value.
+ */
 export const updateChargePackageBodySchema = z
   .object({
     amountCoin: packageFields.amountCoin.optional(),
     priceKrw: packageFields.priceKrw.optional(),
     sortOrder: packageFields.sortOrder.optional(),
     isActive: packageFields.isActive.optional(),
+    expectedAccountId: expectedAccountIdSchema,
   })
-  .refine(
-    (value) => Object.values(value).some((field) => field !== undefined),
-    'at least one field is required',
-  )
+  .refine(namesAFieldBesideAccount, 'at least one field is required')
   // Only checkable here when both halves are sent; the service re-checks against the stored
   // row for a patch that changes just one of them.
   .refine(

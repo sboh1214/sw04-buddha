@@ -4,12 +4,14 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   api,
   isApiError,
+  isForAnotherAccount,
   type ReleaseSetting,
   type ReleaseSettingChange,
   type ReleaseSettingChangeBody,
   unwrap,
 } from '@/lib/api';
 import { replaceReleaseSetting } from '@/lib/release-settings';
+import { useSession } from '@/lib/use-session';
 
 /**
  * 출시 설정 (#170). Under the `admin` root (`PRIVATE_QUERY_ROOTS`); the list and the change log
@@ -68,10 +70,14 @@ export interface ChangeReleaseSettingVariables {
  * item as it now is: it is written over its copy first, then the list and the change log are
  * re-read in one go (the new record is the log's first row). A refusal from the API refreshes
  * too — another admin may have changed the item, or a release dropped it — and a request that
- * never came back refreshes nothing. The toast and the dialog are the caller's, per `mutate`.
+ * never came back refreshes nothing. The cookie of another account (`isForAnotherAccount` — the
+ * body names the admin on screen, ADR-0092) asks for the session again instead, so
+ * SessionCacheGuard empties the cache and the screen shows who is really signed in. The toast and
+ * the dialog are the caller's, per `mutate`.
  */
 export function useChangeReleaseSetting() {
   const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
   const refresh = () => queryClient.invalidateQueries({ queryKey: ADMIN_RELEASE_SETTINGS_KEY });
   return useMutation({
     mutationFn: async ({ key, body }: ChangeReleaseSettingVariables) =>
@@ -88,6 +94,10 @@ export function useChangeReleaseSetting() {
       return refresh();
     },
     onError: async (error: unknown) => {
+      if (isForAnotherAccount(error)) {
+        void refetchSession();
+        return;
+      }
       if (isApiError(error)) await refresh();
     },
   });

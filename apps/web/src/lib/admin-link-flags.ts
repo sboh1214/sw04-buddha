@@ -10,6 +10,7 @@ import {
   type AdminLinkFlagGroup,
   type AdminLinkFlagReviewBody,
   isApiError,
+  isForAnotherAccount,
 } from './api';
 import { nicknameShown } from './account-closure';
 import { formatKst } from './datetime';
@@ -100,13 +101,15 @@ export function linkFlagOutcomeLabel(outcome: LinkFlagReviewOutcome): string {
 
 /**
  * The body of the mark '확인함' on a group of the default list: its link and rule, what came of it,
- * the note when one is written (trimmed; none when blank), and `through` — the group's latest time
- * as the screen shows it, so an entry that arrived after the operator looked stays on the list.
+ * the note when one is written (trimmed; none when blank), `through` — the group's latest time
+ * as the screen shows it, so an entry that arrived after the operator looked stays on the list —
+ * and the admin on screen (`useOperatorId`, ADR-0092: the server refuses another account's).
  */
 export function toLinkFlagReviewBody(
   group: AdminLinkFlagGroup,
   outcome: LinkFlagReviewOutcome,
   note: string,
+  operatorId: string,
 ): AdminLinkFlagReviewBody {
   const trimmed = note.trim();
   return {
@@ -115,14 +118,18 @@ export function toLinkFlagReviewBody(
     outcome,
     through: group.latestFlaggedAt,
     ...(trimmed === '' ? {} : { note: trimmed }),
+    expectedAccountId: operatorId,
   };
 }
 
 /**
  * Why a mark was refused, in words: nothing left to mark (another operator marked the group
- * first) — the screen then reads the list again; anything else is the common error.
+ * first) — the screen then reads the list again; the cookie of another account
+ * (`copy.sessionChanged`: nothing was marked, and the session is asked again, ADR-0092); anything
+ * else is the common error.
  */
 export function linkFlagReviewErrorMessage(error: unknown): string {
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
   return isApiError(error, 'NOT_FOUND') ? copy.adminLinkFlagReviewGone : copy.errUnknown;
 }
 

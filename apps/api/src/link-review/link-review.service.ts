@@ -17,6 +17,7 @@ import {
   type AdminLinkFlagReviewBody,
   type LinkFlagReason,
   type LinkFlagReviewPayload,
+  type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { and, desc, eq, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -442,7 +443,10 @@ export class LinkReviewService {
    * only records that it was taken. NOT_FOUND when nothing is left to mark (another operator marked
    * it, or no such group): nothing is written. Answers the group as the reviewed list shows it.
    */
-  async review(adminId: string, body: AdminLinkFlagReviewBody): Promise<AdminLinkFlagGroup> {
+  async review(
+    adminId: string,
+    body: WithoutExpectedAccount<AdminLinkFlagReviewBody>,
+  ): Promise<AdminLinkFlagGroup> {
     const note = body.note === undefined || body.note === '' ? null : body.note;
     const { adminActions, linkFlags, profiles } = schema;
     return this.db.transaction(async (tx) => {

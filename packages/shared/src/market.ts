@@ -18,6 +18,7 @@ import {
   PRICE_MIN,
   TICKS_MAX_POINTS,
 } from './constants.js';
+import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import {
   type MarketStatus,
   marketEventTypeSchema,
@@ -476,18 +477,25 @@ const marketFields = {
   slug: marketSlugSchema.optional(),
 };
 
-/** `POST /admin/markets` → a draft. */
-export const createMarketBodySchema = z.object(marketFields).meta({ id: 'CreateMarketBody' });
+/**
+ * `POST /admin/markets` → a draft, as the admin on screen (`expectedAccountId`, ADR-0092 — every
+ * admin write below names it too). The service is handed the fields alone: the account is checked
+ * and dropped first, so the `created` event that keeps the body never holds it.
+ */
+export const createMarketBodySchema = z
+  .object({ ...marketFields, expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'CreateMarketBody' });
 export type CreateMarketBody = z.infer<typeof createMarketBodySchema>;
 
-/** `PATCH /admin/markets/:id`: which fields a status admits is the service's decision. */
+/**
+ * `PATCH /admin/markets/:id`: which fields a status admits is the service's decision. At least one
+ * field beside the account.
+ */
 export const updateMarketBodySchema = z
   .object(marketFields)
   .partial()
-  .refine(
-    (value) => Object.values(value).some((field) => field !== undefined),
-    'at least one field is required',
-  )
+  .extend({ expectedAccountId: expectedAccountIdSchema })
+  .refine(namesAFieldBesideAccount, 'at least one field is required')
   .meta({ id: 'UpdateMarketBody' });
 export type UpdateMarketBody = z.infer<typeof updateMarketBodySchema>;
 
@@ -506,6 +514,7 @@ export const resolveMarketBodySchema = z
       .url({ protocol: /^https?$/ })
       .max(MARKET_RESOLVE_EVIDENCE_URL_MAX)
       .nullish(),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'ResolveMarketBody' });
 export type ResolveMarketBody = z.infer<typeof resolveMarketBodySchema>;

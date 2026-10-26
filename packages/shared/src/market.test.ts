@@ -352,12 +352,16 @@ describe('marketListQuerySchema', () => {
 });
 
 // ---- admin bodies --------------------------------------------------------------------
+/** The admin on screen, which every admin write names (ADR-0092). */
+const account = { expectedAccountId: 'admin-1' } as const;
+
 describe('createMarketBodySchema', () => {
   const body = {
     title: ' 2026년 안에 코스피 3000? ',
     rules: '',
     categoryId: 1,
     closeAt: at,
+    ...account,
   };
 
   it('accepts the minimal draft and trims the title', () => {
@@ -383,8 +387,12 @@ describe('createMarketBodySchema', () => {
   it('accepts the largest category id a serial column can hold', () => {
     const parsed = createMarketBodySchema.parse({ ...body, categoryId: INT4_MAX });
     expect(parsed.categoryId).toBe(INT4_MAX);
-    expect(updateMarketBodySchema.safeParse({ categoryId: INT4_MAX }).success).toBe(true);
-    expect(updateMarketBodySchema.safeParse({ categoryId: INT4_MAX + 1 }).success).toBe(false);
+    expect(updateMarketBodySchema.safeParse({ categoryId: INT4_MAX, ...account }).success).toBe(
+      true,
+    );
+    expect(updateMarketBodySchema.safeParse({ categoryId: INT4_MAX + 1, ...account }).success).toBe(
+      false,
+    );
   });
 
   it('refuses bad fields', () => {
@@ -414,6 +422,14 @@ describe('createMarketBodySchema', () => {
     expect(createMarketBodySchema.safeParse({ ...body, rules: undefined }).success).toBe(false);
   });
 
+  it('requires the admin on screen (ADR-0092)', () => {
+    for (const expectedAccountId of [undefined, '', 'x'.repeat(256), 7]) {
+      const parsed = createMarketBodySchema.safeParse({ ...body, expectedAccountId });
+      expect(parsed.success, String(expectedAccountId)).toBe(false);
+      expect(issuePaths(parsed)).toEqual(['expectedAccountId']);
+    }
+  });
+
   it('normalises a decomposed Korean slug to NFC and refuses uuid-shaped slugs', () => {
     const nfd = '코스피-3000'.normalize('NFD');
     expect(nfd).not.toBe('코스피-3000');
@@ -429,42 +445,64 @@ describe('createMarketBodySchema', () => {
 
 describe('updateMarketBodySchema', () => {
   it('accepts any single field but not an empty patch', () => {
-    expect(updateMarketBodySchema.parse({ rules: '새 규칙' })).toEqual({ rules: '새 규칙' });
-    // The AMM inputs are stripped, so a patch of only them is an empty patch.
-    expect(updateMarketBodySchema.safeParse({ liquidityB: 500, initialProbBp: 3000 }).success).toBe(
-      false,
-    );
-    expect(updateMarketBodySchema.parse({ description: null, imageUrl: null })).toEqual({
-      description: null,
-      imageUrl: null,
+    expect(updateMarketBodySchema.parse({ rules: '새 규칙', ...account })).toEqual({
+      rules: '새 규칙',
+      ...account,
     });
-    const empty = updateMarketBodySchema.safeParse({});
+    // The AMM inputs are stripped, so a patch of only them is an empty patch.
+    expect(
+      updateMarketBodySchema.safeParse({ liquidityB: 500, initialProbBp: 3000, ...account })
+        .success,
+    ).toBe(false);
+    expect(updateMarketBodySchema.parse({ description: null, imageUrl: null, ...account })).toEqual(
+      { description: null, imageUrl: null, ...account },
+    );
+    // The account is always there, so it is no field: a patch of it alone is empty.
+    const empty = updateMarketBodySchema.safeParse({ ...account });
     expect(empty.success).toBe(false);
-    expect(updateMarketBodySchema.safeParse({ title: undefined }).success).toBe(false);
-    expect(updateMarketBodySchema.safeParse({ slug: marketId }).success).toBe(false);
-    expect(updateMarketBodySchema.safeParse({ closeAt: 'soon' }).success).toBe(false);
+    expect(empty.error?.issues[0]?.message).toBe('at least one field is required');
+    expect(updateMarketBodySchema.safeParse({ title: undefined, ...account }).success).toBe(false);
+    expect(updateMarketBodySchema.safeParse({ slug: marketId, ...account }).success).toBe(false);
+    expect(updateMarketBodySchema.safeParse({ closeAt: 'soon', ...account }).success).toBe(false);
+  });
+
+  it('requires the admin on screen (ADR-0092)', () => {
+    const parsed = updateMarketBodySchema.safeParse({ rules: '새 규칙' });
+    expect(parsed.success).toBe(false);
+    expect(issuePaths(parsed)).toEqual(['expectedAccountId']);
   });
 });
 
 describe('resolveMarketBodySchema', () => {
   it('requires a result and accepts an optional note and http(s) evidence url', () => {
-    expect(resolveMarketBodySchema.parse({ result: 'YES' })).toEqual({ result: 'YES' });
+    expect(resolveMarketBodySchema.parse({ result: 'YES', ...account })).toEqual({
+      result: 'YES',
+      ...account,
+    });
     expect(
       resolveMarketBodySchema.parse({
         result: 'NO',
         note: ' 발표 없음 ',
         evidenceUrl: 'https://www.bok.or.kr/press/1',
+        ...account,
       }),
-    ).toEqual({ result: 'NO', note: '발표 없음', evidenceUrl: 'https://www.bok.or.kr/press/1' });
-    expect(resolveMarketBodySchema.parse({ result: 'YES', note: null, evidenceUrl: null })).toEqual(
-      { result: 'YES', note: null, evidenceUrl: null },
-    );
+    ).toEqual({
+      result: 'NO',
+      note: '발표 없음',
+      evidenceUrl: 'https://www.bok.or.kr/press/1',
+      ...account,
+    });
+    expect(
+      resolveMarketBodySchema.parse({ result: 'YES', note: null, evidenceUrl: null, ...account }),
+    ).toEqual({ result: 'YES', note: null, evidenceUrl: null, ...account });
     for (const body of [
-      {},
-      { result: 'MAYBE' },
-      { result: 'YES', note: 'x'.repeat(1001) },
-      { result: 'YES', evidenceUrl: 'javascript:alert(1)' },
-      { result: 'YES', evidenceUrl: `https://a.b/${'c'.repeat(500)}` },
+      { ...account },
+      { result: 'MAYBE', ...account },
+      { result: 'YES', note: 'x'.repeat(1001), ...account },
+      { result: 'YES', evidenceUrl: 'javascript:alert(1)', ...account },
+      { result: 'YES', evidenceUrl: `https://a.b/${'c'.repeat(500)}`, ...account },
+      // The admin on screen (ADR-0092).
+      { result: 'YES' },
     ]) {
       expect(resolveMarketBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }

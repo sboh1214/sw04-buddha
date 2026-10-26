@@ -1,6 +1,7 @@
 import { type APIRequestContext, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
+  accountIdOf,
   adminAccount,
   closeMarket,
   createDraftMarket,
@@ -315,7 +316,7 @@ test.describe('테마', () => {
       await live;
       await closeMarket(admin, b.id);
       const judged = await admin.post(`/api/v1/admin/markets/${b.id}/resolve`, {
-        data: { result: 'YES' },
+        data: { result: 'YES', expectedAccountId: await accountIdOf(admin) },
       });
       expect(judged.status(), await judged.text()).toBe(200);
       const results = page.getByTestId('theme-results');
@@ -464,6 +465,7 @@ test.describe('테마', () => {
         intro: `더 보기 ${tag}`,
         startDate: koreanDate(1),
         endDate: koreanDate(2),
+        expectedAccountId: await accountIdOf(admin),
       },
     });
     expect(created.ok()).toBe(true);

@@ -87,24 +87,32 @@ describe('chargePackageSchema', () => {
   });
 });
 
+/** The admin on screen, which an admin's charge package write names (ADR-0092). */
+const account = { expectedAccountId: 'admin-1' } as const;
+
 describe('createChargePackageBodySchema', () => {
   it('defaults the order and availability, and yields a bigint amount', () => {
-    expect(createChargePackageBodySchema.parse({ amountCoin: '5000', priceKrw: 4900 })).toEqual({
+    expect(
+      createChargePackageBodySchema.parse({ amountCoin: '5000', priceKrw: 4900, ...account }),
+    ).toEqual({
       amountCoin: 5_000n,
       priceKrw: 4900,
       sortOrder: 0,
       isActive: true,
+      ...account,
     });
   });
 
   it('refuses a price above face value and amounts outside the bounds', () => {
     for (const body of [
-      { amountCoin: '5000', priceKrw: 5001 },
-      { amountCoin: (CHARGE_PACKAGE_MIN_COIN - 1n).toString(), priceKrw: 500 },
-      { amountCoin: (CHARGE_PACKAGE_MAX_COIN + 1n).toString(), priceKrw: 1000 },
-      { amountCoin: '5000', priceKrw: 0 },
-      { amountCoin: '5000', priceKrw: -100 },
-      { amountCoin: '5000' },
+      { amountCoin: '5000', priceKrw: 5001, ...account },
+      { amountCoin: (CHARGE_PACKAGE_MIN_COIN - 1n).toString(), priceKrw: 500, ...account },
+      { amountCoin: (CHARGE_PACKAGE_MAX_COIN + 1n).toString(), priceKrw: 1000, ...account },
+      { amountCoin: '5000', priceKrw: 0, ...account },
+      { amountCoin: '5000', priceKrw: -100, ...account },
+      { amountCoin: '5000', ...account },
+      // ADR-0092: the admin on screen.
+      { amountCoin: '5000', priceKrw: 4900 },
     ]) {
       expect(createChargePackageBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(
         false,
@@ -123,7 +131,7 @@ describe('face-value refinement', () => {
     // VALIDATION_ERROR into a 500.
     for (const priceKrw of [1.5, '1.5', -0.5]) {
       for (const schema of [createChargePackageBodySchema, updateChargePackageBodySchema]) {
-        const result = schema.safeParse({ amountCoin: '5000', priceKrw });
+        const result = schema.safeParse({ amountCoin: '5000', priceKrw, ...account });
         expect(result.success, String(priceKrw)).toBe(false);
         expect(result.error?.issues.map((issue) => [issue.path, issue.code])).toEqual([
           [['priceKrw'], 'invalid_type'],
@@ -134,6 +142,7 @@ describe('face-value refinement', () => {
     const standard = await createChargePackageBodySchema['~standard'].validate({
       amountCoin: '5000',
       priceKrw: 1.5,
+      ...account,
     });
     expect(standard.issues?.map((issue) => issue.path)).toEqual([['priceKrw']]);
   });
@@ -143,6 +152,7 @@ describe('face-value refinement', () => {
     const result = createChargePackageBodySchema.safeParse({
       amountCoin: '5000',
       priceKrw: 2_000_000,
+      ...account,
     });
     expect(result.success).toBe(false);
     expect(result.error?.issues.map((issue) => issue.code)).toEqual(['too_big', 'custom']);
@@ -151,14 +161,23 @@ describe('face-value refinement', () => {
 
 describe('updateChargePackageBodySchema', () => {
   it('accepts a single field but not an empty patch', () => {
-    expect(updateChargePackageBodySchema.parse({ isActive: false })).toEqual({ isActive: false });
-    expect(updateChargePackageBodySchema.parse({ priceKrw: 4500 })).toEqual({ priceKrw: 4500 });
-    expect(updateChargePackageBodySchema.safeParse({}).success).toBe(false);
+    expect(updateChargePackageBodySchema.parse({ isActive: false, ...account })).toEqual({
+      isActive: false,
+      ...account,
+    });
+    expect(updateChargePackageBodySchema.parse({ priceKrw: 4500, ...account })).toEqual({
+      priceKrw: 4500,
+      ...account,
+    });
+    // The account is always there, so it is no field: a patch of it alone is empty.
+    expect(updateChargePackageBodySchema.safeParse({ ...account }).success).toBe(false);
+    expect(updateChargePackageBodySchema.safeParse({ isActive: false }).success).toBe(false);
   });
 
   it('still refuses a price above the amount when both are given', () => {
     expect(
-      updateChargePackageBodySchema.safeParse({ amountCoin: '5000', priceKrw: 6000 }).success,
+      updateChargePackageBodySchema.safeParse({ amountCoin: '5000', priceKrw: 6000, ...account })
+        .success,
     ).toBe(false);
   });
 });

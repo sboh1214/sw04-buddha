@@ -27,7 +27,9 @@ import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { CHARGE_PACKAGES_QUERY_KEY } from '@/hooks/use-wallet';
-import { api, isApiError, unwrap, type ChargePackage } from '@/lib/api';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
+import { ApiError, api, isApiError, unwrap, type ChargePackage } from '@/lib/api';
 import { boundedInteger, integerField } from '@/lib/form-schema';
 
 const ADMIN_PACKAGES_KEY = ['admin', 'charge-packages'] as const;
@@ -57,8 +59,16 @@ const schema = z
   );
 type FormValues = z.infer<typeof schema>;
 
+/**
+ * 충전 상품 (ADR-0026; off the nav while paid Coin is off, ADR-0049): add, retire or revive, and
+ * remove. Each names the admin on screen (`useOperatorId`, ADR-0092 — the removal in its query),
+ * so they wait for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`)
+ * and the session asked again.
+ */
 export function AdminChargePackages() {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const packages = useQuery({
     queryKey: ADMIN_PACKAGES_KEY,
     queryFn: async (): Promise<ChargePackage[]> =>
@@ -72,7 +82,7 @@ export function AdminChargePackages() {
     ]);
 
   const create = useMutation({
-    mutationFn: async (values: FormValues) =>
+    mutationFn: async ({ values, by }: { values: FormValues; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/charge-packages', {
           body: {
@@ -80,6 +90,7 @@ export function AdminChargePackages() {
             priceKrw: Number(values.priceKrw),
             sortOrder: Number(values.sortOrder),
             isActive: true,
+            expectedAccountId: by,
           },
         }),
       ).data,
@@ -91,34 +102,48 @@ export function AdminChargePackages() {
     onError: (error) =>
       toaster.create({
         type: 'error',
-        title: isApiError(error, 'VALIDATION_ERROR') ? copy.errPackagePrice : copy.errUnknown,
+        title: sessionChanged(error)
+          ? copy.sessionChanged
+          : isApiError(error, 'VALIDATION_ERROR')
+            ? copy.errPackagePrice
+            : copy.errUnknown,
       }),
   });
 
   const toggle = useMutation({
-    mutationFn: async (pack: ChargePackage) =>
+    mutationFn: async ({ pack, by }: { pack: ChargePackage; by: string }) =>
       unwrap(
         await api.PATCH('/api/v1/admin/charge-packages/{id}', {
           params: { path: { id: pack.id } },
-          body: { isActive: !pack.isActive },
+          body: { isActive: !pack.isActive, expectedAccountId: by },
         }),
       ).data,
     onSuccess: invalidate,
-    onError: () => toaster.create({ type: 'error', title: copy.errUnknown }),
+    onError: (error) =>
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error) ? copy.sessionChanged : copy.errUnknown,
+      }),
   });
 
   const remove = useMutation({
-    mutationFn: async (id: string) => {
+    mutationFn: async ({ id, by }: { id: string; by: string }) => {
       const result = await api.DELETE('/api/v1/admin/charge-packages/{id}', {
-        params: { path: { id } },
+        // A DELETE has no body: the admin on screen rides in the query.
+        params: { path: { id }, query: { expectedAccountId: by } },
       });
-      if (result.error) throw new Error(copy.errUnknown);
+      // The API's refusal as read everywhere else, so another account's is told apart.
+      if (result.error) throw new ApiError(result.response.status, result.error.error);
     },
     onSuccess: async () => {
       toaster.create({ type: 'success', title: copy.adminPackageDeleted });
       await invalidate();
     },
-    onError: () => toaster.create({ type: 'error', title: copy.errUnknown }),
+    onError: (error) =>
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error) ? copy.sessionChanged : copy.errUnknown,
+      }),
   });
 
   const {
@@ -133,7 +158,8 @@ export function AdminChargePackages() {
 
   // Only on success (see the coupon screen): a refused price must not erase what was typed.
   const submit = handleSubmit(async (values) => {
-    await create.mutateAsync(values).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await create.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
   });
 
   return (
@@ -179,6 +205,7 @@ export function AdminChargePackages() {
                 size="sm"
                 alignSelf="flex-start"
                 loading={isSubmitting}
+                disabled={operatorId === undefined}
                 data-testid="package-create"
               >
                 {copy.adminPackageAdd}
@@ -226,8 +253,11 @@ export function AdminChargePackages() {
                   <Button
                     size="xs"
                     variant="outline"
-                    loading={toggle.isPending && toggle.variables?.id === pack.id}
-                    onClick={() => toggle.mutate(pack)}
+                    loading={toggle.isPending && toggle.variables?.pack.id === pack.id}
+                    disabled={operatorId === undefined}
+                    onClick={() => {
+                      if (operatorId !== undefined) toggle.mutate({ pack, by: operatorId });
+                    }}
                     data-testid={`package-toggle-${pack.id}`}
                   >
                     {pack.isActive ? copy.adminPackageInactive : copy.adminPackageActive}
@@ -236,8 +266,11 @@ export function AdminChargePackages() {
                     size="xs"
                     variant="outline"
                     colorPalette="no"
-                    loading={remove.isPending && remove.variables === pack.id}
-                    onClick={() => remove.mutate(pack.id)}
+                    loading={remove.isPending && remove.variables?.id === pack.id}
+                    disabled={operatorId === undefined}
+                    onClick={() => {
+                      if (operatorId !== undefined) remove.mutate({ id: pack.id, by: operatorId });
+                    }}
                     data-testid={`package-delete-${pack.id}`}
                   >
                     {copy.adminPackageDelete}

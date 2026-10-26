@@ -327,6 +327,17 @@ describe('a refused admin write', () => {
     }
   });
 
+  it('says the session changed when the cookie is another account’s, and a revoked admin apart (ADR-0092)', () => {
+    expect(
+      noticeWriteErrorMessage(
+        refusal(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBe(copy.sessionChanged);
+    expect(noticeWriteErrorMessage(refusal(403, 'FORBIDDEN'))).toBe(copy.adminOnly);
+  });
+
   it('names a notice that is not there, a revoked admin, the onboarding and an unreachable server', () => {
     expect(noticeWriteErrorMessage(refusal(404, 'NOT_FOUND'))).toBe(copy.adminNoticeNotFound);
     expect(noticeWriteErrorMessage(refusal(403, 'FORBIDDEN'))).toBe(copy.adminOnly);

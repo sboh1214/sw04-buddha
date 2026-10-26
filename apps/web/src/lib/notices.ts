@@ -7,7 +7,7 @@ import {
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import { nicknameShown } from './account-closure';
-import { isApiError, isApiUnreachable, validationField } from './api';
+import { isApiError, isApiUnreachable, isForAnotherAccount, validationField } from './api';
 import { postBodyErrorMessage } from './posts';
 
 /**
@@ -284,6 +284,9 @@ export function noticeEditConflict(error: unknown): boolean {
  * - VALIDATION_ERROR on `body`: told apart as a post's body is (`postBodyErrorMessage` — no text,
  *   too long, too many images, an image the admin cannot use);
  * - NOT_FOUND: no such notice (there is no deletion; a hand-made address);
+ * - FORBIDDEN naming `expectedAccountId`: the cookie is another account's (another tab signed in
+ *   — every write names the admin on screen, ADR-0092): `copy.sessionChanged`, and the session is
+ *   asked again;
  * - FORBIDDEN: the account is no admin any more (a revoke while the screen was open);
  * - ONBOARDING_REQUIRED: a consent a revision asked for again, say — the gate follows `['me']`;
  * - a request that never reached the API, and anything else.
@@ -298,6 +301,7 @@ export function noticeWriteErrorMessage(error: unknown): string {
     return copy.errPostInvalid;
   }
   if (isApiError(error, 'NOT_FOUND')) return copy.adminNoticeNotFound;
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'FORBIDDEN')) return copy.adminOnly;
   if (isApiError(error, 'ONBOARDING_REQUIRED')) return copy.errPostOnboarding;
   return isApiUnreachable(error) ? copy.errNetwork : copy.errUnknown;

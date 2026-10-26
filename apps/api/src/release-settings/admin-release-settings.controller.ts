@@ -16,6 +16,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -80,13 +81,17 @@ export class AdminReleaseSettingsController {
   @ApiData(releaseSettingSchema)
   // NOT_FOUND: no registered item has this key. VALIDATION_ERROR: also a value that breaks the
   // status rule or the item's schema (details under `value`), and a change that keeps the
-  // current status and value (path `[]`, RELEASE_SETTING_UNCHANGED_MESSAGE).
+  // current status and value (path `[]`, RELEASE_SETTING_UNCHANGED_MESSAGE). FORBIDDEN: also a
+  // body whose `expectedAccountId` is not the cookie's account (details name the field) — refused
+  // before the key is looked up or locked (ADR-0092).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   change(
     @CurrentUser() admin: SessionUser,
     @Param('key', { schema: releaseSettingKeySchema }) key: string,
     @Body({ schema: releaseSettingChangeBodySchema }) body: ReleaseSettingChangeBody,
   ): Promise<ReleaseSetting> {
-    return this.settings.change(admin.id, key, body);
+    const { expectedAccountId, ...change } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.settings.change(admin.id, key, change);
   }
 }

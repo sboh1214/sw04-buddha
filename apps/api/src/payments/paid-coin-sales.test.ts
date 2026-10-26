@@ -145,7 +145,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       method: 'POST',
       url: '/api/v1/admin/coupons',
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { code: 'WELCOME-2026', amountCoin: '3000' },
+      payload: { code: 'WELCOME-2026', amountCoin: '3000', expectedAccountId: admin.id },
     });
     expect(issued.statusCode).toBe(201);
     const before = await moneyOf(member.id);
@@ -211,7 +211,7 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       method: 'POST',
       url: '/api/v1/admin/charge-packages',
       headers: asAdmin,
-      payload: { amountCoin: '5000', priceKrw: 4900 },
+      payload: { amountCoin: '5000', priceKrw: 4900, expectedAccountId: admin.id },
     });
     expect(created.statusCode).toBe(201);
     for (const url of [

@@ -403,7 +403,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
           method: 'POST',
           url: '/api/auth/change-email',
           headers: { ...jsonHeaders, cookie: user.cookie },
-          payload: { newEmail },
+          payload: { newEmail, expectedAccountId: user.id },
         });
       for (let i = 0; i < DEFAULT_RATE_LIMITS.email; i += 1) {
         const ok = await change(`rotating-${String(i)}-${String(Date.now())}@test.local`);
@@ -445,7 +445,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         method: 'POST',
         url: '/api/auth/change-email',
         headers: { ...jsonHeaders, cookie: user.cookie },
-        payload: { newEmail: named, email: smuggled },
+        payload: { newEmail: named, email: smuggled, expectedAccountId: user.id },
       });
       expect(res.statusCode).toBe(200);
       // One recipient key, and it is the named address's (the key is the tracker's sha256
@@ -486,7 +486,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         method: 'POST',
         url: '/api/auth/change-email',
         headers: { ...jsonHeaders, cookie: user.cookie },
-        payload: { newEmail: victim },
+        payload: { newEmail: victim, expectedAccountId: user.id },
       });
       expect(genuine.statusCode).toBe(200);
       expect(t.mailer.messages.slice(sent).map((m) => m.to)).toEqual([user.email]);
@@ -506,7 +506,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         method: 'POST',
         url: '/api/auth/change-email',
         headers: { ...jsonHeaders, cookie: user.cookie },
-        payload: { newEmail: victim, callbackURL: '/settings' },
+        payload: { newEmail: victim, callbackURL: '/settings', expectedAccountId: user.id },
       });
       expect(requested.statusCode).toBe(200);
       const link = new URL(verificationLinkFor(t.mailer, user.email));
@@ -531,7 +531,7 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
         method: 'POST',
         url: '/api/auth/change-email',
         headers: { ...jsonHeaders, cookie: other.cookie },
-        payload: { newEmail: victim, callbackURL: '/settings' },
+        payload: { newEmail: victim, callbackURL: '/settings', expectedAccountId: other.id },
       });
       expect(alsoRequested.statusCode).toBe(200);
       const otherLink = new URL(verificationLinkFor(t.mailer, other.email));

@@ -1,6 +1,6 @@
 import { RELATED_MARKET_STATUSES, marketSearchTermSchema } from '@buddha/shared';
 import { copy } from '@/copy';
-import { isApiError, validationField } from './api';
+import { isApiError, isForAnotherAccount, validationField } from './api';
 import { MARKET_STATUS_LABEL } from './market-admin';
 import { listSection } from './query-client';
 
@@ -119,9 +119,11 @@ export function relatedHint(): string {
 /**
  * A refused link or unlink, in words: the market itself (the API names the field that carried
  * the other market in a VALIDATION_ERROR — the body's `marketId` on a link, the path's
- * `relatedMarketId` on an unlink), a market that is not there any more, or anything else.
+ * `relatedMarketId` on an unlink), a market that is not there any more, the cookie of another
+ * account (`copy.sessionChanged` — both name the admin on screen, ADR-0092), or anything else.
  */
 export function relatedLinkErrorMessage(error: unknown): string {
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
     if (field === 'marketId' || field === 'relatedMarketId') return copy.errRelatedSelf;

@@ -96,19 +96,21 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       ...input,
     });
 
-  const post = (url: string, payload: unknown = {}, who: TestUser = admin) =>
+  // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
+  // names another.
+  const post = (url: string, payload: object = {}, who: TestUser = admin) =>
     t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/proposals${url}`,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify({ expectedAccountId: who.id, ...payload }),
     });
-  const put = (url: string, payload: unknown, who: TestUser = admin) =>
+  const put = (url: string, payload: object, who: TestUser = admin) =>
     t.app.inject({
       method: 'PUT',
       url: `/api/v1/admin/proposals${url}`,
       headers: { ...jsonHeaders, cookie: who.cookie },
-      payload: JSON.stringify(payload),
+      payload: JSON.stringify({ expectedAccountId: who.id, ...payload }),
     });
   const get = (url: string, who: TestUser = admin) =>
     t.app.inject({
@@ -122,11 +124,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
   };
   const errorOf = (res: { json: <T>() => T }) => res.json<ErrorBody>().error;
   const review = (id: string, who: TestUser = admin) => post(`/${id}/review`, {}, who);
-  const adopt = (id: string, payload: unknown = {}, who: TestUser = admin) =>
+  const adopt = (id: string, payload: object = {}, who: TestUser = admin) =>
     post(`/${id}/adopt`, payload, who);
-  const reject = (id: string, payload: unknown, who: TestUser = admin) =>
+  const reject = (id: string, payload: object, who: TestUser = admin) =>
     post(`/${id}/reject`, payload, who);
-  const link = (id: string, payload: unknown, who: TestUser = admin) =>
+  const link = (id: string, payload: object, who: TestUser = admin) =>
     post(`/${id}/market`, payload, who);
   const actions = () =>
     t.db
@@ -161,6 +163,56 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       expect(res.statusCode).toBe(403);
     }
     expect((await t.db.select().from(schema.marketProposals))[0]?.status).toBe('submitted');
+  });
+
+  it('refuses every operator write that names another admin than the cookie’s, or none, before the proposal is read (ADR-0092)', async () => {
+    const submitted = await proposal();
+    const reviewing = await proposal({ status: 'reviewing' });
+    const adopted = await proposal({ status: 'adopted' });
+    const existing = await createMarket(t.db, { createdBy: admin.id, categoryId: category.id });
+    const before = {
+      proposals: await t.db.select().from(schema.marketProposals),
+      markets: await t.db.select().from(schema.markets),
+    };
+    const pathsOf = (res: { json: <T>() => T }) =>
+      (errorOf(res).details as { path: (string | number)[] }[] | undefined)?.map(
+        (detail) => detail.path,
+      );
+    const writes = [
+      (shown: object, who: TestUser) => post(`/${submitted.id}/review`, shown, who),
+      (shown: object, who: TestUser) =>
+        adopt(reviewing.id, { memo: '채택', market: { type: 'draft' }, ...shown }, who),
+      (shown: object, who: TestUser) =>
+        link(adopted.id, { market: { type: 'existing', marketId: existing.id }, ...shown }, who),
+      (shown: object, who: TestUser) =>
+        reject(submitted.id, { reason: 'other', explanation: '설명', ...shown }, who),
+      (shown: object, who: TestUser) =>
+        put(`/${adopted.id}/internal-memo`, { memo: '메모', ...shown }, who),
+    ];
+    for (const write of writes) {
+      // The screen still shows `admin` while the tab's cookie is `second`'s.
+      const refused = await write({ expectedAccountId: admin.id }, second);
+      expect(refused.statusCode, refused.body).toBe(403);
+      expect(errorOf(refused).code).toBe('FORBIDDEN');
+      expect(pathsOf(refused)).toEqual([['expectedAccountId']]);
+      // No account at all: a validation error naming the field.
+      const unnamed = await write({ expectedAccountId: undefined }, admin);
+      expect(unnamed.statusCode, unnamed.body).toBe(400);
+      expect(pathsOf(unnamed)).toEqual([['expectedAccountId']]);
+    }
+    // Nothing moved, linked, noted or made, and nothing recorded.
+    expect({
+      proposals: await t.db.select().from(schema.marketProposals),
+      markets: await t.db.select().from(schema.markets),
+    }).toEqual(before);
+    expect(await actions()).toEqual([]);
+    // The cookie's own account is taken, and recorded as the one who acted.
+    expect(answerOf(await review(submitted.id, second)).reviewStartedBy).toMatchObject({
+      id: second.id,
+    });
+    expect((await actions()).map((action) => [action.type, action.adminId])).toEqual([
+      ['proposal_review', second.id],
+    ]);
   });
 
   it('lists every proposal newest first with its proposer, or one status, page by page', async () => {
@@ -550,7 +602,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       method: 'POST',
       url: `/api/v1/admin/markets/${draft.id}/open`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: '{}',
+      payload: { expectedAccountId: admin.id },
     });
     expect(opened.statusCode, opened.body).toBe(200);
     expect((await proposerView(linked.id)).adoption?.market).toEqual({
@@ -626,7 +678,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       method: 'POST',
       url: `/api/v1/admin/markets/${draft.id}/open`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: '{}',
+      payload: { expectedAccountId: admin.id },
     });
     expect(opened.statusCode, opened.body).toBe(200);
     expect((await proposerView(adopted.id)).adoption).toEqual({

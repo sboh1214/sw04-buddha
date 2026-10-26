@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
+import { expectedAccountIdSchema } from './expected-account.js';
 import { RETENTION_PERIOD_MAX_DAYS, type RetentionPeriod } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
@@ -535,7 +536,8 @@ export type ReleaseSettingListQuery = z.infer<typeof releaseSettingListQuerySche
  * `PATCH /admin/release-settings/:key`: the new status and value, and why (required). The value is
  * omitted (or null) for `undecided` and required otherwise; `parseReleaseSettingChange` checks it
  * against the item. The reason is stored in jsonb, so it must be text jsonb can hold
- * (`jsonbTextProblem`): refused here, before anything is written.
+ * (`jsonbTextProblem`): refused here, before anything is written. And the admin on screen
+ * (`expectedAccountId`, ADR-0092).
  */
 export const releaseSettingChangeBodySchema = z
   .object({
@@ -550,6 +552,7 @@ export const releaseSettingChangeBodySchema = z
         const problem = jsonbTextProblem(reason);
         if (problem !== null) ctx.addIssue({ code: 'custom', message: problem });
       }),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'ReleaseSettingChangeBody' });
 export type ReleaseSettingChangeBody = z.infer<typeof releaseSettingChangeBodySchema>;

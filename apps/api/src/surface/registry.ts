@@ -464,11 +464,12 @@ export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
     reason: '인증 메일 다시 보내기(ADR-0023): 주소마다 횟수 제한.',
   },
   'POST /change-email': {
-    reason: '세션 계정의 이메일 변경 시작(PLAN 17 Q5): 확인 메일만 보낸다.',
+    reason:
+      '세션 계정의 이메일 변경 시작(PLAN 17 Q5): 확인 메일만 보낸다. 본문의 화면 계정(expectedAccountId)이 세션 계정이 아니면 아무것도 하지 않고 403(ADR-0092).',
   },
   'POST /change-password': {
     reason:
-      '세션 계정의 비밀번호 변경: 지금 비밀번호가 맞아야 하고, 세션 계정의 사용자를 돌려준다.',
+      '세션 계정의 비밀번호 변경: 지금 비밀번호가 맞아야 하고, 세션 계정의 사용자를 돌려준다. 본문의 화면 계정(expectedAccountId)이 세션 계정이 아니면 비밀번호를 보기 전에 403(ADR-0092).',
     answersAccount: true,
   },
   'POST /update-session': {
@@ -499,7 +500,8 @@ export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {
     reason: '세션 계정의 다른 세션 끝내기.',
   },
   'POST /link-social': {
-    reason: '세션 계정에 소셜 로그인 연결(PLAN 10.3): 제공자의 로그인 주소를 돌려준다.',
+    reason:
+      '세션 계정에 소셜 로그인 연결(PLAN 10.3): 제공자의 로그인 주소를 돌려준다. 본문의 화면 계정(expectedAccountId)이 세션 계정이 아니면 연결 상태를 만들기 전에 403(ADR-0092).',
   },
   'GET /list-accounts': {
     reason: '세션 계정의 로그인 수단 목록(PLAN 10.3).',

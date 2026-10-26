@@ -67,18 +67,20 @@ describe.skipIf(!hasTestInfra)('related markets (integration)', () => {
 
   const get = (url: string, cookie?: string) =>
     t.app.inject({ method: 'GET', url, headers: cookie ? { cookie } : {} });
-  const link = (id: string, marketId: string, cookie = admin.cookie) =>
+  // Both name the admin on screen (ADR-0092) — `who`'s own account unless `shown` says another:
+  // the link in its body, the unlink in its query (a DELETE has no body).
+  const link = (id: string, marketId: string, who: TestUser = admin, shown = who.id) =>
     t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/markets/${id}/related`,
-      headers: { ...jsonHeaders, cookie },
-      payload: { marketId },
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { marketId, expectedAccountId: shown },
     });
-  const unlink = (id: string, relatedId: string, cookie = admin.cookie) =>
+  const unlink = (id: string, relatedId: string, who: TestUser = admin, shown = who.id) =>
     t.app.inject({
       method: 'DELETE',
-      url: `/api/v1/admin/markets/${id}/related/${relatedId}`,
-      headers: { origin: ORIGIN, cookie },
+      url: `/api/v1/admin/markets/${id}/related/${relatedId}?expectedAccountId=${encodeURIComponent(shown)}`,
+      headers: { origin: ORIGIN, cookie: who.cookie },
     });
 
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
@@ -501,7 +503,7 @@ describe.skipIf(!hasTestInfra)('related markets (integration)', () => {
     const b = await market();
     expect((await link(hub.id, a.id)).statusCode).toBe(200);
     // Linked by the other admin, from the other end: the hub's list still names that admin.
-    expect((await link(b.id, hub.id, other.cookie)).statusCode).toBe(200);
+    expect((await link(b.id, hub.id, other)).statusCode).toBe(200);
     const linkers = async () =>
       new Map(
         data<AdminRelatedMarket[]>(
@@ -585,5 +587,51 @@ describe.skipIf(!hasTestInfra)('related markets (integration)', () => {
     expect(unlinked.statusCode).toBe(403);
     expect(await links()).toHaveLength(1);
     expect(await shown(a.id)).toEqual([b.id]);
+  });
+
+  it('refuses a link or an unlink that names another admin than the cookie’s, before anything is read (ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    const a = await market();
+    const b = await market();
+    const c = await market();
+    expect((await link(a.id, b.id)).statusCode).toBe(200);
+    // The screen still shows `admin` while the tab's cookie is `other`'s: both ways refused
+    // naming the field, and no link moves.
+    for (const res of [
+      await link(a.id, c.id, other, admin.id),
+      await unlink(a.id, b.id, other, admin.id),
+    ]) {
+      expect(res.statusCode).toBe(403);
+      expect(errorOf(res).code).toBe('FORBIDDEN');
+      expect(errorOf(res).details?.[0]?.path).toEqual(['expectedAccountId']);
+    }
+    expect(await shown(a.id)).toEqual([b.id]);
+    expect(await actions()).toHaveLength(1);
+    // No account named, in the body or the query: a validation error naming the field.
+    const unnamedLink = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${a.id}/related`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { marketId: c.id },
+    });
+    const unnamedUnlink = await t.app.inject({
+      method: 'DELETE',
+      url: `/api/v1/admin/markets/${a.id}/related/${b.id}`,
+      headers: { origin: ORIGIN, cookie: admin.cookie },
+    });
+    for (const res of [unnamedLink, unnamedUnlink]) {
+      expect(res.statusCode).toBe(400);
+      expect(errorOf(res).details?.map((detail) => detail.path)).toEqual([['expectedAccountId']]);
+    }
+    expect(await shown(a.id)).toEqual([b.id]);
+    // The cookie's own account is taken.
+    expect((await unlink(a.id, b.id, other)).statusCode).toBe(200);
+    expect(await shown(a.id)).toEqual([]);
   });
 });

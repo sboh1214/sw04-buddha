@@ -3,6 +3,7 @@ import { adminAccountActorSchema } from './admin-accounts.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { uuidSchema } from './api/uuid.js';
 import { outcomeSchema } from './enums.js';
+import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { type PublicMarketStatus, marketSlugSchema, marketSummarySchema } from './market.js';
 
 /**
@@ -295,10 +296,12 @@ const PERIOD_ORDER = {
 
 /**
  * `POST /admin/themes` → an unpublished theme. Every field is required (owner decision
- * 2026-10-19): the address, the name, the introduction and the period.
+ * 2026-10-19): the address, the name, the introduction and the period. And the admin on screen
+ * (`expectedAccountId`, ADR-0092 — every admin write on a theme names it: the bodiless ones with
+ * `expectedAccountBodySchema`, the market's removal in its query).
  */
 export const createThemeBodySchema = z
-  .object(themeFields)
+  .object({ ...themeFields, expectedAccountId: expectedAccountIdSchema })
   .refine(periodInOrder, PERIOD_ORDER)
   .meta({ id: 'CreateThemeBody' });
 export type CreateThemeBody = z.infer<typeof createThemeBodySchema>;
@@ -307,15 +310,13 @@ export type CreateThemeBody = z.infer<typeof createThemeBodySchema>;
  * `PATCH /admin/themes/:id`: any of the fields, at any time — before, during or after the period,
  * published or not — except the slug once the theme has been published (the service refuses it
  * naming `slug`; the same slug again is no change). A period half is checked against the other
- * half as stored, naming the half the body sent.
+ * half as stored, naming the half the body sent. At least one field beside the account.
  */
 export const updateThemeBodySchema = z
   .object(themeFields)
   .partial()
-  .refine(
-    (value) => Object.values(value).some((field) => field !== undefined),
-    'at least one field is required',
-  )
+  .extend({ expectedAccountId: expectedAccountIdSchema })
+  .refine(namesAFieldBesideAccount, 'at least one field is required')
   .refine(periodInOrder, PERIOD_ORDER)
   .meta({ id: 'UpdateThemeBody' });
 export type UpdateThemeBody = z.infer<typeof updateThemeBodySchema>;
@@ -325,7 +326,7 @@ export type UpdateThemeBody = z.infer<typeof updateThemeBodySchema>;
  * it shows once it opens), lower-cased on the way in like every request-supplied uuid.
  */
 export const linkThemeMarketBodySchema = z
-  .object({ marketId: uuidSchema })
+  .object({ marketId: uuidSchema, expectedAccountId: expectedAccountIdSchema })
   .meta({ id: 'LinkThemeMarketBody' });
 export type LinkThemeMarketBody = z.infer<typeof linkThemeMarketBodySchema>;
 
@@ -337,18 +338,16 @@ const themeNoticeFields = {
 
 /** `POST /admin/themes/:id/notices`: a notice the page shows at once (once the theme is public). */
 export const createThemeNoticeBodySchema = z
-  .object(themeNoticeFields)
+  .object({ ...themeNoticeFields, expectedAccountId: expectedAccountIdSchema })
   .meta({ id: 'CreateThemeNoticeBody' });
 export type CreateThemeNoticeBody = z.infer<typeof createThemeNoticeBodySchema>;
 
-/** `PATCH /admin/themes/:id/notices/:noticeId`: the title, the body or both. */
+/** `PATCH /admin/themes/:id/notices/:noticeId`: the title, the body or both, and the account. */
 export const updateThemeNoticeBodySchema = z
   .object(themeNoticeFields)
   .partial()
-  .refine(
-    (value) => Object.values(value).some((field) => field !== undefined),
-    'at least one field is required',
-  )
+  .extend({ expectedAccountId: expectedAccountIdSchema })
+  .refine(namesAFieldBesideAccount, 'at least one field is required')
   .meta({ id: 'UpdateThemeNoticeBody' });
 export type UpdateThemeNoticeBody = z.infer<typeof updateThemeNoticeBodySchema>;
 

@@ -35,6 +35,8 @@ import {
   useAdminTheme,
   useAdminThemeMarkets,
 } from '@/hooks/use-admin-themes';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
   EMPTY_THEME_NOTICE_FORM,
   type ThemeFormValues,
@@ -56,8 +58,10 @@ import {
   type AdminTheme,
   type AdminThemeMarket,
   type AdminThemeNotice,
+  type UpdateThemeBody,
   api,
   isApiError,
+  isForAnotherAccount,
   unwrap,
 } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -192,24 +196,32 @@ function Item({ label, children }: { label: string; children: React.ReactNode })
  * screen reader says the rule with the button rather than only after a refusal, as the period
  * hint is the date fields'. A publish without such a market is refused by the API, which the toast
  * says in the same words; the server alone decides, since a draft may open meanwhile.
+ *
+ * Both name the admin on screen (`useOperatorId`, ADR-0092 — as every write on this page), so
+ * they wait for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`) and
+ * the session asked again (`useSessionChanged`).
  */
 function PublishButtons({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const [confirming, setConfirming] = useState(false);
   const publishHintId = useId();
   const published = theme.publishedAt !== null;
   const write = useMutation({
-    mutationFn: async (to: 'publish' | 'unpublish') =>
+    mutationFn: async ({ to, by }: { to: 'publish' | 'unpublish'; by: string }) =>
       unwrap(
         to === 'publish'
           ? await api.POST('/api/v1/admin/themes/{id}/publish', {
               params: { path: { id: theme.id } },
+              body: { expectedAccountId: by },
             })
           : await api.POST('/api/v1/admin/themes/{id}/unpublish', {
               params: { path: { id: theme.id } },
+              body: { expectedAccountId: by },
             }),
       ).data,
-    onSuccess: async (fresh, to) => {
+    onSuccess: async (fresh, { to }) => {
       toaster.create({
         type: 'success',
         title: to === 'publish' ? copy.adminThemePublishDone : copy.adminThemeUnpublishDone,
@@ -219,6 +231,7 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
     },
     onError: (error) => {
       setConfirming(false);
+      sessionChanged(error);
       toaster.create({ type: 'error', title: themeWriteErrorMessage(error) });
     },
   });
@@ -245,7 +258,10 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
           <Button
             size="sm"
             loading={write.isPending}
-            onClick={() => write.mutate('publish')}
+            disabled={operatorId === undefined}
+            onClick={() => {
+              if (operatorId !== undefined) write.mutate({ to: 'publish', by: operatorId });
+            }}
             aria-describedby={publishHintId}
             data-testid="theme-publish"
           >
@@ -263,7 +279,10 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
         title={copy.adminThemeUnpublishTitle}
         confirmLabel={copy.adminThemeUnpublish}
         loading={write.isPending}
-        onConfirm={() => write.mutate('unpublish')}
+        confirmDisabled={operatorId === undefined}
+        onConfirm={() => {
+          if (operatorId !== undefined) write.mutate({ to: 'unpublish', by: operatorId });
+        }}
       >
         <Text>{copy.adminThemeUnpublishBody}</Text>
       </ConfirmDialog>
@@ -278,6 +297,8 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
  */
 function EditThemeCard({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const original = useMemo(() => themeFormValues(theme), [theme]);
   const slugFixed = !themeSlugEditable(theme);
   // `values` follows the server as the market edit form does (FOLLOW_SERVER_RESET): a refetch
@@ -305,7 +326,7 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
   }, [slugFixed, theme.slug, resetField]);
 
   const update = useMutation({
-    mutationFn: async (body: NonNullable<ReturnType<typeof toUpdateThemeBody>>) =>
+    mutationFn: async (body: UpdateThemeBody) =>
       unwrap(
         await api.PATCH('/api/v1/admin/themes/{id}', { params: { path: { id: theme.id } }, body }),
       ).data,
@@ -315,6 +336,7 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
       await applyAdminTheme(queryClient, saved);
     },
     onError: (error) => {
+      sessionChanged(error);
       const fieldError = themeFormError(error);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
@@ -326,8 +348,8 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
 
   const submit = handleSubmit(async (values) => {
     const body = toUpdateThemeBody(values, theme);
-    if (body === undefined) return;
-    await update.mutateAsync(body).catch(() => undefined); // reported by onError
+    if (body === undefined || operatorId === undefined) return;
+    await update.mutateAsync({ ...body, expectedAccountId: operatorId }).catch(() => undefined); // reported by onError
   });
 
   return (
@@ -344,7 +366,7 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
               size="sm"
               alignSelf="flex-start"
               loading={isSubmitting}
-              disabled={!isDirty}
+              disabled={!isDirty || operatorId === undefined}
               data-testid="theme-save"
             >
               {copy.save}
@@ -368,6 +390,8 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
  */
 function ThemeMarketsPanel({ themeId }: { themeId: string }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const markets = useAdminThemeMarkets(themeId, true);
   const linkedIds = useMemo(
     () => new Set((markets.data ?? []).map((row) => row.id)),
@@ -382,18 +406,24 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
   const results = search.data?.pages.flatMap((page) => page.items) ?? [];
   const searchSection = relatedSearchSection(search, results.length);
 
-  const onError = (error: unknown) =>
+  const onError = (error: unknown) => {
+    if (sessionChanged(error)) setRemoving(null);
     toaster.create({
       type: 'error',
-      title: isApiError(error, 'NOT_FOUND') ? copy.adminMarketNotFound : copy.errUnknown,
+      title: isForAnotherAccount(error)
+        ? copy.sessionChanged
+        : isApiError(error, 'NOT_FOUND')
+          ? copy.adminMarketNotFound
+          : copy.errUnknown,
     });
+  };
 
   const link = useMutation({
-    mutationFn: async (marketId: string) =>
+    mutationFn: async ({ marketId, by }: { marketId: string; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/themes/{id}/markets', {
           params: { path: { id: themeId } },
-          body: { marketId },
+          body: { marketId, expectedAccountId: by },
         }),
       ).data,
     onSuccess: async (fresh) => {
@@ -404,10 +434,11 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
   });
 
   const unlink = useMutation({
-    mutationFn: async (marketId: string) =>
+    mutationFn: async ({ marketId, by }: { marketId: string; by: string }) =>
       unwrap(
         await api.DELETE('/api/v1/admin/themes/{id}/markets/{marketId}', {
-          params: { path: { id: themeId, marketId } },
+          // A DELETE has no body: the admin on screen rides in the query.
+          params: { path: { id: themeId, marketId }, query: { expectedAccountId: by } },
         }),
       ).data,
     onSuccess: async (fresh) => {
@@ -552,9 +583,13 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
                       {themePickState(row.id, linkedIds) === 'linkable' ? (
                         <Button
                           size="sm"
-                          loading={link.isPending && link.variables === row.id}
-                          disabled={link.isPending}
-                          onClick={() => link.mutate(row.id)}
+                          loading={link.isPending && link.variables?.marketId === row.id}
+                          disabled={link.isPending || operatorId === undefined}
+                          onClick={() => {
+                            if (operatorId !== undefined) {
+                              link.mutate({ marketId: row.id, by: operatorId });
+                            }
+                          }}
                           data-testid={`admin-theme-market-link-${row.id}`}
                         >
                           {copy.adminThemeMarketLink}
@@ -598,8 +633,11 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
           title={copy.adminThemeMarketUnlinkTitle}
           confirmLabel={copy.adminThemeMarketUnlink}
           loading={unlink.isPending}
+          confirmDisabled={operatorId === undefined}
           onConfirm={() => {
-            if (removing) unlink.mutate(removing.id);
+            if (removing && operatorId !== undefined) {
+              unlink.mutate({ marketId: removing.id, by: operatorId });
+            }
           }}
         >
           <Stack gap="2">
@@ -620,33 +658,48 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
  */
 function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const [editing, setEditing] = useState<string | null>(null);
   const [hiding, setHiding] = useState<AdminThemeNotice | null>(null);
 
   const create = useMutation({
-    mutationFn: async (values: ThemeNoticeFormValues) =>
+    mutationFn: async ({ values, by }: { values: ThemeNoticeFormValues; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/themes/{id}/notices', {
           params: { path: { id: theme.id } },
-          body: toThemeNoticeBody(values),
+          body: { ...toThemeNoticeBody(values), expectedAccountId: by },
         }),
       ).data,
     onSuccess: async (fresh) => {
       toaster.create({ type: 'success', title: copy.adminThemeNoticeCreated });
       await applyAdminTheme(queryClient, fresh);
     },
-    onError: (error) => toaster.create({ type: 'error', title: themeWriteErrorMessage(error) }),
+    onError: (error) => {
+      sessionChanged(error);
+      toaster.create({ type: 'error', title: themeWriteErrorMessage(error) });
+    },
   });
 
   const visibility = useMutation({
-    mutationFn: async ({ noticeId, to }: { noticeId: string; to: 'hide' | 'show' }) =>
+    mutationFn: async ({
+      noticeId,
+      to,
+      by,
+    }: {
+      noticeId: string;
+      to: 'hide' | 'show';
+      by: string;
+    }) =>
       unwrap(
         to === 'hide'
           ? await api.POST('/api/v1/admin/themes/{id}/notices/{noticeId}/hide', {
               params: { path: { id: theme.id, noticeId } },
+              body: { expectedAccountId: by },
             })
           : await api.POST('/api/v1/admin/themes/{id}/notices/{noticeId}/show', {
               params: { path: { id: theme.id, noticeId } },
+              body: { expectedAccountId: by },
             }),
       ).data,
     onSuccess: async (fresh, { to }) => {
@@ -659,6 +712,7 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
     },
     onError: (error) => {
       setHiding(null);
+      sessionChanged(error);
       toaster.create({ type: 'error', title: themeWriteErrorMessage(error) });
     },
   });
@@ -680,7 +734,12 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
             submitLabel={copy.adminThemeNoticeCreate}
             initial={EMPTY_THEME_NOTICE_FORM}
             resetOnSuccess
-            onSubmit={(values) => create.mutateAsync(values)}
+            submitDisabled={operatorId === undefined}
+            onSubmit={(values) =>
+              operatorId === undefined
+                ? Promise.reject(new Error('the admin on screen is not known yet'))
+                : create.mutateAsync({ values, by: operatorId })
+            }
           />
           {theme.notices.length === 0 ? (
             <Text color="fg.muted" data-testid="admin-theme-notices-empty">
@@ -743,7 +802,16 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
                             loading={
                               visibility.isPending && visibility.variables.noticeId === notice.id
                             }
-                            onClick={() => visibility.mutate({ noticeId: notice.id, to: 'show' })}
+                            disabled={operatorId === undefined}
+                            onClick={() => {
+                              if (operatorId !== undefined) {
+                                visibility.mutate({
+                                  noticeId: notice.id,
+                                  to: 'show',
+                                  by: operatorId,
+                                });
+                              }
+                            }}
                             data-testid={`admin-theme-notice-show-${notice.id}`}
                           >
                             {copy.adminThemeNoticeShow}
@@ -764,8 +832,11 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
           title={copy.adminThemeNoticeHideTitle}
           confirmLabel={copy.adminThemeNoticeHide}
           loading={visibility.isPending}
+          confirmDisabled={operatorId === undefined}
           onConfirm={() => {
-            if (hiding) visibility.mutate({ noticeId: hiding.id, to: 'hide' });
+            if (hiding && operatorId !== undefined) {
+              visibility.mutate({ noticeId: hiding.id, to: 'hide', by: operatorId });
+            }
           }}
         >
           <Stack gap="2">
@@ -789,19 +860,21 @@ function EditNotice({
   onDone: () => void;
 }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const update = useMutation({
-    mutationFn: async (values: ThemeNoticeFormValues) => {
+    mutationFn: async ({ values, by }: { values: ThemeNoticeFormValues; by: string }) => {
       const next = toThemeNoticeBody(values);
       // Only what changed; the same text again is no request.
-      const body = {
+      const fields = {
         ...(next.title === notice.title ? {} : { title: next.title }),
         ...(next.body === notice.body ? {} : { body: next.body }),
       };
-      if (Object.keys(body).length === 0) return undefined;
+      if (Object.keys(fields).length === 0) return undefined;
       return unwrap(
         await api.PATCH('/api/v1/admin/themes/{id}/notices/{noticeId}', {
           params: { path: { id: theme.id, noticeId: notice.id } },
-          body,
+          body: { ...fields, expectedAccountId: by },
         }),
       ).data;
     },
@@ -811,14 +884,22 @@ function EditNotice({
       toaster.create({ type: 'success', title: copy.adminThemeNoticeSaved });
       await applyAdminTheme(queryClient, fresh);
     },
-    onError: (error) => toaster.create({ type: 'error', title: themeWriteErrorMessage(error) }),
+    onError: (error) => {
+      sessionChanged(error);
+      toaster.create({ type: 'error', title: themeWriteErrorMessage(error) });
+    },
   });
   return (
     <NoticeForm
       testId={`theme-notice-edit-form-${notice.id}`}
       submitLabel={copy.save}
       initial={{ title: notice.title, body: notice.body }}
-      onSubmit={(values) => update.mutateAsync(values)}
+      submitDisabled={operatorId === undefined}
+      onSubmit={(values) =>
+        operatorId === undefined
+          ? Promise.reject(new Error('the admin on screen is not known yet'))
+          : update.mutateAsync({ values, by: operatorId })
+      }
       onCancel={onDone}
     />
   );
@@ -833,6 +914,7 @@ function NoticeForm({
   submitLabel,
   initial,
   resetOnSuccess = false,
+  submitDisabled = false,
   onSubmit,
   onCancel,
 }: {
@@ -840,6 +922,8 @@ function NoticeForm({
   submitLabel: string;
   initial: ThemeNoticeFormValues;
   resetOnSuccess?: boolean;
+  /** While the admin on screen is not known (`GET /me` has not answered): nothing to send as. */
+  submitDisabled?: boolean;
   onSubmit: (values: ThemeNoticeFormValues) => Promise<unknown>;
   onCancel?: () => void;
 }) {
@@ -884,7 +968,13 @@ function NoticeForm({
           <Field.ErrorText>{errors.body?.message}</Field.ErrorText>
         </Field.Root>
         <HStack gap="2">
-          <Button type="submit" size="sm" loading={isSubmitting} data-testid={`${testId}-submit`}>
+          <Button
+            type="submit"
+            size="sm"
+            loading={isSubmitting}
+            disabled={submitDisabled}
+            data-testid={`${testId}-submit`}
+          >
             {submitLabel}
           </Button>
           {onCancel && (

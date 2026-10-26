@@ -319,12 +319,14 @@ export type ProposalAdoptionMarket = z.infer<typeof proposalAdoptionMarketSchema
 
 /**
  * `POST /admin/proposals/:id/adopt` (검토 → 채택): the memo the proposer reads, if any, and the
- * market, if any. Final: a 채택 is never undone.
+ * market, if any. Final: a 채택 is never undone. Every admin write on a proposal names the admin on
+ * screen (`expectedAccountId`, ADR-0092 — 검토 시작 with `expectedAccountBodySchema`).
  */
 export const adoptProposalBodySchema = z
   .object({
     memo: z.string().trim().max(PROPOSAL_NOTE_MAX).nullish(),
     market: proposalAdoptionMarketSchema.nullish(),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'AdoptProposalBody' });
 export type AdoptProposalBody = z.infer<typeof adoptProposalBodySchema>;
@@ -337,7 +339,7 @@ export type AdoptProposalBody = z.infer<typeof adoptProposalBodySchema>;
  * stays as the 채택 left it.
  */
 export const linkProposalMarketBodySchema = z
-  .object({ market: proposalAdoptionMarketSchema })
+  .object({ market: proposalAdoptionMarketSchema, expectedAccountId: expectedAccountIdSchema })
   .meta({ id: 'LinkProposalMarketBody' });
 export type LinkProposalMarketBody = z.infer<typeof linkProposalMarketBodySchema>;
 
@@ -350,6 +352,7 @@ export const rejectProposalBodySchema = z
     reason: proposalRejectionReasonSchema,
     explanation: z.string().trim().min(1).max(PROPOSAL_NOTE_MAX),
     duplicateMarketId: uuidSchema.nullish(),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .superRefine((body, ctx) => {
     const named = body.duplicateMarketId != null;
@@ -375,7 +378,10 @@ export type RejectProposalBody = z.infer<typeof rejectProposalBodySchema>;
  * clears it. Never shown to the proposer.
  */
 export const proposalInternalMemoBodySchema = z
-  .object({ memo: z.string().trim().max(PROPOSAL_NOTE_MAX).nullable() })
+  .object({
+    memo: z.string().trim().max(PROPOSAL_NOTE_MAX).nullable(),
+    expectedAccountId: expectedAccountIdSchema,
+  })
   .meta({ id: 'ProposalInternalMemoBody' });
 export type ProposalInternalMemoBody = z.infer<typeof proposalInternalMemoBodySchema>;
 

@@ -5,6 +5,7 @@ import {
   COUPON_CODE_MIN_LENGTH,
   COUPON_CODE_PATTERN,
 } from './constants.js';
+import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 
 /**
  * Coupons let an admin hand out Coin without touching a balance directly (owner decision
@@ -56,6 +57,7 @@ export const couponSchema = z
   .meta({ id: 'Coupon' });
 export type Coupon = z.infer<typeof couponSchema>;
 
+/** `POST /admin/coupons`, as the admin on screen (`expectedAccountId`, ADR-0092). */
 export const createCouponBodySchema = z
   .object({
     /** Omitted: the server generates a readable random code. */
@@ -67,21 +69,23 @@ export const createCouponBodySchema = z
     maxRedemptions: z.coerce.number().int().positive().max(1_000_000).nullish(),
     expiresAt: z.iso.datetime().nullish(),
     memo: z.string().trim().max(COUPON_MEMO_MAX_LENGTH).nullish(),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'CreateCouponBody' });
 export type CreateCouponBody = z.infer<typeof createCouponBodySchema>;
 
-/** Only the knobs that stay safe once a coupon is out in the world. */
+/**
+ * Only the knobs that stay safe once a coupon is out in the world — at least one — and the admin
+ * on screen.
+ */
 export const updateCouponBodySchema = z
   .object({
     isActive: z.boolean().optional(),
     maxRedemptions: z.coerce.number().int().positive().max(1_000_000).nullish(),
     expiresAt: z.iso.datetime().nullish(),
     memo: z.string().trim().max(COUPON_MEMO_MAX_LENGTH).nullish(),
+    expectedAccountId: expectedAccountIdSchema,
   })
-  .refine(
-    (value) => Object.values(value).some((field) => field !== undefined),
-    'at least one field is required',
-  )
+  .refine(namesAFieldBesideAccount, 'at least one field is required')
   .meta({ id: 'UpdateCouponBody' });
 export type UpdateCouponBody = z.infer<typeof updateCouponBodySchema>;

@@ -115,8 +115,12 @@ describe('the date (#77)', () => {
 });
 
 describe('the operators’ bodies (#77)', () => {
+  /** The admin on screen, which every operator write names (ADR-0092). */
+  const account = { expectedAccountId: 'admin-1' } as const;
+
   it('rejects with a reason and an explanation, and a market for a 중복 only', () => {
-    const ok = (body: Record<string, unknown>) => rejectProposalBodySchema.safeParse(body);
+    const ok = (body: Record<string, unknown>) =>
+      rejectProposalBodySchema.safeParse({ ...account, ...body });
     const market = '7C0B4D3E-2E8A-4C4B-9F7E-0E5A2B9C1D11';
     const duplicate = ok({ reason: 'duplicate', explanation: '중복', duplicateMarketId: market });
     expect(duplicate.success && duplicate.data.duplicateMarketId).toBe(market.toLowerCase());
@@ -134,28 +138,53 @@ describe('the operators’ bodies (#77)', () => {
       ['duplicateMarketId'],
     ]);
     expect(ok({ reason: 'prohibited_topic', explanation: '개설 금지 주제' }).success).toBe(true);
+    expect(
+      rejectProposalBodySchema.safeParse({ reason: 'other', explanation: '기타' }).success,
+    ).toBe(false);
   });
 
   it('adopts with an optional memo and a draft, an existing market or none', () => {
-    expect(adoptProposalBodySchema.parse({})).toEqual({});
+    expect(adoptProposalBodySchema.parse({ ...account })).toEqual({ ...account });
     expect(
-      adoptProposalBodySchema.parse({ memo: ' 메모 ', market: { type: 'draft', categoryId: 2 } }),
-    ).toEqual({ memo: '메모', market: { type: 'draft', categoryId: 2 } });
+      adoptProposalBodySchema.parse({
+        memo: ' 메모 ',
+        market: { type: 'draft', categoryId: 2 },
+        ...account,
+      }),
+    ).toEqual({ memo: '메모', market: { type: 'draft', categoryId: 2 }, ...account });
     expect(
-      adoptProposalBodySchema.safeParse({ market: { type: 'existing', marketId: 'x' } }).success,
+      adoptProposalBodySchema.safeParse({
+        market: { type: 'existing', marketId: 'x' },
+        ...account,
+      }).success,
     ).toBe(false);
-    expect(adoptProposalBodySchema.safeParse({ market: { type: 'open' } }).success).toBe(false);
+    expect(
+      adoptProposalBodySchema.safeParse({ market: { type: 'open' }, ...account }).success,
+    ).toBe(false);
+    expect(adoptProposalBodySchema.safeParse({}).success).toBe(false);
   });
 
   it('links a market later as a 채택 does — a draft or an existing market — and never none', () => {
     expect(
-      linkProposalMarketBodySchema.parse({ market: { type: 'draft', closeAt: undefined } }),
-    ).toEqual({ market: { type: 'draft' } });
+      linkProposalMarketBodySchema.parse({
+        market: { type: 'draft', closeAt: undefined },
+        ...account,
+      }),
+    ).toEqual({ market: { type: 'draft' }, ...account });
     const market = '7C0B4D3E-2E8A-4C4B-9F7E-0E5A2B9C1D11';
     expect(
-      linkProposalMarketBodySchema.parse({ market: { type: 'existing', marketId: market } }),
-    ).toEqual({ market: { type: 'existing', marketId: market.toLowerCase() } });
-    for (const body of [{}, { market: null }, { market: { type: 'open' } }, { memo: '메모' }]) {
+      linkProposalMarketBodySchema.parse({
+        market: { type: 'existing', marketId: market },
+        ...account,
+      }),
+    ).toEqual({ market: { type: 'existing', marketId: market.toLowerCase() }, ...account });
+    for (const body of [
+      { ...account },
+      { market: null, ...account },
+      { market: { type: 'open' }, ...account },
+      { memo: '메모', ...account },
+      { market: { type: 'draft' } },
+    ]) {
       expect(linkProposalMarketBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(
         false,
       );
@@ -170,10 +199,14 @@ describe('the operators’ bodies (#77)', () => {
   });
 
   it('keeps an internal memo or clears it', () => {
-    expect(proposalInternalMemoBodySchema.parse({ memo: null })).toEqual({ memo: null });
-    expect(proposalInternalMemoBodySchema.safeParse({ memo: '가'.repeat(1_001) }).success).toBe(
-      false,
-    );
+    expect(proposalInternalMemoBodySchema.parse({ memo: null, ...account })).toEqual({
+      memo: null,
+      ...account,
+    });
+    expect(
+      proposalInternalMemoBodySchema.safeParse({ memo: '가'.repeat(1_001), ...account }).success,
+    ).toBe(false);
+    expect(proposalInternalMemoBodySchema.safeParse({ memo: null }).success).toBe(false);
   });
 
   it('describes a limit refusal: pending with no time, daily with one', () => {

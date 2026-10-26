@@ -243,6 +243,13 @@ export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];
 export type AuditFailure = components['schemas']['AuditFailure'];
 export type CreateMarketBody = components['schemas']['CreateMarketBody'];
 export type UpdateMarketBody = components['schemas']['UpdateMarketBody'];
+/**
+ * A market write's fields without the admin it names (ADR-0092): what the forms build — the
+ * 미리보기 draws one, and an edit sends only those that changed — before the press adds the admin
+ * on screen.
+ */
+export type CreateMarketFields = Omit<CreateMarketBody, 'expectedAccountId'>;
+export type UpdateMarketFields = Omit<UpdateMarketBody, 'expectedAccountId'>;
 /** `POST /admin/markets/{id}/resolve`: judge a closed market — final at once (ADR-0046). */
 export type ResolveMarketBody = components['schemas']['ResolveMarketBody'];
 /** A release setting (#170): what the item is, its status and value, and who changed it last. */
@@ -304,6 +311,9 @@ export type AdminThemeNotice = components['schemas']['AdminThemeNotice'];
 export type AdminThemeMarket = components['schemas']['AdminThemeMarket'];
 export type CreateThemeBody = components['schemas']['CreateThemeBody'];
 export type UpdateThemeBody = components['schemas']['UpdateThemeBody'];
+/** A theme write's fields without the admin it names, which the press adds (ADR-0092). */
+export type CreateThemeFields = Omit<CreateThemeBody, 'expectedAccountId'>;
+export type UpdateThemeFields = Omit<UpdateThemeBody, 'expectedAccountId'>;
 export type CreateThemeNoticeBody = components['schemas']['CreateThemeNoticeBody'];
 export type UpdateThemeNoticeBody = components['schemas']['UpdateThemeNoticeBody'];
 /**

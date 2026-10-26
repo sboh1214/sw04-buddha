@@ -379,6 +379,8 @@ describe('the review list’s groups and marks (owner decision 2026-10-22)', () 
       reason: 'same_account',
       outcome: 'actioned',
       through: at,
+      // The admin on screen (ADR-0092).
+      expectedAccountId: 'admin-1',
     };
     expect(adminLinkFlagReviewBodySchema.parse(mark)).toEqual(mark);
     expect(adminLinkFlagReviewBodySchema.parse({ ...mark, note: '  숨김  ' }).note).toBe('숨김');
@@ -388,6 +390,8 @@ describe('the review list’s groups and marks (owner decision 2026-10-22)', () 
       { ...mark, note: 'x'.repeat(501) },
       { ...mark, through: 'now' },
       { ...mark, url: '' },
+      { ...mark, expectedAccountId: undefined },
+      { ...mark, expectedAccountId: '' },
     ]) {
       expect(() => adminLinkFlagReviewBodySchema.parse(bad)).toThrow();
     }

@@ -36,6 +36,8 @@ import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { applyProposal, useAdminProposal } from '@/hooks/use-admin-proposals';
 import { useCategories } from '@/hooks/use-markets';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import { type AdminProposal, type MarketSummary, api, isApiError, unwrap } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR } from '@/lib/category-label';
 import { type CategoryNode, groupCategories } from '@/lib/category-tree';
@@ -306,7 +308,9 @@ function ResultCard({ proposal }: { proposal: AdminProposal }) {
 
 /**
  * Reports a refused move: the message as a toast, the field it is about under that field, and
- * — when the proposal moved under the screen — the detail read again.
+ * — when the proposal moved under the screen — the detail read again. The cookie of another
+ * account (every move names the admin on screen, `useOperatorId`, ADR-0092) asks for the session
+ * again (`useSessionChanged`) under `copy.sessionChanged`.
  */
 function useReportFailure<Values extends FieldValues>(
   proposal: AdminProposal,
@@ -314,7 +318,9 @@ function useReportFailure<Values extends FieldValues>(
   fields: Partial<Record<AdminProposalField, keyof Values & string>> = {},
 ) {
   const queryClient = useQueryClient();
+  const sessionChanged = useSessionChanged();
   return (error: unknown) => {
+    sessionChanged(error);
     const failure = adminProposalFailure(error);
     toaster.create({ type: 'error', title: failure.message });
     const name = failure.field === undefined ? undefined : fields[failure.field];
@@ -327,15 +333,20 @@ function useReportFailure<Values extends FieldValues>(
   };
 }
 
-/** 접수 → 검토: one press, recorded with the operator and the time. */
+/**
+ * 접수 → 검토: one press, recorded with the operator and the time — the admin on screen, so the
+ * press waits for `GET /me` (ADR-0092).
+ */
 function StartReview({ proposal }: { proposal: AdminProposal }) {
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
   const report = useReportFailure(proposal);
   const review = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (expectedAccountId: string) =>
       unwrap(
         await api.POST('/api/v1/admin/proposals/{id}/review', {
           params: { path: { id: proposal.id } },
+          body: { expectedAccountId },
         }),
       ).data,
     onSuccess: async (fresh) => {
@@ -349,7 +360,10 @@ function StartReview({ proposal }: { proposal: AdminProposal }) {
       alignSelf="flex-start"
       size="sm"
       loading={review.isPending}
-      onClick={() => review.mutate()}
+      disabled={operatorId === undefined}
+      onClick={() => {
+        if (operatorId !== undefined) review.mutate(operatorId);
+      }}
       data-testid="admin-proposal-review"
     >
       {copy.adminProposalStartReview}
@@ -497,6 +511,8 @@ function useDraftCategories(proposal: AdminProposal) {
  */
 function AdoptForm({ proposal }: { proposal: AdminProposal }) {
   const queryClient = useQueryClient();
+  // The admin on screen, whom the confirmed write names (ADR-0092): the confirm waits for it.
+  const operatorId = useOperatorId();
   const { tree, view } = useDraftCategories(proposal);
   const [picked, setPicked] = useState<MarketSummary | null>(null);
   const [confirming, setConfirming] = useState<AdoptProposalFormValues | null>(null);
@@ -521,14 +537,14 @@ function AdoptForm({ proposal }: { proposal: AdminProposal }) {
   });
 
   const adopt = useMutation({
-    mutationFn: async (values: AdoptProposalFormValues) =>
+    mutationFn: async ({ values, by }: { values: AdoptProposalFormValues; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/proposals/{id}/adopt', {
           params: { path: { id: proposal.id } },
-          body: toAdoptProposalBody(values),
+          body: toAdoptProposalBody(values, by),
         }),
       ).data,
-    onSuccess: async (fresh, values) => {
+    onSuccess: async (fresh, { values }) => {
       toaster.create({ type: 'success', title: copy.adminProposalAdopted });
       setConfirming(null);
       await applyProposal(queryClient, fresh, { marketCreated: values.market === 'draft' });
@@ -605,8 +621,11 @@ function AdoptForm({ proposal }: { proposal: AdminProposal }) {
         title={copy.adminProposalAdoptTitle}
         confirmLabel={copy.adminProposalAdopt}
         loading={adopt.isPending}
+        confirmDisabled={operatorId === undefined}
         onConfirm={() => {
-          if (confirming !== null) adopt.mutate(confirming);
+          if (confirming !== null && operatorId !== undefined) {
+            adopt.mutate({ values: confirming, by: operatorId });
+          }
         }}
       >
         <Stack gap="2">
@@ -629,6 +648,8 @@ function AdoptForm({ proposal }: { proposal: AdminProposal }) {
  */
 function LinkMarketForm({ proposal }: { proposal: AdminProposal }) {
   const queryClient = useQueryClient();
+  // The admin on screen, whom the confirmed write names (ADR-0092): the confirm waits for it.
+  const operatorId = useOperatorId();
   const { tree, view } = useDraftCategories(proposal);
   const [picked, setPicked] = useState<MarketSummary | null>(null);
   const [confirming, setConfirming] = useState<LinkProposalMarketFormValues | null>(null);
@@ -653,14 +674,14 @@ function LinkMarketForm({ proposal }: { proposal: AdminProposal }) {
   });
 
   const link = useMutation({
-    mutationFn: async (values: LinkProposalMarketFormValues) =>
+    mutationFn: async ({ values, by }: { values: LinkProposalMarketFormValues; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/proposals/{id}/market', {
           params: { path: { id: proposal.id } },
-          body: toLinkProposalMarketBody(values),
+          body: toLinkProposalMarketBody(values, by),
         }),
       ).data,
-    onSuccess: async (fresh, values) => {
+    onSuccess: async (fresh, { values }) => {
       toaster.create({ type: 'success', title: copy.adminProposalLinked });
       setConfirming(null);
       await applyProposal(queryClient, fresh, { marketCreated: values.market === 'draft' });
@@ -737,8 +758,11 @@ function LinkMarketForm({ proposal }: { proposal: AdminProposal }) {
         title={copy.adminProposalLinkTitle}
         confirmLabel={copy.adminProposalLink}
         loading={link.isPending}
+        confirmDisabled={operatorId === undefined}
         onConfirm={() => {
-          if (confirming !== null) link.mutate(confirming);
+          if (confirming !== null && operatorId !== undefined) {
+            link.mutate({ values: confirming, by: operatorId });
+          }
         }}
       >
         <Stack gap="2">
@@ -757,6 +781,8 @@ function LinkMarketForm({ proposal }: { proposal: AdminProposal }) {
  */
 function RejectForm({ proposal }: { proposal: AdminProposal }) {
   const queryClient = useQueryClient();
+  // The admin on screen, whom the confirmed write names (ADR-0092): the confirm waits for it.
+  const operatorId = useOperatorId();
   const [picked, setPicked] = useState<MarketSummary | null>(null);
   const [confirming, setConfirming] = useState<RejectProposalFormValues | null>(null);
   const {
@@ -776,11 +802,11 @@ function RejectForm({ proposal }: { proposal: AdminProposal }) {
   });
 
   const reject = useMutation({
-    mutationFn: async (values: RejectProposalFormValues) =>
+    mutationFn: async ({ values, by }: { values: RejectProposalFormValues; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/proposals/{id}/reject', {
           params: { path: { id: proposal.id } },
-          body: toRejectProposalBody(values),
+          body: toRejectProposalBody(values, by),
         }),
       ).data,
     onSuccess: async (fresh) => {
@@ -858,8 +884,11 @@ function RejectForm({ proposal }: { proposal: AdminProposal }) {
         title={copy.adminProposalRejectTitle}
         confirmLabel={copy.adminProposalReject}
         loading={reject.isPending}
+        confirmDisabled={operatorId === undefined}
         onConfirm={() => {
-          if (confirming !== null) reject.mutate(confirming);
+          if (confirming !== null && operatorId !== undefined) {
+            reject.mutate({ values: confirming, by: operatorId });
+          }
         }}
       >
         <Stack gap="2">
@@ -889,13 +918,14 @@ function InternalMemoCard({ proposal }: { proposal: AdminProposal }) {
     values,
     resetOptions: { keepDirtyValues: true },
   });
+  const operatorId = useOperatorId();
   const report = useReportFailure(proposal);
   const save = useMutation({
-    mutationFn: async (memo: string) =>
+    mutationFn: async ({ memo, by }: { memo: string; by: string }) =>
       unwrap(
         await api.PUT('/api/v1/admin/proposals/{id}/internal-memo', {
           params: { path: { id: proposal.id } },
-          body: { memo: memo.trim() === '' ? null : memo.trim() },
+          body: { memo: memo.trim() === '' ? null : memo.trim(), expectedAccountId: by },
         }),
       ).data,
     onSuccess: async (fresh) => {
@@ -905,7 +935,9 @@ function InternalMemoCard({ proposal }: { proposal: AdminProposal }) {
     },
     onError: report,
   });
-  const submit = handleSubmit((form) => save.mutate(form.memo));
+  const submit = handleSubmit((form) => {
+    if (operatorId !== undefined) save.mutate({ memo: form.memo, by: operatorId });
+  });
 
   return (
     <Card.Root data-testid="admin-proposal-internal-memo">
@@ -934,7 +966,7 @@ function InternalMemoCard({ proposal }: { proposal: AdminProposal }) {
               size="sm"
               alignSelf="flex-start"
               loading={save.isPending}
-              disabled={!isDirty}
+              disabled={!isDirty || operatorId === undefined}
               data-testid="admin-proposal-internal-memo-save"
             >
               {copy.save}

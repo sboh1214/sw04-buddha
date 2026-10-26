@@ -1,5 +1,5 @@
 import { copy } from '@/copy';
-import { type Category, type CreateMarketBody, type MarketSummary } from '@/lib/api';
+import { type Category, type CreateMarketFields, type MarketSummary } from '@/lib/api';
 import { isHttpUrl } from '@/lib/market-form';
 
 /**
@@ -36,7 +36,7 @@ export const PREVIEW_SLUG = 'preview';
  * own 참여자, and the 시장 만들기 card '참여자 0'.
  */
 export function toPreviewMarket(
-  body: CreateMarketBody,
+  body: CreateMarketFields,
   categories: Category[],
   base?: MarketSummary,
 ): MarketSummary {

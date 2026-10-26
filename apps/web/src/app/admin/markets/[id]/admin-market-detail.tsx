@@ -40,12 +40,15 @@ import {
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
   type AdminMarket,
   type AdminRelatedMarket,
   type Category,
   type MarketSummary,
   type UpdateMarketBody,
+  type UpdateMarketFields,
   api,
   isApiError,
   unwrap,
@@ -268,21 +271,32 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
  * cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives in its own
  * component, mounted only while its dialog is open, so every opening starts from an empty form.
  * A judged market offers none of these: the 판정 is final (#26 decides what may undo one).
+ *
+ * Each names the admin on screen (`useOperatorId`, ADR-0092), so 열기 and the confirmations wait
+ * for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`), the dialog
+ * closes and the session is asked again (`useSessionChanged`).
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const [confirm, setConfirm] = useState<'close' | 'resolve' | null>(null);
   const closeDialog = () => {
     setConfirm(null);
   };
 
-  const onError = (error: unknown) =>
+  const onError = (error: unknown) => {
+    if (sessionChanged(error)) setConfirm(null);
     toaster.create({ type: 'error', title: transitionErrorMessage(error) });
+  };
 
   const open = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (expectedAccountId: string) =>
       unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/open', { params: { path: { id: market.id } } }),
+        await api.POST('/api/v1/admin/markets/{id}/open', {
+          params: { path: { id: market.id } },
+          body: { expectedAccountId },
+        }),
       ).data,
     // The answer is the market as the transition committed it (the same shape GET returns):
     // it goes on the screen now, so a refetch that fails cannot leave the old status under a
@@ -295,9 +309,12 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
   });
 
   const close = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (expectedAccountId: string) =>
       unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/close', { params: { path: { id: market.id } } }),
+        await api.POST('/api/v1/admin/markets/{id}/close', {
+          params: { path: { id: market.id } },
+          body: { expectedAccountId },
+        }),
       ).data,
     onSuccess: async (closed) => {
       toaster.create({ type: 'success', title: copy.adminMarketClosed });
@@ -313,7 +330,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         <Button
           size="sm"
           loading={open.isPending}
-          onClick={() => open.mutate()}
+          disabled={operatorId === undefined}
+          onClick={() => {
+            if (operatorId !== undefined) open.mutate(operatorId);
+          }}
           data-testid="market-open"
         >
           {copy.adminMarketOpen}
@@ -344,7 +364,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         title={copy.adminMarketCloseTitle}
         confirmLabel={copy.adminMarketClose}
         loading={close.isPending}
-        onConfirm={() => close.mutate()}
+        confirmDisabled={operatorId === undefined}
+        onConfirm={() => {
+          if (operatorId !== undefined) close.mutate(operatorId);
+        }}
       >
         <Text>{copy.adminMarketCloseBody}</Text>
       </ConfirmDialog>
@@ -362,6 +385,8 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
  */
 function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
   const apply = useApplyMarket(market.id);
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const {
     control,
     register,
@@ -373,11 +398,11 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
   });
 
   const resolve = useMutation({
-    mutationFn: async (values: ResolveMarketFormOutput) =>
+    mutationFn: async ({ values, by }: { values: ResolveMarketFormOutput; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/resolve', {
           params: { path: { id: market.id } },
-          body: toResolveMarketBody(values),
+          body: toResolveMarketBody(values, by),
         }),
       ).data,
     onSuccess: async (resolved) => {
@@ -385,10 +410,16 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
       onClose();
       await apply(resolved);
     },
-    onError: (error) => toaster.create({ type: 'error', title: transitionErrorMessage(error) }),
+    onError: (error) => {
+      // Another account's cookie judged nothing: the dialog closes with the toast (ADR-0092).
+      if (sessionChanged(error)) onClose();
+      toaster.create({ type: 'error', title: transitionErrorMessage(error) });
+    },
   });
 
-  const submit = handleSubmit((values) => resolve.mutate(values));
+  const submit = handleSubmit((values) => {
+    if (operatorId !== undefined) resolve.mutate({ values, by: operatorId });
+  });
 
   return (
     <ConfirmDialog
@@ -398,6 +429,7 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
       title={copy.adminMarketResolveTitle}
       confirmLabel={copy.adminMarketResolve}
       loading={resolve.isPending}
+      confirmDisabled={operatorId === undefined}
       onConfirm={() => void submit()}
     >
       <Stack gap="3">
@@ -512,6 +544,9 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
 
 function EditMarketForm({ market, categories }: { market: AdminMarket; categories: Category[] }) {
   const apply = useApplyMarket(market.id);
+  // The admin on screen, whom a save names (ADR-0092): 저장 waits for `GET /me`.
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
   const rulesRequired = market.status === 'open';
@@ -519,7 +554,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     () => marketFormSchema({ original, rulesRequired }),
     [original, rulesRequired],
   );
-  const [pending, setPending] = useState<UpdateMarketBody | null>(null);
+  const [pending, setPending] = useState<UpdateMarketFields | null>(null);
 
   // `values` follows the server: react-hook-form deep-compares it with what it last applied,
   // so a refetch that moved only trade stats or updatedAt changes nothing, and
@@ -558,6 +593,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     },
     onError: (error) => {
       setPending(null);
+      sessionChanged(error);
       const fieldError = marketFormError(error);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
@@ -577,7 +613,8 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       setPending(body);
       return;
     }
-    await update.mutateAsync(body).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await update.mutateAsync({ ...body, expectedAccountId: operatorId }).catch(() => undefined); // reported by onError
   });
 
   return (
@@ -597,7 +634,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
             size="sm"
             alignSelf="flex-start"
             loading={isSubmitting || update.isPending}
-            disabled={!editable || !isDirty}
+            disabled={!editable || !isDirty || operatorId === undefined}
             data-testid="market-save"
           >
             {copy.save}
@@ -612,8 +649,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
         title={copy.adminMarketEditOpenTitle}
         confirmLabel={copy.save}
         loading={update.isPending}
+        confirmDisabled={operatorId === undefined}
         onConfirm={() => {
-          if (pending) update.mutate(pending);
+          if (pending && operatorId !== undefined) {
+            update.mutate({ ...pending, expectedAccountId: operatorId });
+          }
         }}
       >
         <Text>{copy.adminMarketEditOpenBody}</Text>
@@ -724,6 +764,9 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
  */
 function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const queryClient = useQueryClient();
+  // The admin on screen, whom a link and an unlink name (ADR-0092): both wait for `GET /me`.
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const links = useAdminRelatedMarkets(market.id);
   const linkedIds = useMemo(() => new Set((links.data ?? []).map((row) => row.id)), [links.data]);
   const [unlinking, setUnlinking] = useState<AdminRelatedMarket | null>(null);
@@ -735,18 +778,20 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const linksSection = listSection(links, linkRows.length);
   const searchSection = relatedSearchSection(search, results.length);
 
-  const onError = (error: unknown) =>
+  const onError = (error: unknown) => {
+    if (sessionChanged(error)) setUnlinking(null);
     toaster.create({ type: 'error', title: relatedLinkErrorMessage(error) });
+  };
 
   const link = useMutation({
-    mutationFn: async (relatedId: string) =>
+    mutationFn: async ({ relatedId, by }: { relatedId: string; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/related', {
           params: { path: { id: market.id } },
-          body: { marketId: relatedId },
+          body: { marketId: relatedId, expectedAccountId: by },
         }),
       ).data,
-    onSuccess: async (fresh, relatedId) => {
+    onSuccess: async (fresh, { relatedId }) => {
       toaster.create({ type: 'success', title: copy.adminRelatedLinked });
       await applyRelatedMarkets(queryClient, market.id, relatedId, fresh);
     },
@@ -754,13 +799,17 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   });
 
   const unlink = useMutation({
-    mutationFn: async (relatedId: string) =>
+    mutationFn: async ({ relatedId, by }: { relatedId: string; by: string }) =>
       unwrap(
         await api.DELETE('/api/v1/admin/markets/{id}/related/{relatedMarketId}', {
-          params: { path: { id: market.id, relatedMarketId: relatedId } },
+          params: {
+            path: { id: market.id, relatedMarketId: relatedId },
+            // A DELETE has no body: the admin on screen rides in the query.
+            query: { expectedAccountId: by },
+          },
         }),
       ).data,
-    onSuccess: async (fresh, relatedId) => {
+    onSuccess: async (fresh, { relatedId }) => {
       toaster.create({ type: 'success', title: copy.adminRelatedUnlinked });
       setUnlinking(null);
       await applyRelatedMarkets(queryClient, market.id, relatedId, fresh);
@@ -909,9 +958,13 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                         {state === 'linkable' ? (
                           <Button
                             size="sm"
-                            loading={link.isPending && link.variables === row.id}
-                            disabled={link.isPending}
-                            onClick={() => link.mutate(row.id)}
+                            loading={link.isPending && link.variables?.relatedId === row.id}
+                            disabled={link.isPending || operatorId === undefined}
+                            onClick={() => {
+                              if (operatorId !== undefined) {
+                                link.mutate({ relatedId: row.id, by: operatorId });
+                              }
+                            }}
                             data-testid={`admin-related-link-${row.id}`}
                           >
                             {copy.adminRelatedLink}
@@ -958,8 +1011,11 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
           title={copy.adminRelatedUnlinkTitle}
           confirmLabel={copy.adminRelatedUnlink}
           loading={unlink.isPending}
+          confirmDisabled={operatorId === undefined}
           onConfirm={() => {
-            if (unlinking) unlink.mutate(unlinking.id);
+            if (unlinking && operatorId !== undefined) {
+              unlink.mutate({ relatedId: unlinking.id, by: operatorId });
+            }
           }}
         >
           <Stack gap="2">

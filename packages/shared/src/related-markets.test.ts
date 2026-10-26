@@ -43,12 +43,19 @@ describe('relatedMarketPair', () => {
 });
 
 describe('linkRelatedMarketBodySchema', () => {
-  it('takes one market id, lower-cased on the way in', () => {
-    expect(linkRelatedMarketBodySchema.parse({ marketId: B.toUpperCase() })).toEqual({
+  const account = { expectedAccountId: 'admin-1' } as const;
+
+  it('takes one market id, lower-cased on the way in, and the admin on screen', () => {
+    expect(linkRelatedMarketBodySchema.parse({ marketId: B.toUpperCase(), ...account })).toEqual({
       marketId: B,
+      ...account,
     });
-    expect(linkRelatedMarketBodySchema.safeParse({ marketId: 'not-a-uuid' }).success).toBe(false);
-    expect(linkRelatedMarketBodySchema.safeParse({}).success).toBe(false);
+    expect(
+      linkRelatedMarketBodySchema.safeParse({ marketId: 'not-a-uuid', ...account }).success,
+    ).toBe(false);
+    expect(linkRelatedMarketBodySchema.safeParse({ ...account }).success).toBe(false);
+    // ADR-0092: the admin on screen is required.
+    expect(linkRelatedMarketBodySchema.safeParse({ marketId: B }).success).toBe(false);
   });
 });
 

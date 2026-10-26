@@ -21,6 +21,8 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ADMIN_THEMES_KEY, applyAdminTheme, useAdminThemes } from '@/hooks/use-admin-themes';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
   EMPTY_THEME_FORM,
   type ThemeFormValues,
@@ -29,7 +31,7 @@ import {
   themeWriteErrorMessage,
   toCreateThemeBody,
 } from '@/lib/admin-themes';
-import { api, unwrap } from '@/lib/api';
+import { type CreateThemeBody, api, unwrap } from '@/lib/api';
 import { formatThemePeriod } from '@/lib/themes';
 import { ThemeFormFields } from './theme-form-fields';
 
@@ -120,11 +122,15 @@ export function AdminThemes() {
 
 /**
  * 테마 만들기 → an unpublished theme. On success the admin lands on its detail, where markets go
- * in and 공개하기 is (a theme is published with a market in it, owner decision 2026-10-19).
+ * in and 공개하기 is (a theme is published with a market in it, owner decision 2026-10-19). Made
+ * as the admin on screen (`useOperatorId`, ADR-0092): 만들기 waits for `GET /me`, and the cookie
+ * of another account is refused (`copy.sessionChanged`, the session asked again).
  */
 function CreateThemeCard() {
   const router = useRouter();
   const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const form = useForm<ThemeFormValues>({
     resolver: zodResolver(themeFormSchema),
     defaultValues: EMPTY_THEME_FORM,
@@ -136,8 +142,8 @@ function CreateThemeCard() {
   } = form;
 
   const create = useMutation({
-    mutationFn: async (values: ThemeFormValues) =>
-      unwrap(await api.POST('/api/v1/admin/themes', { body: toCreateThemeBody(values) })).data,
+    mutationFn: async (body: CreateThemeBody) =>
+      unwrap(await api.POST('/api/v1/admin/themes', { body })).data,
     onSuccess: async (theme) => {
       toaster.create({ type: 'success', title: copy.adminThemeCreated, description: theme.name });
       await Promise.all([
@@ -147,6 +153,7 @@ function CreateThemeCard() {
       router.push(`/admin/themes/${theme.id}`);
     },
     onError: (error) => {
+      sessionChanged(error);
       // A taken or malformed slug and the other fields' bounds land on their field; the rest is
       // the toast.
       const fieldError = themeFormError(error);
@@ -159,7 +166,10 @@ function CreateThemeCard() {
   });
 
   const submit = handleSubmit(async (values) => {
-    await create.mutateAsync(values).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await create
+      .mutateAsync({ ...toCreateThemeBody(values), expectedAccountId: operatorId })
+      .catch(() => undefined); // reported by onError
   });
 
   return (
@@ -176,6 +186,7 @@ function CreateThemeCard() {
               size="sm"
               alignSelf="flex-start"
               loading={isSubmitting}
+              disabled={operatorId === undefined}
               data-testid="theme-create"
             >
               {copy.adminThemeCreate}

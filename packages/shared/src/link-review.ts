@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { commentSegments } from './comment.js';
+import { expectedAccountIdSchema } from './expected-account.js';
 import {
   POST_LINK_MAX_LENGTH,
   postLinkHref,
@@ -353,7 +354,8 @@ export type AdminLinkFlagItemsQuery = z.infer<typeof adminLinkFlagItemsQuerySche
  * `POST /admin/link-flags/reviews`: mark a group of the default list '확인함' — its entries of
  * `url` and `reason` not marked yet that were put on the list at or before `through` (the group's
  * latest time as the screen showed it, so an entry that arrives after the operator looked stays
- * on the default list) — with what came of it and an optional note.
+ * on the default list) — with what came of it and an optional note, as the admin on screen
+ * (`expectedAccountId`, ADR-0092).
  */
 export const adminLinkFlagReviewBodySchema = z
   .object({
@@ -363,6 +365,7 @@ export const adminLinkFlagReviewBodySchema = z
     /** Optional; blank is none. */
     note: z.string().trim().max(LINK_FLAG_REVIEW_NOTE_MAX_LENGTH).optional(),
     through: z.iso.datetime(),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'AdminLinkFlagReviewBody' });
 export type AdminLinkFlagReviewBody = z.infer<typeof adminLinkFlagReviewBodySchema>;

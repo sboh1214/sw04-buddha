@@ -505,11 +505,13 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
 
   it('change-email (verified user): confirm at the current address, verify the new one, then it applies (PLAN 17 Q5)', async () => {
     const newEmail = 'it-auth-new@test.local';
+    const user = await userRow(email);
     const res = await t.app.inject({
       method: 'POST',
       url: '/api/auth/change-email',
       headers: { ...browserHeaders, cookie },
-      payload: { newEmail, callbackURL: '/settings' },
+      // The account on screen (ADR-0092, screen-account.test.ts).
+      payload: { newEmail, callbackURL: '/settings', expectedAccountId: user!.id },
     });
     expect(res.statusCode).toBe(200);
     // Step 1: confirmation mail to the CURRENT address; nothing changed yet.
@@ -601,13 +603,16 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     });
     expect(resend.statusCode).toBe(400);
 
+    // The account on screen is the cookie's (ADR-0092), so the refusal is the address's.
+    const session = await t.auth.api.getSession({ headers: new Headers({ cookie }) });
     const change = await t.app.inject({
       method: 'POST',
       url: '/api/auth/change-email',
       headers: { ...browserHeaders, cookie },
-      payload: { newEmail: synthetic },
+      payload: { newEmail: synthetic, expectedAccountId: session!.user.id },
     });
     expect(change.statusCode).toBe(400);
+    expect(change.json()).toMatchObject({ code: 'INVALID_EMAIL' });
 
     expect(t.mailer.messages).toHaveLength(0);
     const rows = await t.db.select().from(schema.user).where(eq(schema.user.email, synthetic));
@@ -636,7 +641,7 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       method: 'POST',
       url: '/api/auth/change-email',
       headers: { ...browserHeaders, cookie: own.cookie },
-      payload: { newEmail, callbackURL: '/settings' },
+      payload: { newEmail, callbackURL: '/settings', expectedAccountId: own.id },
     });
     expect(res.statusCode).toBe(200);
     expect(t.mailer.messages).toHaveLength(1);

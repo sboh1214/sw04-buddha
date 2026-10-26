@@ -7,9 +7,10 @@ import {
 import type { Me, Proposal } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
-  E2E_PASSWORD,
+  accountIdOf,
   adminAccount,
   createOpenMarket,
+  E2E_PASSWORD,
   expect,
   freshEmail,
   freshTag,
@@ -134,6 +135,7 @@ async function createDraftMarket(
         imageUrl: null,
         closeAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
         slug: `e2e-${tag}`,
+        expectedAccountId: await accountIdOf(admin),
       },
     }),
   );
@@ -318,7 +320,9 @@ test.describe('시장 제안', () => {
 
       // --- the operators open the market through its own steps; then the member sees its link.
       const opened = await dataOf<{ slug: string; status: string }>(
-        await admin.post(`/api/v1/admin/markets/${marketId}/open`),
+        await admin.post(`/api/v1/admin/markets/${marketId}/open`, {
+          data: { expectedAccountId: await accountIdOf(admin) },
+        }),
       );
       expect(opened.status).toBe('open');
       await page.reload();
@@ -347,7 +351,11 @@ test.describe('시장 제안', () => {
     const rejected = await proposeThroughApi(page, `E2E 중복 ${group}`);
     const retracted = await proposeThroughApi(page, `E2E 철회 ${group}`);
     const reviewing = await proposeThroughApi(page, `E2E 검토 ${group}`);
-    await dataOf(await admin.post(`/api/v1/admin/proposals/${reviewing.id}/review`));
+    await dataOf(
+      await admin.post(`/api/v1/admin/proposals/${reviewing.id}/review`, {
+        data: { expectedAccountId: await accountIdOf(admin) },
+      }),
+    );
 
     // --- the operator rejects one as a 중복, naming the existing market found by its title.
     const explanation = `같은 조건의 시장이 이미 열려 있습니다 ${group}`;
@@ -422,7 +430,11 @@ test.describe('시장 제안', () => {
     const group = freshTag();
     await signUp(page, freshEmail());
     const proposal = await proposeThroughApi(page, `E2E 나중 연결 ${group}`);
-    await dataOf(await admin.post(`/api/v1/admin/proposals/${proposal.id}/review`));
+    await dataOf(
+      await admin.post(`/api/v1/admin/proposals/${proposal.id}/review`, {
+        data: { expectedAccountId: await accountIdOf(admin) },
+      }),
+    );
     const draft = await createDraftMarket(admin, `E2E 초안 ${group}`);
     const adminNickname = (await meOf(admin)).profile.nickname;
 
@@ -477,7 +489,9 @@ test.describe('시장 제안', () => {
 
     // --- once the operators open it, its link.
     const opened = await dataOf<{ slug: string; status: string }>(
-      await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
+      await admin.post(`/api/v1/admin/markets/${draft.id}/open`, {
+        data: { expectedAccountId: await accountIdOf(admin) },
+      }),
     );
     expect(opened.status).toBe('open');
     await page.reload();
