@@ -14,6 +14,7 @@ import {
   type SocialProvider,
 } from '@/lib/auth-client';
 import { MY_SETTINGS_PATH } from '@/lib/my';
+import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -35,17 +36,18 @@ const PROVIDER_LABEL: Record<string, string> = {
  * compares it with the cookie's (ADR-0092): in the render between the session naming B and
  * SessionCacheGuard's reset the card is still A's while the cookie is B's, and a link taken with
  * B's cookie would put the provider A picked on B. Refused, nothing is linked and the session is
- * asked for again. So 연결 waits for `GET /me`, as every other MY 설정 write does — but this card
- * has no failure state of its own for that read: when `GET /me` never answers, 연결 stays off with
- * no reason here (the page's other cards say the profile could not be read; ADR-0092 결과 4-5 asks
- * the owner). 해제 needs no account: it names a login method by its row id, which better-auth looks
- * up among the cookie's account's rows only.
+ * asked for again. So the card waits for `GET /me`, as every other MY 설정 card does, and shows
+ * what they show while it is read and when it fails (`ProfileUnavailable` — the skeleton, then
+ * `copy.errProfileLoad` with 다시 시도; owner decision 2026-10-26 17:21 answer 6 «다른 카드처럼
+ * 보임», as the password card since ADR-0091): before, the rows and 해제 stood while 연결 stayed off
+ * with no reason and no retry. 해제 needs no account: it names a login method by its row id, which
+ * better-auth looks up among the cookie's account's rows only.
  */
 export function LinkedAccounts() {
   const queryClient = useQueryClient();
   const accounts = useLinkedAccounts();
-  // The account this screen's `Me` is: undefined until `GET /me` answers.
-  const accountId = useMe().data?.id;
+  // The account this screen's `Me` is: the card is drawn once `GET /me` has answered.
+  const { data: me, isPending: mePending } = useMe();
   const sessionChanged = useAuthSessionChanged();
 
   const invalidate = () =>
@@ -104,7 +106,11 @@ export function LinkedAccounts() {
       hint={copy.settingsLinkedHint}
       testId="settings-accounts"
     >
-      {accounts.isPending ? (
+      {/* `!me` covers a failed /me AND the session-gone case, where the query never runs — as the
+          address and password cards do. */}
+      {mePending || !me ? (
+        <ProfileUnavailable />
+      ) : accounts.isPending ? (
         <Skeleton height="32" />
       ) : accounts.isError ? (
         // `data ?? []` would draw every method as 미연결, which is the same false claim the
@@ -151,12 +157,10 @@ export function LinkedAccounts() {
                 <Button
                   size="sm"
                   variant="outline"
-                  disabled={accountId === undefined}
                   loading={link.isPending && link.variables?.provider === providerId}
-                  onClick={() => {
-                    if (accountId === undefined) return;
-                    link.mutate({ provider: providerId as SocialProvider, account: accountId });
-                  }}
+                  onClick={() =>
+                    link.mutate({ provider: providerId as SocialProvider, account: me.id })
+                  }
                   data-testid={`link-${providerId}`}
                 >
                   {copy.link}

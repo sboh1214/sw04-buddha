@@ -1,7 +1,16 @@
 import { type APIRequestContext, type Locator, type Page, type Route } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
-import { createOpenMarket, expect, freshEmail, freshTag, meOf, signUp, test } from './helpers';
+import {
+  createOpenMarket,
+  expect,
+  freshEmail,
+  freshTag,
+  meOf,
+  membersTurningInPlace,
+  signUp,
+  test,
+} from './helpers';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074; owner decisions in ADR-0069 decision 2, #45-2·3·4·5): a member
@@ -659,6 +668,8 @@ test.describe('댓글·대댓글', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
+    // The drafts are kept under each box's item for the account that wrote it (ADR-0092 답 3).
+    const accountId = (await meOf(page.request)).id;
     const postId = await postThroughApi(page.request, market.id, `재동의 글 ${tag}`, tag);
     const adminMe = await meOf(admin);
     const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
@@ -734,10 +745,10 @@ test.describe('댓글·대댓글', () => {
     expect(asked).toEqual([]);
     const prefix = `buddha.commentDraft:${postId}`;
     expect(await commentDraftsInTab(page)).toEqual({
-      [`${prefix}:comment`]: `새 댓글 ${tag}\n둘째 줄`,
-      [`${prefix}:reply:${doomed}`]: `갈 곳 없는 답글 ${tag}`,
-      [`${prefix}:reply:${theirs}`]: `답글 ${tag}`,
-      [`${prefix}:edit:${editable}`]: `고친 댓글 ${tag}`,
+      [`${prefix}:comment@${accountId}`]: `새 댓글 ${tag}\n둘째 줄`,
+      [`${prefix}:reply:${doomed}@${accountId}`]: `갈 곳 없는 답글 ${tag}`,
+      [`${prefix}:reply:${theirs}@${accountId}`]: `답글 ${tag}`,
+      [`${prefix}:edit:${editable}@${accountId}`]: `고친 댓글 ${tag}`,
     });
     const doomedGone = await admin.post(`/api/v1/comments/${doomed}/delete`, {
       data: { expectedAccountId: adminMe.id },
@@ -843,9 +854,9 @@ test.describe('댓글·대댓글', () => {
     await expect
       .poll(() => commentDraftsInTab(page))
       .toEqual({
-        [`${prefix}:comment`]: `또 쓴 댓글 ${tag}`,
-        [`${prefix}:reply:${theirs}`]: `다시 쓴 답글 ${tag}`,
-        [`${prefix}:edit:${editable}`]: `다시 고친 댓글 ${tag}`,
+        [`${prefix}:comment@${accountId}`]: `또 쓴 댓글 ${tag}`,
+        [`${prefix}:reply:${theirs}@${accountId}`]: `다시 쓴 답글 ${tag}`,
+        [`${prefix}:edit:${editable}@${accountId}`]: `다시 고친 댓글 ${tag}`,
       });
     await agreeAgain(page);
     await expect(page).toHaveURL(postPage);
@@ -858,7 +869,7 @@ test.describe('댓글·대댓글', () => {
     await expect
       .poll(() => commentDraftsInTab(page))
       .toMatchObject({
-        [`${prefix}:reply:${theirs}`]: `다시 쓴 답글 ${tag}`,
+        [`${prefix}:reply:${theirs}@${accountId}`]: `다시 쓴 답글 ${tag}`,
       });
     expect(writes).toEqual([]);
     expect(asked).toEqual([]);
@@ -875,6 +886,8 @@ test.describe('댓글·대댓글', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
+    // The drafts are kept under each box's item for the account that wrote it (ADR-0092 답 3).
+    const accountId = (await meOf(page.request)).id;
     const postId = await postThroughApi(page.request, market.id, `먼 답글의 글 ${tag}`, tag);
     const top = await commentThroughApi(admin, postId, null, `답글 많은 댓글 ${tag}`);
     for (let index = 1; index <= 50; index += 1) {
@@ -918,7 +931,9 @@ test.describe('댓글·대댓글', () => {
       await expect(page.getByTestId('consent-step')).toBeVisible();
       // Kept with the thread it is in: the 댓글's, not its own.
       await expect
-        .poll(() => commentDraftInTab(page, `buddha.commentDraft:${postId}:edit:${mine}`))
+        .poll(() =>
+          commentDraftInTab(page, `buddha.commentDraft:${postId}:edit:${mine}@${accountId}`),
+        )
         .toMatchObject({ text, threadId: top });
       await page.reload();
       await expect(page.getByTestId('consent-step')).toBeVisible();
@@ -1067,6 +1082,8 @@ test.describe('댓글·대댓글', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
+    // The drafts are kept under each box's item for the account that wrote it (ADR-0092 답 3).
+    const accountId = (await meOf(page.request)).id;
     // The reader writes more 댓글·답글 here than one person may in a minute (#187: 5 a minute,
     // WRITE_LIMITED with nothing written, ADR-0083 결정 4): each waits, when it must, until the
     // oldest of the reader's last five has left the minute — counted from when it was sent, a
@@ -1223,7 +1240,9 @@ test.describe('댓글·대댓글', () => {
       await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(postPage)}`);
       await expect(page.getByTestId('consent-step')).toBeVisible();
       await expect
-        .poll(() => commentDraftInTab(page, `buddha.commentDraft:${postId}:edit:${id}`))
+        .poll(() =>
+          commentDraftInTab(page, `buddha.commentDraft:${postId}:edit:${id}@${accountId}`),
+        )
         .toMatchObject({ text, threadId: top });
       if (reload) {
         await page.reload();
@@ -1812,6 +1831,8 @@ test.describe('댓글·대댓글', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
+    // The drafts are kept under each box's item for the account that wrote it (ADR-0092 답 3).
+    const accountId = (await meOf(page.request)).id;
     const me = await meOf(page.request);
     const adminMe = await meOf(admin);
     const postId = await postThroughApi(page.request, market.id, `거절될 글 ${tag}`, tag);
@@ -1928,10 +1949,10 @@ test.describe('댓글·대댓글', () => {
     await expect
       .poll(() => commentDraftsInTab(page))
       .toEqual({
-        [`${prefix}:comment`]: `단계 앞의 댓글 ${tag}`,
-        [`${prefix}:reply:${theirs}`]: `보내지 못한 답글 ${tag}\n둘째 줄`,
-        [`${prefix}:edit:${mine}`]: `보내지 못한 수정 ${tag}`,
-        [`${prefix}:reply:${other}`]: `딴 상자에 있던 답글 ${tag}`,
+        [`${prefix}:comment@${accountId}`]: `단계 앞의 댓글 ${tag}`,
+        [`${prefix}:reply:${theirs}@${accountId}`]: `보내지 못한 답글 ${tag}\n둘째 줄`,
+        [`${prefix}:edit:${mine}@${accountId}`]: `보내지 못한 수정 ${tag}`,
+        [`${prefix}:reply:${other}@${accountId}`]: `딴 상자에 있던 답글 ${tag}`,
       });
     await page.unroute(`**/api/v1/posts/${postId}/comments`);
     await agreeAgain(page);
@@ -2601,5 +2622,168 @@ test.describe('댓글·대댓글', () => {
     await expect(page.getByRole('heading', { name: '404' })).toHaveCount(0);
     await expect(page).toHaveURL(edit);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+});
+
+test.describe('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 다른 회원으로 답하는 글 화면의 댓글 상자 (ADR-0092 오너 결정 2026-10-26 17:21 답 3)', () => {
+  // `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2), so
+  // SessionCacheGuard resets nothing. The comment boxes are drawn for the account on screen — the
+  // threads by the boxes' turn, the new 댓글's box by the account — so B never gets a box A opened,
+  // nor A's text in one, its 올리기·저장 sent as B with B's cookie. The owner's «이 PR에서 함께,
+  // 적던 것은 A의 초안으로»: each of A's boxes, going, keeps what A typed in this tab as A's draft of
+  // that box (ADR-0074 7-32 — one item per box and account, which B's page neither reads nor
+  // replaces), and A, on the post page again, gets each back in its box, said once in a toast and
+  // under each box.
+
+  test('앞 계정이 쓰던 새 댓글·답글·수정은 다른 회원에게 빈 상자와 닫힌 답글·수정으로 다시 그려지고 아무것도 보내지 않으며, 이 탭에 앞 계정의 것으로 두었다가 그 계정이 돌아오면 그 상자들에 되살린다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const { asked } = dialogs(page);
+    const { a, b, open, toB, toA, close } = await membersTurningInPlace(browser, page);
+    try {
+      const postId = await postThroughApi(admin, market.id, `계정이 바뀌는 글 ${tag}`, tag);
+      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const composer = page.getByTestId('comment-composer');
+      const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+      const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+      await open(`/community/posts/${postId}`);
+
+      // --- A's three boxes, each with text.
+      await composer.getByTestId('comment-input').fill(`앞 계정의 새 댓글 ${tag}`);
+      await commentOf(page, theirs).getByTestId('comment-reply').click();
+      await replyBox.getByTestId('comment-input').fill(`앞 계정의 답글 ${tag}`);
+      await commentOf(page, mine).getByTestId('comment-edit').click();
+      await editForm.getByTestId('comment-input').fill(`앞 계정이 고친 댓글 ${tag}`);
+      const writes: string[] = [];
+      page.on('request', (request) => {
+        const { pathname } = new URL(request.url());
+        if (request.method() === 'GET') return;
+        if (pathname.startsWith('/api/v1/posts/') || pathname.startsWith('/api/v1/comments/')) {
+          writes.push(`${request.method()} ${pathname}`);
+        }
+      });
+
+      // --- B on screen: B's empty box, no 답글 or 수정 open, nothing held apart; A's kept as A's.
+      await toB();
+      await expect(composer.getByTestId('comment-input')).toHaveValue('');
+      await expect(composer.getByTestId('comment-draft-restored')).toHaveCount(0);
+      await expect(replyBox).toHaveCount(0);
+      await expect(editForm).toHaveCount(0);
+      await expect(commentOf(page, mine)).toContainText(`앞 계정의 댓글 ${tag}`);
+      // B is not the author: no 수정 on A's comment.
+      await expect(commentOf(page, mine).getByTestId('comment-edit')).toHaveCount(0);
+      await expect(page.getByTestId('comment-held')).toHaveCount(0);
+      const prefix = `buddha.commentDraft:${postId}`;
+      await expect
+        .poll(() => commentDraftsInTab(page))
+        .toEqual({
+          [`${prefix}:comment@${a.id}`]: `앞 계정의 새 댓글 ${tag}`,
+          [`${prefix}:reply:${theirs}@${a.id}`]: `앞 계정의 답글 ${tag}`,
+          [`${prefix}:edit:${mine}@${a.id}`]: `앞 계정이 고친 댓글 ${tag}`,
+        });
+      await expect(restoredToasts(page)).toHaveCount(0);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+      // B types too: B's own, beside A's.
+      await composer.getByTestId('comment-input').fill(`다른 회원의 새 댓글 ${tag}`);
+
+      // --- A on the page again: each box open with A's text, said under it and once in a toast;
+      // B's kept as B's.
+      await toA();
+      await expect(composer.getByTestId('comment-input')).toHaveValue(`앞 계정의 새 댓글 ${tag}`);
+      await expect(composer.getByTestId('comment-draft-restored')).toHaveText(
+        copy.commentDraftRestored,
+      );
+      await expect(replyBox.getByTestId('comment-input')).toHaveValue(`앞 계정의 답글 ${tag}`);
+      await expect(replyBox.getByTestId('comment-draft-restored')).toBeVisible();
+      await expect(editForm.getByTestId('comment-input')).toHaveValue(`앞 계정이 고친 댓글 ${tag}`);
+      await expect(editForm.getByTestId('comment-draft-restored')).toBeVisible();
+      await expect(restoredToasts(page)).toHaveCount(1);
+      await expect
+        .poll(() => commentDraftsInTab(page))
+        .toEqual({ [`${prefix}:comment@${b.id}`]: `다른 회원의 새 댓글 ${tag}` });
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('다른 회원에게 첫 온보딩 단계가 남아 게이트가 그 자리에서 글 화면을 거두어도, 앞 계정이 따로 보던 글자는 이 탭에 앞 계정의 것으로 두었다가 그 계정이 돌아오면 까닭과 함께 다시 보인다 (ADR-0092 8-26)', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    // B has its first onboarding step left, and the post page is exempt for a re-consent alone: the
+    // gate puts its placeholder in place of the page in the very render `['me']` turns to B, so the
+    // comment section goes without ever being drawn for B — what it showed apart from any box is
+    // kept as A's as it goes (`keepSectionTextsAsItGoes`), as the boxes keep theirs.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const { asked } = dialogs(page);
+    const { a, open, toB, toA, close } = await membersTurningInPlace(browser, page, {
+      bStepLeft: true,
+    });
+    try {
+      const postId = await postThroughApi(admin, market.id, `단계가 남은 회원의 글 ${tag}`, tag);
+      const mine = await commentThroughApi(page.request, postId, null, `곧 지울 댓글 ${tag}`);
+      const postPage = `/community/posts/${postId}`;
+      await open(postPage);
+      const held = page.getByTestId('comment-held');
+
+      // --- A's 답글 under A's own 댓글, which A deletes: with nothing under it the 댓글 leaves the
+      // view and the box with it — its text held apart, with why.
+      await commentOf(page, mine).getByTestId('comment-reply').click();
+      const box = page.getByTestId(`comment-thread-${mine}`).getByTestId('reply-composer');
+      const text = `앞 계정이 따로 보던 답글 ${tag}\n둘째 줄`;
+      await box.getByTestId('comment-input').fill(text);
+      await commentOf(page, mine).getByTestId('comment-delete').click();
+      await page.getByTestId('comment-delete-confirm').click();
+      await expect(page.getByText(copy.commentDeletedToast)).toBeVisible();
+      await expect(page.getByTestId(`comment-thread-${mine}`)).toHaveCount(0);
+      await expect(held).toHaveCount(1);
+      await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.errCommentParentGone);
+      await expect(held.getByTestId('comment-held-text')).toHaveValue(text);
+      expect(await commentDraftsInTab(page)).toEqual({});
+      const writes: string[] = [];
+      page.on('request', (request) => {
+        const { pathname } = new URL(request.url());
+        if (request.method() === 'GET') return;
+        if (pathname.startsWith('/api/v1/posts/') || pathname.startsWith('/api/v1/comments/')) {
+          writes.push(`${request.method()} ${pathname}`);
+        }
+      });
+
+      // --- B on screen: the gate takes the page away and on to B's step; A's text is A's draft of
+      // the box it stood for, which B's page never reads.
+      await toB();
+      await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(postPage)}`);
+      await expect(page.getByTestId('consent-step')).toBeVisible();
+      const prefix = `buddha.commentDraft:${postId}`;
+      await expect
+        .poll(() => commentDraftsInTab(page))
+        .toEqual({ [`${prefix}:reply:${mine}@${a.id}`]: text });
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- A again: the stepper sends A, with nothing left, back to the post page, which takes the
+      // draft back — its 댓글 gone, it is held apart with why, said once.
+      await toA();
+      await expect(page).toHaveURL(postPage);
+      await expect(held).toHaveCount(1);
+      await expect(held.getByTestId('comment-held-reason')).toHaveText(copy.errCommentParentGone);
+      await expect(held.getByTestId('comment-held-text')).toHaveValue(text);
+      await expect(restoredToasts(page)).toHaveCount(1);
+      await expect.poll(() => commentDraftsInTab(page)).toEqual({});
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
   });
 });

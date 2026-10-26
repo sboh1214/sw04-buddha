@@ -183,18 +183,19 @@ describe.skipIf(!hasTestInfra)('paid Coin closed (integration)', () => {
       .returning();
     const before = await moneyOf(member.id);
     const cancel = vi.spyOn(t.app.get(MockPaymentProvider), 'cancel');
-    const refund = (cookie?: string) =>
+    // A refund the open API would take: the admin on screen named (ADR-0092, Q-PG-8 ①).
+    const refund = (who?: TestUser) =>
       t.app.inject({
         method: 'POST',
         url: `/api/v1/admin/payments/${payment!.id}/refund`,
-        headers: cookie === undefined ? jsonHeaders : { ...jsonHeaders, cookie },
-        payload: { reason: '청약철회' },
+        headers: who === undefined ? jsonHeaders : { ...jsonHeaders, cookie: who.cookie },
+        payload: { reason: '청약철회', expectedAccountId: (who ?? admin).id },
       });
 
     // Admin routes check the session and the role first, as everywhere under /admin.
     expect((await refund()).statusCode).toBe(401);
-    expect((await refund(member.cookie)).statusCode).toBe(403);
-    const res = await refund(admin.cookie);
+    expect((await refund(member)).statusCode).toBe(403);
+    const res = await refund(admin);
     expect(res.statusCode).toBe(404);
     expect(res.json()).toEqual(CLOSED);
 

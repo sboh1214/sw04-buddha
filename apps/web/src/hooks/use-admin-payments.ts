@@ -6,8 +6,16 @@ import {
   useMutation,
   useQueryClient,
 } from '@tanstack/react-query';
-import { type AdminPayment, type RefundPaymentBody, api, isApiError, unwrap } from '@/lib/api';
+import {
+  type AdminPayment,
+  type RefundPaymentBody,
+  api,
+  isApiError,
+  isForAnotherAccount,
+  unwrap,
+} from '@/lib/api';
 import { type AdminPaymentPage, replacePaymentRow } from '@/lib/payments';
+import { useSession } from '@/lib/use-session';
 
 /** PLAN 12 결제 목록. Under the `admin` root (`PRIVATE_QUERY_ROOTS`). */
 export const ADMIN_PAYMENTS_KEY = ['admin', 'payments'] as const;
@@ -52,10 +60,14 @@ export interface RefundPaymentVariables {
  * A refusal refreshes too, awaited like a success: most of them mean the row is not what the
  * screen shows any more — a PG refusal put it back to `succeeded`, no answer left it
  * `refunding`, another admin got there first — and the toast must not land on the old row. A
- * request that never came back refreshes nothing.
+ * request that never came back refreshes nothing. The cookie of another account
+ * (`isForAnotherAccount` — the body names the admin on screen, ADR-0092, Q-PG-8 ①) asks for the
+ * session again instead: nothing was taken back, and SessionCacheGuard's reset reads everything
+ * again for the admin really signed in.
  */
 function useRefundCache() {
   const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
   const refresh = () => queryClient.invalidateQueries({ queryKey: ADMIN_ROOT_KEY });
   return {
     onSuccess: (fresh: AdminPayment) => {
@@ -68,6 +80,10 @@ function useRefundCache() {
       return refresh();
     },
     onError: async (error: unknown) => {
+      if (isForAnotherAccount(error)) {
+        void refetchSession();
+        return;
+      }
       if (isApiError(error)) await refresh();
     },
   };
@@ -78,7 +94,8 @@ function useRefundCache() {
  * KRW at the PG, or retry a `refunding` one. The toast and the dialog are the caller's, per
  * `mutate` call; the cache writes happen here, once (`useRefundCache`). A refusal after another
  * attempt refunded the payment answers 200 with the row `refunded`: a success like any other.
- * Closed while paid Coin is off (ADR-0049): the list offers no button then.
+ * The body names the admin on screen (`expectedAccountId` — `useOperatorId`, never the session's;
+ * ADR-0092, Q-PG-8 ①). Closed while paid Coin is off (ADR-0049): the list offers no button then.
  */
 export function useRefundPayment() {
   const cache = useRefundCache();

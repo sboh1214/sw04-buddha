@@ -1067,6 +1067,8 @@ test.describe('운영 공지 (#138)', () => {
     const editor = page.getByTestId('post-editor-content');
     const restored = page.getByTestId('post-draft-restored');
     await signIn(page, adminAccount.email, adminAccount.password);
+    // The draft is kept under the screen's item for the admin who typed it (ADR-0092 답 2).
+    const kept = `buddha.postDraft:notice-new@${(await meOf(page.request)).id}`;
     const reconsent = await asReconsent(page);
     const write = '/admin/notices/new';
     const step = `/onboarding?next=${encodeURIComponent(write)}`;
@@ -1092,7 +1094,7 @@ test.describe('운영 공지 (#138)', () => {
     await expect(page).toHaveURL(step);
     await expect(page.getByTestId('consent-step')).toBeVisible();
     expect(asked).toEqual([]);
-    expect(await draftsInTab(page)).toEqual(['buddha.postDraft:notice-new']);
+    expect(await draftsInTab(page)).toEqual([kept]);
 
     // --- the step done: back on the write screen, the draft taken back and said so.
     await agreeAgain(page);
@@ -1130,7 +1132,7 @@ test.describe('운영 공지 (#138)', () => {
     await page.keyboard.type('버릴 안내');
     await page.getByTestId('post-submit').click();
     await expect(page).toHaveURL(step);
-    expect(await draftsInTab(page)).toEqual(['buddha.postDraft:notice-new']);
+    expect(await draftsInTab(page)).toEqual([kept]);
     // This time the step is done where it brings nobody back (the re-consent answered elsewhere),
     // and the write screen is loaded afresh in this tab: `GET /me` is not in the page, and the form
     // waits for it — made before it, it would skip the draft and leave it in the tab.
@@ -1193,7 +1195,7 @@ test.describe('운영 공지 (#138)', () => {
     const id = await noticeThroughApi(admin, original);
     const edit = `/admin/notices/${id}`;
     const step = `/onboarding?next=${encodeURIComponent(edit)}`;
-    const key = `buddha.postDraft:notice-edit:${id}`;
+    const key = `buddha.postDraft:notice-edit:${id}@${(await meOf(page.request)).id}`;
     const isUpdate = (url: URL) => url.pathname === `${NOTICES}/${id}`;
     const refuseUpdate = async (route: Route) => {
       if (route.request().method() !== 'PUT') return route.fallback();

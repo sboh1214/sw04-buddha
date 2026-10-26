@@ -9,7 +9,6 @@ import {
   type DraftStorage,
   type PostDraft,
   clearPostDraft,
-  clearPostDraftOf,
   clearPostDrafts,
   hasDraftToKeep,
   heldDraftVersion,
@@ -17,6 +16,7 @@ import {
   nextRestoredDraftState,
   postDraftLandedSince,
   postDraftMoment,
+  postDraftScreenKey,
   postDraftStorageKey,
   previewSize,
   readPostDraft,
@@ -28,8 +28,8 @@ import {
 
 /**
  * The post drafts the onboarding gate keeps in this tab (오너 결정 2026-10-20, ADR-0073): kept and
- * taken back by screen and account, gone after POST_DRAFT_TTL_MS, cleared, and kept without the
- * previews when the storage is full.
+ * taken back by screen and account — one item each (ADR-0092 답 2) — gone after POST_DRAFT_TTL_MS,
+ * cleared, and kept without the previews when the storage is full.
  */
 
 /** A Web Storage over a Map, with an optional quota in characters (key + value, as browsers count). */
@@ -108,25 +108,37 @@ const DRAFT: PostDraft = {
 };
 
 describe('where a draft is kept', () => {
-  it('is one item per screen: a new post per market, an edit per post, ids lower-cased', () => {
-    expect(postDraftStorageKey(NEW)).toBe(`${POST_DRAFT_PREFIX}new:${MARKET.toLowerCase()}`);
-    expect(postDraftStorageKey(EDIT)).toBe(`${POST_DRAFT_PREFIX}edit:${POST}`);
-    expect(postDraftStorageKey({ kind: 'new', marketId: POST })).not.toBe(
-      postDraftStorageKey({ kind: 'edit', postId: POST }),
+  it('is one screen per market’s new post and per post edited, ids lower-cased', () => {
+    expect(postDraftScreenKey(NEW)).toBe(`${POST_DRAFT_PREFIX}new:${MARKET.toLowerCase()}`);
+    expect(postDraftScreenKey(EDIT)).toBe(`${POST_DRAFT_PREFIX}edit:${POST}`);
+    expect(postDraftScreenKey({ kind: 'new', marketId: POST })).not.toBe(
+      postDraftScreenKey({ kind: 'edit', postId: POST }),
     );
   });
 
-  it('is one item for the new notice and one per notice edited, under the same prefix (#138, 오너 결정 2026-10-21 (3차))', () => {
-    expect(postDraftStorageKey(NOTICE_NEW)).toBe(`${POST_DRAFT_PREFIX}notice-new`);
-    expect(postDraftStorageKey(NOTICE_EDIT)).toBe(
+  it('is one item per screen and account: the screen’s key and the account’s id, as the API spells it (ADR-0092, 오너 결정 2026-10-26 17:21 답 2)', () => {
+    expect(postDraftStorageKey(NEW, ACCOUNT)).toBe(
+      `${POST_DRAFT_PREFIX}new:${MARKET.toLowerCase()}@${ACCOUNT}`,
+    );
+    expect(postDraftStorageKey(NOTICE_NEW, OTHER_ACCOUNT)).toBe(
+      `${POST_DRAFT_PREFIX}notice-new@${OTHER_ACCOUNT}`,
+    );
+    // An account id is no uuid (better-auth's): its case is its own.
+    expect(postDraftStorageKey(NOTICE_NEW, 'AbC')).not.toBe(postDraftStorageKey(NOTICE_NEW, 'abc'));
+    expect(postDraftStorageKey(NEW, ACCOUNT)).not.toBe(postDraftStorageKey(NEW, OTHER_ACCOUNT));
+  });
+
+  it('is one screen for the new notice and one per notice edited, under the same prefix (#138, 오너 결정 2026-10-21 (3차))', () => {
+    expect(postDraftScreenKey(NOTICE_NEW)).toBe(`${POST_DRAFT_PREFIX}notice-new`);
+    expect(postDraftScreenKey(NOTICE_EDIT)).toBe(
       `${POST_DRAFT_PREFIX}notice-edit:${NOTICE.toLowerCase()}`,
     );
     // Never a post's screen, whatever the id: four kinds, four keys.
     const keys = [
-      postDraftStorageKey({ kind: 'new', marketId: NOTICE }),
-      postDraftStorageKey({ kind: 'edit', postId: NOTICE }),
-      postDraftStorageKey(NOTICE_NEW),
-      postDraftStorageKey(NOTICE_EDIT),
+      postDraftStorageKey({ kind: 'new', marketId: NOTICE }, ACCOUNT),
+      postDraftStorageKey({ kind: 'edit', postId: NOTICE }, ACCOUNT),
+      postDraftStorageKey(NOTICE_NEW, ACCOUNT),
+      postDraftStorageKey(NOTICE_EDIT, ACCOUNT),
     ];
     expect(new Set(keys).size).toBe(4);
     // Signing out clears them with the posts' (the prefix).
@@ -169,7 +181,7 @@ describe('the version a notice edit’s draft was typed on (#138, 오너 결정 
       opened: EDITED_AT,
     });
     const storage = new MemoryStorage(
-      postDraftStorageKey(NOTICE_EDIT).length + withoutPreviews.length,
+      postDraftStorageKey(NOTICE_EDIT, ACCOUNT).length + withoutPreviews.length,
     );
     expect(
       keepPostDraft(storage, NOTICE_EDIT, ACCOUNT, { ...DRAFT, version: EDITED_AT }, NOW),
@@ -193,7 +205,7 @@ describe('the version a notice edit’s draft was typed on (#138, 오너 결정 
         previews: {},
         opened,
       });
-      storage.setItem(postDraftStorageKey(NOTICE_EDIT), raw);
+      storage.setItem(postDraftStorageKey(NOTICE_EDIT, ACCOUNT), raw);
       expect(readPostDraft(storage, NOTICE_EDIT, ACCOUNT, NOW), raw).toBeNull();
       expect(storage.items.size, raw).toBe(0);
     }
@@ -235,12 +247,39 @@ describe('keeping and taking back', () => {
     expect(storage.items.size).toBe(1);
   });
 
-  it('never shows one account the draft of another, and drops it', () => {
+  it('never shows one account the draft of another, and leaves it for its writer (ADR-0092 답 2)', () => {
     const storage = new MemoryStorage();
     keepPostDraft(storage, NEW, ACCOUNT, DRAFT, NOW);
     expect(readPostDraft(storage, NEW, OTHER_ACCOUNT, NOW)).toBeNull();
-    expect(storage.items.size).toBe(0);
-    expect(readPostDraft(storage, NEW, ACCOUNT, NOW)).toBeNull();
+    expect(readPostDraft(storage, NEW, ACCOUNT, NOW)).toEqual(DRAFT);
+    // Nor an item under its account written by another (by hand): no draft, and dropped.
+    storage.setItem(
+      postDraftStorageKey(NEW, OTHER_ACCOUNT),
+      storage.getItem(postDraftStorageKey(NEW, ACCOUNT)) ?? '',
+    );
+    expect(readPostDraft(storage, NEW, OTHER_ACCOUNT, NOW)).toBeNull();
+    expect([...storage.items.keys()]).toEqual([postDraftStorageKey(NEW, ACCOUNT)]);
+  });
+
+  it('keeps one account’s draft of a screen beside another’s: neither replaces, reads nor clears the other (ADR-0092 답 2)', () => {
+    // A typed a notice and the tab turned to B in place: A's form kept A's draft. B's form of the
+    // same screen reads none, B's own draft kept later sits beside A's, and each goes alone.
+    for (const key of [NOTICE_NEW, NOTICE_EDIT, NEW, EDIT]) {
+      const storage = new MemoryStorage();
+      const theirs = { ...DRAFT, title: 'A가 쓰던 제목' };
+      const mine = { ...DRAFT, title: 'B가 쓰던 제목' };
+      keepPostDraft(storage, key, ACCOUNT, theirs, NOW);
+      expect(readPostDraft(storage, key, OTHER_ACCOUNT, NOW + 1)).toBeNull();
+      keepPostDraft(storage, key, OTHER_ACCOUNT, mine, NOW + 2);
+      expect(readPostDraft(storage, key, ACCOUNT, NOW + 3)).toEqual(theirs);
+      expect(readPostDraft(storage, key, OTHER_ACCOUNT, NOW + 3)).toEqual(mine);
+      clearPostDraft(storage, key, OTHER_ACCOUNT);
+      expect(readPostDraft(storage, key, ACCOUNT, NOW + 4)).toEqual(theirs);
+      expect(readPostDraft(storage, key, OTHER_ACCOUNT, NOW + 4)).toBeNull();
+      // A's waits its hour, as any kept draft.
+      expect(readPostDraft(storage, key, ACCOUNT, NOW + POST_DRAFT_TTL_MS + 1)).toBeNull();
+      expect(storage.items.size).toBe(0);
+    }
   });
 
   it('expires POST_DRAFT_TTL_MS after it was kept, and is dropped then', () => {
@@ -261,12 +300,12 @@ describe('keeping and taking back', () => {
     storage.setItem('another.app.item', 'kept');
     sweepPostDrafts(storage, NOW + POST_DRAFT_TTL_MS + 1);
     expect([...storage.items.keys()].sort()).toEqual(
-      ['another.app.item', postDraftStorageKey(EDIT)].sort(),
+      ['another.app.item', postDraftStorageKey(EDIT, ACCOUNT)].sort(),
     );
     // Keeping sweeps too.
     keepPostDraft(storage, NEW, ACCOUNT, DRAFT, NOW + 3 * POST_DRAFT_TTL_MS);
     expect([...storage.items.keys()].sort()).toEqual(
-      ['another.app.item', postDraftStorageKey(NEW)].sort(),
+      ['another.app.item', postDraftStorageKey(NEW, ACCOUNT)].sort(),
     );
   });
 
@@ -275,7 +314,7 @@ describe('keeping and taking back', () => {
     keepPostDraft(storage, NEW, ACCOUNT, DRAFT, NOW);
     keepPostDraft(storage, EDIT, ACCOUNT, DRAFT, NOW);
     storage.setItem('another.app.item', 'kept');
-    clearPostDraft(storage, EDIT);
+    clearPostDraft(storage, EDIT, ACCOUNT);
     expect(readPostDraft(storage, EDIT, ACCOUNT, NOW)).toBeNull();
     expect(readPostDraft(storage, NEW, ACCOUNT, NOW)).toEqual(DRAFT);
     clearPostDrafts(storage);
@@ -301,7 +340,7 @@ describe('what is not a draft', () => {
       }),
     ]) {
       const storage = new MemoryStorage();
-      storage.setItem(postDraftStorageKey(NEW), raw);
+      storage.setItem(postDraftStorageKey(NEW, ACCOUNT), raw);
       expect(readPostDraft(storage, NEW, ACCOUNT, NOW), raw).toBeNull();
       expect(storage.items.size, raw).toBe(0);
     }
@@ -328,12 +367,12 @@ describe('what is not a draft', () => {
     );
     expect(readPostDraft(storage, NEW, ACCOUNT, NOW)?.previews).toEqual({ [IMAGE]: PREVIEW });
     // And so for an item written by hand.
-    const raw = JSON.parse(storage.getItem(postDraftStorageKey(NEW)) ?? '{}') as Record<
+    const raw = JSON.parse(storage.getItem(postDraftStorageKey(NEW, ACCOUNT)) ?? '{}') as Record<
       string,
       unknown
     >;
     storage.setItem(
-      postDraftStorageKey(NEW),
+      postDraftStorageKey(NEW, ACCOUNT),
       JSON.stringify({ ...raw, previews: { [IMAGE]: 'data:image/png;base64,AA"><script>' } }),
     );
     expect(readPostDraft(storage, NEW, ACCOUNT, NOW)?.previews).toEqual({});
@@ -350,7 +389,7 @@ describe('a storage that is full or refused', () => {
       body: DRAFT.body,
       previews: {},
     });
-    const fits = postDraftStorageKey(NEW).length + withoutPreviews.length;
+    const fits = postDraftStorageKey(NEW, ACCOUNT).length + withoutPreviews.length;
     const storage = new MemoryStorage(fits);
     expect(keepPostDraft(storage, NEW, ACCOUNT, DRAFT, NOW)).toBe(true);
     expect(readPostDraft(storage, NEW, ACCOUNT, NOW)).toEqual({ ...DRAFT, previews: {} });
@@ -364,7 +403,7 @@ describe('a storage that is full or refused', () => {
     expect(keepPostDraft(refusing, NEW, ACCOUNT, DRAFT, NOW)).toBe(false);
     expect(readPostDraft(refusing, NEW, ACCOUNT, NOW)).toBeNull();
     expect(() => {
-      clearPostDraft(refusing, NEW);
+      clearPostDraft(refusing, NEW, ACCOUNT);
       clearPostDrafts(refusing);
       sweepPostDrafts(refusing, NOW);
     }).not.toThrow();
@@ -386,6 +425,41 @@ describe('when a screen going away keeps its draft', () => {
         }),
       ).toBe(true);
     }
+  });
+
+  it('keeps a draft with something to lose when a form drawn for its writer goes as the account on screen turns to another (ADR-0092, 오너 결정 2026-10-26 17:21 답 2)', () => {
+    // Whatever the other account's steps: the writer's are not known then.
+    for (const onboarding of [undefined, nothingLeft, stepLeft]) {
+      expect(
+        shouldKeepPostDraft({ hasDraft: true, saved: false, onboarding, accountTurned: true }),
+      ).toBe(true);
+    }
+    // Nothing to lose, or saved: nothing kept, as for the gate.
+    expect(
+      shouldKeepPostDraft({
+        hasDraft: false,
+        saved: false,
+        onboarding: undefined,
+        accountTurned: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldKeepPostDraft({
+        hasDraft: true,
+        saved: true,
+        onboarding: undefined,
+        accountTurned: true,
+      }),
+    ).toBe(false);
+    // Not turned: the gate's rule alone.
+    expect(
+      shouldKeepPostDraft({
+        hasDraft: true,
+        saved: false,
+        onboarding: nothingLeft,
+        accountTurned: false,
+      }),
+    ).toBe(false);
   });
 
   it('keeps nothing on any other leave — a link or Back asked first — nor once the write is saved', () => {
@@ -529,7 +603,9 @@ describe('a write that landed', () => {
     const storage = new MemoryStorage();
     vi.stubGlobal('window', { sessionStorage: storage });
     keepPostDraft(storage, EDIT, OTHER_ACCOUNT, DRAFT, NOW);
+    keepPostDraft(storage, EDIT, ACCOUNT, { ...DRAFT, title: '보낸 제목' }, NOW);
     postDraftLanded(EDIT, ACCOUNT);
+    expect(readPostDraft(storage, EDIT, ACCOUNT, NOW)).toBeNull();
     expect(readPostDraft(storage, EDIT, OTHER_ACCOUNT, NOW)).toEqual(DRAFT);
     postDraftLanded(EDIT, OTHER_ACCOUNT);
     expect(storage.items.size).toBe(0);
@@ -538,15 +614,15 @@ describe('a write that landed', () => {
   it('clears what one account kept for a screen, and only that', () => {
     const storage = new MemoryStorage();
     keepPostDraft(storage, NEW, OTHER_ACCOUNT, DRAFT, NOW);
-    clearPostDraftOf(storage, NEW, ACCOUNT);
+    clearPostDraft(storage, NEW, ACCOUNT);
     expect(readPostDraft(storage, NEW, OTHER_ACCOUNT, NOW)).toEqual(DRAFT);
-    clearPostDraftOf(storage, NEW, OTHER_ACCOUNT);
+    clearPostDraft(storage, NEW, OTHER_ACCOUNT);
     expect(storage.items.size).toBe(0);
-    // What is no draft goes, as a read would remove it; a storage the browser refuses is left.
-    storage.setItem(postDraftStorageKey(NEW), 'not json');
-    clearPostDraftOf(storage, NEW, ACCOUNT);
+    // What is no draft under the account's item goes too; a storage the browser refuses is left.
+    storage.setItem(postDraftStorageKey(NEW, ACCOUNT), 'not json');
+    clearPostDraft(storage, NEW, ACCOUNT);
     expect(storage.items.size).toBe(0);
-    expect(() => clearPostDraftOf(refusing, NEW, ACCOUNT)).not.toThrow();
+    expect(() => clearPostDraft(refusing, NEW, ACCOUNT)).not.toThrow();
   });
 
   it('counts for a notice’s screen the same way, and for that screen alone (#138)', () => {

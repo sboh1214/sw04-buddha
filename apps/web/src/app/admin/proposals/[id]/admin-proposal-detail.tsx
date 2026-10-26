@@ -32,6 +32,7 @@ import {
   useWatch,
 } from 'react-hook-form';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { applyProposal, useAdminProposal } from '@/hooks/use-admin-proposals';
@@ -88,6 +89,9 @@ import { AdminMarketLine, MarketPicker } from './market-picker';
  */
 export function AdminProposalDetail({ id }: { id: string }) {
   const proposal = useAdminProposal(id);
+  // The admin on screen: each form below — and the confirmation it opened — is drawn again for
+  // each, its fields off until that admin is known (ADR-0092 answer 1, `OperatorFieldset`).
+  const operatorId = useOperatorId();
 
   if (proposalIdParam(id) === undefined || isApiError(proposal.error, 'NOT_FOUND')) {
     return (
@@ -144,15 +148,21 @@ export function AdminProposalDetail({ id }: { id: string }) {
           <Card.Body>
             <Stack gap="6">
               {actions.review && <StartReview proposal={data} />}
-              {/* Keyed on the status: a form whose proposal moved starts over. */}
-              {actions.adopt && <AdoptForm key={`adopt-${data.status}`} proposal={data} />}
-              {actions.reject && <RejectForm key={`reject-${data.status}`} proposal={data} />}
-              {actions.link && <LinkMarketForm proposal={data} />}
+              {/* Keyed on the status — a form whose proposal moved starts over — and on the admin
+                  on screen: `['me']` turning from A to B in place drops what A typed and picked,
+                  and the confirmation A opened (owner decision 2026-10-26 17:21 answer 1). */}
+              {actions.adopt && (
+                <AdoptForm key={`adopt-${data.status}-${operatorId ?? ''}`} proposal={data} />
+              )}
+              {actions.reject && (
+                <RejectForm key={`reject-${data.status}-${operatorId ?? ''}`} proposal={data} />
+              )}
+              {actions.link && <LinkMarketForm key={`link-${operatorId ?? ''}`} proposal={data} />}
             </Stack>
           </Card.Body>
         </Card.Root>
       )}
-      <InternalMemoCard proposal={data} />
+      <InternalMemoCard key={operatorId ?? ''} proposal={data} />
     </Stack>
   );
 }
@@ -559,61 +569,63 @@ function AdoptForm({ proposal }: { proposal: AdminProposal }) {
 
   return (
     <form onSubmit={(event) => void submit(event)} noValidate data-testid="admin-proposal-adopt">
-      <Stack gap="3">
-        <Heading as="h4" size="sm">
-          {copy.adminProposalAdopt}
-        </Heading>
-        <Field.Root invalid={!!errors.memo}>
-          <Field.Label>{copy.adminProposalAdoptMemo}</Field.Label>
-          <Textarea rows={2} data-testid="admin-proposal-adopt-memo" {...register('memo')} />
-          <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
-        </Field.Root>
-        <Controller
-          name="market"
-          control={control}
-          render={({ field }) => (
-            <MarketChoiceRadio
-              name={field.name}
-              value={field.value}
-              choices={['none', 'draft', 'existing']}
-              onChange={field.onChange}
-              onBlur={field.onBlur}
-              testId="admin-proposal-adopt-market"
+      <OperatorFieldset disabled={operatorId === undefined}>
+        <Stack gap="3">
+          <Heading as="h4" size="sm">
+            {copy.adminProposalAdopt}
+          </Heading>
+          <Field.Root invalid={!!errors.memo}>
+            <Field.Label>{copy.adminProposalAdoptMemo}</Field.Label>
+            <Textarea rows={2} data-testid="admin-proposal-adopt-memo" {...register('memo')} />
+            <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
+          </Field.Root>
+          <Controller
+            name="market"
+            control={control}
+            render={({ field }) => (
+              <MarketChoiceRadio
+                name={field.name}
+                value={field.value}
+                choices={['none', 'draft', 'existing']}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                testId="admin-proposal-adopt-market"
+              />
+            )}
+          />
+          {market === 'draft' && (
+            <DraftFields
+              tree={tree}
+              view={view}
+              category={register('categoryId')}
+              closeAt={register('closeAt')}
+              categoryError={errors.categoryId?.message}
+              closeAtError={errors.closeAt?.message}
+              testId="admin-proposal-draft"
             />
           )}
-        />
-        {market === 'draft' && (
-          <DraftFields
-            tree={tree}
-            view={view}
-            category={register('categoryId')}
-            closeAt={register('closeAt')}
-            categoryError={errors.categoryId?.message}
-            closeAtError={errors.closeAt?.message}
-            testId="admin-proposal-draft"
-          />
-        )}
-        {market === 'existing' && (
-          <MarketPicker
-            label={copy.adminProposalExistingMarket}
-            picked={picked}
-            onPick={(next) => {
-              setPicked(next);
-              setValue('marketId', next?.id ?? '', { shouldValidate: next !== null });
-            }}
-            error={errors.marketId?.message}
-            testId="admin-proposal-adopt-picker"
-          />
-        )}
-        <Button
-          type="submit"
-          size="sm"
-          alignSelf="flex-start"
-          data-testid="admin-proposal-adopt-submit"
-        >
-          {copy.adminProposalAdopt}
-        </Button>
-      </Stack>
+          {market === 'existing' && (
+            <MarketPicker
+              label={copy.adminProposalExistingMarket}
+              picked={picked}
+              onPick={(next) => {
+                setPicked(next);
+                setValue('marketId', next?.id ?? '', { shouldValidate: next !== null });
+              }}
+              error={errors.marketId?.message}
+              testId="admin-proposal-adopt-picker"
+            />
+          )}
+          <Button
+            type="submit"
+            size="sm"
+            alignSelf="flex-start"
+            data-testid="admin-proposal-adopt-submit"
+          >
+            {copy.adminProposalAdopt}
+          </Button>
+        </Stack>
+      </OperatorFieldset>
       <ConfirmDialog
         testId="admin-proposal-adopt"
         open={confirming !== null}
@@ -696,61 +708,63 @@ function LinkMarketForm({ proposal }: { proposal: AdminProposal }) {
 
   return (
     <form onSubmit={(event) => void submit(event)} noValidate data-testid="admin-proposal-link">
-      <Stack gap="3">
-        <Stack gap="1">
-          <Heading as="h4" size="sm">
-            {copy.adminProposalLink}
-          </Heading>
-          <Text fontSize="sm" color="fg.muted">
-            {copy.adminProposalLinkHint}
-          </Text>
-        </Stack>
-        <Controller
-          name="market"
-          control={control}
-          render={({ field }) => (
-            <MarketChoiceRadio
-              name={field.name}
-              value={field.value}
-              choices={['existing', 'draft']}
-              onChange={field.onChange}
-              onBlur={field.onBlur}
-              testId="admin-proposal-link-market"
+      <OperatorFieldset disabled={operatorId === undefined}>
+        <Stack gap="3">
+          <Stack gap="1">
+            <Heading as="h4" size="sm">
+              {copy.adminProposalLink}
+            </Heading>
+            <Text fontSize="sm" color="fg.muted">
+              {copy.adminProposalLinkHint}
+            </Text>
+          </Stack>
+          <Controller
+            name="market"
+            control={control}
+            render={({ field }) => (
+              <MarketChoiceRadio
+                name={field.name}
+                value={field.value}
+                choices={['existing', 'draft']}
+                onChange={field.onChange}
+                onBlur={field.onBlur}
+                testId="admin-proposal-link-market"
+              />
+            )}
+          />
+          {market === 'draft' && (
+            <DraftFields
+              tree={tree}
+              view={view}
+              category={register('categoryId')}
+              closeAt={register('closeAt')}
+              categoryError={errors.categoryId?.message}
+              closeAtError={errors.closeAt?.message}
+              testId="admin-proposal-link-draft"
             />
           )}
-        />
-        {market === 'draft' && (
-          <DraftFields
-            tree={tree}
-            view={view}
-            category={register('categoryId')}
-            closeAt={register('closeAt')}
-            categoryError={errors.categoryId?.message}
-            closeAtError={errors.closeAt?.message}
-            testId="admin-proposal-link-draft"
-          />
-        )}
-        {market === 'existing' && (
-          <MarketPicker
-            label={copy.adminProposalExistingMarket}
-            picked={picked}
-            onPick={(next) => {
-              setPicked(next);
-              setValue('marketId', next?.id ?? '', { shouldValidate: next !== null });
-            }}
-            error={errors.marketId?.message}
-            testId="admin-proposal-link-picker"
-          />
-        )}
-        <Button
-          type="submit"
-          size="sm"
-          alignSelf="flex-start"
-          data-testid="admin-proposal-link-submit"
-        >
-          {copy.adminProposalLink}
-        </Button>
-      </Stack>
+          {market === 'existing' && (
+            <MarketPicker
+              label={copy.adminProposalExistingMarket}
+              picked={picked}
+              onPick={(next) => {
+                setPicked(next);
+                setValue('marketId', next?.id ?? '', { shouldValidate: next !== null });
+              }}
+              error={errors.marketId?.message}
+              testId="admin-proposal-link-picker"
+            />
+          )}
+          <Button
+            type="submit"
+            size="sm"
+            alignSelf="flex-start"
+            data-testid="admin-proposal-link-submit"
+          >
+            {copy.adminProposalLink}
+          </Button>
+        </Stack>
+      </OperatorFieldset>
       <ConfirmDialog
         testId="admin-proposal-link"
         open={confirming !== null}
@@ -824,59 +838,61 @@ function RejectForm({ proposal }: { proposal: AdminProposal }) {
 
   return (
     <form onSubmit={(event) => void submit(event)} noValidate data-testid="admin-proposal-reject">
-      <Stack gap="3">
-        <Heading as="h4" size="sm">
-          {copy.adminProposalReject}
-        </Heading>
-        <Field.Root invalid={!!errors.reason} required maxW="64">
-          <Field.Label>{copy.proposalRejectionReason}</Field.Label>
-          <NativeSelect.Root>
-            <NativeSelect.Field
-              placeholder={copy.adminProposalRejectReasonPlaceholder}
-              data-testid="admin-proposal-reject-reason"
-              {...register('reason')}
-            >
-              {PROPOSAL_REJECTION_REASONS.map((value) => (
-                <option key={value} value={value}>
-                  {PROPOSAL_REJECTION_REASON_LABEL[value]}
-                </option>
-              ))}
-            </NativeSelect.Field>
-            <NativeSelect.Indicator />
-          </NativeSelect.Root>
-          <Field.ErrorText>{errors.reason?.message}</Field.ErrorText>
-        </Field.Root>
-        <Field.Root invalid={!!errors.explanation} required>
-          <Field.Label>{copy.adminProposalRejectExplanation}</Field.Label>
-          <Textarea
-            rows={3}
-            data-testid="admin-proposal-reject-explanation"
-            {...register('explanation')}
-          />
-          <Field.ErrorText>{errors.explanation?.message}</Field.ErrorText>
-        </Field.Root>
-        {reason === 'duplicate' && (
-          <MarketPicker
-            label={copy.adminProposalDuplicateMarket}
-            picked={picked}
-            onPick={(next) => {
-              setPicked(next);
-              setValue('duplicateMarketId', next?.id ?? '', { shouldValidate: next !== null });
-            }}
-            error={errors.duplicateMarketId?.message}
-            testId="admin-proposal-reject-picker"
-          />
-        )}
-        <Button
-          type="submit"
-          size="sm"
-          variant="outline"
-          alignSelf="flex-start"
-          data-testid="admin-proposal-reject-submit"
-        >
-          {copy.adminProposalReject}
-        </Button>
-      </Stack>
+      <OperatorFieldset disabled={operatorId === undefined}>
+        <Stack gap="3">
+          <Heading as="h4" size="sm">
+            {copy.adminProposalReject}
+          </Heading>
+          <Field.Root invalid={!!errors.reason} required maxW="64">
+            <Field.Label>{copy.proposalRejectionReason}</Field.Label>
+            <NativeSelect.Root>
+              <NativeSelect.Field
+                placeholder={copy.adminProposalRejectReasonPlaceholder}
+                data-testid="admin-proposal-reject-reason"
+                {...register('reason')}
+              >
+                {PROPOSAL_REJECTION_REASONS.map((value) => (
+                  <option key={value} value={value}>
+                    {PROPOSAL_REJECTION_REASON_LABEL[value]}
+                  </option>
+                ))}
+              </NativeSelect.Field>
+              <NativeSelect.Indicator />
+            </NativeSelect.Root>
+            <Field.ErrorText>{errors.reason?.message}</Field.ErrorText>
+          </Field.Root>
+          <Field.Root invalid={!!errors.explanation} required>
+            <Field.Label>{copy.adminProposalRejectExplanation}</Field.Label>
+            <Textarea
+              rows={3}
+              data-testid="admin-proposal-reject-explanation"
+              {...register('explanation')}
+            />
+            <Field.ErrorText>{errors.explanation?.message}</Field.ErrorText>
+          </Field.Root>
+          {reason === 'duplicate' && (
+            <MarketPicker
+              label={copy.adminProposalDuplicateMarket}
+              picked={picked}
+              onPick={(next) => {
+                setPicked(next);
+                setValue('duplicateMarketId', next?.id ?? '', { shouldValidate: next !== null });
+              }}
+              error={errors.duplicateMarketId?.message}
+              testId="admin-proposal-reject-picker"
+            />
+          )}
+          <Button
+            type="submit"
+            size="sm"
+            variant="outline"
+            alignSelf="flex-start"
+            data-testid="admin-proposal-reject-submit"
+          >
+            {copy.adminProposalReject}
+          </Button>
+        </Stack>
+      </OperatorFieldset>
       <ConfirmDialog
         testId="admin-proposal-reject"
         open={confirming !== null}
@@ -902,7 +918,9 @@ function RejectForm({ proposal }: { proposal: AdminProposal }) {
 
 /**
  * The operators' internal memo, in any status (never shown to the proposer). The form follows the
- * server's memo while it is untouched, so another operator's save shows on the next read.
+ * server's memo while it is untouched, so another operator's save shows on the next read. Drawn for
+ * the admin on screen (keyed by it in AdminProposalDetail, its field off until that admin is known):
+ * a memo A typed is not saved as B's once `['me']` turns from A to B in place (ADR-0092 answer 1).
  */
 function InternalMemoCard({ proposal }: { proposal: AdminProposal }) {
   const queryClient = useQueryClient();
@@ -951,27 +969,29 @@ function InternalMemoCard({ proposal }: { proposal: AdminProposal }) {
       </Card.Header>
       <Card.Body>
         <form onSubmit={(event) => void submit(event)} noValidate>
-          <Stack gap="3">
-            <Field.Root invalid={!!errors.memo}>
-              <Field.Label srOnly>{copy.adminProposalInternalMemo}</Field.Label>
-              <Textarea
-                rows={3}
-                data-testid="admin-proposal-internal-memo-input"
-                {...register('memo')}
-              />
-              <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
-            </Field.Root>
-            <Button
-              type="submit"
-              size="sm"
-              alignSelf="flex-start"
-              loading={save.isPending}
-              disabled={!isDirty || operatorId === undefined}
-              data-testid="admin-proposal-internal-memo-save"
-            >
-              {copy.save}
-            </Button>
-          </Stack>
+          <OperatorFieldset disabled={operatorId === undefined}>
+            <Stack gap="3">
+              <Field.Root invalid={!!errors.memo}>
+                <Field.Label srOnly>{copy.adminProposalInternalMemo}</Field.Label>
+                <Textarea
+                  rows={3}
+                  data-testid="admin-proposal-internal-memo-input"
+                  {...register('memo')}
+                />
+                <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
+              </Field.Root>
+              <Button
+                type="submit"
+                size="sm"
+                alignSelf="flex-start"
+                loading={save.isPending}
+                disabled={!isDirty || operatorId === undefined}
+                data-testid="admin-proposal-internal-memo-save"
+              >
+                {copy.save}
+              </Button>
+            </Stack>
+          </OperatorFieldset>
         </form>
       </Card.Body>
     </Card.Root>

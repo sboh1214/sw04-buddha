@@ -14,11 +14,14 @@ import {
   pinnedNoticesView,
 } from '@/lib/notices';
 import {
+  POST_DRAFT_TTL_MS,
   type DraftStorage,
   type PostDraftKey,
   clearPostDraft,
   keepPostDraft,
+  postDraftLanded,
   postDraftMoment,
+  postDraftStorageKey,
   readPostDraft,
 } from '@/lib/post-drafts';
 import { getQueryClient } from '@/lib/query-client';
@@ -805,7 +808,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           ? { title: '쓰던 공지', body: typed.body, previews: {} }
           : { title: '쓰던 공지', body: typed.body, previews: {}, version },
       );
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'admin-1');
       last = heldPostDraftAt(last, typed, true);
 
       // The write lands; its success is held in `onSuccess` (the lists being read again — each
@@ -838,7 +841,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
       // A moment of its own would have come after the landing, and kept — with the version before
       // the save — what was just saved.
       expect(keepHeldPostDraft({ ...last, moment: postDraftMoment() }, me)).toBe(true);
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'admin-1');
       for (const release of releases) release();
       await sent;
       expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('success');
@@ -865,7 +868,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         // The write screen leaves for the list; a form of it made afterwards keeps its own draft.
         expect(keepHeldPostDraft(heldPostDraftAt(undefined, typed, false), me)).toBe(true);
       }
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'admin-1');
     }
   });
 
@@ -949,6 +952,169 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
       expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
       expect(keepHeldPostDraft(theirs, b)).toBe(false);
       expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+    }
+  });
+});
+
+describe('a notice’s draft as the admin on screen turns to another (ADR-0092, 오너 결정 2026-10-26 17:21 답 2 «A의 것으로 1시간 보관»)', () => {
+  // `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2): the notice
+  // screens draw their form for the admin on screen (`key`, app/admin/notices/notice-forms.tsx),
+  // so A's form goes — and, drawn for A alone (`keepOnAccountTurn`), keeps what A typed in this
+  // tab as A's draft for the hour, as the onboarding gate's move does. B's form reads none of it;
+  // A's form, drawn again once A is back, takes it back.
+  const newKey = { kind: 'notice-new' } as const;
+  const editKey = { kind: 'notice-edit', noticeId: notice } as const;
+  const EDITED_AT = '2026-10-20T01:00:00.000Z';
+  const a = { id: 'admin-1', onboarding: { nextStep: null } } as unknown as Me;
+  const b = { id: 'admin-2', onboarding: { nextStep: null } } as unknown as Me;
+  const screens: { key: PostDraftKey; version?: string | null }[] = [
+    { key: newKey },
+    { key: editKey, version: EDITED_AT },
+    { key: editKey, version: null },
+  ];
+  /** The storage's item keys. */
+  const keysOf = (storage: DraftStorage) =>
+    Array.from({ length: storage.length }, (_, index) => storage.key(index));
+  /** A form as of its last render, something typed, drawn for `accountId` alone. */
+  const typedBy = (
+    key: PostDraftKey,
+    accountId: string,
+    title: string,
+    version?: string | null,
+  ): HeldPostDraftAt =>
+    heldPostDraftAt(
+      undefined,
+      {
+        key,
+        accountId,
+        keepOnAccountTurn: true,
+        hasDraft: true,
+        title,
+        body: {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: `${title} 본문` }] }],
+        },
+        previews: new Map(),
+        ...(version === undefined ? {} : { version }),
+      },
+      false,
+    );
+
+  it('keeps what A typed as A’s — an edit’s with the version it was typed on — which B never reads, and A takes back within the hour', () => {
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      const before = Date.now();
+      const theirs = typedBy(key, 'admin-1', 'A가 쓰던 공지', version);
+      // A's form goes with B in `['me']`: kept, for A, under A's item.
+      expect(keepHeldPostDraft(theirs, b)).toBe(true);
+      expect(keysOf(storage)).toEqual([postDraftStorageKey(key, 'admin-1')]);
+      // B's form, made now, reads nothing — and leaves A's.
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      // B typed nothing; `['me']` turns back to A, and B's form goes keeping nothing.
+      const blank = heldPostDraftAt(
+        undefined,
+        { ...theirs, accountId: 'admin-2', hasDraft: false, title: '' },
+        false,
+      );
+      expect(keepHeldPostDraft(blank, a)).toBe(false);
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      // A's form, made again, takes back what A typed.
+      const kept = readPostDraft(storage, key, 'admin-1', Date.now());
+      expect(kept).toEqual({
+        title: 'A가 쓰던 공지',
+        body: theirs.body,
+        previews: {},
+        ...(version === undefined ? {} : { version }),
+      });
+      // For the hour, as the gate's move (POST_DRAFT_TTL_MS).
+      expect(readPostDraft(storage, key, 'admin-1', before + POST_DRAFT_TTL_MS + 1_000)).toBeNull();
+    }
+  });
+
+  it('keeps B’s own draft beside A’s: each admin’s form going keeps its own, and neither replaces the other', () => {
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', 'A가 쓰던 공지', version), b)).toBe(true);
+      // B typed too before `['me']` turned back to A.
+      expect(keepHeldPostDraft(typedBy(key, 'admin-2', 'B가 쓰던 공지', version), a)).toBe(true);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())?.title).toBe('A가 쓰던 공지');
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())?.title).toBe('B가 쓰던 공지');
+    }
+  });
+
+  it('keeps nothing for a form not drawn per admin, with nothing typed, whose write landed, or with no `Me` in the cache — nor on the same admin’s own leave', () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const theirs = typedBy(newKey, 'admin-1', 'A가 쓰던 공지');
+    // A form not drawn per account keeps only on the gate's move (`keepOnAccountTurn` absent).
+    expect(
+      keepHeldPostDraft(
+        { ...theirs, key: { kind: 'new', marketId: notice }, keepOnAccountTurn: undefined },
+        b,
+      ),
+    ).toBe(false);
+    expect(keepHeldPostDraft({ ...theirs, keepOnAccountTurn: false }, b)).toBe(false);
+    // Nothing to lose.
+    expect(keepHeldPostDraft({ ...theirs, hasDraft: false }, b)).toBe(false);
+    // SessionCacheGuard's reset or a sign-out: `['me']` is empty as the form goes.
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    // The same admin, nothing left: a link or Back asked first.
+    expect(keepHeldPostDraft(theirs, a)).toBe(false);
+    expect(storage.length).toBe(0);
+    // A's write landed after the form's last render (its success being handled): saved.
+    postDraftLanded(newKey, 'admin-1');
+    expect(keepHeldPostDraft(theirs, b)).toBe(false);
+    expect(storage.length).toBe(0);
+  });
+
+  it('a write A sent that lands after the turn clears A’s kept draft, and only A’s; one refused as another account’s keeps it', async () => {
+    for (const { key, version } of screens) {
+      const queryClient = getQueryClient();
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      queryClient.setQueryData(ME_QUERY_KEY, b);
+      const send = (refused: boolean) => {
+        const fail = new ApiError(403, {
+          code: 'FORBIDDEN',
+          message: 'x',
+          details: [{ path: ['expectedAccountId'], message: 'x' }],
+        });
+        if (key.kind === 'notice-new') {
+          const post = vi.spyOn(api, 'POST');
+          if (refused) post.mockRejectedValueOnce(fail);
+          else post.mockResolvedValueOnce(answer(adminNotice));
+          return new MutationObserver(
+            queryClient,
+            createNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({ title: 'A가 쓰던 공지', body: {}, accountId: 'admin-1' });
+        }
+        const put = vi.spyOn(api, 'PUT');
+        if (refused) put.mockRejectedValueOnce(fail);
+        else put.mockResolvedValueOnce(answer({ notice: adminNotice, changed: true }));
+        return new MutationObserver(
+          queryClient,
+          updateNoticeOptions(queryClient, sessionUnchanged),
+        ).mutate({
+          noticeId: NOTICE,
+          title: 'A가 쓰던 공지',
+          body: {},
+          expectedEditedAt: version ?? null,
+          accountId: 'admin-1',
+        });
+      };
+      // A's form, locked on its send, goes as `['me']` turns to B: kept, the send in flight.
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', 'A가 쓰던 공지', version), b)).toBe(true);
+      expect(keepHeldPostDraft(typedBy(key, 'admin-2', 'B가 쓰던 공지', version), a)).toBe(true);
+      // Refused as another account's (the tab's cookie was B's by then): A's draft stays.
+      await expect(send(true)).rejects.toBeInstanceOf(ApiError);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())?.title).toBe('A가 쓰던 공지');
+      // Landed: the notice holds it — A's draft goes; B's stays.
+      await send(false);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toBeNull();
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())?.title).toBe('B가 쓰던 공지');
+      clearPostDraft(storage, key, 'admin-2');
     }
   });
 });

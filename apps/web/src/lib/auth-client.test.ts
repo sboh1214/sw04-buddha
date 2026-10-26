@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { isAuthForAnotherAccount } from './auth-client';
+import { copy } from '@/copy';
+import { authErrorMessage, isAuthForAnotherAccount } from './auth-client';
 
 describe('isAuthForAnotherAccount (ADR-0092)', () => {
   const refusal = {
@@ -69,8 +70,8 @@ describe('MY 설정’s better-auth writes name the account on screen (ADR-0092)
 
   it('the address card’s change names its Me', () => {
     const card = source('../app/my/settings/account-section.tsx');
-    expect(card).toContain(
-      '<AccountFields accountId={me.id} email={me.email} emailVerified={me.emailVerified} />',
+    expect(card).toMatch(
+      /<AccountFields\s+key=\{me\.id\}\s+accountId=\{me\.id\}\s+email=\{me\.email\}\s+emailVerified=\{me\.emailVerified\}\s+\/>/,
     );
     const fields = declaration(card, 'AccountFields');
     expect(fields).toContain('authClient.changeEmail(');
@@ -78,17 +79,65 @@ describe('MY 설정’s better-auth writes name the account on screen (ADR-0092)
     expect(fields).toContain('sessionChanged(error) ? copy.sessionChanged');
   });
 
-  it('the login methods card’s link names its Me and waits for it', () => {
+  it('the login methods card’s link names its Me', () => {
     const card = source('../app/my/settings/linked-accounts.tsx');
     const linked = declaration(card, 'LinkedAccounts');
-    expect(linked).toContain('const accountId = useMe().data?.id;');
+    expect(linked).toContain('const { data: me, isPending: mePending } = useMe();');
     expect(linked).toContain('authClient.linkSocial(');
     expect(linked).toContain('{ body: { expectedAccountId: account } }');
-    expect(linked).toContain('disabled={accountId === undefined}');
     expect(linked).toContain(
-      'link.mutate({ provider: providerId as SocialProvider, account: accountId });',
+      'link.mutate({ provider: providerId as SocialProvider, account: me.id })',
     );
     expect(linked).toContain('sessionChanged(error)');
+  });
+
+  it('the login methods card waits for its Me as the other cards do, and says when it could not be read (owner decision 2026-10-26 17:21 answer 6)', () => {
+    // «다른 카드처럼 보임»: the skeleton while `GET /me` is read, then `copy.errProfileLoad` and 다시
+    // 시도 (`ProfileUnavailable`, ADR-0091's password card) — no row, 연결 or 해제 for nobody.
+    // Before, the rows and 해제 stood while 연결 stayed off with no reason and no retry.
+    const card = source('../app/my/settings/linked-accounts.tsx');
+    expect(card).toContain("import { ProfileUnavailable } from './profile-unavailable';");
+    const linked = declaration(card, 'LinkedAccounts');
+    expect(linked).toContain('{mePending || !me ? (\n        <ProfileUnavailable />');
+    // The rows are past it: the list's own states come only once the profile is there.
+    expect(linked.indexOf('<ProfileUnavailable />')).toBeLessThan(
+      linked.indexOf('accounts.isPending ?'),
+    );
+    expect(linked).not.toContain('accountId === undefined');
+    // The failure the card shows is the shared one, with its retry of `GET /me`.
+    const unavailable = source('../app/my/settings/profile-unavailable.tsx');
+    expect(unavailable).toContain('<Alert.Description>{copy.errProfileLoad}</Alert.Description>');
+    expect(unavailable).toContain('onClick={() => void refetch()}');
+  });
+
+  it('인증 메일 다시 보내기 reads the session and the profile again on EMAIL_MISMATCH, its message the generic one (owner decision 2026-10-26 17:21 answer 5)', () => {
+    // better-auth mails a signed-in request only to its own account's address: EMAIL_MISMATCH says
+    // the card's address is not the signed-in account's as it now is — another account signed in
+    // in another window, or the address changed elsewhere. «다시 읽고 일반 문구 유지».
+    const fields = declaration(source('../app/my/settings/account-section.tsx'), 'AccountFields');
+    expect(fields).toContain('const emailMismatch = useAuthEmailMismatch();');
+    expect(fields).toMatch(
+      /authClient\.sendVerificationEmail\(\{ email, callbackURL: CALLBACK \}\);\s+if \(error\) \{[^}]*emailMismatch\(error\);\s+throw new Error\(authErrorMessage\(error\)\);/,
+    );
+    const hook = declaration(source('../hooks/use-session-changed.ts'), 'useAuthEmailMismatch');
+    expect(hook).toContain('if (error?.code !== AUTH_ERROR.EMAIL_MISMATCH) return false;');
+    expect(hook).toContain('void refetchSession();');
+    expect(hook).toContain('void queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });');
+    // The generic message: EMAIL_MISMATCH has no copy of its own.
+    expect(authErrorMessage({ status: 400, code: 'EMAIL_MISMATCH' })).toBe(copy.errUnknown);
+  });
+
+  it('the address card is drawn again for each account (owner decision 2026-10-26 17:21 answer 1)', () => {
+    // `['me']` can turn from A to B in place, before the session does (ADR-0090 결정 4-2 — no
+    // reset then): unkeyed, the address typed on A's card stayed with 변경 on and the next press
+    // named B — B's `Me` — with B's cookie, mailing B's address a confirmation for what A typed.
+    // Keyed by the account, as the password card is (ADR-0091 결정 3), it starts again empty. e2e
+    // auth.spec.ts ('탭의 세션이 아직 …') holds that order.
+    const card = source('../app/my/settings/account-section.tsx');
+    const section = declaration(card, 'AccountSection');
+    expect(section).toMatch(/<AccountFields\s+key=\{me\.id\}/);
+    // Drawn only once `GET /me` has answered: no field to type in for nobody.
+    expect(section).toContain('{isPending || !me ? (\n        <ProfileUnavailable />');
   });
 
   it('none of them reads the session for an account', () => {

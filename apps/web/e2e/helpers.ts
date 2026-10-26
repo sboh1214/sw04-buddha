@@ -3,6 +3,7 @@ import {
   test as base,
   type APIRequestContext,
   type APIResponse,
+  type Browser,
   type BrowserContext,
   type Cookie,
   type Locator,
@@ -818,6 +819,80 @@ export async function switchMeBeforeSession(
   await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
   const drawn = (await (await meRead).json()) as { data: Me };
   expect(drawn.data.id).toBe(to.id);
+}
+
+/**
+ * Two members in ADR-0090 결정 4-2's order, for a screen drawn for the account on screen: A signed
+ * up on `page`, B in a browser context of its own. `open` installs the page's clock — so
+ * `switchMeBeforeSession` can make `['me']` older than its `staleTime` — and opens `path` as A;
+ * `toB` turns `['me']` from A to B in place, better-auth's session still A's
+ * (`switchMeBeforeSession`), and `toA` back: A's cookie in the tab again and `GET /me` read again
+ * as A (on the same `visibilitychange`), the session still answered as A. `close` ends both
+ * contexts and the page's routes. A spec makes what `path` shows between the two: A's and B's
+ * accounts are there (`a`, `b`, and `other`, B's page). `bStepLeft`: B stops at its first
+ * onboarding step (the consent, its first password set — `openSetPassword`), so the onboarding
+ * gate puts its placeholder in place of A's page in the very render `['me']` turns to B, and moves
+ * on to `/onboarding`; `toA` then lands back on `path` (the stepper sends an account with nothing
+ * left on to its `next`).
+ */
+export async function membersTurningInPlace(
+  browser: Browser,
+  page: Page,
+  { bStepLeft = false }: { bStepLeft?: boolean } = {},
+): Promise<{
+  a: Me;
+  b: Me;
+  other: Page;
+  open: (path: string) => Promise<void>;
+  toB: () => Promise<void>;
+  toA: () => Promise<void>;
+  close: () => Promise<void>;
+}> {
+  const otherContext = await browser.newContext();
+  const shownContext = await browser.newContext();
+  const close = async () => {
+    await page.unrouteAll({ behavior: 'ignoreErrors' });
+    await otherContext.close();
+    await shownContext.close();
+  };
+  try {
+    const other = await otherContext.newPage();
+    if (bStepLeft) {
+      await openSetPassword(other, freshEmail());
+      await setFirstPassword(other);
+      await expect(other).toHaveURL('/onboarding');
+    } else {
+      await signUp(other, freshEmail());
+    }
+    const b = await meOf(other.request);
+    expect(b.onboarding.nextStep).toBe(bStepLeft ? 'consent' : null);
+    await signUp(page, freshEmail());
+    const a = await meOf(page.request);
+    expect(a.id).not.toBe(b.id);
+    const aCookies = await page.context().cookies();
+    const open = async (path: string) => {
+      await page.clock.install();
+      await page.goto(path);
+    };
+    const toB = async () =>
+      switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+    const toA = async () => {
+      await page.context().clearCookies();
+      await page.context().addCookies(aCookies);
+      const meRead = nextMeRead(page);
+      await page.clock.fastForward('00:31');
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      const drawn = (await (await meRead).json()) as { data: Me };
+      expect(drawn.data.id).toBe(a.id);
+    };
+    return { a, b, other, open, toB, toA, close };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 /** The first seed admin, for a spec that needs a second signed-in browser without a second mailbox. */

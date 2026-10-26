@@ -1089,6 +1089,36 @@ export function commentDraftKeyOfPlace(postId: string, place: HeldTextPlace): Co
   }
 }
 
+/**
+ * The account a comment section's boxes are drawn for — the last the section knew on screen — and
+ * their turn, which keys the threads (comments-section.tsx): every 답글 box and 수정 box, open or
+ * not, is under a thread.
+ */
+export interface CommentBoxesOwner {
+  accountId: string | undefined;
+  turn: number;
+}
+
+/**
+ * The boxes' owner once `['me']` says `accountId` (ADR-0092, 오너 결정 2026-10-26 17:21 답 3 «이 PR에서
+ * 함께, 적던 것은 A의 초안으로»): the turn moves on whenever the account known turns into another —
+ * in place, before the session does (ADR-0090 결정 4-2), or after a time nobody was known
+ * (SessionCacheGuard's reset, a failed first read) — so the threads are drawn afresh for B: no box
+ * A opened is open, and nothing A typed is in one (A's text was kept as A's draft as its box went,
+ * hooks/use-comment-draft.ts). Nobody known — the reset, a sign-out, `GET /me` not answered yet —
+ * moves nothing, and nor does the first account known or the same account coming back: a box needs
+ * an account to be drawn at all, so nothing was typed for anybody meanwhile, and the threads stay as
+ * they were (the reset's own redraw of the same account is the reset's, as before). The same object
+ * when nothing moves.
+ */
+export function commentBoxesOwner(
+  owner: CommentBoxesOwner,
+  accountId: string | undefined,
+): CommentBoxesOwner {
+  if (accountId === undefined || accountId === owner.accountId) return owner;
+  return { accountId, turn: owner.accountId === undefined ? owner.turn : owner.turn + 1 };
+}
+
 /** Where each held text is drawn: under its comment, at the end of its thread, or under them all. */
 export interface PlacedHeldTexts {
   byComment: ReadonlyMap<string, readonly HeldText[]>;

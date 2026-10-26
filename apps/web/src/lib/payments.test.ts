@@ -385,6 +385,21 @@ describe('refundErrorView', () => {
     ).toBe(copy.errRefundReason);
   });
 
+  it('says the session changed when the cookie is another admin’s (Q-PG-8 ①, ADR-0092)', () => {
+    const otherAccount = apiError(403, 'FORBIDDEN', [
+      { path: ['expectedAccountId'], message: 'session belongs to another account' },
+    ]);
+    expect(refundErrorView(otherAccount)).toEqual({ title: copy.sessionChanged });
+    // Any other 403 — a member's cookie, a field the refusal does not name — is not that.
+    expect(refundErrorView(apiError(403, 'FORBIDDEN')).title).toBe(copy.errUnknown);
+    expect(
+      refundErrorView(apiError(403, 'FORBIDDEN', [{ path: ['reason'], message: 'x' }])).title,
+    ).toBe(copy.errUnknown);
+    // Nothing was decided about the payment, and the session asked again shows who is signed in:
+    // the dialog closes, as every admin confirmation that refusal reaches.
+    expect(refundKeepsDialog(otherAccount)).toBe(false);
+  });
+
   it('falls back to the generic message for everything else', () => {
     expect(refundErrorView(apiError(400, 'VALIDATION_ERROR')).title).toBe(copy.errUnknown);
     expect(refundErrorView(apiError(500, 'INTERNAL')).title).toBe(copy.errUnknown);

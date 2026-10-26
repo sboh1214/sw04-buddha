@@ -15,12 +15,12 @@ import {
 } from '@chakra-ui/react';
 import { PAID_COIN_SALES_ENABLED, formatKrw, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useAdminPayments, useRefundPayment } from '@/hooks/use-admin-payments';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { nicknameShown } from '@/lib/account-closure';
 import { type AdminPayment } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -96,9 +96,15 @@ export function AdminPayments() {
  * `refundAction` offers one and paid Coin is on sale. `Date.now()` is read in render through
  * `refundAction`'s default, as `isClosingSoon` is on the market list: the admin query never runs
  * on the server, so there is no hydration to mismatch.
+ *
+ * The refund names the admin on screen (`useOperatorId`, ADR-0092 — Q-PG-8 ①, owner decision
+ * 2026-10-26 17:21 answer 4 «이 PR에서 더함»), so its button waits for `GET /me`. The dialog is
+ * held for the admin who opened it (`useHeldForOperator`, answer 1's way): `['me']` turning from A
+ * to B in place closes it with the reason A typed.
  */
 function PaymentRow({ payment }: { payment: AdminPayment }) {
-  const [refunding, setRefunding] = useState<RefundAction | null>(null);
+  const operatorId = useOperatorId();
+  const [refunding, setRefunding] = useHeldForOperator<RefundAction>();
   const action = PAID_COIN_SALES_ENABLED ? refundAction(payment) : null;
   const method = paymentMethodLabel(payment.method);
   const reason = paymentFailureReason(payment);
@@ -155,6 +161,7 @@ function PaymentRow({ payment }: { payment: AdminPayment }) {
             size="xs"
             variant="outline"
             colorPalette={action === 'retry' ? 'orange' : undefined}
+            disabled={operatorId === undefined}
             onClick={() => setRefunding(action)}
             data-testid={`admin-payment-refund-${payment.id}`}
           >
@@ -194,7 +201,8 @@ function refusalToast(view: RefundErrorView) {
  *
  * A refusal closes the dialog (the list has been refreshed to the row's new state, with its
  * own button if one is left), except the reason being refused and a request that never came
- * back (`refundKeepsDialog`).
+ * back (`refundKeepsDialog`). The cookie of another account closes it too, with
+ * `copy.sessionChanged` (`refundErrorView`) and the session asked again (`useRefundPayment`).
  */
 function RefundDialog({
   payment,
@@ -206,6 +214,7 @@ function RefundDialog({
   onClose: () => void;
 }) {
   const refund = useRefundPayment();
+  const operatorId = useOperatorId();
   const {
     register,
     handleSubmit,
@@ -217,8 +226,9 @@ function RefundDialog({
   const loading = refund.isPending;
 
   const submit = handleSubmit((values) => {
+    if (operatorId === undefined) return;
     refund.mutate(
-      { id: payment.id, body: { reason: values.reason } },
+      { id: payment.id, body: { reason: values.reason, expectedAccountId: operatorId } },
       {
         onSuccess: () => {
           toaster.create({ type: 'success', title: copy.adminPaymentRefunded });
@@ -288,6 +298,7 @@ function RefundDialog({
                 size="sm"
                 colorPalette="no"
                 loading={loading}
+                disabled={operatorId === undefined}
                 onClick={() => void submit()}
                 data-testid="payment-refund-confirm"
               >

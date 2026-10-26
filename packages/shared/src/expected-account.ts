@@ -5,10 +5,10 @@ import * as z from 'zod';
  * a tab whose session switched to another account before SessionCacheGuard reset its cache still
  * draws the first account's screen, and a write from it would otherwise be done as the second. The
  * API refuses a mismatch before anything is read, locked or written (403 FORBIDDEN naming the
- * field, `assertExpectedAccount`). Every owner write carries it, and so do the admin writes —
+ * field, `assertExpectedAccount`). Every owner write carries it, and so does every admin write —
  * the admin on screen (`useOperatorId`), so a change is never recorded under an admin the user is
- * not looking at (ADR-0092; the balance adjustment and the refund wait on Q-PG-8 ①, whose third
- * route, the manual settlement, ADR-0049 removed).
+ * not looking at (ADR-0092; the balance adjustment and the refund too since the owner closed Q-PG-8
+ * ①, «이 PR에서 더함» — its third route, the manual settlement, ADR-0049 removed).
  */
 export const expectedAccountIdSchema = z.string().min(1).max(255);
 

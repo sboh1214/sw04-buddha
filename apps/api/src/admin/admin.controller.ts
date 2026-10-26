@@ -67,11 +67,12 @@ import { PaymentRefundService } from './payment-refund.service.js';
  * admin that has not finished the onboarding (409 ONBOARDING_REQUIRED, 오너 결정 2026-10-19,
  * ADR-0072) — after the role, so a member hears 403 whatever its onboarding.
  *
- * The charge package and coupon writes name the admin the screen shows (`expectedAccountId` — in
- * the body, or the query of a package's removal, whose DELETE has no body; assertExpectedAccount,
- * ADR-0092): a mismatch with the cookie is refused (403 FORBIDDEN naming the field) before
- * anything is read or written. The balance adjustment and the refund do not yet — Q-PG-8 holds
- * that decision until real PG integration.
+ * Every write here names the admin the screen shows (`expectedAccountId` — in the body, or the
+ * query of a package's removal, whose DELETE has no body; assertExpectedAccount, ADR-0092): a
+ * mismatch with the cookie is refused (403 FORBIDDEN naming the field) before anything is read or
+ * written. The balance adjustment and the refund too, since the owner closed Q-PG-8 ① («이 PR에서
+ * 더함», ADR-0092) — a write from a tab whose cookie turned to another admin would otherwise be
+ * audited as that admin.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -241,7 +242,9 @@ export class AdminController {
     @Param('id') userId: string,
     @Body({ schema: balanceAdjustBodySchema }) body: BalanceAdjustBody,
   ): Promise<AdminBalanceAdjustResult> {
-    return this.admin.adjustBalance(admin.id, userId, body.amountCoin, body.memo);
+    const { expectedAccountId, amountCoin, memo } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.admin.adjustBalance(admin.id, userId, amountCoin, memo);
   }
 
   @Get('payments')
@@ -293,7 +296,9 @@ export class AdminController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: refundPaymentBodySchema }) body: RefundPaymentBody,
   ): Promise<AdminPayment> {
-    return this.refunds.refund(admin.id, id, body.reason);
+    const { expectedAccountId, reason } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.refunds.refund(admin.id, id, reason);
   }
 
   @Get('audit-failures')

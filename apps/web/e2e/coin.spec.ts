@@ -1,7 +1,7 @@
 import type { APIResponse, Locator, Page } from '@playwright/test';
 import type { Me } from '@buddha/shared';
 import { copy } from '../src/copy';
-import { createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
+import { accountIdOf, createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
 
 /**
  * 금액 표기 (#13, ADR-0051): `formatCoin` writes '12,345 Coin' with an ORDINARY space before the
@@ -109,7 +109,11 @@ test.describe('금액 표기 · 375px', () => {
     if (delta !== 0n) {
       await dataOf(
         await admin.post(`/api/v1/admin/users/${me.id}/balance-adjust`, {
-          data: { amountCoin: delta.toString(), memo: 'e2e 금액 표기' },
+          data: {
+            amountCoin: delta.toString(),
+            memo: 'e2e 금액 표기',
+            expectedAccountId: await accountIdOf(admin),
+          },
         }),
       );
     }

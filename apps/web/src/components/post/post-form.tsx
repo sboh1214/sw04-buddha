@@ -83,6 +83,15 @@ export interface PostFormProps {
    */
   draftVersion?: string | null;
   accountId: string | undefined;
+  /**
+   * The screen draws the form for one account — keyed by `accountId` — so `['me']` turning to
+   * another account in place replaces it: what it holds is then kept in this tab for its writer,
+   * for the hour, as the onboarding gate's move keeps it, and taken back when the writer opens the
+   * screen again (hooks/use-post-draft.ts — a notice's forms: ADR-0092, 오너 결정 2026-10-26 17:21
+   * 답 2 «A의 것으로 1시간 보관»; a post's write and edit forms: 답 3 «이 PR에서 함께, 적던 것은 A의
+   * 초안으로»). Absent, only the gate's move keeps it.
+   */
+  keepOnAccountTurn?: boolean;
   submitLabel: string;
   /** Sending, or sent and on the way to the post: the form is locked. */
   pending: boolean;
@@ -230,12 +239,13 @@ export interface NoticeFormOptions {
  */
 export function PostForm(props: PostFormProps) {
   const { draftKey, accountId } = props;
-  // Read once, when the form is made (the editor takes its first document then).
-  const [kept] = useState(() => ({
-    key: draftKey,
-    draft: accountId === undefined ? null : readSessionPostDraft(draftKey, accountId),
-  }));
-  const [held, send] = useReducer(nextRestoredDraftState, kept.draft, restoredDraftState);
+  // Read once, when the form is made (the editor takes its first document then), for the account
+  // on screen then: the draft taken back, and removed from the tab, is that account's.
+  const [kept] = useState<{ key: PostDraftKey; accountId: string; draft: PostDraft } | null>(() => {
+    const draft = accountId === undefined ? null : readSessionPostDraft(draftKey, accountId);
+    return accountId === undefined || draft === null ? null : { key: draftKey, accountId, draft };
+  });
+  const [held, send] = useReducer(nextRestoredDraftState, kept?.draft ?? null, restoredDraftState);
   // Whether the screen's write had landed as of the last render: its turning true ends what was
   // taken back (a notice's edit screen stays on the form after a save; a post's screen leaves).
   const [landed, setLanded] = useState(props.saved);
@@ -246,7 +256,7 @@ export function PostForm(props: PostFormProps) {
   // The title field of the fields on screen: where a discard leaves the focus.
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    if (kept.draft !== null) clearSessionPostDraft(kept.key);
+    if (kept !== null) clearSessionPostDraft(kept.key, kept.accountId);
   }, [kept]);
   return (
     <>
@@ -259,7 +269,7 @@ export function PostForm(props: PostFormProps) {
         titleRef={titleRef}
         onDiscard={() => send('ask')}
       />
-      {kept.draft !== null && (
+      {kept !== null && (
         <DiscardDialog
           // Nothing to discard into once the post is gone: the form is read-only.
           open={held.asking && props.gone !== true}
@@ -270,7 +280,7 @@ export function PostForm(props: PostFormProps) {
             // Once: a second click on 버리기 while the dialog closes discards nothing, and says
             // nothing either.
             if (!held.asking) return;
-            clearSessionPostDraft(kept.key);
+            clearSessionPostDraft(kept.key, kept.accountId);
             send('discard');
             toaster.create(POST_DRAFT_DISCARDED_TOAST);
           }}
@@ -353,6 +363,7 @@ function PostFormFields({
   draftKey,
   draftVersion,
   accountId,
+  keepOnAccountTurn = false,
   submitLabel,
   pending,
   saved,
@@ -439,6 +450,7 @@ function PostFormFields({
     {
       key: draftKey,
       accountId,
+      keepOnAccountTurn,
       // Once a write lands, measured from what it sent (the start moved, and what was taken back
       // ended): a change after it — on a notice's edit screen, which stays on the form — is a
       // draft to keep again. Until the form shows it saved, the landing counts by its moment.

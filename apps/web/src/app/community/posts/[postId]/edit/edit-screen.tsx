@@ -82,6 +82,15 @@ import { useSession } from '@/lib/use-session';
  * closed, and then — or once a read finds the post published again under the closed screen — the
  * form is the post's afresh (`key`), as a reload draws it; a later hiding holds again what it
  * holds then. A hidden post its author deletes (MY '내 글', ADR-0080) is deleted, as above.
+ *
+ * The form is drawn for the account on screen (`key`, ADR-0092, 오너 결정 2026-10-26 17:21 답 3 «이
+ * PR에서 함께, 적던 것은 A의 초안으로»). `['me']` can turn from the author A to another account B in
+ * place, before the session does (ADR-0090 결정 4-2): B is not the author, so B's screen says so in
+ * the form's place and holds nothing of A's — and A's form, going, keeps what A typed in this tab as
+ * A's draft of this edit for the hour, as the onboarding gate's move keeps it (`keepOnAccountTurn`):
+ * the screen opened again by A takes it back. A form held as its post went (above) is kept the same
+ * way — as the gate keeps it — and the screen, holding nothing for A any more, is the post as it
+ * is now when A is back.
  */
 export function EditScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
@@ -136,7 +145,9 @@ export function EditScreen({ postId, fallback }: { postId: string; fallback: Pos
               <EmptyState message={copy.postEditNotYours} data-testid="post-edit-not-yours" />
             ) : (
               <EditForm
-                key={closings}
+                // Each 닫기 draws it afresh; so does each account on screen (ADR-0092, 오너 결정
+                // 2026-10-26 17:21 답 3): A's typing goes into A's kept draft, never to B.
+                key={`${String(closings)}:${writer.accountId}`}
                 post={shown}
                 accountId={writer.accountId}
                 held={held}
@@ -202,6 +213,9 @@ function EditForm({
         initialDocument={post.body}
         draftKey={{ kind: 'edit', postId: post.id }}
         accountId={accountId}
+        // Drawn for its author on screen (its `key`): kept for the author as `['me']` turns to
+        // another account in place, as the onboarding gate's move keeps it (ADR-0092 답 3).
+        keepOnAccountTurn
         submitLabel={copy.postEditSubmit}
         // Held through the move to the post once saved, as the write screen holds it: the form
         // stays locked, and leaving no longer asks (the draft is the server's).

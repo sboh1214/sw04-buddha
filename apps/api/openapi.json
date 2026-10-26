@@ -19174,11 +19174,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "amountCoin",
-          "memo"
+          "memo",
+          "expectedAccountId"
         ]
       },
       "AdminBalanceAdjustResult": {
@@ -19300,10 +19306,16 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "reason"
+          "reason",
+          "expectedAccountId"
         ]
       },
       "AuditFailure": {

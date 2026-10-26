@@ -1,5 +1,6 @@
 import * as z from 'zod';
 import { paymentProviderSchema } from './enums.js';
+import { expectedAccountIdSchema } from './expected-account.js';
 
 /**
  * Payment-provider contracts shared by the API and the web (ADR-0042). The SmartroPay
@@ -19,8 +20,14 @@ export const paymentProviderInfoSchema = z
   .meta({ id: 'PaymentProviderInfo' });
 export type PaymentProviderInfo = z.infer<typeof paymentProviderInfoSchema>;
 
-/** `POST /admin/payments/:id/refund`: why the admin is refunding (required, audited). */
+/**
+ * `POST /admin/payments/:id/refund`: why the admin is refunding (required, audited), as the admin
+ * on screen (`expectedAccountId`, ADR-0092 — Q-PG-8 ①, owner decision 2026-10-26 «이 PR에서 더함»).
+ */
 export const refundPaymentBodySchema = z
-  .object({ reason: z.string().trim().min(1).max(REFUND_REASON_MAX_LENGTH) })
+  .object({
+    reason: z.string().trim().min(1).max(REFUND_REASON_MAX_LENGTH),
+    expectedAccountId: expectedAccountIdSchema,
+  })
   .meta({ id: 'RefundPaymentBody' });
 export type RefundPaymentBody = z.infer<typeof refundPaymentBodySchema>;

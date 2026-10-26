@@ -48,7 +48,7 @@ import {
   linkFlagWrittenAt,
   toLinkFlagReviewBody,
 } from '@/lib/admin-link-flags';
-import { useOperatorId } from '@/hooks/use-operator';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import { type AdminLinkFlag, type AdminLinkFlagGroup, api, unwrap } from '@/lib/api';
 import { ADMIN_MODERATION_ACTIONS_PATH, adminUserModerationPath } from '@/lib/moderation';
@@ -179,6 +179,11 @@ function ErrorAlert() {
  * repeats), and — reviewed — the mark: what came of it, who and when, the note. 항목 보기 opens the
  * entries; 확인함으로 표시 (default list only) opens the mark's dialog. Both buttons are named after
  * the row (its rule and link), as every row has the same two.
+ *
+ * The mark's dialog is held for the admin who opened it (`useHeldForOperator`, ADR-0091 결정 3), so
+ * 확인함으로 표시 waits for `GET /me`: once `['me']` turns from A to B in place, before the session
+ * does (ADR-0090 결정 4-2), it closes with the outcome picked and the note typed for A, which would
+ * otherwise mark the row as B (ADR-0092, owner decision 2026-10-26 17:21 answer 1).
  */
 function LinkFlagGroupRow({
   group,
@@ -187,8 +192,9 @@ function LinkFlagGroupRow({
   group: AdminLinkFlagGroup;
   onMarked: () => void;
 }) {
+  const operatorId = useOperatorId();
   const [open, setOpen] = useState(false);
-  const [marking, setMarking] = useState(false);
+  const [marking, setMarking] = useHeldForOperator<true>();
   const regionId = useId();
   const { review } = group;
   const toggleText = open ? copy.adminLinkFlagHideItems : copy.adminLinkFlagShowItems;
@@ -264,6 +270,7 @@ function LinkFlagGroupRow({
             size="xs"
             variant="outline"
             aria-label={linkFlagGroupActionLabel(group, copy.adminLinkFlagReview)}
+            disabled={operatorId === undefined}
             onClick={() => setMarking(true)}
             data-testid="admin-link-flag-review-open"
           >
@@ -272,8 +279,8 @@ function LinkFlagGroupRow({
         )}
       </HStack>
       {open && <LinkFlagItems id={regionId} group={group} />}
-      {marking && (
-        <ReviewDialog group={group} onClose={() => setMarking(false)} onMarked={onMarked} />
+      {marking !== null && (
+        <ReviewDialog group={group} onClose={() => setMarking(null)} onMarked={onMarked} />
       )}
     </Stack>
   );

@@ -92,6 +92,11 @@ export const AUTH_ERROR = {
   FAILED_TO_UNLINK_LAST_ACCOUNT: 'FAILED_TO_UNLINK_LAST_ACCOUNT',
   CREDENTIAL_ACCOUNT_NOT_FOUND: 'CREDENTIAL_ACCOUNT_NOT_FOUND',
   PROVIDER_NOT_FOUND: 'PROVIDER_NOT_FOUND',
+  /**
+   * `/send-verification-email` with a session: the address asked for is not the session's
+   * account's (better-auth mails a signed-in request only to its own account's address).
+   */
+  EMAIL_MISMATCH: 'EMAIL_MISMATCH',
 } as const;
 
 /** `account.providerId` of the email+password login method. */

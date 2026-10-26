@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { coinAmountInputSchema, coinAmountSchema } from './api/coin-amount.js';
 import { ledgerEntryTypeSchema, ledgerRefTypeSchema, paymentStatusSchema } from './enums.js';
+import { expectedAccountIdSchema } from './expected-account.js';
 
 /** Admin adjustments are bounded in either direction (PLAN 7.3). */
 export const ADJUST_MAX_ABS_COIN = 1_000_000n;
@@ -85,7 +86,10 @@ export const chargeResultSchema = z
   .meta({ id: 'ChargeResult' });
 export type ChargeResult = z.infer<typeof chargeResultSchema>;
 
-/** `POST /admin/users/:id/balance-adjust` (PLAN 7.3): signed amount, reason required. */
+/**
+ * `POST /admin/users/:id/balance-adjust` (PLAN 7.3): signed amount, reason required, as the admin
+ * on screen (`expectedAccountId`, ADR-0092 — Q-PG-8 ①, owner decision 2026-10-26 «이 PR에서 더함»).
+ */
 export const balanceAdjustBodySchema = z
   .object({
     amountCoin: coinAmountInputSchema.refine(
@@ -93,6 +97,7 @@ export const balanceAdjustBodySchema = z
       `must be a non-zero amount within ±${ADJUST_MAX_ABS_COIN.toString()}`,
     ),
     memo: z.string().trim().min(1).max(ADJUST_MEMO_MAX_LENGTH),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'BalanceAdjustBody' });
 export type BalanceAdjustBody = z.infer<typeof balanceAdjustBodySchema>;

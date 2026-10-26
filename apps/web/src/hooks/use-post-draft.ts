@@ -20,6 +20,14 @@ export interface HeldPostDraft extends Omit<PostDraft, 'previews'> {
   /** The account on screen, the draft's writer. */
   accountId: string | undefined;
   /**
+   * The form is drawn for its writer alone — its screen keys it by `accountId` (a notice's forms,
+   * and a post's write and edit forms) — so `['me']` turning to another account in place takes it
+   * away, and it keeps what it holds for its writer then (`keepHeldPostDraft`; ADR-0092, 오너 결정
+   * 2026-10-26 17:21 답 2 «A의 것으로 1시간 보관», 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»).
+   * Absent, only the onboarding gate's move keeps it.
+   */
+  keepOnAccountTurn?: boolean;
+  /**
    * A draft the storage can carry that leaving would lose (`hasDraftToKeep`). A write that lands
    * moves the form's start to what it sent (`landedDraftStart`) and ends what was taken back, so
    * from the render that shows it saved the form holds none until something changes again — on a
@@ -69,17 +77,29 @@ export function heldPostDraftAt(
 
 /**
  * What a form going away does with `last`, its draft as of its last render, given `me` — `GET /me`
- * as the cache holds it now: keeps it in this tab when the gate is taking its writer to a step left
- * (`shouldKeepPostDraft`), for that account only. A write of the screen that account sent and that
- * landed after `last`'s moment counts as saved (`postDraftLandedSince`): its success is being
- * handled and has not reached the form yet — the form, locked since it sent, holds what was sent
- * (`heldPostDraftAt`). Once the form shows the success, what it holds is measured from what was
- * sent (`hasDraft`). Whether it kept it.
+ * as the cache holds it now: keeps it in this tab, for its writer only, when the gate is taking
+ * that account to a step left, or — a form drawn for its writer alone (`keepOnAccountTurn`) — when
+ * `me` is another account: the account on screen turned in place, and the form drawn for it is
+ * another (`shouldKeepPostDraft`). `me` absent — SessionCacheGuard's reset, a sign-out — keeps
+ * nothing. A write of the screen that account sent and that landed after `last`'s moment counts as
+ * saved (`postDraftLandedSince`): its success is being handled and has not reached the form yet —
+ * the form, locked since it sent, holds what was sent (`heldPostDraftAt`). Once the form shows the
+ * success, what it holds is measured from what was sent (`hasDraft`). Whether it kept it.
  */
 export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): boolean {
-  if (last.accountId === undefined || me?.id !== last.accountId) return false;
+  if (last.accountId === undefined || me === undefined) return false;
+  const accountTurned = me.id !== last.accountId;
+  if (accountTurned && last.keepOnAccountTurn !== true) return false;
   const saved = postDraftLandedSince(last.key, last.accountId, last.moment);
-  if (!shouldKeepPostDraft({ hasDraft: last.hasDraft, saved, onboarding: me.onboarding })) {
+  if (
+    !shouldKeepPostDraft({
+      hasDraft: last.hasDraft,
+      saved,
+      // Another account's steps are not the writer's.
+      onboarding: accountTurned ? undefined : me.onboarding,
+      accountTurned,
+    })
+  ) {
     return false;
   }
   return keepSessionPostDraft(last.key, last.accountId, {
@@ -106,7 +126,9 @@ export function keepHeldPostDraft(last: HeldPostDraftAt, me: Me | undefined): bo
  * `['me']` is read from the cache rather than through `useMe`: the form never renders again with
  * the answer that unmounts it. The gate moves an admin as it moves anyone (/admin is not exempt,
  * lib/onboarding.ts), and a notice's forms keep their drafts the same way (#138, 오너 결정
- * 2026-10-21 (3차), ADR-0077).
+ * 2026-10-21 (3차), ADR-0077) — and, drawn for the account on screen, as `['me']` turning to
+ * another account in place takes them away (`keepOnAccountTurn`: a notice's forms, ADR-0092 답 2;
+ * a post's write and edit forms, 답 3).
  */
 export function useKeepPostDraftForOnboarding(draft: HeldPostDraft, pending: boolean): void {
   const queryClient = useQueryClient();

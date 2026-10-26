@@ -26,6 +26,7 @@ import { useForm } from 'react-hook-form';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useAdminRelatedSearch } from '@/hooks/use-admin-markets';
@@ -35,7 +36,7 @@ import {
   useAdminTheme,
   useAdminThemeMarkets,
 } from '@/hooks/use-admin-themes';
-import { useOperatorId } from '@/hooks/use-operator';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
   EMPTY_THEME_NOTICE_FORM,
@@ -86,6 +87,8 @@ export function AdminThemeDetail({ id }: { id: string }) {
   // A malformed id is a wrong address, so it is 찾을 수 없습니다 without a request.
   const themeId = uuidParamSchema.safeParse(id).data;
   const theme = useAdminTheme(themeId ?? '', themeId !== undefined);
+  // The admin on screen: 수정 is drawn again for each (ADR-0092 answer 1, `OperatorFieldset`).
+  const operatorId = useOperatorId();
 
   if (themeId === undefined || (theme.isError && isApiError(theme.error, 'NOT_FOUND'))) {
     return (
@@ -157,7 +160,7 @@ export function AdminThemeDetail({ id }: { id: string }) {
         </Card.Body>
       </Card.Root>
 
-      <EditThemeCard theme={data} />
+      <EditThemeCard key={operatorId ?? ''} theme={data} />
       {/* Keyed by the theme: a fresh search for each theme opened on this route. */}
       <ThemeMarketsPanel key={data.id} themeId={data.id} />
       <ThemeNoticesPanel theme={data} />
@@ -199,13 +202,16 @@ function Item({ label, children }: { label: string; children: React.ReactNode })
  *
  * Both name the admin on screen (`useOperatorId`, ADR-0092 — as every write on this page), so
  * they wait for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`) and
- * the session asked again (`useSessionChanged`).
+ * the session asked again (`useSessionChanged`). The unpublish's confirmation is held for the
+ * admin who opened it (`useHeldForOperator`, ADR-0091 결정 3), so it closes once `['me']` turns from
+ * A to B in place (ADR-0090 결정 4-2) — as every dialog and every form on this page is A's alone
+ * (owner decision 2026-10-26 17:21 answer 1).
  */
 function PublishButtons({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
-  const [confirming, setConfirming] = useState(false);
+  const [confirming, setConfirming] = useHeldForOperator<'unpublish'>();
   const publishHintId = useId();
   const published = theme.publishedAt !== null;
   const write = useMutation({
@@ -226,11 +232,11 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
         type: 'success',
         title: to === 'publish' ? copy.adminThemePublishDone : copy.adminThemeUnpublishDone,
       });
-      setConfirming(false);
+      setConfirming(null);
       await applyAdminTheme(queryClient, fresh);
     },
     onError: (error) => {
-      setConfirming(false);
+      setConfirming(null);
       sessionChanged(error);
       toaster.create({ type: 'error', title: themeWriteErrorMessage(error) });
     },
@@ -242,7 +248,8 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
           <Button
             size="sm"
             variant="outline"
-            onClick={() => setConfirming(true)}
+            disabled={operatorId === undefined}
+            onClick={() => setConfirming('unpublish')}
             data-testid="theme-unpublish"
           >
             {copy.adminThemeUnpublish}
@@ -274,8 +281,8 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
       )}
       <ConfirmDialog
         testId="theme-unpublish-dialog"
-        open={confirming}
-        onClose={() => setConfirming(false)}
+        open={confirming !== null}
+        onClose={() => setConfirming(null)}
         title={copy.adminThemeUnpublishTitle}
         confirmLabel={copy.adminThemeUnpublish}
         loading={write.isPending}
@@ -293,7 +300,9 @@ function PublishButtons({ theme }: { theme: AdminTheme }) {
 /**
  * 수정: the address until the first publish, the name, the introduction and the period, at any
  * time (before, during and after the period, published or not). Only the fields that changed are
- * sent; a save that changes nothing sends nothing.
+ * sent; a save that changes nothing sends nothing. Drawn for the admin on screen (keyed by it in
+ * AdminThemeDetail) with its fields waiting for that admin (`OperatorFieldset`): `['me']` turning
+ * from A to B in place drops what A typed (ADR-0092 answer 1).
  */
 function EditThemeCard({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
@@ -359,19 +368,21 @@ function EditThemeCard({ theme }: { theme: AdminTheme }) {
       </Card.Header>
       <Card.Body>
         <form onSubmit={(event) => void submit(event)} noValidate>
-          <Stack gap="3">
-            <ThemeFormFields form={form} slugFixed={slugFixed} />
-            <Button
-              type="submit"
-              size="sm"
-              alignSelf="flex-start"
-              loading={isSubmitting}
-              disabled={!isDirty || operatorId === undefined}
-              data-testid="theme-save"
-            >
-              {copy.save}
-            </Button>
-          </Stack>
+          <OperatorFieldset disabled={operatorId === undefined}>
+            <Stack gap="3">
+              <ThemeFormFields form={form} slugFixed={slugFixed} />
+              <Button
+                type="submit"
+                size="sm"
+                alignSelf="flex-start"
+                loading={isSubmitting}
+                disabled={!isDirty || operatorId === undefined}
+                data-testid="theme-save"
+              >
+                {copy.save}
+              </Button>
+            </Stack>
+          </OperatorFieldset>
         </form>
       </Card.Body>
     </Card.Root>
@@ -399,7 +410,9 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
   );
   const rows = markets.data ?? [];
   const section = listSection(markets, rows.length);
-  const [removing, setRemoving] = useState<AdminThemeMarket | null>(null);
+  // Held for the admin who opened it: it closes once `['me']` turns from A to B in place (ADR-0092
+  // answer 1). The picker is not: it reads the same markets for every admin and sends nothing.
+  const [removing, setRemoving] = useHeldForOperator<AdminThemeMarket>();
   const [input, setInput] = useState('');
   const [term, setTerm] = useState<string | undefined>(undefined);
   const search = useAdminRelatedSearch(term);
@@ -502,6 +515,7 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={operatorId === undefined}
                       onClick={() => setRemoving(row)}
                       data-testid={`admin-theme-market-unlink-${row.id}`}
                     >
@@ -655,13 +669,18 @@ function ThemeMarketsPanel({ themeId }: { themeId: string }) {
  * characters, whose web addresses the page links; written, edited — the page then marks it
  * 수정됨 — hidden after a confirmation and shown again, never deleted. Every notice is here, hidden
  * ones too, with who wrote it.
+ *
+ * All of it is the admin on screen's (ADR-0092 answer 1): the new notice's form is drawn again
+ * for each (`key`, its fields off until that admin is known), and the notice opened for editing
+ * and the hide's confirmation are held for the admin who opened them (`useHeldForOperator`) — once
+ * `['me']` turns from A to B in place they close with what A typed.
  */
 function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
   const queryClient = useQueryClient();
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
-  const [editing, setEditing] = useState<string | null>(null);
-  const [hiding, setHiding] = useState<AdminThemeNotice | null>(null);
+  const [editing, setEditing] = useHeldForOperator<string>();
+  const [hiding, setHiding] = useHeldForOperator<AdminThemeNotice>();
 
   const create = useMutation({
     mutationFn: async ({ values, by }: { values: ThemeNoticeFormValues; by: string }) =>
@@ -730,6 +749,7 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
       <Card.Body>
         <Stack gap="5">
           <NoticeForm
+            key={operatorId ?? ''}
             testId="theme-notice-new"
             submitLabel={copy.adminThemeNoticeCreate}
             initial={EMPTY_THEME_NOTICE_FORM}
@@ -781,6 +801,7 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
                         <Button
                           size="xs"
                           variant="outline"
+                          disabled={operatorId === undefined}
                           onClick={() => setEditing(notice.id)}
                           data-testid={`admin-theme-notice-edit-${notice.id}`}
                         >
@@ -790,6 +811,7 @@ function ThemeNoticesPanel({ theme }: { theme: AdminTheme }) {
                           <Button
                             size="xs"
                             variant="outline"
+                            disabled={operatorId === undefined}
                             onClick={() => setHiding(notice)}
                             data-testid={`admin-theme-notice-hide-${notice.id}`}
                           >
@@ -907,7 +929,9 @@ function EditNotice({
 
 /**
  * A notice's two fields with their bounds, for writing one and for editing one. A refused submit
- * keeps what was typed; a written notice empties the form when `resetOnSuccess`.
+ * keeps what was typed; a written notice empties the form when `resetOnSuccess`. Its fields and
+ * buttons are off with `submitDisabled` — while the admin on screen is not known — so nothing is
+ * typed for nobody (`OperatorFieldset`, ADR-0092 answer 1).
  */
 function NoticeForm({
   testId,
@@ -946,44 +970,46 @@ function NoticeForm({
   });
   return (
     <form onSubmit={(event) => void submit(event)} noValidate data-testid={testId}>
-      <Stack gap="3">
-        <Field.Root invalid={!!errors.title} required>
-          <Field.Label>{copy.adminThemeNoticeTitle}</Field.Label>
-          <Input
-            autoComplete="off"
-            maxLength={THEME_NOTICE_TITLE_MAX}
-            data-testid={`${testId}-title`}
-            {...register('title')}
-          />
-          <Field.ErrorText>{errors.title?.message}</Field.ErrorText>
-        </Field.Root>
-        <Field.Root invalid={!!errors.body} required>
-          <Field.Label>{copy.adminThemeNoticeBody}</Field.Label>
-          <Textarea
-            rows={4}
-            maxLength={THEME_NOTICE_BODY_MAX}
-            data-testid={`${testId}-body`}
-            {...register('body')}
-          />
-          <Field.ErrorText>{errors.body?.message}</Field.ErrorText>
-        </Field.Root>
-        <HStack gap="2">
-          <Button
-            type="submit"
-            size="sm"
-            loading={isSubmitting}
-            disabled={submitDisabled}
-            data-testid={`${testId}-submit`}
-          >
-            {submitLabel}
-          </Button>
-          {onCancel && (
-            <Button size="sm" variant="ghost" onClick={onCancel}>
-              {copy.cancel}
+      <OperatorFieldset disabled={submitDisabled}>
+        <Stack gap="3">
+          <Field.Root invalid={!!errors.title} required>
+            <Field.Label>{copy.adminThemeNoticeTitle}</Field.Label>
+            <Input
+              autoComplete="off"
+              maxLength={THEME_NOTICE_TITLE_MAX}
+              data-testid={`${testId}-title`}
+              {...register('title')}
+            />
+            <Field.ErrorText>{errors.title?.message}</Field.ErrorText>
+          </Field.Root>
+          <Field.Root invalid={!!errors.body} required>
+            <Field.Label>{copy.adminThemeNoticeBody}</Field.Label>
+            <Textarea
+              rows={4}
+              maxLength={THEME_NOTICE_BODY_MAX}
+              data-testid={`${testId}-body`}
+              {...register('body')}
+            />
+            <Field.ErrorText>{errors.body?.message}</Field.ErrorText>
+          </Field.Root>
+          <HStack gap="2">
+            <Button
+              type="submit"
+              size="sm"
+              loading={isSubmitting}
+              disabled={submitDisabled}
+              data-testid={`${testId}-submit`}
+            >
+              {submitLabel}
             </Button>
-          )}
-        </HStack>
-      </Stack>
+            {onCancel && (
+              <Button size="sm" variant="ghost" onClick={onCancel}>
+                {copy.cancel}
+              </Button>
+            )}
+          </HStack>
+        </Stack>
+      </OperatorFieldset>
     </form>
   );
 }

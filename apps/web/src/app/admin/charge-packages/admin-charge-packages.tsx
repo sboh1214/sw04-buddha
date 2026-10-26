@@ -21,9 +21,10 @@ import {
   parseCoinAmount,
 } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { CHARGE_PACKAGES_QUERY_KEY } from '@/hooks/use-wallet';
@@ -59,11 +60,20 @@ const schema = z
   );
 type FormValues = z.infer<typeof schema>;
 
+/** Both lists a package write changes: this screen's and the wallet's. */
+const invalidatePackages = (queryClient: QueryClient) =>
+  Promise.all([
+    queryClient.invalidateQueries({ queryKey: ADMIN_PACKAGES_KEY }),
+    queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY }),
+  ]);
+
 /**
  * 충전 상품 (ADR-0026; off the nav while paid Coin is off, ADR-0049): add, retire or revive, and
  * remove. Each names the admin on screen (`useOperatorId`, ADR-0092 — the removal in its query),
  * so they wait for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`)
- * and the session asked again.
+ * and the session asked again. The add form is drawn for that admin (`CreatePackageCard`, keyed by
+ * it, its fields off until it is known): `['me']` turning from A to B in place drops what A typed
+ * (owner decision 2026-10-26 17:21 answer 1).
  */
 export function AdminChargePackages() {
   const queryClient = useQueryClient();
@@ -75,40 +85,7 @@ export function AdminChargePackages() {
       unwrap(await api.GET('/api/v1/admin/charge-packages')).data,
   });
 
-  const invalidate = () =>
-    Promise.all([
-      queryClient.invalidateQueries({ queryKey: ADMIN_PACKAGES_KEY }),
-      queryClient.invalidateQueries({ queryKey: CHARGE_PACKAGES_QUERY_KEY }),
-    ]);
-
-  const create = useMutation({
-    mutationFn: async ({ values, by }: { values: FormValues; by: string }) =>
-      unwrap(
-        await api.POST('/api/v1/admin/charge-packages', {
-          body: {
-            amountCoin: values.amountCoin,
-            priceKrw: Number(values.priceKrw),
-            sortOrder: Number(values.sortOrder),
-            isActive: true,
-            expectedAccountId: by,
-          },
-        }),
-      ).data,
-    onSuccess: async () => {
-      toaster.create({ type: 'success', title: copy.adminPackageSaved });
-      reset({ amountCoin: '', priceKrw: '', sortOrder: '0' });
-      await invalidate();
-    },
-    onError: (error) =>
-      toaster.create({
-        type: 'error',
-        title: sessionChanged(error)
-          ? copy.sessionChanged
-          : isApiError(error, 'VALIDATION_ERROR')
-            ? copy.errPackagePrice
-            : copy.errUnknown,
-      }),
-  });
+  const invalidate = () => invalidatePackages(queryClient);
 
   const toggle = useMutation({
     mutationFn: async ({ pack, by }: { pack: ChargePackage; by: string }) =>
@@ -146,75 +123,9 @@ export function AdminChargePackages() {
       }),
   });
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { amountCoin: '', priceKrw: '', sortOrder: '0' },
-  });
-
-  // Only on success (see the coupon screen): a refused price must not erase what was typed.
-  const submit = handleSubmit(async (values) => {
-    if (operatorId === undefined) return;
-    await create.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
-  });
-
   return (
     <Stack gap="4">
-      <Card.Root>
-        <Card.Header>
-          <Text fontWeight="semibold">{copy.adminPackageAdd}</Text>
-        </Card.Header>
-        <Card.Body>
-          <form onSubmit={(e) => void submit(e)} noValidate>
-            <Stack gap="3">
-              <HStack gap="2" align="start" flexWrap="wrap">
-                <Field.Root invalid={!!errors.amountCoin} required maxW="40">
-                  <Field.Label>{copy.adminPackageAmount}</Field.Label>
-                  <Input
-                    inputMode="numeric"
-                    data-testid="package-amount"
-                    {...register('amountCoin')}
-                  />
-                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
-                </Field.Root>
-                <Field.Root invalid={!!errors.priceKrw} required maxW="40">
-                  <Field.Label>{copy.adminPackagePrice}</Field.Label>
-                  <Input
-                    inputMode="numeric"
-                    data-testid="package-price"
-                    {...register('priceKrw')}
-                  />
-                  <Field.ErrorText>{errors.priceKrw?.message}</Field.ErrorText>
-                </Field.Root>
-                <Field.Root invalid={!!errors.sortOrder} maxW="28">
-                  <Field.Label>{copy.adminPackageOrder}</Field.Label>
-                  <Input
-                    inputMode="numeric"
-                    data-testid="package-order"
-                    {...register('sortOrder')}
-                  />
-                  <Field.ErrorText>{errors.sortOrder?.message}</Field.ErrorText>
-                </Field.Root>
-              </HStack>
-              <Button
-                type="submit"
-                size="sm"
-                alignSelf="flex-start"
-                loading={isSubmitting}
-                disabled={operatorId === undefined}
-                data-testid="package-create"
-              >
-                {copy.adminPackageAdd}
-              </Button>
-            </Stack>
-          </form>
-        </Card.Body>
-      </Card.Root>
-
+      <CreatePackageCard key={operatorId ?? ''} />
       {packages.isPending ? (
         <Skeleton height="24" />
       ) : packages.isError ? (
@@ -282,5 +193,115 @@ export function AdminChargePackages() {
         </Stack>
       )}
     </Stack>
+  );
+}
+
+/**
+ * 충전 상품 추가, for the admin on screen: drawn again for each (keyed by it in
+ * AdminChargePackages), its three fields and 추가 off until that admin is known (`OperatorFieldset`).
+ */
+function CreatePackageCard() {
+  const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
+
+  const create = useMutation({
+    mutationFn: async ({ values, by }: { values: FormValues; by: string }) =>
+      unwrap(
+        await api.POST('/api/v1/admin/charge-packages', {
+          body: {
+            amountCoin: values.amountCoin,
+            priceKrw: Number(values.priceKrw),
+            sortOrder: Number(values.sortOrder),
+            isActive: true,
+            expectedAccountId: by,
+          },
+        }),
+      ).data,
+    onSuccess: async () => {
+      toaster.create({ type: 'success', title: copy.adminPackageSaved });
+      reset({ amountCoin: '', priceKrw: '', sortOrder: '0' });
+      await invalidatePackages(queryClient);
+    },
+    onError: (error) =>
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error)
+          ? copy.sessionChanged
+          : isApiError(error, 'VALIDATION_ERROR')
+            ? copy.errPackagePrice
+            : copy.errUnknown,
+      }),
+  });
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { amountCoin: '', priceKrw: '', sortOrder: '0' },
+  });
+
+  // Only on success (see the coupon screen): a refused price must not erase what was typed.
+  const submit = handleSubmit(async (values) => {
+    if (operatorId === undefined) return;
+    await create.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
+  });
+
+  return (
+    <Card.Root>
+      <Card.Header>
+        <Text fontWeight="semibold">{copy.adminPackageAdd}</Text>
+      </Card.Header>
+      <Card.Body>
+        <form onSubmit={(e) => void submit(e)} noValidate>
+          <OperatorFieldset disabled={operatorId === undefined}>
+            <Stack gap="3">
+              <HStack gap="2" align="start" flexWrap="wrap">
+                <Field.Root invalid={!!errors.amountCoin} required maxW="40">
+                  <Field.Label>{copy.adminPackageAmount}</Field.Label>
+                  <Input
+                    inputMode="numeric"
+                    data-testid="package-amount"
+                    {...register('amountCoin')}
+                  />
+                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
+                </Field.Root>
+                <Field.Root invalid={!!errors.priceKrw} required maxW="40">
+                  <Field.Label>{copy.adminPackagePrice}</Field.Label>
+                  <Input
+                    inputMode="numeric"
+                    data-testid="package-price"
+                    {...register('priceKrw')}
+                  />
+                  <Field.ErrorText>{errors.priceKrw?.message}</Field.ErrorText>
+                </Field.Root>
+                <Field.Root invalid={!!errors.sortOrder} maxW="28">
+                  <Field.Label>{copy.adminPackageOrder}</Field.Label>
+                  <Input
+                    inputMode="numeric"
+                    data-testid="package-order"
+                    {...register('sortOrder')}
+                  />
+                  <Field.ErrorText>{errors.sortOrder?.message}</Field.ErrorText>
+                </Field.Root>
+              </HStack>
+              <Button
+                type="submit"
+                size="sm"
+                alignSelf="flex-start"
+                loading={isSubmitting}
+                disabled={operatorId === undefined}
+                data-testid="package-create"
+              >
+                {copy.adminPackageAdd}
+              </Button>
+            </Stack>
+          </OperatorFieldset>
+        </form>
+      </Card.Body>
+    </Card.Root>
   );
 }

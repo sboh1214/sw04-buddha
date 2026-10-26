@@ -646,7 +646,7 @@ describe('the writes', () => {
       // Before anything landed, the gate taking it away keeps it (a 409 is being handled, say).
       expect(keepHeldPostDraft(last, me)).toBe(true);
       expect(readPostDraft(storage, key, 'user-1', Date.now())).not.toBeNull();
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'user-1');
       last = heldPostDraftAt(last, typed, true);
 
       // The write lands; its success is held in `onSuccess` (the lists being read again). Before
@@ -684,7 +684,7 @@ describe('the writes', () => {
 
       // A form of the same screen drawn afterwards keeps its own draft again.
       expect(keepHeldPostDraft(heldPostDraftAt(undefined, typed, false), me)).toBe(true);
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'user-1');
     }
   });
 

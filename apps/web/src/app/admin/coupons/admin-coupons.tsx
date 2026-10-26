@@ -18,6 +18,7 @@ import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-q
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useOperatorId } from '@/hooks/use-operator';
@@ -46,7 +47,10 @@ type FormValues = z.infer<typeof schema>;
 /**
  * 쿠폰 (ADR-0026; off the nav while paid Coin is off, ADR-0049): issue and stop or resume. Both
  * name the admin on screen (`useOperatorId`, ADR-0092), so they wait for `GET /me`; the cookie of
- * another account is refused (`copy.sessionChanged`) and the session asked again.
+ * another account is refused (`copy.sessionChanged`) and the session asked again. The issue form is
+ * drawn for that admin (`CreateCouponCard`, keyed by it, its fields off until it is known):
+ * `['me']` turning from A to B in place drops what A typed (owner decision 2026-10-26 17:21 answer
+ * 1).
  */
 export function AdminCoupons() {
   const queryClient = useQueryClient();
@@ -70,36 +74,6 @@ export function AdminCoupons() {
   });
   const rows = coupons.data?.pages.flatMap((page) => page.items) ?? [];
 
-  const create = useMutation({
-    mutationFn: async ({ values, by }: { values: FormValues; by: string }) =>
-      unwrap(
-        await api.POST('/api/v1/admin/coupons', {
-          body: {
-            ...(values.code ? { code: values.code } : {}),
-            amountCoin: values.amountCoin,
-            maxRedemptions: values.maxRedemptions ? Number(values.maxRedemptions) : null,
-            expiresAt: kstLocalToIso(values.expiresAt),
-            memo: values.memo || null,
-            expectedAccountId: by,
-          },
-        }),
-      ).data,
-    onSuccess: async (coupon) => {
-      toaster.create({ type: 'success', title: copy.adminCouponCreated, description: coupon.code });
-      reset({ code: '', amountCoin: '', maxRedemptions: '', expiresAt: '', memo: '' });
-      await queryClient.invalidateQueries({ queryKey: ADMIN_COUPONS_KEY });
-    },
-    onError: (error) =>
-      toaster.create({
-        type: 'error',
-        title: sessionChanged(error)
-          ? copy.sessionChanged
-          : isApiError(error, 'VALIDATION_ERROR')
-            ? copy.errCouponInvalid
-            : copy.errUnknown,
-      }),
-  });
-
   const toggle = useMutation({
     mutationFn: async ({ coupon, by }: { coupon: Coupon; by: string }) =>
       unwrap(
@@ -118,87 +92,9 @@ export function AdminCoupons() {
       }),
   });
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors, isSubmitting },
-  } = useForm<FormValues>({
-    resolver: zodResolver(schema),
-    defaultValues: { code: '', amountCoin: '', maxRedemptions: '', expiresAt: '', memo: '' },
-  });
-
-  // Reset lives in onSuccess (as it does on the user screen): a duplicate code or a rejected
-  // one has to leave the five fields the admin typed exactly where they are, or the toast from
-  // onError is unactionable. The catch stays because the form discards this promise
-  // (`void submit(e)`), so a rethrow would surface as an unhandled rejection.
-  const submit = handleSubmit(async (values) => {
-    if (operatorId === undefined) return;
-    await create.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
-  });
-
   return (
     <Stack gap="4">
-      <Card.Root>
-        <Card.Header>
-          <Text fontWeight="semibold">{copy.adminCouponCreate}</Text>
-        </Card.Header>
-        <Card.Body>
-          <form onSubmit={(e) => void submit(e)} noValidate>
-            <Stack gap="3">
-              <HStack gap="2" align="start" flexWrap="wrap">
-                <Field.Root invalid={!!errors.code} maxW="52">
-                  <Field.Label>{copy.adminCouponCode}</Field.Label>
-                  <Input autoComplete="off" data-testid="coupon-code-input" {...register('code')} />
-                  <Field.ErrorText>{errors.code?.message}</Field.ErrorText>
-                </Field.Root>
-                <Field.Root invalid={!!errors.amountCoin} required maxW="32">
-                  <Field.Label>{copy.adminCouponAmount}</Field.Label>
-                  <Input
-                    inputMode="numeric"
-                    data-testid="coupon-amount"
-                    {...register('amountCoin')}
-                  />
-                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
-                </Field.Root>
-                <Field.Root invalid={!!errors.maxRedemptions} maxW="32">
-                  <Field.Label>{copy.adminCouponMax}</Field.Label>
-                  <Input
-                    inputMode="numeric"
-                    placeholder={copy.adminCouponUnlimited}
-                    data-testid="coupon-max"
-                    {...register('maxRedemptions')}
-                  />
-                  <Field.ErrorText>{errors.maxRedemptions?.message}</Field.ErrorText>
-                </Field.Root>
-                <Field.Root maxW="56">
-                  <Field.Label>{copy.adminCouponExpires}</Field.Label>
-                  <Input
-                    type="datetime-local"
-                    data-testid="coupon-expires"
-                    {...register('expiresAt')}
-                  />
-                </Field.Root>
-              </HStack>
-              <Field.Root>
-                <Field.Label>{copy.adminCouponMemo}</Field.Label>
-                <Input autoComplete="off" data-testid="coupon-memo" {...register('memo')} />
-              </Field.Root>
-              <Button
-                type="submit"
-                size="sm"
-                alignSelf="flex-start"
-                loading={isSubmitting}
-                disabled={operatorId === undefined}
-                data-testid="coupon-create"
-              >
-                {copy.adminCouponCreate}
-              </Button>
-            </Stack>
-          </form>
-        </Card.Body>
-      </Card.Root>
-
+      <CreateCouponCard key={operatorId ?? ''} />
       {coupons.isPending ? (
         <Skeleton height="24" />
       ) : readFailed(coupons) ? (
@@ -276,5 +172,128 @@ export function AdminCoupons() {
         </Stack>
       )}
     </Stack>
+  );
+}
+
+/**
+ * 쿠폰 발급, for the admin on screen: drawn again for each (keyed by it in AdminCoupons), its five
+ * fields and 발급 off until that admin is known (`OperatorFieldset`).
+ */
+function CreateCouponCard() {
+  const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
+
+  const create = useMutation({
+    mutationFn: async ({ values, by }: { values: FormValues; by: string }) =>
+      unwrap(
+        await api.POST('/api/v1/admin/coupons', {
+          body: {
+            ...(values.code ? { code: values.code } : {}),
+            amountCoin: values.amountCoin,
+            maxRedemptions: values.maxRedemptions ? Number(values.maxRedemptions) : null,
+            expiresAt: kstLocalToIso(values.expiresAt),
+            memo: values.memo || null,
+            expectedAccountId: by,
+          },
+        }),
+      ).data,
+    onSuccess: async (coupon) => {
+      toaster.create({ type: 'success', title: copy.adminCouponCreated, description: coupon.code });
+      reset({ code: '', amountCoin: '', maxRedemptions: '', expiresAt: '', memo: '' });
+      await queryClient.invalidateQueries({ queryKey: ADMIN_COUPONS_KEY });
+    },
+    onError: (error) =>
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error)
+          ? copy.sessionChanged
+          : isApiError(error, 'VALIDATION_ERROR')
+            ? copy.errCouponInvalid
+            : copy.errUnknown,
+      }),
+  });
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    defaultValues: { code: '', amountCoin: '', maxRedemptions: '', expiresAt: '', memo: '' },
+  });
+
+  // Reset lives in onSuccess (as it does on the user screen): a duplicate code or a rejected
+  // one has to leave the five fields the admin typed exactly where they are, or the toast from
+  // onError is unactionable. The catch stays because the form discards this promise
+  // (`void submit(e)`), so a rethrow would surface as an unhandled rejection.
+  const submit = handleSubmit(async (values) => {
+    if (operatorId === undefined) return;
+    await create.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
+  });
+
+  return (
+    <Card.Root>
+      <Card.Header>
+        <Text fontWeight="semibold">{copy.adminCouponCreate}</Text>
+      </Card.Header>
+      <Card.Body>
+        <form onSubmit={(e) => void submit(e)} noValidate>
+          <OperatorFieldset disabled={operatorId === undefined}>
+            <Stack gap="3">
+              <HStack gap="2" align="start" flexWrap="wrap">
+                <Field.Root invalid={!!errors.code} maxW="52">
+                  <Field.Label>{copy.adminCouponCode}</Field.Label>
+                  <Input autoComplete="off" data-testid="coupon-code-input" {...register('code')} />
+                  <Field.ErrorText>{errors.code?.message}</Field.ErrorText>
+                </Field.Root>
+                <Field.Root invalid={!!errors.amountCoin} required maxW="32">
+                  <Field.Label>{copy.adminCouponAmount}</Field.Label>
+                  <Input
+                    inputMode="numeric"
+                    data-testid="coupon-amount"
+                    {...register('amountCoin')}
+                  />
+                  <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
+                </Field.Root>
+                <Field.Root invalid={!!errors.maxRedemptions} maxW="32">
+                  <Field.Label>{copy.adminCouponMax}</Field.Label>
+                  <Input
+                    inputMode="numeric"
+                    placeholder={copy.adminCouponUnlimited}
+                    data-testid="coupon-max"
+                    {...register('maxRedemptions')}
+                  />
+                  <Field.ErrorText>{errors.maxRedemptions?.message}</Field.ErrorText>
+                </Field.Root>
+                <Field.Root maxW="56">
+                  <Field.Label>{copy.adminCouponExpires}</Field.Label>
+                  <Input
+                    type="datetime-local"
+                    data-testid="coupon-expires"
+                    {...register('expiresAt')}
+                  />
+                </Field.Root>
+              </HStack>
+              <Field.Root>
+                <Field.Label>{copy.adminCouponMemo}</Field.Label>
+                <Input autoComplete="off" data-testid="coupon-memo" {...register('memo')} />
+              </Field.Root>
+              <Button
+                type="submit"
+                size="sm"
+                alignSelf="flex-start"
+                loading={isSubmitting}
+                disabled={operatorId === undefined}
+                data-testid="coupon-create"
+              >
+                {copy.adminCouponCreate}
+              </Button>
+            </Stack>
+          </OperatorFieldset>
+        </form>
+      </Card.Body>
+    </Card.Root>
   );
 }

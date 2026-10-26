@@ -34,7 +34,7 @@ import {
   useReleaseSettingChanges,
   useReleaseSettings,
 } from '@/hooks/use-admin-release-settings';
-import { useOperatorId } from '@/hooks/use-operator';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { nicknameShown } from '@/lib/account-closure';
 import { type ReleaseSetting, type ReleaseSettingChange } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -102,7 +102,11 @@ function StatusLegend() {
 function SettingsList() {
   const settings = useReleaseSettings();
   const [undecidedOnly, setUndecidedOnly] = useState(false);
-  const [editing, setEditing] = useState<ReleaseSetting | null>(null);
+  // The item whose change dialog is open, held for the admin who opened it (`useHeldForOperator`,
+  // ADR-0091 결정 3): once `['me']` turns from A to B in place, before the session does (ADR-0090
+  // 결정 4-2), the dialog closes with the status picked and the reason typed for A, which would
+  // otherwise be saved as B (ADR-0092, owner decision 2026-10-26 17:21 answer 1).
+  const [editing, setEditing] = useHeldForOperator<ReleaseSetting>();
   const view =
     settings.data === undefined ? null : releaseSettingsView(settings.data, undecidedOnly);
 
@@ -161,9 +165,12 @@ function SettingsList() {
 
 /**
  * One item: its name and key, the status badge beside the name, what it controls, the value and
- * the unit as two labelled cells (never joined into one figure), and the last change.
+ * the unit as two labelled cells (never joined into one figure), and the last change. 변경 waits for
+ * the admin on screen (`GET /me`): its dialog is held for that admin, and nothing is held for
+ * nobody (`operatorHold`).
  */
 function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void }) {
+  const operatorId = useOperatorId();
   return (
     <Stack
       borderWidth="1px"
@@ -185,6 +192,7 @@ function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void
         <Button
           size="xs"
           variant="outline"
+          disabled={operatorId === undefined}
           onClick={onEdit}
           data-testid={`release-setting-edit-${item.key}`}
         >

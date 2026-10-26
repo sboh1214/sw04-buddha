@@ -18,6 +18,7 @@ import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ADMIN_THEMES_KEY, applyAdminTheme, useAdminThemes } from '@/hooks/use-admin-themes';
@@ -44,10 +45,12 @@ import { ThemeFormFields } from './theme-form-fields';
  */
 export function AdminThemes() {
   const themes = useAdminThemes();
+  // The admin on screen: 테마 만들기 is drawn again for each (ADR-0092 answer 1, `OperatorFieldset`).
+  const operatorId = useOperatorId();
   const rows = themes.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <Stack gap="4">
-      <CreateThemeCard />
+      <CreateThemeCard key={operatorId ?? ''} />
       {themes.isPending ? (
         <Skeleton height="24" />
       ) : themes.isLoadingError ? (
@@ -124,7 +127,10 @@ export function AdminThemes() {
  * 테마 만들기 → an unpublished theme. On success the admin lands on its detail, where markets go
  * in and 공개하기 is (a theme is published with a market in it, owner decision 2026-10-19). Made
  * as the admin on screen (`useOperatorId`, ADR-0092): 만들기 waits for `GET /me`, and the cookie
- * of another account is refused (`copy.sessionChanged`, the session asked again).
+ * of another account is refused (`copy.sessionChanged`, the session asked again). The card is
+ * drawn for that admin (keyed by it above) and its fields wait for it (`OperatorFieldset`):
+ * `['me']` turning from A to B in place drops what A typed (owner decision 2026-10-26 17:21
+ * answer 1).
  */
 function CreateThemeCard() {
   const router = useRouter();
@@ -179,19 +185,21 @@ function CreateThemeCard() {
       </Card.Header>
       <Card.Body>
         <form onSubmit={(event) => void submit(event)} noValidate>
-          <Stack gap="3">
-            <ThemeFormFields form={form} />
-            <Button
-              type="submit"
-              size="sm"
-              alignSelf="flex-start"
-              loading={isSubmitting}
-              disabled={operatorId === undefined}
-              data-testid="theme-create"
-            >
-              {copy.adminThemeCreate}
-            </Button>
-          </Stack>
+          <OperatorFieldset disabled={operatorId === undefined}>
+            <Stack gap="3">
+              <ThemeFormFields form={form} />
+              <Button
+                type="submit"
+                size="sm"
+                alignSelf="flex-start"
+                loading={isSubmitting}
+                disabled={operatorId === undefined}
+                data-testid="theme-create"
+              >
+                {copy.adminThemeCreate}
+              </Button>
+            </Stack>
+          </OperatorFieldset>
         </form>
       </Card.Body>
     </Card.Root>

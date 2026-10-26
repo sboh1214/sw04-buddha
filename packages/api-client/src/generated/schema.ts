@@ -3258,6 +3258,7 @@ export type components = {
         };
         BalanceAdjustBody: {
             amountCoin: components["schemas"]["CoinAmount"];
+            expectedAccountId: string;
             memo: string;
         };
         CancelModerationBody: {
@@ -4260,6 +4261,7 @@ export type components = {
             ledgerEntry: components["schemas"]["LedgerEntry"];
         };
         RefundPaymentBody: {
+            expectedAccountId: string;
             reason: string;
         };
         RegisterBody: {

@@ -26,6 +26,7 @@ import { type ReactNode, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { nicknameShown } from '@/lib/account-closure';
@@ -40,7 +41,7 @@ import {
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
-import { useOperatorId } from '@/hooks/use-operator';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
   type AdminMarket,
@@ -272,15 +273,19 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
  * component, mounted only while its dialog is open, so every opening starts from an empty form.
  * A judged market offers none of these: the 판정 is final (#26 decides what may undo one).
  *
- * Each names the admin on screen (`useOperatorId`, ADR-0092), so 열기 and the confirmations wait
- * for `GET /me`; the cookie of another account is refused (`copy.sessionChanged`), the dialog
- * closes and the session is asked again (`useSessionChanged`).
+ * Each names the admin on screen (`useOperatorId`, ADR-0092), so 열기, the buttons that open the
+ * two dialogs and their confirmations wait for `GET /me`; the cookie of another account is refused
+ * (`copy.sessionChanged`), the dialog closes and the session is asked again (`useSessionChanged`).
+ * The open dialog is held for the admin who opened it (`useHeldForOperator`, ADR-0091 결정 3): once
+ * `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2), it closes with
+ * the result picked and the note typed for A, which would otherwise be judged as B (ADR-0092,
+ * owner decision 2026-10-26 17:21 answer 1).
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
-  const [confirm, setConfirm] = useState<'close' | 'resolve' | null>(null);
+  const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();
   const closeDialog = () => {
     setConfirm(null);
   };
@@ -343,6 +348,7 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         <Button
           size="sm"
           variant="outline"
+          disabled={operatorId === undefined}
           onClick={() => setConfirm('close')}
           data-testid="market-close"
         >
@@ -350,7 +356,12 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         </Button>
       )}
       {canResolve(market.status) && (
-        <Button size="sm" onClick={() => setConfirm('resolve')} data-testid="market-resolve">
+        <Button
+          size="sm"
+          disabled={operatorId === undefined}
+          onClick={() => setConfirm('resolve')}
+          data-testid="market-resolve"
+        >
           {copy.adminMarketResolve}
         </Button>
       )}
@@ -508,6 +519,9 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
  */
 function EditMarketCard({ market }: { market: AdminMarket }) {
   const categories = useCategories();
+  // The form is drawn for the admin on screen (ADR-0092 answer 1, `OperatorFieldset`): `['me']`
+  // turning from A to B in place drops what A typed, and the open market's confirmation with it.
+  const operatorId = useOperatorId();
   const editable = isEditable(market.status);
 
   return (
@@ -535,7 +549,7 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
             </Alert.Content>
           </Alert.Root>
         ) : (
-          <EditMarketForm market={market} categories={categories.data} />
+          <EditMarketForm key={operatorId ?? ''} market={market} categories={categories.data} />
         )}
       </Card.Body>
     </Card.Root>
@@ -554,6 +568,8 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     () => marketFormSchema({ original, rulesRequired }),
     [original, rulesRequired],
   );
+  // The open market's confirmation goes with the form, which EditMarketCard draws again for each
+  // admin on screen (`key`): a confirmation A opened never names B (ADR-0092 answer 1).
   const [pending, setPending] = useState<UpdateMarketFields | null>(null);
 
   // `values` follows the server: react-hook-form deep-compares it with what it last applied,
@@ -620,26 +636,28 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   return (
     <>
       <form onSubmit={(e) => void submit(e)} noValidate>
-        <Stack gap="3">
-          <MarketFormFields
-            form={form}
-            categories={categories}
-            disabled={!editable}
-            // The row itself, so the 미리보기 of a market past draft shows the price and volume it
-            // TRADES at rather than an untraded card.
-            base={market}
-          />
-          <Button
-            type="submit"
-            size="sm"
-            alignSelf="flex-start"
-            loading={isSubmitting || update.isPending}
-            disabled={!editable || !isDirty || operatorId === undefined}
-            data-testid="market-save"
-          >
-            {copy.save}
-          </Button>
-        </Stack>
+        <OperatorFieldset disabled={operatorId === undefined}>
+          <Stack gap="3">
+            <MarketFormFields
+              form={form}
+              categories={categories}
+              disabled={!editable}
+              // The row itself, so the 미리보기 of a market past draft shows the price and volume it
+              // TRADES at rather than an untraded card.
+              base={market}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              alignSelf="flex-start"
+              loading={isSubmitting || update.isPending}
+              disabled={!editable || !isDirty || operatorId === undefined}
+              data-testid="market-save"
+            >
+              {copy.save}
+            </Button>
+          </Stack>
+        </OperatorFieldset>
       </form>
 
       <ConfirmDialog
@@ -761,6 +779,10 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
  * keeps them under a notice with 다시 시도, instead of passing for current — an empty list that
  * could not be re-read after a link made from the other market's page would otherwise go on
  * saying 연결된 관련 시장이 없습니다 (review on #65).
+ *
+ * The unlink's confirmation is held for the admin who opened it (`useHeldForOperator`): it closes
+ * once `['me']` turns from A to B in place (ADR-0092 answer 1). The search is not: it reads the
+ * same markets for every admin and sends nothing as one — a 연결 is its own press, on B's screen.
  */
 function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const queryClient = useQueryClient();
@@ -769,7 +791,7 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const sessionChanged = useSessionChanged();
   const links = useAdminRelatedMarkets(market.id);
   const linkedIds = useMemo(() => new Set((links.data ?? []).map((row) => row.id)), [links.data]);
-  const [unlinking, setUnlinking] = useState<AdminRelatedMarket | null>(null);
+  const [unlinking, setUnlinking] = useHeldForOperator<AdminRelatedMarket>();
   const [input, setInput] = useState('');
   const [term, setTerm] = useState<string | undefined>(undefined);
   const search = useAdminRelatedSearch(term);
@@ -874,6 +896,7 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={operatorId === undefined}
                       onClick={() => setUnlinking(row)}
                       data-testid={`admin-related-unlink-${row.id}`}
                     >
