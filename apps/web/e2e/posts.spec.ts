@@ -1032,6 +1032,14 @@ test.describe('근거 글', () => {
     ] as const) {
       await discard.click();
       await expect(dialog).toBeVisible();
+      // Visible is not yet listening (@zag-js 1.43): in the first frame after the dialog opens, its
+      // focus trap moves the focus to 취소 and its Escape listener is attached right after; its
+      // outside-pointer listener comes a frame and a timer later. A dismissal sent earlier is lost
+      // and the dialog stays open. The frame and the timer awaited here come after those.
+      await expect(page.getByTestId('post-draft-discard-cancel')).toBeFocused();
+      await page.evaluate(
+        () => new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve))),
+      );
       await dismiss();
       await expect(dialog).toHaveCount(0);
       await expect(discard).toBeFocused();
