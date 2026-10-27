@@ -81,7 +81,8 @@ describe.skipIf(!hasTestDb())('the wipe statement (integration, docker test prof
   }
 
   it('empties every public table, accounts included, and restarts their sequences', async () => {
-    await createUser(t.db);
+    // With Coin, so the ledger has a row to empty: a new account starts with none (#70).
+    await createUser(t.db, { balanceCoin: 100n });
     await createMarket(t.db);
     const before = await rowCounts();
     expect(before.user).toBeGreaterThan(0);
@@ -97,9 +98,11 @@ describe.skipIf(!hasTestDb())('the wipe statement (integration, docker test prof
     for (const [table, count] of Object.entries(after)) expect(count, table).toBe(0);
     // The migration journal lives in another schema and is left alone.
     expect(await appliedMigrations()).toBe(migrations);
-    // RESTART IDENTITY: the next account's sign-up bonus is ledger row 1 again.
-    const { user: u } = await createUser(t.db);
+    // RESTART IDENTITY: the next account's first ledger entry is row 1 again.
+    const { user: u } = await createUser(t.db, { balanceCoin: 100n });
     const entries = await t.db.select().from(ledgerEntries);
-    expect(entries).toEqual([expect.objectContaining({ id: 1, userId: u.id, type: 'BONUS' })]);
+    expect(entries).toEqual([
+      expect.objectContaining({ id: 1, userId: u.id, type: 'ADMIN_ADJUST' }),
+    ]);
   });
 });

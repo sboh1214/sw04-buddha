@@ -51,7 +51,7 @@ describe('docker/postgres/init/01-roles.sql names the restrictions the migration
     expect(firstStatement).toBeGreaterThan(0);
     expect(footerStart).toBeGreaterThan(firstStatement);
     expect(found.map((revoke) => revoke.migration)).toEqual(
-      expect.arrayContaining(['0001', '0026', '0030']),
+      expect.arrayContaining(['0001', '0026', '0030', '0031']),
     );
   });
 

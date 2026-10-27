@@ -117,11 +117,10 @@ export async function runLedgerAudit(
       (select count(*) from accounts) as checked
     from accounts
     -- balance_missing needs its own disjunct. With no balance row AND no ledger entries the
-    -- arithmetic below is 0 <> 0, so the broken account would still pass. No test covers that
-    -- shape because buddha_app cannot build it -- ledger_entries is append-only (migration
-    -- 0001) and the trigger writes a BONUS entry with every account -- but accounts predating
-    -- the 0004 bonus have no ledger rows at all, and one of those losing its balance is
-    -- exactly the silent case this job exists to catch.
+    -- arithmetic below is 0 <> 0, so the broken account would still pass -- and every account
+    -- starts with no ledger entry since migration 0031 (signing up grants nothing, #70), as did
+    -- the accounts predating the 0004 bonus. One of those losing its balance row is exactly the
+    -- silent case this job exists to catch.
     where balance_missing or available_coin + locked_coin <> ledger_sum_coin
     order by user_id
   `);

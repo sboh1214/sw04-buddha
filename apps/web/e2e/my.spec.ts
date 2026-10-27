@@ -54,9 +54,10 @@ test.describe('MY', () => {
     await signUp(page, freshEmail());
     await page.goto('/my');
 
-    // The summary: 잔고 요약 with the sign-up bonus, a preview per tab with content, 준비 중 for
-    // the rest. 관심 시장 has its content since #89 (ADR-0064): a fresh account's is empty.
-    await expect(page.getByTestId('portfolio-available')).toHaveText('10,000 Coin');
+    // The summary: 잔고 요약 with a new account's 0 (creating an account grants nothing since #70,
+    // ADR-0071), a preview per tab with content, 준비 중 for the rest. 관심 시장 has its content
+    // since #89 (ADR-0064): a fresh account's is empty.
+    await expect(page.getByTestId('portfolio-available')).toHaveText('0 Coin');
     for (const key of ['positions', 'orders', 'history', 'wallet', 'watchlist']) {
       const preview = page.getByTestId(`my-preview-${key}`);
       await expect(preview).toBeVisible();

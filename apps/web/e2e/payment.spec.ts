@@ -147,7 +147,8 @@ test.describe('유료 충전 닫힘 (ADR-0049)', () => {
       }),
     );
 
-    // Nothing moved: the sign-up bonus alone, no payment, and the coupon unused.
+    // Nothing moved: still the 0 a new account starts with (#70), no payment, and the coupon
+    // unused.
     const after = await meOf(page);
     expect(after.balance).toEqual(before.balance);
     const payments = await dataOf<unknown[]>(await page.request.get('/api/v1/me/payments'));

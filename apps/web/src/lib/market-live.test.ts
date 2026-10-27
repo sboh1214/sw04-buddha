@@ -141,6 +141,7 @@ const me: Me = {
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
+  startGrant: null,
 };
 
 /** The infinite-list shape: the last page ends the list, and the first page has no cursor. */
@@ -691,6 +692,40 @@ describe('applyBalanceEvent', () => {
     // never "do nothing" either: the caller cancels the in-flight `GET /me` before it writes,
     // so a tab that is still loading would be left on a skeleton with nothing to restart it.
     expect(applyBalanceEvent(undefined, balanceEvent())).toEqual({ kind: 'refetch' });
+  });
+
+  it('writes the balance and asks for the profile again while the start Coin waits (#70)', () => {
+    // The worker's payment of a waiting grant reaches the tab as nothing but this event, which
+    // cannot say it was the grant: without the second request the wallet kept its "준비되는 대로
+    // 지급됩니다" over a balance that already held the start Coin.
+    const waiting: Me = {
+      ...me,
+      balance: { availableCoin: '0', lockedCoin: '0' },
+      startGrant: { status: 'pending', amountCoin: null, grantedAt: null },
+    };
+    expect(
+      applyBalanceEvent(waiting, balanceEvent({ availableCoin: '10000', lockedCoin: '0' })),
+    ).toEqual({
+      kind: 'replaceAndRefetch',
+      // The grant is left as held: only `GET /me` may say it is paid.
+      me: { ...waiting, balance: { availableCoin: '10000', lockedCoin: '0' } },
+    });
+  });
+
+  it('costs no request once the start Coin is paid, or for an account with no grant', () => {
+    const granted: Me = {
+      ...me,
+      startGrant: {
+        status: 'granted',
+        amountCoin: '10000',
+        grantedAt: '2026-10-18T00:00:00.000Z',
+      },
+    };
+    for (const held of [granted, { ...me, startGrant: null }]) {
+      expect(applyBalanceEvent(held, balanceEvent()).kind, String(held.startGrant?.status)).toBe(
+        'replace',
+      );
+    }
   });
 });
 

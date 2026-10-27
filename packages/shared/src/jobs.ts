@@ -6,7 +6,7 @@ import { uuidSchema } from './api/uuid.js';
  * close and finalize jobs after a transition commits) and the consumer (apps/worker). One
  * module, so a renamed job cannot leave the API adding work that no worker handles.
  */
-export const QUEUE_NAMES = ['markets', 'audit', 'stats'] as const;
+export const QUEUE_NAMES = ['markets', 'audit', 'stats', 'wallet'] as const;
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
@@ -14,6 +14,12 @@ export const JOB_NAMES = {
   marketFinalize: 'market.finalize',
   ledgerAudit: 'ledger.audit',
   marketTraderCount: 'market.trader_count',
+  /**
+   * Pays every start grant still `pending` (#70, ADR-0071) once the release setting
+   * `grant.start_coin` has a value: the worker's per-minute scan, so the accounts that finished
+   * onboarding while the amount was undecided get it within a minute of an admin entering it.
+   */
+  startGrantPay: 'start_grant.pay',
 } as const;
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 

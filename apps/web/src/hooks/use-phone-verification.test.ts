@@ -43,6 +43,7 @@ const unverified: Me = {
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
+  startGrant: null,
 };
 
 /** The account the tab switched to while a request ran (SessionCacheGuard reset, then B's GET). */

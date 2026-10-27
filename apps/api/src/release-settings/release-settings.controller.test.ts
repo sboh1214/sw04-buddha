@@ -1,6 +1,7 @@
 /**
  * Release settings (#170) against the docker `test` profile, with a registry of test items
- * injected through `createTestApp({ releaseSettings })` — the shipped one is empty. Covers
+ * injected through `createTestApp({ releaseSettings })` — the shipped one holds the items the
+ * issues that use them registered (the start grant, #70), checked at the end. Covers
  * register → list → get → change → change log, the reason and value rules (text jsonb cannot hold
  * included), the refusal of a change to the current state, the undecided filter, the admin-only
  * surface and that a change and its record commit together. Skips when TEST_* are unset.
@@ -11,6 +12,7 @@ import {
   JSONB_NUL_MESSAGE,
   RELEASE_SETTINGS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
+  START_COIN_SETTING,
   defineReleaseSetting,
   defineReleaseSettings,
   type ReleaseSetting,
@@ -552,18 +554,81 @@ describe.skipIf(!hasTestInfra)('release settings (integration)', () => {
   });
 });
 
-describe('ReleaseSettingsService with the shipped registry', () => {
-  it('lists nothing without touching the database: no item is registered yet', async () => {
-    const db = new Proxy(
-      {},
+describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
+  let t: TestApp;
+  let admin: TestUser;
+
+  beforeAll(async () => {
+    // No `releaseSettings`: the app runs what production ships (RELEASE_SETTINGS).
+    t = await createTestApp();
+  });
+  afterAll(async () => {
+    await t?.close(); // undefined when beforeAll timed out waiting for the file lock
+  });
+  beforeEach(async () => {
+    await t.reset();
+    admin = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, admin.id));
+    await t.app.get(AdminGuard).invalidate(admin.id);
+  });
+
+  it('lists the start grant amount (#70), undecided until an admin enters a value', async () => {
+    expect([...RELEASE_SETTINGS.keys()]).toEqual([START_COIN_SETTING.key]);
+    const res = await t.app.inject({
+      method: 'GET',
+      url: BASE,
+      headers: { cookie: admin.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<{ data: ReleaseSetting[] }>().data).toEqual([
       {
-        get() {
-          throw new Error('the database was used');
-        },
+        key: 'grant.start_coin',
+        label: '시작 지급액',
+        unit: 'Coin',
+        description: START_COIN_SETTING.description,
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 1,
+          maximum: 1_000_000,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
       },
-    );
-    const settings = new ReleaseSettingsService(db as never, RELEASE_SETTINGS);
-    expect(await settings.list()).toEqual([]);
-    expect(await settings.list('undecided')).toEqual([]);
+    ]);
+    const settings = t.app.get(ReleaseSettingsService);
+    expect(await settings.get(START_COIN_SETTING)).toEqual({
+      key: 'grant.start_coin',
+      status: 'undecided',
+      value: null,
+    });
+
+    const change = await t.app.inject({
+      method: 'PATCH',
+      url: `${BASE}/grant.start_coin`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { status: 'test', value: 10_000, reason: '내부 시험값' },
+    });
+    expect(change.statusCode).toBe(200);
+    expect(await settings.get(START_COIN_SETTING)).toEqual({
+      key: 'grant.start_coin',
+      status: 'test',
+      value: 10_000,
+    });
+    // Not a whole positive amount within the bound: refused, nothing written.
+    for (const value of [0, 10.5, '10000', 1_000_001]) {
+      const refused = await t.app.inject({
+        method: 'PATCH',
+        url: `${BASE}/grant.start_coin`,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        payload: { status: 'approved', value, reason: '잘못된 값' },
+      });
+      expect(refused.statusCode, String(value)).toBe(400);
+    }
+    expect((await settings.get(START_COIN_SETTING)).value).toBe(10_000);
   });
 });

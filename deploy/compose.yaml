@@ -121,6 +121,8 @@ services:
       ALIGO_USER_ID: ${ALIGO_USER_ID:-}
       ALIGO_SENDER: ${ALIGO_SENDER:-}
       ALIGO_TEST_MODE: ${ALIGO_TEST_MODE:-false}
+      # The keyed hash of a verified number (ADR-0071): required in production, never rotated.
+      PHONE_HASH_KEY: ${PHONE_HASH_KEY}
       # The only payment provider since the SmartroPay integration was removed (ADR-0049). A literal
       # rather than `${PAYMENT_PROVIDER}`: an .env rendered before then may still carry
       # PAYMENT_PROVIDER=smartro, which the api refuses to start on, and its SMARTRO_* lines are

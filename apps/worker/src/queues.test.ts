@@ -10,8 +10,8 @@ import {
 } from './queues.js';
 
 describe('queues', () => {
-  it('declares the queues from PLAN 9', () => {
-    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats']);
+  it('declares the queues from PLAN 9, and the wallet queue of the start grant (#70)', () => {
+    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats', 'wallet']);
   });
 
   it('takes its names from @buddha/shared, the module the API produces with', () => {
@@ -48,11 +48,12 @@ describe('queues', () => {
     expect(DEFAULT_JOB_OPTIONS.backoff).toEqual({ type: 'exponential', delay: 1_000 });
   });
 
-  it('schedules the daily audit and the two per-minute market scans (PLAN 5.5, 9)', () => {
+  it('schedules the daily audit, the two per-minute market scans and the start grant payment', () => {
     expect(JOB_SCHEDULES.map((schedule) => schedule.id)).toEqual([
       'ledger-audit-daily',
       'market-close-scan',
       'market-finalize-scan',
+      'start-grant-pay',
     ]);
     const byId = Object.fromEntries(JOB_SCHEDULES.map((schedule) => [schedule.id, schedule]));
     expect(byId['market-close-scan']).toMatchObject({
@@ -63,6 +64,12 @@ describe('queues', () => {
     expect(byId['market-finalize-scan']).toMatchObject({
       queue: 'markets',
       name: JOB_NAMES.marketFinalize,
+      repeat: { pattern: '* * * * *', tz: 'Asia/Seoul' },
+    });
+    // #70 (ADR-0071): the waiting start grants are paid within a minute of an amount being set.
+    expect(byId['start-grant-pay']).toMatchObject({
+      queue: 'wallet',
+      name: JOB_NAMES.startGrantPay,
       repeat: { pattern: '* * * * *', tz: 'Asia/Seoul' },
     });
     // A scan carries no market id: that is what makes the handler scan (marketJobDataSchema).

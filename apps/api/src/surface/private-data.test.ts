@@ -1,20 +1,24 @@
 /**
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
  * database — email, nickname and time zone, its 본인확인 (verified phone, real name, the code's
- * hash), password and session, a balance and a ledger memo, orders and the fill one of them got
- * against another account's resting order, a position with its PnL, a payment, two watched
- * markets (#89), a recorded search (#15). Then:
+ * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), password
+ * and session, a balance and a ledger memo, orders and the fill one of them got against another
+ * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
+ * recorded search (#15). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
  *   account — in its path, its query (a page cursor made from A's row) or its body — and no
  *   answer may hold A's values; the same request as A shows them, so the check is not blind
- *   (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). What A's own
- *   answer names is not looked at: the excluded-feature names are the public API's (owner
- *   decision 2026-10-14 #113);
+ *   (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). A's own answer is
+ *   looked at for one more thing: it may not hold what nobody is shown (`NEVER_SHOWN`: the keyed
+ *   hash of A's number, the code hash and client address of A's 본인확인). The field names in it
+ *   are not looked at: the excluded-feature names are the public API's (owner decision
+ *   2026-10-14 #113);
  * - every better-auth route that answers with an account's data (AUTH_ROUTES `answersAccount`)
- *   is called anonymously and as B, aimed at A, and neither answer may hold A's values;
+ *   is called anonymously and as B, aimed at A, and neither answer may hold A's values; A's own
+ *   answer shows A's values and none of `NEVER_SHOWN`;
  * - the market room is listened to, anonymously and as B, while A's own events are published and
  *   smuggled onto the market channel and the API publishes a real market event.
  *
@@ -29,6 +33,7 @@ import {
   createMarketLink,
   createPhoneVerification,
   createSearch,
+  createStartGrant,
   createUser,
   createWatch,
 } from '@buddha/db/test';
@@ -50,6 +55,7 @@ import { io, type Socket as ClientSocket } from 'socket.io-client';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { AUTH, AUTH_BASE_PATH } from '../auth/auth.js';
+import { PhoneHasher } from '../identity/phone-hash.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import {
@@ -136,6 +142,7 @@ const AMOUNTS = {
   positionQty: 8_642_097,
   costBasis: 2_718_281n,
   realizedPnl: 3_141_593n,
+  startGrant: 5_317_029n,
 } as const;
 
 /** The fill everyone may see: anonymous, so its numbers are public (N01 §5). */
@@ -243,6 +250,19 @@ const PUBLIC_BODIES: Readonly<Record<string, (fixture: Fixture) => unknown>> = {
   'POST /auth/register': (fixture) => ({ email: fixture.a.email }),
 };
 
+/**
+ * A's values no answer may hold, A's own included: what the server keeps about A but never shows
+ * anyone — the keyed hash of A's number (ADR-0071: the identity that outlives the number, and the
+ * key of every per-number limit), and the 본인확인 sends' code hash and client address
+ * (ADR-0070). The response envelope strips nothing, so whatever a service returns goes out; this
+ * is what catches a `phoneHash` added to `Me.startGrant` or a grant row echoed whole.
+ */
+const NEVER_SHOWN: readonly string[] = [
+  'phone hash',
+  'verification code hash',
+  'verification client address',
+];
+
 interface OwnerCase {
   /** Path parameters by name, naming A's records. */
   params?: Readonly<Record<string, (fixture: Fixture) => string>>;
@@ -273,6 +293,7 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
       'phone',
       'available balance',
       'locked balance',
+      'start grant amount',
     ],
   },
   'PATCH /me': { body: () => ({ nickname: `b_${letters(8)}` }), status: 200 },
@@ -306,7 +327,7 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   'GET /me/ledger': {
     query: { cursor: (fixture) => fixture.cursors.ledger, limit: LIMIT },
     status: 200,
-    own: ['ledger memo'],
+    own: ['ledger memo', 'start grant id', 'start grant amount'],
   },
   'GET /me/payments': {
     query: { cursor: (fixture) => fixture.cursors.payments, limit: LIMIT },
@@ -647,6 +668,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       clientIp,
     });
 
+    // A's start Coin (#70, ADR-0071), paid: its amount and grant id are A's wallet, and the
+    // keyed hash of A's number is nobody's to see, A's own answers included (`NEVER_SHOWN`).
+    const phoneHash = t.app.get(PhoneHasher).hash(phone);
+    const startGrant = await createStartGrant(t.db, {
+      userId: a.id,
+      phoneHash,
+      amountCoin: AMOUNTS.startGrant,
+    });
+
     // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
     const [before] = await t.db
       .select()
@@ -846,6 +876,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('watched market slug', watched.slug),
         text('search term', searchTerm),
         text('search id', search.id),
+        text('start grant id', startGrant.id),
+        text('phone hash', phoneHash),
+        amount('start grant amount', AMOUNTS.startGrant),
         amount('available balance', AMOUNTS.available),
         amount('locked balance', AMOUNTS.locked),
         amount('position qty', AMOUNTS.positionQty),
@@ -972,7 +1005,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
 
   it('never answers anyone but A with A’s data on a better-auth route, and A’s data is there', async () => {
     const answers: { route: string; caller: string; status: number; leaks: string[] }[] = [];
-    const shown: { route: string; status: number; missing: string[] }[] = [];
+    const shown: { route: string; status: number; missing: string[]; shownAnyway: string[] }[] = [];
     for (const [key, authCase] of Object.entries(AUTH_CASES)) {
       const request = authCase.request?.(f) ?? {};
       for (const [caller, cookie] of [
@@ -989,6 +1022,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           route: key,
           status: own.statusCode,
           missing: authCase.own.labels.filter((label) => !held.includes(label)),
+          shownAnyway: held.filter((label) => NEVER_SHOWN.includes(label)),
         });
       }
     }
@@ -1000,7 +1034,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         leaks: [],
       })),
     );
-    expect(shown).toEqual(shown.map(({ route }) => ({ route, status: 200, missing: [] })));
+    expect(shown).toEqual(
+      shown.map(({ route }) => ({ route, status: 200, missing: [], shownAnyway: [] })),
+    );
     // B's session read answered with B: the request reached a session at all.
     expect((await callAuth('GET /get-session', {}, f.b.cookie)).body).toContain(f.b.email);
   });
@@ -1016,7 +1052,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         .then((rows) => rows.map((row) => row.hash));
     const passwordBefore = await password();
     const answers: { route: string; status: number; leaks: string[] }[] = [];
-    const shown: { route: string; status: number; missing: string[] }[] = [];
+    const shown: { route: string; status: number; missing: string[]; shownAnyway: string[] }[] = [];
     for (const key of Object.keys(OWNER_ROUTES)) {
       const ownerCase = OWNER_CASES[key];
       if (!ownerCase) continue; // the case above names it
@@ -1037,13 +1073,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           route: key,
           status: own.statusCode,
           missing: ownerCase.own.filter((label) => !held.includes(label)),
+          // GET /me and GET /me/ledger read the start grant: its amount and id are A's, its hash
+          // is nobody's.
+          shownAnyway: held.filter((label) => NEVER_SHOWN.includes(label)),
         });
       }
     }
     expect(answers).toEqual(
       answers.map(({ route }) => ({ route, status: OWNER_CASES[route]!.status, leaks: [] })),
     );
-    expect(shown).toEqual(shown.map(({ route }) => ({ route, status: 200, missing: [] })));
+    expect(shown).toEqual(
+      shown.map(({ route }) => ({ route, status: 200, missing: [], shownAnyway: [] })),
+    );
 
     // B's refused writes changed nothing of A's: A's record and code stay, B has neither, and
     // nobody was texted (ADR-0070).

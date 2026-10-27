@@ -5,7 +5,7 @@
  * profile; skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_COIN, discountPercent, type ChargePackage } from '@buddha/shared';
+import { discountPercent, type ChargePackage } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -239,7 +239,7 @@ describe.skipIf(!hasTestInfra)('admin charge packages (integration)', () => {
         .select()
         .from(schema.balances)
         .where(eq(schema.balances.userId, member.id));
-      expect(balance?.availableCoin).toBe(SIGNUP_BONUS_COIN + 10_000n);
+      expect(balance?.availableCoin).toBe(10_000n);
     } finally {
       spy.mockRestore();
     }

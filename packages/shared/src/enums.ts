@@ -23,6 +23,10 @@ export const LEDGER_ENTRY_TYPES = [
   'FEE',
   'SETTLEMENT_PAYOUT',
   'ADMIN_ADJUST',
+  /**
+   * A redeemed coupon (ADR-0026, kept while paid Coin is closed, D9). Accounts created before
+   * #70 also carry the old sign-up grant under it; new accounts never get one (ADR-0071).
+   */
   'BONUS',
   /**
    * An admin refund claws back a charge's Coin (−amount_coin, ref payment) before the PG cancel.
@@ -33,12 +37,27 @@ export const LEDGER_ENTRY_TYPES = [
    * after a PAYMENT_CANCEL of the same payment, so the ledger shows both halves.
    */
   'PAYMENT_CANCEL_REVERSAL',
+  /**
+   * 시작 지급 (#70, ADR-0069 decision 4 #70, ADR-0071): the start Coin a verified phone number
+   * gets once — new issuance with its own type, never `BONUS`, which coupons share. Written only
+   * by the start grant (+amount_coin, ref `start_grant` → start_grants.id). Not trading profit
+   * (N02 §8): nothing that computes PnL reads the ledger.
+   */
+  'START_GRANT',
 ] as const;
 export type LedgerEntryType = (typeof LEDGER_ENTRY_TYPES)[number];
 export const ledgerEntryTypeSchema = z.enum(LEDGER_ENTRY_TYPES);
 
 /** ledger_entries.ref_type (varchar, not a Postgres enum): what ref_id points at. */
-export const LEDGER_REF_TYPES = ['payment', 'fill', 'market', 'admin_action', 'coupon'] as const;
+export const LEDGER_REF_TYPES = [
+  'payment',
+  'fill',
+  'market',
+  'admin_action',
+  'coupon',
+  /** A START_GRANT entry's start_grants row (#70, ADR-0071). */
+  'start_grant',
+] as const;
 export type LedgerRefType = (typeof LEDGER_REF_TYPES)[number];
 export const ledgerRefTypeSchema = z.enum(LEDGER_REF_TYPES);
 

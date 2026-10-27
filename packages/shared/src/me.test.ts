@@ -36,6 +36,7 @@ describe('meSchema', () => {
       },
     ],
     verification: null,
+    startGrant: null,
   };
 
   it('parses a complete /me payload', () => {
@@ -61,6 +62,29 @@ describe('meSchema', () => {
     ).toBe(false);
     const { verification: _dropped, ...withoutVerification } = sample;
     expect(meSchema.safeParse(withoutVerification).success).toBe(false);
+  });
+
+  it('carries the start grant, pending with no amount or granted with both (#70)', () => {
+    const pending = {
+      ...sample,
+      startGrant: { status: 'pending', amountCoin: null, grantedAt: null },
+    };
+    expect(meSchema.parse(pending)).toEqual(pending);
+    const granted = {
+      ...sample,
+      startGrant: {
+        status: 'granted',
+        amountCoin: '10000',
+        grantedAt: '2026-10-18T00:00:00.000Z',
+      },
+    };
+    expect(meSchema.parse(granted)).toEqual(granted);
+    expect(
+      meSchema.safeParse({ ...sample, startGrant: { ...granted.startGrant, status: 'paid' } })
+        .success,
+    ).toBe(false);
+    const { startGrant: _dropped, ...withoutGrant } = sample;
+    expect(meSchema.safeParse(withoutGrant).success).toBe(false);
   });
 
   it('carries the picked time zone, null while the browser is followed, and requires the key', () => {

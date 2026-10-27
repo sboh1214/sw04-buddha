@@ -381,8 +381,10 @@ export async function openSetPassword(page: Page, email: string): Promise<void> 
 /**
  * Sign-up (ADR-0024, ADR-0070): /set-password takes the first password and goes home, where the
  * onboarding gate takes the account on to the 본인확인 step; verified, it is back on `/`. It
- * arrives with the sign-up bonus already credited (migration 0004), which the balance chip
- * shows. Returns the number it verified (`phone`, a fresh one unless given).
+ * arrives with 0 Coin and an empty ledger: creating an account grants nothing since #70
+ * (ADR-0071), and the start Coin comes from the grant the onboarding (#58) will call, which
+ * nothing in this build does yet. Returns the number it verified (`phone`, a fresh one unless
+ * given).
  */
 export async function signUp(
   page: Page,

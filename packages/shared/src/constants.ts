@@ -14,13 +14,6 @@ export const PAYOUT_PER_CONTRACT_COIN = 100n;
 export const BP_MAX = 10_000;
 
 /**
- * Granted to every new account by the "user" trigger, in the same transaction as the row
- * itself (PLAN 17 Q2, owner decision 2026-09-04). Changing it needs a migration, because the
- * amount lives in the trigger function as well — see packages/db/drizzle.
- */
-export const SIGNUP_BONUS_COIN = 10_000n;
-
-/**
  * Whether paid Coin is on sale: the charge and its catalogue, the payment provider info, coupon
  * redemption and the admin refund of a charge. Closed in the initial product (N06, owner
  * decision D9, ADR-0049): the code and the tables stay, the API answers each of those routes

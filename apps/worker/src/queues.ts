@@ -43,6 +43,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
   markets: [JOB_NAMES.marketClose, JOB_NAMES.marketFinalize],
   audit: [JOB_NAMES.ledgerAudit],
   stats: [JOB_NAMES.marketTraderCount],
+  wallet: [JOB_NAMES.startGrantPay],
 };
 
 /**
@@ -85,6 +86,14 @@ export const JOB_SCHEDULES = [
     id: 'market-finalize-scan',
     queue: 'markets',
     name: JOB_NAMES.marketFinalize,
+    repeat: EVERY_MINUTE,
+  },
+  // #70 (ADR-0071): the start grants that waited for an amount are paid within a minute of an
+  // admin entering one. A run while the amount is undecided reads one row and stops.
+  {
+    id: 'start-grant-pay',
+    queue: 'wallet',
+    name: JOB_NAMES.startGrantPay,
     repeat: EVERY_MINUTE,
   },
 ] as const satisfies readonly {

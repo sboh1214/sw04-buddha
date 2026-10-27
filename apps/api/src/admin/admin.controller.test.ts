@@ -3,7 +3,7 @@
  * profile. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { SIGNUP_BONUS_COIN, type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
+import { type AdminBalanceAdjustResult, type AdminUser } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -76,7 +76,8 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
 
   it('debits 3,000 Coin from a charged balance and records ADMIN_ADJUST with the reason (AC 3)', async () => {
     await chargeMember(10_000n);
-    const afterAdjust = SIGNUP_BONUS_COIN + 10_000n - 3_000n;
+    // A new account starts at 0 (#70): the charge is all it has.
+    const afterAdjust = 10_000n - 3_000n;
 
     const res = await adjust({ amountCoin: '-3000', memo: '중복 충전 회수' });
     expect(res.statusCode).toBe(200);
@@ -101,7 +102,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
 
   it('refuses an adjustment that would make the balance negative, changing nothing (AC 4)', async () => {
     await chargeMember(10_000n);
-    const balance = SIGNUP_BONUS_COIN + 10_000n;
+    const balance = 10_000n;
 
     const res = await adjust({ amountCoin: (-balance - 1n).toString(), memo: '과다 회수' });
     expect(res.statusCode).toBe(409); // HTTP_STATUS_BY_CODE: INSUFFICIENT_BALANCE -> CONFLICT
@@ -113,8 +114,8 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       .from(schema.ledgerEntries)
       .where(eq(schema.ledgerEntries.userId, member.id))
       .orderBy(schema.ledgerEntries.id);
-    // The sign-up bonus and the charge; the refused adjustment added nothing.
-    expect(entries.map((entry) => entry.type)).toEqual(['BONUS', 'DEPOSIT']);
+    // The charge; the refused adjustment added nothing (signing up writes no entry, #70).
+    expect(entries.map((entry) => entry.type)).toEqual(['DEPOSIT']);
     // The audit row is rolled back with the rest of the transaction.
     expect(
       await t.db
@@ -164,13 +165,13 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       .from(schema.adminActions)
       .where(eq(schema.adminActions.targetId, member.id));
     expect(action!.createdAt.getTime()).toBe(adjusted.createdAt.getTime());
-    expectLedgerChain(ledger, SIGNUP_BONUS_COIN + 2_500n);
+    expectLedgerChain(ledger, 2_500n);
   });
 
   it('credits Coin as well, and requires a memo and a non-zero amount', async () => {
     const credited = await adjust({ amountCoin: '2500', memo: '보상 지급' });
     expect(credited.statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN + 2_500n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 2_500n });
 
     for (const payload of [
       { amountCoin: '1000' },
@@ -181,7 +182,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       expect(res.statusCode, JSON.stringify(payload)).toBe(400);
       expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
     }
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN + 2_500n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 2_500n });
   });
 
   it('404s for an unknown user without writing an audit row', async () => {
@@ -354,6 +355,8 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     // off, so a form body is no body at all (400) even from our own origin — this API speaks
     // JSON, which no cross-origin page can send without a preflight we never answer. Before
     // this round the form was stopped by accident alone: the parser 500ed for want of `qs`.
+    // Coin to take back: a new account starts at 0 (#70). A charge, so no admin action is written.
+    await chargeMember(10_000n);
     const post = (origin: string | undefined, body: { type: 'form' | 'json' }) =>
       t.app.inject({
         method: 'POST',
@@ -377,7 +380,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
         expect(res.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
       }
     }
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 10_000n });
     expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
 
     // A form from our own origin is refused for its shape, not its origin.
@@ -388,7 +391,7 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     // no browser sent it, so it cannot be a forgery.
     expect((await post('http://localhost:3000', { type: 'json' })).statusCode).toBe(200);
     expect((await post(undefined, { type: 'json' })).statusCode).toBe(200);
-    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: SIGNUP_BONUS_COIN - 6_000n });
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 10_000n - 6_000n });
 
     // Reads are never checked: without CORS headers nothing cross-origin can read them anyway.
     const read = await t.app.inject({

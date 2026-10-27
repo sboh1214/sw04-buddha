@@ -205,12 +205,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/search-history/{id}/delete` | Delete one recent search: every recorded search of the entry's term (an id the account has none of deletes nothing); answers the recent searches (the newest 10 distinct terms, newest first) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/me/search-history/clear` | Delete every recorded search of the account; answers the (empty) recent searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
-## 스키마 (80개)
+## 스키마 (81개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 
@@ -373,7 +373,7 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | `market:tick` | `market:<id>` | 체결 후의 가격·통계. 지금은 체결 경로가 없어 발행되지 않는다 | `tradeCount` |
 | `market:trade` | `market:<id>` | 익명 체결 1건. 지금은 체결 경로가 없어 발행되지 않는다 | `fillId` |
 | `market:status` | `market:<id>` | 상태 전이(개장·마감·판정·정산 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다 | `statusEventId` |
-| `user:balance` | `user:<id>` | 충전·환불·지급 후의 잔고 | `ledgerEntryId` |
+| `user:balance` | `user:<id>` | 충전·환불·정산 지급·시작 지급(#70) 후의 잔고 | `ledgerEntryId` |
 | `user:position` | `user:<id>` | 변경된 포지션 1행 | `version` |
 
 이벤트는 커밋 순서대로 도착하지 않을 수 있고(인스턴스 두 대, 늦게 흘러나온 Redis 큐),

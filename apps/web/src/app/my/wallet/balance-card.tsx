@@ -8,8 +8,17 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { profileView } from '@/lib/query-client';
+import { StartGrantPendingNotice } from './start-grant-notice';
 
-/** Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty. */
+/**
+ * Balance summary (PLAN 11.3). `locked_coin` is always 0 in the MVP but shown for honesty.
+ *
+ * Under the balance, while the account's start Coin waits for its amount, the owner's notice that
+ * it will be paid (`StartGrantPendingNotice`, ADR-0069 decision 4 #70) — the same one MY 요약's
+ * wallet preview shows (owner decision 2026-10-18). The balance it sits under is still the
+ * account's real one — 0 for a new account — so the notice says why rather than leaving a bare
+ * 0 Coin.
+ */
 export function BalanceCard() {
   const { data: me, isPending, isFetching, isLoggedIn, refetch } = useMe();
   // The same four states MY's other screens read, and for the same reason: MY's session gate is
@@ -64,6 +73,7 @@ export function BalanceCard() {
                 data-testid="wallet-locked"
               />
             </HStack>
+            <StartGrantPendingNotice me={me} mt="3" testId="wallet-start-grant-pending" />
           </Stack>
         )}
       </Card.Body>

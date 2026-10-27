@@ -26,6 +26,7 @@ const following: Me = {
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
+  startGrant: null,
 };
 
 /** What `PUT /me/time-zone` answers once New York is saved. */

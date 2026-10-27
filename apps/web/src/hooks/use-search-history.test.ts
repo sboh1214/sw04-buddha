@@ -41,6 +41,7 @@ const me = (id: string): Me => ({
     phone: '01012345678',
     verifiedAt: '2026-10-18T00:00:00.000Z',
   },
+  startGrant: null,
 });
 
 const outage = () => new ApiError(503, { code: 'INTERNAL', message: 'x' } as never);

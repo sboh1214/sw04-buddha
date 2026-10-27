@@ -1,9 +1,11 @@
 'use client';
 
+import { type UserBalanceEvent } from '@buddha/shared';
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import { copy } from '@/copy';
 import { api, isForAnotherAccount, unwrap, type Me, type UpdateTimeZoneBody } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { applyBalanceEvent } from '@/lib/market-live';
 import { useSession } from '@/lib/use-session';
 
 /** Query key rule from PLAN 11.5. */
@@ -153,6 +155,50 @@ export async function storeMe(
     return;
   }
   await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+}
+
+/**
+ * A `user:balance` event's write into `['me']` (realtime-provider.tsx, once the event passed its
+ * order gate): the new balance at once, and `GET /me` asked again where the event cannot say the
+ * rest. The reducer (`applyBalanceEvent`, lib/market-live.ts) decides which; this carries it out.
+ * Apart from the provider, which apps/web's node test runner cannot render, so the suite drives
+ * the very steps the provider takes (realtime-cache.test.ts) rather than a copy of them.
+ */
+export function storeBalanceEvent(queryClient: QueryClient, event: UserBalanceEvent): void {
+  const patch = applyBalanceEvent(queryClient.getQueryData<Me>(ME_QUERY_KEY), event);
+  // Kills an in-flight `GET /me` that would otherwise resolve after this write carrying an older
+  // balance. A charge or a coupon also reaches the chip through its own answer's refetch (an
+  // Idempotency-Key replay publishes NO event); a payout reaches it only here.
+  //
+  // The cancel is synchronous down to the state change (query-core's retryer rejects and calls
+  // `onCancel` in the same tick), so both branches below act on a query that is already idle.
+  void queryClient.cancelQueries({ queryKey: ME_QUERY_KEY, exact: true });
+  if (patch.kind === 'refetch') {
+    // Nothing to patch, and the cancel has just REVERTED the first `GET /me` to the state it had
+    // before it started — `pending` with no data, and no observer left fetching. So the request
+    // has to be re-issued, or the balance chip and the 잔고 요약 spin until the next window focus.
+    // Issued after the event was received, so its answer cannot be the snapshot this event
+    // already superseded.
+    void queryClient.invalidateQueries({
+      queryKey: ME_QUERY_KEY,
+      exact: true,
+      refetchType: 'active',
+    });
+    return;
+  }
+  queryClient.setQueryData<Me>(ME_QUERY_KEY, patch.me);
+  if (patch.kind === 'replaceAndRefetch') {
+    // The first kind of realtime-provider.tsx's RULE (its `market:status` handler): the event
+    // cannot build what it may be about. This account's start Coin is waiting (#70), and a
+    // payment of it arrives as nothing but this event, which does not say what the entry was — so
+    // `['me']` is asked again for `startGrant`, after the balance is already on screen. Not 남발:
+    // only while a grant waits, and the answer that says it is paid ends it.
+    void queryClient.invalidateQueries({
+      queryKey: ME_QUERY_KEY,
+      exact: true,
+      refetchType: 'active',
+    });
+  }
 }
 
 async function patchNickname(nickname: string): Promise<Me> {

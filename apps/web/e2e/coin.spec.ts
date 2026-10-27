@@ -12,8 +12,8 @@ import { createOpenMarket, expect, freshEmail, signUp, test } from './helpers';
  *
  * The balance is raised to 1,000,000 Coin first — seven digits, the largest single adjustment an
  * admin can make (`ADJUST_MAX_ABS_COIN`) — so the chip is measured with a long amount rather than
- * whatever the sign-up bonus happens to be. The account is a fresh one: the seed admin's balance
- * is read by other specs running alongside this one.
+ * the 0 a new account starts with (#70, ADR-0071). The account is a fresh one: the seed admin's
+ * balance is read by other specs running alongside this one.
  *
  * The 거래량 is the detail header's. #13 named the card's, but the card shows none since ADR-0062
  * (ADR-0061 decision 1, item 4: volume on the detail only), so the measurement moved to the one

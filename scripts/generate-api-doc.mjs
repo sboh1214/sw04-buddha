@@ -275,7 +275,11 @@ const REALTIME_EVENTS = {
     note: '상태 전이(개장·마감·판정·정산 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다',
     key: '`statusEventId`',
   },
-  'user:balance': { room: '`user:<id>`', note: '충전·환불·지급 후의 잔고', key: '`ledgerEntryId`' },
+  'user:balance': {
+    room: '`user:<id>`',
+    note: '충전·환불·정산 지급·시작 지급(#70) 후의 잔고',
+    key: '`ledgerEntryId`',
+  },
   'user:position': { room: '`user:<id>`', note: '변경된 포지션 1행', key: '`version`' },
 };
 
