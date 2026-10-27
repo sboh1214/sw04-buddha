@@ -250,7 +250,7 @@ terraform apply -replace=random_password.better_auth_secret
 gh workflow run deploy.yml --ref main -f image_tag=<현재 sha>     # .env 재렌더 + 컨테이너 재생성
 ```
 
-`better_auth_secret`을 바꾸면 모든 세션이 무효가 된다(사용자 전원 재로그인).
+`better_auth_secret`을 바꾸면 모든 세션이 무효가 된다(사용자 전원 재로그인). 그 값에서 이끌어 낸 키로 감춘 댓글·답글 목록의 커서도 모두 무효가 된다(ADR-0074) — 열려 있던 글 화면의 그 뒤 '더 보기'·'답글 더 보기'는 400으로 거절되고, 그 화면은 그 거절을 받으면 목록을 처음부터 다시 읽어 새 커서를 받은 뒤 누른 읽기를 한 번 다시 한다(그 다시 읽기마저 실패하면 '답글 더 보기'는 실패를 말하고 다음 누름이 다시 읽는다). 따로 할 일은 없다.
 
 **`phone_hash_key`는 교체하지 않는다**(`-replace`·taint 금지, ADR-0071). 운영 `.env`의 `PHONE_HASH_KEY`로, 본인확인한 휴대전화 번호를 키 있는 해시로 바꿔 '시작 Coin을 받은 번호'(`start_grant_numbers`)로 기록하는 키다. 바꾸면 저장된 해시가 어느 번호와도 맞지 않게 되어, 시작 Coin을 받은 번호가 다음 계정에서 다시 받고 번호마다 세는 한도(ADR-0069 결정 7)도 처음부터 다시 센다. 새 키로도 API는 그대로 뜨므로 아무것도 알려 주지 않는다. 그래서 `ssm.tf`의 `lifecycle { prevent_destroy = true }`가 막는다 — `-replace`·taint, 값을 새로 뽑게 하는 `length`·`special`의 수정, `terraform destroy`는 모두 plan 단계에서 오류로 끝난다. 그 줄을 지우는 커밋은 하지 않는다. 정말 바꿔야 하면(유출) 오너가 그 결과를 정한 뒤 기록을 옮기는 절차를 먼저 만든다 — 지금은 없다.
 

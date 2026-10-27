@@ -1,5 +1,6 @@
 import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
 import { type Market, type Position, isApiError } from './api';
+import { type CommentPages, COMMENT_PAGES_KEY, keepPlacedComments } from './comments';
 import {
   MARKETS_KEY,
   MARKET_KEY,
@@ -86,6 +87,21 @@ function makeQueryClient() {
       replaceEqualDeep(
         held,
         joinSeries(held as CachedSeries | undefined, incoming as CachedSeries),
+      ),
+  });
+  // A post's comment pages (#48, ADR-0074), for another reason: the writer's own 댓글 or 대댓글 that
+  // its read toward its place left at the end of what is held (`withNewComment`) must stay there
+  // through every read of the pages until a read brings the page that holds it (오너 결정
+  // 2026-10-24). A read's pages are written over what was held — by the query's refetch (a focus,
+  // a reconnection, a stale thread's read again), its 더 보기, or a new 댓글's read — and come
+  // without it; this is the one place every one of those writes passes, so `keepPlacedComments`
+  // carries it over here and puts it back, or settles it against what the read just brought.
+  // `['posts', 'comments']` never reaches `['posts', 'post', id]` or the lists.
+  client.setQueryDefaults(COMMENT_PAGES_KEY, {
+    structuralSharing: (held, incoming) =>
+      replaceEqualDeep(
+        held,
+        keepPlacedComments(held as CommentPages | undefined, incoming as CommentPages),
       ),
   });
   return client;

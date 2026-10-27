@@ -66,9 +66,10 @@ export interface PostFormProps {
   refusedImageIds?: readonly string[];
   onSubmit: (values: PostFormValues) => void;
   /**
-   * The post the form edits left every view while the form held something of the writer's (the
-   * edit screen, 오너 결정 2026-10-24, ADR-0073 9-52): the form stays, read-only, with
-   * '없거나 삭제된 글입니다.' and 닫기 (`onClose`) in place of its button.
+   * The post the form edits was deleted — it left every view, or stands as its placeholder with
+   * comments under it (#48) — while the form held something of the writer's (the edit screen, 오너
+   * 결정 2026-10-24, ADR-0073 9-52): the form stays, read-only, with '없거나 삭제된 글입니다.' and
+   * 닫기 (`onClose`) in place of its button.
    */
   gone?: boolean;
   /** 닫기, while `gone`: the writer is done with what the form held. */
@@ -112,14 +113,15 @@ export interface PostFormProps {
  * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
  * storage: the form holds it, and guards it like any draft.
  *
- * The post an edit form edits can leave every view while it is open — deleted in another tab: a
- * save refused as NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`).
- * The form then keeps what the writer had in it, as #48's comment boxes keep a text whose place
- * went (오너 결정 2026-10-24, ADR-0073 9-52; ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답
- * 1·2): the title and the body stay on screen, read-only — selectable and copyable, never changed
- * or sent — under '없거나 삭제된 글입니다.' (`GoneNotice`), and 닫기 takes the button's place;
- * leaving still asks first, and the draft the onboarding gate would keep is kept as before — the
- * post going clears nothing. The screen decides it as the post goes, by what the form said it held
+ * The post an edit form edits can be deleted while it is open — in another tab: a save refused as
+ * NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`) or answers the
+ * placeholder of a post deleted with comments under it (#48, `postEditDeleted`). The form then
+ * keeps what the writer had in it, as #48's comment boxes keep a text whose place went (오너 결정
+ * 2026-10-24, ADR-0073 9-52; ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답 1·2): the title
+ * and the body stay on screen, read-only — selectable and copyable, never changed or sent — under
+ * '없거나 삭제된 글입니다.' (`GoneNotice`), and 닫기 takes the button's place; leaving still asks
+ * first, and the draft the onboarding gate would keep is kept as before — the post going clears
+ * nothing. The screen decides it as the post goes, by what the form said it held
  * (`onHoldingChange`): a form holding nothing of the writer's is not kept.
  *
  * Focus: the notice is focused when the form is drawn with a draft taken back — it appears with

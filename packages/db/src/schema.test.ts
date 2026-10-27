@@ -42,6 +42,9 @@ import {
   phoneVerificationRefusedSends,
   phoneVerifications,
   positions,
+  postCommentCounts,
+  postCommentRevisions,
+  postComments,
   postImages,
   postRevisions,
   posts,
@@ -52,6 +55,7 @@ import {
   startGrants,
   user,
 } from './schema/index.js';
+import { closeDb, createDb } from './client.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import {
   completeOnboarding,
@@ -59,6 +63,7 @@ import {
   createConsents,
   createMarket,
   createMarketLink,
+  createComment,
   createMedia,
   createPhoneVerification,
   createPost,
@@ -70,7 +75,7 @@ import {
   createWatch,
   randomPhoneHash,
 } from './test/factories.js';
-import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 import {
   hasStandingConsent,
   isNicknameHeld,
@@ -867,6 +872,461 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       ).rejects.toSatisfy(
         (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'media_deletions_attempts_check',
       );
+    });
+  });
+
+  describe('comments under a post (migration 0034, #48)', () => {
+    /** A post on an open market by a new account, and that account. */
+    async function postFixture() {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      return { author, market, post };
+    }
+
+    it('stores a 댓글 and a 대댓글 under it, the relations both ways', async () => {
+      const { author, post } = await postFixture();
+      const comment = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        body: '첫 줄\n둘째 줄',
+      });
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+      });
+      expect(comment).toMatchObject({
+        parentId: null,
+        body: '첫 줄\n둘째 줄',
+        editedAt: null,
+        deletedAt: null,
+        hiddenAt: null,
+        isReply: false,
+        parentIsReply: null,
+      });
+      expect(reply).toMatchObject({
+        parentId: comment.id,
+        parentCreatedAt: comment.createdAt,
+        isReply: true,
+        parentIsReply: false,
+      });
+      expect(comment.parentCreatedAt).toBeNull();
+      const withAll = await t.db.query.postComments.findFirst({
+        where: eq(postComments.id, comment.id),
+        with: { post: true, author: true, replies: true },
+      });
+      expect(withAll?.post.id).toBe(post.id);
+      expect(withAll?.author.id).toBe(author.id);
+      expect(withAll?.replies.map((row) => row.id)).toEqual([reply.id]);
+      const withParent = await t.db.query.postComments.findFirst({
+        where: eq(postComments.id, reply.id),
+        with: { parent: true },
+      });
+      expect(withParent?.parent?.id).toBe(comment.id);
+      const postWith = await t.db.query.posts.findFirst({
+        where: eq(posts.id, post.id),
+        with: { comments: true },
+      });
+      expect(postWith?.comments.map((row) => row.id).sort()).toEqual([comment.id, reply.id].sort());
+    });
+
+    it('holds two layers whoever writes: a 대댓글’s parent is a 댓글 of the same post (#45-2)', async () => {
+      const { author, market, post } = await postFixture();
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+      });
+      const parentRefused = (e: unknown) =>
+        sqlState(e) === '23503' && sqlConstraint(e) === 'post_comments_parent_fk';
+      // A reply to a 대댓글.
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, parentId: reply.id }),
+      ).rejects.toSatisfy(parentRefused);
+      // A reply under a 댓글 of another post.
+      const other = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      await expect(
+        createComment(t.db, { postId: other.id, authorId: author.id, parentId: comment.id }),
+      ).rejects.toSatisfy(parentRefused);
+      // A parent that does not exist, and a comment its own parent.
+      await expect(
+        createComment(t.db, {
+          postId: post.id,
+          authorId: author.id,
+          parentId: randomUUID(),
+          parentCreatedAt: comment.createdAt,
+        }),
+      ).rejects.toSatisfy(parentRefused);
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentId: comment.id, parentCreatedAt: comment.createdAt })
+          .where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      // A 댓글 with a 대댓글 cannot become a 대댓글 itself, nor move to another post.
+      const second = await createComment(t.db, { postId: post.id, authorId: author.id });
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentId: second.id, parentCreatedAt: second.createdAt })
+          .where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      await expect(
+        t.db.update(postComments).set({ postId: other.id }).where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      // A 대댓글 carries its 댓글's time, exactly (the comment page walks the 대댓글 in their 댓글's
+      // order by it, ADR-0074 decision 2): another time, none at all, and a 댓글 with one are
+      // refused; the 댓글's own time cannot move from under its 대댓글.
+      const off = new Date(comment.createdAt.getTime() + 1);
+      await expect(
+        createComment(t.db, {
+          postId: post.id,
+          authorId: author.id,
+          parentId: comment.id,
+          parentCreatedAt: off,
+        }),
+      ).rejects.toSatisfy(parentRefused);
+      const timeMissing = (e: unknown) =>
+        sqlState(e) === '23514' && sqlConstraint(e) === 'post_comments_parent_created_at_check';
+      await expect(
+        t.db.execute(
+          sql`INSERT INTO post_comments (post_id, parent_id, author_id, body) VALUES (${post.id}, ${comment.id}, ${author.id}, 'x')`,
+        ),
+      ).rejects.toSatisfy(timeMissing);
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentCreatedAt: null })
+          .where(eq(postComments.id, reply.id)),
+      ).rejects.toSatisfy(timeMissing);
+      await expect(
+        t.db
+          .update(postComments)
+          .set({ parentCreatedAt: second.createdAt })
+          .where(eq(postComments.id, second.id)),
+      ).rejects.toSatisfy(timeMissing);
+      await expect(
+        t.db.update(postComments).set({ createdAt: off }).where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy(parentRefused);
+      // The generated keys are the database's: nobody writes them.
+      await expect(
+        t.db.execute(
+          sql`INSERT INTO post_comments (post_id, author_id, body, is_reply) VALUES (${post.id}, ${author.id}, 'x', true)`,
+        ),
+      ).rejects.toSatisfy((e) => sqlState(e) === '428C9');
+      expect(
+        (await t.db.select({ id: postComments.id }).from(postComments)).map((row) => row.id).sort(),
+      ).toEqual([comment.id, reply.id, second.id].sort());
+    });
+
+    it('refuses a blank body, a body over 1,000 characters and the removal of a comment’s post or author', async () => {
+      const { author, post } = await postFixture();
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, body: '   ' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'post_comments_body_check',
+      );
+      // 1,000 code points fit (an emoji is one, as `codePointLength` counts it); one more does not.
+      await createComment(t.db, { postId: post.id, authorId: author.id, body: '😀'.repeat(1_000) });
+      await expect(
+        createComment(t.db, { postId: post.id, authorId: author.id, body: '가'.repeat(1_001) }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '22001');
+      await expect(t.db.delete(posts).where(eq(posts.id, post.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      await expect(t.db.delete(user).where(eq(user.id, author.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+    });
+
+    it('keeps an edit’s history append-only, deletable later by the retention work', async () => {
+      const { author, post } = await postFixture();
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      const [revision] = await t.db
+        .insert(postCommentRevisions)
+        .values({ commentId: comment.id, body: comment.body, writtenAt: comment.createdAt })
+        .returning();
+      await expect(
+        t.db
+          .update(postCommentRevisions)
+          .set({ body: 'rewritten' })
+          .where(eq(postCommentRevisions.id, revision!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await t.db.delete(postCommentRevisions).where(eq(postCommentRevisions.id, revision!.id));
+      expect(await t.db.select().from(postCommentRevisions)).toEqual([]);
+    });
+
+    it('pages from indexes that hold no deleted comment (Codex review on PR #220)', async () => {
+      // The comment page and '답글 더 보기' walk these three (ADR-0074 decision 2 and 7-31): a
+      // deleted 댓글 or 대댓글 is in none of them, so no history of written and deleted comments is
+      // walked. This pins each index's predicate; that the statements read them, by their leading
+      // columns, is comments.controller.test.ts's (rows read and pages touched, ADR-0074 decision 8).
+      const { rows } = await t.db.execute<{ indexname: string; indexdef: string }>(
+        sql`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'post_comments' ORDER BY indexname`,
+      );
+      const defs = Object.fromEntries(rows.map((row) => [row.indexname, row.indexdef]));
+      expect(defs['post_comments_live_post_id_created_at_id_idx']).toContain(
+        '(post_id, created_at, id) WHERE ((parent_id IS NULL) AND (deleted_at IS NULL))',
+      );
+      expect(defs['post_comments_live_post_id_parent_created_at_parent_id_idx']).toContain(
+        '(post_id, parent_created_at, parent_id) WHERE ((parent_id IS NOT NULL) AND (deleted_at IS NULL))',
+      );
+      expect(defs['post_comments_live_parent_id_created_at_id_idx']).toContain(
+        '(parent_id, created_at, id) WHERE ((parent_id IS NOT NULL) AND (deleted_at IS NULL))',
+      );
+      // No index of a post's or a thread's comments holds the deleted ones besides the key of the
+      // parent's foreign key (whose leading post_id serves the operators' read of every comment).
+      expect(Object.keys(defs).sort()).toEqual([
+        'post_comments_author_id_created_at_idx',
+        'post_comments_live_parent_id_created_at_id_idx',
+        'post_comments_live_post_id_created_at_id_idx',
+        'post_comments_live_post_id_parent_created_at_parent_id_idx',
+        'post_comments_pkey',
+        'post_comments_post_id_id_created_at_is_reply_unique',
+      ]);
+    });
+
+    /**
+     * Every post's kept count (`post_comment_counts`, 0 with no row) checked against its comments
+     * counted afresh — neither deleted nor hidden, 댓글 and 대댓글 alike (ADR-0074 7-9) — and the
+     * kept count of `postId`.
+     */
+    async function kept(postId: string): Promise<number> {
+      const { rows } = await t.db.execute<{ id: string; kept: number; counted: number }>(sql`
+        SELECT p.id, COALESCE(c.count, 0) AS kept,
+               (SELECT count(*)::int FROM post_comments AS pc
+                 WHERE pc.post_id = p.id AND pc.deleted_at IS NULL AND pc.hidden_at IS NULL) AS counted
+        FROM posts AS p LEFT JOIN post_comment_counts AS c ON c.post_id = p.id`);
+      for (const row of rows) expect(row.kept, `post ${row.id}`).toBe(row.counted);
+      return rows.find((row) => row.id === postId)?.kept ?? Number.NaN;
+    }
+    const setComment = (commentId: string, values: Partial<typeof postComments.$inferInsert>) =>
+      t.db.update(postComments).set(values).where(eq(postComments.id, commentId));
+
+    it('keeps each post’s count of the comments in view through every write, in the write’s transaction (Codex review on PR #220, ADR-0074 7-33)', async () => {
+      const { author, market, post } = await postFixture();
+      const other = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      // No row until a comment is in view: the reads take 0.
+      expect(await kept(post.id)).toBe(0);
+      expect(await t.db.select().from(postCommentCounts)).toEqual([]);
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      const reply = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        parentId: comment.id,
+      });
+      expect(await kept(post.id)).toBe(2);
+      // Written hidden or deleted: out of view, not counted.
+      const writtenHidden = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        hiddenAt: new Date(),
+      });
+      const writtenDeleted = await createComment(t.db, {
+        postId: post.id,
+        authorId: author.id,
+        deletedAt: new Date(),
+      });
+      expect(await kept(post.id)).toBe(2);
+      await createComment(t.db, { postId: other.id, authorId: author.id });
+      expect(await kept(other.id)).toBe(1);
+      // An edit of the body moves nothing.
+      await setComment(comment.id, { body: '고친 댓글', editedAt: new Date() });
+      expect(await kept(post.id)).toBe(2);
+      // The author's deletion takes one out; a later time on a deleted one moves nothing.
+      await setComment(reply.id, { deletedAt: new Date() });
+      expect(await kept(post.id)).toBe(1);
+      await setComment(reply.id, { deletedAt: new Date(Date.now() + 1_000) });
+      expect(await kept(post.id)).toBe(1);
+      // Hiding (#50) takes one out and showing it again puts it back; a deleted one stays out
+      // whether hidden or shown.
+      await setComment(comment.id, { hiddenAt: new Date() });
+      expect(await kept(post.id)).toBe(0);
+      await setComment(comment.id, { hiddenAt: null });
+      expect(await kept(post.id)).toBe(1);
+      await setComment(reply.id, { hiddenAt: new Date() });
+      await setComment(reply.id, { hiddenAt: null });
+      expect(await kept(post.id)).toBe(1);
+      // What was written hidden, shown; what was written deleted, back (no route does it — the
+      // count follows whoever writes); both out at once in one statement.
+      await setComment(writtenHidden.id, { hiddenAt: null });
+      await setComment(writtenDeleted.id, { deletedAt: null });
+      expect(await kept(post.id)).toBe(3);
+      await setComment(writtenDeleted.id, { deletedAt: new Date(), hiddenAt: new Date() });
+      expect(await kept(post.id)).toBe(2);
+      // A 댓글 moved to another post (nothing hangs under it): one less here, one more there.
+      await setComment(writtenHidden.id, { postId: other.id });
+      expect(await kept(post.id)).toBe(1);
+      expect(await kept(other.id)).toBe(2);
+      // A hard delete (#184): one in view leaves the count, one out of view does not.
+      await t.db.delete(postComments).where(eq(postComments.id, writtenHidden.id));
+      expect(await kept(other.id)).toBe(1);
+      await t.db.delete(postComments).where(eq(postComments.id, writtenDeleted.id));
+      expect(await kept(post.id)).toBe(1);
+      // In the write's transaction: rolled back, the count is as it was.
+      await expect(
+        t.db.transaction(async (tx) => {
+          await tx.insert(postComments).values({ postId: post.id, authorId: author.id, body: 'x' });
+          tx.rollback();
+        }),
+      ).rejects.toBeInstanceOf(TransactionRollbackError);
+      expect(await kept(post.id)).toBe(1);
+    });
+
+    it('lets buddha_app read the counts and change them only through the trigger, which runs as their owner', async () => {
+      const { author, post } = await postFixture();
+      await createComment(t.db, { postId: post.id, authorId: author.id });
+      const refused = (e: unknown) => sqlState(e) === '42501';
+      await expect(
+        t.db
+          .update(postCommentCounts)
+          .set({ count: 9 })
+          .where(eq(postCommentCounts.postId, post.id)),
+      ).rejects.toSatisfy(refused);
+      await expect(
+        t.db.delete(postCommentCounts).where(eq(postCommentCounts.postId, post.id)),
+      ).rejects.toSatisfy(refused);
+      const { market } = await postFixture();
+      const bare = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      await expect(
+        t.db.insert(postCommentCounts).values({ postId: bare.id, count: 5 }),
+      ).rejects.toSatisfy(refused);
+      const { rows: grants } = await t.db.execute<{ privilege: string }>(sql`
+        SELECT privilege_type AS privilege FROM information_schema.role_table_grants
+        WHERE grantee = 'buddha_app' AND table_schema = 'public' AND table_name = 'post_comment_counts'`);
+      expect(grants.map((row) => row.privilege)).toEqual(['SELECT']);
+      const { rows: functions } = await t.db.execute<{
+        name: string;
+        definer: boolean;
+        config: string[] | null;
+        owner: string;
+      }>(sql`
+        SELECT proname AS name, prosecdef AS definer, proconfig AS config,
+               pg_get_userbyid(proowner) AS owner
+        FROM pg_proc WHERE proname LIKE 'post_comment_counts_%' ORDER BY proname`);
+      expect(functions).toEqual(
+        ['post_comment_counts_clear', 'post_comment_counts_follow'].map((name) => ({
+          name,
+          definer: true,
+          config: ['search_path=pg_catalog, public, pg_temp'],
+          owner: 'buddha_migrate',
+        })),
+      );
+      expect(await kept(post.id)).toBe(1);
+
+      // Nor through a table of its own by the same name (Codex review on PR #220): PUBLIC may
+      // create temporary tables, and a session's pg_temp is searched first for a relation unless
+      // the search path names it, so a function reaching `post_comment_counts` by its bare name
+      // would write buddha_app's table instead of the kept one. The functions name the table with
+      // its schema and put pg_temp last.
+      const session = createDb(testDbUrls()!.appUrl, { max: 1, applicationName: 'buddha-test' });
+      try {
+        await session.execute(sql`
+          CREATE TEMP TABLE post_comment_counts (post_id uuid PRIMARY KEY, count integer NOT NULL DEFAULT 0)`);
+        await session.execute(sql`GRANT ALL ON pg_temp.post_comment_counts TO PUBLIC`);
+        const [shadowed] = await session
+          .insert(postComments)
+          .values({ postId: post.id, authorId: author.id, body: '같은 이름의 표' })
+          .returning();
+        expect(await kept(post.id)).toBe(2);
+        await session
+          .update(postComments)
+          .set({ hiddenAt: sql`now()` })
+          .where(eq(postComments.id, shadowed!.id));
+        expect(await kept(post.id)).toBe(1);
+        await session.delete(postComments).where(eq(postComments.id, shadowed!.id));
+        expect(await kept(post.id)).toBe(1);
+        const { rows: own } = await session.execute<{ n: number }>(
+          sql`SELECT count(*)::int AS n FROM pg_temp.post_comment_counts`,
+        );
+        expect(own).toEqual([{ n: 0 }]);
+      } finally {
+        await closeDb(session);
+      }
+    });
+
+    it('counts comments written and taken out at the same time exactly: the writers of one post queue on its row', async () => {
+      // Each writer holds its transaction open after its write, so the others' writes meet its
+      // lock — the first comments of the post among them, when it has no row yet.
+      const { author, post } = await postFixture();
+      const WRITERS = 12;
+      const pool = createDb(testDbUrls()!.appUrl, { max: WRITERS, applicationName: 'buddha-test' });
+      try {
+        await Promise.all(
+          Array.from({ length: WRITERS }, (_, index) =>
+            pool.transaction(async (tx) => {
+              await tx
+                .insert(postComments)
+                .values({ postId: post.id, authorId: author.id, body: `동시 ${String(index)}` });
+              await tx.execute(sql`SELECT pg_sleep(0.05)`);
+            }),
+          ),
+        );
+        expect(await kept(post.id)).toBe(WRITERS);
+        const ids = await t.db
+          .select({ id: postComments.id })
+          .from(postComments)
+          .where(eq(postComments.postId, post.id));
+        await Promise.all(
+          ids.map(({ id }, index) =>
+            pool.transaction(async (tx) => {
+              await tx
+                .update(postComments)
+                .set(index % 2 === 0 ? { deletedAt: sql`now()` } : { hiddenAt: sql`now()` })
+                .where(eq(postComments.id, id));
+              await tx.execute(sql`SELECT pg_sleep(0.05)`);
+            }),
+          ),
+        );
+        expect(await kept(post.id)).toBe(0);
+      } finally {
+        await closeDb(pool);
+      }
+    });
+
+    it('goes with its post, refuses a count gone wrong, and empties with the comments’ TRUNCATE', async () => {
+      const { author, post } = await postFixture();
+      const shown = await createComment(t.db, { postId: post.id, authorId: author.id });
+      await createComment(t.db, { postId: post.id, authorId: author.id, deletedAt: new Date() });
+      expect(await kept(post.id)).toBe(1);
+      // A post with comments cannot be removed; once they are (#184), it goes and its row with it.
+      await expect(t.db.delete(posts).where(eq(posts.id, post.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      await t.db.delete(postComments).where(eq(postComments.postId, post.id));
+      expect(await t.db.select().from(postCommentCounts)).toEqual([{ postId: post.id, count: 0 }]);
+      await t.db.delete(posts).where(eq(posts.id, post.id));
+      expect(await t.db.select().from(postCommentCounts)).toEqual([]);
+      expect(shown.postId).toBe(post.id);
+
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        // A count whose row went missing (the owner removed it) is not quietly left wrong: a
+        // comment of that post leaving the view is refused.
+        const second = await postFixture();
+        const lost = await createComment(t.db, {
+          postId: second.post.id,
+          authorId: second.author.id,
+        });
+        await owner.delete(postCommentCounts).where(eq(postCommentCounts.postId, second.post.id));
+        await expect(setComment(lost.id, { deletedAt: new Date() })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23000' && errorMessage(e).includes('never kept'),
+        );
+        // A count kept when the comments are emptied (Codex review on PR #220: the TRUNCATE
+        // found the table empty, so it held without the statement trigger). `post_comments`'
+        // CASCADE reaches post_comment_revisions only — the counts are the posts'.
+        const third = await postFixture();
+        await createComment(t.db, { postId: third.post.id, authorId: third.author.id });
+        expect(await t.db.select().from(postCommentCounts)).toEqual([
+          { postId: third.post.id, count: 1 },
+        ]);
+        await owner.execute(sql`TRUNCATE post_comments CASCADE`);
+        expect(await t.db.select().from(postCommentCounts)).toEqual([]);
+      } finally {
+        await closeDb(owner);
+      }
     });
   });
 

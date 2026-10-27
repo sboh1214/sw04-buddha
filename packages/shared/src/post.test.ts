@@ -155,8 +155,26 @@ describe('the public shapes', () => {
         market,
         createdAt,
         editedAt: null,
+        commentCount: 3,
       }).success,
     ).toBe(true);
+    // The comment count (#48) is a count: a whole number, never below zero.
+    for (const commentCount of [-1, 1.5, undefined]) {
+      expect(
+        postSummarySchema.safeParse({
+          id: MARKET,
+          title: null,
+          excerpt: '근거',
+          thumbnailUrl: null,
+          author,
+          market,
+          createdAt,
+          editedAt: null,
+          commentCount,
+        }).success,
+        String(commentCount),
+      ).toBe(false);
+    }
     expect(
       postSchema.safeParse({
         state: 'published',
@@ -167,13 +185,15 @@ describe('the public shapes', () => {
         market,
         createdAt,
         editedAt: createdAt,
+        commentCount: 0,
       }).success,
     ).toBe(true);
     for (const state of ['deleted', 'hidden'] as const) {
-      expect(postSchema.parse({ state, id: MARKET, market })).toEqual({
+      expect(postSchema.parse({ state, id: MARKET, market, commentCount: 2 })).toEqual({
         state,
         id: MARKET,
         market,
+        commentCount: 2,
       });
     }
     expect(postDeletionSchema.parse({ id: MARKET, placeholder: false }).placeholder).toBe(false);

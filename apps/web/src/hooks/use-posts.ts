@@ -117,13 +117,17 @@ export interface DeletePostVariables {
 }
 
 /**
- * A refused write's side effects, shared by the three and the image upload (`postImageUploader`):
- * the cookie as another account asks for the session again (`onSessionChanged`, SessionCacheGuard
- * then shows who is signed in), and a refusal for the onboarding reads `['me']` again, so the
- * onboarding gate takes the account to its step — and the form, going, keeps its draft in this tab
- * (hooks/use-post-draft.ts, 오너 결정 2026-10-20).
+ * A refused write's side effects, shared by the post writes, the image upload (`postImageUploader`)
+ * and the comment writes (use-comments.ts): the cookie as another account asks for the session
+ * again (`onSessionChanged`, SessionCacheGuard then shows who is signed in), and a refusal for the
+ * onboarding reads `['me']` again, so the onboarding gate takes the account to its step — and a
+ * post form, going, keeps its draft in this tab (hooks/use-post-draft.ts, 오너 결정 2026-10-20).
  */
-async function afterRefusal(queryClient: QueryClient, error: Error, onSessionChanged: () => void) {
+export async function afterRefusal(
+  queryClient: QueryClient,
+  error: Error,
+  onSessionChanged: () => void,
+) {
   if (isForAnotherAccount(error)) onSessionChanged();
   if (isApiError(error, 'ONBOARDING_REQUIRED')) {
     await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });

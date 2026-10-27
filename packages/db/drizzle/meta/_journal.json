@@ -239,6 +239,13 @@
       "when": 1792400170658,
       "tag": "0033_posts",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1792401447557,
+      "tag": "0034_post_comments",
+      "breakpoints": true
     }
   ]
 }

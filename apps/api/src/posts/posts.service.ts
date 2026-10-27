@@ -23,6 +23,11 @@ import {
   type SanitizedPostDocument,
 } from '@buddha/shared';
 import { type AnyColumn, type SQL, and, desc, eq, ilike, inArray, isNull, sql } from 'drizzle-orm';
+import {
+  postHasComments,
+  postHasCommentsSql,
+  visibleCommentCountSql,
+} from '../comments/comment-queries.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -32,7 +37,6 @@ import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { type Page } from '../wallet/wallet.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
-type Executor = Db | Tx;
 
 /** What a post write sends, the body normalised by `postDocumentInputSchema`. */
 export interface PostContent {
@@ -106,11 +110,13 @@ function postMarketOf(row: {
 }
 
 /**
- * What the public sees of a post (#45-5), by its times and whether replies hang under it:
- * `published`; `deleted` — the author deleted it and replies hang under it, the placeholder
- * '삭제된 글입니다' with the author hidden; `gone` — deleted with nothing under it, out of every
- * view; `hidden` — an operator hid it, '운영 정책에 따라 숨긴 글입니다'. The author's deletion
- * comes first: a hidden post its author deleted is deleted.
+ * What the public sees of a post (#45-5), by its times and whether anything hangs under it — for
+ * a post, comments not deleted (hidden ones too, `postHasComments`): `published`; `deleted` — the
+ * author deleted it and such comments hang under it, the placeholder '삭제된 글입니다' with the
+ * author hidden; `gone` — deleted with nothing under it, out of every view; `hidden` — an operator
+ * hid it, '운영 정책에 따라 숨긴 글입니다'. The author's deletion comes first: a hidden post its
+ * author deleted is deleted. A comment (#48) is seen the same way, its 대댓글 not deleted being
+ * what hangs under a 댓글 (a 대댓글 has none, so a deleted one is gone).
  */
 export function publicStateOf(
   post: { deletedAt: Date | null; hiddenAt: Date | null },
@@ -130,7 +136,10 @@ export function publicStateOf(
 export class PostsService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
-  /** The columns both public reads select: the post, its author's public face, its market. */
+  /**
+   * The columns both public reads select: the post, its author's public face, its market, and how
+   * many comments it shows (#48).
+   */
   private readonly columns = {
     id: schema.posts.id,
     title: schema.posts.title,
@@ -153,6 +162,7 @@ export class PostsService {
       categorySlug: schema.categories.slug,
       categoryNameKo: schema.categories.nameKo,
     },
+    commentCount: visibleCommentCountSql(schema.posts.id),
   };
 
   /**
@@ -202,6 +212,7 @@ export class PostsService {
         market: postMarketOf(row.market),
         createdAt: row.createdAt.toISOString(),
         editedAt: row.editedAt?.toISOString() ?? null,
+        commentCount: row.commentCount,
       })),
       nextCursor: hasMore && last ? encodeKeyset({ createdAt: last.createdAt, id: last.id }) : null,
     };
@@ -214,7 +225,7 @@ export class PostsService {
   async get(postId: string): Promise<Post> {
     const { posts, profiles, markets, categories } = schema;
     const [row] = await this.db
-      .select({ ...this.columns, body: posts.body })
+      .select({ ...this.columns, body: posts.body, hasComments: postHasCommentsSql(posts.id) })
       .from(posts)
       .innerJoin(profiles, eq(profiles.userId, posts.authorId))
       .innerJoin(markets, eq(markets.id, posts.marketId))
@@ -222,14 +233,15 @@ export class PostsService {
       .where(eq(posts.id, postId))
       .limit(1);
     if (!row) throw postNotFound();
-    const state = publicStateOf(row, await this.hasReplies(this.db, row.id));
+    const state = publicStateOf(row, row.hasComments);
     const market = postMarketOf(row.market);
+    const { commentCount } = row;
     switch (state) {
       case 'gone':
         throw postNotFound();
       case 'deleted':
       case 'hidden':
-        return { state, id: row.id, market };
+        return { state, id: row.id, market, commentCount };
       case 'published':
         return {
           state,
@@ -240,6 +252,7 @@ export class PostsService {
           market,
           createdAt: row.createdAt.toISOString(),
           editedAt: row.editedAt?.toISOString() ?? null,
+          commentCount,
         };
     }
   }
@@ -329,10 +342,13 @@ export class PostsService {
   /**
    * `POST /posts/:postId/delete`: the author deletes the post (#45-5), a hidden one too. Its
    * content stays for operators (and #184's retention); the public sees the placeholder while
-   * replies hang under it and nothing otherwise — never restored. A second deletion is NOT_FOUND.
+   * comments hang under it and nothing otherwise — never restored. A second deletion is NOT_FOUND.
    * It never passes `checkWriter`: deleting one's own post asks for a session and nothing more — not
    * the onboarding, not a consent a revision asks for again (owner decision 2026-10-19, ADR-0073),
    * and not #185's 작성 제한 either (#45-12: 자기 글 삭제는 제재 중에도 할 수 있다).
+   * The post's row lock (`lockOwnPost`) waits for a comment being written under it, which holds
+   * the row shared (CommentsService), so the answer counts that comment, and no comment lands
+   * under the post once the deletion commits.
    */
   async delete(authorId: string, postId: string): Promise<PostDeletion> {
     return this.db.transaction(async (tx) => {
@@ -341,7 +357,7 @@ export class PostsService {
         .update(schema.posts)
         .set({ deletedAt: sql`now()` })
         .where(eq(schema.posts.id, postId));
-      return { id: postId, placeholder: await this.hasReplies(tx, postId) };
+      return { id: postId, placeholder: await postHasComments(tx, postId) };
     });
   }
 
@@ -355,14 +371,6 @@ export class PostsService {
    */
   private async checkWriter(tx: Tx, authorId: string): Promise<void> {
     await assertOnboarded(tx, authorId);
-  }
-
-  /**
-   * Whether replies hang under a post, which keeps a deleted post as a placeholder (#45-5). There
-   * are none before the comments (#48), which answers it here.
-   */
-  private hasReplies(_executor: Executor, _postId: string): Promise<boolean> {
-    return Promise.resolve(false);
   }
 
   /**

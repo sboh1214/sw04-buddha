@@ -40,6 +40,10 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // The upload is understood and refused for what it is (#45-3): not an allowed image, too large,
   // too many pixels or undecodable.
   IMAGE_NOT_ALLOWED: HttpStatus.UNPROCESSABLE_ENTITY,
+  // Where the comment would go refuses it (a hidden or deleted post or 댓글, #45-5), or the
+  // comment's state refuses the edit (hidden by an operator): conflicts with that state.
+  COMMENT_NOT_ALLOWED: HttpStatus.CONFLICT,
+  COMMENT_NOT_EDITABLE: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

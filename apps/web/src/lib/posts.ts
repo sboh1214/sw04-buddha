@@ -12,6 +12,7 @@ import {
   type Post,
   type PostAuthor,
   type PostSummary,
+  type PublishedPost,
   isApiError,
   isApiUnreachable,
   isForAnotherAccount,
@@ -32,8 +33,8 @@ import { firstValue } from './market-ssr';
  * in the title and the text (#45-7); anyone reads, signed in or not, and an account that finished
  * the onboarding writes (#57-8). A card is the title, two lines of the text without formatting, a
  * small square thumbnail of the first image, the author, the time and the market's title (owner
- * decision 2026-10-18); the comment and like counts come with #48 and #49 and are not drawn
- * before them.
+ * decision 2026-10-18) and the comment count (#48, lib/comments.ts); the like count comes with #49
+ * and is not drawn before it.
  */
 
 /** The community list's address (N02 §2: one of the three top-level areas, #16). */
@@ -356,9 +357,9 @@ export function isOwnPost(author: PostAuthor, viewerPublicId: string | undefined
 }
 
 /**
- * What a post page shows instead of a post (#45-5): '삭제된 글입니다' for a deleted post replies
- * still hang under (none before #48) and '운영 정책에 따라 숨긴 글입니다' for a hidden one — never
- * the author or a word of the post, only its market.
+ * What a post page shows instead of a post (#45-5): '삭제된 글입니다' for a deleted post comments
+ * still hang under (#48) and '운영 정책에 따라 숨긴 글입니다' for a hidden one — never the author or
+ * a word of the post, only its market and its comments.
  */
 export function postPlaceholderMessage(state: Exclude<PostState, 'published'>): string {
   return state === 'deleted' ? copy.postDeletedPlaceholder : copy.postHiddenPlaceholder;
@@ -379,16 +380,35 @@ export function postGoneAfter(gone: boolean, read: { isError: boolean; error: un
 }
 
 /**
- * An edit screen whose post left every view (오너 결정 2026-10-24, ADR-0073 9-52): what it draws.
- * The form keeps what the writer had in it — the title and the body, which they can select and
- * copy but no longer change — with '없거나 삭제된 글입니다.' and 닫기, until they close it (`held`);
- * then, and at once when the form held nothing of theirs, the screen is the server's 404. The rule
- * of #48's comment boxes (ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답 1·2): a box going
- * with a changed text is held with why until it is closed, the page's 404 waits for it, and one
- * holding nothing of the writer's is not.
+ * Whether a read has put a deleted post's placeholder in place of the post an edit screen had
+ * published (`published`, what its form was drawn from) — deleted in another tab while comments
+ * still hang under it (#48, ADR-0074 7-35). The API answers that read with the placeholder (#45-5:
+ * '삭제된 글입니다' stays at the address with its comments), not NOT_FOUND, so `postGoneAfter` does
+ * not hear it, while a save is refused as NOT_FOUND all the same (only a published post is edited):
+ * the post is deleted under the form as the owner's answer of 2026-10-24 means it (ADR-0073 9-52),
+ * and the screen keeps what its form held the same way (`postEditGoneAfter`). Never undone: a
+ * deleted post is not restored, and a later read answers the placeholder or NOT_FOUND. A screen
+ * opened on the placeholder had no post published, and shows the placeholder as before.
+ */
+export function postEditDeleted(published: PublishedPost | undefined, read: Post): boolean {
+  return published !== undefined && read.state === 'deleted';
+}
+
+/**
+ * An edit screen whose post left every view (오너 결정 2026-10-24, ADR-0073 9-52) — or stands as its
+ * placeholder, deleted with comments under it (#48, `postEditDeleted`): what it draws. The form
+ * keeps what the writer had in it — the title and the body, which they can select and copy but no
+ * longer change — with '없거나 삭제된 글입니다.' and 닫기, until they close it (`held`); then, and at
+ * once when the form held nothing of theirs, the screen is the server's page as a reload draws it:
+ * the 404, or the placeholder's '삭제된 글입니다.'. The rule of #48's comment boxes (ADR-0074, 오너
+ * 결정 2026-10-20 답 4, 2026-10-21 답 1·2): a box going with a changed text is held with why until
+ * it is closed, the page's 404 waits for it, and one holding nothing of the writer's is not.
  */
 export interface PostEditGone {
-  /** The post left every view (`postGoneAfter`): no later read brings it back. */
+  /**
+   * The post left every view (`postGoneAfter`), or a read put its placeholder in its place
+   * (`postEditDeleted`): no later read brings it back.
+   */
   gone: boolean;
   /** The form is on screen holding what the writer had in it, until they close it. */
   held: boolean;
@@ -396,13 +416,13 @@ export interface PostEditGone {
 
 /**
  * The edit screen's `PostEditGone` once `now` is heard: whether a read says the post is gone
- * (`postGoneAfter`), and whether the form holds something of the writer's (`formHolding`, the
- * form's own word as of its last render — a changed title or body, a draft taken back, an upload on
- * its way, and no save that landed: what leaving would lose). Held is decided as the post goes, by
- * what the form held then, and is never taken up later; it ends when the writer closes it, or when
- * the form leaves the screen under it (the session gone in another tab, say: the gate's sign-in
- * prompt in its place) — there is nothing left on screen to hold. The same object when nothing
- * changes.
+ * (`postGoneAfter`, `postEditDeleted`), and whether the form holds something of the writer's
+ * (`formHolding`, the form's own word as of its last render — a changed title or body, a draft
+ * taken back, an upload on its way, and no save that landed: what leaving would lose). Held is
+ * decided as the post goes, by what the form held then, and is never taken up later; it ends when
+ * the writer closes it, or when the form leaves the screen under it (the session gone in another
+ * tab, say: the gate's sign-in prompt in its place) — there is nothing left on screen to hold. The
+ * same object when nothing changes.
  */
 export function postEditGoneAfter(
   state: PostEditGone,

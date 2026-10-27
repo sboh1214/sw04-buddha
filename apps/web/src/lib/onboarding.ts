@@ -100,15 +100,16 @@ export interface OnboardingExemptPage {
 
 /**
  * The pages exempt for a login-only action. Later issues add theirs here: #77 the proposal list
- * (`/my/proposals`, withdrawing a proposal), and #48's comment deletion lives on the post page
- * already. ADR-0061's watchlist is not one: its server asks for a session alone, and its screens
- * keep the onboarding prompt (#89 — the owner wrote the screen in).
+ * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
+ * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx).
+ * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
+ * onboarding prompt (#89 — the owner wrote the screen in).
  */
 export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
   {
     route: '/community/posts/[postId]',
     reason:
-      'an author facing a re-consent deletes their own post with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46); its edit entry goes to the step',
+      'an author facing a re-consent deletes their own post and their own comments with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46, #48); its edit entry and its comment writes go to the step',
   },
 ];
 

@@ -24,14 +24,17 @@ export async function generateMetadata({
 
 /**
  * A post page (#46, ADR-0073): the whole post — title, byline, body, its market — or the
- * placeholder of a hidden post and of a deleted one replies hang under (#45-5), and 404 for a
- * deleted post with nothing under it, which is gone (the API answers NOT_FOUND, as for an address
- * that never was a post). Public (N05 §2).
+ * placeholder of a hidden post and of a deleted one that comments not deleted (hidden ones too)
+ * still hang under (#45-5), and 404 for a deleted post with none, which is gone (the API answers
+ * NOT_FOUND, as for an address that never was a post). Public (N05 §2).
  *
  * The post is read here, once, and seeded under its key, so the HTML carries the post and the
- * client component follows the cache from there (an edit writes the new post into it). Nothing
- * personal is read: whether the viewer wrote it — and so 수정 and 삭제 — is decided in the browser
- * once `GET /me` has answered.
+ * client component follows the cache from there (an edit writes the new post into it). Its
+ * comments are not (오너 결정 2026-10-21, ADR-0074): the browser reads them, held to the per-address
+ * limit as every reader's request is — the web's own requests to the API are not, and a page any
+ * visitor can have drawn must not read what a thread holds. Nothing personal is read: whether the
+ * viewer wrote it or a comment — and so 수정 and 삭제 — is decided in the browser once `GET /me` has
+ * answered.
  */
 export default async function PostPage({ params }: { params: Promise<{ postId: string }> }) {
   const { postId } = await params;

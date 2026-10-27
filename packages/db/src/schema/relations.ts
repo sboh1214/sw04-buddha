@@ -28,6 +28,7 @@ import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
 import { phoneVerificationCodes, phoneVerifications } from './phone-verifications.js';
 import { positions } from './positions.js';
+import { postCommentRevisions, postComments } from './post-comments.js';
 import { postImages, postRevisions, posts } from './posts.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
@@ -156,6 +157,27 @@ export const postsRelations = relations(posts, ({ one, many }) => ({
   author: one(user, { fields: [posts.authorId], references: [user.id] }),
   revisions: many(postRevisions),
   images: many(postImages),
+  comments: many(postComments),
+}));
+
+export const postCommentsRelations = relations(postComments, ({ one, many }) => ({
+  post: one(posts, { fields: [postComments.postId], references: [posts.id] }),
+  author: one(user, { fields: [postComments.authorId], references: [user.id] }),
+  // A 대댓글's 댓글 and a 댓글's 대댓글 (#45-2): the two ends of `post_comments_parent_fk`.
+  parent: one(postComments, {
+    fields: [postComments.parentId],
+    references: [postComments.id],
+    relationName: 'post_comment_parent',
+  }),
+  replies: many(postComments, { relationName: 'post_comment_parent' }),
+  revisions: many(postCommentRevisions),
+}));
+
+export const postCommentRevisionsRelations = relations(postCommentRevisions, ({ one }) => ({
+  comment: one(postComments, {
+    fields: [postCommentRevisions.commentId],
+    references: [postComments.id],
+  }),
 }));
 
 export const postRevisionsRelations = relations(postRevisions, ({ one }) => ({
@@ -284,6 +306,7 @@ export const userRelations = relations(user, ({ one, many }) => ({
   searches: many(marketSearches),
   marketLinks: many(marketLinks),
   posts: many(posts),
+  postComments: many(postComments),
   media: many(mediaObjects),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),

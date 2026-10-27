@@ -7,6 +7,7 @@ export * from './api/uuid.js';
 export * from './approvals.js';
 export * from './auth.js';
 export * from './charge-package.js';
+export * from './comment.js';
 export * from './consent.js';
 export * from './coupon.js';
 export * from './api/errors.js';

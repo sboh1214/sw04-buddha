@@ -4,6 +4,7 @@ import { AdminAccountsModule } from './admin-accounts/admin-accounts.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { ApprovalsModule } from './approvals/approvals.module.js';
 import { AuthModule } from './auth/auth.module.js';
+import { CommentsModule } from './comments/comments.module.js';
 import { CommonModule } from './common/common.module.js';
 import { envFilePaths, envSchema } from './config/env.js';
 import { HealthController } from './health/health.controller.js';
@@ -67,6 +68,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // show (upload, public read, the media store). After the onboarding, whose guard they use.
     PostsModule,
     MediaModule,
+    // 댓글·대댓글 (#48): a post's comments and their authors' writes. After the posts, whose
+    // routes it follows in the document, and the onboarding, whose guard it uses.
+    CommentsModule,
   ],
   controllers: [HealthController],
 })
