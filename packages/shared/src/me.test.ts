@@ -1,19 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { meSchema, nicknameSchema, updateMeBodySchema } from './me.js';
-
-describe('nicknameSchema', () => {
-  it('accepts Hangul, letters, digits and underscore within 2..20 chars', () => {
-    for (const ok of ['user_A7K2', '홍길동', 'user01', 'ab', '가'.repeat(20)]) {
-      expect(nicknameSchema.safeParse(ok).success).toBe(true);
-    }
-  });
-
-  it('rejects length and charset violations', () => {
-    for (const bad of ['a', '가'.repeat(21), 'hello world', 'nick-name', '닉네임!', '']) {
-      expect(nicknameSchema.safeParse(bad).success).toBe(false);
-    }
-  });
-});
+import { meSchema, updateMeBodySchema } from './me.js';
 
 describe('meSchema', () => {
   const sample = {
@@ -25,6 +11,8 @@ describe('meSchema', () => {
       role: 'user',
       createdAt: '2026-09-03T00:00:00.000Z',
       timeZone: null,
+      nicknameChangeAvailableAt: null,
+      interestCategoryIds: [],
     },
     balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [
@@ -37,6 +25,15 @@ describe('meSchema', () => {
     ],
     verification: null,
     startGrant: null,
+    onboarding: {
+      consent: false,
+      verification: false,
+      nickname: false,
+      completed: false,
+      interests: false,
+      nextStep: 'consent',
+      consents: [],
+    },
   };
 
   it('parses a complete /me payload', () => {
@@ -64,7 +61,7 @@ describe('meSchema', () => {
     expect(meSchema.safeParse(withoutVerification).success).toBe(false);
   });
 
-  it('carries the start grant, pending with no amount or granted with both (#70)', () => {
+  it('carries the start grant: pending, granted with an amount, or the number already used (#70, #58)', () => {
     const pending = {
       ...sample,
       startGrant: { status: 'pending', amountCoin: null, grantedAt: null },
@@ -79,6 +76,12 @@ describe('meSchema', () => {
       },
     };
     expect(meSchema.parse(granted)).toEqual(granted);
+    // #58 (오너 결정 2026-10-19): the account's number's start Coin is another account's.
+    const numberUsed = {
+      ...sample,
+      startGrant: { status: 'number_used', amountCoin: null, grantedAt: null },
+    };
+    expect(meSchema.parse(numberUsed)).toEqual(numberUsed);
     expect(
       meSchema.safeParse({ ...sample, startGrant: { ...granted.startGrant, status: 'paid' } })
         .success,
@@ -101,8 +104,51 @@ describe('meSchema', () => {
     ).toBe(false);
   });
 
-  it('validates PATCH /me bodies', () => {
-    expect(updateMeBodySchema.parse({ nickname: '새이름' })).toEqual({ nickname: '새이름' });
-    expect(updateMeBodySchema.safeParse({ nickname: 'x' }).success).toBe(false);
+  it('carries the onboarding, the next change of the nickname and the interests (#58)', () => {
+    const onboarded = {
+      ...sample,
+      profile: {
+        ...sample.profile,
+        nicknameChangeAvailableAt: '2026-11-17T00:00:00.000Z',
+        interestCategoryIds: [1, 7],
+      },
+      onboarding: {
+        consent: true,
+        verification: true,
+        nickname: true,
+        completed: true,
+        interests: true,
+        nextStep: null,
+        consents: [
+          {
+            item: 'terms',
+            version: 'draft-2026-10-18',
+            agreed: true,
+            recordedAt: '2026-10-18T00:00:00.000Z',
+          },
+        ],
+      },
+    };
+    expect(meSchema.parse(onboarded)).toEqual(onboarded);
+    const { onboarding: _dropped, ...withoutOnboarding } = sample;
+    expect(meSchema.safeParse(withoutOnboarding).success).toBe(false);
+    expect(
+      meSchema.safeParse({ ...sample, onboarding: { ...sample.onboarding, nextStep: 'grant' } })
+        .success,
+    ).toBe(false);
+  });
+
+  it('validates PATCH /me bodies: the nickname and the account the screen shows', () => {
+    expect(updateMeBodySchema.parse({ nickname: '새이름', expectedAccountId: 'u1' })).toEqual({
+      nickname: '새이름',
+      expectedAccountId: 'u1',
+    });
+    expect(updateMeBodySchema.safeParse({ nickname: 'x', expectedAccountId: 'u1' }).success).toBe(
+      false,
+    );
+    expect(updateMeBodySchema.safeParse({ nickname: '새이름' }).success).toBe(false);
+    expect(
+      updateMeBodySchema.safeParse({ nickname: '새이름', expectedAccountId: '' }).success,
+    ).toBe(false);
   });
 });

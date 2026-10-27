@@ -23,6 +23,7 @@ import { SocialButtons } from '@/components/auth/social-buttons';
 import { PasswordInput } from '@/components/ui/password-input';
 import { copy } from '@/copy';
 import { AUTH_ERROR, authClient, authErrorMessage, signIn } from '@/lib/auth-client';
+import { nextQuery } from '@/lib/next-path';
 
 const schema = z.object({
   email: z.email(copy.errEmailInvalid),
@@ -91,7 +92,9 @@ export function LoginForm({ next, notice }: { next: string; notice?: string | un
               <Text fontSize="xs" color="fg.subtle">
                 {copy.loginResendHint}{' '}
                 <Link asChild colorPalette="brand" color="colorPalette.fg">
-                  <NextLink href="/signup">{copy.signup}</NextLink>
+                  <NextLink href={{ pathname: '/signup', query: nextQuery(next) }}>
+                    {copy.signup}
+                  </NextLink>
                 </Link>
               </Text>
               {/* The other half of ADR-0024: verified but never got as far as a password.
@@ -142,7 +145,7 @@ export function LoginForm({ next, notice }: { next: string; notice?: string | un
       <Text fontSize="sm" color="fg.muted" textAlign="center">
         {copy.noAccountYet}{' '}
         <Link asChild colorPalette="brand" color="colorPalette.fg" fontWeight="medium">
-          <NextLink href="/signup">{copy.signup}</NextLink>
+          <NextLink href={{ pathname: '/signup', query: nextQuery(next) }}>{copy.signup}</NextLink>
         </Link>
       </Text>
     </Stack>

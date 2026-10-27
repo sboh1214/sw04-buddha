@@ -8,7 +8,12 @@
  * published. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { createCategory, createMarket, createSettlementStep } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createCategory,
+  createMarket,
+  createSettlementStep,
+} from '@buddha/db/test';
 import {
   marketChannel,
   marketCloseJobId,
@@ -74,6 +79,8 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
   });

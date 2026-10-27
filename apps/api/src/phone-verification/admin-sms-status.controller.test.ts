@@ -8,7 +8,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { createUser } from '@buddha/db/test';
+import { completeOnboarding, createConsents, createUser } from '@buddha/db/test';
 import { adminSmsStatusSchema, errorEnvelopeSchema, type AdminSmsStatus } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -51,6 +51,9 @@ describe.skipIf(!hasTestInfra)('SMS 발송 현황 /api/v1/admin/sms/status (inte
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072); its
+    // 본인확인 record comes with no send, so the counts below start at zero.
+    await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
@@ -61,13 +64,16 @@ describe.skipIf(!hasTestInfra)('SMS 발송 현황 /api/v1/admin/sms/status (inte
     expect(res.statusCode, res.body).toBe(200);
     return adminSmsStatusSchema.parse(res.json<{ data: unknown }>().data);
   };
-  const requestCode = (as: TestUser, phone: string) =>
-    t.app.inject({
+  /** A code request through the API, by an account past the consent step it needs first (#58). */
+  const requestCode = async (as: TestUser, phone: string) => {
+    await createConsents(t.db, { userId: as.id });
+    return t.app.inject({
       method: 'POST',
       url: '/api/v1/me/phone-verification/code',
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: as.cookie },
       payload: JSON.stringify({ realName: '홍길동', phone, expectedAccountId: as.id }),
     });
+  };
 
   /** A recorded send of `userId` at `ms` (epoch), with what the provider said of it. */
   async function send(userId: string, ms: number, sendOutcome: 'accepted' | 'unknown') {

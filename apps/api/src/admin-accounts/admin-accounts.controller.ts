@@ -20,6 +20,7 @@ import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { AdminAccountsService } from './admin-accounts.service.js';
 
@@ -27,7 +28,8 @@ import { AdminAccountsService } from './admin-accounts.service.js';
  * Admin accounts (#171): the admins, a grant and a revoke with a reason (recorded), and the
  * record of both. Guards run in order: SessionGuard fills `request.auth` (401 without a session,
  * 403 for a foreign Origin on a mutation), AdminGuard reads the role (403 for a member) — the
- * records included (N04 §6: every admin may read them, owner decision 2026-10-13).
+ * records included (N04 §6: every admin may read them, owner decision 2026-10-13) — and
+ * OnboardedGuard refuses an admin that has not finished the onboarding (409, ADR-0072).
  *
  * A grant and a revoke name the admin the screen shows (`expectedAccountId`,
  * assertExpectedAccount): a mismatch with the cookie is refused before anything is read or
@@ -38,7 +40,7 @@ import { AdminAccountsService } from './admin-accounts.service.js';
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('admin/admins')
-@UseGuards(SessionGuard, AdminGuard)
+@UseGuards(SessionGuard, AdminGuard, OnboardedGuard)
 export class AdminAccountsController {
   constructor(private readonly accounts: AdminAccountsService) {}
 
@@ -48,7 +50,7 @@ export class AdminAccountsController {
     summary: 'Every account that holds the admin role now, with its latest grant',
   })
   @ApiData(adminAccountSchema.array())
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED')
   list(): Promise<AdminAccount[]> {
     return this.accounts.list();
   }
@@ -60,7 +62,7 @@ export class AdminAccountsController {
       'Admin grants and revokes, newest first: account, admin, reason and time (of one account with `userId`)',
   })
   @ApiPageOf(adminRoleChangeSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async listChanges(
     @Query({ schema: adminRoleChangeListQuerySchema }) query: AdminRoleChangeListQuery,
   ): Promise<ApiPage<AdminRoleChange>> {
@@ -85,6 +87,7 @@ export class AdminAccountsController {
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
     'NOT_FOUND',
     'VALIDATION_ERROR',
     'ROLE_CHANGE_NOT_ALLOWED',
@@ -111,6 +114,7 @@ export class AdminAccountsController {
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
     'NOT_FOUND',
     'VALIDATION_ERROR',
     'ROLE_CHANGE_NOT_ALLOWED',

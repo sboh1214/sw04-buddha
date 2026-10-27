@@ -62,14 +62,32 @@ export class MeController {
     return { ok: true };
   }
 
+  /**
+   * MY 설정's nickname change (#58, ADR-0069 decision 1 #57-6): once in 30 days after the
+   * onboarding, never the auto nickname's prefix or a reserved word, nor a nickname another
+   * account has (ignoring case) or gave up less than 30 days ago. The body names the account the
+   * screen shows (`expectedAccountId`): a change a month is too dear to spend on the account another
+   * tab signed in as, which the cookie-only write of A-PG-24 would have renamed.
+   */
   @Patch()
   @ApiOperation({ operationId: 'updateMe', summary: 'Change nickname' })
   @ApiData(meSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  // FORBIDDEN: a mutation whose Origin is not ours, or a body whose `expectedAccountId` is not the
+  // cookie's account (nothing written). ONBOARDING_REQUIRED: the onboarding's nickname step is not
+  // done — the nickname is set there. NICKNAME_NOT_ALLOWED: the rules and the interval.
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
+    'NICKNAME_NOT_ALLOWED',
+  )
   updateMe(
     @CurrentUser() user: SessionUser,
     @Body({ schema: updateMeBodySchema }) body: UpdateMeBody,
   ): Promise<Me> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
     return this.me.updateNickname(user.id, body.nickname);
   }
 

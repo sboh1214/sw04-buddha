@@ -9,7 +9,7 @@
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { schema } from '@buddha/db';
-import { createPhoneVerification } from '@buddha/db/test';
+import { completeOnboarding, createPhoneVerification } from '@buddha/db/test';
 import { type AdminAccount, type AdminRoleChange } from '@buddha/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
@@ -55,6 +55,8 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, user.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: user.id });
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(user.id);
   }
@@ -62,10 +64,15 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
   async function verifyPhone(userId: string) {
     await createPhoneVerification(t.db, { userId });
   }
-  /** A member ready for a grant: its email verified (the sign-up does it) and its phone. */
+  /**
+   * A member ready for a grant: its email verified (the sign-up does it) and its phone — and the
+   * rest of its onboarding done, so that once an admin it may use the admin surface (/admin asks
+   * for the onboarding after the role, ADR-0072; admin-access.test.ts pins the 409 without it).
+   */
   async function candidate() {
     const user = await signUpTestUser(t);
     await verifyPhone(user.id);
+    await completeOnboarding(t.db, { userId: user.id });
     return user;
   }
 

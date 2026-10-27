@@ -4,6 +4,7 @@ import {
   adminLoginPath,
   loginPathBackTo,
   loginPathBackToPage,
+  nextQuery,
   safeNextPath,
 } from './next-path';
 
@@ -77,5 +78,31 @@ describe('loginPathBackToPage', () => {
     for (const value of ['https://evil.example/?watchlist=1', '//evil.example', '/\\evil']) {
       expect(next(loginPathBackToPage(value)), value).toBe('/');
     }
+  });
+});
+
+describe('nextQuery', () => {
+  it('carries the page a sign-up starts from, query string included (#58, #57-9)', () => {
+    expect(nextQuery('/markets/btc-100k')).toEqual({ next: '/markets/btc-100k' });
+    expect(nextQuery('/?category=economy&sort=newest')).toEqual({
+      next: '/?category=economy&sort=newest',
+    });
+  });
+
+  it('carries nothing for home, an auth screen, or a value that is not a path here', () => {
+    for (const value of [
+      '/',
+      '/login',
+      '/signup',
+      '/set-password',
+      '/reset-password/confirm',
+      '/onboarding?next=%2Fmy',
+      'https://evil.example',
+      '//evil.example',
+    ]) {
+      expect(nextQuery(value), value).toEqual({});
+    }
+    // A look-alike prefix is an ordinary page.
+    expect(nextQuery('/loginx')).toEqual({ next: '/loginx' });
   });
 });

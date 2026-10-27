@@ -12,7 +12,13 @@
  */
 import { createHash } from 'node:crypto';
 import { schema } from '@buddha/db';
-import { DEFAULT_RATE_LIMITS, RATE_LIMIT_BUCKETS, RATE_LIMIT_WINDOW_SECONDS } from '@buddha/shared';
+import {
+  CONSENT_ITEMS,
+  DEFAULT_RATE_LIMITS,
+  RATE_LIMIT_BUCKETS,
+  RATE_LIMIT_WINDOW_SECONDS,
+  currentConsentVersion,
+} from '@buddha/shared';
 import { eq } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -197,6 +203,56 @@ describe.skipIf(!hasTestInfra)('rate limits (integration)', () => {
       });
       expect(read.statusCode).toBe(200);
       expect((await record(other, '하나 더')).statusCode).toBe(200);
+    });
+  });
+
+  describe('POST /me/consents — 5 a minute per account (ADR-0072)', () => {
+    /**
+     * Not a PLAN 7.5 row: every changed answer is a consent record that stays (the app cannot
+     * rewrite one; they are kept for the retention period), and the optional marketing answer can
+     * be flipped at will. Counted per account, at the shipped number.
+     */
+    const answer = (as: TestUser, marketing: boolean) =>
+      t.app.inject({
+        method: 'POST',
+        url: '/api/v1/me/consents',
+        headers: { ...jsonHeaders, cookie: as.cookie },
+        payload: {
+          consents: Object.fromEntries(
+            CONSENT_ITEMS.map((item) => [
+              item,
+              {
+                version: currentConsentVersion(item),
+                agreed: item === 'marketing' ? marketing : true,
+              },
+            ]),
+          ),
+          expectedAccountId: as.id,
+        },
+      });
+    const rows = (as: TestUser) =>
+      t.db
+        .select({ id: schema.consentRecords.id })
+        .from(schema.consentRecords)
+        .where(eq(schema.consentRecords.userId, as.id));
+
+    it('refuses the 6th answer of the window, recording nothing, and counts each account apart', async () => {
+      const user = await signUpTestUser(t);
+      const other = await signUpTestUser(t);
+      expect(RATE_LIMIT_BUCKETS.consent).toEqual({ scope: 'user', limit: 5 });
+      for (let i = 0; i < DEFAULT_RATE_LIMITS.consent; i += 1) {
+        // The marketing answer flipped each time: every request after the first writes a row.
+        const allowed = await answer(user, i % 2 === 1);
+        expect([i, allowed.statusCode]).toEqual([i, 200]);
+      }
+      const recorded = (await rows(user)).length;
+      expect(recorded).toBe(CONSENT_ITEMS.length + DEFAULT_RATE_LIMITS.consent - 1);
+      const refused = await answer(user, DEFAULT_RATE_LIMITS.consent % 2 === 1);
+      expect(refused.statusCode).toBe(429);
+      const body: RefusalBody = refused.json();
+      expect(body.error.code).toBe('RATE_LIMITED');
+      expect(await rows(user)).toHaveLength(recorded);
+      expect((await answer(other, false)).statusCode).toBe(200);
     });
   });
 

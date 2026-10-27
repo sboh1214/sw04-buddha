@@ -41,6 +41,8 @@ describe('PRIVATE_DATA (#113)', () => {
         'watchlist',
         'search-history',
         'identity-verification',
+        'consent',
+        'former-nickname',
         'risk-flag',
         'author-holding',
         'market-maker',
@@ -114,6 +116,18 @@ describe('findPrivateField', () => {
     ['birthDate', 'identity-verification'],
     ['clientIp', 'identity-verification'],
     ['ip_address', 'identity-verification'],
+    ['consents', 'consent'],
+    ['consentedAt', 'consent'],
+    ['marketingConsent', 'consent'],
+    ['agreedAt', 'consent'],
+    ['userAgent', 'consent'],
+    ['user_agent', 'consent'],
+    ['previousNickname', 'former-nickname'],
+    ['nicknameHistory', 'former-nickname'],
+    ['nickname_changed_at', 'former-nickname'],
+    ['nicknameChangeAvailableAt', 'former-nickname'],
+    ['releasedNickname', 'former-nickname'],
+    ['nickname_holds', 'former-nickname'],
     ['passwordHash', 'auth-secret'],
     ['sessionToken', 'auth-secret'],
     ['riskFlags', 'risk-flag'],
@@ -196,6 +210,9 @@ describe('findPrivateField', () => {
     'searchable',
     'keyword',
     'research',
+    // A nickname on its own is public (an author's, #37-5's profile); only a former one is not.
+    'nickname',
+    'authorNickname',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

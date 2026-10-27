@@ -31,6 +31,14 @@ export type ConfirmPhoneVerificationBody = components['schemas']['ConfirmPhoneVe
 export type UpdateRealNameBody = components['schemas']['UpdateRealNameBody'];
 /** `PUT /me/time-zone` (ADR-0063): the zone, or null to follow the browser, and the account. */
 export type UpdateTimeZoneBody = components['schemas']['UpdateTimeZoneBody'];
+/** `PATCH /me`: the nickname and the account the screen shows (#58). */
+export type UpdateMeBody = components['schemas']['UpdateMeBody'];
+/** `POST /me/consents` (#58): every consent item at its current version, and the account. */
+export type RecordConsentsBody = components['schemas']['RecordConsentsBody'];
+/** `POST /me/onboarding/nickname` (#58): the nickname the step sets or confirms, and the account. */
+export type SetOnboardingNicknameBody = components['schemas']['SetOnboardingNicknameBody'];
+/** `PUT /me/interest-categories` (#58): the categories picked (none: the skip), and the account. */
+export type SetInterestCategoriesBody = components['schemas']['SetInterestCategoriesBody'];
 export type LedgerEntry = components['schemas']['LedgerEntry'];
 export type Payment = components['schemas']['Payment'];
 export type Balance = components['schemas']['Balance'];

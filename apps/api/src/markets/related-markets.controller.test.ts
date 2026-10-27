@@ -8,7 +8,13 @@
  * admin's list names who linked each market by nickname. Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
-import { createCategory, createFill, createMarket, createMarketLink } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createCategory,
+  createFill,
+  createMarket,
+  createMarketLink,
+} from '@buddha/db/test';
 import { type AdminRelatedMarket, type MarketSummary, relatedMarketPair } from '@buddha/shared';
 import { randomUUID } from 'node:crypto';
 import { asc, eq, inArray } from 'drizzle-orm';
@@ -49,6 +55,8 @@ describe.skipIf(!hasTestInfra)('related markets (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: admin.id });
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(admin.id);
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
@@ -485,6 +493,8 @@ describe.skipIf(!hasTestInfra)('related markets (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, other.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: other.id });
     await t.app.get(AdminGuard).invalidate(other.id);
     const hub = await market();
     const a = await market();

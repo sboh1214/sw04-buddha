@@ -36,6 +36,7 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { MarketAdminService } from './market-admin.service.js';
 import { RelatedMarketsService } from './related-markets.service.js';
@@ -43,12 +44,13 @@ import { RelatedMarketsService } from './related-markets.service.js';
 /**
  * Admin market CRUD and transitions (PLAN 7.3, 12; M3). Guards run in order: SessionGuard
  * fills `request.auth` (401 without a session, 403 for a foreign Origin on a mutation),
- * AdminGuard reads the role (403 for a member).
+ * AdminGuard reads the role (403 for a member), OnboardedGuard refuses an admin that has not
+ * finished the onboarding (409 ONBOARDING_REQUIRED, ADR-0072).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
 @Controller('admin/markets')
-@UseGuards(SessionGuard, AdminGuard)
+@UseGuards(SessionGuard, AdminGuard, OnboardedGuard)
 export class AdminMarketsController {
   constructor(
     private readonly markets: MarketAdminService,
@@ -65,7 +67,7 @@ export class AdminMarketsController {
   // No `@ApiQuery`: `adminMarketListQuerySchema` has no component id, so swagger expands it
   // into the cursor/limit/status/q parameters itself (see markets.controller.ts).
   @ApiPageOf(marketSummarySchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   async adminListMarkets(
     @Query({ schema: adminMarketListQuerySchema }) query: AdminMarketListQuery,
   ): Promise<ApiPage<MarketSummary>> {
@@ -84,7 +86,7 @@ export class AdminMarketsController {
     summary: 'The markets linked to this one, any status, the latest link first, with who linked',
   })
   @ApiData(adminRelatedMarketSchema.array())
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminListRelatedMarkets(
     @Param('id', { schema: uuidParamSchema }) id: string,
   ): Promise<AdminRelatedMarket[]> {
@@ -102,7 +104,7 @@ export class AdminMarketsController {
   @ApiData(adminRelatedMarketSchema.array())
   // VALIDATION_ERROR names `marketId` for the market itself; NOT_FOUND names it for an unknown
   // one (an unknown market in the path is a plain NOT_FOUND).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminLinkRelatedMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -122,7 +124,7 @@ export class AdminMarketsController {
   // The link's refusals, naming the path's `relatedMarketId` where the link names the body's
   // `marketId`: VALIDATION_ERROR for the market itself, NOT_FOUND for an unknown one (an unknown
   // market in the first path segment is a plain NOT_FOUND).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUnlinkRelatedMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -137,7 +139,7 @@ export class AdminMarketsController {
     summary: 'One market with its exposure, settlement steps and event log',
   })
   @ApiData(adminMarketSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminGetMarket(@Param('id', { schema: uuidParamSchema }) id: string): Promise<AdminMarket> {
     return this.markets.get(id);
   }
@@ -150,7 +152,7 @@ export class AdminMarketsController {
   @ApiData(adminMarketSchema, 201)
   // NOT_FOUND names `categoryId`; VALIDATION_ERROR names `slug` (taken), `categoryId`
   // (disabled) or `closeAt` (not in the future) besides the body schema's own issues.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminCreateMarket(
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createMarketBodySchema }) body: CreateMarketBody,
@@ -167,7 +169,14 @@ export class AdminMarketsController {
       'refuse naming status',
   })
   @ApiData(adminMarketSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'RULES_REQUIRED')
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'RULES_REQUIRED',
+  )
   adminUpdateMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -184,7 +193,14 @@ export class AdminMarketsController {
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `status` (not a draft) or `closeAt` (already past).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'RULES_REQUIRED')
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'RULES_REQUIRED',
+  )
   adminOpenMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -196,7 +212,14 @@ export class AdminMarketsController {
   @HttpCode(200)
   @ApiOperation({ operationId: 'adminCloseMarket', summary: 'open → closed' })
   @ApiData(adminMarketSchema)
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'MARKET_NOT_OPEN')
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'ONBOARDING_REQUIRED',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'MARKET_NOT_OPEN',
+  )
   adminCloseMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
@@ -213,7 +236,7 @@ export class AdminMarketsController {
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `status` for anything but a closed market — a resolved one
   // included: a judgement is final, so neither the same result again nor another is accepted.
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR')
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminResolveMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,

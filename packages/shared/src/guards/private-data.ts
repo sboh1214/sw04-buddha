@@ -39,6 +39,8 @@ export const PRIVATE_DATA_IDS = [
   'watchlist',
   'search-history',
   'identity-verification',
+  'consent',
+  'former-nickname',
   'auth-secret',
   'risk-flag',
   'author-holding',
@@ -287,6 +289,53 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['birth'],
       ['birthday'],
       ['carrier'],
+    ],
+  },
+  {
+    id: 'consent',
+    name: '약관 동의 기록(항목·문서 판·동의 시각·IP·기기 정보)',
+    basis: 'ADR-0069 결정 1(#57-5), ADR-0072',
+    // What an account agreed to and when, and the client address and browser (User-Agent) the
+    // record keeps (#58): a public shape never says whether or when somebody consented
+    // (`consents`, `consentedAt`, `marketingConsent`, `agreedAt`) nor carries a User-Agent
+    // (`userAgent`). The address is `ip` in identity-verification above. The account's own
+    // `GET /me` shows it its answers (never the address or the browser) on an owner-only route,
+    // which this list does not read.
+    fields: [
+      ['consent'],
+      ['consents'],
+      ['consented'],
+      ['agreed'],
+      ['agreement'],
+      ['agreements'],
+      ['user', 'agent'],
+      ['user', 'agents'],
+    ],
+  },
+  {
+    id: 'former-nickname',
+    name: '이전 닉네임(바꾸거나 비운 닉네임)',
+    basis: 'ADR-0069 결정 3(#37-3·#37-16), 결정 1(#57-6)',
+    // A nickname an account gave up is held from others for 30 days (#58), and never shown: the
+    // public sees the current nickname only, on old posts too (#37-3). A public shape never names
+    // an account's former nicknames or when it changed one (`previousNickname`, `nicknameHistory`,
+    // `nicknameChangedAt`, `releasedNickname`).
+    fields: [
+      ['previous', 'nickname'],
+      ['previous', 'nicknames'],
+      ['former', 'nickname'],
+      ['former', 'nicknames'],
+      ['old', 'nickname'],
+      ['old', 'nicknames'],
+      ['nickname', 'history'],
+      ['nickname', 'histories'],
+      ['nickname', 'changed'],
+      ['nickname', 'change'],
+      ['nickname', 'changes'],
+      ['released', 'nickname'],
+      ['released', 'nicknames'],
+      ['nickname', 'hold'],
+      ['nickname', 'holds'],
     ],
   },
   {

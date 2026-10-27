@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation';
 import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { MY_WALLET_PATH } from '@/lib/my';
+import { nextQuery } from '@/lib/next-path';
 
 /**
  * Right side of the top nav (PLAN 11.4 AuthButtons): logged out -> 로그인 / 가입하기;
@@ -47,8 +48,12 @@ export function AuthButtons() {
         >
           <NextLink href={{ pathname: '/login', query: { next: pathname } }}>{copy.login}</NextLink>
         </Button>
+        {/* Carries the page too (#58, ADR-0069 decision 1 #57-9): after the onboarding a new
+            account comes back to the market it was looking at. */}
         <Button asChild h="40px" px="3" borderRadius="pill" textStyle="emphasisSm">
-          <NextLink href="/signup">{copy.signup}</NextLink>
+          <NextLink href={{ pathname: '/signup', query: nextQuery(pathname) }}>
+            {copy.signup}
+          </NextLink>
         </Button>
       </HStack>
     );

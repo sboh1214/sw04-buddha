@@ -2,6 +2,7 @@
 
 import { Alert, Button, Field, Link, Skeleton, Stack } from '@chakra-ui/react';
 import { zodResolver } from '@hookform/resolvers/zod';
+import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
@@ -15,12 +16,13 @@ import { newPasswordSchema, type NewPasswordValues } from '@/lib/password';
 
 /**
  * The email sign-up's first password (ADR-0024). Nothing else is asked here since ADR-0070: the
- * real name and the number are given once, in the 본인확인 step on /onboarding, where the number
- * is proven by the code texted to it. Home is where the form goes on, and the onboarding gate
- * takes the account from there to that step, as it takes every account that has not verified —
- * so one place, the gate, decides where an unverified account goes.
+ * consent, the real name and the number, and the nickname are the onboarding's steps on
+ * /onboarding (#58). `next` — the page the visitor signed up from, home without one — is where the
+ * form goes on, and the onboarding gate takes the account from there to its remaining step, as it
+ * takes every account with one left, and brings it back to `next` at the end — so one place, the
+ * gate, decides where an account that has not finished goes.
  */
-export function SetPasswordForm() {
+export function SetPasswordForm({ next }: { next: string }) {
   const { data: me, isPending, isFetching, refetch } = useMe();
 
   if (isPending) return <Skeleton height="32" />;
@@ -57,7 +59,7 @@ export function SetPasswordForm() {
           </Alert.Content>
         </Alert.Root>
         <Link asChild colorPalette="brand" color="colorPalette.fg" fontWeight="medium">
-          <NextLink href="/">{copy.goHome}</NextLink>
+          <NextLink href={next as Route}>{next === '/' ? copy.goHome : copy.continueOn}</NextLink>
         </Link>
       </Stack>
     );
@@ -65,10 +67,10 @@ export function SetPasswordForm() {
 
   // Keyed on the account, so a session switched under this screen (SessionCacheGuard) mounts a
   // fresh form for the new one instead of keeping the previous account's typed values.
-  return <SetPasswordFields key={me.id} />;
+  return <SetPasswordFields key={me.id} next={next} />;
 }
 
-function SetPasswordFields() {
+function SetPasswordFields({ next }: { next: string }) {
   const router = useRouter();
   const setPassword = useSetPassword();
   const {
@@ -86,7 +88,7 @@ function SetPasswordFields() {
       // the session by the hook, whose `ready` keeps the button off until it is known.
       await setPassword.mutateAsync(values.newPassword);
       toaster.create({ type: 'success', title: copy.passwordSet });
-      router.push('/');
+      router.push(next as Route);
       router.refresh();
     } catch (error) {
       // Another account's cookie: nothing was written, and the session refetch the hook started

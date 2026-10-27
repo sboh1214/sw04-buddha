@@ -7,7 +7,11 @@ import { type LegalDocument, bullets, numbered, paragraph, table } from './docum
  * review (QUESTIONS.md Q-M2-3).
  *
  * The collected items are what the code actually stores: better-auth's `user`/`account`/
- * `session` rows (email, password hash, the provider's name/image, IP and user agent),
+ * `session` rows (email, password hash, the provider's member id, IP and user agent — no longer
+ * the provider's name or photo, which neither `user.name`/`user.image` nor `account.id_token` (the
+ * provider's ID token that carries them) keep since ADR-0072, 오너 결정 2026-10-19 (2차) 3; the
+ * policy's wording of it, which still lists them, is #137's, D11; nor the provider's access and
+ * refresh tokens, 오너 결정 2026-10-19 (4차) 1),
  * `profiles` (nickname), `phone_verifications` (real name and verified mobile, ADR-0070),
  * `phone_verification_codes` (each code sent: the number and the real name it was sent with, the
  * code's HMAC, the times, the client IP and whether the provider took it — kept as 본인확인 기록

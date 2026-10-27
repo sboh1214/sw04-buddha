@@ -1,4 +1,4 @@
-import { and, asc, eq, exists, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, exists, isNull, ne, sql } from 'drizzle-orm';
 import type { Db } from './client.js';
 import { isPhoneVerified } from './phone-verification.js';
 import { balances } from './schema/balances.js';
@@ -13,6 +13,43 @@ export type StartGrantRow = typeof startGrants.$inferSelect;
 export type StartGrantNumberRow = typeof startGrantNumbers.$inferSelect;
 type LedgerRow = typeof ledgerEntries.$inferSelect;
 type BalanceRow = typeof balances.$inferSelect;
+
+/**
+ * Whether ANOTHER account's start grant holds the number whose keyed hash is `phoneHash`: a live
+ * (not released) row of `start_grant_numbers` for a grant that is not `userId`'s — paid or waiting,
+ * a withdrawn account's paid grant included (`user_id` is NOT NULL and RESTRICT, so its grant keeps
+ * naming it), the grant's own number or one an operator recorded for it. The number counts for
+ * that grant, not for `userId` (#57-1); a number whose grant was cancelled is released and free
+ * again (owner decision 2026-10-18), so it does not answer this. `GET /me` asks it for an account
+ * with no grant of its own whose onboarding asked for one (#58's nickname step grants in the
+ * transaction that confirms it, and `recordStartGrant` then answered `number_already_used`), and
+ * the notice screen then says the number cannot receive its start Coin (오너 결정 2026-10-19,
+ * ADR-0072). Asking the record rather than inferring it from a missing row keeps that answer true
+ * of an account that got no grant another way (a test's onboarded account; later a bot, #115).
+ *
+ * The account's own grant never counts: `GET /me` reads its rows in separate statements, so one
+ * that overlaps the nickname step's commit can see no grant of its own in the first and that very
+ * grant's number here — and must not tell the account its own new start Coin went elsewhere.
+ */
+export async function startGrantHoldsNumber(
+  executor: Db | Tx,
+  phoneHash: string,
+  userId: string,
+): Promise<boolean> {
+  const [held] = await executor
+    .select({ grantId: startGrantNumbers.grantId })
+    .from(startGrantNumbers)
+    .innerJoin(startGrants, eq(startGrants.id, startGrantNumbers.grantId))
+    .where(
+      and(
+        eq(startGrantNumbers.phoneHash, phoneHash),
+        isNull(startGrantNumbers.releasedAt),
+        ne(startGrants.userId, userId),
+      ),
+    )
+    .limit(1);
+  return held !== undefined;
+}
 
 /**
  * What a grant row stands for (#70, ADR-0071): paid (`granted_at`), cancelled when its account

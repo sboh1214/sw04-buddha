@@ -1,22 +1,27 @@
 import { randomUUID } from 'node:crypto';
 import {
   APPROVAL_STATUSES,
+  CONSENT_ITEMS,
   COUNTERPARTY_TYPES,
+  NICKNAME_HOLD_DAYS,
   LEDGER_ENTRY_TYPES,
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
   RELEASE_SETTING_STATUSES,
+  currentConsentVersion,
   nicknameSchema,
   releaseSettingChangeBodySchema,
   releaseSettingChangePayloadSchema,
 } from '@buddha/shared';
-import { and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
+import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   adminActions,
   approvalRequests,
   auditFailures,
   balances,
+  categories,
+  consentRecords,
   fills,
   ledgerEntries,
   marketLinks,
@@ -26,6 +31,7 @@ import {
   marketWatchEvents,
   marketWatches,
   markets,
+  nicknameHolds,
   orders,
   paymentEvents,
   payments,
@@ -33,6 +39,7 @@ import {
   phoneVerificationRefusedSends,
   phoneVerifications,
   positions,
+  profileInterestCategories,
   profiles,
   releaseSettings,
   startGrantNumbers,
@@ -41,7 +48,9 @@ import {
 } from './schema/index.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import {
+  completeOnboarding,
   createCategory,
+  createConsents,
   createMarket,
   createMarketLink,
   createPhoneVerification,
@@ -54,12 +63,21 @@ import {
   randomPhoneHash,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import {
+  hasStandingConsent,
+  isNicknameHeld,
+  lockNicknames,
+  missingOnboardingStepsOf,
+  newestConsentRowsOf,
+  readOnboarding,
+} from './onboarding.js';
 import { isPhoneVerified } from './phone-verification.js';
 import {
   cancelStartGrant,
   payStartGrant,
   pendingStartGrantIds,
   recordStartGrant,
+  startGrantHoldsNumber,
 } from './start-grants.js';
 import { lockAdminRoles } from './tx-helpers.js';
 
@@ -153,11 +171,319 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     ).rejects.toSatisfy((e) => sqlState(e) === '23514');
   });
 
-  it('enforces unique nicknames', async () => {
+  it('enforces unique nicknames, ignoring case (migration 0032, #57-6)', async () => {
     await createUser(t.db, { nickname: '중복닉' });
     await expect(createUser(t.db, { nickname: '중복닉' })).rejects.toSatisfy(
-      (e) => sqlState(e) === '23505',
+      (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'profiles_nickname_lower_unique',
     );
+    await createUser(t.db, { nickname: 'Trader_Kim' });
+    for (const variant of ['trader_kim', 'TRADER_KIM', 'Trader_Kim']) {
+      await expect(createUser(t.db, { nickname: variant })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'profiles_nickname_lower_unique',
+      );
+    }
+    // The exact-case constraint it replaced is gone.
+    const { rows } = await t.db.execute<{ name: string }>(sql`
+      SELECT conname AS name FROM pg_constraint WHERE conname = 'profiles_nickname_unique'`);
+    expect(rows).toEqual([]);
+  });
+
+  describe('the onboarding (migration 0032, #58)', () => {
+    /** Runs `body` in a transaction that is rolled back, so a seeded random() replays. */
+    async function rolledBack<T>(
+      body: (tx: Parameters<Parameters<typeof t.db.transaction>[0]>[0]) => Promise<T>,
+    ) {
+      let result: T | undefined;
+      await t.db
+        .transaction(async (tx) => {
+          result = await body(tx);
+          tx.rollback();
+        })
+        .catch((error: unknown) => {
+          if (!(error instanceof TransactionRollbackError)) throw error;
+        });
+      return result as T;
+    }
+
+    /** The auto nickname a new account gets with random() seeded so, plus a hold set up first. */
+    async function autoNickname(seed: number, hold?: typeof nicknameHolds.$inferInsert) {
+      return rolledBack(async (tx) => {
+        if (hold) await tx.insert(nicknameHolds).values(hold);
+        await tx.execute(sql`SELECT setseed(${seed})`);
+        const id = randomUUID();
+        await tx.insert(user).values({ id, name: 'x', email: `${id}@test.local` });
+        const [row] = await tx
+          .select({ nickname: profiles.nickname })
+          .from(profiles)
+          .where(eq(profiles.userId, id));
+        return row!.nickname;
+      });
+    }
+
+    it('gives no other account a nickname held less than 30 days, the auto one included', async () => {
+      const seed = 0.4242;
+      const first = await autoNickname(seed);
+      // The same seed draws the same first candidate: replayed, it is the nickname again.
+      expect(await autoNickname(seed)).toBe(first);
+      const { user: other } = await createUser(t.db);
+      const day = 24 * 60 * 60 * 1_000;
+      // Held by another account (in any case) or by a withdrawn one: the generator draws again.
+      for (const hold of [
+        { nickname: first, userId: other.id, releasedAt: new Date(Date.now() - day) },
+        { nickname: first.toLowerCase(), userId: other.id },
+        { nickname: first, userId: null },
+      ]) {
+        const next = await autoNickname(seed, hold);
+        expect(next).not.toBe(first);
+        expect(next).toMatch(/^user_[23456789A-HJ-NP-Z]{4}$/);
+      }
+      // A hold past its 30 days holds nothing.
+      expect(NICKNAME_HOLD_DAYS).toBe(30);
+      expect(
+        await autoNickname(seed, {
+          nickname: first,
+          userId: other.id,
+          releasedAt: new Date(Date.now() - (NICKNAME_HOLD_DAYS * day + 60_000)),
+        }),
+      ).toBe(first);
+    });
+
+    it('holds a nickname from other accounts only, ignoring case, for 30 days', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      const day = 24 * 60 * 60 * 1_000;
+      await t.db.insert(nicknameHolds).values([
+        { nickname: 'Released_A', userId: a.id, releasedAt: new Date(Date.now() - 29 * day) },
+        { nickname: 'old_one', userId: a.id, releasedAt: new Date(Date.now() - 31 * day) },
+        { nickname: 'withdrawn', userId: null },
+      ]);
+      const held = (nickname: string, userId: string) =>
+        t.db.transaction((tx) => isNicknameHeld(tx, nickname, userId));
+      expect(await held('Released_A', b.id)).toBe(true);
+      expect(await held('released_a', b.id)).toBe(true);
+      // The account that gave it up may take it back.
+      expect(await held('released_a', a.id)).toBe(false);
+      expect(await held('old_one', b.id)).toBe(false);
+      expect(await held('withdrawn', a.id)).toBe(true);
+      expect(await held('never_used', b.id)).toBe(false);
+    });
+
+    it('locks a nickname ignoring case until the transaction ends', async () => {
+      // pg_try_advisory_xact_lock on the key lock_nickname() takes: false while another holds it.
+      const tryLock = (nickname: string) =>
+        t.db.transaction(async (tx) => {
+          const result = await tx.execute<{ locked: boolean }>(
+            sql`SELECT pg_try_advisory_xact_lock(hashtext('buddha:nickname'), hashtext(lower(${nickname}))) AS locked`,
+          );
+          return result.rows[0]!.locked;
+        });
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let locked!: () => void;
+      const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+      const holder = t.db.transaction(async (tx) => {
+        await lockNicknames(tx, ['Foo_Bar', 'zeta', 'FOO_BAR']);
+        locked();
+        await released;
+      });
+      await lockTaken;
+      expect(await tryLock('foo_bar')).toBe(false);
+      expect(await tryLock('ZETA')).toBe(false);
+      expect(await tryLock('other')).toBe(true);
+      release();
+      await holder;
+      expect(await tryLock('foo_bar')).toBe(true);
+    });
+
+    it('makes the auto nickname’s generator wait on the lock of each candidate it draws', async () => {
+      // The candidate a seeded sign-up draws first (replayed: the same seed draws it again).
+      const seed = 0.1717;
+      const first = await autoNickname(seed);
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      let locked!: () => void;
+      const lockTaken = new Promise<void>((resolve) => (locked = resolve));
+      // Whoever gives `first` up holds its lock until the hold it writes commits (a change).
+      const holder = t.db.transaction(async (tx) => {
+        await lockNicknames(tx, [first.toLowerCase()]);
+        locked();
+        await released;
+      });
+      await lockTaken;
+      const id = randomUUID();
+      const signUp = t.db.transaction(async (tx) => {
+        await tx.execute(sql`SELECT setseed(${seed})`);
+        await tx.insert(user).values({ id, name: 'x', email: `${id}@test.local` });
+      });
+      // The sign-up is parked on that lock (its trigger's `lock_nickname(candidate)`), not past it.
+      const started = Date.now();
+      for (;;) {
+        const { rows } = await t.db.execute<{ n: number }>(sql`
+          SELECT count(*)::int AS n FROM pg_stat_activity
+           WHERE datname = current_database() AND pid <> pg_backend_pid()
+             AND wait_event_type = 'Lock' AND wait_event = 'advisory'`);
+        if ((rows[0]?.n ?? 0) > 0) break;
+        if (Date.now() - started > 5_000) throw new Error('the sign-up never waited on the lock');
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      expect(
+        await t.db.select({ id: profiles.userId }).from(profiles).where(eq(profiles.userId, id)),
+      ).toEqual([]);
+      release();
+      await holder;
+      await signUp;
+      const [profile] = await t.db
+        .select({ nickname: profiles.nickname })
+        .from(profiles)
+        .where(eq(profiles.userId, id));
+      expect(profile?.nickname).toBe(first);
+    });
+
+    it('keeps consent records append-only, of the listed items, with their address and browser', async () => {
+      const { user: u } = await createUser(t.db);
+      const rows = await createConsents(t.db, {
+        userId: u.id,
+        marketing: true,
+        clientIp: '2001:DB8::1',
+        userAgent: 'Mozilla/5.0',
+      });
+      expect(rows.map((row) => [row.item, row.agreed])).toEqual(
+        CONSENT_ITEMS.map((item) => [item, true]),
+      );
+      expect(rows[0]).toMatchObject({ clientIp: '2001:db8::1', userAgent: 'Mozilla/5.0' });
+      await expect(
+        t.db
+          .update(consentRecords)
+          .set({ agreed: false })
+          .where(eq(consentRecords.id, rows[0]!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db
+          .insert(consentRecords)
+          .values({ userId: u.id, item: 'refund', version: 'v', agreed: true }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'consent_records_item_check',
+      );
+      // Kept past the account (restrict): a withdrawal keeps the user row (#140).
+      await expect(t.db.delete(user).where(eq(user.id, u.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      // DELETE stays for the retention work (#184).
+      await t.db.delete(consentRecords).where(eq(consentRecords.userId, u.id));
+      expect(await t.db.select().from(consentRecords)).toEqual([]);
+    });
+
+    it('keeps one pick per category and account, gone with the category or the account', async () => {
+      const { user: u } = await createUser(t.db);
+      const parent = await createCategory(t.db, { slug: 'interest-parent', nameKo: '상위' });
+      const child = await createCategory(t.db, {
+        slug: 'interest-child',
+        nameKo: '하위',
+        parentId: parent.id,
+      });
+      await t.db.insert(profileInterestCategories).values([
+        { userId: u.id, categoryId: parent.id },
+        { userId: u.id, categoryId: child.id },
+      ]);
+      await expect(
+        t.db.insert(profileInterestCategories).values({ userId: u.id, categoryId: child.id }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23505');
+      await t.db.delete(categories).where(eq(categories.id, child.id));
+      expect(
+        (await t.db.select().from(profileInterestCategories)).map((row) => row.categoryId),
+      ).toEqual([parent.id]);
+    });
+
+    it('reads one newest row per item, however often an answer was changed', async () => {
+      const { user: u } = await createUser(t.db);
+      const { user: other } = await createUser(t.db);
+      expect(await newestConsentRowsOf(t.db, u.id)).toEqual([]);
+      await createConsents(t.db, { userId: u.id, versions: { terms: 'draft-1999-01-01' } });
+      await createConsents(t.db, { userId: other.id, marketing: true });
+      // The optional answer flipped many times over, then the terms agreed at the current version.
+      await t.db.insert(consentRecords).values(
+        Array.from({ length: 40 }, (_, index) => ({
+          userId: u.id,
+          item: 'marketing',
+          version: currentConsentVersion('marketing'),
+          agreed: index % 2 === 0,
+        })),
+      );
+      await t.db.insert(consentRecords).values({
+        userId: u.id,
+        item: 'terms',
+        version: currentConsentVersion('terms'),
+        agreed: true,
+      });
+      const rows = await newestConsentRowsOf(t.db, u.id);
+      // One row per item, oldest first — the account's own, the last of each.
+      expect(rows.map((row) => [row.item, row.version, row.agreed])).toEqual([
+        ['privacy', currentConsentVersion('privacy'), true],
+        ['age', currentConsentVersion('age'), true],
+        ['marketing', currentConsentVersion('marketing'), false],
+        ['terms', currentConsentVersion('terms'), true],
+      ]);
+      expect(await hasStandingConsent(t.db, u.id)).toBe(true);
+      expect((await readOnboarding(t.db, u.id))?.consents.map((c) => [c.item, c.agreed])).toEqual([
+        ['terms', true],
+        ['privacy', true],
+        ['age', true],
+        ['marketing', false],
+      ]);
+      // Each item is one lookup on the index, from the end of the account's entries of it (a table
+      // this small would be scanned whole, so the planner is told not to).
+      const plan = await t.db.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+        const result = await tx.execute<{ 'QUERY PLAN': string }>(
+          sql`EXPLAIN SELECT id FROM consent_records WHERE user_id = ${u.id} AND item = 'terms' ORDER BY id DESC LIMIT 1`,
+        );
+        return result.rows.map((row) => row['QUERY PLAN']).join('\n');
+      });
+      expect(plan).toMatch(/Index (Only )?Scan Backward using consent_records_user_id_item_id_idx/);
+      expect(plan).not.toMatch(/Sort/);
+    });
+
+    it('reads the onboarding: consent, 본인확인, nickname and interests, in order', async () => {
+      const { user: u } = await createUser(t.db);
+      expect(await readOnboarding(t.db, 'nobody')).toBeNull();
+      expect(await missingOnboardingStepsOf(t.db, 'nobody')).toEqual([
+        'consent',
+        'verification',
+        'nickname',
+      ]);
+      expect(await readOnboarding(t.db, u.id)).toEqual({
+        progress: { consent: false, verification: false, nickname: false, interests: false },
+        consents: [],
+      });
+      expect(await hasStandingConsent(t.db, u.id)).toBe(false);
+      // An answer from before a revision that asked again does not stand (an unknown version).
+      await createConsents(t.db, { userId: u.id, versions: { terms: 'draft-1999-01-01' } });
+      expect(await hasStandingConsent(t.db, u.id)).toBe(false);
+      expect(await missingOnboardingStepsOf(t.db, u.id)).toEqual([
+        'consent',
+        'verification',
+        'nickname',
+      ]);
+      await createConsents(t.db, { userId: u.id, marketing: true });
+      expect(await hasStandingConsent(t.db, u.id)).toBe(true);
+      const read = await readOnboarding(t.db, u.id);
+      // The newest answer to each item, in CONSENT_ITEMS order.
+      expect(read?.consents.map((c) => [c.item, c.agreed])).toEqual([
+        ['terms', true],
+        ['privacy', true],
+        ['age', true],
+        ['marketing', true],
+      ]);
+      expect(await missingOnboardingStepsOf(t.db, u.id)).toEqual(['verification', 'nickname']);
+      await completeOnboarding(t.db, { userId: u.id });
+      expect(await missingOnboardingStepsOf(t.db, u.id)).toEqual([]);
+      expect((await readOnboarding(t.db, u.id))?.progress).toEqual({
+        consent: true,
+        verification: true,
+        nickname: true,
+        interests: false,
+      });
+    });
   });
 
   it('createMarket writes a market with no price before its first fill, and relations resolve', async () => {
@@ -2498,6 +2824,27 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await t.db.select().from(startGrants)).toEqual([grant]);
       expect(await numbersOf(grant.id)).toEqual(numbers);
     });
+
+    it('says whether ANOTHER account’s grant holds a number, never the asking account’s own', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      const { user: c } = await createUser(t.db);
+      const hash = randomPhoneHash();
+      // Nobody's grant holds it yet.
+      expect(await startGrantHoldsNumber(t.db, hash, a.id)).toBe(false);
+      await createStartGrant(t.db, { userId: a.id, phoneHash: hash });
+      // A's own grant is not "the number went elsewhere" (a `GET /me` overlapping A's nickname
+      // step can meet it, ADR-0072); to every other account it is.
+      expect(await startGrantHoldsNumber(t.db, hash, a.id)).toBe(false);
+      expect(await startGrantHoldsNumber(t.db, hash, b.id)).toBe(true);
+      // Another number's grant says nothing of this one.
+      await createStartGrant(t.db, { userId: c.id });
+      expect(await startGrantHoldsNumber(t.db, randomPhoneHash(), b.id)).toBe(false);
+      // A's grant cancelled while it waited (its withdrawal, owner decision 2026-10-18): the number
+      // is released, free for the next account, and held by nobody's grant.
+      await t.db.transaction((tx) => cancelStartGrant(tx, a.id));
+      expect(await startGrantHoldsNumber(t.db, hash, b.id)).toBe(false);
+    });
   });
 
   describe('buddha_app privileges (PLAN 6.4)', () => {
@@ -2528,7 +2875,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'phone_verification_refused_sends',
             'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
-            'market_search_terms', 'market_links')
+            'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
+            'profile_interest_categories')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -2563,6 +2911,16 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('market_search_terms')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0027 (#65): an unlink deletes the pair's row; the history is admin_actions.
       expect(privs('market_links')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0032 (#58): a consent record is never rewritten, and goes only after its
+      // retention period (#184); holds and interest picks are written and removed freely.
+      expect(privs('consent_records')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      expect(privs('nickname_holds')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('profile_interest_categories')).toEqual([
+        'DELETE',
+        'INSERT',
+        'SELECT',
+        'UPDATE',
+      ]);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

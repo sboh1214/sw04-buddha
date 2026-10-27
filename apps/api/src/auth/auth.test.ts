@@ -4,6 +4,7 @@
  * (fails under CI=true, see the harness).
  */
 import { schema } from '@buddha/db';
+import { AUTH_USER_NAME } from '@buddha/shared';
 import { and, eq, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { type Redis } from 'ioredis';
@@ -204,6 +205,166 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     ).toEqual([]);
   });
 
+  /** The better-auth `user` row's name and photo. */
+  async function nameAndImage(userId: string) {
+    const [row] = await t.db
+      .select({ name: schema.user.name, image: schema.user.image })
+      .from(schema.user)
+      .where(eq(schema.user.id, userId));
+    return row;
+  }
+
+  it('keeps no name or photo: not the email sign-up’s, not a provider’s (ADR-0072)', async () => {
+    // 오너 결정 2026-10-19 (2차) 3: a social login's provider name and profile photo are not
+    // stored. The email sign-up above passed better-auth a name too.
+    const signedUp = await userRow(email);
+    expect(await nameAndImage(signedUp!.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+
+    // A social sign-up: better-auth's createOAuthUser with what the provider handed over.
+    const context = await t.auth.$context;
+    const created = await context.internalAdapter.createOAuthUser(
+      {
+        email: 'it-auth-social-name@test.local',
+        name: '홍길동',
+        image: 'https://k.kakaocdn.net/photo.jpg',
+        emailVerified: true,
+      },
+      {
+        providerId: 'kakao',
+        issuer: 'https://kauth.kakao.com',
+        accountId: `kakao-name-${String(Date.now())}`,
+      },
+    );
+    expect(created.user).toMatchObject({ name: AUTH_USER_NAME, image: null });
+    expect(await nameAndImage(created.user.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+
+    // A later sign-in or link that copies the provider's profile over (`overrideUserInfoOnSignIn`,
+    // `updateUserInfoOnLink`) goes through the same update: neither column is written, and what
+    // else it carries still is.
+    await context.internalAdapter.updateUser(created.user.id, {
+      name: '홍길동',
+      image: 'https://k.kakaocdn.net/photo.jpg',
+      emailVerified: false,
+    });
+    expect(await nameAndImage(created.user.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+    expect((await userRow('it-auth-social-name@test.local'))?.emailVerified).toBe(false);
+  });
+
+  /** A provider's ID token as Google's looks: a readable JWT whose payload names the member. */
+  function idTokenNaming(name: string): string {
+    const part = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
+    return [
+      part({ alg: 'RS256', typ: 'JWT' }),
+      part({
+        sub: `google-${name}`,
+        email: 'member@gmail.com',
+        email_verified: true,
+        name,
+        picture: 'https://lh3.googleusercontent.com/a/photo',
+      }),
+      'signature',
+    ].join('.');
+  }
+
+  /** The tokens a login account row holds, and its scope. */
+  async function accountTokens(accountRowId: string) {
+    const [row] = await t.db
+      .select({
+        idToken: schema.account.idToken,
+        accessToken: schema.account.accessToken,
+        refreshToken: schema.account.refreshToken,
+        accessTokenExpiresAt: schema.account.accessTokenExpiresAt,
+        refreshTokenExpiresAt: schema.account.refreshTokenExpiresAt,
+        scope: schema.account.scope,
+      })
+      .from(schema.account)
+      .where(eq(schema.account.id, accountRowId));
+    return row;
+  }
+
+  /** What a provider's token response hands better-auth: every token and its expiry. */
+  function providerTokens(label: string) {
+    return {
+      accessToken: `${label}-access`,
+      refreshToken: `${label}-refresh`,
+      idToken: idTokenNaming('홍길동'),
+      accessTokenExpiresAt: new Date(Date.now() + 3_600_000),
+      refreshTokenExpiresAt: new Date(Date.now() + 86_400_000),
+    };
+  }
+
+  const NO_TOKENS = {
+    idToken: null,
+    accessToken: null,
+    refreshToken: null,
+    accessTokenExpiresAt: null,
+    refreshTokenExpiresAt: null,
+  };
+
+  it('keeps no provider token: no ID, access or refresh token (ADR-0072 7-30)', async () => {
+    // 오너 결정 2026-10-19 (2차) 3 for the ID token, which carries the name and photo, and (4차) 1
+    // for the access and refresh tokens and their expiry. better-auth hands them to the account row
+    // as they came: on a social sign-up (createOAuthUser, the callback's createAccount), on a link
+    // (linkAccount), and again on every sign-in and refresh (updateAccount). Each keeps the rest of
+    // what it carries.
+    const context = await t.auth.$context;
+    const created = await context.internalAdapter.createOAuthUser(
+      { email: 'it-auth-social-token@test.local', name: '', emailVerified: true },
+      {
+        providerId: 'google',
+        issuer: 'https://accounts.google.com',
+        accountId: `google-token-${String(Date.now())}`,
+        ...providerTokens('google-1'),
+        scope: 'openid,email',
+      },
+    );
+    expect(created.account).toMatchObject(NO_TOKENS);
+    expect(await accountTokens(created.account.id)).toEqual({
+      ...NO_TOKENS,
+      scope: 'openid,email',
+    });
+
+    // The next sign-in's fresh tokens (`updateAccountOnSignIn`) or a refresh: none is written, and
+    // what else the update carries still is.
+    await context.internalAdapter.updateAccount(created.account.id, {
+      providerId: 'google',
+      ...providerTokens('google-2'),
+      scope: 'openid,email,https://www.googleapis.com/auth/userinfo.email',
+    });
+    expect(await accountTokens(created.account.id)).toEqual({
+      ...NO_TOKENS,
+      scope: 'openid,email,https://www.googleapis.com/auth/userinfo.email',
+    });
+
+    // A second provider linked to the same member.
+    const linked = await context.internalAdapter.linkAccount({
+      userId: created.user.id,
+      providerId: 'kakao',
+      issuer: 'https://kauth.kakao.com',
+      accountId: `kakao-token-${String(Date.now())}`,
+      ...providerTokens('kakao'),
+      scope: 'account_email',
+    });
+    expect(await accountTokens(linked.id)).toEqual({ ...NO_TOKENS, scope: 'account_email' });
+
+    // And the plain createAccount the link callback uses.
+    const account = await context.internalAdapter.createAccount({
+      userId: created.user.id,
+      providerId: 'naver',
+      issuer: 'https://nid.naver.com',
+      accountId: `naver-token-${String(Date.now())}`,
+      ...providerTokens('naver'),
+    });
+    expect(await accountTokens(account.id)).toMatchObject(NO_TOKENS);
+    // The member's three login accounts, none holding one.
+    const rows = await t.db
+      .select({ id: schema.account.id })
+      .from(schema.account)
+      .where(eq(schema.account.userId, created.user.id));
+    expect(rows).toHaveLength(3);
+    for (const row of rows) expect(await accountTokens(row.id)).toMatchObject(NO_TOKENS);
+  });
+
   it('signing in before the link is clicked fails and sends nothing', async () => {
     const res = await t.app.inject({
       method: 'POST',
@@ -379,6 +540,45 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(await userRow(email)).toBeUndefined();
   });
 
+  it('carries the page the visitor came from through the link to /set-password (#58)', async () => {
+    // ADR-0069 decision 1 #57-9: after the onboarding a sign-up returns to the page it left. The
+    // link is the one thing that crosses the mailbox, so it carries `next` itself.
+    const address = 'it-auth-register-next@test.local';
+    const next = '/markets/abc?x=1';
+    expect((await register({ email: address, next })).statusCode).toBe(200);
+    const link = verificationLinkFor(t.mailer, address);
+    expect(new URL(link).searchParams.get('callbackURL')).toBe(
+      `/set-password?next=${encodeURIComponent(next)}`,
+    );
+    // Followed, it lands there signed in — and better-auth's own `error` on a broken copy of the
+    // same link is added beside `next`, not over it.
+    const res = await t.app.inject({ method: 'GET', url: pathOf(link) });
+    expect(res.statusCode).toBe(302);
+    const target = new URL(String(res.headers.location), 'http://localhost:3000');
+    expect(target.pathname).toBe('/set-password');
+    expect(target.searchParams.get('next')).toBe(next);
+    expect(sessionCookieOf(res.headers['set-cookie'])).toBeDefined();
+    const broken = new URL(link);
+    broken.searchParams.set('token', 'not-a-token');
+    const refused = await t.app.inject({ method: 'GET', url: pathOf(broken.toString()) });
+    expect(refused.statusCode).toBe(302);
+    const landed = new URL(String(refused.headers.location), 'http://localhost:3000');
+    expect(landed.pathname).toBe('/set-password');
+    expect(landed.searchParams.get('next')).toBe(next);
+    expect(landed.searchParams.get('error')).toBe('INVALID_TOKEN');
+  });
+
+  it('refuses a next that is not a path on this origin, and mails nothing (#58)', async () => {
+    const bad = ['https://evil.example/x', '//evil.example', '/\\evil.example'];
+    for (const [index, next] of bad.entries()) {
+      // An address each: the route's rate limit counts per address (`email`).
+      const res = await register({ email: `it-auth-bad-next-${String(index)}@test.local`, next });
+      expect(res.statusCode, next).toBe(400);
+      expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
+    }
+    expect(t.mailer.messages).toHaveLength(0);
+  });
+
   it('refuses the synthetic no-email domain on register and on every credential endpoint', async () => {
     const synthetic = 'kakao_42@noemail.buddha.local';
     const registered = await register({ email: synthetic });
@@ -501,6 +701,51 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     expect(user).toMatchObject({ emailVerified: false });
     expect(await credentialAccount(user!.id)).toBeUndefined();
     expect(t.mailer.messages).toHaveLength(1);
+  });
+
+  it('better-auth’s update-user is not exposed: no name or photo through it (ADR-0072)', async () => {
+    const member = await signUpTestUser(t);
+    const attempt = await t.app.inject({
+      method: 'POST',
+      url: '/api/auth/update-user',
+      headers: { ...browserHeaders, cookie: member.cookie },
+      payload: { name: '홍길동', image: 'https://example.com/me.jpg' },
+    });
+    expect(attempt.statusCode).toBe(404);
+    expect(await nameAndImage(member.id)).toEqual({ name: AUTH_USER_NAME, image: null });
+  });
+
+  it('better-auth’s account-info is not exposed: no provider profile through it (ADR-0072 7-31)', async () => {
+    // Its answer is the linked provider's name and photo, read from the stored ID token or
+    // fetched with the stored access token; disabledPaths answers before either is looked at.
+    const member = await signUpTestUser(t);
+    const attempt = await t.app.inject({
+      method: 'GET',
+      url: '/api/auth/account-info',
+      headers: { ...browserHeaders, cookie: member.cookie },
+    });
+    expect(attempt.statusCode).toBe(404);
+    expect(attempt.body).toBe('Not Found');
+  });
+
+  it('better-auth’s get-access-token and refresh-token are not exposed: no provider token through them (ADR-0072 7-31)', async () => {
+    // 오너 결정 2026-10-19 (4차) 1: they hand the session's account its linked provider's stored
+    // access token (and refresh it with the stored refresh token), which the service keeps none of;
+    // disabledPaths answers before an account is looked up.
+    const member = await signUpTestUser(t);
+    for (const path of ['/api/auth/get-access-token', '/api/auth/refresh-token']) {
+      const attempt = await t.app.inject({
+        method: 'POST',
+        url: path,
+        headers: { ...browserHeaders, cookie: member.cookie },
+        payload: { accountId: 'any-account' },
+      });
+      expect({ path, status: attempt.statusCode, body: attempt.body }).toEqual({
+        path,
+        status: 404,
+        body: 'Not Found',
+      });
+    }
   });
 
   /**

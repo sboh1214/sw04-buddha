@@ -1,4 +1,4 @@
-import { Container, Heading, List, Stack, Table, Text } from '@chakra-ui/react';
+import { Box, Container, Heading, List, Stack, Table, Text } from '@chakra-ui/react';
 import { copy } from '@/copy';
 import {
   type LegalBlock,
@@ -41,7 +41,7 @@ export function LegalDocumentView({
           <Heading as="h2" textStyle="headline">
             {doc.title}
           </Heading>
-          <Blocks blocks={doc.intro} />
+          <LegalBlocks blocks={doc.intro} />
         </Stack>
         {doc.sections.map((section, index) => {
           const id = `${testId}-${String(index + 1)}`;
@@ -50,7 +50,7 @@ export function LegalDocumentView({
               <Heading as="h3" id={id} textStyle="titleLg">
                 {sectionHeading(doc.numbering, index, section.heading)}
               </Heading>
-              <Blocks blocks={section.blocks} />
+              <LegalBlocks blocks={section.blocks} />
             </Stack>
           );
         })}
@@ -65,7 +65,7 @@ export function LegalDocumentView({
             <Heading as="h3" id={`${testId}-addendum`} textStyle="titleLg">
               {copy.legalAddendum}
             </Heading>
-            <Blocks blocks={doc.addendum} />
+            <LegalBlocks blocks={doc.addendum} />
           </Stack>
         )}
       </Stack>
@@ -73,20 +73,62 @@ export function LegalDocumentView({
   );
 }
 
-function Blocks({ blocks }: { blocks: readonly LegalBlock[] }) {
+/**
+ * A document's blocks, as the legal pages draw them — also the onboarding's consent texts
+ * (consent-texts.ts), which the consent step shows inline. Already resolved: pass the blocks of
+ * `resolveLegalDocument(…)`.
+ *
+ * `stackedTables`: each table row drawn as a block of its own, every cell under its column's name,
+ * for a box too narrow for the columns side by side — the consent step's text box is about 240px
+ * wide at a 375px screen, and a three-column table there would hide its last column (the
+ * retention period, the heart of the consent) behind a sideways scroll inside a box that already
+ * scrolls down.
+ */
+export function LegalBlocks({
+  blocks,
+  stackedTables = false,
+}: {
+  blocks: readonly LegalBlock[];
+  stackedTables?: boolean;
+}) {
   // Index keys: the blocks are a fixed document, never reordered at run time.
-  return blocks.map((block, index) => <Block key={index} block={block} />);
+  return blocks.map((block, index) => (
+    <Block key={index} block={block} stackedTables={stackedTables} />
+  ));
 }
 
-function Block({ block }: { block: LegalBlock }) {
+function Block({ block, stackedTables }: { block: LegalBlock; stackedTables: boolean }) {
   switch (block.kind) {
     case 'paragraph':
       return <Text>{block.text}</Text>;
     case 'list':
       return <LegalList ordered={block.ordered} items={block.items} />;
     case 'table':
+      if (stackedTables) {
+        return (
+          <Stack gap="2" role="group" aria-label={block.caption}>
+            <Text color="fg.muted">{block.caption}</Text>
+            {block.rows.map((row, rowIndex) => (
+              <Stack as="dl" key={rowIndex} gap="2" borderWidth="1px" borderRadius="md" p="3">
+                {row.map((cell, cellIndex) => (
+                  <Box key={cellIndex}>
+                    <Text as="dt" fontWeight="semibold">
+                      {block.head[cellIndex]}
+                    </Text>
+                    <Text as="dd" m="0">
+                      {cell}
+                    </Text>
+                  </Box>
+                ))}
+              </Stack>
+            ))}
+          </Stack>
+        );
+      }
       return (
-        // Scrolls sideways on its own at 375px rather than widening the page.
+        // Scrolls sideways on its own at 375px rather than widening the page. The cells wrap:
+        // the scroll area's own `white-space: nowrap` would put each cell on one line and stretch
+        // the table to several screens' width.
         <Table.ScrollArea borderWidth="1px" borderRadius="row">
           <Table.Root size="sm">
             <Table.Caption captionSide="top" textAlign="start" px="3" pt="2" color="fg.muted">
@@ -95,7 +137,7 @@ function Block({ block }: { block: LegalBlock }) {
             <Table.Header>
               <Table.Row>
                 {block.head.map((cell) => (
-                  <Table.ColumnHeader key={cell} minW="24">
+                  <Table.ColumnHeader key={cell} minW="24" whiteSpace="normal">
                     {cell}
                   </Table.ColumnHeader>
                 ))}
@@ -105,7 +147,7 @@ function Block({ block }: { block: LegalBlock }) {
               {block.rows.map((row, rowIndex) => (
                 <Table.Row key={rowIndex}>
                   {row.map((cell, cellIndex) => (
-                    <Table.Cell key={cellIndex} verticalAlign="top">
+                    <Table.Cell key={cellIndex} verticalAlign="top" whiteSpace="normal">
                       {cell}
                     </Table.Cell>
                   ))}

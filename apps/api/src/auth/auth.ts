@@ -5,8 +5,10 @@ import { APIError, createAuthMiddleware, getSessionFromCtx } from 'better-auth/a
 import { verifyJWT } from 'better-auth/crypto';
 import { type Db, schema } from '@buddha/db';
 import {
+  AUTH_USER_NAME,
   DEFAULT_RATE_LIMITS,
   NO_EMAIL_DOMAIN,
+  SET_PASSWORD_PATH,
   isNoEmailAddress,
   type RateLimits,
 } from '@buddha/shared';
@@ -25,10 +27,11 @@ export const AUTH_BASE_PATH = '/api/auth';
 /** `account.providerId` of the email+password login method. */
 export const CREDENTIAL_PROVIDER_ID = 'credential';
 
-/** Page that asks a freshly verified user for their first password (ADR-0024). */
-export const SET_PASSWORD_PATH = '/set-password';
-
-/** Where a verification link lands when the client did not ask for a specific page. */
+/**
+ * Where a verification link lands when the client did not ask for a specific page: the page that
+ * asks a freshly verified user for their first password (ADR-0024, `SET_PASSWORD_PATH` of
+ * @buddha/shared, which also builds the link that carries the sign-up's `next`, #58).
+ */
 const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
 
 /**
@@ -37,6 +40,45 @@ const DEFAULT_VERIFY_CALLBACK = SET_PASSWORD_PATH;
  * now that `disabledPaths` 404s it over HTTP.
  */
 const SIGN_IN_PATH = '/sign-in/email';
+
+/** better-auth's own name-and-photo update, refused over HTTP (`disabledPaths` below). */
+const UPDATE_USER_PATH = '/update-user';
+/** better-auth's read of a linked provider's profile (name, photo), refused the same way. */
+const ACCOUNT_INFO_PATH = '/account-info';
+/** better-auth's hand-out of a linked provider's stored access token, refused the same way. */
+const GET_ACCESS_TOKEN_PATH = '/get-access-token';
+/** better-auth's refresh of a linked provider's stored tokens, refused the same way. */
+const REFRESH_TOKEN_PATH = '/refresh-token';
+
+/**
+ * What the `account` hooks below write on every login account row: none of the provider's tokens
+ * (오너 결정 2026-10-19 (2차) 3 for the ID token, (4차) 1 for the access and refresh tokens and their
+ * expiry, ADR-0072 7-30). better-auth uses them for nothing but the routes `disabledPaths` refuses.
+ */
+const NO_PROVIDER_TOKENS = {
+  idToken: null,
+  accessToken: null,
+  refreshToken: null,
+  accessTokenExpiresAt: null,
+  refreshTokenExpiresAt: null,
+} as const;
+const PROVIDER_TOKEN_FIELDS = Object.keys(
+  NO_PROVIDER_TOKENS,
+) as (keyof typeof NO_PROVIDER_TOKENS)[];
+
+/**
+ * What the service asks each provider for (오너 결정 2026-10-19 (2차) 3, ADR-0072 7-40): the
+ * member identifier and the email address, and not the name or the profile photo it does not
+ * keep. better-auth's defaults add Google's `profile` (a name and a photo in the ID token) and
+ * Kakao's `profile_nickname` and `profile_image`; `disableDefaultScope` drops them. Google's
+ * `openid` brings the ID token better-auth reads the member (`sub`) and the address from, and
+ * `email` the address and `email_verified`. Naver takes no scope from the request — its developer
+ * console decides what it hands over (ADR-0072 결과 3).
+ */
+export const OAUTH_SCOPES = {
+  google: ['openid', 'email'],
+  kakao: ['account_email'],
+} as const;
 const CHANGE_EMAIL_PATH = '/change-email';
 
 const EMAIL_INPUT_PATHS = new Set([
@@ -233,8 +275,29 @@ export function createAuth({
      * `disabledPaths` is checked in the HTTP router's `onRequest` only, so the route 404s
      * for the outside world while `auth.api.signUpEmail` — the server-side call
      * RegistrationService makes — still works. Paths are relative to `basePath`.
+     *
+     * `/update-user` too (오너 결정 2026-10-19 (2차) 3, ADR-0072): all it writes is `user.name`
+     * and `user.image` — better-auth's own name and photo, which this service does not keep (a
+     * member's name is the nickname, `PATCH /me`) — so it is refused rather than left to answer
+     * success while the hooks below keep both columns as they are. And `/account-info`, whose
+     * whole answer is the linked provider's profile — the name and photo the service neither
+     * asks for (`OAUTH_SCOPES`) nor keeps: read from the stored ID token (Google's, never stored
+     * now) or fetched afresh with the stored access token (Kakao's, Naver's). The web never
+     * called it.
+     *
+     * `/get-access-token` and `/refresh-token` too (오너 결정 2026-10-19 (4차) 1, ADR-0072 7-31):
+     * they hand the session's account its linked provider's stored access token — the second
+     * after refreshing it with the stored refresh token — and the service keeps neither (the
+     * `account` hooks below). Signing in, linking and unlinking never read them back; nothing
+     * else in better-auth but these two and `/account-info` does. The web never called either.
      */
-    disabledPaths: ['/sign-up/email'],
+    disabledPaths: [
+      '/sign-up/email',
+      UPDATE_USER_PATH,
+      ACCOUNT_INFO_PATH,
+      GET_ACCESS_TOKEN_PATH,
+      REFRESH_TOKEN_PATH,
+    ],
     database: drizzleAdapter(db, {
       provider: 'pg',
       schema: {
@@ -284,11 +347,21 @@ export function createAuth({
     },
 
     socialProviders: {
-      ...(providers.google ? { google: providers.google } : {}),
+      ...(providers.google
+        ? {
+            google: {
+              ...providers.google,
+              disableDefaultScope: true,
+              scope: [...OAUTH_SCOPES.google],
+            },
+          }
+        : {}),
       ...(providers.kakao
         ? {
             kakao: {
               ...providers.kakao,
+              disableDefaultScope: true,
+              scope: [...OAUTH_SCOPES.kakao],
               // The built-in provider maps kakao_account.email, which is undefined when
               // the user withheld consent (email_needs_agreement); mapProfileToUser is
               // spread last by the provider, so these fields win.
@@ -354,6 +427,51 @@ export function createAuth({
     },
 
     databaseHooks: {
+      /**
+       * A social login's provider name and profile photo are not stored (오너 결정 2026-10-19 (2차)
+       * 3, ADR-0072; #37-6 '소셜 로그인 사진은 쓰지 않는다'): better-auth copies the provider's
+       * `name` and `image` into the `user` row on a social sign-up (`handleOAuthUserInfo`), and on a
+       * later sign-in or link when told to (`overrideUserInfoOnSignIn`, `updateUserInfoOnLink`,
+       * both off here). Every account is created with AUTH_USER_NAME and no image, whatever the
+       * sign-up passed — the email sign-up's name, a provider's — and any update that names either
+       * column writes the same instead (an update hook can replace values, not drop keys): an
+       * upgrade or an option turned on later cannot refill them. better-auth's `/update-user`,
+       * which writes nothing else, is disabled above. The provider's ID token, which carries them
+       * too, is kept out of `account` below, and so are its access and refresh tokens.
+       */
+      user: {
+        create: {
+          before: (user) =>
+            Promise.resolve({ data: { ...user, name: AUTH_USER_NAME, image: null } }),
+        },
+        update: {
+          before: (data) =>
+            Promise.resolve({
+              data: {
+                ...(data.name !== undefined ? { name: AUTH_USER_NAME } : {}),
+                ...(data.image !== undefined ? { image: null } : {}),
+              },
+            }),
+        },
+      },
+      /**
+       * None of the provider's tokens is stored either (ADR-0072 7-30). better-auth copies them
+       * into `account` as they came — on a social sign-up, on a link, and again on every later
+       * sign-in (`updateAccountOnSignIn`) and token refresh:
+       * - the ID token (오너 결정 2026-10-19 (2차) 3): Google's is a readable JWT whose payload
+       *   carries the member's name and photo address (`name`, `picture`) whenever the `profile`
+       *   scope was granted;
+       * - the access and refresh tokens and their expiry (오너 결정 2026-10-19 (4차) 1): a standing
+       *   key to the member's provider account, kept in plain text (`encryptOAuthTokens` is off).
+       * Every account is created with none (`NO_PROVIDER_TOKENS`) and any update that names one
+       * writes none (an update hook replaces values, it cannot drop keys). Nothing the service
+       * serves reads them back: a sign-in or a link reads the provider's answer from the tokens
+       * of the callback's own token response (Google's `getUserInfo` decodes that ID token, Kakao's
+       * and Naver's ask with that access token); unlinking deletes the row and revokes nothing; no
+       * provider here signs out through the ID token (`createEndSessionURL`); better-auth's own
+       * sessions are its `session` rows. Only `/get-access-token`, `/refresh-token` and
+       * `/account-info` read them, and `disabledPaths` refuses all three.
+       */
       account: {
         create: {
           /**
@@ -368,14 +486,26 @@ export function createAuth({
            *
            * Returning `false` cancels the create (better-auth `createWithHooks`), and
            * `signUpEmail` ignores what `linkAccount` returns. Scoped to `/sign-up/email`, so
-           * /set-password, password reset and social linking still create their accounts.
+           * /set-password, password reset and social linking still create their accounts — each
+           * without a provider token.
            */
           before: (account, context) =>
             Promise.resolve(
               context?.path === '/sign-up/email' && account.providerId === CREDENTIAL_PROVIDER_ID
                 ? false
-                : undefined,
+                : { data: { ...account, ...NO_PROVIDER_TOKENS } },
             ),
+        },
+        update: {
+          before: (data) =>
+            Promise.resolve({
+              data: Object.fromEntries(
+                PROVIDER_TOKEN_FIELDS.filter((field) => data[field] !== undefined).map((field) => [
+                  field,
+                  null,
+                ]),
+              ),
+            }),
         },
       },
     },

@@ -1,20 +1,65 @@
 import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
+import { type Me } from './api';
 import {
   ONBOARDING_EXEMPT_PATHS,
+  ONBOARDING_SCREENS,
+  afterVerification,
   gatedPagePath,
+  interestIds,
   isOnboardingExempt,
+  isReconsent,
+  isStepBack,
   needsOnboarding,
   onboardingNext,
   onboardingPath,
+  onboardingReturnReason,
+  onboardingScreen,
+  startGrantNotice,
+  takeOnboardingAnswer,
+  withInterest,
+  type Onboarding,
 } from './onboarding';
 
-/** What `GET /me` carries once the account has confirmed its code (ADR-0070). */
-const VERIFIED = {
-  realName: '홍길동',
-  phone: '01012345678',
-  verifiedAt: '2026-10-18T00:00:00.000Z',
+/** A consent answer as `GET /me` lists it. */
+const agreed = (item: 'terms' | 'privacy' | 'age' | 'marketing', value = true) => ({
+  item,
+  version: 'draft-2026-10-18',
+  agreed: value,
+  recordedAt: '2026-10-18T00:00:00.000Z',
+});
+const CONSENTS = [agreed('terms'), agreed('privacy'), agreed('age'), agreed('marketing', false)];
+
+/** `GET /me`'s `onboarding` at each point of the owner's order (ADR-0069 decision 4 #58). */
+const FRESH: Onboarding = {
+  consent: false,
+  verification: false,
+  nickname: false,
+  completed: false,
+  interests: false,
+  nextStep: 'consent',
+  consents: [],
 };
+const CONSENTED: Onboarding = {
+  ...FRESH,
+  consent: true,
+  nextStep: 'verification',
+  consents: CONSENTS,
+};
+const VERIFIED: Onboarding = { ...CONSENTED, verification: true, nextStep: 'nickname' };
+/**
+ * The three required steps done and the start Coin granted; the interests not answered — on the
+ * notice or the interests screen right now, or left there (skipped, 오너 결정 2026-10-19 (2차) 5).
+ */
+const COMPLETED: Onboarding = {
+  ...VERIFIED,
+  nickname: true,
+  completed: true,
+  nextStep: null,
+};
+const DONE: Onboarding = { ...COMPLETED, interests: true };
+/** Done once, then a revision that changed members' rights asked for the consent again (#57-5). */
+const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
 describe('isOnboardingExempt', () => {
   it('lists exactly the routes ADR-0043 names, plus /api', () => {
@@ -57,7 +102,7 @@ describe('isOnboardingExempt', () => {
 
   it('exempts /charge only while paid Coin is on sale: it is not found otherwise', () => {
     expect(isOnboardingExempt('/charge')).toBe(PAID_COIN_SALES_ENABLED);
-    expect(needsOnboarding('/charge', null)).toBe(!PAID_COIN_SALES_ENABLED);
+    expect(needsOnboarding('/charge', FRESH)).toBe(!PAID_COIN_SALES_ENABLED);
   });
 
   it('does not exempt a look-alike prefix or any other screen, /admin included', () => {
@@ -82,32 +127,42 @@ describe('isOnboardingExempt', () => {
 });
 
 describe('needsOnboarding', () => {
-  it('redirects a signed-in account that has not verified from a gated page', () => {
-    expect(needsOnboarding('/', null)).toBe(true);
-    expect(needsOnboarding('/my/wallet', null)).toBe(true);
-    expect(needsOnboarding('/admin/markets', null)).toBe(true);
+  it('redirects a signed-in account with any step left from a gated page', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      expect(needsOnboarding('/', onboarding), String(onboarding.nextStep)).toBe(true);
+      expect(needsOnboarding('/my/wallet', onboarding)).toBe(true);
+      expect(needsOnboarding('/admin/markets', onboarding)).toBe(true);
+    }
+  });
+
+  it('never sends an onboarded account back for the interest categories (2차 5)', () => {
+    // Shown once, after the notice; an account that left before answering them skipped them.
+    expect(COMPLETED.completed).toBe(true);
+    expect(needsOnboarding('/', COMPLETED)).toBe(false);
+    expect(needsOnboarding('/', DONE)).toBe(false);
   });
 
   it('never redirects from an exempt page — no loop through /onboarding', () => {
-    expect(needsOnboarding('/onboarding', null)).toBe(false);
-    expect(needsOnboarding('/set-password', null)).toBe(false);
-    expect(needsOnboarding('/privacy', null)).toBe(false);
+    expect(needsOnboarding('/onboarding', FRESH)).toBe(false);
+    expect(needsOnboarding('/set-password', FRESH)).toBe(false);
+    expect(needsOnboarding('/privacy', FRESH)).toBe(false);
+    expect(needsOnboarding('/terms', RECONSENT)).toBe(false);
   });
 
-  it('never redirects while the answer is unknown, or once the account has verified', () => {
+  it('never redirects while the answer is unknown, or once nothing is left', () => {
     expect(needsOnboarding('/my/wallet', undefined)).toBe(false);
-    expect(needsOnboarding('/my/wallet', VERIFIED)).toBe(false);
-    expect(needsOnboarding('/admin/users', VERIFIED)).toBe(false);
+    expect(needsOnboarding('/my/wallet', DONE)).toBe(false);
+    expect(needsOnboarding('/admin/users', DONE)).toBe(false);
   });
 
   it('leaves a held account the two screens with 로그아웃, and lets it go once signed out', () => {
     // MY holds the other 로그아웃 and is gated, so these two carry one (owner decision
     // 2026-10-13, #16).
-    expect(needsOnboarding('/my', null)).toBe(true);
+    expect(needsOnboarding('/my', FRESH)).toBe(true);
     for (const path of ['/onboarding', '/set-password']) {
-      expect(needsOnboarding(path, null), path).toBe(false);
+      expect(needsOnboarding(path, FRESH), path).toBe(false);
     }
-    // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the verification is
+    // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the onboarding is
     // unknown.
     expect(needsOnboarding('/', undefined)).toBe(false);
   });
@@ -187,5 +242,203 @@ describe('gatedPagePath', () => {
     expect(gatedPagePath('/my/wallet', { pathname: '/my/settings', search: '?error=x' })).toBe(
       '/my/wallet',
     );
+  });
+});
+
+describe('onboardingScreen', () => {
+  const visit = { reachedNickname: false, noticeRead: false };
+  const afterNickname = { reachedNickname: true, noticeRead: false };
+
+  it("follows the server's next step, in the owner's order (decision 4 #58)", () => {
+    expect(ONBOARDING_SCREENS).toEqual([
+      'consent',
+      'verification',
+      'nickname',
+      'notice',
+      'interests',
+    ]);
+    expect(onboardingScreen(FRESH, visit)).toBe('consent');
+    expect(onboardingScreen(CONSENTED, visit)).toBe('verification');
+    expect(onboardingScreen(VERIFIED, visit)).toBe('nickname');
+    expect(onboardingScreen(RECONSENT, visit)).toBe('consent');
+    // The server's step comes first whatever the visit holds.
+    expect(onboardingScreen(RECONSENT, { reachedNickname: true, noticeRead: true })).toBe(
+      'consent',
+    );
+  });
+
+  it('shows the notice after the nickname step of this visit, then the interests (#57-7, #57-10)', () => {
+    expect(onboardingScreen(COMPLETED, afterNickname)).toBe('notice');
+    expect(onboardingScreen(COMPLETED, { reachedNickname: true, noticeRead: true })).toBe(
+      'interests',
+    );
+    // Answered or skipped: nothing left.
+    expect(onboardingScreen(DONE, { reachedNickname: true, noticeRead: true })).toBeNull();
+  });
+
+  it('shows neither to an account that arrives with the three done: they were skipped (2차 5)', () => {
+    // It left at the notice or the interests, or it is back after a re-consent.
+    expect(onboardingScreen(COMPLETED, visit)).toBeNull();
+    expect(onboardingScreen(COMPLETED, { reachedNickname: false, noticeRead: true })).toBeNull();
+    expect(onboardingScreen(DONE, visit)).toBeNull();
+  });
+});
+
+describe('why the account is on an earlier step (오너 결정 2026-10-19 (2차) 6)', () => {
+  it('tells a step back from a step forward', () => {
+    expect(isStepBack('nickname', 'consent')).toBe(true);
+    expect(isStepBack('interests', 'consent')).toBe(true);
+    expect(isStepBack('notice', 'verification')).toBe(true);
+    expect(isStepBack('consent', 'verification')).toBe(false);
+    expect(isStepBack('nickname', 'nickname')).toBe(false);
+    expect(isStepBack(null, 'consent')).toBe(false);
+    expect(isStepBack('nickname', null)).toBe(false);
+  });
+
+  it('says a re-consent on its consent step, however the account got there', () => {
+    expect(isReconsent(RECONSENT)).toBe(true);
+    expect(isReconsent(FRESH)).toBe(false);
+    expect(isReconsent(DONE)).toBe(false);
+    expect(onboardingReturnReason(RECONSENT, 'consent', false)).toBe('reconsent');
+    expect(onboardingReturnReason(RECONSENT, 'consent', true)).toBe('reconsent');
+    // An account that declined the marketing only agreed to nothing required: not a re-consent.
+    expect(isReconsent({ ...FRESH, consents: [agreed('marketing', false)] })).toBe(false);
+  });
+
+  it('says to finish the earlier step when the server sent the account back to it', () => {
+    expect(onboardingReturnReason(CONSENTED, 'verification', true)).toBe('earlier_step');
+    expect(onboardingReturnReason(FRESH, 'consent', true)).toBe('earlier_step');
+  });
+
+  it('says nothing where the account was going anyway', () => {
+    expect(onboardingReturnReason(FRESH, 'consent', false)).toBeNull();
+    expect(onboardingReturnReason(VERIFIED, 'nickname', false)).toBeNull();
+    expect(onboardingReturnReason(COMPLETED, null, true)).toBeNull();
+  });
+});
+
+describe('afterVerification', () => {
+  it('marks the 본인확인 done and resumes at the nickname, as the server would answer', () => {
+    expect(afterVerification(CONSENTED)).toEqual(VERIFIED);
+  });
+
+  it('works out completed and the next step with the shared rule, not a copy of it', () => {
+    // A consent that stopped standing while the code was confirmed (a revision): still the consent.
+    const consentGone: Onboarding = { ...CONSENTED, consent: false };
+    expect(afterVerification(consentGone)).toMatchObject({
+      verification: true,
+      completed: false,
+      nextStep: 'consent',
+    });
+  });
+
+  it('leaves a verified account as it is (the real-name card writes through the same path)', () => {
+    expect(afterVerification(DONE)).toBe(DONE);
+    expect(afterVerification(COMPLETED)).toBe(COMPLETED);
+  });
+});
+
+describe('takeOnboardingAnswer', () => {
+  const held: Me = {
+    id: 'user-1',
+    email: 'a@example.com',
+    emailVerified: true,
+    profile: {
+      nickname: 'user_ab12',
+      role: 'user',
+      createdAt: '2026-10-18T00:00:00.000Z',
+      timeZone: 'America/New_York',
+      nicknameChangeAvailableAt: null,
+      interestCategoryIds: [],
+    },
+    balance: { availableCoin: '0', lockedCoin: '0' },
+    linkedAccounts: [],
+    verification: {
+      realName: '홍길동',
+      phone: '01012345678',
+      verifiedAt: '2026-10-18T00:00:00.000Z',
+    },
+    startGrant: null,
+    onboarding: VERIFIED,
+  };
+  /** A snapshot read after the write, with what a concurrent write changed meanwhile. */
+  const answer: Me = {
+    ...held,
+    profile: {
+      ...held.profile,
+      nickname: '새닉네임',
+      timeZone: 'Asia/Seoul',
+      nicknameChangeAvailableAt: null,
+      interestCategoryIds: [1, 3],
+    },
+    balance: { availableCoin: '10000', lockedCoin: '0' },
+    startGrant: { status: 'granted', amountCoin: '10000', grantedAt: '2026-10-18T00:00:01.000Z' },
+    onboarding: COMPLETED,
+  };
+
+  it('the consent step takes the onboarding only', () => {
+    expect(takeOnboardingAnswer(held, answer, 'consent')).toEqual({
+      ...held,
+      onboarding: COMPLETED,
+    });
+  });
+
+  it('the nickname step takes the onboarding, the nickname and the start Coin — not the balance', () => {
+    const taken = takeOnboardingAnswer(held, answer, 'nickname');
+    expect(taken.onboarding).toBe(COMPLETED);
+    expect(taken.startGrant).toEqual(answer.startGrant);
+    expect(taken.profile.nickname).toBe('새닉네임');
+    // What other writes own stays: the zone, the categories, the balance (asked again instead).
+    expect(taken.profile.timeZone).toBe('America/New_York');
+    expect(taken.profile.interestCategoryIds).toEqual([]);
+    expect(taken.balance).toEqual(held.balance);
+  });
+
+  it('the interests step takes the onboarding and the categories', () => {
+    const taken = takeOnboardingAnswer(held, answer, 'interests');
+    expect(taken.onboarding).toBe(COMPLETED);
+    expect(taken.profile.interestCategoryIds).toEqual([1, 3]);
+    expect(taken.profile.nickname).toBe('user_ab12');
+    expect(taken.startGrant).toBeNull();
+  });
+});
+
+describe('startGrantNotice', () => {
+  it('says the amount once paid, the pending sentence while it waits, the used number, nothing without word', () => {
+    expect(
+      startGrantNotice({
+        status: 'granted',
+        amountCoin: '10000',
+        grantedAt: '2026-10-18T00:00:00.000Z',
+      }),
+    ).toEqual({ kind: 'granted', amountCoin: 10000n });
+    expect(startGrantNotice({ status: 'pending', amountCoin: null, grantedAt: null })).toEqual({
+      kind: 'pending',
+    });
+    // The verified number's start Coin went to an earlier account (#57-1, 오너 결정 2026-10-19).
+    expect(startGrantNotice({ status: 'number_used', amountCoin: null, grantedAt: null })).toEqual({
+      kind: 'number_used',
+    });
+    // No word from the server (never after a completed nickname step): no amount line at all.
+    expect(startGrantNotice(null)).toEqual({ kind: 'none' });
+  });
+});
+
+describe('the interest categories', () => {
+  const categories = [{ id: 5 }, { id: 1 }, { id: 12 }, { id: 3 }];
+
+  it('picks top-level and sub-categories alike, any number (#57-7)', () => {
+    let picked: ReadonlySet<number> = new Set();
+    picked = withInterest(picked, 5, true);
+    picked = withInterest(picked, 12, true);
+    picked = withInterest(picked, 1, true);
+    picked = withInterest(picked, 12, false);
+    expect([...picked].sort((a, b) => a - b)).toEqual([1, 5]);
+  });
+
+  it('sends what is picked among the categories on screen, in id order', () => {
+    expect(interestIds(new Set([12, 3, 99]), categories)).toEqual([3, 12]);
+    // None: the skip.
+    expect(interestIds(new Set(), categories)).toEqual([]);
   });
 });

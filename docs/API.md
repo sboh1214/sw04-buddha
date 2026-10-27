@@ -99,9 +99,11 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `VERIFICATION_CODE_REJECTED` | 409 | 본인확인이 되지 않았다. `details.reason` 이 까닭을 말한다 — `no_code`(기다리는 인증번호가 없다: 받지 않았거나 이미 썼다), `expired`(3분이 지났다), `attempts_exceeded`(틀린 입력이 5번이 되어 그 인증번호를 버렸다. 새로 받아야 한다), `superseded`(다시 받기 전의 인증번호다. 새 인증번호를 넣어야 하고, 틀린 입력으로 세지 않는다), `mismatch`(틀렸다. `details.remainingAttempts` 가 남은 입력 수다). 계정의 가장 최근 인증번호만 확인한다. |
 | `SMS_SEND_FAILED` | 502 | SMS 사업자가 인증번호 문자를 받지 않은 것이 확실하다(502: 거절, 요청이 나가기 전의 연결 실패). 이 발송은 세지 않고 이 요청이 남긴 인증번호도 없다. 앞서 받은 인증번호는 3분 안이고 버려지지 않았으면 그대로 확인할 수 있다(그것이 다시 가장 최근 인증번호다). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. |
 | `SMS_SEND_UNCONFIRMED` | 502 | SMS 사업자의 답을 받지 못했다(502: 시간 초과, 요청이 나간 뒤 끊긴 연결, 5xx, 읽을 수 없는 답). 문자가 갔을 수 있으므로 발송으로 세고(60초 간격과 하루 한도) 그 인증번호는 확인할 수 있다. 5xx 본문은 `details` 를 싣지 않으므로 코드로 `SMS_SEND_FAILED` 와 가린다. |
+| `ONBOARDING_REQUIRED` | 409 | 그 동작에 필요한 온보딩 단계를 마치지 않은 계정이다(#58). `details.steps` 가 마치지 않은 단계를 순서대로 말한다 — `consent`(약관 동의, `POST /api/v1/me/consents`), `verification`(휴대전화 본인확인), `nickname`(닉네임 설정, `POST /api/v1/me/onboarding/nickname`). 본인확인 인증번호 요청은 약관 동의만 요구하고, 닉네임 설정은 약관 동의와 본인확인을, 온보딩을 마친 계정만 하는 동작(관심 카테고리, 모든 관리자 API, 이후의 글·좋아요·신고·제안·주문)은 세 단계를 모두 요구한다. 관리자 API는 관리자 권한을 먼저 보므로 관리자가 아닌 계정에는 `FORBIDDEN` 이다. 권리를 바꾸는 약관 개정 뒤에는 다시 동의할 때까지 `consent` 가 남는다. |
+| `NICKNAME_NOT_ALLOWED` | 409 | 닉네임 규칙에 맞지 않는다(#58). `details.reason` 이 까닭을 말한다 — `auto_prefix`(직접 입력한 닉네임이 자동 닉네임의 `user_` 로 시작한다. 대소문자 무관), `reserved_word`(운영자를 사칭하는 낱말이 들어 있다. 대소문자 무관, 밑줄을 빼고 견준다), `taken`(다른 계정이 대소문자만 다른 닉네임까지 포함해 쓰고 있거나, 다른 계정이 비운 지 30일이 지나지 않았다), `change_interval`(마지막 변경 뒤 30일이 지나지 않았다. `details.nextChangeAt` 이 다음 변경이 되는 시각), `already_set`(온보딩의 닉네임 설정을 이미 마쳤다. 바꾸려면 `PATCH /api/v1/me`). |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (60개)
+## 오퍼레이션 (63개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -116,12 +118,15 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
 | GET | `/api/v1/me` | Profile, balance and linked sign-in methods | 🔒 | `UNAUTHENTICATED`, `NOT_FOUND`, `RATE_LIMITED` |
-| PATCH | `/api/v1/me` | Change nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| PATCH | `/api/v1/me` | Change nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `NICKNAME_NOT_ALLOWED`, `RATE_LIMITED` |
 | POST | `/api/v1/me/password` | Set the first password (after verification, or for a social-only account) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | PUT | `/api/v1/me/time-zone` | Set the time zone times are shown in (null: follow the browser) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| POST | `/api/v1/me/phone-verification/code` | Text a six-digit code to the mobile number, keeping the real name for the confirmation | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `PHONE_VERIFICATION_NOT_ALLOWED`, `PHONE_VERIFICATION_LIMITED`, `RATE_LIMITED`, `SMS_SEND_FAILED`, `SMS_SEND_UNCONFIRMED` |
+| POST | `/api/v1/me/phone-verification/code` | Text a six-digit code to the mobile number, keeping the real name for the confirmation | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `PHONE_VERIFICATION_NOT_ALLOWED`, `PHONE_VERIFICATION_LIMITED`, `RATE_LIMITED`, `SMS_SEND_FAILED`, `SMS_SEND_UNCONFIRMED` |
 | POST | `/api/v1/me/phone-verification/confirm` | Confirm the account's newest code: records the verified number and real name | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `VERIFICATION_CODE_REJECTED`, `PHONE_VERIFICATION_NOT_ALLOWED`, `RATE_LIMITED` |
 | PUT | `/api/v1/me/real-name` | Change the real name | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `VERIFICATION_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/me/consents` | Record consent answers: the items the consent step asks, or the marketing one alone | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| POST | `/api/v1/me/onboarding/nickname` | Set or confirm the nickname in the onboarding, and grant the start Coin | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `NICKNAME_NOT_ALLOWED`, `VERIFICATION_REQUIRED`, `RATE_LIMITED` |
+| PUT | `/api/v1/me/interest-categories` | Set the interest categories (none: skip the step) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
 
 ### `wallet` — 지갑·결제
 
@@ -139,36 +144,36 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 
 | 메서드 | 경로 | 설명 | 인증 | 오류 |
 | --- | --- | --- | --- | --- |
-| GET | `/api/v1/admin/charge-packages` | Every charge package, active or not | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/charge-packages` | Add a charge package | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/charge-packages/{id}` | Change the amount, price, order or availability | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| DELETE | `/api/v1/admin/charge-packages/{id}` | Remove a package (past payments keep their own amount and price) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/coupons` | Coupons, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/coupons` | Issue a coupon (the code is generated when omitted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/coupons/{id}` | Disable a coupon or change its cap, expiry or memo | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/users` | Search users by email or nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit Coin with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/payments/{id}/refund` | Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `INSUFFICIENT_BALANCE`, `DUPLICATE_REQUEST`, `REFUND_NOT_ALLOWED`, `PAYMENT_GATEWAY_REFUSED`, `RATE_LIMITED`, `PAYMENT_GATEWAY_ERROR` |
-| GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets` | Create a draft market (no price until its first fill) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/markets/{id}/related` | The markets linked to this one, any status, the latest link first, with who linked | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/related` | Link another market to this one, two-way, in any status of either; linking a linked pair changes nothing. Answers the links as they stand | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| DELETE | `/api/v1/admin/markets/{id}/related/{relatedMarketId}` | Unlink two markets; unlinking a pair that is not linked changes nothing. Answers the path market's links as they stand | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/markets/{id}` | One market with its exposure, settlement steps and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RULES_REQUIRED`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `MARKET_NOT_OPEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolved: record the final result; settlement starts immediately | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/release-settings` | Every registered release setting with its status and value, in registry order; `status=undecided` lists the ones with no value | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/release-settings/changes` | Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| PATCH | `/api/v1/admin/release-settings/{key}` | Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/admins` | Every account that holds the admin role now, with its latest grant | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/admins` | Make an account an admin with a reason (recorded); only an account with a verified email that has verified its mobile number | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/admins/changes` | Admin grants and revokes, newest first: account, admin, reason and time (of one account with `userId`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
-| POST | `/api/v1/admin/admins/{userId}/revoke` | Take the admin role from an account (one's own included) with a reason (recorded) and sign it out everywhere; refused when fewer than two admins would remain | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
-| GET | `/api/v1/admin/sms/status` | Counts of the verification texts: sent (against the daily service limit), unanswered and refused, in the last 24 hours and per Korean day for seven days | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/charge-packages` | Every charge package, active or not | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/charge-packages` | Add a charge package | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/charge-packages/{id}` | Change the amount, price, order or availability | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| DELETE | `/api/v1/admin/charge-packages/{id}` | Remove a package (past payments keep their own amount and price) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/coupons` | Coupons, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/coupons` | Issue a coupon (the code is generated when omitted) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/coupons/{id}` | Disable a coupon or change its cap, expiry or memo | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/users` | Search users by email or nickname | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/users/{id}/balance-adjust` | Credit or debit Coin with a mandatory reason (ADMIN_ADJUST) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `INSUFFICIENT_BALANCE`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/payments` | Charges, newest first | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/payments/{id}/refund` | Refund an unused charge within 7 days of its approval: claw back all its Coin, then cancel the whole KRW at the provider (retry a refunding one). Closed while paid Coin is off: 404 (ADR-0049) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `INSUFFICIENT_BALANCE`, `DUPLICATE_REQUEST`, `REFUND_NOT_ALLOWED`, `PAYMENT_GATEWAY_REFUSED`, `RATE_LIMITED`, `PAYMENT_GATEWAY_ERROR` |
+| GET | `/api/v1/admin/audit-failures` | Ledger/balance mismatches found by the ledger.audit job | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets` | Every market, drafts included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets` | Create a draft market (no price until its first fill) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets/{id}/related` | The markets linked to this one, any status, the latest link first, with who linked | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/related` | Link another market to this one, two-way, in any status of either; linking a linked pair changes nothing. Answers the links as they stand | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| DELETE | `/api/v1/admin/markets/{id}/related/{relatedMarketId}` | Unlink two markets; unlinking a pair that is not linked changes nothing. Answers the path market's links as they stand | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/markets/{id}` | One market with its exposure, settlement steps and event log | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/markets/{id}` | Edit a draft (any field) or an open market (text, close time, category; slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RULES_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/open` | draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RULES_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/close` | open → closed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `MARKET_NOT_OPEN`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/markets/{id}/resolve` | closed → resolved: record the final result; settlement starts immediately | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/release-settings` | Every registered release setting with its status and value, in registry order; `status=undecided` lists the ones with no value | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/release-settings/changes` | Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| PATCH | `/api/v1/admin/release-settings/{key}` | Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/admins` | Every account that holds the admin role now, with its latest grant | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/admins` | Make an account an admin with a reason (recorded); only an account with a verified email that has verified its mobile number | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/admins/changes` | Admin grants and revokes, newest first: account, admin, reason and time (of one account with `userId`) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| POST | `/api/v1/admin/admins/{userId}/revoke` | Take the admin role from an account (one's own included) with a reason (recorded) and sign it out everywhere; refused when fewer than two admins would remain | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `ROLE_CHANGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| GET | `/api/v1/admin/sms/status` | Counts of the verification texts: sent (against the daily service limit), unanswered and refused, in the last 24 hours and per Korean day for seven days | 🔒 | `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
 
 ### `markets` — 시장·시세
 
@@ -205,12 +210,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/search-history/{id}/delete` | Delete one recent search: every recorded search of the entry's term (an id the account has none of deletes nothing); answers the recent searches (the newest 10 distinct terms, newest first) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/me/search-history/clear` | Delete every recorded search of the account; answers the (empty) recent searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
-## 스키마 (81개)
+## 스키마 (89개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `Nickname`, `OkResult`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `NextPath`, `Nickname`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 
@@ -287,6 +292,17 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
   주소에나 비밀번호를 먼저 심을 수 있어서, 공격자가 피해자 주소로 가입해 두고 피해자가 우리 인증
   메일을 누르면 그 비밀번호가 피해자 계정의 것이 된다. 서버 안에서 호출하는
   `auth.api.signUpEmail` 은 계속 동작한다(`disabledPaths` 는 HTTP 라우터에서만 검사된다).
+- `POST /api/auth/update-user` — `disabledPaths` 로 막혀 HTTP 로는 **404** 다. 그 경로가 쓰는 것은
+  better-auth 의 이름(`user.name`)과 사진(`user.image`)뿐인데 이 서비스는 그 둘을 두지 않는다
+  (회원의 이름은 닉네임, `PATCH /api/v1/me`). 서버 안의 `auth.api.updateUser` 는 남지만 데이터베이스
+  훅이 두 칸을 그대로 둔다(ADR-0072 7-30·7-31, 오너 결정 2026-10-19 (2차) 3).
+- `GET /api/auth/account-info` — `disabledPaths` 로 막혀 HTTP 로는 **404** 다. 그 답은 연결한 소셜
+  로그인 제공자의 프로필(이름·사진)인데, 이 서비스는 제공자에게 그것을 묻지도(구글은 `openid`·`email`,
+  카카오는 `account_email` 만) 그것을 담은 제공자의 ID 토큰을 두지도 않는다(ADR-0072 7-30·7-31·7-40).
+- `POST /api/auth/get-access-token`·`POST /api/auth/refresh-token` — `disabledPaths` 로 막혀 HTTP
+  로는 **404** 다. 둘은 세션 계정에 연결한 소셜 로그인 제공자의 접근 토큰을(뒤의 것은 저장한 갱신
+  토큰으로 새로 받아) 내주는데, 이 서비스는 제공자의 접근·갱신 토큰을 두지 않는다 — 로그인과 연결은
+  콜백이 받은 토큰으로 제공자에게 묻고 저장하지 않는다(ADR-0072 7-30·7-31, 오너 결정 2026-10-19 (4차) 1).
 - 최초 비밀번호 설정에는 대응하는 HTTP 경로가 없다. better-auth 의 `setPassword` 는 서버 전용
   엔드포인트라, 이 저장소는 `POST /api/v1/me/password` 로 감싸 노출한다. 본문은
   `newPassword` 와 화면이 보는 계정 `expectedAccountId` 이고, 그것이 쿠키의 계정이 아니면
@@ -320,6 +336,7 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
 | `searchHistory` | 로그인 계정 (라우트별) | 30 | `POST /api/v1/me/search-history`(제출한 검색어 기록). 기록마다 남는 행이라(보관 기간 없음) 계정마다 센다. 웹은 거절된 기록을 버리고 검색은 그대로 간다. |
 | `phoneVerification` | 로그인 계정 (라우트별) | 5 | `POST /api/v1/me/phone-verification/code`(본인확인 인증번호 요청). 계정마다 센다. 발송 수 자체는 이 버킷이 아니라 DB 의 고정 한도(60초 간격, 계정·번호마다 24시간 10번, `PHONE_VERIFICATION_LIMITED`)가 막고, 이 버킷은 그 한도에 거절당할 요청을 스크립트가 쏟아 내는 속도를 막는다. |
+| `consent` | 로그인 계정 (라우트별) | 5 | `POST /api/v1/me/consents`(약관 동의와 MY 설정의 마케팅 정보 수신 켜고 끄기). 계정마다 센다. 바뀐 답마다 고치지 못하고 보존기간 동안 남는 동의 기록 행이 쌓이므로(선택 항목인 마케팅 정보 수신은 MY 설정에서 몇 번이든 켜고 끌 수 있다), 주소 버킷만으로는 한 계정이 보낼 주소가 있는 만큼 기록을 늘릴 수 있다. 동의 단계는 한 번(개정 뒤 다시 묻는 때에 한 번 더) 보내고, MY 설정의 마케팅 스위치는 바꿀 때마다 한 번 보낸다. |
 | `email` | 본문이 지목한 이메일 주소 (라우트별) | 5 | 메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다. |
 | `signIn` | 본문이 지목한 이메일 주소 (라우트별) | 10 | `/api/auth/sign-in/email`. 시도를 세되 **성공한 로그인이 버킷을 지운다** — 비밀번호가 맞은 로그인은 공격이 아니고, 그것까지 남기면 공유 계정이 쓰이는 것만으로 스스로 잠긴다. `/api/auth/*` 전체는 이와 별도로 `default`(주소) 버킷에도 들어간다. |
 

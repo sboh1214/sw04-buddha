@@ -28,18 +28,22 @@ export interface LockPollClient {
 }
 
 /**
- * Polls until another backend of the test database is parked on a heavyweight lock (bounded):
- * how a test that holds a row or advisory lock knows the request it dispatched has reached
- * that lock, rather than guessing with a sleep. The database is exclusive to the running
- * suite (the packages/db file lock) and every connection uses one role, so pg_stat_activity
- * shows the wait.
+ * Polls until `count` other backends of the test database are parked on a heavyweight lock
+ * (bounded): how a test that holds a row or advisory lock knows the requests it dispatched have
+ * reached their locks, rather than guessing with a sleep. The database is exclusive to the
+ * running suite (the packages/db file lock) and every connection uses one role, so
+ * pg_stat_activity shows the wait.
  *
  * Safe to call on a client that is inside a transaction (one holding a row lock): Postgres
  * freezes pg_stat_activity at its first read within a transaction and answers every later
  * read from that snapshot, so a poll that started before the request reached the lock would
  * never see it arrive. Each iteration discards the snapshot first.
  */
-export async function waitForLockWaiter(client: LockPollClient, what: string): Promise<void> {
+export async function waitForLockWaiter(
+  client: LockPollClient,
+  what: string,
+  count = 1,
+): Promise<void> {
   const started = Date.now();
   for (;;) {
     await client.query('SELECT pg_stat_clear_snapshot()');
@@ -48,7 +52,7 @@ export async function waitForLockWaiter(client: LockPollClient, what: string): P
          WHERE datname = current_database() AND pid <> pg_backend_pid()
            AND wait_event_type = 'Lock'`,
     );
-    if (Number((rows[0] as { n?: string } | undefined)?.n) > 0) return;
+    if (Number((rows[0] as { n?: string } | undefined)?.n) >= count) return;
     if (Date.now() - started > LIMIT_MS) {
       const { rows: others } = await client.query(
         `SELECT state, wait_event_type, wait_event, left(query, 120) AS query
@@ -56,7 +60,7 @@ export async function waitForLockWaiter(client: LockPollClient, what: string): P
           WHERE datname = current_database() AND pid <> pg_backend_pid()`,
       );
       throw new Error(
-        `${what}: no backend is waiting on a lock; others: ${JSON.stringify(others)}`,
+        `${what}: fewer than ${String(count)} backends wait on a lock; others: ${JSON.stringify(others)}`,
       );
     }
     await sleep(POLL_MS);

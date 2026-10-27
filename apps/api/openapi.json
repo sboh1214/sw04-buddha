@@ -200,6 +200,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | NICKNAME_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -469,7 +479,7 @@
             }
           },
           "409": {
-            "description": "PHONE_VERIFICATION_NOT_ALLOWED",
+            "description": "ONBOARDING_REQUIRED | PHONE_VERIFICATION_NOT_ALLOWED",
             "content": {
               "application/json": {
                 "schema": {
@@ -1358,6 +1368,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -1434,6 +1454,16 @@
           },
           "403": {
             "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -1549,6 +1579,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -1617,6 +1657,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -1731,6 +1781,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -1807,6 +1867,16 @@
           },
           "403": {
             "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -1914,6 +1984,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -2036,6 +2116,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -2142,7 +2232,7 @@
             }
           },
           "409": {
-            "description": "INSUFFICIENT_BALANCE",
+            "description": "ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE",
             "content": {
               "application/json": {
                 "schema": {
@@ -2249,6 +2339,16 @@
           },
           "403": {
             "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -2365,7 +2465,7 @@
             }
           },
           "409": {
-            "description": "INSUFFICIENT_BALANCE | DUPLICATE_REQUEST | REFUND_NOT_ALLOWED | PAYMENT_GATEWAY_REFUSED",
+            "description": "ONBOARDING_REQUIRED | INSUFFICIENT_BALANCE | DUPLICATE_REQUEST | REFUND_NOT_ALLOWED | PAYMENT_GATEWAY_REFUSED",
             "content": {
               "application/json": {
                 "schema": {
@@ -2482,6 +2582,16 @@
           },
           "403": {
             "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -3163,6 +3273,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -3249,6 +3369,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -3357,6 +3487,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -3457,6 +3597,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -3575,6 +3725,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -3664,6 +3824,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -3777,6 +3947,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "422": {
             "description": "RULES_REQUIRED",
             "content": {
@@ -3876,6 +4056,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -3992,7 +4182,7 @@
             }
           },
           "409": {
-            "description": "MARKET_NOT_OPEN",
+            "description": "ONBOARDING_REQUIRED | MARKET_NOT_OPEN",
             "content": {
               "application/json": {
                 "schema": {
@@ -4100,6 +4290,16 @@
           },
           "404": {
             "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5045,6 +5245,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -5160,6 +5370,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -5267,6 +5487,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -5328,6 +5558,16 @@
           },
           "403": {
             "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5431,7 +5671,7 @@
             }
           },
           "409": {
-            "description": "ROLE_CHANGE_NOT_ALLOWED",
+            "description": "ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5555,6 +5795,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -5663,7 +5913,7 @@
             }
           },
           "409": {
-            "description": "ROLE_CHANGE_NOT_ALLOWED",
+            "description": "ONBOARDING_REQUIRED | ROLE_CHANGE_NOT_ALLOWED",
             "content": {
               "application/json": {
                 "schema": {
@@ -5738,6 +5988,16 @@
               }
             }
           },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
           "429": {
             "description": "RATE_LIMITED",
             "content": {
@@ -5757,6 +6017,314 @@
         "summary": "Counts of the verification texts: sent (against the daily service limit), unanswered and refused, in the last 24 hours and per Korean day for seven days",
         "tags": [
           "admin"
+        ]
+      }
+    },
+    "/api/v1/me/consents": {
+      "post": {
+        "operationId": "recordMyConsents",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordConsentsBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Me"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Record consent answers: the items the consent step asks, or the marketing one alone",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/v1/me/onboarding/nickname": {
+      "post": {
+        "operationId": "setMyOnboardingNickname",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetOnboardingNicknameBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Me"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | NICKNAME_NOT_ALLOWED | VERIFICATION_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Set or confirm the nickname in the onboarding, and grant the start Coin",
+        "tags": [
+          "me"
+        ]
+      }
+    },
+    "/api/v1/me/interest-categories": {
+      "put": {
+        "operationId": "setMyInterestCategories",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetInterestCategoriesBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/Me"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Set the interest categories (none: skip the step)",
+        "tags": [
+          "me"
         ]
       }
     }
@@ -5829,6 +6397,8 @@
           "VERIFICATION_CODE_REJECTED",
           "SMS_SEND_FAILED",
           "SMS_SEND_UNCONFIRMED",
+          "ONBOARDING_REQUIRED",
+          "NICKNAME_NOT_ALLOWED",
           "INTERNAL"
         ]
       },
@@ -5839,11 +6409,22 @@
             "type": "string",
             "format": "email",
             "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$"
+          },
+          "next": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NextPath"
+              }
+            ]
           }
         },
         "required": [
           "email"
         ]
+      },
+      "NextPath": {
+        "type": "string",
+        "maxLength": 2048
       },
       "RegisterResult": {
         "type": "object",
@@ -5892,13 +6473,29 @@
                 "nullable": true,
                 "type": "string",
                 "maxLength": 64
+              },
+              "nicknameChangeAvailableAt": {
+                "nullable": true,
+                "type": "string",
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+              },
+              "interestCategoryIds": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 9007199254740991
+                }
               }
             },
             "required": [
               "nickname",
               "role",
               "createdAt",
-              "timeZone"
+              "timeZone",
+              "nicknameChangeAvailableAt",
+              "interestCategoryIds"
             ],
             "additionalProperties": false
           },
@@ -5939,6 +6536,9 @@
                 "$ref": "#/components/schemas/StartGrant"
               }
             ]
+          },
+          "onboarding": {
+            "$ref": "#/components/schemas/Onboarding"
           }
         },
         "required": [
@@ -5949,7 +6549,8 @@
           "balance",
           "linkedAccounts",
           "verification",
-          "startGrant"
+          "startGrant",
+          "onboarding"
         ],
         "additionalProperties": false
       },
@@ -6027,7 +6628,8 @@
             "type": "string",
             "enum": [
               "pending",
-              "granted"
+              "granted",
+              "number_used"
             ]
           },
           "amountCoin": {
@@ -6051,6 +6653,94 @@
           "grantedAt"
         ],
         "additionalProperties": false
+      },
+      "Onboarding": {
+        "type": "object",
+        "properties": {
+          "consent": {
+            "type": "boolean"
+          },
+          "verification": {
+            "type": "boolean"
+          },
+          "nickname": {
+            "type": "boolean"
+          },
+          "completed": {
+            "type": "boolean"
+          },
+          "interests": {
+            "type": "boolean"
+          },
+          "nextStep": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OnboardingStep"
+              }
+            ]
+          },
+          "consents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsentRecord"
+            }
+          }
+        },
+        "required": [
+          "consent",
+          "verification",
+          "nickname",
+          "completed",
+          "interests",
+          "nextStep",
+          "consents"
+        ],
+        "additionalProperties": false
+      },
+      "OnboardingStep": {
+        "type": "string",
+        "enum": [
+          "consent",
+          "verification",
+          "nickname"
+        ]
+      },
+      "ConsentRecord": {
+        "type": "object",
+        "properties": {
+          "item": {
+            "$ref": "#/components/schemas/ConsentItem"
+          },
+          "version": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "agreed": {
+            "type": "boolean"
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "item",
+          "version",
+          "agreed",
+          "recordedAt"
+        ],
+        "additionalProperties": false
+      },
+      "ConsentItem": {
+        "type": "string",
+        "enum": [
+          "terms",
+          "privacy",
+          "age",
+          "marketing"
+        ]
       },
       "SetPasswordBody": {
         "type": "object",
@@ -6094,10 +6784,16 @@
         "properties": {
           "nickname": {
             "$ref": "#/components/schemas/Nickname"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "nickname"
+          "nickname",
+          "expectedAccountId"
         ]
       },
       "UpdateTimeZoneBody": {
@@ -8621,6 +9317,146 @@
           "refused"
         ],
         "additionalProperties": false
+      },
+      "RecordConsentsBody": {
+        "type": "object",
+        "properties": {
+          "consents": {
+            "type": "object",
+            "properties": {
+              "terms": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "enum": [
+                      "draft-2026-10-18"
+                    ]
+                  },
+                  "agreed": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                },
+                "required": [
+                  "version",
+                  "agreed"
+                ]
+              },
+              "privacy": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "enum": [
+                      "draft-2026-10-18"
+                    ]
+                  },
+                  "agreed": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                },
+                "required": [
+                  "version",
+                  "agreed"
+                ]
+              },
+              "age": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "enum": [
+                      "draft-2026-10-18"
+                    ]
+                  },
+                  "agreed": {
+                    "type": "boolean",
+                    "enum": [
+                      true
+                    ]
+                  }
+                },
+                "required": [
+                  "version",
+                  "agreed"
+                ]
+              },
+              "marketing": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "enum": [
+                      "draft-2026-10-18"
+                    ]
+                  },
+                  "agreed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "version",
+                  "agreed"
+                ]
+              }
+            }
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "consents",
+          "expectedAccountId"
+        ]
+      },
+      "SetOnboardingNicknameBody": {
+        "type": "object",
+        "properties": {
+          "nickname": {
+            "$ref": "#/components/schemas/Nickname"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "nickname",
+          "expectedAccountId"
+        ]
+      },
+      "SetInterestCategoriesBody": {
+        "type": "object",
+        "properties": {
+          "categoryIds": {
+            "maxItems": 200,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "categoryIds",
+          "expectedAccountId"
+        ]
       }
     }
   }

@@ -5,6 +5,7 @@ import {
   schema,
   startGrantStatus,
   type Db,
+  type PayStartGrantResult,
   type StartGrantRow,
 } from '@buddha/db';
 import { serializeCoinAmount, START_COIN_SETTING, type StartGrant } from '@buddha/shared';
@@ -28,9 +29,10 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
  *   enters one;
  * - `number_already_used`: the verified number counts for another account's grant — paid or
  *   waiting, typically an account that withdrew before this one verified the same number. Nothing
- *   for this account (#57-1·#57-17): it has no grant record, so `GET /me` says null. (A number
- *   whose grant was cancelled — its account withdrew while it waited — is free again and does not
- *   answer this, owner decision 2026-10-18.)
+ *   for this account (#57-1·#57-17): it has no grant record, and once its onboarding asked for one
+ *   `GET /me` says `number_used` (NUMBER_USED_START_GRANT). (A number whose grant was cancelled —
+ *   its account withdrew while it waited — is free again and does not answer this, owner decision
+ *   2026-10-18.)
  * - `cancelled`: the account's own grant was cancelled when it withdrew while the grant waited
  *   (`cancelStartGrant`, #140); one grant per account, so nothing now. A withdrawal also deletes
  *   the 본인확인 record, so a withdrawn account meets VERIFICATION_REQUIRED first: this answers only
@@ -39,6 +41,25 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 export type StartGrantResult =
   | { outcome: 'granted' | 'already_granted' | 'pending'; startGrant: StartGrant }
   | { outcome: 'number_already_used' | 'cancelled' };
+
+/**
+ * What `StartGrantService.grantIn` did inside its caller's transaction: the payment's own result
+ * (`granted` carries the balance and the entry to announce), or no record for this account.
+ */
+export type StartGrantTxResult =
+  Exclude<PayStartGrantResult, { outcome: 'unverified' }> | { outcome: 'number_already_used' };
+
+/**
+ * `Me.startGrant` of an account whose onboarding asked for the grant while its verified number
+ * counted for another account's grant (`number_already_used`): the notice screen says the number
+ * cannot receive it (오너 결정 2026-10-19, ADR-0072). Not a record of this account: `GET /me`
+ * finds the number held by the other account's grant (`startGrantHoldsNumber`, @buddha/db).
+ */
+export const NUMBER_USED_START_GRANT: StartGrant = {
+  status: 'number_used',
+  amountCoin: null,
+  grantedAt: null,
+};
 
 /**
  * A grant row as `Me.startGrant` and the result above show it: waiting or paid. A cancelled grant
@@ -60,12 +81,14 @@ export function toStartGrant(
 
 /**
  * 시작 지급 (#70, ADR-0071): the same start Coin once per verified mobile number (N01 §2, ADR-0069
- * decision 1 #57-1). An internal service with NO route of its own: the onboarding (#58) calls
- * `grant` once it has confirmed, on the server, the account's consent, 본인확인 and nickname (D18,
- * N02 §9); the worker pays the grants that waited for an amount (`start_grant.pay`). Creating an
- * account or signing in grants nothing (migration 0031).
+ * decision 1 #57-1). An internal service with NO route of its own: the onboarding's nickname step
+ * (#58, OnboardingService.setNickname) calls `grantIn` in its own transaction once it has confirmed,
+ * on the server, the account's consent, 본인확인 and nickname (D18, N02 §9); the worker pays the
+ * grants that waited for an amount (`start_grant.pay`). Creating an account or signing in grants
+ * nothing (migration 0031).
  *
- * One transaction per call, its locks in the order of ADR-0071 (본인확인 기록 → grant → balance):
+ * One transaction per call (`grant`'s own, or the caller's for `grantIn`), its locks in the order of
+ * ADR-0071 (본인확인 기록 → grant → balance):
  * 1. The account's 본인확인 record (`phone_verifications`, #183) FOR SHARE — none, no grant:
  *    VERIFICATION_REQUIRED. The share lock keeps the number from changing or going (an operator's
  *    edit, a withdrawal and its cancellation of the grant) until this commits.
@@ -84,7 +107,7 @@ export function toStartGrant(
  *
  * Operator accounts get it under the same conditions (decision 4 #70). Bot and system accounts
  * (#115) do not exist yet; when they do, they get no grant record — the place for that check is
- * marked in `grant`.
+ * marked in `grantIn`.
  *
  * Not trading profit (N02 §8): PnL lives on `positions` (realized_pnl_coin) and nothing that
  * computes it reads ledger entries.
@@ -104,46 +127,62 @@ export class StartGrantService {
    * ledger entry. Throws VERIFICATION_REQUIRED for an account with no 본인확인 record.
    */
   async grant(userId: string): Promise<StartGrantResult> {
-    const result = await this.db.transaction(async (tx) => {
-      const [verified] = await tx
-        .select({ phone: schema.phoneVerifications.phone })
-        .from(schema.phoneVerifications)
-        .where(eq(schema.phoneVerifications.userId, userId))
-        .limit(1)
-        .for('share');
-      if (!verified) {
-        throw new AppError('VERIFICATION_REQUIRED', {
-          message: 'The start Coin needs a verified mobile number',
-        });
-      }
-      // #115: a bot or system account gets no start grant (#70 본문). No such account exists yet;
-      // the check that tells one apart goes here, before anything is recorded.
-      const recorded = await recordStartGrant(tx, userId, this.hasher.hash(verified.phone));
-      if (recorded.outcome === 'number_already_used') return recorded;
-      const paid = await payStartGrant(tx, recorded.grantId, (inner) => this.amount(inner)).catch(
-        (error: unknown) => {
-          if (error instanceof AppError) throw error;
-          throw new AppError('INTERNAL', {
-            message: 'The start grant could not be paid',
-            cause: error,
-          });
-        },
-      );
-      // payStartGrant asks for the 본인확인 record itself (the worker pays with nothing else
-      // holding it); here the FOR SHARE read above holds it, so this is never reached. Should it
-      // be, it is the same refusal, and throwing rolls back a grant recorded above.
-      if (paid.outcome === 'unverified') {
-        throw new AppError('VERIFICATION_REQUIRED', {
-          message: 'The start Coin needs a verified mobile number',
-        });
-      }
-      return paid;
-    });
+    const result = await this.db.transaction((tx) => this.grantIn(tx, userId));
+    return this.announce(userId, result);
+  }
 
+  /**
+   * `grant`'s work inside the caller's transaction, for a caller whose own write must commit
+   * together with the grant: the onboarding's nickname step (#58) confirms the nickname and grants
+   * in one transaction, so an account whose onboarding is done always had its grant asked for. The
+   * caller commits, then hands the result to `announce`, which publishes the balance and gives
+   * the outcome `grant` would have. Locks as `grant` does, in the order above, after whatever the
+   * caller locked first.
+   */
+  async grantIn(tx: Tx, userId: string): Promise<StartGrantTxResult> {
+    const [verified] = await tx
+      .select({ phone: schema.phoneVerifications.phone })
+      .from(schema.phoneVerifications)
+      .where(eq(schema.phoneVerifications.userId, userId))
+      .limit(1)
+      .for('share');
+    if (!verified) {
+      throw new AppError('VERIFICATION_REQUIRED', {
+        message: 'The start Coin needs a verified mobile number',
+      });
+    }
+    // #115: a bot or system account gets no start grant (#70 본문). No such account exists yet;
+    // the check that tells one apart goes here, before anything is recorded.
+    const recorded = await recordStartGrant(tx, userId, this.hasher.hash(verified.phone));
+    if (recorded.outcome === 'number_already_used') return recorded;
+    const paid = await payStartGrant(tx, recorded.grantId, (inner) => this.amount(inner)).catch(
+      (error: unknown) => {
+        if (error instanceof AppError) throw error;
+        throw new AppError('INTERNAL', {
+          message: 'The start grant could not be paid',
+          cause: error,
+        });
+      },
+    );
+    // payStartGrant asks for the 본인확인 record itself (the worker pays with nothing else
+    // holding it); here the FOR SHARE read above holds it, so this is never reached. Should it
+    // be, it is the same refusal, and throwing rolls back a grant recorded above.
+    if (paid.outcome === 'unverified') {
+      throw new AppError('VERIFICATION_REQUIRED', {
+        message: 'The start Coin needs a verified mobile number',
+      });
+    }
+    return paid;
+  }
+
+  /**
+   * After the transaction of `grantIn` committed: the `user:balance` event of a payment (PLAN 8,
+   * best effort, like every balance change) and the outcome as `grant` answers it.
+   */
+  async announce(userId: string, result: StartGrantTxResult): Promise<StartGrantResult> {
     if (result.outcome === 'number_already_used') return result;
     if (result.outcome === 'cancelled') return { outcome: 'cancelled' };
     if (result.outcome === 'granted') {
-      // After COMMIT, like every balance change (PLAN 8); best effort.
       await this.publisher.publishUser(userId, balanceEvent(result.balance, result.ledgerEntry));
     }
     const startGrant = toStartGrant(result.grant);

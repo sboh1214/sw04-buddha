@@ -6,7 +6,7 @@
 // table created by migrations, which is all the seed needs.
 import { randomUUID } from 'node:crypto';
 import {
-  nicknameSchema,
+  AUTH_USER_NAME,
   SEED_ADMIN_GRANT_REASON,
   type CategorySlug,
   SUBCATEGORY_SLUGS,
@@ -76,7 +76,6 @@ const SUBCATEGORY_NAMES = {
  */
 const CREDENTIAL_ISSUER = 'local:credential';
 const CREDENTIAL_PROVIDER = 'credential';
-const ADMIN_NICKNAME = '관리자';
 
 async function seedCategories(db: Db): Promise<void> {
   // Parents first, then the leaves under them: a leaf's `parent_id` is the id the first
@@ -202,20 +201,6 @@ interface AdminInput {
   password: string;
 }
 
-/** '관리자', then '관리자2', '관리자3', ... when another user already owns the nickname. */
-async function pickNickname(tx: Pick<Db, 'select'>, ownUserId: string): Promise<string> {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    const candidate = attempt === 0 ? ADMIN_NICKNAME : `${ADMIN_NICKNAME}${String(attempt + 1)}`;
-    if (!nicknameSchema.safeParse(candidate).success) continue;
-    const [taken] = await tx
-      .select({ userId: profiles.userId })
-      .from(profiles)
-      .where(eq(profiles.nickname, candidate));
-    if (!taken || taken.userId === ownUserId) return candidate;
-  }
-  throw new Error('[db:seed] could not find a free admin nickname');
-}
-
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
 /**
@@ -224,9 +209,12 @@ type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
  * better-auth/crypto). The "user" AFTER INSERT trigger (migrations 0002 and 0031) creates the
  * profile (auto nickname) and a zero balance with no ledger entry, like every account: the
  * operator account gets its start Coin as everyone does, after its 본인확인 and onboarding (#70,
- * ADR-0069 decision 4 #70), never from the seed. A fresh account is renamed 관리자 (관리자2
- * for the second) and promoted; an account the address already has keeps its nickname and
- * password and is verified and promoted. Writes its `admin_grant` record — actor the account
+ * ADR-0069 decision 4 #70), never from the seed. A fresh account keeps the trigger's auto nickname
+ * — the seed no longer renames it 관리자, a reserved word the nickname rules refuse (#57-6): the admin
+ * keeps it or picks its own at the onboarding's nickname step, as every account does (오너 결정
+ * 2026-10-19 (2차) 2, ADR-0072) — and its better-auth `user.name` is AUTH_USER_NAME, as every
+ * account's. A fresh account is promoted; an account the address already has keeps its nickname
+ * and password and is verified and promoted. Writes its `admin_grant` record — actor the account
  * itself, reason SEED_ADMIN_GRANT_REASON — at `at`, and returns its id. Returns undefined,
  * changing nothing, for an account that was revoked once: the seed never gives the role back
  * (owner decision 2026-10-13).
@@ -260,7 +248,7 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
     const id = randomUUID();
     await tx.insert(user).values({
       id,
-      name: ADMIN_NICKNAME,
+      name: AUTH_USER_NAME,
       email,
       emailVerified: true,
       createdAt: now,
@@ -303,14 +291,9 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
   if (!profile) {
     throw new Error('[db:seed] the "user" trigger did not create a profile (run db:migrate)');
   }
-  // A fresh account also trades the trigger's auto nickname for 관리자 in the same statement.
   await tx
     .update(profiles)
-    .set({
-      ...(created ? { nickname: await pickNickname(tx, userId) } : {}),
-      role: 'admin',
-      updatedAt: at,
-    })
+    .set({ role: 'admin', updatedAt: at })
     .where(eq(profiles.userId, userId));
   await tx.insert(adminActions).values({
     adminId: userId,

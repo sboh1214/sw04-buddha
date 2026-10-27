@@ -137,11 +137,22 @@ const me: Me = {
     role: 'user',
     createdAt: '2026-08-01T00:00:00.000Z',
     timeZone: null,
+    nicknameChangeAvailableAt: null,
+    interestCategoryIds: [],
   },
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
   startGrant: null,
+  onboarding: {
+    consent: false,
+    verification: false,
+    nickname: false,
+    completed: false,
+    interests: false,
+    nextStep: 'consent',
+    consents: [],
+  },
 };
 
 /** The infinite-list shape: the last page ends the list, and the first page has no cursor. */

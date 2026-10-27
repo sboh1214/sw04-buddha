@@ -22,11 +22,22 @@ const following: Me = {
     role: 'user',
     createdAt: '2026-08-01T00:00:00.000Z',
     timeZone: null,
+    nicknameChangeAvailableAt: null,
+    interestCategoryIds: [],
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
   verification: null,
   startGrant: null,
+  onboarding: {
+    consent: false,
+    verification: false,
+    nickname: false,
+    completed: false,
+    interests: false,
+    nextStep: 'consent',
+    consents: [],
+  },
 };
 
 /** What `PUT /me/time-zone` answers once New York is saved. */
@@ -250,6 +261,35 @@ describe('storeMe', () => {
     }
   });
 
+  it('takes when the nickname may change next with the nickname, and nothing else (#58)', async () => {
+    // A change starts the 30 days (ADR-0069 decision 1 #57-6): the settings card says when.
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(inNewYork));
+    try {
+      await me.observer.refetch();
+      const changed: Me = {
+        ...following,
+        profile: {
+          ...following.profile,
+          nickname: '새이름',
+          nicknameChangeAvailableAt: '2026-11-17T00:00:00.000Z',
+          interestCategoryIds: [9],
+        },
+      };
+
+      await storeMe(queryClient, changed, 'nickname', () => undefined);
+
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
+        ...inNewYork.profile,
+        nickname: '새이름',
+        nicknameChangeAvailableAt: '2026-11-17T00:00:00.000Z',
+      });
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
   it('keeps a balance that changed while the write ran, taking only the profile from the answer', async () => {
     // THE HAZARD: the answer's balance is what the server read right after the UPDATE. A fill
     // that committed after that read reached the tab first as `user:balance`, which patched
@@ -334,7 +374,7 @@ describe('the profile mutations', () => {
       await me.observer.refetch();
       const inflight = me.observer.refetch();
 
-      await rename.mutate('새이름');
+      await rename.mutate({ nickname: '새이름', expectedAccountId: following.id });
       stale.resolve(following);
       await inflight;
       await settle();
@@ -378,6 +418,45 @@ describe('the profile mutations', () => {
       await expect(save.mutate(body)).rejects.toThrow('other account');
       expect(session.count()).toBe(1);
       await expect(save.mutate(body)).rejects.toThrow('invalid');
+      expect(session.count()).toBe(1);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session again when the nickname PATCH is refused for another account (#58)', async () => {
+    // PATCH /me names the account since #58 (`expectedAccountId`): its 403 is the same sign of a
+    // switch as the time zone's. A refused nickname (the rules, the interval) is not.
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const failures = [
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'other account',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      }),
+      new ApiError(409, {
+        code: 'NICKNAME_NOT_ALLOWED',
+        message: 'taken',
+        details: { reason: 'taken' },
+      }),
+    ];
+    const rename = new MutationObserver(
+      queryClient,
+      updateNicknameOptions(queryClient, session.refetch, () =>
+        Promise.reject(failures.shift() ?? new Error('no failure left')),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      const body = { nickname: '새이름', expectedAccountId: following.id };
+
+      await expect(rename.mutate(body)).rejects.toThrow('other account');
+      expect(session.count()).toBe(1);
+      await expect(rename.mutate(body)).rejects.toThrow('taken');
       expect(session.count()).toBe(1);
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
     } finally {

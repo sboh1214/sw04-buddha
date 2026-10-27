@@ -4,7 +4,13 @@
  * the guard surface (401/403/CSRF). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
-import { createCategory, createMarket, createPosition, createUser } from '@buddha/db/test';
+import {
+  completeOnboarding,
+  createCategory,
+  createMarket,
+  createPosition,
+  createUser,
+} from '@buddha/db/test';
 import {
   INT4_MAX,
   marketChannel,
@@ -54,6 +60,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: admin.id });
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(admin.id);
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });

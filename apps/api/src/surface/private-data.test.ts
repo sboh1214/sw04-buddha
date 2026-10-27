@@ -4,7 +4,8 @@
  * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), password
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
- * recorded search (#15). Then:
+ * recorded search (#15), its consent records with the address and browser they came with and a
+ * nickname it gave up (#58). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
@@ -13,7 +14,8 @@
  *   answer may hold A's values; the same request as A shows them, so the check is not blind
  *   (N04 §7 "다른 사용자가 비공개 자산·주문을 조회할 수 없어야 한다"). A's own answer is
  *   looked at for one more thing: it may not hold what nobody is shown (`NEVER_SHOWN`: the keyed
- *   hash of A's number, the code hash and client address of A's 본인확인). The field names in it
+ *   hash of A's number, the code hash and client address of A's 본인확인, the client address and
+ *   browser of A's consents, A's former nickname). The field names in it
  *   are not looked at: the excluded-feature names are the public API's (owner decision
  *   2026-10-14 #113);
  * - every better-auth route that answers with an account's data (AUTH_ROUTES `answersAccount`)
@@ -29,6 +31,9 @@
 import { randomInt, randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
 import {
+  completeOnboarding,
+  createCategory,
+  createConsents,
   createMarket,
   createMarketLink,
   createPhoneVerification,
@@ -38,7 +43,9 @@ import {
   createWatch,
 } from '@buddha/db/test';
 import {
+  CONSENT_ITEMS,
   PAGE_LIMIT_MAX,
+  currentConsentVersion,
   REALTIME_EVENT_REGISTRY,
   REALTIME_EXCEPTION_EVENT,
   REALTIME_NAMESPACE,
@@ -111,9 +118,9 @@ interface Fixture {
   searchId: string;
   /** A's verified number (ADR-0070), digits: what B's code request names. */
   phone: string;
+  /** An active category: what B's refused interest categories name (#58). */
+  categoryId: number;
   paymentId: string;
-  /** A's password login: the `account` row better-auth keeps. */
-  accountId: string;
   /** Page cursors made from A's rows: a page from there holds A's newest row and the older ones. */
   cursors: { ledger: string; orders: string; payments: string; watchlist: string };
   sentinels: readonly Sentinel[];
@@ -261,6 +268,11 @@ const NEVER_SHOWN: readonly string[] = [
   'phone hash',
   'verification code hash',
   'verification client address',
+  // #58: the consent record's client address and browser are the record's alone, and a nickname
+  // given up is never shown again (#37-3) — A's own `GET /me` included.
+  'consent client address',
+  'consent user agent',
+  'released nickname',
 ];
 
 interface OwnerCase {
@@ -296,7 +308,32 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
       'start grant amount',
     ],
   },
-  'PATCH /me': { body: () => ({ nickname: `b_${letters(8)}` }), status: 200 },
+  // B's cookie naming A's account: refused before anything is read or written (#58) — A's
+  // nickname stays and no change of B's is spent (below).
+  'PATCH /me': {
+    body: (fixture) => ({ nickname: `b_${letters(8)}`, expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account: nobody's consent is recorded, nobody's nickname set and no
+  // start Coin granted (below).
+  'POST /me/consents': {
+    body: (fixture) => ({
+      consents: Object.fromEntries(
+        CONSENT_ITEMS.map((item) => [item, { version: currentConsentVersion(item), agreed: true }]),
+      ),
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
+  },
+  'POST /me/onboarding/nickname': {
+    body: (fixture) => ({ nickname: `b_${letters(8)}`, expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B has done the onboarding, so the guard lets it to the account check, which refuses.
+  'PUT /me/interest-categories': {
+    body: (fixture) => ({ categoryIds: [fixture.categoryId], expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
   'POST /me/password': {
     body: (fixture) => ({ newPassword: 'another-password-1', expectedAccountId: fixture.a.id }),
     status: 403,
@@ -434,9 +471,6 @@ interface AuthCase {
   own?: { request?: (fixture: Fixture) => AuthRequest; labels: readonly string[] };
 }
 
-/** A's login account and A, as better-auth's account-token routes take them. */
-const aimedAtA = (fixture: Fixture) => ({ accountId: fixture.accountId, userId: fixture.a.id });
-
 const WRONG_PASSWORD = 'not-the-password-1';
 
 /** The better-auth routes that answer with an account's data (AUTH_ROUTES `answersAccount`). */
@@ -484,18 +518,6 @@ const AUTH_CASES: Readonly<Record<string, AuthCase>> = {
   'GET /list-accounts': {
     status: { anonymous: 401, B: 200 },
     own: { labels: ['user id', 'account id'] },
-  },
-  'POST /refresh-token': {
-    request: (fixture) => ({ body: aimedAtA(fixture) }),
-    status: { anonymous: 401, B: 400 },
-  },
-  'POST /get-access-token': {
-    request: (fixture) => ({ body: aimedAtA(fixture) }),
-    status: { anonymous: 401, B: 400 },
-  },
-  'GET /account-info': {
-    request: (fixture) => ({ query: aimedAtA(fixture) }),
-    status: { anonymous: 401, B: 400 },
   },
 };
 
@@ -627,6 +649,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     for (const socket of sockets.splice(0)) socket.disconnect();
   });
 
+  /** An active category of its own, when the reset left none (#58's interest categories). */
+  async function createCategoryRow(): Promise<number> {
+    return (await createCategory(t.db)).id;
+  }
+
   async function seed(): Promise<Fixture> {
     const tag = randomUUID().replaceAll('-', '').slice(0, 10);
     const a = await signUpTestUser(t, {
@@ -639,6 +666,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .update(schema.profiles)
       .set({ role: 'admin' })
       .where(eq(schema.profiles.userId, admin.id));
+    // An admin finishes the onboarding like any account before /admin answers it (ADR-0072).
+    await completeOnboarding(t.db, { userId: admin.id });
     await t.app.get(AdminGuard).invalidate(admin.id);
 
     const nickname = `leak_${tag}`;
@@ -676,6 +705,27 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       phoneHash,
       amountCoin: AMOUNTS.startGrant,
     });
+
+    // A's consents (#58), each with the address and browser it came with (sentinels: nobody, A
+    // included, is shown them), and a nickname A gave up (#37-3: never shown again). B has done
+    // the onboarding, so its refused interest categories reach the account check.
+    const consentIp = `2001:db8::${randomInt(0x1000, 0x10000).toString(16)}:${randomInt(0x1000, 0x10000).toString(16)}`;
+    const consentAgent = `LeakBrowser/${tag}`;
+    await createConsents(t.db, {
+      userId: a.id,
+      marketing: true,
+      clientIp: consentIp,
+      userAgent: consentAgent,
+    });
+    const releasedNickname = `gone_${tag}`;
+    await t.db.insert(schema.nicknameHolds).values({ nickname: releasedNickname, userId: a.id });
+    await completeOnboarding(t.db, { userId: b.id });
+    const [category] = await t.db
+      .select({ id: schema.categories.id })
+      .from(schema.categories)
+      .where(eq(schema.categories.isActive, true))
+      .limit(1);
+    const categoryId = category?.id ?? (await createCategoryRow());
 
     // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
     const [before] = await t.db
@@ -840,8 +890,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
+      categoryId,
       paymentId: payment!.id,
-      accountId: account!.id,
       cursors: {
         ledger: cursorAfter(entry!),
         // The later of A's two orders, so the page holds both.
@@ -858,6 +908,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('phone', phone),
         text('verification code hash', codeHash),
         text('verification client address', clientIp),
+        text('consent client address', consentIp),
+        text('consent user agent', consentAgent),
+        text('released nickname', releasedNickname),
         text('password', a.password),
         text('session token', session!.token),
         text('account id', account!.id),
@@ -1051,6 +1104,26 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         .where(eq(schema.account.userId, f.a.id))
         .then((rows) => rows.map((row) => row.hash));
     const passwordBefore = await password();
+    // #58: what B's refused onboarding writes would have written — consents, a nickname and its
+    // hold, a start grant, interest categories — as it stands before them.
+    const onboardingState = () =>
+      Promise.all([
+        t.db.select().from(schema.consentRecords).orderBy(schema.consentRecords.id),
+        t.db
+          .select({
+            userId: schema.profiles.userId,
+            nickname: schema.profiles.nickname,
+            confirmed: schema.profiles.nicknameConfirmedAt,
+            changed: schema.profiles.nicknameChangedAt,
+            interests: schema.profiles.interestsAnsweredAt,
+          })
+          .from(schema.profiles)
+          .orderBy(schema.profiles.userId),
+        t.db.select().from(schema.nicknameHolds).orderBy(schema.nicknameHolds.id),
+        t.db.select().from(schema.startGrants).orderBy(schema.startGrants.id),
+        t.db.select().from(schema.profileInterestCategories),
+      ]);
+    const onboardingBefore = await onboardingState();
     const answers: { route: string; status: number; leaks: string[] }[] = [];
     const shown: { route: string; status: number; missing: string[]; shownAnyway: string[] }[] = [];
     for (const key of Object.keys(OWNER_ROUTES)) {
@@ -1086,8 +1159,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       shown.map(({ route }) => ({ route, status: 200, missing: [], shownAnyway: [] })),
     );
 
-    // B's refused writes changed nothing of A's: A's record and code stay, B has neither, and
-    // nobody was texted (ADR-0070).
+    // B's refused writes changed nothing of A's: A's record and code stay, B has no code (its
+    // record is its own onboarding's, #58), and nobody was texted (ADR-0070).
     const sentinel = (label: string) => f.sentinels.find((s) => s.label === label)!.value;
     expect(
       await t.db
@@ -1096,8 +1169,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           realName: schema.phoneVerifications.realName,
           phone: schema.phoneVerifications.phone,
         })
-        .from(schema.phoneVerifications),
+        .from(schema.phoneVerifications)
+        .where(eq(schema.phoneVerifications.userId, f.a.id)),
     ).toEqual([{ userId: f.a.id, realName: sentinel('real name'), phone: sentinel('phone') }]);
+    // The admin's record is its own onboarding's too (ADR-0072: /admin asks for it).
+    expect(
+      (await t.db.select().from(schema.phoneVerifications)).map((row) => row.userId).sort(),
+    ).toEqual([f.a.id, f.b.id, f.admin.id].sort());
     expect(
       await t.db
         .select({ userId: schema.phoneVerificationCodes.userId })
@@ -1111,6 +1189,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(profile?.timeZone).toBe(sentinel('time zone'));
     expect(passwordBefore).toHaveLength(1);
     expect(await password()).toEqual(passwordBefore);
+    // B's refused consent, nickname, change and interest categories changed nobody's (#58).
+    expect(await onboardingState()).toEqual(onboardingBefore);
 
     // B's refused unwatch left A's watches and their `watch` events, and wrote nothing for B. B
     // asking about that market heard its own state, and A hears A's (#89).

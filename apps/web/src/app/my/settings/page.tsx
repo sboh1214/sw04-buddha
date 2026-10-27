@@ -4,6 +4,7 @@ import { copy } from '@/copy';
 import { requireMySession } from '@/lib/my.server';
 import { AccountSection } from './account-section';
 import { LinkedAccounts } from './linked-accounts';
+import { MarketingSection } from './marketing-section';
 import { NicknameForm } from './nickname-form';
 import { PasswordForm } from './password-form';
 import { SettingsNotice } from './settings-notice';
@@ -35,6 +36,7 @@ export default async function SettingsPage({
       <VerificationSection />
       <LinkedAccounts />
       <PasswordForm />
+      <MarketingSection />
       <TimeZoneSection />
       <ThemeSection />
     </Stack>

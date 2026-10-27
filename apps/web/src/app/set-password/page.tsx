@@ -4,7 +4,9 @@ import { redirect } from 'next/navigation';
 import { AuthCard } from '@/components/auth/auth-card';
 import { SignOutButton } from '@/components/auth/sign-out-button';
 import { copy } from '@/copy';
+import { setPasswordCallbackURL } from '@buddha/shared';
 import { verifyLinkErrorCode } from '@/lib/auth-client';
+import { safeNextPath } from '@/lib/next-path';
 import { getServerSession } from '@/lib/session.server';
 import { SetPasswordForm } from './set-password-form';
 
@@ -23,20 +25,28 @@ export const metadata: Metadata = { title: `${copy.setPasswordTitle} | ${copy.ap
  * - session present: they verified earlier in this browser and the form below works, so the
  *   note says the link is stale without sending them after a new one.
  *
+ * `?next=` is the page the visitor signed up from (#58, ADR-0069 decision 1 #57-9), which the link
+ * carries (`setPasswordCallbackURL`): the form goes on there once the password is set, and the
+ * onboarding gate takes the account from there to its steps and back. Validated here once
+ * (`safeNextPath`); home without one. A broken link without a session keeps it too: the login
+ * screen comes back to this page with the same `next`.
+ *
  * 로그아웃 sits under the form in every state (owner decision 2026-10-13, #16): an account that has
- * not verified its phone yet (ADR-0070) is kept out of MY, where the other 로그아웃 is, by the
+ * not finished its onboarding yet (#58) is kept out of MY, where the other 로그아웃 is, by the
  * onboarding gate.
  */
 export default async function SetPasswordPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string | string[] }>;
+  searchParams: Promise<{ error?: string | string[]; next?: string | string[] }>;
 }) {
-  const { error } = await searchParams;
+  const { error, next } = await searchParams;
   const brokenLink = verifyLinkErrorCode(error);
+  const nextPath = safeNextPath(next);
   if (!(await getServerSession())) {
     const suffix = brokenLink ? `&error=${encodeURIComponent(brokenLink)}` : '';
-    redirect(`/login?next=/set-password${suffix}` as Route);
+    const back = encodeURIComponent(setPasswordCallbackURL(nextPath));
+    redirect(`/login?next=${back}${suffix}` as Route);
   }
   return (
     <AuthCard title={copy.setPasswordTitle} subtitle={copy.setPasswordSubtitle}>
@@ -49,7 +59,7 @@ export default async function SetPasswordPage({
             </Alert.Content>
           </Alert.Root>
         )}
-        <SetPasswordForm />
+        <SetPasswordForm next={nextPath} />
         <SignOutButton alignSelf="center" data-testid="set-password-logout" />
       </Stack>
     </AuthCard>

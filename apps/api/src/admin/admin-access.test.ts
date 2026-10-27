@@ -5,14 +5,22 @@
  * AdminGuard before anything else. Like admin-audit.test.ts, the routes come from the module
  * graph, not from a list kept here, so a route added tomorrow is checked tomorrow.
  *
+ * An admin is an account like any other: until it has finished the onboarding (#58: consent,
+ * 본인확인, nickname) every /admin route refuses it too, OnboardedGuard right after AdminGuard
+ * (409 ONBOARDING_REQUIRED, 오너 결정 2026-10-19, ADR-0072) — after the role, so a member hears
+ * 403 whatever its onboarding.
+ *
  * Two halves: a static walk of the guard metadata (no Postgres, no Redis: runs everywhere), and
- * the same surface requested for real as a member (403) and with no session (401).
+ * the same surface requested for real as a member (403), with no session (401) and as an admin
+ * that has not finished the onboarding (409).
  */
 import { schema } from '@buddha/db';
+import { completeOnboarding } from '@buddha/db/test';
 import { eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { SessionGuard } from '../auth/session.guard.js';
+import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { discoverRoutes, guardsOf, isAdminPath, type DiscoveredRoute } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
@@ -35,13 +43,14 @@ describe('admin access (static)', () => {
     for (const key of OPERATION_RECORDS) expect(keys).toContain(key);
   });
 
-  it('runs SessionGuard and then AdminGuard first on every /admin route', () => {
-    // First, and in this order: AdminGuard reads the session SessionGuard resolved, and a
-    // route-level guard (PaidCoinSalesGuard) must not answer a member before the role check.
+  it('runs SessionGuard, AdminGuard and then OnboardedGuard first on every /admin route', () => {
+    // First, and in this order: AdminGuard reads the session SessionGuard resolved, a route-level
+    // guard (PaidCoinSalesGuard) must not answer a member before the role check, and the
+    // onboarding is asked of admins only (ADR-0072), so a member's answer stays the role's 403.
     const unguarded = adminRoutes
       .filter((route) => {
-        const [first, second] = guardsOf(route);
-        return first !== SessionGuard || second !== AdminGuard;
+        const [first, second, third] = guardsOf(route);
+        return first !== SessionGuard || second !== AdminGuard || third !== OnboardedGuard;
       })
       .map((route) => route.key);
     expect(unguarded).toEqual([]);
@@ -111,7 +120,39 @@ describe.skipIf(!hasTestInfra)('admin access (integration)', () => {
     expect(answers).toEqual(adminRoutes.map((route) => ({ route: route.key, status: 401 })));
   });
 
-  it('lets the same member through once it is an admin: the 403 was the role, not the request', async () => {
+  it('answers an admin that has not finished the onboarding 409 on every admin route (#58)', async () => {
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, member.id));
+    await t.app.get(AdminGuard).invalidate(member.id);
+    const answers = [];
+    for (const route of adminRoutes) {
+      const res = await call(route, member.cookie);
+      const error = res.json<{ error?: { code: string; details?: unknown } }>().error;
+      answers.push({
+        route: route.key,
+        status: res.statusCode,
+        code: error?.code,
+        details: error?.details,
+      });
+    }
+    // Every step is missing: a fresh account, refused before any pipe or body is read.
+    expect(answers).toEqual(
+      adminRoutes.map((route) => ({
+        route: route.key,
+        status: 409,
+        code: 'ONBOARDING_REQUIRED',
+        details: { steps: ['consent', 'verification', 'nickname'] },
+      })),
+    );
+  });
+
+  it('lets the same member through once it is an onboarded admin: the 403 was the role, the 409 the onboarding', async () => {
+    await completeOnboarding(t.db, { userId: member.id });
+    // Onboarded but still a member: the role's 403, as for any member.
+    const [first] = adminRoutes;
+    expect((await call(first!, member.cookie)).statusCode).toBe(403);
     await t.db
       .update(schema.profiles)
       .set({ role: 'admin' })
