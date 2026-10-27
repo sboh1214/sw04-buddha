@@ -8,7 +8,7 @@
 
 ## 언제 도나
 
-- 평소 시험과 함께 돈다. `pnpm test`(`turbo run test`)와 CI의 `turbo run lint typecheck test build`가 돌리고, 켜고 끄는 설정이나 환경 변수는 없다.
+- 평소 시험과 함께 돈다. `pnpm test`(`turbo run test`)와 CI의 `Unit Tests`(shared·web)·`Integration Tests (api)`·`Integration Tests (db)` job이 돌리고, 켜고 끄는 설정이나 환경 변수는 없다.
 - 대부분은 DB 없이 도는 정적 검사다. 실제 응답을 보는 `apps/api/src/surface/private-data.test.ts`만 test 프로필의 Postgres·Redis가 필요하다. 로컬에서 `TEST_*`가 없으면 그 시험은 건너뛰고(CI에서는 실패한다), 같은 파일의 'private data cases (static)'은 DB 없이도 돈다.
 - API의 정적 검사는 커밋된 `apps/api/openapi.json`을 읽는다. 컨트롤러나 응답 스키마를 고쳤으면 `pnpm api:openapi`로 다시 만든 뒤 결과를 믿는다. 문서가 코드와 어긋나면 CI의 `OpenAPI contract check`가 실패한다. 실제 응답의 필드 이름은 런타임 검사가 따로 본다.
 - **#149의 출시 점검이 이 검사를 다시 돌린다.** 아래 '검사와 자리' 표의 시험이 모두 대상이다.

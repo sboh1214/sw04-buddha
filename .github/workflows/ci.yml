@@ -12,20 +12,209 @@ concurrency:
 permissions:
   contents: read
 
+# Every check is its own job on its own runner, so they run side by side instead of one after
+# another, and each job with a database gets a Postgres of its own: the integration suites no
+# longer wait on each other's file lock (packages/db/src/test/harness.ts), and the e2e no
+# longer has to empty what the tests left behind. The last job gathers them under the one
+# status check the main ruleset requires.
+#
+# Only variables declared in turbo.json (`env` / `passThroughEnv` / framework inference) reach
+# tasks: Turborepo runs in strict env mode. Add new keys there first. The exception is
+# everything the e2e job needs: Playwright and the three servers run outside turbo, so they
+# read this block directly.
+# Locally TEST_* point at the docker `test` profile (5433/6380); here the service containers
+# double as the test database, so TEST_* and DATABASE_* are the same server. Jobs without
+# service containers never connect: lint, typecheck and build only need the values to exist.
 env:
   TURBO_TELEMETRY_DISABLED: '1'
   DO_NOT_TRACK: '1'
+  DATABASE_URL: postgres://buddha_app:buddha@localhost:5432/buddha
+  DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
+  REDIS_URL: redis://localhost:6379
+  TEST_DATABASE_URL: postgres://buddha_app:buddha@localhost:5432/buddha
+  TEST_DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
+  TEST_REDIS_URL: redis://localhost:6379
+  NEXT_PUBLIC_API_URL: http://localhost:4000
+  # The worker's liveness probe the e2e job waits on (apps/worker/src/health.ts).
+  WORKER_HOST: localhost
+  WORKER_HEALTH_PORT: '4100'
+  # better-auth (M1). Fixed test secret; never reuse outside CI.
+  BETTER_AUTH_SECRET: ci-only-better-auth-secret-0123456789abcdef
+  BETTER_AUTH_URL: http://localhost:3000
+  WEB_ORIGIN: http://localhost:3000
+  # Reaches the e2e job's Mailpit service container. The vitest suites still never send mail:
+  # apps/api/src/test/setup-env.ts pins its own SMTP_HOST and the MAILER is overridden.
+  SMTP_HOST: localhost
+  SMTP_PORT: '1025'
+  SMTP_FROM: noreply@buddha.local
+  # e2e only: the sign-up helper polls Mailpit's HTTP API for the verification link, and
+  # the specs drive the web server the e2e job starts.
+  MAILPIT_URL: http://127.0.0.1:8025
+  E2E_BASE_URL: http://localhost:3000
+  # db:seed skips the admin — and with it the seeded markets — unless both are set
+  # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market. The
+  # second bootstrap admin: the two-person rule needs two distinct admins here too (#171).
+  SEED_ADMIN_EMAIL: admin@buddha.local
+  SEED_ADMIN_PASSWORD: ci-only-admin-password
+  SEED_SECOND_ADMIN_EMAIL: admin2@buddha.local
+  SEED_SECOND_ADMIN_PASSWORD: ci-only-second-admin-password
 
 jobs:
-  ci:
-    name: format / lint / typecheck / test / build
+  prettier:
+    name: Check with Prettier
     runs-on: ubuntu-latest
-    # 30 covered everything up to the OpenAPI check; the Playwright leg adds the chromium
-    # download, the seed and two projects' specs against one database (PLAN 14 AC 7).
-    timeout-minutes: 45
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+
+      - name: Check formatting
+        run: pnpm format:check
+
+  lint:
+    name: Lint with ESLint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+        with:
+          turbo-cache: lint
+
+      # web#lint depends on web#build (apps/web/turbo.json, ADR-0016), so this job builds the
+      # web app too.
+      - name: Lint the workspace
+        run: pnpm turbo run lint
+
+  typecheck:
+    name: Type Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+        with:
+          turbo-cache: typecheck
+
+      # web#typecheck also waits for web#build: both write .next/types (ADR-0016).
+      - name: Run type check
+        run: pnpm turbo run typecheck
+
+  build:
+    name: Build and Check API Contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+        with:
+          turbo-cache: build
+
+      - name: Build the workspace
+        run: pnpm turbo run build
+
+      # PLAN 14 API contract check: the committed OpenAPI document, the generated client types
+      # and docs/API.md (generated from that document by scripts/generate-api-doc.mjs) must all
+      # match the code.
+      - name: OpenAPI contract check
+        run: |
+          pnpm api:openapi
+          git diff --exit-code -- apps/api/openapi.json packages/api-client/src/generated docs/API.md
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+        with:
+          turbo-cache: unit
+
+      # Every package but the three whose suites need Postgres and Redis (test-integration
+      # below), so a new package's tests land here without touching this file.
+      - name: Run unit tests
+        run: pnpm turbo run test --filter='!api' --filter='!@buddha/db' --filter='!worker'
+
+  test-integration:
+    name: Integration Tests (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            filter: api
+          - name: db
+            filter: '@buddha/db'
+          - name: worker
+            filter: worker
 
     # The superuser below is only used to apply docker/postgres/init/01-roles.sql; tasks then
     # connect with the same buddha_app / buddha_migrate roles as local development (PLAN 6.4).
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: buddha
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/workflows/setup
+        with:
+          turbo-cache: integration-${{ matrix.name }}
+
+      - name: Create database roles (same SQL as docker compose)
+        run: psql postgres://postgres:postgres@localhost:5432/buddha -v ON_ERROR_STOP=1 -f docker/postgres/init/01-roles.sql
+
+      # Applies packages/db/drizzle/* as buddha_migrate (DATABASE_MIGRATE_URL) so the
+      # integration tests find the schema. Also proves the committed migrations apply cleanly
+      # on an empty database.
+      - name: Run migrations
+        run: pnpm db:migrate
+
+      - name: Run integration tests
+        run: pnpm turbo run test --filter='${{ matrix.filter }}'
+
+  # ---- e2e (PLAN 14 AC 7, A-M1-10): its own build, database and servers per shard ----------------
+  e2e:
+    name: E2E Tests (Playwright ${{ matrix.shard }}/${{ strategy.job-total }})
+    runs-on: ubuntu-latest
+    # Covers the build, the chromium download, the seed and this shard's specs of both projects.
+    timeout-minutes: 30
+
+    # The specs are split across the shards by test (fullyParallel), mobile-375 and
+    # desktop-1280 alike. Add a shard here to split them further.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
     # Mailpit exists for the Playwright e2e alone: every spec signs up and reads the
     # verification link out of Mailpit's HTTP API. The vitest suites never reach it — they
     # replace the MAILER provider with an in-memory mailer (ADR-0022).
@@ -64,87 +253,20 @@ jobs:
           - 1025:1025
           - 8025:8025
 
-    # Only variables declared in turbo.json (`env` / `passThroughEnv` / framework
-    # inference) reach tasks: Turborepo runs in strict env mode. Add new keys there first.
-    # The exception is everything the e2e leg needs: Playwright and the three servers run
-    # outside turbo, so they read this block directly.
-    # Locally TEST_* point at the docker `test` profile (5433/6380); here the service
-    # containers double as the test database, so TEST_* and DATABASE_* are the same server (the
-    # e2e leg empties it before seeding).
-    env:
-      DATABASE_URL: postgres://buddha_app:buddha@localhost:5432/buddha
-      DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
-      REDIS_URL: redis://localhost:6379
-      TEST_DATABASE_URL: postgres://buddha_app:buddha@localhost:5432/buddha
-      TEST_DATABASE_MIGRATE_URL: postgres://buddha_migrate:buddha@localhost:5432/buddha
-      TEST_REDIS_URL: redis://localhost:6379
-      NEXT_PUBLIC_API_URL: http://localhost:4000
-      # The worker's liveness probe the e2e leg waits on (apps/worker/src/health.ts).
-      WORKER_HOST: localhost
-      WORKER_HEALTH_PORT: '4100'
-      # better-auth (M1). Fixed test secret; never reuse outside CI.
-      BETTER_AUTH_SECRET: ci-only-better-auth-secret-0123456789abcdef
-      BETTER_AUTH_URL: http://localhost:3000
-      WEB_ORIGIN: http://localhost:3000
-      # Reaches the Mailpit service container above. The vitest suites still never send mail:
-      # apps/api/src/test/setup-env.ts pins its own SMTP_HOST and the MAILER is overridden.
-      SMTP_HOST: localhost
-      SMTP_PORT: '1025'
-      SMTP_FROM: noreply@buddha.local
-      # e2e only: the sign-up helper polls Mailpit's HTTP API for the verification link, and
-      # the specs drive the web server this job starts below.
-      MAILPIT_URL: http://127.0.0.1:8025
-      E2E_BASE_URL: http://localhost:3000
-      # db:seed skips the admin — and with it the seeded markets — unless both are set
-      # (packages/db/src/seed.ts); the e2e signs in as this admin to open its own market. The
-      # second bootstrap admin: the two-person rule needs two distinct admins here too (#171).
-      SEED_ADMIN_EMAIL: admin@buddha.local
-      SEED_ADMIN_PASSWORD: ci-only-admin-password
-      SEED_SECOND_ADMIN_EMAIL: admin2@buddha.local
-      SEED_SECOND_ADMIN_PASSWORD: ci-only-second-admin-password
-
     steps:
       - uses: actions/checkout@v7
-
-      # Installs pnpm (version from package.json "packageManager") and Node 24, caches the
-      # pnpm store, then runs `pnpm install` itself (frozen lockfile: pnpm's CI default).
-      - uses: pnpm/setup@v2
+      - uses: ./.github/workflows/setup
         with:
-          runtime: node@24
-          cache: true
+          turbo-cache: e2e
 
       - name: Create database roles (same SQL as docker compose)
         run: psql postgres://postgres:postgres@localhost:5432/buddha -v ON_ERROR_STOP=1 -f docker/postgres/init/01-roles.sql
 
-      - name: Restore Turborepo cache
-        uses: actions/cache@v6
-        with:
-          path: .turbo/cache
-          key: turbo-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            turbo-${{ runner.os }}-
-
-      # Applies packages/db/drizzle/* as buddha_migrate (DATABASE_MIGRATE_URL) so the
-      # integration tests find the schema. Also proves the committed migrations apply cleanly
-      # on an empty database. Seeding happens later: it is needed by the e2e, not by vitest.
       - name: Run migrations
         run: pnpm db:migrate
 
-      - name: Prettier
-        run: pnpm format:check
-
-      - name: Lint / typecheck / test / build
-        run: pnpm turbo run lint typecheck test build
-
-      # PLAN 14 API contract check: the committed OpenAPI document, the generated client types
-      # and docs/API.md (generated from that document by scripts/generate-api-doc.mjs) must all
-      # match the code.
-      - name: OpenAPI contract check
-        run: |
-          pnpm api:openapi
-          git diff --exit-code -- apps/api/openapi.json packages/api-client/src/generated docs/API.md
-
-      # ---- e2e (PLAN 14 AC 7, A-M1-10): everything below runs against the build above ----
+      - name: Build the API, the worker and the web app
+        run: pnpm turbo run build --filter=api --filter=worker --filter=web
 
       # Playwright uses its own Chromium build, not the runner's Google Chrome package.
       # Disable that unused APT source so its index (e.g. Hash Sum mismatch) cannot break
@@ -158,18 +280,11 @@ jobs:
       - name: Install Playwright chromium
         run: pnpm --filter web exec playwright install --with-deps chromium
 
-      # The vitest suites above ran against this same database (TEST_* = DATABASE_*) and leave
-      # whatever their last case wrote, an admin among it maybe. Since #171 the seed creates its
-      # two admins only while no account is an admin, so empty every table first: the statement
-      # deploy/reset-db.sh runs (wipe-cli.ts as buddha_migrate, docs/RESET.md). The schema and
-      # the migrations stay.
-      - name: Empty the database the tests used
-        run: pnpm --filter @buddha/db run db:wipe --yes
-
       # The e2e flow needs the categories, and its market fixture is created through the admin API
       # as the seeded admin (SEED_ADMIN_* above); the admin-accounts spec also signs in as the
-      # second one (SEED_SECOND_ADMIN_*, #171) and needs exactly these two admins, which the seed
-      # creates on the database emptied above. No spec charges:
+      # second one (SEED_SECOND_ADMIN_*, #171) and needs exactly these two admins. Since #171 the
+      # seed creates them only while no account is an admin, which holds here: no test ran on
+      # this job's database, so it has the migrations and nothing else. No spec charges:
       # paid Coin is closed (ADR-0049), and the payment spec puts a package on sale itself (the
       # seed's are off sale, #125) to show the charge is refused anyway. db:seed declares
       # DATABASE_URL and the four SEED_*ADMIN_* keys in turbo.json's passThroughEnv.
@@ -212,9 +327,9 @@ jobs:
           done
 
       # Invoked outside turbo (pnpm runs the package script directly), so CI / E2E_BASE_URL /
-      # MAILPIT_URL reach Playwright from the job env and turbo.json stays untouched.
+      # MAILPIT_URL reach Playwright from the workflow env and turbo.json stays untouched.
       - name: Playwright e2e (mobile-375 + desktop-1280)
-        run: pnpm --filter web test:e2e
+        run: pnpm --filter web test:e2e --shard=${{ matrix.shard }}/${{ strategy.job-total }}
 
       # Traces (trace: 'on-first-retry' with retries: 2 in CI) plus whatever report the run
       # produced, and all three server logs. Ignored when a step before the e2e is what failed.
@@ -222,10 +337,33 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v6
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: |
             apps/web/playwright-report/
             apps/web/test-results/
             ${{ runner.temp }}/e2e-logs/
           if-no-files-found: ignore
           retention-days: 7
+
+  # The main ruleset requires a status check with exactly this name, which was the single job's
+  # before the split; keep it, or change the ruleset in the same breath. A cancelled, failed or
+  # skipped job above fails it, so it never passes on part of the checks.
+  ci:
+    name: format / lint / typecheck / test / build
+    if: always()
+    needs: [prettier, lint, typecheck, build, test, test-integration, e2e]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Require every job to pass
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            if [ "$result" != success ]; then
+              echo "::error::a required job ended as $result"
+              exit 1
+            fi
+          done

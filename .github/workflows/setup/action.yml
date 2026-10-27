@@ -1,0 +1,30 @@
+name: Setup Node + pnpm
+description: Install pnpm from packageManager, Node 24 and the workspace, then restore this job's Turborepo cache (checkout first)
+
+inputs:
+  turbo-cache:
+    # One cache per job: parallel jobs saving under one key would race, and each job only
+    # needs the outputs of its own tasks. Matrix legs that run the same tasks share a name.
+    # No name may start with another name and a hyphen ('test' and 'test-api'): the shorter
+    # one's restore key would match the longer one's caches and restore those instead.
+    description: Name of this job's Turborepo cache (.turbo/cache); empty for jobs that run no turbo task
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    # Installs pnpm (version from package.json "packageManager") and Node 24, caches the
+    # pnpm store, then runs `pnpm install` itself (frozen lockfile: pnpm's CI default).
+    - uses: pnpm/setup@v2
+      with:
+        runtime: node@24
+        cache: true
+
+    - name: Restore Turborepo cache
+      if: inputs.turbo-cache != ''
+      uses: actions/cache@v6
+      with:
+        path: .turbo/cache
+        key: turbo-${{ runner.os }}-${{ inputs.turbo-cache }}-${{ github.sha }}
+        restore-keys: |
+          turbo-${{ runner.os }}-${{ inputs.turbo-cache }}-
