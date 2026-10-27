@@ -48,6 +48,11 @@ const AUTH_ENV_KEYS = [
   'SMTP_SECURE',
   'AUTH_COOKIE_DOMAIN',
   'PAYMENT_PROVIDER',
+  'SMS_PROVIDER',
+  'ALIGO_API_KEY',
+  'ALIGO_USER_ID',
+  'ALIGO_SENDER',
+  'ALIGO_TEST_MODE',
 ] as const satisfies readonly (keyof Env)[];
 
 /**

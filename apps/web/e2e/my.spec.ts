@@ -136,7 +136,7 @@ test.describe('MY', () => {
   });
 
   test('관리자에게는 MY 안에 관리자 진입이 있다', async ({ page, admin }) => {
-    // The fixture gives the seed admin its contact, so the onboarding gate lets it through.
+    // The fixture verifies the seed admin's phone, so the onboarding gate lets it through.
     void admin;
     await signIn(page, adminAccount.email, adminAccount.password);
     await page.goto('/my/settings');

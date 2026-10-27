@@ -29,7 +29,7 @@ import { formatKst } from './datetime';
 export const ADMIN_ROLE_REFUSAL_MESSAGE: Readonly<Record<AdminRoleChangeRefusal, string>> = {
   already_admin: copy.errAdminGrantAlreadyAdmin,
   email_not_verified: copy.errAdminGrantEmailNotVerified,
-  contact_required: copy.errAdminGrantContactRequired,
+  phone_not_verified: copy.errAdminGrantPhoneNotVerified,
   not_admin: copy.errAdminRevokeNotAdmin,
   min_admins: copy.errAdminRevokeMinAdmins,
 };
@@ -157,7 +157,7 @@ export type AdminRoleReasonValues = z.infer<typeof adminRoleReasonFormSchema>;
  * What a dialog does with a refused grant or revoke.
  * - `field`: the reason was refused; the message goes under it and the dialog stays.
  * - `alert`: the rules refused it (ROLE_CHANGE_NOT_ALLOWED): why, inside the dialog, which stays
- *   so the admin reads it — a missing contact, an unverified email, fewer than two admins left.
+ *   so the admin reads it — an unverified phone, an unverified email, fewer than two admins left.
  * - `toast`: anything else, a change of the signed-in account among it (`sessionChanged`).
  *   `keepDialog` only when the request never came back (nothing was decided, so the admin may
  *   send it again); an answer from the API closes it.

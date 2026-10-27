@@ -76,11 +76,11 @@ export class AdminAccountsController {
   @ApiOperation({
     operationId: 'adminGrantAdmin',
     summary:
-      'Make an account an admin with a reason (recorded); only an account with a verified email and a real name and mobile number on file',
+      'Make an account an admin with a reason (recorded); only an account with a verified email that has verified its mobile number',
   })
   @ApiData(adminRoleChangeSchema, 201)
   // ROLE_CHANGE_NOT_ALLOWED: details[0].message is `already_admin`, `email_not_verified` or
-  // `contact_required` (ADMIN_GRANT_REFUSALS). FORBIDDEN: also an actor revoked meanwhile, or a
+  // `phone_not_verified` (ADMIN_GRANT_REFUSALS). FORBIDDEN: also an actor revoked meanwhile, or a
   // body whose `expectedAccountId` is not the cookie's account (details name the field).
   @ApiErrors(
     'UNAUTHENTICATED',

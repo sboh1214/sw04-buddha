@@ -76,6 +76,20 @@ export function isCountableAddress(ip: string | undefined, uncounted?: BlockList
   return family === undefined || !uncounted.check(address, family);
 }
 
+/**
+ * The client a request names, by the rule above: its address as one spelling — without the
+ * `::ffff:` Node puts before an IPv4 peer on a dual-stack socket, and without an IPv6 zone — or
+ * null for a peer that cannot name a client (loopback, a listed proxy) and for anything that is
+ * not an address. The per-address daily limit of the SMS codes counts this, and each send records
+ * it (ADR-0070): behind Caddy, `TRUST_PROXY` makes it the visitor's.
+ */
+export function clientAddress(ip: string | undefined, uncounted?: BlockList): string | null {
+  if (ip === undefined || !isCountableAddress(ip, uncounted)) return null;
+  const unmapped = ip.startsWith('::ffff:') ? ip.slice('::ffff:'.length) : ip;
+  const address = unmapped.split('%')[0] ?? unmapped;
+  return ipFamily(address) === undefined ? null : address;
+}
+
 /** The tracker of the address throttler: the client address, whatever the route. */
 export function addressTracker(req: Record<string, unknown>): string {
   return `ip:${String((req as { ip?: string }).ip)}`;

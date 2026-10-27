@@ -43,7 +43,11 @@ const me = (id: string): Me => ({
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
-  contact: { realName: '홍길동', phone: '01012345678' },
+  verification: {
+    realName: '홍길동',
+    phone: '01012345678',
+    verifiedAt: '2026-10-18T00:00:00.000Z',
+  },
 });
 
 const press = (watched: boolean, account = 'user-1'): WatchVariables => ({

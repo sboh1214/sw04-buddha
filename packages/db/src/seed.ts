@@ -348,11 +348,12 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
  * nobody: admins come and go on the admin screen (`POST /admin/admins`, `…/revoke`), and a
  * revoked account is never promoted again.
  *
- * The one exception to the grant rule of the admin screen (a verified email AND a real name and
- * mobile number, ADR-0043): nobody exists yet who could grant, so the seed promotes accounts it
- * verifies itself and with no contact — they enter it at their first sign-in, the onboarding gate
- * covers /admin too. Each grant is recorded like any other (`admin_grant`, actor the account
- * itself, reason SEED_ADMIN_GRANT_REASON). Re-running never resets a password.
+ * The one exception to the grant rule of the admin screen (a verified email AND a completed
+ * SMS verification of the phone, ADR-0070): nobody exists yet who could grant, so the seed
+ * promotes accounts it verifies the email of itself and whose phone nobody verified — they verify
+ * it at their first sign-in, the onboarding gate covers /admin too. Each grant is recorded like
+ * any other (`admin_grant`, actor the account itself, reason SEED_ADMIN_GRANT_REASON). Re-running
+ * never resets a password.
  *
  * Returns the first admin's id when that account holds the role now: the `created_by` and event
  * actor of the seed markets.

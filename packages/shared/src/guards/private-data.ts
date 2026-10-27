@@ -161,7 +161,7 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
   {
     id: 'real-name',
     name: '실명',
-    basis: 'D8, ADR-0043',
+    basis: 'D8, ADR-0043, ADR-0070',
     fields: [
       ['real', 'name'],
       ['full', 'name'],
@@ -171,7 +171,7 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
   {
     id: 'phone',
     name: '휴대전화 번호',
-    basis: 'D8, ADR-0043',
+    basis: 'D8, ADR-0043, ADR-0070(본인확인한 번호)',
     fields: [['phone'], ['phones'], ['mobile'], ['tel'], ['telephone']],
   },
   {
@@ -255,13 +255,21 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
   {
     id: 'identity-verification',
     name: '본인확인 기록',
-    basis: 'D8',
+    basis: 'D8, ADR-0069 결정 1(#57-3), ADR-0070',
+    // The SMS verification (#183, ADR-0070) is stored: a public shape never says whether, when or
+    // how an account verified (`verified`, `verifiedAt`, `verification`), nor carries a code
+    // (`otp`) or the client address a code was asked from (`ip`, `clientIp`: the record keeps it,
+    // owner decision 2026-10-18). The verified number is `phone` above and the real name
+    // `real-name`. The account's own `GET /me` is an owner-only route, which this list does not
+    // read.
     fields: [
       ['verification'],
       ['verifications'],
       ['verified'],
       ['identity'],
       ['otp'],
+      ['ip'],
+      ['ips'],
       ['kyc'],
       ['ci'],
       ['di'],
@@ -269,7 +277,6 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['birthday'],
       ['carrier'],
     ],
-    pending: 'D8의 휴대폰 SMS OTP 본인확인이 아직 없다',
   },
   {
     id: 'auth-secret',

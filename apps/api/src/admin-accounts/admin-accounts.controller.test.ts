@@ -1,14 +1,15 @@
 /**
- * Admin accounts (#171) against the docker `test` profile: granting with the email and contact
- * conditions, revoking with the two-admin floor (the revoker's own included), the sessions a
- * revoke deletes (a sign-in in flight's too) and the admin access it ends from the next request
- * (with the cache still saying admin), a grant after a revoke, the records written with each
- * change (or not at all) in the order they were made, the list and the history. Skips when
- * TEST_* are unset.
+ * Admin accounts (#171) against the docker `test` profile: granting with the email and phone
+ * verification conditions, revoking with the two-admin floor (the revoker's own included), the
+ * sessions a revoke deletes (a sign-in in flight's too) and the admin access it ends from the
+ * next request (with the cache still saying admin), a grant after a revoke, the records written
+ * with each change (or not at all) in the order they were made, the list and the history. Skips
+ * when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { schema } from '@buddha/db';
+import { createPhoneVerification } from '@buddha/db/test';
 import { type AdminAccount, type AdminRoleChange } from '@buddha/shared';
 import { asc, eq, inArray, sql } from 'drizzle-orm';
 import { type Redis } from 'ioredis';
@@ -57,15 +58,14 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     // The guard caches roles for 60 s (PLAN 10.5); the promotion above happened behind it.
     await t.app.get(AdminGuard).invalidate(user.id);
   }
-  async function addContact(userId: string) {
-    await t.db
-      .insert(schema.userContacts)
-      .values({ userId, realName: '홍길동', phone: '01012345678' });
+  /** The account's completed 본인확인 (ADR-0070), as a matched confirmation leaves it. */
+  async function verifyPhone(userId: string) {
+    await createPhoneVerification(t.db, { userId });
   }
-  /** A member ready for a grant: verified (the sign-up does it) with a contact. */
+  /** A member ready for a grant: its email verified (the sign-up does it) and its phone. */
   async function candidate() {
     const user = await signUpTestUser(t);
-    await addContact(user.id);
+    await verifyPhone(user.id);
     return user;
   }
 
@@ -156,7 +156,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     return row!.nickname;
   }
 
-  it('grants a verified account with a contact: the role, its record and the answer agree', async () => {
+  it('grants an account with a verified email and phone: the role, its record and the answer agree', async () => {
     const c = await candidate();
     // C's role is cached as `user` by a refused request: the grant must not wait 60 s for it.
     expect((await get(BASE, c.cookie)).statusCode).toBe(403);
@@ -186,7 +186,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
   });
 
   it('refuses a grant the conditions do not allow, writing nothing', async () => {
-    // Unverified (an address registered and never confirmed), even with a contact.
+    // Unverified (an address registered and never confirmed), even with a verified phone.
     const unverifiedId = randomUUID();
     await t.db.insert(schema.user).values({
       id: unverifiedId,
@@ -194,12 +194,12 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
       email: `unverified-${unverifiedId}@test.local`,
       emailVerified: false,
     });
-    await addContact(unverifiedId);
-    // Verified, with no real name and mobile number (ADR-0043).
-    const noContact = await signUpTestUser(t);
+    await verifyPhone(unverifiedId);
+    // Its email verified, its phone not (ADR-0070).
+    const noPhone = await signUpTestUser(t);
     for (const [userId, reason] of [
       [unverifiedId, 'email_not_verified'],
-      [noContact.id, 'contact_required'],
+      [noPhone.id, 'phone_not_verified'],
       [b.id, 'already_admin'],
     ] as const) {
       const res = await grant({ userId, reason: '시험' });
@@ -220,7 +220,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
     }
     expect(await records()).toEqual([]);
     expect(await roleOf(unverifiedId)).toBe('user');
-    expect(await roleOf(noContact.id)).toBe('user');
+    expect(await roleOf(noPhone.id)).toBe('user');
     expect(await roleOf(c.id)).toBe('user');
   });
 
@@ -343,7 +343,7 @@ describe.skipIf(!hasTestInfra)('admin accounts (integration)', () => {
   it('refuses a grant or revoke whose body names another account than the cookie, writing nothing', async () => {
     // A tab still showing one admin after another tab signed in as somebody else: the cookie is
     // the other's, the body names the account on screen. Refused before anything is read or
-    // written (403 naming expectedAccountId), as the charge, coupon and contact bodies are.
+    // written (403 naming expectedAccountId), as the charge, coupon and verification bodies are.
     const c = await candidate();
     await grant({ userId: c.id, reason: '셋째 관리자' });
     const d = await candidate();

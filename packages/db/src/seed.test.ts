@@ -20,11 +20,11 @@ import {
   ledgerEntries,
   marketEvents,
   markets,
+  phoneVerifications,
   priceTicks,
   profiles,
   releaseSettings,
   user,
-  userContacts,
 } from './schema/index.js';
 import { SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
 import { createUser } from './test/factories.js';
@@ -267,8 +267,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       }),
     ]);
     expect(records[1]!.createdAt.getTime()).toBeGreaterThan(records[0]!.createdAt.getTime());
-    // No contact: the bootstrap admins enter it at their first sign-in (ADR-0043).
-    expect(await t.db.select().from(userContacts)).toEqual([]);
+    // Not verified: the bootstrap admins verify at their first sign-in like every account
+    // (ADR-0069 decision 4, #58; ADR-0070).
+    expect(await t.db.select().from(phoneVerifications)).toEqual([]);
   });
 
   it('creates one admin when no second is configured', async () => {

@@ -1,5 +1,9 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { CATEGORY_ITEM_OPACITY } from '@/lib/nav';
+import { SRC, scriptKindOf, screenSources } from '@/test/screen-text';
 import { system } from './system';
 
 /**
@@ -170,6 +174,43 @@ describe('palette contrast', () => {
     expect(failures).toEqual([]);
   });
 
+  it('reads every warning notice, drawn yellow, at 4.5:1 (1.4.3)', () => {
+    // Every 주의 안내 is yellow (owner decision 2026-10-18, third round, ADR-0070; the
+    // 본인확인 "the text may have come" notice first, second round): the subtle alert every screen
+    // draws is `yellow.fg` words and icon on `yellow.subtle`, the outline 다시 시도 button inside
+    // it `yellow.border` and `yellow.focusRing` on that ground (1.4.11, 3:1), a warning toast
+    // `yellow.contrast` on `yellow.solid`, its action button's stroke black at 50% over that fill.
+    const failures = MODES.flatMap((mode) => [
+      ...shortfall(
+        `yellow.fg on yellow.subtle ${mode}`,
+        ratio(resolve('yellow.fg', mode), resolve('yellow.subtle', mode)),
+        TEXT_MIN,
+      ),
+      ...shortfall(
+        `yellow.contrast on yellow.solid ${mode}`,
+        ratio(resolve('yellow.contrast', mode), resolve('yellow.solid', mode)),
+        TEXT_MIN,
+      ),
+      // The 다시 시도 button most warning notices hold: its outline and its focus ring.
+      ...shortfall(
+        `yellow.border on yellow.subtle ${mode}`,
+        ratio(resolve('yellow.border', mode), resolve('yellow.subtle', mode)),
+        GRAPHIC_MIN,
+      ),
+      ...shortfall(
+        `yellow.focusRing on yellow.subtle ${mode}`,
+        ratio(resolve('yellow.focusRing', mode), resolve('yellow.subtle', mode)),
+        GRAPHIC_MIN,
+      ),
+      ...shortfall(
+        `black/50 stroke on yellow.solid ${mode}`,
+        ratio(over('#000000', resolve('yellow.solid', mode), 0.5), resolve('yellow.solid', mode)),
+        GRAPHIC_MIN,
+      ),
+    ]);
+    expect(failures).toEqual([]);
+  });
+
   it('reads the dimmed category items of the header at 4.5:1 (1.4.3)', () => {
     // nav.tsx rests row 2's inactive items at `CATEGORY_ITEM_OPACITY` over the page, which is
     // Kalshi's treatment; the opacity is the smallest step that keeps 15px text AA in both modes.
@@ -184,5 +225,145 @@ describe('palette contrast', () => {
       ),
     );
     expect(failures).toEqual([]);
+  });
+});
+
+/**
+ * 주의 안내는 노랑이다 (owner decision 2026-10-18, third round, ADR-0070): the theme, not each
+ * screen, decides it. Chakra's own recipes paint `warning` orange; theme/system.ts restates the
+ * alert's `status: warning` and the toast's `[data-type=warning]` in yellow, and nothing else.
+ */
+describe('warning notices', () => {
+  type Styles = Record<string, unknown>;
+  /** The parts of a merged slot recipe read here (Chakra types `getSlotRecipe` as `any`). */
+  interface MergedRecipe {
+    base?: Record<string, Styles | undefined>;
+    variants?: Record<string, Record<string, Record<string, Styles | undefined>> | undefined>;
+  }
+  const alert = system.getSlotRecipe('alert') as MergedRecipe | undefined;
+  const toast = system.getSlotRecipe('toast') as MergedRecipe | undefined;
+
+  it('draw every alert of the warning status in the yellow palette, and no other status', () => {
+    const status = alert?.variants?.status;
+    expect(status?.warning?.root).toEqual({ colorPalette: 'yellow' });
+    // The rest stay Chakra's own.
+    expect(status?.info?.root).toEqual({ colorPalette: 'blue' });
+    expect(status?.success?.root).toEqual({ colorPalette: 'green' });
+    expect(status?.error?.root).toEqual({ colorPalette: 'red' });
+    // Merged over Chakra's recipe, not in place of it: its base and its other variants remain.
+    expect(alert?.base?.root).toMatchObject({ display: 'flex', borderRadius: 'l3' });
+    expect(Object.keys(alert?.variants ?? {})).toEqual(
+      expect.arrayContaining(['status', 'variant', 'size', 'inline']),
+    );
+    // As a screen gets it: `<Alert.Root status="warning">` with no palette of its own. At run
+    // time the slot styles are style objects, whatever the declared class-name type.
+    const slots = system.sva(alert as never)({ status: 'warning' }) as unknown as Record<
+      string,
+      Record<string, Styles | undefined> | undefined
+    >;
+    const root = slots.root?.['@layer recipes'];
+    expect(root?.['--chakra-colors-color-palette-subtle']).toBe(
+      'var(--chakra-colors-yellow-subtle)',
+    );
+    expect(root?.['--chakra-colors-color-palette-fg']).toBe('var(--chakra-colors-yellow-fg)');
+  });
+
+  it('fill a warning toast yellow too', () => {
+    const root = toast?.base?.root;
+    expect(root?.['&[data-type=warning]']).toMatchObject({
+      bg: 'yellow.solid',
+      color: 'yellow.contrast',
+    });
+    expect(root?.['&[data-type=error]']).toMatchObject({ bg: 'red.solid' });
+  });
+
+  /**
+   * The recipe decides only while no screen paints over it: a `colorPalette` (or a colour, a
+   * background, raw styles) on a notice's part beats the recipe's `status` variant, which is how
+   * the verification notice used to pick its own palette. So no part of an alert or a toast —
+   * `Alert.Root`, `Alert.Indicator`, …, `Toast.Root`, … — carries one, nor a spread that could
+   * hand it one: the status alone decides its colours, on every screen and not only on the three
+   * the e2e suite measures in a browser (`expectYellowWarning`).
+   */
+  const NOTICE_PART = /^(Alert|Toast)\.[A-Z]\w*$/;
+  const PAINT_PROPS = new Set([
+    'colorPalette',
+    'color',
+    'bg',
+    'bgColor',
+    'background',
+    'backgroundColor',
+    'borderColor',
+    'css',
+    'style',
+  ]);
+
+  /** Every notice part in `source` and, as `file:line <Part prop>`, each prop that paints it. */
+  function noticeParts(fileName: string, source: string): { parts: string[]; painted: string[] } {
+    const file = ts.createSourceFile(
+      fileName,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      scriptKindOf(fileName),
+    );
+    const parts: string[] = [];
+    const painted: string[] = [];
+    const visit = (node: ts.Node): void => {
+      if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
+        const tag = node.tagName.getText(file);
+        if (NOTICE_PART.test(tag)) {
+          parts.push(tag);
+          for (const attribute of node.attributes.properties) {
+            const spread = ts.isJsxSpreadAttribute(attribute);
+            const name = spread ? '{...}' : attribute.name.getText(file);
+            if (spread || PAINT_PROPS.has(name)) {
+              const { line } = file.getLineAndCharacterOfPosition(attribute.getStart(file));
+              painted.push(`${path.relative(SRC, fileName)}:${String(line + 1)} <${tag} ${name}>`);
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    return { parts, painted };
+  }
+
+  it('let no screen paint an alert or a toast over its status', () => {
+    const found = screenSources().map((file) => ({
+      file: path.relative(SRC, file),
+      ...noticeParts(file, readFileSync(file, 'utf8')),
+    }));
+    // The walk reaches the screens: warning notices of every area, and the one toast.
+    const holding = (tag: string) => found.filter((f) => f.parts.includes(tag)).map((f) => f.file);
+    expect(holding('Alert.Root')).toEqual(
+      expect.arrayContaining([
+        'app/onboarding/verification-step.tsx',
+        'app/markets/[slug]/market-detail.tsx',
+        'app/my/portfolio.tsx',
+        'app/search/market-search.tsx',
+        'app/admin/admins/admin-accounts.tsx',
+      ]),
+    );
+    expect(holding('Toast.Root')).toEqual(['components/ui/toaster.tsx']);
+    expect(found.flatMap((f) => f.painted)).toEqual([]);
+  });
+
+  it('would catch a screen that paints its warning another colour', () => {
+    const screen = path.join(SRC, 'app', 'example.tsx');
+    const tsx = (props: string) =>
+      `export const N = () => (\n  <Alert.Root\n    status="warning"${props}\n  >\n    <Alert.Indicator />\n  </Alert.Root>\n);\n`;
+    expect(noticeParts(screen, tsx('')).painted).toEqual([]);
+    expect(noticeParts(screen, tsx('\n    colorPalette="orange"')).painted).toEqual([
+      'app/example.tsx:4 <Alert.Root colorPalette>',
+    ]);
+    expect(noticeParts(screen, tsx(' bg="orange.subtle" {...rest}')).painted).toEqual([
+      'app/example.tsx:3 <Alert.Root bg>',
+      'app/example.tsx:3 <Alert.Root {...}>',
+    ]);
+    expect(
+      noticeParts(screen, '<Toast.Root colorPalette="orange"><Toast.Title /></Toast.Root>').painted,
+    ).toEqual(['app/example.tsx:1 <Toast.Root colorPalette>']);
   });
 });

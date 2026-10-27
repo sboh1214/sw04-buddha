@@ -247,11 +247,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
     expect(await t.db.select().from(schema.ledgerEntries)).toEqual(before.ledger);
   });
 
-  it('needs the session only: an account with no real name or phone may watch (#57)', async () => {
+  it('needs the session only: an account that has not verified its phone may watch (#57)', async () => {
     const rows = await t.db
       .select()
-      .from(schema.userContacts)
-      .where(eq(schema.userContacts.userId, user.id));
+      .from(schema.phoneVerifications)
+      .where(eq(schema.phoneVerifications.userId, user.id));
     expect(rows).toEqual([]);
     const m = await market();
     expect((await watch(m.id)).statusCode).toBe(200);

@@ -3,6 +3,7 @@ import {
   test as base,
   type APIRequestContext,
   type APIResponse,
+  type Locator,
   type Page,
 } from '@playwright/test';
 import type { AdminMarket, Category } from '@buddha/shared';
@@ -33,11 +34,18 @@ export const E2E_PASSWORD = 'passw0rd-e2e';
 /** Mailpit HTTP API (docker compose). Override with MAILPIT_URL. */
 const MAILPIT_URL = process.env.MAILPIT_URL ?? 'http://127.0.0.1:8025';
 
+/** The real name every account here gives in the 본인확인 step (ADR-0070). */
+export const E2E_REAL_NAME = '테스트회원';
+
 /**
- * The real name and mobile number every sign-up here gives on /set-password (ADR-0043). The
- * phone is typed the way people type it; the API stores the digits.
+ * A mobile number no other account here has verified: 010 and eight random digits. Each account
+ * needs its own since ADR-0070 — one account per verified number (ADR-0069 decision 1 #57-1) —
+ * and a number receives codes for at most three accounts a day, so no two accounts share one
+ * even across re-runs against a persistent database (a collision is one in a hundred million).
  */
-export const E2E_CONTACT = { realName: '테스트회원', phone: '010-1234-5678' } as const;
+export function freshPhone(): string {
+  return `010${String(Math.floor(Math.random() * 100_000_000)).padStart(8, '0')}`;
+}
 
 /** `.env.example`'s defaults, so a developer who never exported them still runs the suite. */
 const ADMIN_EMAIL = process.env.SEED_ADMIN_EMAIL ?? 'admin@buddha.local';
@@ -45,11 +53,15 @@ const ADMIN_PASSWORD = process.env.SEED_ADMIN_PASSWORD ?? 'admin1234!';
 const SECOND_ADMIN_EMAIL = process.env.SEED_SECOND_ADMIN_EMAIL ?? 'admin2@buddha.local';
 const SECOND_ADMIN_PASSWORD = process.env.SEED_SECOND_ADMIN_PASSWORD ?? 'admin5678!';
 
-/** A bootstrap admin of `pnpm db:seed`, and the contact its fixture gives it (the seed gives none). */
+/**
+ * A bootstrap admin of `pnpm db:seed`, and the real name and number its fixture verifies it with
+ * (the seed verifies nobody). Fixed numbers, one per admin: verified once, they stay the admin's
+ * in a persistent database. `freshPhone()` draws one of them once in fifty million.
+ */
 interface SeedAdmin {
   email: string;
   password: string;
-  contact: { realName: string; phone: string };
+  verification: { realName: string; phone: string };
   /** The variables that name it, for the error a missing seed raises. */
   env: string;
 }
@@ -57,16 +69,38 @@ interface SeedAdmin {
 const FIRST_ADMIN: SeedAdmin = {
   email: ADMIN_EMAIL,
   password: ADMIN_PASSWORD,
-  contact: { realName: '테스트관리자', phone: '01000000000' },
+  verification: { realName: '테스트관리자', phone: '01000000000' },
   env: 'SEED_ADMIN_EMAIL / SEED_ADMIN_PASSWORD',
 };
 
 const SECOND_ADMIN: SeedAdmin = {
   email: SECOND_ADMIN_EMAIL,
   password: SECOND_ADMIN_PASSWORD,
-  contact: { realName: '테스트둘째관리자', phone: '01000000001' },
+  verification: { realName: '테스트둘째관리자', phone: '01000000001' },
   env: 'SEED_SECOND_ADMIN_EMAIL / SEED_SECOND_ADMIN_PASSWORD',
 };
+
+/**
+ * How long a fixture keeps trying to verify a seed admin. Parallel workers share the two admins,
+ * so all but one of them are refused (the 60-second resend interval, or the per-account rate
+ * limit) while the one that got the code confirms it; the rest wait and look again.
+ */
+const ADMIN_VERIFY_MS = 120_000;
+
+/** How long a fixture that was refused waits before it asks `GET /me` again. */
+const ADMIN_VERIFY_POLL_MS = 2_000;
+
+/**
+ * What a run says when the service-wide limit refuses its codes: every send stays as an
+ * account's 본인확인 기록 (ADR-0070), so a persistent database counts the sends of every run of
+ * the last 24 hours against the service's five hundred — about eighty a full run (both
+ * projects).
+ */
+const SERVICE_LIMIT_HELP =
+  'the service-wide limit of 500 verification codes in 24 hours (ADR-0070) is reached in this ' +
+  "database, which keeps every earlier run's sends: on an isolated e2e database delete them " +
+  '(`DELETE FROM phone_verification_codes`, as the migration role) or wait until the oldest is ' +
+  '24 hours old';
 
 /** PLAN 13 M4 AC 1: 한 브라우저의 변화가 다른 브라우저의 카드·상세에 1초 내 반영된다. */
 export const REALTIME_BUDGET_MS = 1_000;
@@ -80,13 +114,15 @@ const CLOSE_IN_MS = 24 * 60 * 60 * 1_000;
 // ---- fixtures -----------------------------------------------------------------------
 
 /**
- * Signs `context` in as a bootstrap admin and gives it a contact.
+ * Signs `context` in as a bootstrap admin and makes sure it has completed 본인확인 (ADR-0070).
  *
- * The seed admins are accounts like any other, so the onboarding gate (ADR-0043) would send a
- * spec's browser sign-in as one (`signIn(…, adminAccount…)`) to /onboarding instead of `/`.
- * Every spec that does that also asks for that admin's fixture, so the admin gets a contact
- * here — an upsert, so a re-run against a persistent database changes nothing. The body names
- * the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
+ * The seed admins are accounts like any other, so the onboarding gate would send a spec's
+ * browser sign-in as one (`signIn(…, adminAccount…)`) to /onboarding instead of `/` — the
+ * owner's decision for operators (ADR-0069 decision 4, #58: they onboard as every account does).
+ * Every spec that signs a browser in as an admin also asks for that admin's fixture, so the admin
+ * is verified here, through the API and the development SMS sender, the first time any fixture
+ * runs against a database; after that `GET /me` already says so and nothing is sent. Every body
+ * names the account it is for (`expectedAccountId`, A-PG-24): the sign-in's own answer.
  */
 async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Promise<void> {
   const signedIn = await context.post('/api/auth/sign-in/email', {
@@ -100,14 +136,53 @@ async function signInSeedAdmin(context: APIRequestContext, admin: SeedAdmin): Pr
     );
   }
   const { user } = (await signedIn.json()) as { user: { id: string } };
-  const contact = await context.put('/api/v1/me/contact', {
-    data: { ...admin.contact, expectedAccountId: user.id },
-  });
-  if (!contact.ok()) {
-    throw new Error(
-      `saving the contact of ${admin.email} failed (${String(contact.status())}): ${await contact.text()}`,
-    );
+  await verifySeedAdmin(context, admin, user.id);
+}
+
+/**
+ * Verifies a seed admin unless it is already. Workers running in parallel share the two admins:
+ * the one whose code request is answered confirms the code it reads from Mailpit, and the others
+ * — refused with 429 (the resend interval, or the per-account rate limit) or with a code that a
+ * newer one replaced — wait and ask `GET /me` again until it says verified.
+ */
+async function verifySeedAdmin(
+  context: APIRequestContext,
+  admin: SeedAdmin,
+  expectedAccountId: string,
+): Promise<void> {
+  const deadline = Date.now() + ADMIN_VERIFY_MS;
+  while (Date.now() < deadline) {
+    const me = await unwrap<{ verification: unknown }>(await context.get('/api/v1/me'));
+    if (me.verification !== null) return;
+    const seen = await smsMessageIds(admin.verification.phone);
+    const sent = await context.post('/api/v1/me/phone-verification/code', {
+      data: { ...admin.verification, expectedAccountId },
+    });
+    if (sent.ok()) {
+      const code = await smsCode(admin.verification.phone, seen);
+      const confirmed = await context.post('/api/v1/me/phone-verification/confirm', {
+        data: { code, expectedAccountId },
+      });
+      if (confirmed.ok()) return;
+      // 409: another worker verified first, or its newer code replaced this one.
+      if (confirmed.status() !== 409) {
+        throw new Error(
+          `confirming the code of ${admin.email} failed (${String(confirmed.status())}): ` +
+            (await confirmed.text()),
+        );
+      }
+    } else if (sent.status() === 429) {
+      // A daily limit is not another worker's minute: waiting would not end it in this test.
+      const body = (await sent.json()) as { error: { details?: { reason?: string } } };
+      if (body.error.details?.reason === 'service_daily') throw new Error(SERVICE_LIMIT_HELP);
+    } else if (sent.status() !== 409) {
+      throw new Error(
+        `requesting a code for ${admin.email} failed (${String(sent.status())}): ${await sent.text()}`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, ADMIN_VERIFY_POLL_MS));
   }
+  throw new Error(`${admin.email} was not verified within ${String(ADMIN_VERIFY_MS)} ms`);
 }
 
 /**
@@ -170,10 +245,128 @@ export async function verificationLink(email: string): Promise<string> {
 }
 
 /**
+ * Where the API's development SMS sender (SMS_PROVIDER=dev, the default outside production)
+ * mails the text it would have sent to `phone` (digits): apps/api/src/sms/dev-sms-sender.ts.
+ */
+function smsAddress(phone: string): string {
+  return `sms-${phone}@sms.buddha.local`;
+}
+
+/** The Mailpit ids of every development SMS to `phone`, newest first. */
+export async function smsMessageIds(phone: string): Promise<string[]> {
+  const query = encodeURIComponent(`to:${smsAddress(phone)}`);
+  const search = (await (
+    await fetch(`${MAILPIT_URL}/api/v1/search?query=${query}`)
+  ).json()) as MailpitSearch;
+  return search.messages.map((message) => message.ID);
+}
+
+/**
+ * The six digits of the newest development SMS to `phone` that is not one of `seen` — the ids
+ * `smsMessageIds` gave before the code was requested, so an older text to the same number (a
+ * resend, a re-run against a persistent Mailpit) is never read for the new one.
+ */
+export async function smsCode(phone: string, seen: readonly string[] = []): Promise<string> {
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    const fresh = (await smsMessageIds(phone)).find((id) => !seen.includes(id));
+    if (fresh !== undefined) {
+      const message = (await (
+        await fetch(`${MAILPIT_URL}/api/v1/message/${fresh}`)
+      ).json()) as MailpitMessage;
+      const match = /인증번호는 (\d{6})입니다/.exec(message.Text);
+      if (match?.[1] !== undefined) return match[1];
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  throw new Error(`no SMS code for ${phone} (is Mailpit up at ${MAILPIT_URL}?)`);
+}
+
+/**
+ * The 본인확인 step on /onboarding (ADR-0070), done as a member does it: the real name and the
+ * number, 인증번호 받기, the code the development sender mailed to Mailpit, 본인확인 완료. The
+ * page then goes on to its `next`, which the caller checks. Returns the number verified.
+ */
+export async function verifyPhone(
+  page: Page,
+  phone: string = freshPhone(),
+  realName: string = E2E_REAL_NAME,
+): Promise<string> {
+  await expect(page.getByTestId('verification-step')).toBeVisible();
+  const seen = await smsMessageIds(phone);
+  await page.getByTestId('verification-real-name').fill(realName);
+  await page.getByTestId('verification-phone').fill(phone);
+  await page.getByTestId('verification-send').click();
+  await expectCodeInput(page);
+  await page.getByTestId('verification-code').fill(await smsCode(phone, seen));
+  await page.getByTestId('verification-confirm').click();
+  return phone;
+}
+
+/**
+ * Waits for the code input a send opens, and fails with what to do when the service-wide limit
+ * refused the send instead (SERVICE_LIMIT_HELP) rather than as a missing input.
+ */
+export async function expectCodeInput(page: Page): Promise<void> {
+  const input = page.getByTestId('verification-code');
+  const serviceLimit = page
+    .getByTestId('verification-notice')
+    .filter({ hasText: copy.errVerificationServiceDaily });
+  await expect(input.or(serviceLimit)).toBeVisible();
+  if (await serviceLimit.isVisible()) throw new Error(SERVICE_LIMIT_HELP);
+}
+
+/**
+ * The colour a Chakra colour token (`yellow.subtle`) paints as `property` (`backgroundColor`,
+ * `color`) where `element` is, in that page's colour mode: read off a probe appended inside it, so
+ * it resolves as the element's own would.
+ */
+export function tokenColour(
+  element: Locator,
+  token: string,
+  property: 'backgroundColor' | 'color' = 'backgroundColor',
+): Promise<string> {
+  return element.evaluate(
+    (node, [name, prop]) => {
+      const probe = document.createElement('div');
+      probe.style[prop] = `var(--chakra-colors-${name.replace('.', '-')})`;
+      node.append(probe);
+      const colour = getComputedStyle(probe)[prop];
+      probe.remove();
+      return colour;
+    },
+    [token, property] as const,
+  );
+}
+
+/** The background `element` is drawn with. */
+export function backgroundOf(element: Locator): Promise<string> {
+  return element.evaluate((node) => getComputedStyle(node).backgroundColor);
+}
+
+/**
+ * Every 주의 안내 is yellow (owner decision 2026-10-18, third round, ADR-0070 — the 본인확인
+ * "the text may have come" notice first, second round): `element`, an alert of the warning status,
+ * is drawn with the yellow palette — `yellow.subtle` behind `yellow.fg` words — and not with the
+ * orange Chakra gives the status by itself. The theme decides it (theme/system.ts), not the screen.
+ */
+export async function expectYellowWarning(element: Locator): Promise<void> {
+  await expect(element).toBeVisible();
+  const yellow = await tokenColour(element, 'yellow.subtle');
+  const orange = await tokenColour(element, 'orange.subtle');
+  // Both tokens resolve to a colour (an unknown variable paints nothing) and they differ.
+  expect(yellow).not.toBe('rgba(0, 0, 0, 0)');
+  expect(yellow).not.toBe(orange);
+  expect(await backgroundOf(element)).toBe(yellow);
+  expect(await element.evaluate((node) => getComputedStyle(node).color)).toBe(
+    await tokenColour(element, 'yellow.fg', 'color'),
+  );
+}
+
+/**
  * The first half of a sign-up (ADR-0024): the form takes the email only, and the link in the
  * mail signs the user in and lands on /set-password. The account is signed in from here on
- * but has neither a password nor a real name and phone yet — which is also the state the
- * onboarding gate exists for (ADR-0043), so onboarding.spec.ts starts from this.
+ * but has neither a password nor a verified phone yet — which is also the state the onboarding
+ * gate exists for (ADR-0043, ADR-0070), so onboarding.spec.ts starts from this.
  */
 export async function openSetPassword(page: Page, email: string): Promise<void> {
   await page.goto('/signup');
@@ -186,24 +379,30 @@ export async function openSetPassword(page: Page, email: string): Promise<void> 
 }
 
 /**
- * Sign-up (ADR-0024, ADR-0043): /set-password takes the first password AND the real name and
- * mobile number, so the account never meets the onboarding gate. It arrives with the sign-up
- * bonus already credited (migration 0004), which the balance chip shows.
+ * Sign-up (ADR-0024, ADR-0070): /set-password takes the first password and goes home, where the
+ * onboarding gate takes the account on to the 본인확인 step; verified, it is back on `/`. It
+ * arrives with the sign-up bonus already credited (migration 0004), which the balance chip
+ * shows. Returns the number it verified (`phone`, a fresh one unless given).
  */
-export async function signUp(page: Page, email: string): Promise<void> {
+export async function signUp(
+  page: Page,
+  email: string,
+  phone: string = freshPhone(),
+): Promise<string> {
   await openSetPassword(page, email);
   await page.getByTestId('new-password').fill(E2E_PASSWORD);
   await page.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
-  await page.getByTestId('contact-real-name').fill(E2E_CONTACT.realName);
-  await page.getByTestId('contact-phone').fill(E2E_CONTACT.phone);
   await page.getByRole('button', { name: copy.setPasswordSubmit }).click();
+  await expect(page).toHaveURL('/onboarding');
+  await verifyPhone(page, phone);
   await expect(page).toHaveURL('/');
+  return phone;
 }
 
 /**
  * Signs an existing account in through the login form; lands on `/` with no `next`. The account
- * must have a real name and phone — every `signUp` account does, and the seed admins get them
- * from the `admin` and `secondAdmin` fixtures — or the onboarding gate (ADR-0043) sends it to
+ * must have verified its phone — every `signUp` account has, and the seed admins are verified by
+ * the `admin` and `secondAdmin` fixtures — or the onboarding gate (ADR-0070) sends it to
  * /onboarding instead.
  */
 export async function signIn(page: Page, email: string, password: string): Promise<void> {

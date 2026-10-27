@@ -8,10 +8,11 @@ import { cursorQuerySchema } from './api/pagination.js';
  * every change appends an `admin_grant` / `admin_revoke` row to `admin_actions` in the
  * transaction that changes the role.
  *
- * - A grant goes only to an account with a verified email and a real name and mobile number on
- *   file (ADR-0043 `user_contacts`). The seed's bootstrap admins are the one exception: it
- *   creates them before anyone could grant (packages/db seed.ts), and they enter their contact at
- *   their first sign-in like every account.
+ * - A grant goes only to an account with a verified email that has completed 본인확인, the SMS
+ *   verification of its mobile number (ADR-0069 decision 4 #58, ADR-0070; it was a real name and
+ *   number on file, ADR-0043, until the verified number replaced them). The seed's bootstrap
+ *   admins are the one exception: it creates them before anyone could grant (packages/db
+ *   seed.ts), and they verify at their first sign-in like every account.
  * - A revoke that would leave fewer than MIN_ADMINS admins is refused, the revoker's own
  *   included. It applies from the next request: every session of the account is deleted, so it
  *   is signed out everywhere, and AdminGuard takes an admin answer from Postgres only — never
@@ -29,13 +30,13 @@ export const SEED_ADMIN_GRANT_REASON = '시드';
 
 /**
  * Why a grant is refused (ROLE_CHANGE_NOT_ALLOWED, `details[0].message`; the web picks its copy
- * by it): the account is an admin already, its email is not verified, or it has no real name and
- * mobile number on file.
+ * by it): the account is an admin already, its email is not verified, or it has not completed the
+ * SMS verification of its number (ADR-0070).
  */
 export const ADMIN_GRANT_REFUSALS = [
   'already_admin',
   'email_not_verified',
-  'contact_required',
+  'phone_not_verified',
 ] as const;
 /**
  * Why a revoke is refused (ROLE_CHANGE_NOT_ALLOWED, `details[0].message`): the account is not an
@@ -74,7 +75,7 @@ export type AdminAccount = z.infer<typeof adminAccountSchema>;
 
 /**
  * The signed-in admin the screen is showing (better-auth `user.id`), on both bodies as on the
- * charge, coupon, contact and password bodies. The cookie decides who acts, and a tab whose
+ * charge, coupon, verification and password bodies. The cookie decides who acts, and a tab whose
  * session was switched elsewhere (another tab signed in as somebody else; sign-ins are not
  * broadcast) keeps showing the old account until it refetches. The server refuses a mismatch
  * (403 FORBIDDEN naming the field) before anything is read or written: a change is recorded

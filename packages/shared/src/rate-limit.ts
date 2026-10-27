@@ -64,6 +64,15 @@ export const RATE_LIMIT_BUCKETS = {
    * search: the web drops it (use-search-history.ts).
    */
   searchHistory: { scope: 'user', limit: 30 },
+  /**
+   * `POST /me/phone-verification/code` (#183, ADR-0070): asking for an SMS code, per account. Not
+   * in PLAN 7.5, and not what bounds the texts: the owner's fixed limits do that from the
+   * database (one send a minute, ten a day per account and per number, PHONE_VERIFICATION_LIMITS),
+   * and they hold across restarts and instances. This one keeps a scripted client from spending
+   * a database transaction per refused request at the address bucket's pace; a person who waits
+   * out each minute stays far below it.
+   */
+  phoneVerification: { scope: 'user', limit: 5 },
   /** Routes that mail an address the caller chose, counted per address (A-M2-10). */
   email: { scope: 'email', limit: 5 },
   /**

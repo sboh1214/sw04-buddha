@@ -84,7 +84,8 @@ export const PUBLIC_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
 
 export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'GET /me': {
-    reason: '본인 계정: 이메일·프로필·잔액·로그인 수단·실명·휴대전화(N04 §2)',
+    reason:
+      '본인 계정: 이메일·프로필·잔액·로그인 수단과 본인확인 기록(확인한 휴대전화·실명·확인 시각, ADR-0070)(N04 §2)',
   },
   'PATCH /me': {
     reason: '본인 닉네임 변경',
@@ -92,12 +93,21 @@ export const OWNER_ROUTES: Readonly<Record<string, RegisteredRoute>> = {
   'POST /me/password': {
     reason: '본인 첫 비밀번호 설정: 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
-  'PUT /me/contact': {
-    reason: '본인 실명·휴대전화(ADR-0043): 본문의 expectedAccountId가 세션 계정이어야 한다',
+  'POST /me/phone-verification/code': {
+    reason:
+      '본인확인 인증번호 발송(#183, ADR-0070): 세션 계정이 적은 실명·휴대전화 번호로 인증번호를 SMS로 보내고 남은 유효 시간과 다시 받기까지의 시간만 돌려준다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'POST /me/phone-verification/confirm': {
+    reason:
+      '본인확인 완료(#183, ADR-0070): 세션 계정에 마지막으로 보낸 인증번호와 맞을 때만 세션 계정의 본인확인 기록을 쓰고 그것을 돌려준다. 본문의 expectedAccountId가 세션 계정이어야 한다',
+  },
+  'PUT /me/real-name': {
+    reason:
+      '본인 실명 수정(ADR-0069 결정 1 #57-3, ADR-0070): 세션 계정의 본인확인 기록의 실명만 바꾸고(번호는 바꾸지 않는다) 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
   'PUT /me/time-zone': {
     reason:
-      '본인 표시 시간대 저장·해제(ADR-0063): 세션 계정의 프로필만 바꾸고, 연락처처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
+      '본인 표시 시간대 저장·해제(ADR-0063): 세션 계정의 프로필만 바꾸고, 본인확인처럼 본문의 expectedAccountId가 세션 계정이어야 한다',
   },
   'GET /me/ledger': {
     reason: '본인 Coin 원장(N04 §3 지갑)',
@@ -167,8 +177,9 @@ export interface RegisteredAuthRoute {
  * so the module walk cannot see them, and open to anyone — each checks the session itself.
  * registry.test.ts lists what the auth instance serves (every endpoint of `auth.api` with a path,
  * plugins' included, less `disabledPaths`) and fails on one missing here or a line it no longer
- * serves (owner decision 2026-10-13 #113 (a)): a plugin (the SMS OTP of #183, say) or an upgrade
- * that adds an endpoint is refused until it is written here. Keys are `METHOD /path`.
+ * serves (owner decision 2026-10-13 #113 (a)): a plugin (a phone-number sign-in, say; #183's SMS
+ * code is the API's own, ADR-0070) or an upgrade that adds an endpoint is refused until it is
+ * written here. Keys are `METHOD /path`.
  * `/sign-up/email` is disabled (ADR-0024): RegistrationService calls it on the server only.
  */
 export const AUTH_ROUTES: Readonly<Record<string, RegisteredAuthRoute>> = {

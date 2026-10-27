@@ -15,9 +15,20 @@ export const api = createApiClient({ baseUrl: '', credentials: 'include' });
  */
 export type Me = components['schemas']['Me'];
 export type LinkedAccount = components['schemas']['LinkedAccount'];
-/** Real name + mobile number (ADR-0043): `Me.contact`, and the answer to `PUT /me/contact`. */
-export type Contact = components['schemas']['Contact'];
-export type ContactBody = components['schemas']['ContactBody'];
+/**
+ * 본인확인 (ADR-0070): the verified number, real name and time — `Me.verification`, and the answer
+ * to the confirmation and to `PUT /me/real-name`.
+ */
+export type PhoneVerification = components['schemas']['PhoneVerification'];
+/** `POST /me/phone-verification/code`: real name, number and the account on screen. */
+export type RequestPhoneVerificationCodeBody =
+  components['schemas']['RequestPhoneVerificationCodeBody'];
+/** The answer to a sent code: seconds until it expires and until another may be requested. */
+export type PhoneVerificationCodeSent = components['schemas']['PhoneVerificationCodeSent'];
+/** `POST /me/phone-verification/confirm`: the six digits and the account on screen. */
+export type ConfirmPhoneVerificationBody = components['schemas']['ConfirmPhoneVerificationBody'];
+/** `PUT /me/real-name` (MY 설정): the new real name and the account on screen. */
+export type UpdateRealNameBody = components['schemas']['UpdateRealNameBody'];
 /** `PUT /me/time-zone` (ADR-0063): the zone, or null to follow the browser, and the account. */
 export type UpdateTimeZoneBody = components['schemas']['UpdateTimeZoneBody'];
 export type LedgerEntry = components['schemas']['LedgerEntry'];
@@ -76,6 +87,11 @@ export type AdminRoleChange = components['schemas']['AdminRoleChange'];
  * on screen (`expectedAccountId`).
  */
 export type AdminGrantBody = components['schemas']['AdminGrantBody'];
+/**
+ * `GET /admin/sms/status` (#183, ADR-0070): the counts of the 본인확인 texts — the last 24 hours
+ * against the service's daily limit, and seven Korean days, newest first.
+ */
+export type AdminSmsStatus = components['schemas']['AdminSmsStatus'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */
@@ -137,7 +153,7 @@ export function isApiUnreachable(error: unknown): boolean {
  * way (the charge route's 404 for an unknown `packageId`, INSUFFICIENT_BALANCE on `amountCoin`,
  * the in-progress DUPLICATE_REQUEST on the `Idempotency-Key` header, and the FORBIDDEN on
  * `expectedAccountId` when the cookie belongs to another account — the charge, coupon,
- * contact, password and admin grant and revoke bodies alike).
+ * verification, real-name, password and admin grant and revoke bodies alike).
  * Returns the first field name found, e.g. 'nickname'; undefined when no field is named.
  */
 export function validationField(error: ApiError): string | undefined {
@@ -161,17 +177,17 @@ export function validationMessage(error: ApiError): string | undefined {
 
 /**
  * The 403 that means "the cookie belongs to somebody else than the account on screen": the
- * server refused to charge, to redeem for, or to write the contact or first password of an
- * account the user is not looking at, or to grant or revoke the admin role as one (PLAN 5.3
- * shape — `chargeBodySchema`, `redeemCouponBodySchema`, `contactBodySchema`,
- * `setPasswordBodySchema`, `adminGrantBodySchema` and `adminRevokeBodySchema` all carry
- * `expectedAccountId`; A-PG-24 for the contact and password, #171 for the admin ones). Only this
- * FORBIDDEN names the field; the CSRF refusal names none.
+ * server refused to charge, to redeem for, to text a code for, verify or rename, or to set the
+ * first password of an account the user is not looking at, or to grant or revoke the admin role
+ * as one (PLAN 5.3 shape — `chargeBodySchema`, `redeemCouponBodySchema`, the three 본인확인
+ * bodies (ADR-0070), `setPasswordBodySchema`, `adminGrantBodySchema` and `adminRevokeBodySchema`
+ * all carry `expectedAccountId`; A-PG-24 for the password and what was then the contact, #171 for
+ * the admin ones). Only this FORBIDDEN names the field; the CSRF refusal names none.
  *
  * It lives beside `validationField`, which it is built on, rather than in the wallet hook it
  * started in: the keyed flows that send `expectedAccountId` (charge, coupon) must keep their
- * idempotency key on this answer (the server judged the cookie, not the key), and the contact
- * hook must not import a wallet hook — and a whole `'use client'` module — to ask a pure
+ * idempotency key on this answer (the server judged the cookie, not the key), and the 본인확인
+ * hooks must not import a wallet hook — and a whole `'use client'` module — to ask a pure
  * question about an ApiError.
  */
 export function isForAnotherAccount(error: unknown): boolean {

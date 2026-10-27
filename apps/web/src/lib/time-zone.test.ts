@@ -520,6 +520,10 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     names: ['formatAdminGrant'],
     reason: 'the admin accounts list: the line under an admin saying when it was granted',
   },
+  'lib/admin-sms.ts': {
+    names: ['smsAsOf'],
+    reason: 'the admin SMS send status (ADR-0070): 기준 시각, when the counts were read',
+  },
 };
 
 /**

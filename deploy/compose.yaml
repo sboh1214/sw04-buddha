@@ -114,6 +114,13 @@ services:
       KAKAO_CLIENT_SECRET: ${KAKAO_CLIENT_SECRET}
       NAVER_CLIENT_ID: ${NAVER_CLIENT_ID}
       NAVER_CLIENT_SECRET: ${NAVER_CLIENT_SECRET}
+      # 본인확인 SMS (ADR-0070): aligo always, whatever an older .env says; empty keys make every
+      # code send fail rather than the API refuse to start.
+      SMS_PROVIDER: aligo
+      ALIGO_API_KEY: ${ALIGO_API_KEY:-}
+      ALIGO_USER_ID: ${ALIGO_USER_ID:-}
+      ALIGO_SENDER: ${ALIGO_SENDER:-}
+      ALIGO_TEST_MODE: ${ALIGO_TEST_MODE:-false}
       # The only payment provider since the SmartroPay integration was removed (ADR-0049). A literal
       # rather than `${PAYMENT_PROVIDER}`: an .env rendered before then may still carry
       # PAYMENT_PROVIDER=smartro, which the api refuses to start on, and its SMARTRO_* lines are

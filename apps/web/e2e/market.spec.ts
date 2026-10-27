@@ -7,6 +7,7 @@ import {
   createOpenMarket,
   detailCopyTestId,
   expect,
+  expectYellowWarning,
   signIn,
   subscribed,
   test,
@@ -816,7 +817,7 @@ test.describe('시장 상세 · 375px', () => {
     page,
   }) => {
     const market = await createOpenMarket(admin);
-    // The seed admin, whose contact the `admin` fixture filled in (helpers.ts).
+    // The seed admin, whose phone the `admin` fixture verified (helpers.ts).
     await signIn(page, adminAccount.email, adminAccount.password);
     await page.goto(`/markets/${market.slug}`);
     await expect(page.getByTestId('watch-button')).toBeVisible();
@@ -1091,6 +1092,8 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     await expect(page.getByTestId('watch-button')).toBeVisible();
 
     await expect(page.getByTestId('market-status-notice')).toContainText(copy.marketClosedNotice);
+    // A warning, drawn yellow as every 주의 안내 is (owner decision 2026-10-18, third round).
+    await expectYellowWarning(page.getByTestId('market-status-notice'));
     await expect(page.getByTestId('order-entry-bar')).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'YES 매수' })).toHaveCount(0);
     await expect(page.getByRole('button', { name: 'NO 매수' })).toHaveCount(0);
@@ -1147,7 +1150,7 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     // A market without a description has no 배경 section either, in neither width's place.
     await expect(page.locator('[data-testid^="market-background"]')).toHaveCount(0);
 
-    // The seed admin, whose contact the `admin` fixture filled in (helpers.ts).
+    // The seed admin, whose phone the `admin` fixture verified (helpers.ts).
     await signIn(page, adminAccount.email, adminAccount.password);
     await page.goto(`/markets/${market.slug}`);
     await expect(page.getByTestId('watch-button')).toBeVisible();

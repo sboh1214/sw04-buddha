@@ -20,9 +20,9 @@ import { markets } from './markets.js';
  * neither table. Private to the account (#37): no public route reads either table, and nothing
  * counts a market's watchers in public (PRIVATE_DATA `watchlist`).
  *
- * The account FK is CASCADE like `profiles` and `user_contacts`: a watch is a preference of the
- * account and nothing references it. The market FK is RESTRICT like every other reference to a
- * market (markets are never deleted; a draft cannot be watched and no market returns to draft).
+ * The account FK is CASCADE like `profiles` and `phone_verifications`: a watch is a preference of
+ * the account and nothing references it. The market FK is RESTRICT like every other reference to
+ * a market (markets are never deleted; a draft cannot be watched and no market returns to draft).
  */
 export const marketWatches = pgTable(
   'market_watches',

@@ -30,17 +30,20 @@ import {
   orders,
   paymentEvents,
   payments,
+  phoneVerificationCodes,
+  phoneVerificationRefusedSends,
+  phoneVerifications,
   positions,
   profiles,
   releaseSettings,
   user,
-  userContacts,
 } from './schema/index.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import {
   createCategory,
   createMarket,
   createMarketLink,
+  createPhoneVerification,
   createPosition,
   createSearch,
   createSettlementStep,
@@ -48,6 +51,7 @@ import {
   createWatch,
 } from './test/factories.js';
 import { connectTestDb, hasTestDb, type TestDb } from './test/harness.js';
+import { isPhoneVerified } from './phone-verification.js';
 import { lockAdminRoles } from './tx-helpers.js';
 
 /**
@@ -722,25 +726,120 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       );
     });
 
-    it('keeps one contact per account', async () => {
-      const { user: u } = await createUser(t.db);
-      await t.db
-        .insert(userContacts)
-        .values({ userId: u.id, realName: '홍길동', phone: '01012345678' });
+    it('keeps one verification per account and one account per number (#183, ADR-0070)', async () => {
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      expect(await isPhoneVerified(t.db, a.id)).toBe(false);
+      const row = await createPhoneVerification(t.db, { userId: a.id, phone: '01012345678' });
+      expect(row).toMatchObject({ userId: a.id, phone: '01012345678', realName: '홍길동' });
+      expect(await isPhoneVerified(t.db, a.id)).toBe(true);
+      expect(await isPhoneVerified(t.db, b.id)).toBe(false);
+      expect(await isPhoneVerified(t.db, 'no-such-account')).toBe(false);
+      // A second row for the account, and the number for another account: both refused.
       await expect(
         t.db
-          .insert(userContacts)
-          .values({ userId: u.id, realName: '김철수', phone: '01099998888' }),
+          .insert(phoneVerifications)
+          .values({ userId: a.id, phone: '01099998888', realName: '김철수' }),
       ).rejects.toSatisfy((e) => sqlState(e) === '23505');
-      const [upserted] = await t.db
-        .insert(userContacts)
-        .values({ userId: u.id, realName: '김철수', phone: '01099998888' })
-        .onConflictDoUpdate({
-          target: userContacts.userId,
-          set: { realName: '김철수', phone: '01099998888' },
-        })
+      await expect(
+        t.db
+          .insert(phoneVerifications)
+          .values({ userId: b.id, phone: '01012345678', realName: '김철수' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'phone_verifications_phone_unique',
+      );
+      // Only the digits phoneSchema yields: another spelling of the number is not another number.
+      for (const phone of ['010-999-88', '0212345678', '01512345678', '0101234567x']) {
+        await expect(
+          t.db.insert(phoneVerifications).values({ userId: b.id, phone, realName: '김철수' }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'phone_verifications_phone_check',
+        );
+      }
+    });
+
+    it('keeps the codes sent, their counts and their account (#183, ADR-0070)', async () => {
+      const { user: u } = await createUser(t.db);
+      const code = (values: Partial<typeof phoneVerificationCodes.$inferInsert> = {}) => ({
+        id: randomUUID(),
+        userId: u.id,
+        phone: '01012345678',
+        realName: '홍길동',
+        codeHash: 'a'.repeat(64),
+        expiresAt: new Date(Date.now() + 180_000),
+        ...values,
+      });
+      const [row] = await t.db.insert(phoneVerificationCodes).values(code()).returning();
+      // A send is `unknown` until the provider takes it (migration 0030).
+      expect(row).toMatchObject({
+        attempts: 0,
+        consumedAt: null,
+        clientIp: null,
+        sendOutcome: 'unknown',
+      });
+      expect(row!.sentAt.getTime()).toBeLessThan(row!.expiresAt.getTime());
+      // The client address is an inet (migration 0029): one spelling of an address, so the
+      // per-address limit counts `2001:DB8:0::1` and `2001:db8::1` as the address they are.
+      const [addressed] = await t.db
+        .insert(phoneVerificationCodes)
+        .values(code({ clientIp: '2001:DB8:0:0::1' }))
         .returning();
-      expect(upserted).toMatchObject({ realName: '김철수', phone: '01099998888' });
+      expect(addressed!.clientIp).toBe('2001:db8::1');
+      await expect(
+        t.db.insert(phoneVerificationCodes).values(code({ clientIp: 'not-an-address' })),
+      ).rejects.toSatisfy((e) => sqlState(e) === '22P02');
+      await expect(
+        t.db.insert(phoneVerificationCodes).values(code({ attempts: -1 })),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' && sqlConstraint(e) === 'phone_verification_codes_attempts_check',
+      );
+      await expect(
+        t.db
+          .insert(phoneVerificationCodes)
+          .values(code({ sentAt: new Date(), expiresAt: new Date(Date.now() - 1_000) })),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' && sqlConstraint(e) === 'phone_verification_codes_expiry_check',
+      );
+      // What the provider said: taken, or not yet known. A refused send is not a row here.
+      const [accepted] = await t.db
+        .update(phoneVerificationCodes)
+        .set({ sendOutcome: 'accepted' })
+        .where(eq(phoneVerificationCodes.id, row!.id))
+        .returning();
+      expect(accepted!.sendOutcome).toBe('accepted');
+      await expect(
+        t.db.execute(
+          sql`UPDATE phone_verification_codes SET send_outcome = 'refused' WHERE id = ${row!.id}`,
+        ),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' &&
+          sqlConstraint(e) === 'phone_verification_codes_send_outcome_check',
+      );
+    });
+
+    it('keeps a refused send’s time alone, never changed (#183, migration 0030)', async () => {
+      const attemptedAt = new Date(Date.now() - 60_000);
+      const [row] = await t.db
+        .insert(phoneVerificationRefusedSends)
+        .values({ attemptedAt })
+        .returning();
+      // The time and an id: no account, number, name or address to keep.
+      expect(Object.keys(row!).sort()).toEqual(['attemptedAt', 'id']);
+      expect(row!.attemptedAt.getTime()).toBe(attemptedAt.getTime());
+      await expect(
+        t.db
+          .update(phoneVerificationRefusedSends)
+          .set({ attemptedAt: new Date() })
+          .where(eq(phoneVerificationRefusedSends.id, row!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      // Deleted by the API once older than the week the status reads.
+      await t.db
+        .delete(phoneVerificationRefusedSends)
+        .where(eq(phoneVerificationRefusedSends.id, row!.id));
+      expect(await t.db.select().from(phoneVerificationRefusedSends)).toEqual([]);
     });
   });
 
@@ -1473,7 +1572,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         FROM information_schema.role_table_grants
         WHERE grantee = 'buddha_app' AND table_schema = 'public'
           AND table_name IN ('ledger_entries', 'market_events', 'admin_actions', 'payment_events',
-            'balances', 'payments', 'user_contacts', 'market_settlement_steps', 'release_settings',
+            'balances', 'payments', 'phone_verifications', 'phone_verification_codes',
+            'phone_verification_refused_sends',
+            'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
             'market_search_terms', 'market_links')
         ORDER BY 1, 2`);
@@ -1486,7 +1587,13 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('payment_events')).toEqual(['INSERT', 'SELECT']);
       expect(privs('balances')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('payments')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
-      expect(privs('user_contacts')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0028 (#183): the real name changes in place and the row goes with the account;
+      // a code's wrong entries, its use and what the provider said (0030) are written in place,
+      // and a send the provider refused is deleted (the rest are 본인확인 기록, #184's to delete).
+      expect(privs('phone_verifications')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('phone_verification_codes')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0030: a refused send's time is written and deleted after a week, never changed.
+      expect(privs('phone_verification_refused_sends')).toEqual(['DELETE', 'INSERT', 'SELECT']);
       // Migration 0016: the worker updates a step's row in place.
       expect(privs('market_settlement_steps')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0020: a release setting is changed, never removed.

@@ -1,4 +1,5 @@
-import { createSystem, defaultConfig, defineConfig } from '@chakra-ui/react';
+import { createSystem, defaultConfig, defineConfig, defineSlotRecipe } from '@chakra-ui/react';
+import { alertAnatomy, toastAnatomy } from '@chakra-ui/react/anatomy';
 
 // Pretendard Variable is loaded via the CSS import in app/layout.tsx.
 const fontStack = [
@@ -15,6 +16,20 @@ const fontStack = [
   'Malgun Gothic',
   'sans-serif',
 ];
+
+// 주의 안내는 노랑이다 (owner decision 2026-10-18, third round: 앱의 주의 안내를 모두 노란색으로,
+// ADR-0070). Chakra paints its `warning` status orange — the alert recipe's `status: warning` sets
+// `colorPalette: orange`, the toast recipe fills `[data-type=warning]` with `orange.solid` — so the
+// two recipes are restated here, merged over Chakra's own, and every `<Alert.Root status="warning">`
+// (and any warning toast) is yellow without a prop of its own: no screen picks the colour, the
+// status does. The subtle alert every screen uses reads `yellow.fg` words and icon on
+// `yellow.subtle` (light 800 on 100, dark 300 on 900); the toast `yellow.contrast` (black) on
+// `yellow.solid` (300) in both modes, with black rather than Chakra's white strokes for its action
+// button on that light fill (a white stroke is 1.1:1 there; black at 50% is 3.75:1). All measured
+// in contrast.test.ts. No screen raises a warning toast today; the rule holds for the first one.
+// The orange palette itself stays for what is no notice: the 마감 임박 badge, the statuses waiting
+// on an admin, 미정 in the release settings, the admin's 재시도 button.
+const WARNING_PALETTE = 'yellow';
 
 // PLAN 11.2: brand = a green scale built around Kalshi's #28cc95 (the placeholder indigo of Q7
 // went with the Kalshi restyle, ADR-0041); yes = teal, no = red (Chakra's built-in scales).
@@ -60,6 +75,25 @@ const config = defineConfig({
     body: { fontVariantNumeric: 'tabular-nums' },
   },
   theme: {
+    slotRecipes: {
+      alert: defineSlotRecipe({
+        slots: alertAnatomy.keys(),
+        variants: { status: { warning: { root: { colorPalette: WARNING_PALETTE } } } },
+      }),
+      toast: defineSlotRecipe({
+        slots: toastAnatomy.keys(),
+        base: {
+          root: {
+            '&[data-type=warning]': {
+              bg: `${WARNING_PALETTE}.solid`,
+              color: `${WARNING_PALETTE}.contrast`,
+              '--toast-trigger-bg': '{black/10}',
+              '--toast-border-color': '{black/50}',
+            },
+          },
+        },
+      }),
+    },
     // Kalshi's type ladder (`typ-*` classes, measured): the card title, the overline above it,
     // the three body sizes and their medium-weight "emphasis" twins, and the page headline.
     // One `textStyle` per rung so a card, a nav item and a sidebar row cannot drift apart by a
@@ -230,6 +264,17 @@ const config = defineConfig({
         orange: {
           solid: { value: { _light: '{colors.orange.700}', _dark: '{colors.orange.500}' } },
           contrast: { value: { _light: 'white', _dark: 'black' } },
+        },
+        // The palette of every warning notice (WARNING_PALETTE above). Most of those notices hold
+        // a 다시 시도 button (`variant="outline"`, no palette of its own), so the button's stroke
+        // and focus ring are `yellow.border` / `yellow.focusRing` painted on the notice's
+        // `yellow.subtle` — a component boundary, 1.4.11's 3:1. Chakra's 500 step is 1.79:1 on
+        // light `yellow.100`, so light takes the 700 step (6.13:1); dark keeps Chakra's 500 (7.60:1
+        // on `yellow.900`). The config is merged, so `fg`/`subtle`/`solid`/`contrast` stay
+        // built-in (their pairs measured in contrast.test.ts).
+        yellow: {
+          border: { value: { _light: '{colors.yellow.700}', _dark: '{colors.yellow.500}' } },
+          focusRing: { value: { _light: '{colors.yellow.700}', _dark: '{colors.yellow.500}' } },
         },
       },
     },

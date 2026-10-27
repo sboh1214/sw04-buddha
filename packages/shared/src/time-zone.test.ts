@@ -129,7 +129,7 @@ describe('updateTimeZoneBodySchema', () => {
     ).toBe(false);
   });
 
-  it('requires the account the screen shows, as the contact and password bodies do (A-PG-24)', () => {
+  it('requires the account the screen shows, as the verification and password bodies do (A-PG-24)', () => {
     for (const body of [
       { timeZone: 'America/New_York' },
       { timeZone: null },

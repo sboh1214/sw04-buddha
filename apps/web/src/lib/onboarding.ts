@@ -3,27 +3,30 @@ import type { Me } from './api';
 import { safeNextPath } from './next-path';
 
 /**
- * The onboarding gate (ADR-0043): a signed-in account with no real name and mobile number on
- * file — a social sign-up, or any account older than the requirement — is sent to /onboarding
- * from every screen except the ones below, and comes back to where it was going once it has
- * answered. Email sign-ups give both on /set-password and never meet the gate.
+ * The onboarding gate (ADR-0043, keyed on 본인확인 since ADR-0070): a signed-in account that has
+ * not completed the SMS verification (#183) — every new account, social or email, and any account
+ * older than the requirement — is sent to /onboarding from every screen except the ones below,
+ * and comes back to where it was going once it has verified. Email sign-ups set their password on
+ * /set-password first and meet the gate right after it.
  *
  * Pure functions of the URL and of what `GET /me` said, kept out of the gate component
  * (components/auth/onboarding-gate.tsx) so vitest can run them under its node environment.
  * The gate is a client component rather than a check in `proxy.ts`: knowing whether the
- * account has a contact takes a `GET /me`, and a proxy that asked the API on every navigation
+ * account has verified takes a `GET /me`, and a proxy that asked the API on every navigation
  * would put one extra request in front of every page — the matcher widening ADR-0034 already
  * declined for less. The client already holds that answer (the nav's balance chip reads it).
+ * The gate is the screen's; the server's own check of "verified" (`isPhoneVerified`, @buddha/db)
+ * is what the actions that need it (#58, #70) call.
  */
 
 export const ONBOARDING_PATH = '/onboarding';
 
 /**
- * Routes a signed-in account without a contact may still open. Each entry covers itself and
+ * Routes a signed-in account that has not verified may still open. Each entry covers itself and
  * its subtree (`/terms`, `/terms/…`), never a look-alike prefix (`/termsx`).
  * - /onboarding itself, or the gate would loop.
  * - The auth screens: /login, /signup, /reset-password, and /set-password, where an email
- *   sign-up gives its contact in the first place.
+ *   sign-up sets its first password before it verifies.
  * - What a visitor must be able to read before handing personal data over: the three legal
  *   documents, and the public charge guide (ADR-0044) while paid Coin is on sale — `/charge` is
  *   not found otherwise (PAID_COIN_SALES_ENABLED, ADR-0049).
@@ -55,14 +58,17 @@ export function isOnboardingExempt(pathname: string): boolean {
 }
 
 /**
- * Whether the gate sends this page to /onboarding. `contact` is what `GET /me` said:
+ * Whether the gate sends this page to /onboarding. `verification` is what `GET /me` said:
  * - `undefined` — not known: no session, the session or `/me` still pending, or `/me` failed.
- *   Never redirect on a guess; a member with a contact must not be bounced while it loads.
- * - `null` — signed in, and the account has none.
- * - an object — nothing to do.
+ *   Never redirect on a guess; a verified member must not be bounced while it loads.
+ * - `null` — signed in, and the account has not verified.
+ * - a record — nothing to do.
  */
-export function needsOnboarding(pathname: string, contact: Me['contact'] | undefined): boolean {
-  return contact === null && !isOnboardingExempt(pathname);
+export function needsOnboarding(
+  pathname: string,
+  verification: Me['verification'] | undefined,
+): boolean {
+  return verification === null && !isOnboardingExempt(pathname);
 }
 
 /** The path part of a same-origin destination, percent-decoded for comparison. */
@@ -78,7 +84,7 @@ function pathOf(path: string): string {
 /**
  * Where /onboarding returns to: `?next=` if it is a path on this origin (`safeNextPath` — no
  * `https://…`, `//host`, backslash or control-character tricks), otherwise home. Never
- * /onboarding itself: an account that already has a contact is sent straight on to `next`, so a
+ * /onboarding itself: an account that has verified already is sent straight on to `next`, so a
  * `next` pointing back at the gate would bounce between the two for ever.
  */
 export function onboardingNext(next: string | string[] | null | undefined): string {

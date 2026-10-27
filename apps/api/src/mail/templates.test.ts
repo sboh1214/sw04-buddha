@@ -9,6 +9,7 @@ import {
   type EmailContent,
   MAIL_TEMPLATES,
   changeEmailConfirmationEmail,
+  devVerificationCodeEmail,
   passwordResetEmail,
   verificationEmail,
 } from './templates.js';
@@ -40,6 +41,14 @@ describe('mail templates', () => {
     expect(mail.html).toContain('new@example.com');
   });
 
+  it('development SMS mail carries the code in subject, text and html (ADR-0070)', () => {
+    const mail = devVerificationCodeEmail({ code: '012345', expiresInMinutes: 3 });
+    expect(mail.subject).toContain('012345');
+    expect(mail.text).toContain('본인확인 인증번호는 012345입니다. 3분 안에');
+    expect(mail.html).toContain('lang="ko"');
+    expect(mail.html).toContain('012345');
+  });
+
   it('escapes html in interpolated values', () => {
     const mail = verificationEmail({ url: 'http://x/?a=<b>&c="d"' });
     expect(mail.html).not.toContain('<b>');
@@ -62,6 +71,7 @@ const EXAMPLES: {
   verification: [{ url }, { url, expiresInMinutes: 15 }],
   passwordReset: [{ url }, { url, expiresInMinutes: 15 }],
   changeEmailConfirmation: [{ url, newEmail: 'new@example.com' }],
+  devVerificationCode: [{ code: '012345', expiresInMinutes: 3 }],
 };
 
 /** Every mail each registered template builds from its examples. */
@@ -174,7 +184,13 @@ const MAIL_INPUTS: Readonly<Record<string, { type: 'string' | 'number'; what: st
     type: 'string',
     what: 'the address an account asked to change to, as better-auth hands it to the mail hook',
   },
-  expiresInMinutes: { type: 'number', what: 'how long the link is valid' },
+  expiresInMinutes: { type: 'number', what: 'how long the link (or the code) is valid' },
+  code: {
+    type: 'string',
+    what:
+      'the six digits of a phone verification code, which the development SMS sender mails to ' +
+      'Mailpit instead of texting (ADR-0070): digits the server drew, no words',
+  },
 };
 
 /**

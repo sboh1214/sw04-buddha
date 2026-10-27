@@ -86,7 +86,7 @@ function TimeZoneFields({ picked }: { picked: string | null }) {
         timeZone: timeZoneFromSelect(form.timeZone),
         expectedAccountId: update.accountId,
       });
-      // Explicitly not keepDirtyValues, as the contact card does: the form's resetOptions would
+      // Explicitly not keepDirtyValues, as the real-name card does: the form's resetOptions would
       // otherwise keep the submitted value as dirty instead of taking the saved one.
       reset({ timeZone: timeZoneSelectValue(me.profile.timeZone) }, { keepDirtyValues: false });
       toaster.create({ type: 'success', title: copy.timeZoneSaved });

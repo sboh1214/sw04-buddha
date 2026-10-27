@@ -195,8 +195,9 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
 - 최초 비밀번호 설정에는 대응하는 HTTP 경로가 없다. better-auth 의 \`setPassword\` 는 서버 전용
   엔드포인트라, 이 저장소는 \`POST /api/v1/me/password\` 로 감싸 노출한다. 본문은
   \`newPassword\` 와 화면이 보는 계정 \`expectedAccountId\` 이고, 그것이 쿠키의 계정이 아니면
-  아무것도 바꾸지 않고 \`403 FORBIDDEN\`(\`details\` 가 그 필드를 지목한다)이다 — 실명·휴대전화의
-  \`PUT /api/v1/me/contact\` 도 같다(ADR-0043 추기).
+  아무것도 바꾸지 않고 \`403 FORBIDDEN\`(\`details\` 가 그 필드를 지목한다)이다 — 본인확인의
+  \`POST /api/v1/me/phone-verification/*\` 와 실명의 \`PUT /api/v1/me/real-name\` 도 같다(ADR-0043 추기,
+  ADR-0070).
 
 **공통 규칙**
 
@@ -323,8 +324,8 @@ const ERROR_NOTES = {
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   RULES_REQUIRED: '정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다.',
-  CONTACT_REQUIRED:
-    '실명과 휴대전화 번호를 아직 등록하지 않은 계정이다. `PUT /api/v1/me/contact` 로 등록한 뒤 다시 시도한다.',
+  VERIFICATION_REQUIRED:
+    '본인확인(휴대전화 SMS 인증번호)을 마치지 않은 계정이다. `POST /api/v1/me/phone-verification/code` 로 인증번호를 받아 `POST /api/v1/me/phone-verification/confirm` 으로 확인한 뒤 다시 시도한다(ADR-0070).',
   REFUND_NOT_ALLOWED:
     '환불 정책 밖의 결제다. `details[0].message` 가 까닭을 말한다 — `window_closed`(승인 후 7일이 지났다), `status`(환불할 수 있는 상태가 아니다), `provider`(그 결제 수단은 취소를 지원하지 않는다). 이미 쓴 Coin 이 있으면 `INSUFFICIENT_BALANCE` 로 답한다.',
   PAYMENT_GATEWAY_REFUSED:
@@ -332,9 +333,19 @@ const ERROR_NOTES = {
   PAYMENT_GATEWAY_ERROR:
     'PG 에 닿지 못했거나 결과를 알 수 없다(502). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. 환불이면 `refunding` 으로 남으니 다시 시도한다. 단 그사이 다른 시도가 환불을 끝냈으면 오류가 아니라 `refunded` 로 마친 결제로 답한다.',
   ROLE_CHANGE_NOT_ALLOWED:
-    '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `contact_required`(실명·휴대전화를 등록하지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
+    '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `phone_not_verified`(휴대전화 본인확인을 마치지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
   APPROVAL_NOT_ALLOWED:
     '2인 통제 요청의 결정(승인·거절)을 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다). 이 규칙을 쓰는 라우트가 이 코드를 문서화한다.',
+  PHONE_VERIFICATION_NOT_ALLOWED:
+    '본인확인을 받지 않는다. `details.reason` 이 까닭을 말한다 — `already_verified`(이미 본인확인을 마쳤다), `phone_in_use`(그 번호는 다른 계정이 본인확인한 번호다. 한 번호에 한 계정, 맞는 인증번호를 확인한 뒤에만 알린다).',
+  PHONE_VERIFICATION_LIMITED:
+    '인증번호를 보내지 않았다. `details.reason` 이 걸린 한도를, `details.retryAfterSeconds` 가 같은 요청이 그 한도를 지나는 때까지의 초를 말한다(여럿이면 가장 오래 걸리는 것) — `resend_interval`(그 계정의 앞선 발송 뒤 60초가 지나지 않았다), 직전 24시간의 `account_daily`(그 계정이 10번 받았다), `account_phone_daily`(그 계정이 그 번호로 10번 받았다), `phone_accounts`(그 번호로 다른 계정 3개가 받았다), `ip_daily`(같은 접속 주소(IP)의 요청으로 50번 보냈다. 클라이언트를 가리키지 못하는 접속 — 루프백, 웹 서버의 rewrite — 은 세지 않는다), `service_daily`(서비스 전체가 500건 보냈다). 그 계정만의 한도(`resend_interval`·`account_daily`·`account_phone_daily`)는 초까지 정확하고, 다른 계정의 발송과 함께 세는 한도(`phone_accounts`·`ip_daily`·`service_daily`)는 서버 시계의 분 단위로 올려 60의 배수로 답하고 그 분까지 닫혀 있다 — 한도째 발송이 24시간이 된 뒤의 첫 정각 분에 열리므로 남의 발송 시각을 답으로도 통과로도 초까지 알리지 않는다. 기다림은 요청이 든 분의 시작부터 세므로, 답을 받은 때부터 기다리면 그 한도가 열린 때이거나 1분 안으로 뒤다.',
+  VERIFICATION_CODE_REJECTED:
+    '본인확인이 되지 않았다. `details.reason` 이 까닭을 말한다 — `no_code`(기다리는 인증번호가 없다: 받지 않았거나 이미 썼다), `expired`(3분이 지났다), `attempts_exceeded`(틀린 입력이 5번이 되어 그 인증번호를 버렸다. 새로 받아야 한다), `superseded`(다시 받기 전의 인증번호다. 새 인증번호를 넣어야 하고, 틀린 입력으로 세지 않는다), `mismatch`(틀렸다. `details.remainingAttempts` 가 남은 입력 수다). 계정의 가장 최근 인증번호만 확인한다.',
+  SMS_SEND_FAILED:
+    'SMS 사업자가 인증번호 문자를 받지 않은 것이 확실하다(502: 거절, 요청이 나가기 전의 연결 실패). 이 발송은 세지 않고 이 요청이 남긴 인증번호도 없다. 앞서 받은 인증번호는 3분 안이고 버려지지 않았으면 그대로 확인할 수 있다(그것이 다시 가장 최근 인증번호다). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다.',
+  SMS_SEND_UNCONFIRMED:
+    'SMS 사업자의 답을 받지 못했다(502: 시간 초과, 요청이 나간 뒤 끊긴 연결, 5xx, 읽을 수 없는 답). 문자가 갔을 수 있으므로 발송으로 세고(60초 간격과 하루 한도) 그 인증번호는 확인할 수 있다. 5xx 본문은 `details` 를 싣지 않으므로 코드로 `SMS_SEND_FAILED` 와 가린다.',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 
@@ -346,6 +357,8 @@ const RATE_LIMIT_ROUTES = {
   coupon: '`POST /api/v1/coupons/redeem`',
   searchHistory:
     '`POST /api/v1/me/search-history`(제출한 검색어 기록). 기록마다 남는 행이라(보관 기간 없음) 계정마다 센다. 웹은 거절된 기록을 버리고 검색은 그대로 간다.',
+  phoneVerification:
+    '`POST /api/v1/me/phone-verification/code`(본인확인 인증번호 요청). 계정마다 센다. 발송 수 자체는 이 버킷이 아니라 DB 의 고정 한도(60초 간격, 계정·번호마다 24시간 10번, `PHONE_VERIFICATION_LIMITED`)가 막고, 이 버킷은 그 한도에 거절당할 요청을 스크립트가 쏟아 내는 속도를 막는다.',
   email:
     '메일을 보내는 경로 — `POST /api/v1/auth/register` 와 `/api/auth/*` 의 `/change-email`, `/send-verification-email`, `/request-password-reset`, `/forget-password`. 시도 자체를 센다(시도가 곧 피해다). `/change-email` 만은 **로그인한 요청만** 센다(세션 없는 요청은 401 이고 아무에게도 메일이 가지 않으므로): 먼저 **요청한 계정**의 버킷을, 그다음 `newEmail` 의 버킷을 — 인증된 계정의 확인 메일은 본문의 주소가 아니라 계정이 이미 가진 주소로 가고, 계정을 먼저 세야 한 계정이 1분에 다섯 주소까지만 지목할 수 있기 때문이다. `GET /verify-email` 도 링크가 메일을 보내는 종류(이메일 변경의 **확인** 링크: 누를 때마다 새 주소에 다시 보낸다)이면 그 수신 주소로 센다 — 토큰은 1시간짜리 무상태 JWT 라 누른다고 소모되지 않기 때문이다. 서명이 유효한 토큰만 세고, 변경을 적용하는 **검증** 링크는 메일을 보내지 않으므로 세지 않는다.',
   signIn:

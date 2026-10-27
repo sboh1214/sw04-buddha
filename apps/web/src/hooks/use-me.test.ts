@@ -25,7 +25,7 @@ const following: Me = {
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
-  contact: null,
+  verification: null,
 };
 
 /** What `PUT /me/time-zone` answers once New York is saved. */
@@ -158,7 +158,7 @@ describe('storeMe', () => {
 
   it("leaves another account's profile alone, its refresh in flight included", async () => {
     // THE HAZARD: A's PUT answers after the tab switched to B (SessionCacheGuard reset and B's
-    // GET /me landed). Writing A's `Me` would put A's nickname, balance and contact on B's
+    // GET /me landed). Writing A's `Me` would put A's nickname, balance and verification on B's
     // screen; cancelling would drop B's own refresh.
     const queryClient = getQueryClient();
     const session = sessionRefetches();

@@ -8,7 +8,11 @@ import { type LegalDocument, bullets, numbered, paragraph, table } from './docum
  *
  * The collected items are what the code actually stores: better-auth's `user`/`account`/
  * `session` rows (email, password hash, the provider's name/image, IP and user agent),
- * `profiles` (nickname), `user_contacts` (real name, mobile, ADR-0043) and `payments` /
+ * `profiles` (nickname), `phone_verifications` (real name and verified mobile, ADR-0070),
+ * `phone_verification_codes` (each code sent: the number and the real name it was sent with, the
+ * code's HMAC, the times, the client IP and whether the provider took it — kept as 본인확인 기록
+ * for #184's retention period, past a withdrawal: the owner's exception to the immediate deletion
+ * of ADR-0069 #57-18, ADR-0070; the policy's wording of both is #137's, D11) and `payments` /
  * `payment_events` (the PG's approval result, whose card number arrives masked — SmartroPay
  * masks digits 7-12). The processors are the PG and AWS (terraform/: ap-northeast-2, SES in the
  * same region). Keep this list in step with the schema when either changes.

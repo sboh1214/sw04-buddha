@@ -97,7 +97,7 @@ describe('updateWatchBodySchema', () => {
     }
   });
 
-  it('requires the account the screen shows, as the contact and time-zone bodies do (A-PG-24)', () => {
+  it('requires the account the screen shows, as the verification and time-zone bodies do (A-PG-24)', () => {
     for (const body of [
       { watched: true },
       { watched: true, expectedAccountId: '' },

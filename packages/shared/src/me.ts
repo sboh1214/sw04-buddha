@@ -1,8 +1,8 @@
 import * as z from 'zod';
 import { coinAmountSchema } from './api/coin-amount.js';
 import { NICKNAME_MAX_LENGTH, NICKNAME_MIN_LENGTH } from './constants.js';
-import { contactSchema } from './contact.js';
 import { roleSchema } from './enums.js';
+import { phoneVerificationSchema } from './phone-verification.js';
 import { TIME_ZONE_MAX_LENGTH } from './time-zone.js';
 
 /**
@@ -54,10 +54,11 @@ export const meSchema = z
     balance: z.object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema }),
     linkedAccounts: z.array(linkedAccountSchema),
     /**
-     * Real name and mobile number (ADR-0043); null until the member provides them, which is
-     * what sends a signed-in account to `/onboarding`.
+     * The account's 본인확인 (ADR-0070): the mobile number it proved with an SMS code, the real
+     * name it gave, and when; null until it confirms a code, which is what sends a signed-in
+     * account to `/onboarding`. Owner-only, like everything here.
      */
-    contact: contactSchema.nullable(),
+    verification: phoneVerificationSchema.nullable(),
   })
   .meta({ id: 'Me' });
 export type Me = z.infer<typeof meSchema>;

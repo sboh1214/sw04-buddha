@@ -1,8 +1,9 @@
 /**
  * #113 at run time, against the docker `test` profile. Account A's private data is in the
- * database — email, nickname and time zone, real name and phone, password and session, a balance
- * and a ledger memo, orders and the fill one of them got against another account's resting order,
- * a position with its PnL, a payment, two watched markets (#89), a recorded search (#15). Then:
+ * database — email, nickname and time zone, its 본인확인 (verified phone, real name, the code's
+ * hash), password and session, a balance and a ledger memo, orders and the fill one of them got
+ * against another account's resting order, a position with its PnL, a payment, two watched
+ * markets (#89), a recorded search (#15). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability;
@@ -26,6 +27,7 @@ import { schema } from '@buddha/db';
 import {
   createMarket,
   createMarketLink,
+  createPhoneVerification,
   createSearch,
   createUser,
   createWatch,
@@ -101,6 +103,8 @@ interface Fixture {
   watchedCategory: string;
   /** A's recorded search (#15): the id B's delete names, its term a sentinel. */
   searchId: string;
+  /** A's verified number (ADR-0070), digits: what B's code request names. */
+  phone: string;
   paymentId: string;
   /** A's password login: the `account` row better-auth keeps. */
   accountId: string;
@@ -276,12 +280,22 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     body: (fixture) => ({ newPassword: 'another-password-1', expectedAccountId: fixture.a.id }),
     status: 403,
   },
-  'PUT /me/contact': {
+  // B's cookie naming A's account (and A's number): refused before a code is drawn or texted, a
+  // confirmation looked up or a name written — A's record stays and nobody was texted (below).
+  'POST /me/phone-verification/code': {
     body: (fixture) => ({
       realName: '다른사람',
-      phone: '01012345678',
+      phone: fixture.phone,
       expectedAccountId: fixture.a.id,
     }),
+    status: 403,
+  },
+  'POST /me/phone-verification/confirm': {
+    body: (fixture) => ({ code: '123456', expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'PUT /me/real-name': {
+    body: (fixture) => ({ realName: '다른사람', expectedAccountId: fixture.a.id }),
     status: 403,
   },
   // B's cookie naming A's account: refused before anything is written, and A's zone stays (below).
@@ -614,9 +628,24 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       .update(schema.profiles)
       .set({ nickname, timeZone })
       .where(eq(schema.profiles.userId, a.id));
+    // A's 본인확인 (ADR-0070): the record, and the code it was confirmed with (its hash and the
+    // address it was asked from sentinels too: nobody but A may see whether, when, how or from
+    // where A verified — and no route shows A the address either).
     const realName = `숨김${letters(8)}`;
     const phone = `010${String(randomInt(10_000_000, 100_000_000))}`;
-    await t.db.insert(schema.userContacts).values({ userId: a.id, realName, phone });
+    await createPhoneVerification(t.db, { userId: a.id, realName, phone });
+    const codeHash = randomUUID().replaceAll('-', '').repeat(2);
+    const clientIp = `2001:db8::${randomInt(0x1000, 0x10000).toString(16)}:${randomInt(0x1000, 0x10000).toString(16)}`;
+    await t.db.insert(schema.phoneVerificationCodes).values({
+      id: randomUUID(),
+      userId: a.id,
+      phone,
+      realName,
+      codeHash,
+      expiresAt: new Date(Date.now() + 180_000),
+      consumedAt: new Date(),
+      clientIp,
+    });
 
     // The balance as the books would have it: the change is an ADMIN_ADJUST entry.
     const [before] = await t.db
@@ -780,6 +809,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       relatedMarket: related,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
+      phone,
       paymentId: payment!.id,
       accountId: account!.id,
       cursors: {
@@ -796,6 +826,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
+        text('verification code hash', codeHash),
+        text('verification client address', clientIp),
         text('password', a.password),
         text('session token', session!.token),
         text('account id', account!.id),
@@ -1013,13 +1045,24 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     );
     expect(shown).toEqual(shown.map(({ route }) => ({ route, status: 200, missing: [] })));
 
-    // B's refused writes changed nothing of A's.
-    const [contact] = await t.db
-      .select()
-      .from(schema.userContacts)
-      .where(eq(schema.userContacts.userId, f.a.id));
+    // B's refused writes changed nothing of A's: A's record and code stay, B has neither, and
+    // nobody was texted (ADR-0070).
     const sentinel = (label: string) => f.sentinels.find((s) => s.label === label)!.value;
-    expect(contact).toMatchObject({ realName: sentinel('real name'), phone: sentinel('phone') });
+    expect(
+      await t.db
+        .select({
+          userId: schema.phoneVerifications.userId,
+          realName: schema.phoneVerifications.realName,
+          phone: schema.phoneVerifications.phone,
+        })
+        .from(schema.phoneVerifications),
+    ).toEqual([{ userId: f.a.id, realName: sentinel('real name'), phone: sentinel('phone') }]);
+    expect(
+      await t.db
+        .select({ userId: schema.phoneVerificationCodes.userId })
+        .from(schema.phoneVerificationCodes),
+    ).toEqual([{ userId: f.a.id }]);
+    expect(t.sms.messages).toEqual([]);
     const [profile] = await t.db
       .select({ timeZone: schema.profiles.timeZone })
       .from(schema.profiles)

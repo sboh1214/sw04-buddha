@@ -101,6 +101,31 @@ export function changeEmailConfirmationEmail(input: {
 }
 
 /**
+ * 개발용 SMS 발송기의 본인확인 인증번호 (SMS_PROVIDER=dev, ADR-0070): the code the development
+ * sender texts to nobody, mailed to Mailpit instead (`sms-<number>@sms.buddha.local`). Never sent
+ * in production, where the env schema refuses that sender.
+ */
+export function devVerificationCodeEmail(input: {
+  code: string;
+  expiresInMinutes: number;
+}): EmailContent {
+  const title = `[${SERVICE_NAME}] 개발용 SMS: 본인확인 인증번호 ${input.code}`;
+  const paragraphs = [
+    '개발용 발송기가 SMS 대신 보낸 메일입니다. 받는 주소의 숫자가 인증번호를 받을 휴대전화 번호입니다.',
+    `본인확인 인증번호는 ${input.code}입니다. ${String(input.expiresInMinutes)}분 안에 입력해 주세요.`,
+  ];
+  const body = paragraphs.map((p) => `<p style="margin:0 0 12px">${escapeHtml(p)}</p>`).join('');
+  return {
+    subject: title,
+    text: `${paragraphs.join('\n\n')}\n`,
+    html:
+      `<!doctype html><html lang="ko"><body style="font-family:Pretendard,-apple-system,` +
+      `'Segoe UI',sans-serif;color:#1a1a1a;line-height:1.6;padding:24px">` +
+      `<h1 style="font-size:18px;margin:0 0 16px">${escapeHtml(title)}</h1>${body}</body></html>`,
+  };
+}
+
+/**
  * Every mail template, by name: functions declared in this file. The mail code sends what these
  * build and nothing else; a new mail is a new line here (with its example inputs in
  * templates.test.ts, which the compiler asks for, and any new input in its MAIL_INPUTS).
@@ -109,4 +134,5 @@ export const MAIL_TEMPLATES = {
   verification: verificationEmail,
   passwordReset: passwordResetEmail,
   changeEmailConfirmation: changeEmailConfirmationEmail,
+  devVerificationCode: devVerificationCodeEmail,
 } as const satisfies Record<string, (input: never) => EmailContent>;

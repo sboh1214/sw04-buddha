@@ -35,18 +35,32 @@ describe('meSchema', () => {
         createdAt: '2026-09-03T00:00:00.000Z',
       },
     ],
-    contact: null,
+    verification: null,
   };
 
   it('parses a complete /me payload', () => {
     expect(meSchema.parse(sample)).toEqual(sample);
   });
 
-  it('carries the contact once provided, and requires the key either way', () => {
-    const withContact = { ...sample, contact: { realName: '홍길동', phone: '01012345678' } };
-    expect(meSchema.parse(withContact)).toEqual(withContact);
-    const { contact: _dropped, ...withoutContact } = sample;
-    expect(meSchema.safeParse(withoutContact).success).toBe(false);
+  it('carries the verification once confirmed, and requires the key either way (ADR-0070)', () => {
+    const verified = {
+      ...sample,
+      verification: {
+        realName: '홍길동',
+        phone: '01012345678',
+        verifiedAt: '2026-10-18T00:00:00.000Z',
+      },
+    };
+    expect(meSchema.parse(verified)).toEqual(verified);
+    // The number is the stored digits, never a spelling of them.
+    expect(
+      meSchema.safeParse({
+        ...verified,
+        verification: { ...verified.verification, phone: '010-1234-5678' },
+      }).success,
+    ).toBe(false);
+    const { verification: _dropped, ...withoutVerification } = sample;
+    expect(meSchema.safeParse(withoutVerification).success).toBe(false);
   });
 
   it('carries the picked time zone, null while the browser is followed, and requires the key', () => {

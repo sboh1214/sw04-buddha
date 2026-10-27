@@ -14,8 +14,11 @@ export const ERROR_CODES = [
   'RULES_REQUIRED',
   // No brackets or quotes in the comments of this list: scripts/generate-api-doc.mjs reads it
   // with a regex. The detail shapes of the codes below are in its ERROR_NOTES.
-  /** No real name / mobile number on the account yet, and the action needs them (ADR-0043). */
-  'CONTACT_REQUIRED',
+  /**
+   * The account has not completed the SMS verification yet, and the action needs it. Took the
+   * place of the contact-required code when the verified number replaced the unverified contact.
+   */
+  'VERIFICATION_REQUIRED',
   /** An admin refund outside the policy; the first detail names why (ADR-0042). */
   'REFUND_NOT_ALLOWED',
   /**
@@ -35,6 +38,36 @@ export const ERROR_CODES = [
    * decided already. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
    */
   'APPROVAL_NOT_ALLOWED',
+  /**
+   * A verification the rules refuse: the account verified already, or the number is the verified
+   * number of another account. Details carry the reason, phoneVerificationNotAllowedDetailsSchema.
+   */
+  'PHONE_VERIFICATION_NOT_ALLOWED',
+  /**
+   * No code was sent: the resend interval, or a daily send limit of the account, of the account
+   * at the number, of the accounts at the number, of the client address or of the service.
+   * Details carry the reason and retryAfterSeconds, phoneVerificationLimitedDetailsSchema.
+   */
+  'PHONE_VERIFICATION_LIMITED',
+  /**
+   * A typed code that verifies nothing: none waiting, expired, discarded after its wrong entries,
+   * an older code a newer send replaced, or wrong with entries left. Details carry the reason,
+   * verificationCodeRejectedDetailsSchema.
+   */
+  'VERIFICATION_CODE_REJECTED',
+  /**
+   * The SMS provider certainly did not take the text (502): it refused it or could not be reached
+   * before the request left. Nothing was sent and this send is not counted, so it left no code to
+   * confirm. A code the account was sent earlier, still within its three minutes, can still be
+   * confirmed: it is the newest code again.
+   */
+  'SMS_SEND_FAILED',
+  /**
+   * The answer of the SMS provider was lost (502): a timeout, a connection cut after the request
+   * left, a 5xx or an unreadable answer. The text may have gone, so the send counts against the
+   * limits and its code can be confirmed (ADR-0070). Its own code as a 5xx body has no details.
+   */
+  'SMS_SEND_UNCONFIRMED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

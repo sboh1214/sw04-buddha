@@ -20,8 +20,8 @@ const SECRET_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * Personal data a PG echoes back (BuyerName, BuyerTel, BuyerEmail, a delivery address…).
- * `payment_events` is append-only and outlives the account — `user_contacts` is deleted with
- * it — so a copy here would be the one copy nobody can erase.
+ * `payment_events` is append-only and outlives the account — `phone_verifications` is deleted
+ * with it — so a copy here would be the one copy nobody can erase.
  */
 const PERSONAL_KEY = /^(buyer|receiver|delivery|parent)/i;
 

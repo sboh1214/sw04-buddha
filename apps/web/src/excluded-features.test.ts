@@ -121,16 +121,6 @@ const COPY_ALLOWANCES: readonly {
       "The wallet's 이용 내역 names the kept ledger types (D9, ADR-0049): rows from before sales " +
       'closed, not an offer. None is written while they are closed.',
   })),
-  ...(['onboardingSubtitle', 'settingsContactHint', 'setPasswordContactHeading'] as const).map(
-    (key) => ({
-      key,
-      feature: 'paid-purchase' as const,
-      words: ['결제', '구매'],
-      reason:
-        'Why the real name and phone are asked for still says 결제: owner decision 2026-10-13 ' +
-        '(#112) keeps the wording until #58 rewrites the onboarding.',
-    }),
-  ),
 ];
 
 function isPreservedPaid(file: string): boolean {

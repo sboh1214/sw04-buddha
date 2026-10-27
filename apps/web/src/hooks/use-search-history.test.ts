@@ -36,7 +36,11 @@ const me = (id: string): Me => ({
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
-  contact: { realName: '홍길동', phone: '01012345678' },
+  verification: {
+    realName: '홍길동',
+    phone: '01012345678',
+    verifiedAt: '2026-10-18T00:00:00.000Z',
+  },
 });
 
 const outage = () => new ApiError(503, { code: 'INTERNAL', message: 'x' } as never);

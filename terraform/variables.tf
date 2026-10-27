@@ -239,3 +239,39 @@ variable "naver_client_secret" {
   sensitive   = true
   default     = ""
 }
+
+# 알리고 SMS for 본인확인 (#183, ADR-0070). Sign up at smartsms.aligo.in, register the sender number
+# (발신번호) and the EC2 Elastic IP as a sending address, and issue an API key. Leave all three empty
+# to deploy without them: the API starts, and every verification code send fails until they are set.
+
+variable "aligo_api_key" {
+  description = "알리고 API key (empty = verification codes cannot be sent)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "aligo_user_id" {
+  description = "알리고 account id the API key belongs to (empty = not configured)."
+  type        = string
+  sensitive   = true
+  default     = ""
+}
+
+variable "aligo_sender" {
+  description = "Sender number registered with 알리고 (발신번호), digits only (empty = not configured)."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.aligo_sender == "" || can(regex("^[0-9]{8,11}$", var.aligo_sender))
+    error_message = "aligo_sender must be empty or the registered sender number, 8-11 digits."
+  }
+}
+
+variable "aligo_test_mode" {
+  description = "알리고 test mode (testmode_yn=Y): answered as usual, texted to nobody, not charged."
+  type        = bool
+  default     = false
+}
