@@ -13,8 +13,9 @@ export default defineConfig({
     // for the same reason.
     testTimeout: 30_000,
     // `beforeAll` also waits for the cross-package file lock (src/test/harness.ts) while the api
-    // and worker suites run on the same database, so in CI it can sit for the length of those
-    // suites — minutes, not seconds. The CI job has its own 30-minute ceiling.
+    // and worker suites run on the same database, so under `pnpm test` it can sit for the length
+    // of those suites — minutes, not seconds. CI gives each package a job and a database of its
+    // own (.github/workflows/ci.yml), so nothing waits there.
     hookTimeout: 600_000,
   },
 });

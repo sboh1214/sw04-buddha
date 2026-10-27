@@ -15,8 +15,9 @@ export default defineConfig({
     fileParallelism: false,
     testTimeout: 20_000,
     // `beforeAll` waits for the cross-package file lock (packages/db harness) while the db and
-    // worker suites run on the same database, so in CI it can sit for the length of those
-    // suites — minutes, not seconds. The CI job has its own 30-minute ceiling.
+    // worker suites run on the same database, so under `pnpm test` it can sit for the length of
+    // those suites — minutes, not seconds. CI gives each package a job and a database of its own
+    // (.github/workflows/ci.yml), so nothing waits there.
     hookTimeout: 600_000,
   },
 });
