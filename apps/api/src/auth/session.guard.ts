@@ -9,7 +9,7 @@ import { AUTH, type Auth, type SessionData } from './auth.js';
 /**
  * Fastify request after SessionGuard ran — or after the rate-limit guard resolved the session
  * first, which it does for the routes counted per account (`@RateLimit('charge')` and friends,
- * rate-limit.tracker.ts).
+ * rate-limit.tracker.ts), or the image upload's gate did, before the body was read (image-body.ts).
  *
  * That second writer is why `@CurrentUser()` still refuses a request with no `auth` rather than
  * treating the field as proof of anything: a route in a `user` bucket that forgot SessionGuard

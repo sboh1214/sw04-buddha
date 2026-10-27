@@ -777,11 +777,157 @@ export const copy = {
   // 관심 시장 탭(#89): 최근 등록 순의 시장 카드. 끝난 시장도 해제할 때까지 상태와 함께 남는다.
   watchlistEmpty: `아직 관심 시장이 없습니다. ${WATCHLIST_HOW_TO_ADD}`,
 
-  // --- community (placeholder) ---
-  // 헤더가 가리키는 자리는 있어야 하므로 화면은 있고, 기능은 아직 없다.
+  // --- community (#46, ADR-0073) ---
+  // 근거 글(N05 §2)과 그것을 모은 커뮤니티 목록. 글 하나는 시장 하나에 달리고(#45-1), 목록은 최신순
+  // 하나에 시장·카테고리 필터와 제목·본문 검색이 있다(#45-7). 누구나 읽고 온보딩을 마친 계정이 쓴다.
+  // 카드의 댓글 수·좋아요 수는 #48·#49가 생길 때 더한다(없는 수를 그리지 않는다).
   communityTitle: '커뮤니티',
-  communityComingSoon:
-    '커뮤니티는 준비 중입니다. 시장을 두고 이야기 나눌 자리가 곧 열립니다. 그때까지는 시장을 둘러봐 주세요.',
+  communityWrite: '글쓰기',
+  communityListLabel: '근거 글 목록',
+  communityFilterMarket: '시장',
+  communityFilterMarketPick: '시장 고르기',
+  communityFilterMarketClear: '시장 필터 해제',
+  communityFilterMarketUnknown: '고른 시장',
+  communityCategory: '카테고리',
+  communityCategoryAll: '모든 카테고리',
+  communitySearchLabel: '글 검색',
+  communitySearchPlaceholder: '제목·본문에서 찾기',
+  communitySearchSubmit: '검색',
+  communityEmpty: '아직 글이 없습니다. 시장을 골라 첫 글을 써 보세요.',
+  communityEmptyFiltered: '조건에 맞는 글이 없습니다.',
+  // 작성자 표기(#37-3·#37-6·#45-9): 지금 닉네임과 작은 원형 이미지(없으면 닉네임 첫 글자), 관리자
+  // 계정에는 '운영자'(운영 권한만 뜻한다). 탈퇴한 작성자(#140)는 링크 없이 이 이름만.
+  postAuthorAdmin: '운영자',
+  postAuthorFormer: '탈퇴한 사용자',
+  postEdited: '수정됨',
+  postImageAlt: '글에 넣은 이미지',
+  postThumbnailAlt: '글의 첫 이미지',
+  // 자리표시(#45-5): 작성자와 글의 어떤 말도 보이지 않고 시장만 남는다.
+  postDeletedPlaceholder: '삭제된 글입니다.',
+  postHiddenPlaceholder: '운영 정책에 따라 숨긴 글입니다.',
+  postNotFound: '없거나 삭제된 글입니다.',
+  postMarketHeading: '이 글의 시장',
+  postMarketPosts: '이 시장의 글 더 보기',
+  postBackToCommunity: '커뮤니티로',
+  postEdit: '수정',
+  postDelete: '삭제',
+  postDeleteTitle: '글을 삭제합니다',
+  postDeleteBody: '삭제한 글은 되살릴 수 없습니다. 계속할까요?',
+  postDeleteConfirm: '삭제하기',
+  postDeletedToast: '글을 삭제했습니다.',
+  // 쓰기·수정 화면. 시장은 쓸 때 한 번 고르고 바꿀 수 없다(#45-4). 확률을 받는 칸은 없다(N05 §2).
+  postWriteTitle: '글쓰기',
+  postEditTitle: '글 수정',
+  postWriteMarketLabel: '시장',
+  postWriteMarketHint: '글은 고른 시장에 달리고, 올린 뒤에는 시장을 바꿀 수 없습니다.',
+  postWriteMarketChange: '다른 시장 고르기',
+  // 주소의 시장을 읽지 못했을 때(시장이 없다는 답이 아니라 API에 닿지 못하거나 서버 오류 — 그 시장의 글
+  // 양식이 이미 있으면 그대로 두고 이 문장은 양식이 아직 없을 때만, '다시 시도'와 함께).
+  postWriteMarketLoadError: '시장을 불러오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+  postWriteTitleLabel: '제목 (선택)',
+  postWriteTitlePlaceholder: '제목 없이 올려도 됩니다',
+  postWriteBodyLabel: '본문',
+  postWriteBodyPlaceholder: '근거와 출처를 적어 주세요. 링크와 이미지를 넣을 수 있습니다.',
+  postWriteLength: '자',
+  postWriteImages: '이미지',
+  postWriteImagesUnit: '장',
+  postWriteSubmit: '올리기',
+  postEditSubmit: '저장',
+  postWriteSignedOut: '글을 쓰려면 로그인해 주세요.',
+  postEditNotYours: '내가 쓴 글만 고칠 수 있습니다.',
+  postWriteUploading: '이미지를 올리는 중',
+  // 쓰거나 고치던 글을 두고 떠날 때 묻는 말: 묻는 것은 오너 결정 2026-10-19, 문장은 오너가 승인했다(2026-10-20,
+  // ADR-0073). 링크(다른 사이트로 가는 것도)·뒤로·앞으로 가기·머리의 검색에서. 탭을 닫거나 새로 고치거나 주소를
+  // 입력해 떠날 때는 브라우저가 자기 문구로 묻는다. 온보딩 게이트가 남은 단계로 보낼 때는 묻지 않는다(글은 남는다).
+  postLeaveConfirm: '쓰던 내용이 사라집니다. 나갈까요?',
+  // 온보딩 게이트가 남은 단계로 보낼 때 이 탭에 잠시(1시간) 둔 쓰던 글을, 단계를 마치고 돌아온 같은 화면에서
+  // 되살렸을 때(오너 결정 2026-10-20, ADR-0073). 버리면 화면이 처음 보인 내용(새 글은 빈 양식, 수정은 저장된 글)으로
+  // 돌아간다. 버리기는 언제나 먼저 묻고(postDraftDiscard가 그 확인 창의 제목, 단추는 '취소'와 postDraftDiscardConfirm),
+  // 버린 뒤에는 postDraftDiscarded를 다른 완료처럼 토스트로 화면에 보이고 화면 읽기 프로그램에는 토스트의 알림
+  // 영역이 한 번 읽는다(오너 결정 2026-10-20 3차 답 3·5 — 묻는 문장과 알리는 문장은 오너가 준 것, 창의 제목과
+  // 단추는 오너가 그대로 두었다).
+  postDraftRestored: '쓰던 내용을 되살렸습니다.',
+  postDraftDiscard: '되살린 내용 버리기',
+  postDraftDiscardQuestion: '되살린 내용을 버릴까요? 그 뒤에 쓴 내용도 사라집니다.',
+  postDraftDiscardConfirm: '버리기',
+  postDraftDiscarded: '되살린 내용을 버렸습니다.',
+  // 시장 고르기: 공개 상태의 모든 시장(진행 중·거래 마감·판정 완료·정산 완료·무효, #45-6)을 제목으로 찾는다.
+  marketPickerLabel: '시장 찾기',
+  marketPickerPlaceholder: '시장 제목의 일부',
+  marketPickerSubmit: '찾기',
+  marketPickerPrompt: '글을 쓸 시장을 제목으로 찾아 고르세요.',
+  marketPickerFilterPrompt: '글을 볼 시장을 제목으로 찾아 고르세요.',
+  marketPickerEmpty: '제목에 이 글자가 들어간 시장이 없습니다.',
+  marketPickerPick: '고르기',
+  // 편집기 도구 막대(서식은 #45-3의 허용 목록뿐이다).
+  editorToolbar: '서식',
+  editorBold: '굵게',
+  editorItalic: '기울임',
+  editorStrike: '취소선',
+  editorCode: '코드',
+  editorHeading: '제목',
+  editorParagraph: '본문 글자',
+  editorBulletList: '글머리 기호 목록',
+  editorOrderedList: '번호 목록',
+  editorBlockquote: '인용',
+  editorCodeBlock: '코드 블록',
+  editorHorizontalRule: '구분선',
+  editorLink: '링크',
+  editorLinkPrompt: '링크 주소(http 또는 https)',
+  // 넣지 못한 링크: 서버가 지울 링크는 편집기도 넣지 않는다(http·https, 사용자 정보 없음, 2,048자까지).
+  editorLinkInvalid:
+    '넣을 수 없는 링크입니다. 사용자 정보가 없는 http·https 주소를 2,048자까지 넣을 수 있습니다.',
+  editorLinkApply: '넣기',
+  editorUnlink: '링크 해제',
+  editorImage: '이미지 넣기',
+  editorTable: '표 넣기',
+  editorTableAddRow: '행 추가',
+  editorTableAddColumn: '열 추가',
+  editorTableDeleteRow: '행 삭제',
+  editorTableDeleteColumn: '열 삭제',
+  editorTableDelete: '표 삭제',
+  editorColor: '글자 색',
+  editorColorNone: '기본 색',
+  editorColorRed: '빨강',
+  editorColorOrange: '주황',
+  editorColorGreen: '초록',
+  editorColorBlue: '파랑',
+  editorColorPurple: '보라',
+  editorColorGray: '회색',
+  editorUndo: '실행 취소',
+  editorRedo: '다시 실행',
+  // 글을 올리거나 고치거나 지우지 못했을 때. 규칙은 서버가 판단하고 편집기는 같은 방식으로 미리 센다.
+  errPostTitle: '제목은 100자 이하의 한 줄로 입력해 주세요.',
+  errPostBodyEmpty: '본문을 입력해 주세요.',
+  errPostBodyTooLong: '본문은 서식을 뺀 5,000자 이하로 입력해 주세요.',
+  errPostTooManyImages: '이미지는 글마다 10장까지 넣을 수 있습니다.',
+  // 쓸 수 없는 이미지: 올린 지 오래되어 지워졌거나, 다른 글이 가져갔거나, 내 업로드가 아니다.
+  // 편집기는 그 이미지에 테두리를 그린다.
+  errPostImageUnusable:
+    '다시 넣어야 하는 이미지가 있습니다. 테두리로 표시한 이미지를 지우고 다시 넣어 주세요.',
+  errPostInvalid: '입력한 내용을 확인해 주세요.',
+  errPostMarketUnavailable: '이 시장에는 글을 쓸 수 없습니다.',
+  // 고치는 사이 다른 탭에서 지운 글의 수정 화면이 쓰던 제목·본문을 고칠 수 없게 남길 때 그 위의 까닭도 이 문장이고,
+  // 닫는 단추는 copy.close다(오너 결정 2026-10-24, ADR-0073 9-52 — #48의 남긴 댓글 글자와 같은 꼴).
+  errPostGone: '없거나 삭제된 글입니다.',
+  errPostNotYours: '다른 사람의 글은 고치거나 삭제할 수 없습니다.',
+  // 숨긴 글(#45-5): 작성자가 지울 수는 있지만 그 단추는 #50·#51이 붙인다 — 그때까지 삭제를 약속하지 않는다.
+  errPostNotEditable: '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.',
+  // 쓰기·수정·이미지 올리기 모두에, 처음 가입한 계정과 약관 개정에 다시 동의해야 하는 계정 모두에 맞는 말.
+  // 자기 글 삭제는 로그인만 본다(오너 결정 2026-10-19).
+  errPostOnboarding: '약관 동의 등 남은 절차를 마친 뒤에 할 수 있습니다.',
+  errImageType: 'JPEG·PNG·WebP·GIF 이미지만 넣을 수 있습니다.',
+  errImageSize: '이미지는 한 장에 5MB까지 넣을 수 있습니다.',
+  // 한 프레임이 너무 크거나(`pixels`) 모든 프레임을 더해 너무 크면(`frames`) — 둘에 같은 문장(오너 결정 2026-10-19).
+  // 긴 변이 짧은 변의 32배를 넘는 아주 가는 이미지도 `pixels`라 이 문장이다(오너 결정 2026-10-21 (2차) 답 1).
+  // PNG가 그 종류(채널·비트·인터레이스)마다 잰 한 프레임의 한도를 넘어도 `pixels`라 이 문장이다(오너 결정 2026-10-21 (2차) 답 4).
+  // 변환 전체로 잰 한도 — 움직이는 WebP(한 장면은 `pixels`, 모든 장면은 `frames`), 움직이는 GIF의 한 장면,
+  // 성분이 넷(CMYK)인 점진적 JPEG — 를 넘어도 이 문장이다(Codex의 세 번째 리뷰, #219). 알파가 있는 정지 WebP는
+  // 거절하지 않고 줄여 받는다(오너 결정 2026-10-22 답 1).
+  errImageTooLarge: '이미지가 너무 크거나 프레임이 너무 많습니다.',
+  errImageUnreadable: '이미지를 읽을 수 없습니다. 다른 파일을 골라 주세요.',
+  errImageEmpty: '빈 파일입니다. 다른 파일을 골라 주세요.',
+  errImageUpload: '이미지를 올리지 못했습니다. 다시 시도해 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

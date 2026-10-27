@@ -3,8 +3,10 @@ import {
   ALL_CATEGORY_SLUGS,
   AUDIT_FAILURE_KINDS,
   CONSENT_ITEMS,
+  IMAGE_CONTENT_TYPES,
   LEDGER_REF_TYPES,
   MARKET_EVENT_TYPES,
+  MEDIA_KINDS,
   PAYMENT_EVENT_TYPES,
   PAYMENT_PROVIDERS,
   PHONE_VERIFICATION_SEND_OUTCOMES,
@@ -76,6 +78,8 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'phone_verification_codes.send_outcome': PHONE_VERIFICATION_SEND_OUTCOMES,
   'start_grant_numbers.source': START_GRANT_NUMBER_SOURCES,
   'consent_records.item': CONSENT_ITEMS,
+  'media_objects.kind': MEDIA_KINDS,
+  'media_objects.content_type': IMAGE_CONTENT_TYPES,
 };
 
 /**

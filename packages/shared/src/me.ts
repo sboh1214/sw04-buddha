@@ -4,6 +4,7 @@ import { roleSchema } from './enums.js';
 import { nicknameSchema } from './nickname.js';
 import { onboardingSchema } from './onboarding.js';
 import { phoneVerificationSchema } from './phone-verification.js';
+import { publicIdSchema } from './public-id.js';
 import { startGrantSchema } from './start-grant.js';
 import { TIME_ZONE_MAX_LENGTH } from './time-zone.js';
 
@@ -27,6 +28,12 @@ export const meSchema = z
     email: z.email(),
     emailVerified: z.boolean(),
     profile: z.object({
+      /**
+       * The account's public id (ADR-0069 decision 5): what public answers name it by — the author
+       * of its posts (#46), its profile address (#41). The web compares it with a post's author to
+       * offer the author's own edit and delete.
+       */
+      publicId: publicIdSchema,
       nickname: nicknameSchema,
       role: roleSchema,
       createdAt: z.iso.datetime(),

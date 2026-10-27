@@ -1,5 +1,5 @@
 import { desc, sql } from 'drizzle-orm';
-import { index, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
+import { check, index, pgTable, text, uniqueIndex, varchar } from 'drizzle-orm/pg-core';
 import { user } from './auth.js';
 import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { roleEnum } from './enums.js';
@@ -18,6 +18,18 @@ export const profiles = pgTable(
       .primaryKey()
       .references(() => user.id, { onDelete: 'cascade' }),
     nickname: varchar({ length: 20 }).notNull(),
+    /**
+     * The account's public id (#46, ADR-0069 decision 3 #37-2 and decision 5): what public answers
+     * name the account by — a post's author, #41's `/u/<publicId>` — so the account id never
+     * leaves the server in one. Drawn by the database for every new row (`gen_public_id()`,
+     * migration 0033, which gave the existing rows theirs too) and never changed: a link keeps
+     * pointing at the same person when the nickname changes. PUBLIC_ID_PATTERN in @buddha/shared
+     * is the CHECK's shape.
+     */
+    publicId: varchar({ length: 10 })
+      .notNull()
+      .unique('profiles_public_id_unique')
+      .default(sql`gen_public_id()`),
     role: roleEnum().notNull().default('user'),
     /**
      * The IANA zone the member picked in MY 설정 for reading times (ADR-0061 #60-8, ADR-0063),
@@ -73,5 +85,7 @@ export const profiles = pgTable(
      * of this one.
      */
     index('profiles_created_at_user_id_idx').on(desc(t.createdAt), desc(t.userId)),
+    /** Ten of the 32 characters of PUBLIC_ID_ALPHABET (no 0/o, 1/i). */
+    check('profiles_public_id_check', sql`${t.publicId} ~ '^[2-9a-hj-np-z]{10}$'`),
   ],
 );

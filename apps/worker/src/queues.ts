@@ -44,6 +44,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
   audit: [JOB_NAMES.ledgerAudit],
   stats: [JOB_NAMES.marketTraderCount],
   wallet: [JOB_NAMES.startGrantPay],
+  media: [JOB_NAMES.mediaOrphanCleanup],
 };
 
 /**
@@ -95,6 +96,14 @@ export const JOB_SCHEDULES = [
     queue: 'wallet',
     name: JOB_NAMES.startGrantPay,
     repeat: EVERY_MINUTE,
+  },
+  // #46 (ADR-0073): the uploads no post took within ORPHAN_MEDIA_HOURS, hourly at :17 — a day's
+  // grace makes the minute of the hour immaterial, and off the hour keeps it apart from the rest.
+  {
+    id: 'media-orphan-cleanup',
+    queue: 'media',
+    name: JOB_NAMES.mediaOrphanCleanup,
+    repeat: { pattern: '17 * * * *', tz: 'Asia/Seoul' },
   },
 ] as const satisfies readonly {
   id: string;

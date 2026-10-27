@@ -1,33 +1,74 @@
-import { Container, Heading, Stack } from '@chakra-ui/react';
+import { Container } from '@chakra-ui/react';
+import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
-import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
-
-export const metadata: Metadata = { title: `${copy.communityTitle} | ${copy.appName}` };
+import { fetchCategoriesServer, fetchMarketServer, fetchPostsPageServer } from '@/lib/api.server';
+import { dehydratePublic } from '@/lib/market-keys';
+import {
+  type CommunitySearchParams,
+  communityFiltersFromSearchParams,
+  communityPostsKey,
+} from '@/lib/posts';
+import { getQueryClient } from '@/lib/query-client';
+import { CommunityScreen } from './community-screen';
 
 /**
- * `/community`: 커뮤니티, one of the three top-level areas (N02 §2, #16) — the header's row 1 and
- * the mobile tab bar both lead here, signed in or not — and nothing more yet.
- *
- * A nav item has to lead somewhere — a link to a 404 is worse than no link. What the area holds
- * is #46's, so this is a PLACEHOLDER and deliberately not a stub of the feature: no data, no
- * query, no client component, no route segment under it. When #46 builds the area, this file is
- * replaced, not extended.
- *
- * Static on purpose — nothing here reads a cookie, a search param or the API, so Next
- * prerenders it at build time like `/login`, and it stays up when the API is down. The chrome
- * matches the home page's Kalshi measurements (content width 1320px, 24px side padding, the
- * 30px headline) so the visitor does not see the page narrow and widen between the two.
+ * Rendered per request, like the home and the search (app/page.tsx says why `cache: 'no-store'`
+ * alone does not make it so): the URL's filters are read here.
  */
-export default function CommunityPage() {
+export const dynamic = 'force-dynamic';
+
+/**
+ * Not for search engines (owner decision 2026-10-19, ADR-0073): the list shows members' nicknames
+ * and posts, kept out of search results as the profiles are (#37-1). The post pages and the write
+ * and edit screens say the same.
+ */
+export const metadata: Metadata = {
+  title: `${copy.communityTitle} | ${copy.appName}`,
+  robots: { index: false },
+};
+
+/**
+ * `/community`: 커뮤니티, one of the three top-level areas (N02 §2, #16) — every market's 근거 글,
+ * newest first (#46, ADR-0073; ADR-0069 decision 2 #45-7), narrowed by a market, a category and a
+ * term searched in the title and the text. Public: anyone reads (N05 §2), and 글쓰기 asks a visitor
+ * to sign in on the write screen.
+ *
+ * The URL is normalised ONCE, here, and handed down (the home's rule). The first page of the list
+ * is read here and dehydrated, so the cards are in the HTML — without JavaScript too, the search
+ * box being a plain form — and the client picks the page up under the same key; a failed read is
+ * not dehydrated, and the browser then reads the page itself and shows its own failure. The market
+ * a `?market=` names is read for its title (the filter's chip), and the categories for the
+ * category select's first paint; either failing leaves the screen its fallbacks. Nothing personal
+ * is read: this HTML is the same for every visitor.
+ */
+export default async function CommunityPage({
+  searchParams,
+}: {
+  searchParams: Promise<CommunitySearchParams>;
+}) {
+  const filters = communityFiltersFromSearchParams(await searchParams);
+  const queryClient = getQueryClient();
+  const [, categories, market] = await Promise.all([
+    queryClient.prefetchInfiniteQuery({
+      queryKey: communityPostsKey(filters),
+      queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
+        fetchPostsPageServer(filters, pageParam),
+      // The param the client's own options declare (hooks/use-posts.ts), so the seeded page is
+      // picked up rather than fetched again.
+      initialPageParam: undefined as string | undefined,
+    }),
+    fetchCategoriesServer().catch(() => undefined),
+    filters.market === undefined
+      ? Promise.resolve(null)
+      : fetchMarketServer(filters.market).catch(() => null),
+  ]);
+
   return (
-    <Container maxW="1320px" px="6" py="10">
-      <Stack gap="6">
-        <Heading as="h2" textStyle="headline">
-          {copy.communityTitle}
-        </Heading>
-        <EmptyState message={copy.communityComingSoon} data-testid="community-coming-soon" />
-      </Stack>
+    <Container maxW="1320px" px="6" py={{ base: '6', md: '10' }}>
+      <HydrationBoundary state={dehydratePublic(queryClient)}>
+        <CommunityScreen filters={filters} categories={categories} marketTitle={market?.title} />
+      </HydrationBoundary>
     </Container>
   );
 }

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { POST_TEXT_COLORS } from '@buddha/shared';
 import { CATEGORY_ITEM_OPACITY } from '@/lib/nav';
 import { SRC, scriptKindOf, screenSources } from '@/test/screen-text';
 import { system } from './system';
@@ -208,6 +209,36 @@ describe('palette contrast', () => {
         GRAPHIC_MIN,
       ),
     ]);
+    expect(failures).toEqual([]);
+  });
+
+  it('reads every post text colour on the page and on a card at 4.5:1 in both modes', () => {
+    // A post's body is drawn on the page, and its card's excerpt has no colour, but the post page
+    // sits the body on the plain page and a later screen may put it on a card: both grounds are
+    // held, as the focus ring's are (#46, ADR-0073; owner decision 2026-10-18).
+    const grounds: Record<Mode, { name: string; hex: string }[]> = {
+      _light: [
+        { name: 'bg', hex: resolve('bg', '_light') },
+        { name: 'bg.subtle', hex: resolve('bg.subtle', '_light') },
+        { name: 'surface.card', hex: over('#808080', resolve('bg', '_light'), 0.02) },
+      ],
+      _dark: [
+        { name: 'bg', hex: resolve('bg', '_dark') },
+        { name: 'bg.subtle', hex: resolve('bg.subtle', '_dark') },
+        { name: 'surface.card', hex: over('#ffffff', resolve('bg', '_dark'), 0.02) },
+      ],
+    };
+    const failures = POST_TEXT_COLORS.flatMap((color) =>
+      MODES.flatMap((mode) =>
+        grounds[mode].flatMap((ground) =>
+          shortfall(
+            `postText.${color} on ${ground.name} ${mode}`,
+            ratio(resolve(`postText.${color}`, mode), ground.hex),
+            TEXT_MIN,
+          ),
+        ),
+      ),
+    );
     expect(failures).toEqual([]);
   });
 

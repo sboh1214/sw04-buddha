@@ -5,6 +5,7 @@ import {
   COUNTERPARTY_TYPES,
   NICKNAME_HOLD_DAYS,
   LEDGER_ENTRY_TYPES,
+  PUBLIC_ID_PATTERN,
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
   RELEASE_SETTING_STATUSES,
@@ -31,6 +32,8 @@ import {
   marketWatchEvents,
   marketWatches,
   markets,
+  mediaDeletions,
+  mediaObjects,
   nicknameHolds,
   orders,
   paymentEvents,
@@ -39,6 +42,9 @@ import {
   phoneVerificationRefusedSends,
   phoneVerifications,
   positions,
+  postImages,
+  postRevisions,
+  posts,
   profileInterestCategories,
   profiles,
   releaseSettings,
@@ -53,7 +59,9 @@ import {
   createConsents,
   createMarket,
   createMarketLink,
+  createMedia,
   createPhoneVerification,
+  createPost,
   createPosition,
   createSearch,
   createSettlementStep,
@@ -687,6 +695,179 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     // Clearing an account's searches, as the clear route does, takes all its terms away.
     await t.db.delete(marketSearches).where(eq(marketSearches.userId, u.id));
     expect(await terms()).toEqual([term(theirs)]);
+  });
+
+  describe('posts and their images (migration 0033, #46)', () => {
+    it('gives every profile a public id of its own, of the public shape, kept apart from the account id', async () => {
+      const accounts = await Promise.all(Array.from({ length: 20 }, () => createUser(t.db)));
+      const ids = accounts.map(({ profile }) => profile.publicId);
+      for (const id of ids) expect(id).toMatch(PUBLIC_ID_PATTERN);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(ids).not.toContain(accounts[0]!.user.id);
+      await expect(
+        t.db
+          .update(profiles)
+          .set({ publicId: ids[1]! })
+          .where(eq(profiles.userId, accounts[0]!.user.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'profiles_public_id_unique',
+      );
+      for (const bad of ['ABCDEFGH23', 'abcdefgh10', 'short']) {
+        await expect(
+          t.db
+            .update(profiles)
+            .set({ publicId: bad })
+            .where(eq(profiles.userId, accounts[0]!.user.id)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'profiles_public_id_check',
+        );
+      }
+    });
+
+    it('stores a post with its text and images derived, and searches title and text together', async () => {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db, { status: 'closed' });
+      const media = await createMedia(t.db, { ownerId: author.id });
+      const post = await createPost(t.db, {
+        marketId: market.id,
+        authorId: author.id,
+        title: '금리 전망',
+        text: '첫 줄\n둘째 줄',
+        imageIds: [media.id],
+      });
+      expect(post).toMatchObject({
+        title: '금리 전망',
+        bodyText: '첫 줄\n둘째 줄',
+        imageIds: [media.id],
+        searchText: '금리 전망\n첫 줄\n둘째 줄',
+        editedAt: null,
+        deletedAt: null,
+        hiddenAt: null,
+      });
+      // Attached as the API attaches: the post's image row and the upload's time.
+      expect(await t.db.select().from(postImages)).toEqual([
+        { postId: post.id, mediaId: media.id, createdAt: expect.any(Date) as unknown },
+      ]);
+      const [attached] = await t.db.select().from(mediaObjects);
+      expect(attached?.attachedAt).toBeInstanceOf(Date);
+      // The search reads the generated column, case-insensitively, through the trigram index.
+      const found = await t.db
+        .select({ id: posts.id })
+        .from(posts)
+        .where(sql`${posts.searchText} ILIKE ${'%전망\n첫%'}`);
+      expect(found).toEqual([{ id: post.id }]);
+      const [index] = (
+        await t.db.execute<{ indexdef: string }>(
+          sql`SELECT indexdef FROM pg_indexes WHERE indexname = 'posts_search_text_trgm_idx'`,
+        )
+      ).rows;
+      expect(index?.indexdef).toContain('gin_trgm_ops');
+      // The relations resolve both ways.
+      const withAll = await t.db.query.posts.findFirst({
+        where: eq(posts.id, post.id),
+        with: {
+          market: true,
+          author: { with: { profile: true } },
+          images: { with: { media: true } },
+        },
+      });
+      expect(withAll?.market.id).toBe(market.id);
+      expect(withAll?.author.profile?.publicId).toMatch(PUBLIC_ID_PATTERN);
+      expect(withAll?.images.map((image) => image.media.id)).toEqual([media.id]);
+    });
+
+    it('refuses a blank title, a second post for one image and the removal of a post’s market or author', async () => {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      await expect(
+        createPost(t.db, { marketId: market.id, authorId: author.id, title: '   ' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'posts_title_check',
+      );
+      const media = await createMedia(t.db, { ownerId: author.id });
+      await createPost(t.db, { marketId: market.id, authorId: author.id, imageIds: [media.id] });
+      await expect(
+        createPost(t.db, { marketId: market.id, authorId: author.id, imageIds: [media.id] }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'post_images_media_id_unique',
+      );
+      await expect(t.db.delete(user).where(eq(user.id, author.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      await expect(t.db.delete(markets).where(eq(markets.id, market.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+    });
+
+    it('keeps an edit’s history append-only, deletable later by the retention work', async () => {
+      const { user: author } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      const [revision] = await t.db
+        .insert(postRevisions)
+        .values({
+          postId: post.id,
+          title: null,
+          body: post.body,
+          bodyText: post.bodyText,
+          imageIds: [],
+          writtenAt: post.createdAt,
+        })
+        .returning();
+      await expect(
+        t.db
+          .update(postRevisions)
+          .set({ bodyText: 'rewritten' })
+          .where(eq(postRevisions.id, revision!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await t.db.delete(postRevisions).where(eq(postRevisions.id, revision!.id));
+      expect(await t.db.select().from(postRevisions)).toEqual([]);
+    });
+
+    it('takes an upload of the listed kinds and types only, with a size', async () => {
+      const { user: owner } = await createUser(t.db);
+      const base = {
+        ownerId: owner.id,
+        kind: 'post_image',
+        storageKey: 'post-images/x.png',
+        contentType: 'image/png',
+        byteSize: 1,
+        width: 1,
+        height: 1,
+      };
+      for (const [values, constraint] of [
+        [{ kind: 'avatar' }, 'media_objects_kind_check'],
+        [{ contentType: 'image/svg+xml' }, 'media_objects_content_type_check'],
+        [{ byteSize: 0 }, 'media_objects_size_check'],
+        [{ width: 0 }, 'media_objects_size_check'],
+      ] as const) {
+        await expect(t.db.insert(mediaObjects).values({ ...base, ...values })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === constraint,
+        );
+      }
+      await t.db.insert(mediaObjects).values(base);
+      await expect(t.db.insert(mediaObjects).values(base)).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'media_objects_storage_key_unique',
+      );
+    });
+
+    it('queues an object key for removal once, never with a negative count (media_deletions)', async () => {
+      const [queued] = await t.db
+        .insert(mediaDeletions)
+        .values({ storageKey: 'post-images/x.png' })
+        .returning();
+      // Queued now, due now, refused by nothing yet.
+      expect(queued).toMatchObject({ attempts: 0, lastError: null });
+      expect(queued!.nextAttemptAt.getTime()).toBe(queued!.queuedAt.getTime());
+      await expect(
+        t.db.insert(mediaDeletions).values({ storageKey: 'post-images/x.png' }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23505');
+      await expect(
+        t.db.insert(mediaDeletions).values({ storageKey: 'post-images/y.png', attempts: -1 }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'media_deletions_attempts_check',
+      );
+    });
   });
 
   describe('the direct AMM is gone (migration 0017, #125)', () => {

@@ -1,30 +1,43 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { mediaStorageEnvIssues, mediaStorageEnvShape } from '@buddha/storage';
 import * as z from 'zod';
 
 /**
  * Environment schema. The worker shares the same `.env` keys as `apps/api`
  * (PLAN 15). Unknown keys are ignored.
  */
-export const envSchema = z.object({
-  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  REDIS_URL: z.url({ protocol: /^rediss?$/ }),
-  DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
-  LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
-  /**
-   * `GET /health` (health.ts) so the e2e runner and CI can wait for the worker the way they
-   * wait for the API — a worker that is still connecting must not be taken for one that will
-   * close and settle markets on time (PLAN M5 AC 7). 200 once the queues are attached AND
-   * Postgres has answered one `select 1` (`waitForDb`, main.ts); both, because closing and
-   * settling are database transactions and the API's own probe covers both too. It is a fact
-   * about BOOT: a Postgres that dies afterwards leaves the flag at 200 (Q-M5-11). 0 disables
-   * the server: a deployment that probes the process some other way keeps no listening socket
-   * it never asked for.
-   */
-  WORKER_HEALTH_PORT: z.coerce.number().int().min(0).max(65535).default(4100),
-  /** Bind address of the health server; 'localhost' keeps it off the network by default. */
-  WORKER_HOST: z.string().min(1).default('localhost'),
-});
+export const envSchema = z
+  .object({
+    NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
+    REDIS_URL: z.url({ protocol: /^rediss?$/ }),
+    DATABASE_URL: z.url({ protocol: /^postgres(ql)?$/ }),
+    LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).optional(),
+    /**
+     * `GET /health` (health.ts) so the e2e runner and CI can wait for the worker the way they
+     * wait for the API — a worker that is still connecting must not be taken for one that will
+     * close and settle markets on time (PLAN M5 AC 7). 200 once the queues are attached AND
+     * Postgres has answered one `select 1` (`waitForDb`, main.ts); both, because closing and
+     * settling are database transactions and the API's own probe covers both too. It is a fact
+     * about BOOT: a Postgres that dies afterwards leaves the flag at 200 (Q-M5-11). 0 disables
+     * the server: a deployment that probes the process some other way keeps no listening socket
+     * it never asked for.
+     */
+    WORKER_HEALTH_PORT: z.coerce.number().int().min(0).max(65535).default(4100),
+    /** Bind address of the health server; 'localhost' keeps it off the network by default. */
+    WORKER_HOST: z.string().min(1).default('localhost'),
+    /**
+     * The media store (#46, ADR-0073), the same keys as apps/api: the worker removes the uploads no
+     * post took (`media.orphan_cleanup`), row and object, from the store the API wrote them to (a
+     * key the store refused stays queued in `media_deletions` for a later run).
+     */
+    ...mediaStorageEnvShape,
+  })
+  .superRefine((env, ctx) => {
+    for (const issue of mediaStorageEnvIssues(env)) {
+      ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message });
+    }
+  });
 
 export type Env = z.infer<typeof envSchema>;
 

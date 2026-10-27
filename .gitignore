@@ -21,6 +21,9 @@ expo-env.d.ts
 *.log
 .DS_Store
 
+# local media store (MEDIA_STORAGE=local, @buddha/storage): uploads of development and the e2e
+.media/
+
 # playwright (apps/web)
 apps/web/test-results/
 apps/web/playwright-report/

@@ -5,9 +5,30 @@
 import { type Redis } from 'ioredis';
 import { describe, expect, it, vi } from 'vitest';
 import { uncountedPeers } from '../config/env.js';
+import { MEDIA_READ_ROUTE, addressBucketOf } from './address-limit.js';
 import { emailTracker } from './email-tracker.js';
 import { clientAddress, isCountableAddress } from './rate-limit.tracker.js';
 import { RATE_LIMIT_KEY_PREFIX, RedisThrottlerStorage } from './redis-throttler.storage.js';
+
+describe('addressBucketOf', () => {
+  it('counts an image read in its own bucket and every other request in the default', () => {
+    // Owner decision 2026-10-19 (ADR-0073): the image reads leave the default for `mediaRead`.
+    expect(MEDIA_READ_ROUTE).toBe('/api/v1/media/:mediaId');
+    expect(addressBucketOf('GET', MEDIA_READ_ROUTE)).toBe('mediaRead');
+    expect(addressBucketOf('HEAD', MEDIA_READ_ROUTE)).toBe('mediaRead');
+    // The upload is under /media too, and is no read.
+    expect(addressBucketOf('POST', '/api/v1/media/images')).toBe('default');
+    expect(addressBucketOf('GET', '/api/v1/posts/:postId')).toBe('default');
+    expect(addressBucketOf('GET', '/api/v1/posts')).toBe('default');
+    // A path no route matched is counted, in the default.
+    expect(addressBucketOf('GET', undefined)).toBe('default');
+  });
+
+  it('counts the health routes in no bucket', () => {
+    expect(addressBucketOf('GET', '/api/health')).toBeNull();
+    expect(addressBucketOf('GET', '/api/health/live')).toBeNull();
+  });
+});
 
 describe('isCountableAddress', () => {
   it('refuses loopback in every spelling Node produces', () => {

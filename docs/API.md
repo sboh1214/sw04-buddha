@@ -99,11 +99,13 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `VERIFICATION_CODE_REJECTED` | 409 | 본인확인이 되지 않았다. `details.reason` 이 까닭을 말한다 — `no_code`(기다리는 인증번호가 없다: 받지 않았거나 이미 썼다), `expired`(3분이 지났다), `attempts_exceeded`(틀린 입력이 5번이 되어 그 인증번호를 버렸다. 새로 받아야 한다), `superseded`(다시 받기 전의 인증번호다. 새 인증번호를 넣어야 하고, 틀린 입력으로 세지 않는다), `mismatch`(틀렸다. `details.remainingAttempts` 가 남은 입력 수다). 계정의 가장 최근 인증번호만 확인한다. |
 | `SMS_SEND_FAILED` | 502 | SMS 사업자가 인증번호 문자를 받지 않은 것이 확실하다(502: 거절, 요청이 나가기 전의 연결 실패). 이 발송은 세지 않고 이 요청이 남긴 인증번호도 없다. 앞서 받은 인증번호는 3분 안이고 버려지지 않았으면 그대로 확인할 수 있다(그것이 다시 가장 최근 인증번호다). 다른 5xx 처럼 본문에 내부 사정을 담지 않는다. |
 | `SMS_SEND_UNCONFIRMED` | 502 | SMS 사업자의 답을 받지 못했다(502: 시간 초과, 요청이 나간 뒤 끊긴 연결, 5xx, 읽을 수 없는 답). 문자가 갔을 수 있으므로 발송으로 세고(60초 간격과 하루 한도) 그 인증번호는 확인할 수 있다. 5xx 본문은 `details` 를 싣지 않으므로 코드로 `SMS_SEND_FAILED` 와 가린다. |
-| `ONBOARDING_REQUIRED` | 409 | 그 동작에 필요한 온보딩 단계를 마치지 않은 계정이다(#58). `details.steps` 가 마치지 않은 단계를 순서대로 말한다 — `consent`(약관 동의, `POST /api/v1/me/consents`), `verification`(휴대전화 본인확인), `nickname`(닉네임 설정, `POST /api/v1/me/onboarding/nickname`). 본인확인 인증번호 요청은 약관 동의만 요구하고, 닉네임 설정은 약관 동의와 본인확인을, 온보딩을 마친 계정만 하는 동작(관심 카테고리, 모든 관리자 API, 이후의 글·좋아요·신고·제안·주문)은 세 단계를 모두 요구한다. 관리자 API는 관리자 권한을 먼저 보므로 관리자가 아닌 계정에는 `FORBIDDEN` 이다. 권리를 바꾸는 약관 개정 뒤에는 다시 동의할 때까지 `consent` 가 남는다. |
+| `ONBOARDING_REQUIRED` | 409 | 그 동작에 필요한 온보딩 단계를 마치지 않은 계정이다(#58). `details.steps` 가 마치지 않은 단계를 순서대로 말한다 — `consent`(약관 동의, `POST /api/v1/me/consents`), `verification`(휴대전화 본인확인), `nickname`(닉네임 설정, `POST /api/v1/me/onboarding/nickname`). 본인확인 인증번호 요청은 약관 동의만 요구하고, 닉네임 설정은 약관 동의와 본인확인을, 온보딩을 마친 계정만 하는 동작(관심 카테고리, 모든 관리자 API, 근거 글 쓰기·수정과 이미지 올리기, 이후의 댓글·좋아요·신고·제안·주문)은 세 단계를 모두 요구한다. 자기 글 삭제는 로그인만 본다(ADR-0073). 관리자 API는 관리자 권한을 먼저 보므로 관리자가 아닌 계정에는 `FORBIDDEN` 이다. 권리를 바꾸는 약관 개정 뒤에는 다시 동의할 때까지 `consent` 가 남는다. |
 | `NICKNAME_NOT_ALLOWED` | 409 | 닉네임 규칙에 맞지 않는다(#58). `details.reason` 이 까닭을 말한다 — `auto_prefix`(직접 입력한 닉네임이 자동 닉네임의 `user_` 로 시작한다. 대소문자 무관), `reserved_word`(운영자를 사칭하는 낱말이 들어 있다. 대소문자 무관, 밑줄을 빼고 견준다), `taken`(다른 계정이 대소문자만 다른 닉네임까지 포함해 쓰고 있거나, 다른 계정이 비운 지 30일이 지나지 않았다), `change_interval`(마지막 변경 뒤 30일이 지나지 않았다. `details.nextChangeAt` 이 다음 변경이 되는 시각), `already_set`(온보딩의 닉네임 설정을 이미 마쳤다. 바꾸려면 `PATCH /api/v1/me`). |
+| `POST_NOT_EDITABLE` | 409 | 그 글은 지금 작성자가 고칠 수 없다(#46). `details.reason` 이 까닭을 말한다 — `hidden`(운영 정책에 따라 숨긴 글이다. 숨긴 글은 지울 수는 있다). |
+| `IMAGE_NOT_ALLOWED` | 422 | 올린 파일을 이미지로 받지 않는다(#46, 422). `details.reason` 이 까닭을 말한다 — `type`(내용이 JPEG·PNG·WebP·GIF가 아니다. 파일 이름이나 보낸 형식은 보지 않는다), `size`(5MB(5,242,880바이트)보다 크다. 본문은 읽기 전에 길이로 거른다 — 그 두 배를 넘게 밝힌 본문은 413 `VALIDATION_ERROR` 이고, 길이(`Content-Length`)를 밝히지 않은 본문은 그 두 배(10MiB)를 밝힌 것으로 셈하며 넘으면 받는 중에 413 이다. 계정마다 끝나지 않은 업로드(답이 끝나고 변환·저장도 끝날 때까지 — 클라이언트가 먼저 끊어도)가 셋일 때의 넷째나, API 프로세스가 받는 중인 업로드 본문에 이 본문의 길이를 더해 64MiB를 넘는 업로드는 — 어느 하나만으로도 — 본문을 읽지 않고 429 `RATE_LIMITED`(`Retry-After` 2초) 다. 그 안이어도 API의 메모리 — 프로세스의 상주 메모리(RSS)와 이미 내준 몫에 이 본문의 길이를 더한 것 — 가 한도(`API_MEMORY_CEILING_MIB`, 비우면 컨테이너의 메모리 한도 448MiB에서 32MiB를 뺀 416MiB) 안에 들 때까지 본문을 읽지 않고 10초까지 기다리고, 들지 않으면 같은 429 다. 받은 본문의 변환도 그 메모리에 변환 하나의 몫(144MiB)과 이미지 읽기에 남겨 두는 몫(읽기의 예산 32MiB 가운데 빈 것)이 들 때까지, 변환 대기열에 든 때부터 10초까지 기다리고, 들지 않으면 아무것도 저장하지 않고 같은 429 다(오너 결정 2026-10-22 답 3). 본문이 30초 동안 한 바이트도 오지 않거나(오너 결정 2026-10-21), 읽기 시작한 지 2분 안에 다 오지 않으면(계속 보내도 — 오너 결정 2026-10-22 (2차)) 끊고 408 `VALIDATION_ERROR` 다. 본문의 형식(`Content-Type`)이 이미지 네 형식(`image/jpeg`·`image/png`·`image/webp`·`image/gif`)이나 `application/octet-stream` 이 아니면 — JSON·텍스트도, 형식이 없어도 — 본문을 읽지 않고 415 `VALIDATION_ERROR` 다: 계정의 업로드가 셋이거나 64MiB 가 찼어도, 밝힌 길이가 10MiB 를 넘어도(413 이 아니다) 415 다. 출처·세션·온보딩의 확인(403 `FORBIDDEN`·401 `UNAUTHENTICATED`·`ONBOARDING_REQUIRED`)은 본문의 형식과 상관없이 이 모두보다 먼저이고 본문을 읽지 않는다, ADR-0073), `pixels`(한 장면이 너무 크다 — 풀 때 드는 메모리로 형식마다 정한 한도(ADR-0073 결정 9-8. PNG는 풀린 뒤의 채널·비트와 인터레이스의 종류마다 잰 한도다 — 알파가 있는 PNG와 16비트 RGB, 인터레이스 RGB는 더 작고(8비트 RGBA 1,970만, 16비트 RGBA 330만 화소) 알파가 없는 회색과 인터레이스가 아닌 8비트 RGB는 5천만(인터레이스 16비트 회색만 약 4,194만)이다. 팔레트는 RGB로, 투명(`tRNS`)이 든 팔레트·회색·RGB는 알파가 있는 것으로 센다, 오너 결정 2026-10-21 (2차). 변환 전체가 드는 메모리로 잰 한도도 있다 — 움직이는 WebP의 장면은 105만, 움직이는 GIF의 장면은 500만, 성분이 넷(CMYK)인 점진적 JPEG는 약 959만 화소까지. 알파가 있는 정지 WebP는 풀 때의 한도(약 895만 화소)까지 받고 340만 화소 안으로 줄여 저장한다(정사각이면 1,843px — 오너 결정 2026-10-22 답 1))나 5천만 화소를 넘거나, 긴 변이 짧은 변의 32배를 넘는다(아주 가는 이미지는 화소보다 훨씬 많은 메모리로 변환된다, 오너 결정 2026-10-21 (2차)). 가로로 길든 세로로 길든 같고, 움직이는 이미지는 한 장면의 두 변이다), `frames`(움직이는 이미지의 장면 하나하나는 괜찮지만 모든 장면을 더하면 5천만 화소(움직이는 WebP는 1,200만)를 넘는다 — 장면이 너무 많다), `unreadable`(그 형식이라면서 읽히지 않는다. 성분이 넷보다 많은 JPEG도), `empty`(내용이 없다). |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (63개)
+## 오퍼레이션 (70개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -210,12 +212,29 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | POST | `/api/v1/me/search-history/{id}/delete` | Delete one recent search: every recorded search of the entry's term (an id the account has none of deletes nothing); answers the recent searches (the newest 10 distinct terms, newest first) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 | POST | `/api/v1/me/search-history/clear` | Delete every recorded search of the account; answers the (empty) recent searches | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `RATE_LIMITED` |
 
-## 스키마 (89개)
+### `posts`
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| GET | `/api/v1/posts` | The community list: every market’s posts, newest first (the only order), never a deleted or hidden one; narrowed by market, by category (either level, like GET /markets) and by q, a case-insensitive partial match in the title or the text | — | `VALIDATION_ERROR`, `RATE_LIMITED` |
+| POST | `/api/v1/posts` | A post on a market in any public status: an optional title and a formatted body (at most 5000 characters of text and 10 images, each an upload of the author’s own); formatting outside the allow-list is removed | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `RATE_LIMITED` |
+| GET | `/api/v1/posts/{postId}` | A post page: the whole post, or a placeholder for a hidden post and for a deleted one that replies hang under; a deleted post with none is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+| PUT | `/api/v1/posts/{postId}` | The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `POST_NOT_EDITABLE`, `RATE_LIMITED` |
+| POST | `/api/v1/posts/{postId}/delete` | The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every view otherwise. Never restored | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+
+### `media`
+
+| 메서드 | 경로 | 설명 | 인증 | 오류 |
+| --- | --- | --- | --- | --- |
+| POST | `/api/v1/media/images` | An image for a post: JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if no post takes it within 24 hours | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `ONBOARDING_REQUIRED`, `IMAGE_NOT_ALLOWED`, `RATE_LIMITED` |
+| GET | `/api/v1/media/{mediaId}` | An image a post shows (NOT_FOUND for any other: not attached, removed by an edit, or of a deleted or hidden post). Revalidated on every use (ETag) | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
+
+## 스키마 (107개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CursorQuery`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `NextPath`, `Nickname`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `PriceSeries`, `PriceTick`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCouponBody`, `CreateMarketBody`, `CreatePostBody`, `CursorQuery`, `DeletePostBody`, `DeletedPost`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `HiddenPost`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `NextPath`, `Nickname`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `Post`, `PostAuthor`, `PostBlock`, `PostDeletion`, `PostDocument`, `PostInline`, `PostListItem`, `PostMark`, `PostMarket`, `PostSummary`, `PostTableRow`, `PriceSeries`, `PriceTick`, `PublishedPost`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdatePostBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UploadedImage`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 
@@ -331,7 +350,8 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
 
 | 버킷 | 기준 | 한도(/60초) | 적용 라우트 |
 | --- | --- | --- | --- |
-| `default` | 클라이언트 주소 (API 전체에 하나) | 100 | 모든 HTTP 라우트. 아래 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산). |
+| `default` | 클라이언트 주소 (라우트를 가리지 않고 버킷마다 하나. 요청 하나는 주소 버킷 하나에만 든다) | 100 | 이미지 읽기(`mediaRead`)를 뺀 모든 HTTP 라우트. 아래 `user`·`email` 버킷을 지목한 라우트도 여기에 함께 들어간다(주소 하나당 API 전체 합산). |
+| `mediaRead` | 클라이언트 주소 (라우트를 가리지 않고 버킷마다 하나. 요청 하나는 주소 버킷 하나에만 든다) | 600 | `GET /api/v1/media/{mediaId}`(근거 글의 이미지 읽기, 304 포함). `default` 대신 이 버킷에만 든다(오너 결정 2026-10-19, ADR-0073) — API가 이미지를 쓸 때마다 다시 확인하므로(no-cache + ETag) 이미지를 그릴 때마다 요청이 하나이고, 썸네일이 있는 목록이나 이미지가 많은 글을 읽는 것만으로 기본 100/분에 닿을 수 있어서다. PLAN 7.5 의 표에는 없다. |
 | `charge` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/payments/charge` |
 | `coupon` | 로그인 계정 (라우트별) | 10 | `POST /api/v1/coupons/redeem` |
 | `searchHistory` | 로그인 계정 (라우트별) | 30 | `POST /api/v1/me/search-history`(제출한 검색어 기록). 기록마다 남는 행이라(보관 기간 없음) 계정마다 센다. 웹은 거절된 기록을 버리고 검색은 그대로 간다. |
@@ -347,8 +367,10 @@ PLAN 7.5 의 표는 `packages/shared/src/rate-limit.ts` 한 곳에 있고, 아�
   `X-RateLimit-Reset` 이 붙는다. 버킷을 지목한 라우트는 같은 이름에 `-route` 가 붙은 세 개를
   더 받는다. 거절될 때는 `Retry-After`(초)가 더 붙고 — 어느 버킷이 거절했든 접미사 없이 —,
   본문은 PLAN 7 봉투의 `RATE_LIMITED` 이며 `details.retryAfterSeconds` 에 같은 숫자가 들어 있다.
-- **`ip` 스코프는 API 전체가 한 통이고, 파싱과 핸들러보다 앞에서 센다.** PLAN 7.5 의 기본값은
-  주소당으로 쓰여 있으므로 경로별로 나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 세는 곳은
+- **`ip` 스코프는 경로를 가리지 않고 주소마다 세고(이미지 읽기만 따로), 파싱과 핸들러보다 앞에서 센다.** PLAN 7.5 의 기본값은
+  주소당으로 쓰여 있으므로 경로별로 나누면 한 호출자가 경로 수만큼 100번을 쓸 수 있다. 예외는 이미지
+  읽기 하나다: `GET /api/v1/media/{mediaId}` 는 `default` 가 아니라 `mediaRead` 에만 들고(304 포함),
+  그 응답의 `X-RateLimit-*` 은 그 버킷의 한도를 말한다. 세는 곳은
   Fastify 의 `onRequest` 훅이라 핸들러에 닿지 못하는 요청 — 파싱할 수 없는 본문(400), `bodyLimit`
   초과(413), 라우트 없는 경로(404) — 도 센다(라우터가 훅 이전에 직접 답하는 둘, 해독할 수 없는
   경로 400 과 `maxParamLength` 초과 414 만 예외다). 클라이언트를 지목할 수 없는 피어는 아예

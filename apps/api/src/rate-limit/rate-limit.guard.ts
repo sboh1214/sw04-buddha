@@ -13,18 +13,17 @@ import {
   type ThrottlerRequest,
   type ThrottlerStorage,
 } from '@nestjs/throttler';
-import { type RateLimits } from '@buddha/shared';
+import { RATE_LIMIT_BUCKETS, type RateLimits } from '@buddha/shared';
 import { AppError } from '../common/errors/app-error.js';
 import { RATE_LIMITS } from './rate-limit.limits.js';
 import { rateLimitBucket } from './rate-limit.tracker.js';
 
 /**
- * The storage namespace of the per-address bucket (PLAN 7.5's default row): `rl:default:…`.
- * Not a throttler of this guard any more — the bucket is counted by the Fastify hook in
- * address-limit.ts, ahead of parsing and the handler — but the name stays, so the keys do.
+ * Counts the row of PLAN 7.5's table a handler names with `@RateLimit`. The address buckets
+ * (`default`, `mediaRead`) are not throttlers of this guard: the Fastify hook in address-limit.ts
+ * counts them ahead of parsing and the handler, each under its own name (`rl:default:…`,
+ * `rl:mediaRead:…`).
  */
-export const ADDRESS_THROTTLER = 'default';
-/** Counts the row of PLAN 7.5's table a handler names with `@RateLimit`. */
 export const ROUTE_THROTTLER = 'route';
 
 /**
@@ -85,7 +84,7 @@ export class RateLimitGuard extends ThrottlerGuard {
   protected override handleRequest(requestProps: ThrottlerRequest): Promise<boolean> {
     const { context } = requestProps;
     const bucket = rateLimitBucket(this.reflector, context);
-    if (bucket === 'default') return Promise.resolve(true);
+    if (RATE_LIMIT_BUCKETS[bucket].scope === 'ip') return Promise.resolve(true);
     return super.handleRequest({ ...requestProps, limit: this.limits[bucket] });
   }
 

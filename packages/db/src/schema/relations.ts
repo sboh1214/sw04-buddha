@@ -21,12 +21,14 @@ import { marketLinks } from './market-links.js';
 import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
+import { mediaObjects } from './media-objects.js';
 import { nicknameHolds } from './nickname-holds.js';
 import { orders } from './orders.js';
 import { paymentEvents } from './payment-events.js';
 import { payments } from './payments.js';
 import { phoneVerificationCodes, phoneVerifications } from './phone-verifications.js';
 import { positions } from './positions.js';
+import { postImages, postRevisions, posts } from './posts.js';
 import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
 import { releaseSettings } from './release-settings.js';
@@ -146,6 +148,28 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   // larger one. Its related markets are the other end of both (market-links.ts).
   linksAsLow: many(marketLinks, { relationName: 'market_link_low' }),
   linksAsHigh: many(marketLinks, { relationName: 'market_link_high' }),
+  posts: many(posts),
+}));
+
+export const postsRelations = relations(posts, ({ one, many }) => ({
+  market: one(markets, { fields: [posts.marketId], references: [markets.id] }),
+  author: one(user, { fields: [posts.authorId], references: [user.id] }),
+  revisions: many(postRevisions),
+  images: many(postImages),
+}));
+
+export const postRevisionsRelations = relations(postRevisions, ({ one }) => ({
+  post: one(posts, { fields: [postRevisions.postId], references: [posts.id] }),
+}));
+
+export const postImagesRelations = relations(postImages, ({ one }) => ({
+  post: one(posts, { fields: [postImages.postId], references: [posts.id] }),
+  media: one(mediaObjects, { fields: [postImages.mediaId], references: [mediaObjects.id] }),
+}));
+
+export const mediaObjectsRelations = relations(mediaObjects, ({ one }) => ({
+  owner: one(user, { fields: [mediaObjects.ownerId], references: [user.id] }),
+  post: one(postImages, { fields: [mediaObjects.id], references: [postImages.mediaId] }),
 }));
 
 export const ordersRelations = relations(orders, ({ one, many }) => ({
@@ -259,6 +283,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   watchEvents: many(marketWatchEvents),
   searches: many(marketSearches),
   marketLinks: many(marketLinks),
+  posts: many(posts),
+  media: many(mediaObjects),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),
   approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),

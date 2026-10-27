@@ -70,6 +70,22 @@ export type UpdateWatchBody = components['schemas']['UpdateWatchBody'];
 export type RecentSearch = components['schemas']['RecentSearch'];
 /** `POST /me/search-history`: the submitted term and the account on screen (ADR-0066). */
 export type RecordSearchBody = components['schemas']['RecordSearchBody'];
+/**
+ * 근거 글 (#46, ADR-0073): a community card (`GET /posts`), a post page in one of its three states
+ * (`GET /posts/:postId`), the published one alone, its author and its market as every public answer
+ * names them, and the answer of a deletion.
+ */
+export type PostSummary = components['schemas']['PostSummary'];
+export type Post = components['schemas']['Post'];
+export type PublishedPost = components['schemas']['PublishedPost'];
+export type PostAuthor = components['schemas']['PostAuthor'];
+export type PostMarket = components['schemas']['PostMarket'];
+export type PostDeletion = components['schemas']['PostDeletion'];
+/** `POST /posts` and `PUT /posts/:postId`: the title, the editor's JSON and the account on screen. */
+export type CreatePostBody = components['schemas']['CreatePostBody'];
+export type UpdatePostBody = components['schemas']['UpdatePostBody'];
+/** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
+export type UploadedImage = components['schemas']['UploadedImage'];
 export type AdminPayment = components['schemas']['AdminPayment'];
 /** `POST /admin/payments/{id}/refund`: why the admin refunds (required, audited). */
 export type RefundPaymentBody = components['schemas']['RefundPaymentBody'];

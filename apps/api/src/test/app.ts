@@ -5,6 +5,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { Test } from '@nestjs/testing';
 import { schema, type Db } from '@buddha/db';
 import { connectTestDb, type TestDb } from '@buddha/db/test';
+import { MemoryObjectStorage } from '@buddha/storage';
 import { type Redis } from 'ioredis';
 import {
   DEFAULT_RATE_LIMITS,
@@ -20,6 +21,7 @@ import { DB } from '../infra/db/db.provider.js';
 import { MAX_PARAM_LENGTH } from '../infra/http/fastify-options.js';
 import { registerSecurityHeaders } from '../infra/http/security-headers.js';
 import { MAILER } from '../mail/mail.provider.js';
+import { OBJECT_STORAGE } from '../media/object-storage.provider.js';
 import { PAID_COIN_SALES } from '../payments/paid-coin-sales.guard.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
 import { installAddressLimit } from '../rate-limit/address-limit.js';
@@ -40,6 +42,11 @@ export interface TestApp {
   mailer: MemoryMailer;
   /** The SMS sender every verification code goes through (ADR-0070): texts nobody. */
   sms: MemorySmsSender;
+  /**
+   * The media store (#46): objects in memory, readable by the suite. Emptied by `reset()` with the
+   * database, whose rows name them.
+   */
+  storage: MemoryObjectStorage;
   /** `http://127.0.0.1:<port>`, only with `{ listen: true }`. */
   url?: string;
   /** Truncates every table (owner role, via the packages/db harness). Call in beforeEach. */
@@ -93,18 +100,22 @@ export interface CreateTestAppOptions {
 
 /**
  * Boots AppModule exactly like main.ts (prefix, versioning, bodyParser: false, the realtime
- * WebSocket adapter) with the in-memory mailer and SMS sender, and by default without listening.
+ * WebSocket adapter) with the in-memory mailer, SMS sender and media store, and by default without
+ * listening.
  * Holds the packages/db test-file lock until close().
  */
 export async function createTestApp(options: CreateTestAppOptions = {}): Promise<TestApp> {
   const harness: TestDb = await connectTestDb();
   const mailer = createMemoryMailer();
   const sms = createMemorySmsSender();
+  const storage = new MemoryObjectStorage();
   const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(MAILER)
     .useValue(mailer)
     .overrideProvider(SMS_SENDER)
     .useValue(sms)
+    .overrideProvider(OBJECT_STORAGE)
+    .useValue(storage)
     .overrideProvider(RATE_LIMITS)
     .useValue({ ...DEFAULT_RATE_LIMITS, ...options.rateLimits })
     .overrideProvider(UNCOUNTED_PEERS)
@@ -144,9 +155,11 @@ export async function createTestApp(options: CreateTestAppOptions = {}): Promise
     auth: app.get<Auth>(AUTH),
     mailer,
     sms,
+    storage,
     url,
     reset: async () => {
       await harness.reset();
+      storage.objects.clear();
       await clearRateLimitBuckets(app.get<Redis>(REDIS));
     },
     close: async () => {

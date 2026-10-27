@@ -18,6 +18,7 @@
   "dependencies": {
     "@buddha/db": "workspace:*",
     "@buddha/shared": "workspace:*",
+    "@buddha/storage": "workspace:*",
     "@fastify/helmet": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
@@ -39,6 +40,7 @@
     "pino": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
+    "sharp": "catalog:",
     "socket.io": "catalog:",
     "zod": "catalog:"
   },

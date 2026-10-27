@@ -4,11 +4,13 @@
  * hash), its start Coin (#70: the grant, its amount and the keyed hash of A's number), password
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
- * recorded search (#15), its consent records with the address and browser they came with and a
- * nickname it gave up (#58). Then:
+ * recorded search (#15), its consent records with the address and browser they came with, a
+ * nickname it gave up (#58) and a post with an image on the market it trades (#46). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
- *   field naming an excluded feature or keeping a probability;
+ *   field naming an excluded feature or keeping a probability — except that a route registered
+ *   as showing a person (`showsPerson`: a post's author, ADR-0069 decision 5) may hold A's
+ *   nickname and public id, and must, so the allowance is not vacuous;
  * - every registered owner-only route is called as B, aimed at A wherever it takes an id or an
  *   account — in its path, its query (a page cursor made from A's row) or its body — and no
  *   answer may hold A's values; the same request as A shows them, so the check is not blind
@@ -36,7 +38,9 @@ import {
   createConsents,
   createMarket,
   createMarketLink,
+  createMedia,
   createPhoneVerification,
+  createPost,
   createSearch,
   createStartGrant,
   createUser,
@@ -105,6 +109,11 @@ interface Fixture {
   market: MarketRow;
   /** The open market linked to `market` (#65): the one item of `market`'s 관련 시장. */
   relatedMarket: MarketRow;
+  /**
+   * A's post on `market` with A's image in it (#46): what the post routes and the image route are
+   * called with, so their answers name A as the author and serve A's upload.
+   */
+  post: { id: string; mediaId: string };
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -246,10 +255,26 @@ function forbiddenFields(body: string): string[] {
 
 // ---- the cases ---------------------------------------------------------------------------
 
-/** Path parameters of the public routes, by name: A's market. */
+/** Path parameters of the public routes, by name: A's market, A's post and the image in it. */
 const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
   id: (fixture) => fixture.market.id,
   idOrSlug: (fixture) => fixture.market.slug,
+  postId: (fixture) => fixture.post.id,
+  mediaId: (fixture) => fixture.post.mediaId,
+};
+
+/**
+ * What a route that shows a person (`showsPerson`, ADR-0069 decision 5) may hold of A, the author
+ * of the post it shows: A's nickname — the current one (#37-3) — and A's public id. Nothing else of
+ * A: the account id, the email and every other value stay sentinels there as everywhere. #141 adds
+ * the image when A has one.
+ */
+const PERSON_LABELS: readonly string[] = ['nickname', 'public id'];
+
+/** A post body B sends in its refused writes: one paragraph, nothing of A's. */
+const B_POST_BODY = {
+  type: 'doc',
+  content: [{ type: 'paragraph', content: [{ type: 'text', text: 'B의 근거' }] }],
 };
 
 /** Bodies of the public routes that take one: A's own address, the request most about A. */
@@ -273,6 +298,10 @@ const NEVER_SHOWN: readonly string[] = [
   'consent client address',
   'consent user agent',
   'released nickname',
+  // #46: what is kept of A's posts for operators only (#45-4, #45-5) — an earlier version an edit
+  // replaced and a post A deleted — whoever asks, A included.
+  'post revision',
+  'deleted post',
 ];
 
 interface OwnerCase {
@@ -283,8 +312,13 @@ interface OwnerCase {
    * wherever a key can name one — a page cursor made from A's row, A's id.
    */
   query?: Readonly<Record<string, (fixture: Fixture) => string>>;
-  /** What B sends: A's account wherever the body names one. */
+  /**
+   * What B sends: A's account wherever the body names one. JSON, or — a Buffer — the bytes
+   * themselves under `contentType`.
+   */
   body?: (fixture: Fixture) => unknown;
+  /** The type of a body sent as bytes (`body` a Buffer). */
+  contentType?: string;
   /** B's answer. */
   status: number;
   /**
@@ -433,6 +467,40 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   },
   'POST /me/search-history/clear': {
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account (#46): refused before anything is read or written — no post of
+  // B's, A's post as it was (below). B naming itself on A's post is refused there too.
+  'POST /posts': {
+    body: (fixture) => ({
+      marketId: fixture.market.id,
+      title: 'B의 글',
+      body: B_POST_BODY,
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
+  },
+  'PUT /posts/:postId': {
+    params: { postId: (fixture) => fixture.post.id },
+    body: (fixture) => ({
+      title: 'B가 고친 글',
+      body: B_POST_BODY,
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
+  },
+  'POST /posts/:postId/delete': {
+    params: { postId: (fixture) => fixture.post.id },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // The file is the body, so the account rides in the query: B naming A is refused before the
+  // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
+  // (415 before any check of the account — image-body.ts).
+  'POST /media/images': {
+    query: { expectedAccountId: (fixture) => fixture.a.id },
+    body: () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
+    contentType: 'image/jpeg',
     status: 403,
   },
   'POST /payments/charge': {
@@ -847,6 +915,45 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       createdBy: admin.id,
     });
 
+    // A's post (#46) on the market A trades, with A's image in it (its object in the test's
+    // store): the post routes name A as its author — A's nickname and public id, which those
+    // routes may show (`showsPerson`) and no other may — and the image route serves A's upload.
+    const media = await createMedia(t.db, { ownerId: a.id, contentType: 'image/png' });
+    await t.storage.put(media.storageKey, new Uint8Array([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    const post = await createPost(t.db, {
+      marketId: market.id,
+      authorId: a.id,
+      title: `A의 근거 ${tag}`,
+      imageIds: [media.id],
+    });
+    const [{ publicId } = { publicId: '' }] = await t.db
+      .select({ publicId: schema.profiles.publicId })
+      .from(schema.profiles)
+      .where(eq(schema.profiles.userId, a.id));
+    // What is kept of A's posts for operators only (#45-4, #45-5): an earlier version of that
+    // post, as an edit leaves it, and a post A deleted with nothing under it. Neither is anyone's
+    // to read through the API, A's included (`NEVER_SHOWN`).
+    const revisionText = `leak-revision-${tag}`;
+    await t.db.insert(schema.postRevisions).values({
+      postId: post.id,
+      title: revisionText,
+      body: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: revisionText }] }],
+      },
+      bodyText: revisionText,
+      imageIds: [],
+      writtenAt: new Date(post.createdAt.getTime() - 60_000),
+    });
+    const deletedText = `leak-deleted-${tag}`;
+    await createPost(t.db, {
+      marketId: market.id,
+      authorId: a.id,
+      title: deletedText,
+      text: deletedText,
+      deletedAt: new Date(),
+    });
+
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
@@ -887,6 +994,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       market,
       watched,
       relatedMarket: related,
+      post: { id: post.id, mediaId: media.id },
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
@@ -903,6 +1011,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('user id', a.id),
         text('email', a.email),
         text('nickname', nickname),
+        text('public id', publicId),
+        text('post revision', revisionText),
+        text('deleted post', deletedText),
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
@@ -947,6 +1058,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       params?: Record<string, string>;
       query?: Record<string, string>;
       body?: unknown;
+      /** The type of a body that is bytes (a Buffer); JSON otherwise. */
+      contentType?: string;
       cookie?: string;
     },
   ) {
@@ -962,15 +1075,22 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     if (!safe && input.body === undefined) {
       throw new Error(`no body for ${route.key}: add it to this file's cases`);
     }
+    const bytes = Buffer.isBuffer(input.body) ? input.body : undefined;
     return t.app.inject({
       method: route.method as 'GET',
       url,
       headers: {
         origin: ORIGIN,
-        ...(safe ? {} : { 'content-type': 'application/json' }),
+        ...(safe
+          ? {}
+          : {
+              'content-type': bytes
+                ? (input.contentType ?? 'application/octet-stream')
+                : 'application/json',
+            }),
         ...(input.cookie ? { cookie: input.cookie } : {}),
       },
-      ...(safe ? {} : { payload: JSON.stringify(input.body) }),
+      ...(safe ? {} : { payload: bytes ?? JSON.stringify(input.body) }),
     });
   }
 
@@ -982,7 +1102,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
   it('answers every public route without A’s private data, whoever asks', async () => {
     const answers: { route: string; caller: string; status: number; leaks: string[] }[] = [];
     const bodies = new Map<string, string>();
+    const persons: { route: string; caller: string; shown: string[] }[] = [];
     for (const key of Object.keys(PUBLIC_ROUTES)) {
+      // A route that shows a person (ADR-0069 decision 5) may hold A's nickname and public id as
+      // the author it shows; every other value of A — the account id first — is still a leak.
+      const allowed = PUBLIC_ROUTES[key]!.showsPerson === undefined ? [] : PERSON_LABELS;
       for (const [caller, cookie] of [
         ['anonymous', undefined],
         ['B', f.b.cookie],
@@ -994,13 +1118,24 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           cookie,
         });
         if (caller === 'anonymous') bodies.set(key, res.body);
+        const held = leaked(res.body);
+        if (allowed.length > 0) {
+          persons.push({
+            route: key,
+            caller,
+            shown: held.filter((label) => allowed.includes(label)),
+          });
+        }
         answers.push({
           route: key,
           caller,
           // Kept paid code answers 404 while paid Coin is off; everything else answers, so
           // the check below read a real answer and not an error.
           status: res.statusCode,
-          leaks: [...leaked(res.body), ...forbiddenFields(res.body)],
+          leaks: [
+            ...held.filter((label) => !allowed.includes(label)),
+            ...forbiddenFields(res.body),
+          ],
         });
       }
     }
@@ -1012,6 +1147,21 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         leaks: [],
       })),
     );
+    // The allowance is not vacuous: every route that may show a person showed A, the author of
+    // the post it was called with, to everyone — the list and the post page (#46).
+    expect(persons.map(({ route }) => route)).toEqual(
+      expect.arrayContaining(['GET /posts', 'GET /posts/:postId']),
+    );
+    expect(persons).toEqual(
+      persons.map(({ route, caller }) => ({ route, caller, shown: PERSON_LABELS })),
+    );
+    // The post routes answered A's post, and the image route served A's upload.
+    const listed = parse(bodies.get('GET /posts')!) as { data: { id: string }[] };
+    expect(listed.data.map((row) => row.id)).toEqual([f.post.id]);
+    expect(parse(bodies.get('GET /posts/:postId')!)).toMatchObject({
+      data: { state: 'published', id: f.post.id },
+    });
+    expect(bodies.get('GET /media/:mediaId')).toContain('PNG');
     // The answers held A's market, A's fill and the market linked to A's — anonymously — so there
     // was something to leak, and the 관련 시장 answer's item had its field names checked rather
     // than an empty page passing for one.
@@ -1124,6 +1274,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         t.db.select().from(schema.profileInterestCategories),
       ]);
     const onboardingBefore = await onboardingState();
+    // #46: what B's refused post writes and upload would have written — posts, their history,
+    // uploads and their objects — as it stands before them.
+    const postState = async () => [
+      ...(await Promise.all([
+        t.db.select().from(schema.posts).orderBy(schema.posts.id),
+        t.db.select().from(schema.postRevisions),
+        t.db.select().from(schema.mediaObjects).orderBy(schema.mediaObjects.id),
+        t.db.select().from(schema.postImages),
+      ])),
+      [...t.storage.objects.keys()].sort(),
+    ];
+    const postsBefore = await postState();
     const answers: { route: string; status: number; leaks: string[] }[] = [];
     const shown: { route: string; status: number; missing: string[]; shownAnyway: string[] }[] = [];
     for (const key of Object.keys(OWNER_ROUTES)) {
@@ -1136,6 +1298,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         params,
         query,
         body: ownerCase.body?.(f),
+        contentType: ownerCase.contentType,
         cookie: f.b.cookie,
       });
       answers.push({ route: key, status: res.statusCode, leaks: leaked(res.body) });
@@ -1235,6 +1398,29 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(asB.statusCode).toBe(200);
     expect(asB.json<{ data: unknown }>().data).toEqual([]);
     expect(await searches()).toEqual([aSearch]);
+
+    // B's refused post writes and upload wrote nothing (#46). B naming itself on A's post is
+    // refused too — only its author changes a post — and A's post stays as it was.
+    expect(await postState()).toEqual(postsBefore);
+    for (const [key, body] of [
+      [
+        'PUT /posts/:postId',
+        { title: 'B가 고친 글', body: B_POST_BODY, expectedAccountId: f.b.id },
+      ],
+      ['POST /posts/:postId/delete', { expectedAccountId: f.b.id }],
+    ] as const) {
+      const res = await call(routeOf(key), {
+        params: { postId: f.post.id },
+        body,
+        cookie: f.b.cookie,
+      });
+      expect({ key, status: res.statusCode, leaks: leaked(res.body) }).toEqual({
+        key,
+        status: 403,
+        leaks: [],
+      });
+    }
+    expect(await postState()).toEqual(postsBefore);
   });
 
   // ---- the market room --------------------------------------------------------------------

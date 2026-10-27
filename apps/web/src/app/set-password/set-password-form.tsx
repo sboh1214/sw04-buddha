@@ -20,7 +20,9 @@ import { newPasswordSchema, type NewPasswordValues } from '@/lib/password';
  * /onboarding (#58). `next` — the page the visitor signed up from, home without one — is where the
  * form goes on, and the onboarding gate takes the account from there to its remaining step, as it
  * takes every account with one left, and brings it back to `next` at the end — so one place, the
- * gate, decides where an account that has not finished goes.
+ * gate, decides where an account that has not finished goes — a post page included: the gate
+ * exempts it (`ONBOARDING_EXEMPT_PAGES`) only for an account that finished once and faces a
+ * re-consent alone, never for a new one (ADR-0073 9-37, 오너 결정 2026-10-20).
  */
 export function SetPasswordForm({ next }: { next: string }) {
   const { data: me, isPending, isFetching, refetch } = useMe();

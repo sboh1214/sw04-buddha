@@ -1,6 +1,7 @@
 import { BlockList, isIP } from 'node:net';
 import path from 'node:path';
 import { paymentProviderSchema } from '@buddha/shared';
+import { mediaStorageEnvIssues, mediaStorageEnvShape } from '@buddha/storage';
 import { config as loadDotenv } from 'dotenv';
 import * as z from 'zod';
 
@@ -238,8 +239,35 @@ export const envSchema = z
      * every per-number count would start over (ADR-0071).
      */
     PHONE_HASH_KEY: optionalString,
+
+    // --- Media storage (#46, ADR-0073): the post images, in the private S3 bucket or a local
+    //     directory. The same keys as apps/worker, which removes uploads nothing took
+    //     (@buddha/storage `mediaStorageEnvShape` documents each).
+    ...mediaStorageEnvShape,
+    /**
+     * The memory ceiling the API keeps its image work under, in MiB (owner decision 2026-10-22
+     * answer 3, ADR-0073 9-46): an upload body, a conversion and an image read wait — then are
+     * refused, RATE_LIMITED — while the process's resident memory, the shares already given out
+     * and their own bytes would pass it (media/memory-admission.ts). Empty: the memory limit the
+     * process runs under less 32MiB — the api container's 448MiB (deploy/compose.yaml) gives
+     * 416 — and no ceiling when there is none (development, the tests). Set it when the
+     * container's idle memory (`docker stats`) leaves a conversion (144MiB) and the room it keeps
+     * for the image reads (32MiB) too little room under the default, or to try a ceiling.
+     */
+    API_MEMORY_CEILING_MIB: z.preprocess(
+      (value) => (typeof value === 'string' && value.trim() === '' ? undefined : value),
+      z.coerce
+        .number()
+        .int()
+        .min(1)
+        .max(1024 * 1024)
+        .optional(),
+    ),
   })
   .superRefine((env, ctx) => {
+    for (const issue of mediaStorageEnvIssues(env)) {
+      ctx.addIssue({ code: 'custom', path: [issue.path], message: issue.message });
+    }
     // Same reason as WEB_ORIGIN below: a bad entry must fail at `loadEnv()` under its own name.
     try {
       uncountedPeers(env);

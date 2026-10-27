@@ -30,6 +30,7 @@ export class MeService {
           id: schema.user.id,
           email: schema.user.email,
           emailVerified: schema.user.emailVerified,
+          publicId: schema.profiles.publicId,
           nickname: schema.profiles.nickname,
           role: schema.profiles.role,
           createdAt: schema.profiles.createdAt,
@@ -109,6 +110,7 @@ export class MeService {
       email: row.email,
       emailVerified: row.emailVerified,
       profile: {
+        publicId: row.publicId,
         nickname: row.nickname,
         role: row.role,
         createdAt: row.createdAt.toISOString(),

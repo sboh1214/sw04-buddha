@@ -1,5 +1,5 @@
 import { SetMetadata } from '@nestjs/common';
-import { type RateLimitBucket } from '@buddha/shared';
+import { type AddressRateLimitBucket, type RateLimitBucket } from '@buddha/shared';
 
 export const RATE_LIMIT_BUCKET = 'buddha:rateLimitBucket';
 
@@ -20,12 +20,13 @@ export const RATE_LIMIT_BUCKET = 'buddha:rateLimitBucket';
  * ahead of the guard, in a Fastify hook (address-limit.ts), and this one reports itself as
  * `X-RateLimit-*-route`.
  *
- * There is no decorator to exempt a route from the address bucket: the hook sees the Fastify
- * route it matched, not the Nest controller behind it, so `Reflector` metadata is out of its
- * reach and the two health routes it exempts are named in address-limit.ts itself.
+ * There is no decorator to exempt a route from the address bucket, nor to move it to the other
+ * address bucket: the hook sees the Fastify route it matched, not the Nest controller behind it,
+ * so `Reflector` metadata is out of its reach — the two health routes it exempts and the image
+ * read it counts in `mediaRead` are named in address-limit.ts itself.
  * (`@SkipThrottle()` would be inert — it names a throttler this guard no longer runs — which is
  * why the one this file used to export is gone.)
  */
 export const RateLimit = (
-  bucket: Exclude<RateLimitBucket, 'default'>,
+  bucket: Exclude<RateLimitBucket, AddressRateLimitBucket>,
 ): MethodDecorator & ClassDecorator => SetMetadata(RATE_LIMIT_BUCKET, bucket);

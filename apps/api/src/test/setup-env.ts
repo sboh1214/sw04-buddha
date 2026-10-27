@@ -29,3 +29,6 @@ process.env.SMTP_HOST = '127.0.0.1';
 process.env.SMTP_PORT = '9';
 // The immediate mock charge, whatever a developer's .env says.
 process.env.PAYMENT_PROVIDER = 'mock';
+// The API's memory ceiling from the process's own limit (none here), whatever a developer's .env
+// says: the media suites stub the RSS, and check the ceiling the module derives (ADR-0073 9-46).
+process.env.API_MEMORY_CEILING_MIB = '';

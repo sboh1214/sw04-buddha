@@ -29,6 +29,7 @@ const me = (id: string): Me => ({
   email: `${id}@example.com`,
   emailVerified: true,
   profile: {
+    publicId: 'k7m2p9qx4z',
     nickname: '테스터',
     role: 'user',
     createdAt: '2026-08-01T00:00:00.000Z',

@@ -16,13 +16,14 @@ export const RATE_LIMIT_WINDOW_SECONDS = 60;
 /**
  * What a bucket counts.
  *
- * - `ip`    — the client address, in ONE bucket for the whole API, counted ahead of parsing
- *             and the handler (so a body that cannot be parsed or a path with no route still
- *             counts; only what Fastify's router refuses before any hook does not). PLAN 7.5's default
- *             ("100req/분/IP") is stated per address, not per route: a limit that reset on
- *             every path would let a caller spend it once per handler. A peer that cannot name
- *             a client — loopback, or a proxy the API's RATE_LIMIT_UNCOUNTED_PEERS names — is
- *             not counted at all.
+ * - `ip`    — the client address, whatever the route, counted ahead of parsing and the handler
+ *             (so a body that cannot be parsed or a path with no route still counts; only what
+ *             Fastify's router refuses before any hook does not). Each request lands in exactly
+ *             ONE address bucket: an image read (`GET /media/:mediaId`) in `mediaRead`, every
+ *             other request in `default`. PLAN 7.5's default ("100req/분/IP") is stated per
+ *             address, not per route: a limit that reset on every path would let a caller spend
+ *             it once per handler. A peer that cannot name a client — loopback, or a proxy the
+ *             API's RATE_LIMIT_UNCOUNTED_PEERS names — is not counted at all.
  * - `user`  — the signed-in account, per route. The rows PLAN 7.5 states per user.
  * - `email` — the address in the request body, per route: for routes that put mail in
  *             somebody's inbox, what has to be bounded is the recipient, not the sender
@@ -41,17 +42,29 @@ export interface RateLimitBucketSpec {
 }
 
 /**
- * `default` counts the client address on EVERY route. The rest are attached with
- * `@RateLimit('<bucket>')` in apps/api and ADD to it rather than replace it: a route that names
- * one is bounded twice, and whichever bound it reaches first refuses.
+ * `default` counts the client address on every route but the image reads, which `mediaRead`
+ * counts instead (both in the API's address hook, address-limit.ts). The `user` and `email`
+ * buckets are attached with `@RateLimit('<bucket>')` in apps/api and ADD to the address bucket
+ * rather than replace it: a route that names one is bounded twice, and whichever bound it reaches
+ * first refuses.
  *
  * Replacing was the first shape of this, and it took the address bound off precisely the routes
  * that most needed one — `POST /auth/register` counts the RECIPIENT's inbox, so a caller who
  * varied the address had no bound at all.
  */
 export const RATE_LIMIT_BUCKETS = {
-  /** PLAN 7.5 default. */
+  /** PLAN 7.5 default. Every request but an image read (`mediaRead`). */
   default: { scope: 'ip', limit: 100 },
+  /**
+   * `GET /media/:mediaId` (#46): a post's image, read by address in a bucket of its own INSTEAD of
+   * `default` — 304s included (owner decision 2026-10-19, ADR-0073). Not in PLAN 7.5. The API
+   * checks every image on every use (no-cache + ETag, so hiding or deleting a post stops its
+   * images at once), so drawing one is a request each time: a list of twenty cards with
+   * thumbnails or a post of ten images spent the reader's 100 a minute alongside everything else,
+   * and a shared address (a carrier's, an office's) reached it and drew broken images. The owner
+   * chose a generous number of its own; the reads stay bounded per address all the same.
+   */
+  mediaRead: { scope: 'ip', limit: 600 },
   /** PLAN 7.5 `/payments/charge`. */
   charge: { scope: 'user', limit: 10 },
   /** `/coupons/redeem`: a coupon code is a short secret and this is the only route that tests one. */
@@ -104,6 +117,17 @@ export const RATE_LIMIT_BUCKETS = {
 } as const satisfies Record<string, RateLimitBucketSpec>;
 
 export type RateLimitBucket = keyof typeof RATE_LIMIT_BUCKETS;
+
+/**
+ * The buckets the API's address hook counts (`ip` scope): every request lands in one of them, by
+ * its route. A handler cannot name one with `@RateLimit` — that decorator adds a `user` or `email`
+ * bucket on top.
+ */
+export type AddressRateLimitBucket = {
+  [Bucket in RateLimitBucket]: (typeof RATE_LIMIT_BUCKETS)[Bucket]['scope'] extends 'ip'
+    ? Bucket
+    : never;
+}[RateLimitBucket];
 
 /** The default limit of every bucket, as the API's `RATE_LIMITS` provider serves it. */
 export type RateLimits = Record<RateLimitBucket, number>;

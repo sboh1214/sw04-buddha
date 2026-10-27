@@ -1,10 +1,14 @@
 import { type BlockList } from 'node:net';
 import { type NestFastifyApplication } from '@nestjs/platform-fastify';
-import { RATE_LIMIT_WINDOW_SECONDS, type RateLimits } from '@buddha/shared';
+import {
+  type AddressRateLimitBucket,
+  RATE_LIMIT_WINDOW_SECONDS,
+  type RateLimits,
+} from '@buddha/shared';
 import { AUTH_BASE_PATH } from '../auth/auth.js';
 import { AppError } from '../common/errors/app-error.js';
 import { REDIS } from '../infra/redis/redis.provider.js';
-import { ADDRESS_THROTTLER, rateLimitKey } from './rate-limit.guard.js';
+import { rateLimitKey } from './rate-limit.guard.js';
 import { RATE_LIMITS } from './rate-limit.limits.js';
 import { addressTracker, isCountableAddress } from './rate-limit.tracker.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
@@ -19,6 +23,28 @@ import type { Redis } from 'ioredis';
  * instance that was defending itself (health.controller.ts).
  */
 const UNCOUNTED_ROUTES: ReadonlySet<string> = new Set(['/api/health', '/api/health/live']);
+
+/**
+ * The image read (`GET /api/v1/media/:mediaId`, #46), by the pattern Fastify matched like the
+ * health routes above — so a query string, a percent-encoding or a malformed id (400) is the same
+ * route. HEAD too: Fastify answers it from the GET handler.
+ */
+export const MEDIA_READ_ROUTE = '/api/v1/media/:mediaId';
+
+/**
+ * The address bucket a request is counted in, or null for one never counted (the health routes):
+ * an image read in `mediaRead` alone, 304s included — not in `default` (owner decision 2026-10-19,
+ * ADR-0073: the API checks every image on every use, so a page of thumbnails was a page of
+ * requests out of the reader's 100) — and every other request in `default`.
+ */
+export function addressBucketOf(
+  method: string,
+  routeUrl: string | undefined,
+): AddressRateLimitBucket | null {
+  if (routeUrl !== undefined && UNCOUNTED_ROUTES.has(routeUrl)) return null;
+  if ((method === 'GET' || method === 'HEAD') && routeUrl === MEDIA_READ_ROUTE) return 'mediaRead';
+  return 'default';
+}
 
 /**
  * PLAN 7.5's per-address default — "100req/분/IP", for the API as a whole — as a raw Fastify
@@ -43,10 +69,13 @@ const UNCOUNTED_ROUTES: ReadonlySet<string> = new Set(['/api/health', '/api/heal
  *
  * Keyed on the address, whatever the path (`rateLimitKey(null, …)`: `rl:default:any:<digest>`),
  * because PLAN 7.5's default is stated per address, not per surface — a caller's hundred covers
- * `/api/v1/*` and `/api/auth/*` together. Skipped, not refused, for a peer that cannot name a
- * client (`isCountableAddress`: loopback, and the proxies `RATE_LIMIT_UNCOUNTED_PEERS` lists).
+ * `/api/v1/*` and `/api/auth/*` together. The one route counted apart is the image read, in a
+ * bucket of its own under the same key (`rl:mediaRead:any:<digest>`, `addressBucketOf`): never
+ * both. Skipped, not refused, for a peer that cannot name a client (`isCountableAddress`:
+ * loopback, and the proxies `RATE_LIMIT_UNCOUNTED_PEERS` lists).
  *
- * The three `X-RateLimit-*` headers on a counted response and `Retry-After` on a refusal are
+ * The three `X-RateLimit-*` headers on a counted response (on an image read they speak of its own
+ * bucket) and `Retry-After` on a refusal are
  * the ones `@nestjs/throttler` wrote for its `default` throttler, in its shape (unsuffixed:
  * the library suffixes every name but `default`, and the named buckets keep `-route`), so
  * docs/API.md's header contract is unchanged. Written on `reply.raw`, as @fastify/helmet does:
@@ -77,15 +106,18 @@ export function installAddressLimit(app: NestFastifyApplication): void {
     .getHttpAdapter()
     .getInstance()
     .addHook('onRequest', async (request, reply) => {
-      if (UNCOUNTED_ROUTES.has(request.routeOptions.url ?? '')) return;
+      const bucket = addressBucketOf(request.method, request.routeOptions.url);
+      if (bucket === null) return;
       if (!isCountableAddress(request.ip, uncounted)) return;
-      const limit = limits.default;
+      const limit = limits[bucket];
+      // The bucket's name is the storage namespace: `rl:default:any:<digest>` and
+      // `rl:mediaRead:any:<digest>` are two counters for one address.
       const record = await storage.increment(
         rateLimitKey(null, addressTracker(request as unknown as Record<string, unknown>)),
         windowMs,
         limit,
         windowMs,
-        ADDRESS_THROTTLER,
+        bucket,
       );
       if (!record.isBlocked) {
         // The storage's fail-open record (Redis unreachable) is `timeToExpire: 0`, a value no

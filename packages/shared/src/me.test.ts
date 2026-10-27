@@ -7,6 +7,7 @@ describe('meSchema', () => {
     email: 'user@example.com',
     emailVerified: false,
     profile: {
+      publicId: 'k7m2p9qx4z',
       nickname: 'user_Q7Z9',
       role: 'user',
       createdAt: '2026-09-03T00:00:00.000Z',
@@ -96,6 +97,15 @@ describe('meSchema', () => {
     expect(meSchema.parse(sample).profile.timeZone).toBeNull();
     const { timeZone: _dropped, ...withoutZone } = sample.profile;
     expect(meSchema.safeParse({ ...sample, profile: withoutZone }).success).toBe(false);
+  });
+
+  it('carries the public id public answers name the account by, never in another shape (#46)', () => {
+    const { publicId: _dropped, ...withoutId } = sample.profile;
+    expect(meSchema.safeParse({ ...sample, profile: withoutId }).success).toBe(false);
+    expect(
+      meSchema.safeParse({ ...sample, profile: { ...sample.profile, publicId: 'user_Q7Z9' } })
+        .success,
+    ).toBe(false);
   });
 
   it('rejects a non-string balance', () => {

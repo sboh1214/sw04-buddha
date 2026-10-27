@@ -386,3 +386,58 @@ describe('PHONE_HASH_KEY (#70, ADR-0071)', () => {
     );
   });
 });
+
+describe('media storage (#46, ADR-0073)', () => {
+  it('boots in production without a bucket (every upload then fails) and refuses the local directory', () => {
+    const env = envSchema.parse(base);
+    expect(env.MEDIA_STORAGE).toBeUndefined();
+    expect(env.MEDIA_S3_BUCKET).toBeUndefined();
+    for (const [values, path] of [
+      [{ MEDIA_STORAGE: 'local' }, 'MEDIA_STORAGE'],
+      [{ MEDIA_S3_ACCESS_KEY_ID: 'AKIA' }, 'MEDIA_S3_ACCESS_KEY_ID'],
+      [{ MEDIA_S3_BUCKET: 'Not A Bucket' }, 'MEDIA_S3_BUCKET'],
+    ] as const) {
+      const result = envSchema.safeParse({ ...base, ...values });
+      expect(result.success, JSON.stringify(values)).toBe(false);
+      if (!result.success) expect(result.error.issues.map((issue) => issue.path)).toEqual([[path]]);
+    }
+    expect(
+      envSchema.parse({
+        ...base,
+        MEDIA_S3_BUCKET: 'tf-buddha-prod-media',
+        MEDIA_S3_ACCESS_KEY_ID: 'AKIA',
+        MEDIA_S3_SECRET_ACCESS_KEY: 'secret',
+      }).MEDIA_S3_BUCKET,
+    ).toBe('tf-buddha-prod-media');
+    expect(
+      envSchema.safeParse({ ...base, NODE_ENV: 'development', MEDIA_STORAGE: 'local' }).success,
+    ).toBe(true);
+  });
+});
+
+describe('API_MEMORY_CEILING_MIB (#46, owner decision 2026-10-22 answer 3, ADR-0073 9-46)', () => {
+  it('is unset by default and when left empty: the ceiling then comes from the memory limit', () => {
+    expect(envSchema.parse(base).API_MEMORY_CEILING_MIB).toBeUndefined();
+    expect(envSchema.parse({ ...base, API_MEMORY_CEILING_MIB: '' }).API_MEMORY_CEILING_MIB).toBe(
+      undefined,
+    );
+    expect(envSchema.parse({ ...base, API_MEMORY_CEILING_MIB: ' ' }).API_MEMORY_CEILING_MIB).toBe(
+      undefined,
+    );
+  });
+
+  it('takes a whole number of MiB, and refuses anything else under its own name', () => {
+    expect(envSchema.parse({ ...base, API_MEMORY_CEILING_MIB: '400' }).API_MEMORY_CEILING_MIB).toBe(
+      400,
+    );
+    for (const value of ['0', '-1', '400.5', 'lots', '416MiB']) {
+      const result = envSchema.safeParse({ ...base, API_MEMORY_CEILING_MIB: value });
+      expect(result.success, value).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.map((issue) => issue.path)).toEqual([
+          ['API_MEMORY_CEILING_MIB'],
+        ]);
+      }
+    }
+  });
+});

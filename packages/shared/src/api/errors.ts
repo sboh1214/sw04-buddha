@@ -81,6 +81,18 @@ export const ERROR_CODES = [
    * interval, when the next change is allowed, nicknameNotAllowedDetailsSchema.
    */
   'NICKNAME_NOT_ALLOWED',
+  /**
+   * The author cannot edit this post now: an operator hid it. A hidden post can still be deleted.
+   * Details carry the reason, postNotEditableDetailsSchema.
+   */
+  'POST_NOT_EDITABLE',
+  /**
+   * An upload the image rules refuse: its content is not a JPEG, PNG, WebP or GIF, it is too large,
+   * a frame is too large to decode (or too thin: its long side over 32 times its short side) or an
+   * animation has too many frames, it does not decode, or it is empty. Details carry the reason,
+   * imageNotAllowedDetailsSchema.
+   */
+  'IMAGE_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

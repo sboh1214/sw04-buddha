@@ -880,6 +880,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/media/{mediaId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** An image a post shows (NOT_FOUND for any other: not attached, removed by an edit, or of a deleted or hidden post). Revalidated on every use (ETag) */
+        get: operations["getImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/media/images": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** An image for a post: JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if no post takes it within 24 hours */
+        post: operations["uploadImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/payments/charge": {
         parameters: {
             query?: never;
@@ -908,6 +942,59 @@ export type paths = {
         get: operations["getPaymentProvider"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/posts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The community list: every market’s posts, newest first (the only order), never a deleted or hidden one; narrowed by market, by category (either level, like GET /markets) and by q, a case-insensitive partial match in the title or the text */
+        get: operations["listPosts"];
+        put?: never;
+        /** A post on a market in any public status: an optional title and a formatted body (at most 5000 characters of text and 10 images, each an upload of the author’s own); formatting outside the allow-list is removed */
+        post: operations["createPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/posts/{postId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A post page: the whole post, or a placeholder for a hidden post and for a deleted one that replies hang under; a deleted post with none is NOT_FOUND */
+        get: operations["getPost"];
+        /** The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE) */
+        put: operations["updatePost"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/posts/{postId}/delete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while replies hang under it, and is gone from every view otherwise. Never restored */
+        post: operations["deletePost"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1195,13 +1282,32 @@ export type components = {
             slug?: string;
             title: string;
         };
+        CreatePostBody: {
+            /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
+            body: unknown;
+            expectedAccountId: string;
+            /** Format: uuid */
+            marketId: string;
+            /** @description Optional, one line, at most 100 characters; blank is none */
+            title?: string | null;
+        };
         CursorQuery: {
             cursor?: string;
             /** @default 20 */
             limit: number;
         };
+        DeletedPost: {
+            /** Format: uuid */
+            id: string;
+            market: components["schemas"]["PostMarket"];
+            /** @enum {string} */
+            state: "deleted";
+        };
+        DeletePostBody: {
+            expectedAccountId: string;
+        };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -1220,6 +1326,13 @@ export type components = {
             qty: number;
             /** @enum {string} */
             side: "buy" | "sell";
+        };
+        HiddenPost: {
+            /** Format: uuid */
+            id: string;
+            market: components["schemas"]["PostMarket"];
+            /** @enum {string} */
+            state: "hidden";
         };
         LedgerEntry: {
             amountCoin: components["schemas"]["CoinAmount"];
@@ -1333,6 +1446,8 @@ export type components = {
                 nickname: components["schemas"]["Nickname"];
                 /** Format: date-time */
                 nicknameChangeAvailableAt: string | null;
+                /** @description An account’s public id: 10 lower-case letters and digits, never the account id */
+                publicId: string;
                 role: components["schemas"]["UserRole"];
                 timeZone: string | null;
             };
@@ -1437,6 +1552,157 @@ export type components = {
             updatedAt: string;
             version: number;
         };
+        Post: components["schemas"]["PublishedPost"] | components["schemas"]["DeletedPost"] | components["schemas"]["HiddenPost"];
+        PostAuthor: {
+            imageUrl: string | null;
+            isAdmin: boolean;
+            /** @enum {string} */
+            kind: "member";
+            nickname: string;
+            /** @description An account’s public id: 10 lower-case letters and digits, never the account id */
+            publicId: string;
+        } | {
+            /** @enum {string} */
+            kind: "former_member";
+        };
+        PostBlock: {
+            content?: components["schemas"]["PostInline"][];
+            /** @enum {string} */
+            type: "paragraph";
+        } | {
+            attrs: {
+                /** @enum {number} */
+                level: 1 | 2 | 3;
+            };
+            content?: components["schemas"]["PostInline"][];
+            /** @enum {string} */
+            type: "heading";
+        } | {
+            content: components["schemas"]["PostBlock"][];
+            /** @enum {string} */
+            type: "blockquote";
+        } | {
+            content: components["schemas"]["PostListItem"][];
+            /** @enum {string} */
+            type: "bulletList";
+        } | {
+            attrs: {
+                start: number;
+            };
+            content: components["schemas"]["PostListItem"][];
+            /** @enum {string} */
+            type: "orderedList";
+        } | {
+            content?: {
+                text: string;
+                /** @enum {string} */
+                type: "text";
+            }[];
+            /** @enum {string} */
+            type: "codeBlock";
+        } | {
+            /** @enum {string} */
+            type: "horizontalRule";
+        } | {
+            attrs: {
+                /** Format: uuid */
+                mediaId: string;
+            };
+            /** @enum {string} */
+            type: "image";
+        } | {
+            content: components["schemas"]["PostTableRow"][];
+            /** @enum {string} */
+            type: "table";
+        };
+        PostDeletion: {
+            /** Format: uuid */
+            id: string;
+            placeholder: boolean;
+        };
+        PostDocument: {
+            content: components["schemas"]["PostBlock"][];
+            /** @enum {string} */
+            type: "doc";
+        };
+        PostInline: {
+            marks?: components["schemas"]["PostMark"][];
+            text: string;
+            /** @enum {string} */
+            type: "text";
+        } | {
+            /** @enum {string} */
+            type: "hardBreak";
+        };
+        PostListItem: {
+            content: components["schemas"]["PostBlock"][];
+            /** @enum {string} */
+            type: "listItem";
+        };
+        PostMark: {
+            /** @enum {string} */
+            type: "bold";
+        } | {
+            /** @enum {string} */
+            type: "italic";
+        } | {
+            /** @enum {string} */
+            type: "strike";
+        } | {
+            /** @enum {string} */
+            type: "code";
+        } | {
+            attrs: {
+                href: string;
+            };
+            /** @enum {string} */
+            type: "link";
+        } | {
+            attrs: {
+                /** @enum {string} */
+                color: "red" | "orange" | "green" | "blue" | "purple" | "gray";
+            };
+            /** @enum {string} */
+            type: "textStyle";
+        };
+        PostMarket: {
+            category: {
+                nameKo: string;
+                slug: string;
+            };
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "open" | "closed" | "resolved" | "settled" | "voided";
+            title: string;
+        };
+        PostSummary: {
+            author: components["schemas"]["PostAuthor"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            excerpt: string;
+            /** Format: uuid */
+            id: string;
+            market: components["schemas"]["PostMarket"];
+            thumbnailUrl: string | null;
+            title: string | null;
+        };
+        PostTableRow: {
+            content: {
+                attrs: {
+                    colspan: number;
+                    rowspan: number;
+                };
+                content: components["schemas"]["PostBlock"][];
+                /** @enum {string} */
+                type: "tableCell" | "tableHeader";
+            }[];
+            /** @enum {string} */
+            type: "tableRow";
+        };
         PriceSeries: {
             bucketSeconds: number;
             /** Format: date-time */
@@ -1455,6 +1721,20 @@ export type components = {
             trigger: "trade" | "resolve";
             /** Format: date-time */
             ts: string;
+        };
+        PublishedPost: {
+            author: components["schemas"]["PostAuthor"];
+            body: components["schemas"]["PostDocument"];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            editedAt: string | null;
+            /** Format: uuid */
+            id: string;
+            market: components["schemas"]["PostMarket"];
+            /** @enum {string} */
+            state: "published";
+            title: string | null;
         };
         RecentSearch: {
             /** Format: uuid */
@@ -1632,6 +1912,13 @@ export type components = {
             expectedAccountId: string;
             nickname: components["schemas"]["Nickname"];
         };
+        UpdatePostBody: {
+            /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
+            body: unknown;
+            expectedAccountId: string;
+            /** @description Optional, one line, at most 100 characters; blank is none */
+            title?: string | null;
+        };
         UpdateRealNameBody: {
             expectedAccountId: string;
             realName: string;
@@ -1643,6 +1930,15 @@ export type components = {
         UpdateWatchBody: {
             expectedAccountId: string;
             watched: boolean;
+        };
+        UploadedImage: {
+            byteSize: number;
+            /** @enum {string} */
+            contentType: "image/jpeg" | "image/png" | "image/webp" | "image/gif";
+            height: number;
+            /** Format: uuid */
+            id: string;
+            width: number;
         };
         /** @enum {string} */
         UserRole: "user" | "admin";
@@ -5734,6 +6030,156 @@ export interface operations {
             };
         };
     };
+    getImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mediaId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": string;
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Not modified (If-None-Match) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    uploadImage: {
+        parameters: {
+            query: {
+                expectedAccountId: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": string;
+                "image/gif": string;
+                "image/jpeg": string;
+                "image/png": string;
+                "image/webp": string;
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["UploadedImage"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description IMAGE_NOT_ALLOWED */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     charge: {
         parameters: {
             query?: never;
@@ -5833,6 +6279,334 @@ export interface operations {
                     "application/json": {
                         data: components["schemas"]["PaymentProviderInfo"];
                     };
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listPosts: {
+        parameters: {
+            query?: {
+                category?: string;
+                cursor?: string;
+                limit?: number;
+                marketId?: string;
+                q?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PostSummary"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    createPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreatePostBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Post"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    getPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Post"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    updatePost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdatePostBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["Post"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | POST_NOT_EDITABLE */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    deletePost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DeletePostBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["PostDeletion"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             /** @description NOT_FOUND */

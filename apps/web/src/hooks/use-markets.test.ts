@@ -187,10 +187,13 @@ describe('the request each list sends', () => {
 
   /** Spies on `api.GET` with an empty last page, and answers the query of every call. */
   function sentQueries() {
+    // `as never`: the spy's type is the generated client's answer for every GET path at once
+    // (since #46 an image route among them), which no one answer satisfies; the call is checked
+    // by what it sent, below.
     const spy = vi.spyOn(api, 'GET').mockResolvedValue({
       data: { data: [], meta: { nextCursor: null } },
       response: new Response(null, { status: 200 }),
-    });
+    } as never);
     // The generated client's overloads type the calls too narrowly to destructure; each call is
     // `(path, { params: { query } })`.
     const calls = spy.mock.calls as unknown as [string, { params: { query: unknown } }][];
@@ -649,10 +652,11 @@ describe('a detail’s 관련 시장 (#65, ADR-0068)', () => {
   });
 
   it('sends the market’s related route, by its lower-cased id, with the page’s cursor', async () => {
+    // `as never`: see 'the request each list sends' above.
     const spy = vi.spyOn(api, 'GET').mockResolvedValue({
       data: { data: [card], meta: { nextCursor: 'cursor-2' } },
       response: new Response(null, { status: 200 }),
-    });
+    } as never);
     const options = relatedMarketsInfiniteQueryOptions(ID.toUpperCase());
     await expect(options.queryFn({ pageParam: undefined })).resolves.toEqual({
       items: [card],

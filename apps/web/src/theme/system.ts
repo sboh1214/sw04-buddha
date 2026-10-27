@@ -276,6 +276,20 @@ const config = defineConfig({
           border: { value: { _light: '{colors.yellow.700}', _dark: '{colors.yellow.500}' } },
           focusRing: { value: { _light: '{colors.yellow.700}', _dark: '{colors.yellow.500}' } },
         },
+        // The six text colours a post's writer picks (#46, ADR-0073; owner decision 2026-10-18:
+        // a fixed palette drawn with values readable in either theme). The document stores the
+        // name; these are what it paints, on the page ground: the 700 step on white and the 300
+        // step on Kalshi's near-black (gray one step softer, 600/400), every one at least 4.5:1
+        // (1.4.3, body text) — measured in contrast.test.ts. Not `colorPalette` tokens: a post
+        // colour is text on the page, never a fill with a label on it.
+        postText: {
+          red: { value: { _light: '{colors.red.700}', _dark: '{colors.red.300}' } },
+          orange: { value: { _light: '{colors.orange.700}', _dark: '{colors.orange.300}' } },
+          green: { value: { _light: '{colors.green.700}', _dark: '{colors.green.300}' } },
+          blue: { value: { _light: '{colors.blue.700}', _dark: '{colors.blue.300}' } },
+          purple: { value: { _light: '{colors.purple.700}', _dark: '{colors.purple.300}' } },
+          gray: { value: { _light: '{colors.gray.600}', _dark: '{colors.gray.400}' } },
+        },
       },
     },
   },

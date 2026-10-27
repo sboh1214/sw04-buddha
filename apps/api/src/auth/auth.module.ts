@@ -54,6 +54,13 @@ const AUTH_ENV_KEYS = [
   'ALIGO_SENDER',
   'ALIGO_TEST_MODE',
   'PHONE_HASH_KEY',
+  'MEDIA_STORAGE',
+  'MEDIA_LOCAL_DIR',
+  'MEDIA_S3_BUCKET',
+  'MEDIA_S3_REGION',
+  'MEDIA_S3_ACCESS_KEY_ID',
+  'MEDIA_S3_SECRET_ACCESS_KEY',
+  'API_MEMORY_CEILING_MIB',
 ] as const satisfies readonly (keyof Env)[];
 
 /**

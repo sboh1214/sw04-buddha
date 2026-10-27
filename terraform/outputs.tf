@@ -45,6 +45,11 @@ output "data_volume_id" {
   value       = aws_ebs_volume.data.id
 }
 
+output "media_bucket_name" {
+  description = "The private bucket of the post images (media.tf). Never public: images are served by the API. The database reset empties it too (deploy/reset-db.sh, docs/RESET.md)."
+  value       = aws_s3_bucket.media.bucket
+}
+
 output "ses_identity_arn" {
   description = "SES identity ARN. Check verification with `aws sesv2 get-email-identity --email-identity <domain>` before inviting testers."
   value       = aws_sesv2_email_identity.app.arn

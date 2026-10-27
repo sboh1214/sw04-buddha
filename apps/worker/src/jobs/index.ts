@@ -1,4 +1,5 @@
 import { type Db } from '@buddha/db';
+import { type ObjectStorage } from '@buddha/storage';
 import { marketJobDataSchema, type MarketJobData } from '@buddha/shared';
 import { UnrecoverableError, type Job, type Processor } from 'bullmq';
 import { type Logger } from 'pino';
@@ -8,6 +9,7 @@ import { type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
+import { removeOrphanMedia } from './media-orphan-cleanup.js';
 import { type ScanFailure } from './scan.js';
 import { payPendingStartGrants } from './start-grant-pay.js';
 
@@ -17,6 +19,8 @@ export interface JobContext {
   auditDb: Db;
   /** Realtime events after a market job commits (realtime.ts); best effort, never throws. */
   publish: Publish;
+  /** The media store (#46): the orphan clean-up removes objects from it. */
+  storage: ObjectStorage;
   logger: Logger;
 }
 
@@ -94,6 +98,34 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     };
     // Every minute: quiet unless it paid something or failed.
     logger[paid > 0 || failed > 0 ? 'info' : 'debug'](result, 'start grant payment');
+    return result;
+  },
+  [JOB_NAMES.mediaOrphanCleanup]: async (_job, { db, storage, logger }) => {
+    const { queued, removed, failed, failures, pending } = await removeOrphanMedia(db, storage);
+    // An object the store kept stays queued (media_deletions) and a later run tries it again: one
+    // error line each, with how many times the store has refused it, and the run itself does not
+    // fail (retrying the job at once would only ask the same store again).
+    for (const { storageKey, attempts, err } of failures) {
+      logger.error(
+        { storageKey, attempts, err },
+        'orphan upload object not removed; kept for retry',
+      );
+    }
+    const result = {
+      queued,
+      removed,
+      failed,
+      failures: failures.map(({ storageKey, attempts, message }) => ({
+        storageKey,
+        attempts,
+        message,
+      })),
+      pending,
+    };
+    logger[queued > 0 || removed > 0 || failed > 0 ? 'info' : 'debug'](
+      result,
+      'orphan upload clean-up',
+    );
     return result;
   },
 };

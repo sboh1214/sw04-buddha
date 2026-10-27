@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { signOut } from '@/lib/auth-client';
+import { clearSessionPostDrafts } from '@/lib/post-drafts';
 
 /**
  * 로그아웃, as one action for every control that offers it (`SignOutButton`: MY, /onboarding,
@@ -38,6 +39,9 @@ export function useSignOut(): () => Promise<void> {
     // (a localStorage broadcast) and is emptied by SessionCacheGuard when its session
     // identity changes.
     queryClient.clear();
+    // So are the post drafts the onboarding gate kept in this tab (lib/post-drafts.ts): each is
+    // its writer's only, and whoever signs in next here never sees one.
+    clearSessionPostDrafts();
     router.push('/');
     router.refresh();
   };

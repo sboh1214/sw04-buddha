@@ -52,7 +52,7 @@ resource "aws_ssm_parameter" "env" {
   name        = local.ssm_env_parameter
   description = "Complete production .env for the tf-buddha compose stack; read by deploy/deploy.sh"
   type        = "SecureString"
-  # Standard tier: free, 4 KB limit (the rendered file is ~2.7 KB with every optional key set).
+  # Standard tier: free, 4 KB limit (the rendered file is ~3.2 KB with every optional key set).
   tier = "Standard"
 
   value = templatefile("${path.module}/templates/env.tftpl", {
@@ -78,6 +78,9 @@ resource "aws_ssm_parameter" "env" {
     aligo_user_id              = var.aligo_user_id
     aligo_sender               = var.aligo_sender
     aligo_test_mode            = var.aligo_test_mode
+    media_s3_bucket            = aws_s3_bucket.media.bucket
+    media_s3_access_key_id     = aws_iam_access_key.media.id
+    media_s3_secret_access_key = aws_iam_access_key.media.secret
     postgres_password          = random_password.postgres_superuser.result
     seed_admin_email           = var.seed_admin_email
     seed_admin_password        = var.seed_admin_password

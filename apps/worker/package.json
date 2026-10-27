@@ -16,6 +16,7 @@
   "dependencies": {
     "@buddha/db": "workspace:*",
     "@buddha/shared": "workspace:*",
+    "@buddha/storage": "workspace:*",
     "bullmq": "catalog:",
     "drizzle-orm": "catalog:",
     "ioredis": "catalog:",
