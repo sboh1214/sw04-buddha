@@ -53,6 +53,15 @@ export const AUTO_NICKNAME_PREFIX = 'user_';
  */
 export const AUTO_NICKNAME_PATTERN = /^user_[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{4}$/;
 
+/**
+ * The 32 characters the auto nickname's four are drawn from (ADR-0052, the trigger's alphabet):
+ * an operator giving a member's nickname back to an auto nickname draws from it too (#50, #37-10).
+ */
+export const AUTO_NICKNAME_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+
+/** The number of characters after the prefix. */
+export const AUTO_NICKNAME_SUFFIX_LENGTH = 4;
+
 /** Whether `nickname` has the shape of the auto nickname the trigger gives (ADR-0052). */
 export function isAutoNickname(nickname: string): boolean {
   return AUTO_NICKNAME_PATTERN.test(nickname);

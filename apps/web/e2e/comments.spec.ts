@@ -1620,11 +1620,17 @@ test.describe('댓글·대댓글', () => {
     // A read of the pages — a new 댓글's: the six threads at the top read on to their 300, five
     // reply pages each, 30 in all; nothing is left for the seventh, back to its first 50.
     const box = page.getByTestId('comment-composer');
+    // The write's read draws the thread again — some 1,900 comments, each with its 신고 (#50,
+    // ADR-0081): alone, from the answer to the post read again, about 3.2 s against 2.5 s without
+    // them, and with the e2e workers side by side past the default 15 seconds (ADR-0081 결과 5,
+    // 다시 쌓기(2026-10-24) (7)).
     const readAgain = async (text: string) => {
       replyRequests.length = 0;
       await box.getByTestId('comment-input').fill(text);
       await box.getByTestId('comment-submit').click();
-      await expect(page.getByTestId('comments-list').getByText(text)).toBeVisible();
+      await expect(page.getByTestId('comments-list').getByText(text)).toBeVisible({
+        timeout: 45_000,
+      });
     };
     await readAgain(`새 댓글 ${tag}`);
     await expect(shownIn(tops[6]!)).toHaveCount(50);

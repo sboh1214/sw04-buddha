@@ -3,6 +3,9 @@ import { copy } from '@/copy';
 import { type PublicProfile } from '@/lib/api';
 import { nameInitial } from '@/lib/posts';
 import { interestCategoryLabel, joinedMonthText, profileCounts } from '@/lib/profile';
+import { OperatorLink } from '@/components/moderation/operator-link';
+import { ReportButton } from '@/components/moderation/report-button';
+import { adminProfileModerationPath } from '@/lib/moderation';
 import { OwnProfileLink } from './own-profile-link';
 import { ProfileAuthored } from './profile-authored';
 
@@ -22,7 +25,9 @@ import { ProfileAuthored } from './profile-authored';
  * - the counts of visible posts and comments and the likes they received (#37-4), each named for
  *   what it counts and never a score, a rank or a skill (N05 §2, D5);
  * - on the member's own profile, the link to MY 설정 (decision 4 #41, `OwnProfileLink` — decided in
- *   the browser);
+ *   the browser), and on anyone else's, 신고 (#37-10, #50 — `ReportButton`, decided there too) —
+ *   and for an operator '운영', the member's moderation page (owner decision 2026-10-21,
+ *   `OperatorLink`, by the profile's public id);
  * - the posts and comments area (#37-14, #51 — ADR-0080): the member's 글 and 댓글 on two tabs,
  *   read in the browser (`ProfileAuthored`), the items the counts count.
  *
@@ -137,7 +142,21 @@ export function ProfileView({ profile }: { profile: PublicProfile }) {
           ))}
         </HStack>
 
-        <OwnProfileLink publicId={member.publicId} />
+        <HStack gap="2" flexWrap="wrap" data-testid="profile-actions">
+          <OwnProfileLink publicId={member.publicId} />
+          <ReportButton
+            subject={{ type: 'profile', publicId: member.publicId }}
+            // The dialog names the member by the nickname shown here (owner decision 2026-10-22
+            // (2차) 4).
+            item={{ type: 'profile', nickname: member.nickname }}
+            authorPublicId={member.publicId}
+          />
+          <OperatorLink
+            href={adminProfileModerationPath(member.publicId)}
+            label={copy.operatorModerationProfileLabel}
+            testId="profile-operator-link"
+          />
+        </HStack>
       </Stack>
 
       <Card.Root as="section" aria-labelledby="profile-posts-heading" data-testid="profile-posts">

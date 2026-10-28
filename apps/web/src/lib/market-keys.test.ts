@@ -296,6 +296,8 @@ describe('isPrivateQueryKey', () => {
     // with their cookie; the counts are public and live under the posts' root. 'my-authored' came
     // with #51 (ADR-0080): MY '내 글' is the member's own writing with the hidden items and their
     // reasons (#45-5: the member's alone), read with their cookie; a profile's lists are public.
+    // 'my-moderation' came with #50 (ADR-0081): the member's own reports and the actions taken on
+    // them (PRIVATE_DATA `reports`, `moderation`); the operators' reads live under 'admin'.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -309,6 +311,7 @@ describe('isPrivateQueryKey', () => {
         'search-history',
         'likes',
         'my-authored',
+        'my-moderation',
       ].sort(),
     );
     expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);

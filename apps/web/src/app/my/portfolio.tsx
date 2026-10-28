@@ -656,24 +656,28 @@ function OrderRow({ order }: { order: Order }) {
 
 /**
  * One card with its own heading, so each section is a landmark a screen reader can jump to. A
- * preview on the summary passes `href`, its tab, for the 전체 보기 beside the heading.
+ * preview on the summary passes `href`, its tab, for the 전체 보기 beside the heading. `headingAs`
+ * is `h4` on a page that names itself with an `h3` under MY's `h2` (조치·신고 내역, which is no
+ * tab to name it).
  */
 export function Section({
   title,
   testId,
   href,
+  headingAs = 'h3',
   children,
 }: {
   title: string;
   testId: string;
   href?: Route;
+  headingAs?: 'h3' | 'h4';
   children: ReactNode;
 }) {
   return (
     <Card.Root data-testid={testId}>
       <Card.Header>
         <HStack justify="space-between" gap="3">
-          <Heading as="h3" size="md">
+          <Heading as={headingAs} size="md">
             {title}
           </Heading>
           {href !== undefined && (

@@ -354,6 +354,9 @@ test.describe('운영 공지 (#138)', () => {
         await expect(row.getByTestId('notice-edited')).toHaveCount(0);
         await expect(area).not.toContainText(nickname);
         await expect(area).not.toContainText(copy.postAuthorAdmin);
+        // A notice takes no report (#45-8): its row has no 신고, which a visitor's post card has
+        // (#50, ADR-0081).
+        await expect(area.getByTestId('report-open')).toHaveCount(0);
         // Above the list and its controls, apart from the posts.
         await expect(visitor.getByTestId('community-posts').getByText(title)).toHaveCount(0);
         const areaBox = await area.boundingBox();
@@ -414,6 +417,13 @@ test.describe('운영 공지 (#138)', () => {
         // No comment, like or report (#45-8), and no operator anywhere on it.
         await expect(visitor.getByTestId('comments-heading')).toHaveCount(0);
         await expect(visitor.getByTestId('post-author-actions')).toHaveCount(0);
+        await expect(visitor.getByTestId('report-open')).toHaveCount(0);
+        // Nor the operators' '운영' (#50): a notice is no post the moderation pages read.
+        await page.goto(`/community/notices/${first}`);
+        await expect(page.getByTestId('notice-screen')).toBeVisible();
+        await expect(page.getByTestId('post-operator-link')).toHaveCount(0);
+        await expect(page.getByTestId('report-open')).toHaveCount(0);
+        await page.goto('/admin/notices');
         await expect(visitor.getByTestId('notice-screen')).not.toContainText(nickname);
         // Not indexed: a robots meta that says `noindex` and none that says otherwise — counted, as
         // posts.spec.ts does, since the move from the community list (itself `noindex` since #46's

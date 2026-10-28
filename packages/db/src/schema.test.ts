@@ -10,6 +10,9 @@ import {
   MARKET_STATUSES,
   PRICE_TICK_TRIGGERS,
   RELEASE_SETTING_STATUSES,
+  REPORT_REASONS,
+  REPORT_STATUSES,
+  REPORT_TARGET_TYPES,
   currentConsentVersion,
   nicknameSchema,
   releaseSettingChangeBodySchema,
@@ -36,6 +39,7 @@ import {
   markets,
   mediaDeletions,
   mediaObjects,
+  moderationActions,
   nicknameHolds,
   noticeImages,
   noticeRevisions,
@@ -55,8 +59,10 @@ import {
   postRevisions,
   posts,
   profileInterestCategories,
+  profileItemRemovals,
   profiles,
   releaseSettings,
+  reports,
   startGrantNumbers,
   startGrants,
   user,
@@ -72,12 +78,14 @@ import {
   createComment,
   createCommentLike,
   createMedia,
+  createModerationAction,
   createNotice,
   createPhoneVerification,
   createPost,
   createPostLike,
   createPosition,
   createProfileImage,
+  createReport,
   createSearch,
   createSettlementStep,
   createStartGrant,
@@ -1713,6 +1721,518 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         await tx.delete(mediaObjects).where(eq(mediaObjects.id, image.id));
       });
       expect(await t.db.select().from(mediaObjects)).toEqual([]);
+    });
+  });
+
+  describe('reports and moderation actions (migration 0039, #50)', () => {
+    async function moderationFixture() {
+      const { user: author } = await createUser(t.db);
+      const { user: reporter } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      return { author, reporter, admin, post, comment };
+    }
+
+    it('labels its enums exactly like their shared tuples', async () => {
+      const labels = async (name: string) =>
+        (
+          await t.db.execute<{ label: string }>(
+            sql`SELECT enumlabel AS label FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+                WHERE t.typname = ${name} ORDER BY e.enumsortorder`,
+          )
+        ).rows.map((row) => row.label);
+      expect(await labels('report_reason')).toEqual([...REPORT_REASONS]);
+      expect(await labels('report_target_type')).toEqual([...REPORT_TARGET_TYPES]);
+      expect(await labels('report_status')).toEqual([...REPORT_STATUSES]);
+    });
+
+    it('stores a report on a post, a comment and a profile, each in its own shape', async () => {
+      const { author, reporter, post, comment } = await moderationFixture();
+      const onPost = await createReport(t.db, {
+        reporterId: reporter.id,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      const onComment = await createReport(t.db, {
+        reporterId: reporter.id,
+        reportedUserId: author.id,
+        commentId: comment.id,
+        reason: 'other',
+        description: '저작권 침해',
+      });
+      const onProfile = await createReport(t.db, {
+        reporterId: reporter.id,
+        reportedUserId: author.id,
+        reason: 'impersonation',
+      });
+      expect([onPost.targetType, onComment.targetType, onProfile.targetType]).toEqual([
+        'post',
+        'comment',
+        'profile',
+      ]);
+      // The generated key is the target as one text: the queue's group.
+      expect([onPost.targetKey, onComment.targetKey, onProfile.targetKey]).toEqual([
+        post.id,
+        comment.id,
+        author.id,
+      ]);
+      expect(onPost).toMatchObject({ status: 'pending', resolvedAt: null, actionId: null });
+      // The wrong shapes, whoever writes.
+      for (const values of [
+        { targetType: 'post' as const, postId: null, commentId: null },
+        { targetType: 'post' as const, postId: post.id, commentId: comment.id },
+        { targetType: 'comment' as const, postId: post.id, commentId: null },
+        { targetType: 'profile' as const, postId: post.id, commentId: null },
+      ]) {
+        await expect(
+          t.db.insert(reports).values({
+            ...values,
+            reportedUserId: author.id,
+            reporterId: reporter.id,
+            reporterPhoneHash: randomPhoneHash(),
+            reason: 'spam',
+          }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'reports_target_check',
+        );
+      }
+      await expect(
+        t.db.execute(sql`UPDATE reports SET target_key = 'x' WHERE id = ${onPost.id}`),
+      ).rejects.toSatisfy((e) => sqlState(e) === '428C9');
+    });
+
+    it('refuses a report on oneself, a 기타 without a description and a hash that is not one', async () => {
+      const { author, reporter, post } = await moderationFixture();
+      await expect(
+        createReport(t.db, { reporterId: author.id, reportedUserId: author.id, postId: post.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'reports_not_own_check',
+      );
+      for (const description of [null, '  ']) {
+        await expect(
+          createReport(t.db, {
+            reporterId: reporter.id,
+            reportedUserId: author.id,
+            postId: post.id,
+            reason: 'other',
+            description,
+          }),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      }
+      await expect(
+        createReport(t.db, {
+          reporterId: reporter.id,
+          reportedUserId: author.id,
+          postId: post.id,
+          reporterPhoneHash: 'A'.repeat(64),
+        }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'reports_phone_hash_check',
+      );
+    });
+
+    it('holds one pending report per account and target, and takes another once it is processed (decision 7)', async () => {
+      const { author, reporter, admin, post } = await moderationFixture();
+      const first = await createReport(t.db, {
+        reporterId: reporter.id,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      await expect(
+        createReport(t.db, { reporterId: reporter.id, reportedUserId: author.id, postId: post.id }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' && sqlConstraint(e) === 'reports_pending_reporter_target_idx',
+      );
+      // The same account on the profile is another target.
+      await createReport(t.db, { reporterId: reporter.id, reportedUserId: author.id });
+      await t.db
+        .update(reports)
+        .set({
+          status: 'dismissed',
+          resolvedAt: new Date(),
+          resolvedBy: admin.id,
+          dismissalReason: '위반 아님',
+        })
+        .where(eq(reports.id, first.id));
+      await createReport(t.db, {
+        reporterId: reporter.id,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      expect(
+        (await t.db.select().from(reports).where(eq(reports.postId, post.id))).map((r) => r.status),
+      ).toEqual(expect.arrayContaining(['dismissed', 'pending']));
+    });
+
+    it('writes a processing once, with who and when, and never changes what was reported', async () => {
+      const { author, reporter, admin, post } = await moderationFixture();
+      const report = await createReport(t.db, {
+        reporterId: reporter.id,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      // A processing without its operator, time or reason is not one.
+      for (const set of [
+        { status: 'dismissed' as const, resolvedAt: new Date(), dismissalReason: '없음' },
+        { status: 'dismissed' as const, resolvedAt: new Date(), resolvedBy: admin.id },
+        { status: 'actioned' as const, resolvedAt: new Date(), resolvedBy: admin.id },
+      ]) {
+        await expect(
+          t.db.update(reports).set(set).where(eq(reports.id, report.id)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'reports_resolution_check',
+        );
+      }
+      // The member reported never processes a report on themselves (decision 4 #50).
+      await expect(
+        t.db
+          .update(reports)
+          .set({
+            status: 'dismissed',
+            resolvedAt: new Date(),
+            resolvedBy: author.id,
+            dismissalReason: '없음',
+          })
+          .where(eq(reports.id, report.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'reports_not_own_check',
+      );
+      await expect(
+        t.db.update(reports).set({ reason: 'harassment' }).where(eq(reports.id, report.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('cannot change what was reported'));
+      const action = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        postId: post.id,
+      });
+      await t.db
+        .update(reports)
+        .set({
+          status: 'actioned',
+          resolvedAt: new Date(),
+          resolvedBy: admin.id,
+          actionId: action.id,
+        })
+        .where(eq(reports.id, report.id));
+      await expect(
+        t.db
+          .update(reports)
+          .set({ status: 'dismissed', actionId: null, dismissalReason: '번복' })
+          .where(eq(reports.id, report.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('was processed'));
+      // Removed with the retention period (#184): buddha_app deletes.
+      await t.db.delete(reports).where(eq(reports.id, report.id));
+      expect(await t.db.select().from(reports)).toEqual([]);
+    });
+
+    it('takes a change of the hash alone, and only from the operator’s number change (owner decision 2026-10-21)', async () => {
+      // docs/OPERATIONS.md moves the person's pending and recent reports onto the new number's hash
+      // (ADR-0081): the keep-record trigger takes that change from the transaction that names the
+      // account and the new hash (its SET LOCAL lines), and nothing else of the row with it.
+      const { author, reporter, admin, post, comment } = await moderationFixture();
+      await createPhoneVerification(t.db, { userId: reporter.id });
+      const oldHash = randomPhoneHash();
+      const newHash = randomPhoneHash();
+      const pending = await createReport(t.db, {
+        reporterId: reporter.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      const dismissed = await createReport(t.db, {
+        reporterId: reporter.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+        commentId: comment.id,
+        status: 'dismissed',
+        resolvedBy: admin.id,
+        dismissalReason: '위반 아님',
+      });
+      const { user: someoneElse } = await createUser(t.db);
+      await createPhoneVerification(t.db, { userId: someoneElse.id });
+      const others = await createReport(t.db, {
+        reporterId: someoneElse.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+        postId: post.id,
+      });
+      const keeps = 'keeps the number it was sent with';
+      const moveTo = (id: string, hash: string) =>
+        sql`UPDATE reports SET reporter_phone_hash = ${hash} WHERE id = ${id}`;
+      /** A transaction as the number change's: its SET LOCAL lines, then `body`. */
+      const asNumberChange = (
+        body: (tx: Parameters<Parameters<typeof t.db.transaction>[0]>[0]) => Promise<unknown>,
+        settings: Record<string, string> = {
+          'phone_change.user_id': reporter.id,
+          'phone_change.new_hash': newHash,
+        },
+      ) =>
+        t.db.transaction(async (tx) => {
+          for (const [name, value] of Object.entries(settings)) {
+            await tx.execute(sql`SELECT set_config(${name}, ${value}, true)`);
+          }
+          await body(tx);
+        });
+      // Any write of the app's: no setting names it.
+      await expect(t.db.execute(moveTo(pending.id, newHash))).rejects.toSatisfy((e) =>
+        errorMessage(e).includes(keeps),
+      );
+      // In the change: another hash, another account's report, or more than the hash — refused.
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(pending.id, randomPhoneHash()))),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(others.id, newHash))),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      for (const more of [
+        sql`reason = 'harassment'`,
+        sql`description = '바꾼 설명'`,
+        sql`status = 'dismissed', resolved_at = now(), resolved_by = ${admin.id}, dismissal_reason = '없음'`,
+      ]) {
+        await expect(
+          asNumberChange((tx) =>
+            tx.execute(
+              sql`UPDATE reports SET reporter_phone_hash = ${newHash}, ${more} WHERE id = ${pending.id}`,
+            ),
+          ),
+        ).rejects.toSatisfy((e) => errorMessage(e).includes("changes its number's hash alone"));
+      }
+      // The hash alone, of the account's reports — a processed one too.
+      await asNumberChange(async (tx) => {
+        await tx.execute(moveTo(pending.id, newHash));
+        await tx.execute(moveTo(dismissed.id, newHash));
+      });
+      const after = await t.db.select().from(reports);
+      const byId = new Map(after.map((row) => [row.id, row]));
+      expect(byId.get(pending.id)).toEqual({ ...pending, reporterPhoneHash: newHash });
+      expect(byId.get(dismissed.id)).toEqual({ ...dismissed, reporterPhoneHash: newHash });
+      expect(byId.get(others.id)).toEqual(others);
+      // Once the change names the old number's hash (#49's final procedure), a withdrawn account's
+      // report on that number is the account's too; a live account's never is.
+      const { user: withdrawn } = await createUser(t.db);
+      const inherited = await createReport(t.db, {
+        reporterId: withdrawn.id,
+        reporterPhoneHash: oldHash,
+        reportedUserId: author.id,
+      });
+      const withOld = {
+        'phone_change.user_id': reporter.id,
+        'phone_change.new_hash': newHash,
+        'phone_change.old_hash': oldHash,
+      };
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(inherited.id, newHash))),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      await expect(
+        asNumberChange((tx) => tx.execute(moveTo(others.id, newHash)), withOld),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes(keeps));
+      await asNumberChange((tx) => tx.execute(moveTo(inherited.id, newHash)), withOld);
+      const [moved] = await t.db.select().from(reports).where(eq(reports.id, inherited.id));
+      expect(moved).toEqual({ ...inherited, reporterPhoneHash: newHash });
+      // The processing's rules hold as before around it: a processed report keeps its result.
+      await expect(
+        t.db.update(reports).set({ reason: 'harassment' }).where(eq(reports.id, dismissed.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('was processed'));
+    });
+
+    it('holds an action to its types, its subject’s shape, its reason and another operator', async () => {
+      const { author, admin, post, comment } = await moderationFixture();
+      const base = { userId: author.id, createdBy: admin.id, reason: 'spam' as const };
+      await expect(
+        t.db.insert(moderationActions).values({ ...base, type: 'ban' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_type_check',
+      );
+      for (const values of [
+        { type: 'hide', postId: null, commentId: null },
+        { type: 'hide', postId: post.id, commentId: comment.id },
+        { type: 'warning', postId: post.id, commentId: comment.id },
+        { type: 'bio_clear', postId: post.id, commentId: null },
+      ]) {
+        await expect(
+          t.db.insert(moderationActions).values({ ...base, ...values }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_subject_check',
+        );
+      }
+      await expect(
+        t.db.insert(moderationActions).values({ ...base, type: 'warning', reason: 'other' }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_other_note_check',
+      );
+      await expect(
+        t.db.insert(moderationActions).values({ ...base, type: 'warning', endsAt: new Date() }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_ends_at_check',
+      );
+      await expect(
+        t.db.insert(moderationActions).values({ ...base, type: 'warning', createdBy: author.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_not_own_check',
+      );
+      // A warning about nothing, about a comment, and a hiding of each.
+      await createModerationAction(t.db, { ...base, type: 'warning' });
+      await createModerationAction(t.db, { ...base, type: 'warning', commentId: comment.id });
+      await createModerationAction(t.db, { ...base, postId: post.id });
+      await createModerationAction(t.db, { ...base, commentId: comment.id });
+      expect(await t.db.select().from(moderationActions)).toHaveLength(4);
+    });
+
+    it('keeps one standing hiding per item, and writes a cancellation once', async () => {
+      const { author, admin, post } = await moderationFixture();
+      const { user: other } = await createUser(t.db, { role: 'admin' });
+      const hide = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        postId: post.id,
+      });
+      await expect(
+        createModerationAction(t.db, { userId: author.id, createdBy: other.id, postId: post.id }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' &&
+          sqlConstraint(e) === 'moderation_actions_standing_post_hide_idx',
+      );
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ note: '다른 설명' })
+          .where(eq(moderationActions.id, hide.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('cannot change what was done'));
+      // The member never cancels an action on themselves either.
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ cancelledAt: new Date(), cancelledBy: author.id, cancelReason: '이의 인정' })
+          .where(eq(moderationActions.id, hide.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_not_own_check',
+      );
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ cancelledAt: new Date(), cancelledBy: other.id })
+          .where(eq(moderationActions.id, hide.id)),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_cancellation_check',
+      );
+      await t.db
+        .update(moderationActions)
+        .set({ cancelledAt: new Date(), cancelledBy: other.id, cancelReason: '이의 인정' })
+        .where(eq(moderationActions.id, hide.id));
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ cancelReason: '다른 사유' })
+          .where(eq(moderationActions.id, hide.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('was cancelled'));
+      // Once cancelled, the item may be hidden again.
+      await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: other.id,
+        postId: post.id,
+      });
+    });
+
+    it('keeps what a profile action took away, one item each, never rewritten', async () => {
+      const { author, admin } = await moderationFixture();
+      const image = await createProfileImage(t.db, { userId: author.id });
+      await t.db.update(profiles).set({ imageId: null }).where(eq(profiles.userId, author.id));
+      const removal = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        type: 'image_remove',
+        removed: { imageId: image.id },
+      });
+      const [kept] = await t.db
+        .select()
+        .from(profileItemRemovals)
+        .where(eq(profileItemRemovals.actionId, removal.id));
+      expect(kept).toEqual({ actionId: removal.id, nickname: null, bio: null, imageId: image.id });
+      // The image is the record's until #184 removes it.
+      await expect(
+        t.db.delete(mediaObjects).where(eq(mediaObjects.id, image.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+      await expect(
+        t.db
+          .update(profileItemRemovals)
+          .set({ imageId: null, bio: 'x' })
+          .where(eq(profileItemRemovals.actionId, removal.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      const action = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        type: 'warning',
+      });
+      await expect(
+        t.db.insert(profileItemRemovals).values({ actionId: action.id, nickname: 'a', bio: 'b' }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'profile_item_removals_item_check',
+      );
+      await t.db.delete(profileItemRemovals).where(eq(profileItemRemovals.actionId, removal.id));
+      await t.db.delete(mediaObjects).where(eq(mediaObjects.id, image.id));
+    });
+
+    it('names the nickname reset a hold came from: one hold an action, kept with it, and handed to the member alone (owner decision 2026-10-22)', async () => {
+      const { author, reporter, admin } = await moderationFixture();
+      const reset = await createModerationAction(t.db, {
+        userId: author.id,
+        createdBy: admin.id,
+        type: 'nickname_reset',
+        removed: { nickname: '사칭닉네임' },
+      });
+      const held = (nickname: string, userId: string) =>
+        t.db.transaction((tx) => isNicknameHeld(tx, nickname, userId));
+      // The reset's hold names no account: held from everybody, the member too (2026-10-21).
+      const [hold] = await t.db
+        .insert(nicknameHolds)
+        .values({ nickname: '사칭닉네임', userId: null, actionId: reset.id })
+        .returning();
+      expect(await held('사칭닉네임', author.id)).toBe(true);
+      expect(await held('사칭닉네임', reporter.id)).toBe(true);
+      // One hold an action, and only an action there is.
+      await expect(
+        t.db
+          .insert(nicknameHolds)
+          .values({ nickname: '사칭닉네임', userId: null, actionId: reset.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'nickname_holds_action_id_unique',
+      );
+      await expect(
+        t.db.insert(nicknameHolds).values({ nickname: '아무닉네임', actionId: randomUUID() }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23503' &&
+          sqlConstraint(e) === 'nickname_holds_action_id_moderation_actions_id_fk',
+      );
+      // The action stays while its hold does (#184 removes the hold first).
+      await t.db.delete(profileItemRemovals).where(eq(profileItemRemovals.actionId, reset.id));
+      await expect(
+        t.db.delete(moderationActions).where(eq(moderationActions.id, reset.id)),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23503' &&
+          sqlConstraint(e) === 'nickname_holds_action_id_moderation_actions_id_fk',
+      );
+      // Handed to the member (the reset's cancellation): theirs to pick, nobody else's yet.
+      await t.db
+        .update(nicknameHolds)
+        .set({ userId: author.id })
+        .where(eq(nicknameHolds.id, hold!.id));
+      expect(await held('사칭닉네임', author.id)).toBe(false);
+      expect(await held('사칭닉네임', reporter.id)).toBe(true);
+      expect(await held('사칭닉네임', admin.id)).toBe(true);
+      // A member's own change names no action.
+      const [own] = await t.db
+        .insert(nicknameHolds)
+        .values({ nickname: '내가버린닉', userId: author.id })
+        .returning();
+      expect(own?.actionId).toBeNull();
     });
   });
 

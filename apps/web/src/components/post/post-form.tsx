@@ -104,6 +104,13 @@ export interface PostFormProps {
    * 닫기 (`onClose`) in place of its button.
    */
   gone?: boolean;
+  /**
+   * Why, while `gone`: '없거나 삭제된 글입니다.' (`copy.errPostGone`, the default) — or, for a post
+   * an operator hid under the form (#50, 오너 결정 2026-10-25, ADR-0081 7-29), '운영 정책에 따라
+   * 숨긴 글은 고칠 수 없습니다.' (`copy.errPostNotEditable`): each the sentence of the save refused
+   * for it.
+   */
+  goneMessage?: string;
   /** 닫기, while `gone`: the writer is done with what the form held. */
   onClose?: () => void;
   /**
@@ -180,11 +187,13 @@ export interface NoticeFormOptions {
  *
  * The post an edit form edits can be deleted while it is open — in another tab: a save refused as
  * NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`) or answers the
- * placeholder of a post deleted with comments under it (#48, `postEditDeleted`). The form then
- * keeps what the writer had in it, as #48's comment boxes keep a text whose place went (오너 결정
- * 2026-10-24, ADR-0073 9-52; ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답 1·2): the title
- * and the body stay on screen, read-only — selectable and copyable, never changed or sent — under
- * '없거나 삭제된 글입니다.' (`GoneNotice`), and 닫기 takes the button's place; leaving still asks
+ * placeholder of a post deleted with comments under it (#48, `postEditDeleted`) — or an operator
+ * can hide it (#50, `postEditHidden`). The form then keeps what the writer had in it, as #48's
+ * comment boxes keep a text whose place went (오너 결정 2026-10-24, ADR-0073 9-52; 2026-10-25 for a
+ * hiding, ADR-0081 7-29; ADR-0074, 오너 결정 2026-10-20 답 4, 2026-10-21 답 1·2): the title and
+ * the body stay on screen, read-only — selectable and copyable, never changed or sent — under
+ * '없거나 삭제된 글입니다.', or '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.' for a hiding
+ * (`GoneNotice`, `goneMessage`), and 닫기 takes the button's place; leaving still asks
  * first, and the draft the onboarding gate would keep is kept as before — the post going clears
  * nothing. The screen decides it as the post goes, by what the form said it held
  * (`onHoldingChange`): a form holding nothing of the writer's is not kept.
@@ -333,6 +342,7 @@ function PostFormFields({
   refusedImageIds,
   onSubmit,
   gone = false,
+  goneMessage = copy.errPostGone,
   onClose,
   onHoldingChange,
   notice,
@@ -455,7 +465,7 @@ function PostFormFields({
       }}
       data-testid="post-form"
     >
-      {gone && <GoneNotice />}
+      {gone && <GoneNotice message={goneMessage} />}
       {restored !== null && !gone && (
         <Alert.Root
           ref={noticeRef}
@@ -608,13 +618,14 @@ function PostFormFields({
 /**
  * '없거나 삭제된 글입니다.' at the top of a form whose post left every view (오너 결정 2026-10-24,
  * ADR-0073 9-52) — the reason #48 puts at the top of a comment text it holds, in the words of a
- * save refused for it (`copy.errPostGone`). The focus comes here only when it has fallen to the
- * page — the controls a save in flight disabled took it with them — and the sentence, the notice's
- * name, is read out then; otherwise the focus stays where the writer has it and the sentence is an
- * alert, read out as it appears. Decided as it first appears, on the client only (the server's
- * HTML never holds it), as #48's held texts decide it (ADR-0074 7-25).
+ * save refused for it (`copy.errPostGone`), or of one refused for a post an operator hid under the
+ * form (`copy.errPostNotEditable`, #50, ADR-0081 7-29: `message`). The focus comes here only when
+ * it has fallen to the page — the controls a save in flight disabled took it with them — and the
+ * sentence, the notice's name, is read out then; otherwise the focus stays where the writer has it
+ * and the sentence is an alert, read out as it appears. Decided as it first appears, on the client
+ * only (the server's HTML never holds it), as #48's held texts decide it (ADR-0074 7-25).
  */
-function GoneNotice() {
+function GoneNotice({ message }: { message: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const textId = useId();
   const [takesFocus] = useState(
@@ -636,7 +647,7 @@ function GoneNotice() {
     >
       <Alert.Indicator />
       <Alert.Content>
-        <Alert.Description id={textId}>{copy.errPostGone}</Alert.Description>
+        <Alert.Description id={textId}>{message}</Alert.Description>
       </Alert.Content>
     </Alert.Root>
   );

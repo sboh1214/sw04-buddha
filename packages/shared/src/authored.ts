@@ -79,8 +79,8 @@ export type AuthoredComment = z.infer<typeof authoredCommentSchema>;
 /**
  * Why an operator hid a post or a comment, as MY '내 글' shows it to its author (owner decision
  * 2026-10-22, ADR-0080: «사유 목록 중 하나 + 운영자 설명»): one of the report reasons (#45-10,
- * `REPORT_REASONS`) and the explanation the operator wrote, if they wrote one. #50 records both with
- * the hiding and fills this; nothing does before it.
+ * `REPORT_REASONS`) and the explanation the operator wrote, if they wrote one — what #50's hiding
+ * records (`moderation_actions`, ADR-0081).
  */
 export const hiddenReasonSchema = z
   .object({
@@ -94,14 +94,14 @@ export type HiddenReason = z.infer<typeof hiddenReasonSchema>;
 
 /**
  * What MY '내 글' says of a post or a comment an operator hid (#45-5: '숨김' and the reason, to the
- * member alone): the reason the hiding was recorded with. Null until a hiding carries one — the
- * hiding itself, its reason and its reversal come with #50's moderation records, which fill it;
- * before them nothing records a reason, so it is null on every hidden item. Never the operator who
- * hid it, nor anything of a report (#45-13: the reporter and the operator are not shown).
+ * member alone): the reason the standing hiding was recorded with (#50's moderation records; a
+ * cancelled hiding no longer hides anything). Null only for an item hidden with no hiding recorded,
+ * which nothing writes now. Never the operator who hid it, nor anything of a report (#45-13: the
+ * reporter and the operator are not shown).
  */
 export const hiddenNoticeSchema = z
   .object({
-    /** The reason the hiding was recorded with, as #50 records it; null while none is. */
+    /** The reason the standing hiding was recorded with (#50); null when none was recorded. */
     reason: hiddenReasonSchema.nullable(),
   })
   .meta({ id: 'HiddenNotice' });

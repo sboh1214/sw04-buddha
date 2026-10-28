@@ -11,6 +11,7 @@ import {
 import { type ReactNode } from 'react';
 import { copy } from '@/copy';
 import { isPostTextColor } from '@/lib/post-editor';
+import { type PostHeadingStart, postHeadingElement } from '@/lib/posts';
 import { POST_CONTENT_CSS } from './post-content-style';
 import { RetriedImage } from './retried-image';
 
@@ -28,7 +29,8 @@ import { RetriedImage } from './retried-image';
  *   notice screens draw a notice's through their own route (`imageSrc`, #138).
  * - A colour is a name drawn through the theme (`data-color`, post-content-style.ts).
  * - Headings are `h3`–`h5` under the page's `h1` and the post's `h2` — or, one level down
- *   (`headingFrom`), `h4`–`h6` under a title that is itself an `h3`.
+ *   (`headingFrom`), `h4`–`h6` under a title that is itself an `h3`, or from `h5` on where the
+ *   body sits deeper still (`postHeadingElement`).
  */
 export function PostBody({
   document,
@@ -39,21 +41,22 @@ export function PostBody({
   /**
    * Where an image's bytes are read, by its media id: the public `GET /media/:id` by default; the
    * admin's notice screens pass their own (`adminNoticeImagePath`, #138), since the public route
-   * serves a pinned notice's current images only.
+   * serves a pinned notice's current images only, and so do the operators' moderation pages (#50,
+   * ADR-0081), which read a hidden or deleted post's images, and an earlier version's, at their
+   * operator address (`adminMediaPath`) — the public one serves none of them.
    */
   imageSrc?: (mediaId: string) => string;
   /**
    * The level the body's first heading (제목 1) takes: 3 under a title that is an `h2` (a post, a
    * notice's page), 4 under one that is an `h3` (an earlier version of a notice, on the admin's
-   * screen under the admin layout's `h2`, #138) — so a heading in the body sits under the title it
-   * belongs to rather than beside it. How a heading looks does not change (`data-heading`).
+   * screen under the admin layout's `h2`, #138), 5 on the operators' moderation pages, where the
+   * body sits in a block under the page's `h3` and the block's `h4` (#50) — so a heading in the
+   * body sits under the title it belongs to rather than beside it. How a heading looks does not
+   * change (`data-heading`).
    */
-  headingFrom?: 3 | 4;
+  headingFrom?: PostHeadingStart;
 }) {
-  const draw: Draw = {
-    src: imageSrc,
-    headings: headingFrom === 4 ? (['h4', 'h5', 'h6'] as const) : (['h3', 'h4', 'h5'] as const),
-  };
+  const draw: Draw = { src: imageSrc, headingFrom };
   return (
     <Box css={POST_CONTENT_CSS} data-testid="post-body">
       {blocks(document.content, draw)}
@@ -63,11 +66,11 @@ export function PostBody({
 
 /**
  * What `block` takes from `PostBody` beside the document: where an image node's bytes are read
- * (`imageSrc`), and the tags of the three heading levels (`headingFrom`).
+ * (`imageSrc`), and the level of the first heading (`headingFrom`).
  */
 interface Draw {
   src: (mediaId: string) => string;
-  headings: readonly ['h3', 'h4', 'h5'] | readonly ['h4', 'h5', 'h6'];
+  headingFrom: PostHeadingStart;
 }
 
 /** Only an http(s) address is a link; the server keeps no other, this is the second lock. */
@@ -170,9 +173,14 @@ function block(node: PostBlock, key: number, draw: Draw): ReactNode {
     case 'paragraph':
       return <p key={key}>{inlines(node.content)}</p>;
     case 'heading': {
-      const Tag = draw.headings[node.attrs.level - 1] ?? draw.headings[2];
+      const heading = postHeadingElement(node.attrs.level, draw.headingFrom);
+      const Tag = heading.tag;
       return (
-        <Tag key={key} data-heading={node.attrs.level}>
+        <Tag
+          key={key}
+          data-heading={node.attrs.level}
+          {...(Tag === 'div' ? { role: 'heading', 'aria-level': heading.ariaLevel } : {})}
+        >
           {inlines(node.content)}
         </Tag>
       );

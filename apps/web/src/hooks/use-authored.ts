@@ -10,6 +10,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import {
   type AuthoredComment,
+  type CommentDeletion,
   type MyComment,
   type MyPost,
   type PostSummary,
@@ -27,9 +28,10 @@ import {
   returnsToDrawnPage,
   withoutAuthoredItem,
 } from '@/lib/authored';
-import { postCommentsKey } from '@/lib/comments';
+import { postCommentsKey, withoutComment } from '@/lib/comments';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
 import { useSession } from '@/lib/use-session';
+import { writePages } from './use-comments';
 import { afterRefusal } from './use-posts';
 
 /**
@@ -170,7 +172,8 @@ export interface DeleteMyItemVariables {
  * post deleted turns the post its comments name from hidden to the deleted placeholder), the
  * profile's lists (the same), the community list's cards and the post's own page and comment
  * threads (its placeholder and count). The ones on screen — MY's — are read at once; the others
- * when next shown.
+ * when next shown. A comment's deletion is in the post's comment pages held already
+ * (`deleteMyItemOptions`): marked stale, they are read again for what else changed.
  */
 async function afterMyDeletion(queryClient: QueryClient, postId: string) {
   await Promise.all([
@@ -191,12 +194,25 @@ async function afterMyDeletion(queryClient: QueryClient, postId: string) {
  * cancelled, so it cannot land with the item back) — the tab and the summary's preview share the
  * entry — and everything it touched is read again (`afterMyDeletion`).
  *
+ * A comment's answer (`CommentDeletion`) also goes into the post's comment pages this tab holds,
+ * as the post page's own 삭제 writes it (`writePages` with `withoutComment`, use-comments.ts): its
+ * placeholder, or out — and with it out of what #48 keeps placed at the end of the pages
+ * (`keepPlacedComments`, 오너 결정 2026-10-24). A comment the member wrote on the post page in this
+ * tab and an operator hid since may be held there still as it was before the hiding, placed at the
+ * end past the five pages read toward it; marked stale only, every read of the pages would put that
+ * copy back at their end until 더 보기 read the list to its end (ADR-0081 7-28 — the item ADR-0080
+ * 결과 5 left to #50). The post's count does not move: a hidden comment was out of it.
+ *
  * A refusal: as another account, the session is asked for again (`afterRefusal`); NOT_FOUND — the
  * item was deleted meanwhile, on another tab — reads MY's lists again, so it leaves them too.
  */
 export function deleteMyItemOptions(queryClient: QueryClient, onSessionChanged: () => void) {
   return {
-    mutationFn: async ({ tab, id, expectedAccountId }: DeleteMyItemVariables): Promise<void> => {
+    mutationFn: async ({
+      tab,
+      id,
+      expectedAccountId,
+    }: DeleteMyItemVariables): Promise<CommentDeletion | null> => {
       const body = { expectedAccountId };
       if (tab === 'posts') {
         unwrap(
@@ -205,22 +221,28 @@ export function deleteMyItemOptions(queryClient: QueryClient, onSessionChanged: 
             body,
           }),
         );
-      } else {
-        unwrap(
-          await api.POST('/api/v1/comments/{commentId}/delete', {
-            params: { path: { commentId: id.toLowerCase() } },
-            body,
-          }),
-        );
+        return null;
       }
+      return unwrap(
+        await api.POST('/api/v1/comments/{commentId}/delete', {
+          params: { path: { commentId: id.toLowerCase() } },
+          body,
+        }),
+      ).data;
     },
-    onSuccess: async (_answer: void, { tab, id, postId }: DeleteMyItemVariables) => {
+    onSuccess: async (
+      deletion: CommentDeletion | null,
+      { tab, id, postId }: DeleteMyItemVariables,
+    ) => {
       const key = myAuthoredKey(tab);
       await queryClient.cancelQueries({ queryKey: key, exact: true });
       queryClient.setQueryData<{ pages: AuthoredPage<{ id: string }>[]; pageParams: unknown[] }>(
         key,
         (data) => withoutAuthoredItem(data, id.toLowerCase()),
       );
+      if (deletion !== null) {
+        await writePages(queryClient, postId, (held) => withoutComment(held, deletion));
+      }
       await afterMyDeletion(queryClient, postId);
     },
     onError: async (error: Error) => {

@@ -9,11 +9,13 @@ import {
 } from '@chakra-ui/react';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { CardReportButton } from '@/components/moderation/report-button';
 import { PostByline } from '@/components/post/post-author';
 import { type AuthoredComment } from '@/lib/api';
 import { commentKindLabel, commentedPostText } from '@/lib/authored';
 import { likeCountText } from '@/lib/likes';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { authorPublicIdOf } from '@/lib/moderation';
 import { postPath } from '@/lib/posts';
 
 /**
@@ -32,12 +34,24 @@ import { postPath } from '@/lib/posts';
  * what it opens ('답글 <the post's title>'), as the community card names its link by the title; the
  * comment's text — up to 1,000 characters, which a three-line clamp only hides from sight — sits
  * outside it as plain text, as the card's excerpt does (ADR-0080 7-8). Its links are the post
- * page's (a link inside the card's own would nest two anchors).
+ * page's (a link inside the card's own would nest two anchors). On a profile's tab it carries 신고
+ * for every reader but its author (owner decision 2026-10-21, `CardReportButton`), above the
+ * card's link and outside it.
  *
  * No directive: it renders inside the lists' client components. The lists are read in the browser
  * only, so nothing here is in the server's HTML.
  */
-export function AuthoredCommentCard({ comment }: { comment: AuthoredComment }) {
+export function AuthoredCommentCard({
+  comment,
+  report,
+}: {
+  comment: AuthoredComment;
+  /**
+   * 신고 on the card (owner decision 2026-10-21) — a profile's 댓글 tab's, not MY's (the member's
+   * own) — with the tab's page for a visitor's login to come back to.
+   */
+  report?: { backPath: string };
+}) {
   return (
     <LinkBox
       as="article"
@@ -130,6 +144,14 @@ export function AuthoredCommentCard({ comment }: { comment: AuthoredComment }) {
           >
             {likeCountText(comment.likeCount)}
           </Text>
+          {report !== undefined && (
+            <CardReportButton
+              subject={{ type: 'comment', commentId: comment.id, postId: comment.post.id }}
+              item={{ type: 'comment', body: comment.body }}
+              authorPublicId={authorPublicIdOf(comment.author)}
+              backPath={report.backPath}
+            />
+          )}
         </HStack>
       </Stack>
     </LinkBox>

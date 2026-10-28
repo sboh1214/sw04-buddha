@@ -147,11 +147,11 @@ export function reportReasonLabel(code: ReportReason): string {
 
 /**
  * What MY '내 글' says beside an item an operator hid (#45-5: '숨김' and the reason, to the member
- * alone): the mark always; once the hiding carries a reason, its line — the report reason the
- * operator picked (owner decision 2026-10-22: «사유 목록 중 하나 + 운영자 설명») — and the
- * operator's explanation on a line of its own when they wrote one. The reason comes with #50's
- * moderation records; until then no hiding records one (`reason: null`), and the mark stands alone
- * rather than a line that says nothing.
+ * alone): the mark always, and the reason's line — the report reason the operator picked for the
+ * standing hiding (owner decision 2026-10-22: «사유 목록 중 하나 + 운영자 설명»; #50's
+ * `moderation_actions`, ADR-0081) — with the operator's explanation on a line of its own when they
+ * wrote one. `reason: null` only for an item hidden with no hiding recorded, which no path writes
+ * now (ADR-0081 7-24): then the mark stands alone rather than a line that says nothing.
  */
 export function hiddenNoticeView(hidden: HiddenNotice): {
   mark: string;
@@ -219,7 +219,9 @@ function cutAtCharacter(text: string, max: number): string {
  * break that reaches the cap is a first line cut there, and ends in '…' — as does a first line of
  * exactly 300 code points, which the excerpt cannot tell apart — and it ends where the server cut
  * it (never inside a surrogate pair, but maybe inside an emoji's ZWJ sequence). A title is never
- * cut: it is at most 100 characters (POST_TITLE_MAX_LENGTH).
+ * cut: it is at most 100 characters (POST_TITLE_MAX_LENGTH). The report dialog names a post or a
+ * comment by this same rule (`reportItemName`, lib/moderation.ts — one rule since the restack of
+ * #50, ADR-0081 결과 5).
  */
 export function hiddenItemName(item: HiddenItem): string {
   if (item.tab === 'posts') {

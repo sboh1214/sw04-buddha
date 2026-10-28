@@ -32,8 +32,9 @@ import { posts } from './posts.js';
  * - `deleted_at`: the author deleted it (#45-5). The row and its body stay, for operators only
  *   (and #184's retention). The public sees '삭제된 글입니다' for a 댓글 while a 대댓글 not deleted
  *   hangs under it, and nothing otherwise.
- * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal come with
- *   #50). '운영 정책에 따라 숨긴 글입니다', no new 대댓글 under it, no edits by its author; deletable.
+ * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal are
+ *   #50's `moderation_actions`). '운영 정책에 따라 숨긴 글입니다', no new 대댓글 under it, no edits
+ *   by its author; deletable.
  * - `parent_created_at`: a 대댓글's 댓글's `created_at`, NULL for a 댓글 — copied when the 대댓글 is
  *   written and held to the 댓글's by the parent's foreign key, so it is never anything else. It
  *   lets a post's 대댓글 be walked in their 댓글's order (the second index below), which is how the
@@ -135,10 +136,10 @@ export const postComments = pgTable(
 );
 
 /**
- * 수정 이력 (#45-4: «댓글·대댓글도 같은 규칙»): every body an edit replaced, for operators only (no
- * route reads it before #50's moderation screens). Append-only like `post_revisions`: buddha_app
- * loses UPDATE (migration 0034); DELETE stays for #184, which removes a version after the
- * retention period counted from `replaced_at` (ADR-0069 decision 7).
+ * 수정 이력 (#45-4: «댓글·대댓글도 같은 규칙»): every body an edit replaced, for operators only (#50's
+ * moderation page, `GET /admin/moderation/comments/:commentId`). Append-only like
+ * `post_revisions`: buddha_app loses UPDATE (migration 0034); DELETE stays for #184, which removes
+ * a version after the retention period counted from `replaced_at` (ADR-0069 decision 7).
  *
  * - `written_at`: when that version began — the comment's creation or the edit before.
  * - `replaced_at`: when an edit replaced it.

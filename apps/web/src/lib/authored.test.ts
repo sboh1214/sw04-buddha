@@ -147,7 +147,7 @@ describe('MY’s 숨김 line (#45-5)', () => {
     expect(hiddenNoticeView({ reason: { code: 'other', note: '   ' } }).note).toBeNull();
   });
 
-  it('is the mark alone until a hiding records a reason (#50)', () => {
+  it('is the mark alone for an item hidden with no hiding recorded (ADR-0081 7-24)', () => {
     expect(hiddenNoticeView({ reason: null })).toEqual({ mark: '숨김', reason: null, note: null });
   });
 

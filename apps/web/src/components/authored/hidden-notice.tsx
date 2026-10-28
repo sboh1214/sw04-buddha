@@ -5,11 +5,11 @@ import { hiddenNoticeView } from '@/lib/authored';
 
 /**
  * The line MY '내 글' draws above an item an operator hid (#45-5: «숨긴 글은 '숨김' 표시와 사유를
- * 본인에게 보인다»): the '숨김' mark, and once the hiding carries a reason (#50 records it; until then
- * the mark stands alone, `hiddenNoticeView`) the reason — one of the report reasons — and the
- * operator's explanation on a line under it when there is one (owner decision 2026-10-22). Never on
- * a profile — the public lists leave a hidden item out, and no public answer marks one
- * (PRIVATE_DATA `moderation`). Never who hid it (#45-13).
+ * 본인에게 보인다»): the '숨김' mark and the reason the standing hiding was recorded with (#50,
+ * ADR-0081) — one of the report reasons — with the operator's explanation on a line under it when
+ * there is one (owner decision 2026-10-22); the mark alone only for an item hidden with no hiding
+ * recorded (`hiddenNoticeView`). Never on a profile — the public lists leave a hidden item out, and
+ * no public answer marks one (PRIVATE_DATA `moderation`). Never who hid it (#45-13).
  *
  * `action` is what sits beside the mark at the line's end: MY's 삭제 (owner decision 2026-10-22:
  * «'숨김' 줄 옆, 확인 후», `DeleteHiddenItem`). It stays outside the notice itself

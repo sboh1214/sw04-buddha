@@ -16,6 +16,9 @@ import {
   PAYMENT_STATUSES,
   PRICE_TICK_TRIGGERS,
   RELEASE_SETTING_STATUSES,
+  REPORT_REASONS,
+  REPORT_STATUSES,
+  REPORT_TARGET_TYPES,
   ROLES,
   TIME_IN_FORCES,
 } from '@buddha/shared';
@@ -35,3 +38,7 @@ export const counterpartyTypeEnum = pgEnum('counterparty_type', COUNTERPARTY_TYP
 export const priceTickTriggerEnum = pgEnum('price_tick_trigger', PRICE_TICK_TRIGGERS);
 export const releaseSettingStatusEnum = pgEnum('release_setting_status', RELEASE_SETTING_STATUSES);
 export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES);
+/** 신고 사유 (#45-10): a report's reason, and the reason every moderation action carries (#50). */
+export const reportReasonEnum = pgEnum('report_reason', REPORT_REASONS);
+export const reportTargetTypeEnum = pgEnum('report_target_type', REPORT_TARGET_TYPES);
+export const reportStatusEnum = pgEnum('report_status', REPORT_STATUSES);

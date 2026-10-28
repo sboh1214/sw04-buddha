@@ -14,9 +14,12 @@ import {
   relatedMarketPair,
   type ImageContentType,
   type MarketStatus,
+  type ModerationActionType,
   type PostDocument,
   type Outcome,
   type ReleaseSettingStatus,
+  type ReportReason,
+  type ReportStatus,
   type Role,
   type SettlementStep,
   type SettlementStepStatus,
@@ -38,6 +41,7 @@ import {
   marketWatches,
   markets,
   mediaObjects,
+  moderationActions,
   noticeImages,
   notices,
   orders,
@@ -47,8 +51,10 @@ import {
   postImages,
   postLikes,
   posts,
+  profileItemRemovals,
   profiles,
   releaseSettings,
+  reports,
   user,
 } from '../schema/index.js';
 import { storedReleaseSettingValue } from '../release-settings.js';
@@ -1008,4 +1014,131 @@ export async function createNotice(db: Db, input: CreateNoticeInput = {}) {
     }
     return notice!;
   });
+}
+
+export interface CreateModerationActionInput {
+  /** The member acted on. */
+  userId: string;
+  /** The operator. */
+  createdBy: string;
+  /** Default: `hide` with a post, `warning` without one. */
+  type?: ModerationActionType;
+  /** A hiding's post, or a warning's. */
+  postId?: string;
+  /** A hiding's comment, or a warning's. */
+  commentId?: string;
+  /** Default: `spam`. */
+  reason?: ReportReason;
+  /** The explanation the member reads. Default: none (a `other` needs one). */
+  note?: string | null;
+  /** Default: the database clock. */
+  createdAt?: Date;
+  /** A cancellation: when, by whom and why. */
+  cancelled?: { at: Date; by: string; reason: string };
+  /**
+   * What a profile action took away (#37-10): kept in `profile_item_removals` for the
+   * `nickname_reset`, `bio_clear` and `image_remove` types. Default: a nickname, a 소개 or no image
+   * — an `image_remove` needs its image id.
+   */
+  removed?: { nickname?: string; bio?: string; imageId?: string };
+}
+
+/**
+ * A moderation action (#50) as an operator's route leaves the record: the `moderation_actions` row,
+ * and for a profile action what it took away. Writes nothing else — not `hidden_at`, nor the
+ * profile — so a test sets the item's state itself (`createPost({ hiddenAt })`).
+ */
+export async function createModerationAction(db: Db, input: CreateModerationActionInput) {
+  const type = input.type ?? (input.postId || input.commentId ? 'hide' : 'warning');
+  return db.transaction(async (tx) => {
+    const [action] = await tx
+      .insert(moderationActions)
+      .values({
+        type,
+        userId: input.userId,
+        postId: input.postId ?? null,
+        commentId: input.commentId ?? null,
+        reason: input.reason ?? 'spam',
+        note: input.note ?? null,
+        createdBy: input.createdBy,
+        ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+        ...(input.cancelled === undefined
+          ? {}
+          : {
+              cancelledAt: input.cancelled.at,
+              cancelledBy: input.cancelled.by,
+              cancelReason: input.cancelled.reason,
+            }),
+      })
+      .returning();
+    const removed = input.removed;
+    if (type === 'nickname_reset' || type === 'bio_clear' || type === 'image_remove') {
+      await tx.insert(profileItemRemovals).values({
+        actionId: action!.id,
+        nickname: type === 'nickname_reset' ? (removed?.nickname ?? `old_${tag()}`) : null,
+        bio: type === 'bio_clear' ? (removed?.bio ?? `소개 ${tag()}`) : null,
+        imageId: type === 'image_remove' ? (removed?.imageId ?? null) : null,
+      });
+    }
+    return action!;
+  });
+}
+
+export interface CreateReportInput {
+  reporterId: string;
+  /** The member reported: the item's author, the profile's member. */
+  reportedUserId: string;
+  /** A post's report. */
+  postId?: string;
+  /** A comment's report. Neither: a profile's. */
+  commentId?: string;
+  /** Default: a random hash, so two reports never share a number. */
+  reporterPhoneHash?: string;
+  /** Default: `spam`. */
+  reason?: ReportReason;
+  /** Default: none (an `other` needs one). */
+  description?: string | null;
+  /** Default: the database clock. */
+  createdAt?: Date;
+  /** Default: `pending`. A processed one needs `resolvedBy`, and `actionId` or `dismissalReason`. */
+  status?: ReportStatus;
+  resolvedAt?: Date;
+  resolvedBy?: string;
+  actionId?: string;
+  dismissalReason?: string;
+}
+
+/**
+ * A report (#50) as `POST …/reports` leaves it, or, with the processing, as an operator left it.
+ * Checks nothing the API checks (the onboarding, the target's state, the daily limit); the
+ * database holds the shape, one pending report per account and target, and nobody reporting
+ * themselves.
+ */
+export async function createReport(db: Db, input: CreateReportInput) {
+  const targetType = input.postId ? 'post' : input.commentId ? 'comment' : 'profile';
+  const status = input.status ?? 'pending';
+  const [report] = await db
+    .insert(reports)
+    .values({
+      targetType,
+      postId: input.postId ?? null,
+      commentId: input.commentId ?? null,
+      reportedUserId: input.reportedUserId,
+      reporterId: input.reporterId,
+      reporterPhoneHash: input.reporterPhoneHash ?? randomPhoneHash(),
+      reason: input.reason ?? 'spam',
+      description: input.description ?? null,
+      status,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+      ...(status === 'pending'
+        ? {}
+        : {
+            resolvedAt: input.resolvedAt ?? new Date(),
+            resolvedBy: input.resolvedBy ?? null,
+            actionId: input.actionId ?? null,
+            dismissalReason: input.dismissalReason ?? null,
+          }),
+    })
+    .returning();
+  return report!;
 }

@@ -288,6 +288,10 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // MY '내 글' (#51, ADR-0080): the member's own posts and comments with the hidden ones and their
   // reasons (`MY_AUTHORED_KEY`, lib/authored.ts). A profile's lists are public (`['authored']`).
   'my-authored',
+  // 조치·신고 내역 (#50, ADR-0081): the member's own reports and the actions taken on them
+  // (`MY_MODERATION_KEY`, lib/moderation.ts) — theirs and operators' alone (PRIVATE_DATA `reports`,
+  // `moderation`). The operators' reads are under `admin`.
+  'my-moderation',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

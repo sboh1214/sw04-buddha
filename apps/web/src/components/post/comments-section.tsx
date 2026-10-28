@@ -28,6 +28,8 @@ import {
   useRef,
   useState,
 } from 'react';
+import { OperatorLink } from '@/components/moderation/operator-link';
+import { ReportButton } from '@/components/moderation/report-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
@@ -89,6 +91,7 @@ import {
   repliesOnScreenOf,
   resolveCommentDrafts,
 } from '@/lib/comments';
+import { adminCommentModerationPath, authorPublicIdOf } from '@/lib/moderation';
 import { loginPathBackTo } from '@/lib/next-path';
 import { isOwnPost, postKey, postPath, postReadErrorMessage } from '@/lib/posts';
 import { refreshFailed } from '@/lib/query-client';
@@ -972,11 +975,19 @@ function CommentItem({
   return (
     <Stack gap="2">
       {comment.state !== 'published' ? (
-        <Box as="article" py="1" data-testid={`comment-${comment.id}`} data-state={comment.state}>
+        <HStack
+          as="article"
+          py="1"
+          gap="2"
+          flexWrap="wrap"
+          data-testid={`comment-${comment.id}`}
+          data-state={comment.state}
+        >
           <Text textStyle="bodySm" color="fg.muted" data-testid="comment-placeholder">
             {commentPlaceholderMessage(comment.state)}
           </Text>
-        </Box>
+          <CommentOperatorLink commentId={comment.id} />
+        </HStack>
       ) : (
         <PublishedCommentItem
           context={context}
@@ -991,6 +1002,20 @@ function CommentItem({
   );
 }
 
+/**
+ * '운영', for operators only (owner decision 2026-10-21, `OperatorLink`): the comment's moderation
+ * page, from each 댓글 and 대댓글 — a placeholder's too, which the page reads whole.
+ */
+function CommentOperatorLink({ commentId }: { commentId: string }) {
+  return (
+    <OperatorLink
+      href={adminCommentModerationPath(commentId)}
+      label={copy.operatorModerationCommentLabel}
+      testId="comment-operator-link"
+    />
+  );
+}
+
 /** Whether a thread holds a comment that takes a like: one published, the 댓글 or a 대댓글. */
 function hasPublishedComment(thread: CommentThread): boolean {
   return [thread.comment, ...thread.replies].some((comment) => comment.state === 'published');
@@ -1001,13 +1026,15 @@ function hasPublishedComment(thread: CommentThread): boolean {
  * links, and its actions — 좋아요 with its count for every reader (#49, ADR-0076: a visitor's press
  * goes to the login page and back; one's own comment takes one too, and so does a comment under a
  * hidden or deleted post — the rule is the comment's own, owner decision 2026-10-20), 답글 where
- * the thread takes one, and for its author 수정 (in place, or the step left first) and 삭제 (asked
- * first, with a session alone). A placeholder has none of them. The author is told by the public
- * id of `GET /me` (`isOwnPost`), never in the HTML; the server checks the author on every write.
- * When the edit closes — 취소, or saved — the focus goes back to 수정, as a reply's goes back to
- * 답글. An edit draft taken back after a step opens the edit with it, and so does an edit's text
- * held apart until a read brought this 대댓글 within the 300 a read of the pages keeps (`reopened`,
- * 오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1).
+ * the thread takes one, 신고 for every other reader (#50, ADR-0081 — `ReportButton`; a visitor's
+ * press goes to the login page and back), '운영' for an operator (owner decision 2026-10-21 —
+ * a placeholder has it too, nothing else), and for its author 수정 (in place, or the step left
+ * first) and 삭제 (asked first, with a session alone). A placeholder has none of the others. The
+ * author is told by the public id of `GET /me` (`isOwnPost`), never in the HTML; the server checks
+ * the author on every write. When the edit closes — 취소, or saved — the focus goes back to 수정, as
+ * a reply's goes back to 답글. An edit draft taken back after a step opens the edit with it, and so
+ * does an edit's text held apart until a read brought this 대댓글 within the 300 a read of the
+ * pages keeps (`reopened`, 오너 결정 2026-10-22 (2차) 답 2·(3차) 답 1).
  */
 function PublishedCommentItem({
   context,
@@ -1097,6 +1124,12 @@ function PublishedCommentItem({
                 {copy.commentReply}
               </Button>
             )}
+            <ReportButton
+              subject={{ type: 'comment', commentId: comment.id, postId }}
+              item={{ type: 'comment', body: comment.body }}
+              authorPublicId={authorPublicIdOf(comment.author)}
+            />
+            <CommentOperatorLink commentId={comment.id} />
             {own && viewer !== undefined && (
               <>
                 <Button

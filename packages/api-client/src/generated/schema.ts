@@ -265,6 +265,227 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/media/{mediaId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Any stored image, whatever shows it, for operators. Revalidated on every use (ETag) */
+        get: operations["adminGetImage"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every moderation action, newest first, with its reason, operator, time and cancellation — no operator on an action taken on the admin reading it (`aboutViewer`) */
+        get: operations["adminListModerationActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/actions/{actionId}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. A nickname reset’s cancellation restores no nickname but hands the hold of the nickname taken away to the member: other accounts stay held for the rest of the 30 days from the reset, and while that hold stands the member picks that nickname, exactly as it was taken away, with no change interval, even after a pick since the reset, once (taken back and given up again, it keeps the interval, as any other nickname does). One cancelled already is `cancelled`; one on the acting admin is `own` */
+        post: operations["adminCancelModerationAction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/comments/{commentId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A 댓글 or 대댓글 whatever its state, its earlier versions, its post, the reports on it, its actions and its author’s record of actions */
+        get: operations["adminGetCommentModeration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/comments/{commentId}/hide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hide a 댓글 or 대댓글 with a reason, as a post. Resolves the pending reports on it (조치함) */
+        post: operations["adminHideComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/posts/{postId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A post whatever its state (the deleted original too), its earlier versions, the reports on it with their reporters, its actions and its author’s record of actions. On a record about the admin reading it, no reporter, report description or operator (`aboutViewer`) */
+        get: operations["adminGetPostModeration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/posts/{postId}/hide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Hide a post with a reason: out of every list, its placeholder on its page, no new comment, no edit by its author. Resolves the pending reports on it (조치함). A deleted post is `deleted`, a hidden one `hidden`, the acting admin’s own `own` */
+        post: operations["adminHidePost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/profiles/{publicId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The same page as `GET /admin/moderation/users/{userId}`, found by the public id of the profile’s address — the way from a public profile’s operator link */
+        get: operations["adminGetProfileModeration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** A member’s public profile now (its image at its operator address), the reports on it and every action on the member, with what profile actions took away */
+        get: operations["adminGetUserModeration"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}/bio-clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Empty a member’s 소개 with a reason; it is kept for operators. None is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
+        post: operations["adminClearBio"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}/image-remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove a member’s profile image with a reason: served to nobody from then on and kept for operators. None is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
+        post: operations["adminRemoveProfileImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}/nickname-reset": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Give a member’s nickname back to an auto nickname with a reason; the nickname taken away is kept for operators and held from every account for 30 days (from the member too, until the reset is cancelled), and the member’s 30-day change interval is waived (they pick a new one at once). An auto nickname already is `nothing_to_remove`. Resolves the pending reports on the profile (조치함) */
+        post: operations["adminResetNickname"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}/warn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Warn a member with a reason: a record and the member’s notice only. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs` */
+        post: operations["adminWarnUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/notices": {
         parameters: {
             query?: never;
@@ -488,6 +709,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The report queue, grouped by target: `pending` (default) — targets with a pending report, the one waiting longest first — or `resolved` — targets whose reports were all processed, the latest first. Each with the target now, its member, the counts per reason and times */
+        get: operations["adminListReportGroups"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/reports/dismiss": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Dismiss (기각) the reports named, each pending, with a reason (recorded): nothing is done to anyone and the reporters read 기각. A report on the acting admin’s own item or profile is another admin’s (own); one processed already is `resolved` */
+        post: operations["adminDismissReports"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/sms/status": {
         parameters: {
             query?: never;
@@ -652,6 +907,23 @@ export type paths = {
         get: operations["listCommentReplies"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/comments/{commentId}/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a 댓글 or a 대댓글. One reason (기타 needs a description). Refused: one’s own (own), the same person’s report on it still pending (duplicate), a deleted placeholder or a hidden item (deleted, hidden), and more than 20 in 24 hours per person (REPORT_LIMITED, none for an operator). Nothing is hidden by a report; an operator decides. Answers the report as the reporter’s list shows it */
+        post: operations["reportComment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -897,6 +1169,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/moderation/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one and its cancellation. Never the operator, a report or a reporter */
+        get: operations["listMyModerationActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/onboarding/interests": {
         parameters: {
             query?: never;
@@ -1111,6 +1400,23 @@ export type paths = {
         get?: never;
         /** Change the real name */
         put: operations["updateMyRealName"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account’s own reports, newest first: what each was about as the public sees it now (a placeholder by its id alone), the reason and description sent, and the result — pending, actioned (조치함) or dismissed (기각) — with when. Never the action taken nor who took it */
+        get: operations["listMyReports"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -1412,6 +1718,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/posts/{postId}/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a 근거 글. One reason (기타 needs a description). Refused: one’s own (own), the same person’s report on it still pending (duplicate), a deleted placeholder or a hidden item (deleted, hidden), and more than 20 in 24 hours per person (REPORT_LIMITED, none for an operator). Nothing is hidden by a report; an operator decides. Answers the report as the reporter’s list shows it */
+        post: operations["reportPost"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/profiles/{publicId}": {
         parameters: {
             query?: never;
@@ -1463,6 +1786,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/profiles/{publicId}/reports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Report a member’s public profile (its nickname, image and 소개). An unknown public id is NOT_FOUND, as the profile. One reason (기타 needs a description). Refused: one’s own (own), the same person’s report on it still pending (duplicate), and more than 20 in 24 hours per person (REPORT_LIMITED, none for an operator). Nothing is hidden by a report; an operator decides. Answers the report as the reporter’s list shows it */
+        post: operations["reportProfile"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 };
 export type webhooks = Record<string, never>;
 export type components = {
@@ -1483,6 +1823,42 @@ export type components = {
         AdminBalanceAdjustResult: {
             ledgerEntry: components["schemas"]["LedgerEntry"];
             user: components["schemas"]["AdminUser"];
+        };
+        AdminCommentModeration: {
+            actions: components["schemas"]["AdminModerationAction"][];
+            author: components["schemas"]["ModerationUser"];
+            authorActions: components["schemas"]["AdminModerationAction"][];
+            body: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deletedAt: string | null;
+            /** Format: date-time */
+            editedAt: string | null;
+            /** Format: date-time */
+            hiddenAt: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            parentId: string | null;
+            post: {
+                /** Format: uuid */
+                id: string;
+                state: components["schemas"]["ModerationItemState"];
+                title: string | null;
+            };
+            reporterCount: number;
+            reports: components["schemas"]["AdminReport"][];
+            revisions: components["schemas"]["AdminCommentRevision"][];
+            state: components["schemas"]["ModerationItemState"];
+        };
+        AdminCommentRevision: {
+            body: string;
+            id: number;
+            /** Format: date-time */
+            replacedAt: string;
+            /** Format: date-time */
+            writtenAt: string;
         };
         AdminGrantBody: {
             expectedAccountId: string;
@@ -1533,6 +1909,27 @@ export type components = {
             /** Format: date-time */
             voidedAt: string | null;
             volumeCoin: components["schemas"]["CoinAmount"];
+        };
+        AdminModerationAction: {
+            /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
+            aboutViewer: boolean;
+            /** Format: date-time */
+            cancelledAt: string | null;
+            cancelledBy: components["schemas"]["AdminAccountActor"] | null;
+            cancelReason: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["AdminAccountActor"] | null;
+            /** Format: date-time */
+            endsAt: string | null;
+            /** Format: uuid */
+            id: string;
+            reason: components["schemas"]["HiddenReason"];
+            removed: components["schemas"]["RemovedProfileItem"] | null;
+            reportCount: number;
+            subject: components["schemas"]["ModerationTarget"] | null;
+            type: components["schemas"]["ModerationActionType"];
+            user: components["schemas"]["ModerationUser"];
         };
         AdminNotice: {
             body: components["schemas"]["PostDocument"];
@@ -1614,6 +2011,54 @@ export type components = {
             status: "pending" | "succeeded" | "failed" | "cancelled" | "refunding" | "refunded";
             userId: string;
         };
+        AdminPostComment: {
+            author: components["schemas"]["ModerationUser"];
+            /** Format: date-time */
+            createdAt: string;
+            excerpt: string;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            parentId: string | null;
+            state: components["schemas"]["ModerationItemState"];
+        };
+        AdminPostModeration: {
+            actions: components["schemas"]["AdminModerationAction"][];
+            author: components["schemas"]["ModerationUser"];
+            authorActions: components["schemas"]["AdminModerationAction"][];
+            body: components["schemas"]["PostDocument"];
+            comments: components["schemas"]["AdminPostComment"][];
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            deletedAt: string | null;
+            /** Format: date-time */
+            editedAt: string | null;
+            /** Format: date-time */
+            hiddenAt: string | null;
+            /** Format: uuid */
+            id: string;
+            market: {
+                /** Format: uuid */
+                id: string;
+                slug: string;
+                title: string;
+            };
+            reporterCount: number;
+            reports: components["schemas"]["AdminReport"][];
+            revisions: components["schemas"]["AdminPostRevision"][];
+            state: components["schemas"]["ModerationItemState"];
+            title: string | null;
+        };
+        AdminPostRevision: {
+            body: components["schemas"]["PostDocument"];
+            id: number;
+            /** Format: date-time */
+            replacedAt: string;
+            title: string | null;
+            /** Format: date-time */
+            writtenAt: string;
+        };
         AdminRelatedMarket: {
             category: {
                 nameKo: string;
@@ -1642,6 +2087,42 @@ export type components = {
             tradeCount: number;
             traderCount: number;
             volumeCoin: components["schemas"]["CoinAmount"];
+        };
+        AdminReport: {
+            /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
+            aboutViewer: boolean;
+            /** Format: uuid */
+            actionId: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            description: string | null;
+            dismissalReason: string | null;
+            /** Format: uuid */
+            id: string;
+            reason: components["schemas"]["ReportReason"];
+            reporter: components["schemas"]["ModerationUser"] | null;
+            /** Format: date-time */
+            resolvedAt: string | null;
+            resolvedBy: components["schemas"]["AdminAccountActor"] | null;
+            status: components["schemas"]["ReportStatus"];
+            target: components["schemas"]["ModerationTarget"];
+        };
+        AdminReportGroup: {
+            excerpt: string;
+            /** Format: date-time */
+            firstPendingAt: string | null;
+            /** Format: date-time */
+            lastResolvedAt: string | null;
+            /** Format: date-time */
+            latestReportAt: string;
+            pendingCount: number;
+            reasons: components["schemas"]["ReportReasonCount"][];
+            reportCount: number;
+            reporterCount: number;
+            state: components["schemas"]["ModerationItemState"];
+            target: components["schemas"]["ModerationTarget"];
+            title: string | null;
+            user: components["schemas"]["ModerationUser"];
         };
         AdminRevokeBody: {
             expectedAccountId: string;
@@ -1695,6 +2176,14 @@ export type components = {
             /** @enum {string} */
             role: "user" | "admin";
         };
+        AdminUserModeration: {
+            actions: components["schemas"]["AdminModerationAction"][];
+            bio: string | null;
+            imageUrl: string | null;
+            reporterCount: number;
+            reports: components["schemas"]["AdminReport"][];
+            user: components["schemas"]["ModerationUser"];
+        };
         AdminUserQuery: {
             cursor?: string;
             /** @default 20 */
@@ -1734,6 +2223,10 @@ export type components = {
         BalanceAdjustBody: {
             amountCoin: components["schemas"]["CoinAmount"];
             memo: string;
+        };
+        CancelModerationBody: {
+            expectedAccountId: string;
+            reason: string;
         };
         Category: {
             id: number;
@@ -1878,6 +2371,12 @@ export type components = {
             /** @description Optional, one line, at most 100 characters; blank is none */
             title?: string | null;
         };
+        CreateReportBody: {
+            /** @description Plain text, at most 500 characters after trimming; required with the reason other, optional otherwise */
+            description?: string | null;
+            expectedAccountId: string;
+            reason: components["schemas"]["ReportReason"];
+        };
         CursorQuery: {
             cursor?: string;
             /** @default 20 */
@@ -1906,8 +2405,16 @@ export type components = {
         DeleteProfileImageBody: {
             expectedAccountId: string;
         };
+        DismissedReports: {
+            reports: components["schemas"]["AdminReport"][];
+        };
+        DismissReportsBody: {
+            expectedAccountId: string;
+            reason: string;
+            reportIds: string[];
+        };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -2074,6 +2581,65 @@ export type components = {
             startGrant: components["schemas"]["StartGrant"] | null;
             verification: components["schemas"]["PhoneVerification"] | null;
         };
+        ModerationActionBody: {
+            expectedAccountId: string;
+            /** @description The explanation the member reads, plain text, at most 500 characters after trimming; required with the reason other */
+            note?: string | null;
+            reason: components["schemas"]["ReportReason"];
+        };
+        /** @enum {string} */
+        ModerationActionType: "hide" | "warning" | "nickname_reset" | "bio_clear" | "image_remove";
+        ModerationCommentTarget: {
+            /** Format: uuid */
+            commentId: string;
+            /** Format: uuid */
+            postId: string;
+            /** @enum {string} */
+            type: "comment";
+        };
+        /** @enum {string} */
+        ModerationItemState: "published" | "hidden" | "deleted" | "gone";
+        ModerationPostTarget: {
+            /** Format: uuid */
+            postId: string;
+            /** @enum {string} */
+            type: "post";
+        };
+        ModerationProfileTarget: {
+            /** @enum {string} */
+            type: "profile";
+            userId: string;
+        };
+        ModerationTarget: components["schemas"]["ModerationPostTarget"] | components["schemas"]["ModerationCommentTarget"] | components["schemas"]["ModerationProfileTarget"];
+        ModerationUser: {
+            id: string;
+            nickname: string;
+            /** @description An account’s public id: 10 lower-case letters and digits, never the account id */
+            publicId: string;
+            role: components["schemas"]["UserRole"];
+        };
+        MyActionCommentSubject: {
+            excerpt: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            postId: string;
+            /** @enum {string} */
+            type: "comment";
+        };
+        MyActionPostSubject: {
+            excerpt: string | null;
+            /** Format: uuid */
+            id: string;
+            title: string | null;
+            /** @enum {string} */
+            type: "post";
+        };
+        MyActionProfileSubject: {
+            /** @enum {string} */
+            type: "profile";
+        };
+        MyActionSubject: components["schemas"]["MyActionPostSubject"] | components["schemas"]["MyActionCommentSubject"] | components["schemas"]["MyActionProfileSubject"];
         MyComment: {
             author: components["schemas"]["PostAuthor"];
             body: string;
@@ -2089,6 +2655,19 @@ export type components = {
             /** Format: uuid */
             parentId: string | null;
             post: components["schemas"]["CommentedPost"];
+        };
+        MyModerationAction: {
+            /** Format: date-time */
+            cancelledAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            endsAt: string | null;
+            /** Format: uuid */
+            id: string;
+            reason: components["schemas"]["HiddenReason"];
+            subject: components["schemas"]["MyActionSubject"] | null;
+            type: components["schemas"]["ModerationActionType"];
         };
         MyPost: {
             author: components["schemas"]["PostAuthor"];
@@ -2109,6 +2688,18 @@ export type components = {
         MyPostLikes: {
             likedCommentIds: string[];
             postLiked: boolean;
+        };
+        MyReport: {
+            /** Format: date-time */
+            createdAt: string;
+            description: string | null;
+            /** Format: uuid */
+            id: string;
+            reason: components["schemas"]["ReportReason"];
+            /** Format: date-time */
+            resolvedAt: string | null;
+            status: components["schemas"]["ReportStatus"];
+            target: components["schemas"]["ReportTarget"];
         };
         NextPath: string;
         Nickname: string;
@@ -2561,8 +3152,65 @@ export type components = {
         };
         /** @enum {string} */
         ReleaseSettingStatus: "undecided" | "proposal" | "test" | "approved";
+        RemovedProfileItem: {
+            /** @enum {string} */
+            item: "nickname";
+            nickname: string;
+        } | {
+            bio: string;
+            /** @enum {string} */
+            item: "bio";
+        } | {
+            imageUrl: string;
+            /** @enum {string} */
+            item: "image";
+        };
+        ReportedComment: components["schemas"]["ReportedPublishedComment"] | components["schemas"]["ReportedDeletedComment"] | components["schemas"]["ReportedHiddenComment"];
+        ReportedCommentTarget: {
+            comment: components["schemas"]["ReportedComment"];
+            /** Format: uuid */
+            postId: string;
+            /** @enum {string} */
+            type: "comment";
+        };
+        ReportedDeletedComment: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "deleted";
+        };
+        ReportedHiddenComment: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "hidden";
+        };
+        ReportedPostTarget: {
+            post: components["schemas"]["CommentedPost"];
+            /** @enum {string} */
+            type: "post";
+        };
+        ReportedProfileTarget: {
+            member: components["schemas"]["PostAuthor"];
+            /** @enum {string} */
+            type: "profile";
+        };
+        ReportedPublishedComment: {
+            excerpt: string;
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            state: "published";
+        };
         /** @enum {string} */
         ReportReason: "spam" | "harassment" | "personal_info" | "impersonation" | "collusion_manipulation" | "off_topic" | "rights_infringement" | "other";
+        ReportReasonCount: {
+            count: number;
+            reason: components["schemas"]["ReportReason"];
+        };
+        /** @enum {string} */
+        ReportStatus: "pending" | "actioned" | "dismissed";
+        ReportTarget: components["schemas"]["ReportedPostTarget"] | components["schemas"]["ReportedCommentTarget"] | components["schemas"]["ReportedProfileTarget"];
         RequestPhoneVerificationCodeBody: {
             expectedAccountId: string;
             phone: string;
@@ -2689,6 +3337,28 @@ export type components = {
         };
         /** @enum {string} */
         UserRole: "user" | "admin";
+        WarningBody: {
+            expectedAccountId: string;
+            /** @description The explanation the member reads, plain text, at most 500 characters after trimming; required with the reason other */
+            note?: string | null;
+            reason: components["schemas"]["ReportReason"];
+            /** @default null */
+            subject: components["schemas"]["WarningSubject"] | null;
+        };
+        WarningSubject: {
+            /** Format: uuid */
+            postId: string;
+            /** @enum {string} */
+            type: "post";
+        } | {
+            /** Format: uuid */
+            commentId: string;
+            /** @enum {string} */
+            type: "comment";
+        } | {
+            /** @enum {string} */
+            type: "profile";
+        };
         WatchState: {
             watched: boolean;
         };
@@ -4355,6 +5025,1053 @@ export interface operations {
             };
         };
     };
+    adminGetImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                mediaId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The image */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": string;
+                    "image/jpeg": string;
+                    "image/png": string;
+                    "image/webp": string;
+                };
+            };
+            /** @description Not modified (If-None-Match) */
+            304: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "image/gif": components["schemas"]["ErrorEnvelope"];
+                    "image/jpeg": components["schemas"]["ErrorEnvelope"];
+                    "image/png": components["schemas"]["ErrorEnvelope"];
+                    "image/webp": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListModerationActions: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminCancelModerationAction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelModerationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetCommentModeration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCommentModeration"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminHideComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModerationActionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetPostModeration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminPostModeration"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminHidePost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModerationActionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetProfileModeration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminUserModeration"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminGetUserModeration: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminUserModeration"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminClearBio: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModerationActionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRemoveProfileImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModerationActionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminResetNickname: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModerationActionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminWarnUser: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WarningBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListNotices: {
         parameters: {
             query: {
@@ -5515,6 +7232,156 @@ export interface operations {
             };
         };
     };
+    adminListReportGroups: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                status?: "pending" | "resolved";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminReportGroup"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminDismissReports: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DismissReportsBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["DismissedReports"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminSmsStatus: {
         parameters: {
             query?: never;
@@ -6114,6 +7981,87 @@ export interface operations {
                 };
             };
             /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reportComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                commentId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReportBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyReport"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | REPORT_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED | REPORT_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;
@@ -7026,6 +8974,59 @@ export interface operations {
             };
         };
     };
+    listMyModerationActions: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyModerationAction"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     answerMyInterestsStep: {
         parameters: {
             query?: never;
@@ -7878,6 +9879,59 @@ export interface operations {
             };
             /** @description VERIFICATION_REQUIRED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    listMyReports: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyReport"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -9271,6 +11325,87 @@ export interface operations {
             };
         };
     };
+    reportPost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                postId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReportBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyReport"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | REPORT_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED | REPORT_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     getProfile: {
         parameters: {
             query?: never;
@@ -9412,6 +11547,87 @@ export interface operations {
                 };
             };
             /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    reportProfile: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                publicId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateReportBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyReport"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | REPORT_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED | REPORT_LIMITED */
             429: {
                 headers: {
                     [name: string]: unknown;

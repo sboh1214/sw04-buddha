@@ -33,7 +33,8 @@ import { createdAt, timestampTz } from './columns.js';
  *   that stores it — it never waits to be taken — so it is attached from its first moment (the
  *   CHECK below), and the worker never removes one: the member's replacement or deletion does, at
  *   once (ADR-0069 decision 4 #141), and an image an operator removes stays for operators only for
- *   the retention period (#37-10, #50's to do, #184's to remove), attached and shown by nothing.
+ *   the retention period (#37-10, #50's `profile_item_removals`, #184's to remove), attached and
+ *   shown by nothing.
  *
  * Rows outlive a withdrawal (`user` RESTRICT, like every record #140 anonymises around).
  */

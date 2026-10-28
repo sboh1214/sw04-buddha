@@ -11,8 +11,9 @@ export const IMAGE_BINARY = { schema: { type: 'string', format: 'binary' } } as 
 /**
  * Who may keep a copy of an answered image: `public` for `GET /media/:mediaId` (what a post or a
  * pinned notice shows, the same for everyone), `private` for an admin's read of a notice's images
- * (`GET /admin/notices/:noticeId/images/:mediaId`, #138), which a shared cache must not hand on.
- * Both `no-cache`: kept, but asked again on every use.
+ * (`GET /admin/notices/:noticeId/images/:mediaId`, #138) and an operator's of any stored image
+ * (`GET /admin/media/:mediaId`, #50), which a shared cache must not hand on. Both `no-cache`:
+ * kept, but asked again on every use.
  */
 export type ImageCacheScope = 'public' | 'private';
 
@@ -26,8 +27,8 @@ export type ImageCacheScope = 'public' | 'private';
  * An answer with the image holds its bytes from the storage read until the answer has been handed
  * to the socket, or the client has gone — and in either case until the storage read has settled: a
  * share of the process's budget (`imageReads`, ADR-0073 decision 9-36), taken before the store is
- * read. Both routes take from the one budget, so neither can hold more of the API's memory than it
- * allows. A client that goes gives the read up (an aborted signal), and the share comes back once
+ * read. Every route that answers an image takes from the one budget, so none can hold more of the
+ * API's memory than it allows. A client that goes gives the read up (an aborted signal), and the share comes back once
  * that read has stopped. Past the budget the read is RATE_LIMITED with `Retry-After`. Within the
  * budget, the image's bytes are then asked of the API's memory (`memoryAdmission`, ADR-0073 owner
  * decision 2026-10-22 answer 3): the read waits up to `memoryWaits.readMs` for the process's RSS and

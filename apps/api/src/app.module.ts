@@ -17,6 +17,7 @@ import { MarketsModule } from './markets/markets.module.js';
 import { MediaModule } from './media/media.module.js';
 import { MeModule } from './me/me.module.js';
 import { NoticesModule } from './notices/notices.module.js';
+import { ModerationModule } from './moderation/moderation.module.js';
 import { OnboardingModule } from './onboarding/onboarding.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
@@ -89,8 +90,11 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // store. After MediaModule and MeModule, whose store, body parser and answer it uses.
     ProfileImageModule,
     // 작성자별 글·댓글 목록 (#51): the profile's 글·댓글 tabs and MY '내 글'. After the profile, whose
-    // member lookup it uses; last, so the document keeps the routes before it where they were.
+    // member lookup it uses.
     AuthoredModule,
+    // 신고와 운영 처리 (#50): the reports, the operators' queue and actions, and MY's records of
+    // both. Last, so the document keeps the routes before it where they were.
+    ModerationModule,
   ],
   controllers: [HealthController],
 })

@@ -8,7 +8,8 @@
  * exactly what the profile counts; anyone reads them, signed in or not, the same answer, naming the
  * member by the public face alone; an unknown or malformed public id is NOT_FOUND as the profile
  * is; a comment names its post by id alone when the post is a placeholder; MY lists the member's
- * own, the hidden ones marked (reason null until #50) and the deleted ones never, and only to the
+ * own, the hidden ones marked with the standing hiding's reason (#50: a report reason and the
+ * operator's explanation, a cancelled hiding's never) and the deleted ones never, and only to the
  * member, who deletes a hidden one through the delete routes (MY's 삭제, owner decision
  * 2026-10-22); N04 §7: a post or comment deleted leaves both lists and the counts, and a public item
  * cleared leaves the profile. Nothing of the member's trading rides on an item. Skips when TEST_*
@@ -27,6 +28,7 @@ import {
   createCommentLike,
   createMarket,
   createMedia,
+  createModerationAction,
   createNotice,
   createPost,
   createPostLike,
@@ -499,6 +501,30 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
       deletedAt: at(30),
     });
     await createComment(t.db, { postId: othersPost.id, authorId: other.id, createdAt: at(10) });
+    // The hidings (#50): the post's with an explanation; the comment's earlier one cancelled, and
+    // the standing one the reason MY reads (owner decision 2026-10-22, ADR-0080).
+    const { user: operator } = await createUser(t.db, { role: 'admin' });
+    await createModerationAction(t.db, {
+      userId: member.id,
+      createdBy: operator.id,
+      postId: hidden.id,
+      reason: 'off_topic',
+      note: '시장과 무관한 글',
+    });
+    await createModerationAction(t.db, {
+      userId: member.id,
+      createdBy: operator.id,
+      commentId: hiddenComment.id,
+      reason: 'spam',
+      note: '취소된 숨김',
+      cancelled: { at: at(29), by: operator.id, reason: '이의 인정' },
+    });
+    await createModerationAction(t.db, {
+      userId: member.id,
+      createdBy: operator.id,
+      commentId: hiddenComment.id,
+      reason: 'harassment',
+    });
 
     const posts = await myPosts();
     expect(ids(posts)).toEqual([hidden.id, visible.id]);
@@ -507,12 +533,16 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
       excerpt: '내 글의 본문',
       // `GET /media/:mediaId` serves no image of a hidden post: no thumbnail to point at.
       thumbnailUrl: null,
-      hidden: { reason: null },
+      hidden: { reason: { code: 'off_topic', note: '시장과 무관한 글' } },
     });
     expect(posts.data[1]?.hidden).toBeNull();
     const comments = await myComments();
     expect(ids(comments)).toEqual([underHidden.id, hiddenComment.id, comment.id]);
-    expect(comments.data.map((item) => item.hidden)).toEqual([null, { reason: null }, null]);
+    expect(comments.data.map((item) => item.hidden)).toEqual([
+      null,
+      { reason: { code: 'harassment', note: null } },
+      null,
+    ]);
     expect(comments.data[0]?.post).toEqual({ state: 'hidden', id: hidden.id });
     expect(comments.data[1]).toMatchObject({ body: '숨긴 내 댓글' });
 

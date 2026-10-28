@@ -6,6 +6,7 @@
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
  * `admin-markets-resolve.controller.test` for the market transitions,
  * `related-markets.controller.test` for the links between markets,
+ * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `release-settings.controller.test` for the release settings,
  * `admin-accounts.controller.test` for the admin grants and revokes and
  * `notices.controller.test` for the notices' writes, pins and unpins. What none of them can
@@ -55,6 +56,14 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'PUT /admin/notices/:noticeId': 'notice_update',
   'POST /admin/notices/:noticeId/pin': 'notice_pin',
   'POST /admin/notices/:noticeId/unpin': 'notice_unpin',
+  'POST /admin/moderation/posts/:postId/hide': 'moderation_post_hide',
+  'POST /admin/moderation/comments/:commentId/hide': 'moderation_comment_hide',
+  'POST /admin/moderation/users/:userId/warn': 'moderation_warning',
+  'POST /admin/moderation/users/:userId/nickname-reset': 'moderation_nickname_reset',
+  'POST /admin/moderation/users/:userId/bio-clear': 'moderation_bio_clear',
+  'POST /admin/moderation/users/:userId/image-remove': 'moderation_image_remove',
+  'POST /admin/moderation/actions/:actionId/cancel': 'moderation_cancel',
+  'POST /admin/reports/dismiss': 'report_dismiss',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

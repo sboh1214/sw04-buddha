@@ -76,9 +76,12 @@ export const ERROR_CODES = [
   'ONBOARDING_REQUIRED',
   /**
    * A nickname the rules refuse: the auto nickname prefix or a reserved word in a typed one, one
-   * another account has or gave up less than 30 days ago, a change within 30 days of the last, or
-   * another nickname once the onboarding step is done. Details carry the reason and, for the
-   * interval, when the next change is allowed, nicknameNotAllowedDetailsSchema.
+   * another account has or gave up less than 30 days ago (or one an operator reset took from the
+   * member, held from them too until the reset is cancelled — ADR-0081), a change within 30 days of
+   * the last (but for the nickname handed back, exactly as it was taken away, when an operator
+   * cancels a reset, while its hold stands, once — ADR-0081), or another nickname once the onboarding
+   * step is done. Details carry the reason and, for the interval, when the next change is allowed,
+   * nicknameNotAllowedDetailsSchema.
    */
   'NICKNAME_NOT_ALLOWED',
   /**
@@ -121,6 +124,25 @@ export const ERROR_CODES = [
    * version of the notice now, noticeEditConflictDetailsSchema.
    */
   'NOTICE_EDIT_CONFLICT',
+  /**
+   * Nothing was reported: the reporter wrote the target or owns the profile, the same person has
+   * a report on it that is still waiting, or the target shows only its placeholder, deleted or
+   * hidden. Details carry the reason, reportNotAllowedDetailsSchema.
+   */
+  'REPORT_NOT_ALLOWED',
+  /**
+   * Nothing was reported: the person filed the fixed number of reports of the last 24 hours,
+   * counted by the keyed hash of the verified number and not by account; an operator account has
+   * no limit. Details carry the limit and retryAfterSeconds, reportLimitedDetailsSchema.
+   */
+  'REPORT_LIMITED',
+  /**
+   * An operator action or a processing of reports the rules refuse: the target is the acting
+   * operator, the item is hidden already or deleted, there is nothing to take away, the action
+   * was cancelled already, a report was processed already, or a warning names a post or a comment
+   * of another member. Details carry the reason, moderationNotAllowedDetailsSchema.
+   */
+  'MODERATION_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -136,6 +136,46 @@ export type HiddenReason = components['schemas']['HiddenReason'];
 export type ReportReason = components['schemas']['ReportReason'];
 export type MyPost = components['schemas']['MyPost'];
 export type MyComment = components['schemas']['MyComment'];
+/**
+ * 신고와 운영 처리 (#50, ADR-0081). The member's side: a report's body (one reason, the description
+ * '기타' needs, the account on screen), one of their own reports as `GET /me/reports` and a report's
+ * answer give it (what it was about as the public sees it now, and 접수·조치함·기각), and one action
+ * an operator took on them (`GET /me/moderation/actions` — type, reason, subject, times; never the
+ * operator nor a reporter).
+ */
+export type CreateReportBody = components['schemas']['CreateReportBody'];
+export type MyReport = components['schemas']['MyReport'];
+export type ReportTarget = components['schemas']['ReportTarget'];
+export type ReportStatus = components['schemas']['ReportStatus'];
+export type MyModerationAction = components['schemas']['MyModerationAction'];
+export type MyActionSubject = components['schemas']['MyActionSubject'];
+export type ModerationActionType = components['schemas']['ModerationActionType'];
+/**
+ * The operators' side (every admin reads them, ADR-0056 1-2): a queue entry (the reports on one
+ * target together), one report with its reporter, one action with everything recorded, the three
+ * moderation pages (a post, a comment, a member), and the bodies of an action, a warning, a
+ * cancellation and a dismissal.
+ */
+export type AdminReportGroup = components['schemas']['AdminReportGroup'];
+export type AdminReport = components['schemas']['AdminReport'];
+export type AdminModerationAction = components['schemas']['AdminModerationAction'];
+export type AdminPostModeration = components['schemas']['AdminPostModeration'];
+/** A comment under a post on its operators' page: the way to the comment's own page. */
+export type AdminPostComment = components['schemas']['AdminPostComment'];
+export type AdminCommentModeration = components['schemas']['AdminCommentModeration'];
+export type AdminUserModeration = components['schemas']['AdminUserModeration'];
+export type AdminPostRevision = components['schemas']['AdminPostRevision'];
+export type AdminCommentRevision = components['schemas']['AdminCommentRevision'];
+export type ModerationTarget = components['schemas']['ModerationTarget'];
+export type ModerationUser = components['schemas']['ModerationUser'];
+export type ModerationItemState = components['schemas']['ModerationItemState'];
+export type RemovedProfileItem = components['schemas']['RemovedProfileItem'];
+export type ModerationActionBody = components['schemas']['ModerationActionBody'];
+export type WarningBody = components['schemas']['WarningBody'];
+export type WarningSubject = components['schemas']['WarningSubject'];
+export type CancelModerationBody = components['schemas']['CancelModerationBody'];
+export type DismissReportsBody = components['schemas']['DismissReportsBody'];
+export type DismissedReports = components['schemas']['DismissedReports'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

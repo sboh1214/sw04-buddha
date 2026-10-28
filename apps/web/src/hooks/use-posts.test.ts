@@ -5,6 +5,7 @@ import {
   type InfiniteData,
 } from '@tanstack/react-query';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { copy } from '@/copy';
 import { ApiError, type Me, type Post, type PostSummary, api } from '@/lib/api';
 import {
   type DraftStorage,
@@ -18,8 +19,11 @@ import {
   type CountedPostPage,
   communityPostsKey,
   marketPostsKey,
+  POST_EDIT_ON_SCREEN,
   postEditDeleted,
   postEditGoneAfter,
+  postEditHeldMessage,
+  postEditHidden,
   postGoneAfter,
   postKey,
 } from '@/lib/posts';
@@ -412,13 +416,18 @@ describe('the writes', () => {
     expect(postGoneAfter(false, result)).toBe(true);
     // The form held the refused title as the post went: the screen keeps it, read-only, until it
     // is closed — one holding nothing of the writer's is the 404 at once.
-    const onScreen = { gone: false, held: false };
-    expect(
-      postEditGoneAfter(onScreen, { gone: postGoneAfter(false, result), formHolding: true }),
-    ).toEqual({ gone: true, held: true });
-    expect(
-      postEditGoneAfter(onScreen, { gone: postGoneAfter(false, result), formHolding: false }),
-    ).toEqual({ gone: true, held: false });
+    const onScreen = POST_EDIT_ON_SCREEN;
+    const gone = postGoneAfter(false, result);
+    expect(postEditGoneAfter(onScreen, { gone, hidden: false, formHolding: true })).toEqual({
+      gone: true,
+      hidden: false,
+      held: true,
+    });
+    expect(postEditGoneAfter(onScreen, { gone, hidden: false, formHolding: false })).toEqual({
+      gone: true,
+      hidden: false,
+      held: false,
+    });
     // The refusal landed nothing: every draft the gate kept stays.
     expect(readPostDraft(storage, editKey, 'user-1', now)).toEqual(kept);
     expect(readPostDraft(storage, newKey, 'user-1', now)).toEqual(kept);
@@ -480,13 +489,62 @@ describe('the writes', () => {
     // holds something of the writer's, as for NOT_FOUND.
     const read = result.data ?? opened;
     expect(postEditDeleted(opened, read)).toBe(true);
-    const onScreen = { gone: false, held: false };
     expect(
-      postEditGoneAfter(onScreen, {
+      postEditGoneAfter(POST_EDIT_ON_SCREEN, {
         gone: postGoneAfter(false, result) || postEditDeleted(opened, read),
+        hidden: postEditHidden(opened, read),
         formHolding: true,
       }),
-    ).toEqual({ gone: true, held: true });
+    ).toEqual({ gone: true, hidden: false, held: true });
+    unsubscribe();
+  });
+
+  it('an edit of a post an operator hid is refused as POST_NOT_EDITABLE, and the read again answers its placeholder, which the edit screen hears as the post taken from under the form — its sentence the refusal’s (#50, 오너 결정 2026-10-25, ADR-0081 7-29)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(postKey(post), { ...published, commentCount: 1 });
+    const screen = new QueryObserver(queryClient, postQueryOptions(POST));
+    const unsubscribe = screen.subscribe(() => undefined);
+    const opened = screen.getCurrentResult().data;
+    if (opened?.state !== 'published') throw new Error('opened on the post');
+    const placeholder: Post = {
+      state: 'hidden',
+      id: post,
+      market: published.market,
+      commentCount: 1,
+    };
+    const get = vi.spyOn(api, 'GET').mockResolvedValue(answer(placeholder));
+    vi.spyOn(api, 'PUT').mockRejectedValueOnce(
+      new ApiError(409, { code: 'POST_NOT_EDITABLE', message: 'x', details: { reason: 'hidden' } }),
+    );
+    const edit = new MutationObserver(
+      queryClient,
+      updatePostOptions(queryClient, () => undefined),
+    );
+    await expect(
+      edit.mutate({ postId: POST, title: '고친 제목', body: {}, expectedAccountId: 'user-1' }),
+    ).rejects.toBeInstanceOf(ApiError);
+    // The refusal's read of the page has come back by the time the refusal is the screen's.
+    expect(get).toHaveBeenCalledTimes(1);
+    const result = screen.getCurrentResult();
+    expect(result.data).toEqual(placeholder);
+    // A 200: not gone, and not deleted — hidden, over the post the screen had published.
+    expect(postGoneAfter(false, result)).toBe(false);
+    const read = result.data ?? opened;
+    expect(postEditDeleted(opened, read)).toBe(false);
+    expect(postEditHidden(opened, read)).toBe(true);
+    const now = {
+      gone: postGoneAfter(false, result) || postEditDeleted(opened, read),
+      hidden: postEditHidden(opened, read),
+    };
+    const held = postEditGoneAfter(POST_EDIT_ON_SCREEN, { ...now, formHolding: true });
+    expect(held).toEqual({ gone: false, hidden: true, held: true });
+    expect(postEditHeldMessage(held)).toBe(copy.errPostNotEditable);
+    // A form holding nothing of the writer's (the same content sent, say) is not kept.
+    expect(postEditGoneAfter(POST_EDIT_ON_SCREEN, { ...now, formHolding: false })).toEqual({
+      gone: false,
+      hidden: true,
+      held: false,
+    });
     unsubscribe();
   });
 

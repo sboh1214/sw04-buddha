@@ -271,7 +271,7 @@ function PostList({ filters }: { filters: CommunityFilters }) {
       ) : (
         <>
           {rows.map((post) => (
-            <PostCard key={post.id} post={post} />
+            <PostCard key={post.id} post={post} report={{ backPath: communityPath(filters) }} />
           ))}
           {list.hasNextPage && (
             <>

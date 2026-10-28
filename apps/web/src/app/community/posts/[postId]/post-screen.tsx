@@ -18,6 +18,8 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useId, useRef, useState } from 'react';
+import { OperatorLink } from '@/components/moderation/operator-link';
+import { ReportButton } from '@/components/moderation/report-button';
 import { CommentsSection } from '@/components/post/comments-section';
 import { LikeButton, LikesUnreadableNotice } from '@/components/post/like-button';
 import { PostByline } from '@/components/post/post-author';
@@ -28,6 +30,7 @@ import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
 import { type Post, type PostMarket } from '@/lib/api';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { adminPostModerationPath, authorPublicIdOf, postReportItem } from '@/lib/moderation';
 import {
   COMMUNITY_PATH,
   communityPath,
@@ -49,12 +52,14 @@ import { useSession } from '@/lib/use-session';
  * as an `h2` only a screen reader sees, so the body's `h3`–`h5` always sit under one), the byline
  * (author, time, 수정됨), the body, its 좋아요 (#49, ADR-0076: the public count, and the reader's
  * own toggle once the browser knows who reads — with a line beside it when the reader's likes could
- * not be read, owner decision 2026-10-20, answer 10) and the market it belongs to — a link to its
+ * not be read, owner decision 2026-10-20, answer 10), 신고 for a reader who did not write it (#50,
+ * ADR-0081 — `ReportButton`, decided in the browser), '운영' for an operator (owner decision
+ * 2026-10-21, `OperatorLink` — on a placeholder too) and the market it belongs to — a link to its
  * detail, which opens in every status, and to the community list of that market. Its author also
  * gets 수정 and 삭제 (`isOwnPost`, by the public id of `GET /me`, so nothing of it is in the HTML). A
- * hidden or deleted post is its placeholder and its market only (#45-5) — no count and no 좋아요,
- * as it takes none. Under either come the post's comments (#48, ADR-0074): a placeholder keeps
- * them readable (N04 §6), and only a published post takes new ones.
+ * hidden or deleted post is its placeholder and its market only (#45-5) — no count, no 좋아요 and
+ * no 신고, as it takes none. Under either come the post's comments (#48, ADR-0074): a placeholder
+ * keeps them readable (N04 §6), and only a published post takes new ones.
  *
  * The onboarding gate lets an account that finished its onboarding once and faces a re-consent
  * alone open this page (`ONBOARDING_EXEMPT_PAGES`, 오너 결정 2026-10-20): deleting one's own post
@@ -75,6 +80,14 @@ import { useSession } from '@/lib/use-session';
  * (오너 결정 2026-10-21 답 1; leaving asks while they are shown). Then — at once when there is
  * none — the server page is drawn again (`router.refresh`): it answers what a reload does, the 404
  * (`notFound()`, page.tsx). A read that fails otherwise keeps the post on screen.
+ *
+ * A post deleted with comments under it (#48) or hidden by an operator (#50) has not left: a read
+ * answers its placeholder, drawn at once in the post's place as a reload draws it, its market and
+ * its comments under it; the boxes that take no write there any more hold their texts with why
+ * ('삭제된 글에는 …', '운영 정책에 따라 숨긴 글에는 …', `goneBoxReason`) until they are closed, an
+ * edit of one's own comment stays (ADR-0074 7-6), and no 404 waits. A hiding cancelled brings the
+ * post back on the next read; the texts held stay until closed. The edit screen hears the same
+ * three reads the same way, its form held with why until closed (edit-screen.tsx, ADR-0081 7-29).
  */
 export function PostScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
@@ -121,12 +134,15 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
           </Alert.Content>
         </Alert.Root>
       ) : post.state !== 'published' ? (
-        <Alert.Root status="info" data-testid={`post-${post.state}`}>
-          <Alert.Indicator />
-          <Alert.Content>
-            <Alert.Description>{postPlaceholderMessage(post.state)}</Alert.Description>
-          </Alert.Content>
-        </Alert.Root>
+        <Stack gap="2">
+          <Alert.Root status="info" data-testid={`post-${post.state}`}>
+            <Alert.Indicator />
+            <Alert.Content>
+              <Alert.Description>{postPlaceholderMessage(post.state)}</Alert.Description>
+            </Alert.Content>
+          </Alert.Root>
+          <PostOperatorLink postId={post.id} />
+        </Stack>
       ) : (
         <>
           <Stack gap="3">
@@ -157,6 +173,13 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
               count={post.likeCount}
             />
             <LikesUnreadableNotice postId={post.id} />
+            <ReportButton
+              subject={{ type: 'post', postId: post.id }}
+              // Named as its card names it (`postReportItem`).
+              item={postReportItem(post)}
+              authorPublicId={authorPublicIdOf(post.author)}
+            />
+            <PostOperatorLink postId={post.id} />
           </HStack>
         </>
       )}
@@ -164,6 +187,21 @@ export function PostScreen({ postId, fallback }: { postId: string; fallback: Pos
       <CommentsSection post={post} gone={gone} onNothingHeld={toNotFound} focusGone={focusGone} />
       <BackLink />
     </Stack>
+  );
+}
+
+/**
+ * '운영', for operators only (owner decision 2026-10-21, `OperatorLink`): the post's moderation
+ * page — beside its reactions, or under its placeholder, which the page acts on as well (a hiding
+ * cancelled, the deleted original read).
+ */
+function PostOperatorLink({ postId }: { postId: string }) {
+  return (
+    <OperatorLink
+      href={adminPostModerationPath(postId)}
+      label={copy.operatorModerationPostLabel}
+      testId="post-operator-link"
+    />
   );
 }
 

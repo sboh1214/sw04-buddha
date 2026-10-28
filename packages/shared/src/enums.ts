@@ -285,6 +285,44 @@ export const ADMIN_ACTION_TYPES = [
   'notice_pin',
   /** A notice was unpinned: the same target, written only when it was pinned. */
   'notice_unpin',
+  /**
+   * An operator hid a 근거 글 (#50, ADR-0081): target `moderation_action` / the action's id, payload
+   * `{actionId, postId, userId, reason, note, reportIds}` — the report reason picked, the
+   * explanation shown to the author and the pending reports the hiding resolved. Written in the
+   * transaction that sets `posts.hidden_at` and inserts the `moderation_actions` row.
+   */
+  'moderation_post_hide',
+  /** The same for a 댓글 or a 대댓글 (#50): payload `{actionId, commentId, userId, reason, note, reportIds}`. */
+  'moderation_comment_hide',
+  /**
+   * An operator warned a member (#50, #45-11: a record and the member's notice only): target
+   * `moderation_action` / its id, payload `{actionId, userId, subject, reason, note, reportIds}`.
+   */
+  'moderation_warning',
+  /**
+   * An operator gave a member's nickname back to an auto nickname (#50, #37-10): payload
+   * `{actionId, userId, reason, note, reportIds}`. The nickname taken away is kept for operators in
+   * `profile_item_removals`, never here.
+   */
+  'moderation_nickname_reset',
+  /** An operator emptied a member's 소개 (#50, #37-10): the same payload; the 소개 is kept apart. */
+  'moderation_bio_clear',
+  /**
+   * An operator removed a member's profile image (#50, #37-10): the same payload; the image stays,
+   * for operators only, in `profile_item_removals` and `media_objects`.
+   */
+  'moderation_image_remove',
+  /**
+   * An operator cancelled a moderation action, with a reason (#50): target `moderation_action` /
+   * its id, payload `{actionId, type, userId, reason}`. A hiding's cancellation shows the item
+   * again; the profile items are not restored (#37-10).
+   */
+  'moderation_cancel',
+  /**
+   * An operator dismissed reports (#50: 기각, nothing done to anyone): target null, payload
+   * `{reportIds, reason}` — the reports, each pending until then, and the operator's reason.
+   */
+  'report_dismiss',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -323,8 +361,8 @@ export const approvalStatusSchema = z.enum(APPROVAL_STATUSES).meta({ id: 'Approv
  * 침해 (명예훼손·저작권) set apart from 기타. The same list names why an operator hid a post or a
  * comment: the reason a hiding carries is one of these and the operator's explanation, if any
  * (owner decision 2026-10-22, ADR-0080; `hiddenReasonSchema`, authored.ts). #50 takes reports with
- * them and records a hiding's; nothing stores them yet, so no Postgres type is built from this
- * tuple until #50 adds one. Labels: copy.ts (`reportReason*`, the web's `reportReasonLabel`).
+ * them and records a hiding's in the Postgres enum `report_reason` built from this tuple (migration
+ * 0039). Labels: copy.ts (`reportReason*`, the web's `reportReasonLabel`).
  */
 export const REPORT_REASONS = [
   'spam',
@@ -338,6 +376,53 @@ export const REPORT_REASONS = [
 ] as const;
 export type ReportReason = (typeof REPORT_REASONS)[number];
 export const reportReasonSchema = z.enum(REPORT_REASONS).meta({ id: 'ReportReason' });
+
+/**
+ * What a report is about (#50, ADR-0081; Postgres enum `report_target_type`): a 근거 글, a comment
+ * (`comment` — a 댓글 and a 대댓글 alike, #45-10 «근거 글·댓글·대댓글») or a member's public profile
+ * (#37-10 «프로필도 신고 대상», its nickname, image and 소개 together). Nothing else takes a report:
+ * not a notice (#45-8 «공지는 … 신고를 받지 않는다»), not a market proposal (#77).
+ */
+export const REPORT_TARGET_TYPES = ['post', 'comment', 'profile'] as const;
+export type ReportTargetType = (typeof REPORT_TARGET_TYPES)[number];
+export const reportTargetTypeSchema = z.enum(REPORT_TARGET_TYPES).meta({ id: 'ReportTargetType' });
+
+/**
+ * reports.status (Postgres enum `report_status`): a report waits as `pending` until an operator
+ * processes it, once — `actioned` when an action was taken on what it reported, `dismissed` when
+ * the operator closed it with nothing done (기각). The reporter sees 접수 and then 조치함 or 기각
+ * (#45-13); the same person may report the same target again only once theirs is not pending
+ * (ADR-0069 decision 7).
+ */
+export const REPORT_STATUSES = ['pending', 'actioned', 'dismissed'] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+export const reportStatusSchema = z.enum(REPORT_STATUSES).meta({ id: 'ReportStatus' });
+
+/**
+ * moderation_actions.type (#50, ADR-0081): what an operator did to a member, chosen by the
+ * violation's weight (#45-11 «위반 정도에 맞춰 고른다», never step by step and never by a count of
+ * reports):
+ * - `hide`: a 근거 글 or a comment hidden (#45-5, reversible by cancelling it);
+ * - `warning`: a record and the member's notice only (#45-11);
+ * - `nickname_reset`, `bio_clear`, `image_remove`: a public profile item taken away (#37-10: the
+ *   nickname back to an auto nickname, the 소개 emptied, the image removed — kept for operators,
+ *   never restored).
+ * The writing restriction (#185) and the account restriction (#139) join this list. Stored as a
+ * varchar with a CHECK rather than a Postgres enum, so the migration that adds a type can use it in
+ * the same batch (drizzle runs a batch in one transaction, where a value an `ADD VALUE` added cannot
+ * be used — 55P04, migration 0014).
+ */
+export const MODERATION_ACTION_TYPES = [
+  'hide',
+  'warning',
+  'nickname_reset',
+  'bio_clear',
+  'image_remove',
+] as const;
+export type ModerationActionType = (typeof MODERATION_ACTION_TYPES)[number];
+export const moderationActionTypeSchema = z
+  .enum(MODERATION_ACTION_TYPES)
+  .meta({ id: 'ModerationActionType' });
 
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections

@@ -37,8 +37,8 @@ import { mediaObjects } from './media-objects.js';
  * - `deleted_at`: the author deleted it (#45-5). The row and its content stay, for operators only
  *   (and #184's retention); public answers show the placeholder while replies hang under it and
  *   nothing otherwise.
- * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal come with #50
- *   through `admin_actions`). Out of the list, no new replies, no edits by the author; deletable.
+ * - `hidden_at`: an operator hid it (#45-5; the action, its reason and its reversal are #50's
+ *   `moderation_actions`). Out of the list, no new replies, no edits by the author; deletable.
  *
  * The market and the author are RESTRICT: markets are never deleted, and a withdrawn author's
  * posts stay with the author anonymised (#37-17, #140).
@@ -93,9 +93,10 @@ export const posts = pgTable(
 
 /**
  * 수정 이력 (#45-4: «이전 내용은 운영자만 보는 이력»): every version an edit replaced, title and
- * body as they were, for operators only (no route reads it before #50's moderation screens).
- * Append-only: buddha_app loses UPDATE (migration 0033); DELETE stays for #184, which removes a
- * version after the retention period counted from `replaced_at` (ADR-0069 decision 7).
+ * body as they were, for operators only (#50's moderation page,
+ * `GET /admin/moderation/posts/:postId`). Append-only: buddha_app loses UPDATE (migration 0033);
+ * DELETE stays for #184, which removes a version after the retention period counted from
+ * `replaced_at` (ADR-0069 decision 7).
  *
  * - `written_at`: when that version began — the post's creation or the edit before.
  * - `replaced_at`: when an edit replaced it.

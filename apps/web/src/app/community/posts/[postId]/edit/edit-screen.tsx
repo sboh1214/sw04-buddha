@@ -12,14 +12,18 @@ import { copy } from '@/copy';
 import { postQueryOptions, useUpdatePost } from '@/hooks/use-posts';
 import { type Post } from '@/lib/api';
 import {
+  POST_EDIT_ON_SCREEN,
   type PostEditGone,
   isOwnPost,
+  postEditClosed,
   postEditDeleted,
   postEditGoneAfter,
+  postEditHeldMessage,
+  postEditHidden,
   postEditPath,
+  postEditUnavailableMessage,
   postGoneAfter,
   postPath,
-  postPlaceholderMessage,
   postWriteErrorMessage,
   refusedImageIds,
 } from '@/lib/posts';
@@ -55,13 +59,28 @@ import { useSession } from '@/lib/use-session';
  * keeps the form as above, drawn from the post as it last had it published (the query holds the
  * placeholder now). Closed — or at once — the screen is the placeholder, as a reload draws it, and
  * draws the server page again too.
+ *
+ * A post an operator hides while its edit screen is open (#50) is taken from under the form the
+ * same way (오너 결정 2026-10-25 «숨김에도 글자를 남김», ADR-0081 7-29): the save is refused as
+ * POST_NOT_EDITABLE, and the read after it — or a focus — answers the hidden post's placeholder
+ * (`postEditHidden`). The form stays as above, read-only under '운영 정책에 따라 숨긴 글은 고칠 수
+ * 없습니다.' — the refusal's own sentence — with 닫기, and its images as a deletion holds them (the
+ * same `held`, the editor's `readOnly`): no next file is sent, and an upload already on its way
+ * goes in after what is selected (ADR-0073 9-53); closed, or at once when it held nothing of
+ * the writer's, the screen is that sentence in the form's place, as a reload of a hidden post's
+ * edit screen draws it (#45-5). The query holds that answer, the server page's own, so nothing is
+ * drawn again. A hiding is undone when an operator cancels it: a held form stays until it is
+ * closed, and then — or once a read finds the post published again under the closed screen — the
+ * form is the post's afresh (`key`), as a reload draws it; a later hiding holds again what it
+ * holds then. A hidden post its author deletes (MY '내 글', ADR-0080) is deleted, as above.
  */
 export function EditScreen({ postId, fallback }: { postId: string; fallback: Post }) {
   const router = useRouter();
   const query = useQuery(postQueryOptions(postId));
   const post = query.data ?? fallback;
   // The post as the screen last had it published: what a held form is drawn from once a read has
-  // put the placeholder of the post deleted under it in its place (`postEditDeleted`).
+  // put the placeholder of the post deleted (`postEditDeleted`) or hidden (`postEditHidden`) under
+  // it in its place.
   const [published, setPublished] = useState(post.state === 'published' ? post : undefined);
   if (post.state === 'published' && post !== published) setPublished(post);
   // NOT_FOUND heard (`postGoneAfter`): the post left every view, and the server page is the 404.
@@ -70,13 +89,16 @@ export function EditScreen({ postId, fallback }: { postId: string; fallback: Pos
   if (nowNotFound !== notFound) setNotFound(nowNotFound);
   // Whether the form holds something of the writer's, as it last said (`onHoldingChange`).
   const [formHolding, setFormHolding] = useState(false);
-  const [state, setState] = useState<PostEditGone>({ gone: false, held: false });
+  const [state, setState] = useState<PostEditGone>(POST_EDIT_ON_SCREEN);
   const next = postEditGoneAfter(state, {
     gone: nowNotFound || postEditDeleted(published, post),
+    hidden: postEditHidden(published, post),
     formHolding,
   });
   if (next !== state) setState(next);
   const { gone, held } = state;
+  // Each 닫기 draws the form afresh should it come back — a hiding cancelled — as a reload does.
+  const [closings, setClosings] = useState(0);
   // Drawn again as NOT_FOUND comes after the placeholder too (its last comment deleted since): the
   // 404 in place of the placeholder.
   useEffect(() => {
@@ -97,21 +119,22 @@ export function EditScreen({ postId, fallback }: { postId: string; fallback: Pos
           {(writer) =>
             shown.state !== 'published' ? (
               <EmptyState
-                message={
-                  shown.state === 'hidden'
-                    ? copy.errPostNotEditable
-                    : postPlaceholderMessage(shown.state)
-                }
+                message={postEditUnavailableMessage(shown.state)}
                 data-testid="post-edit-unavailable"
               />
             ) : !isOwnPost(shown.author, writer.publicId) ? (
               <EmptyState message={copy.postEditNotYours} data-testid="post-edit-not-yours" />
             ) : (
               <EditForm
+                key={closings}
                 post={shown}
                 accountId={writer.accountId}
-                gone={gone}
-                onClose={() => setState({ gone: true, held: false })}
+                held={held}
+                heldMessage={postEditHeldMessage(state)}
+                onClose={() => {
+                  setState(postEditClosed(state));
+                  setClosings(closings + 1);
+                }}
                 onHoldingChange={setFormHolding}
               />
             )
@@ -125,17 +148,20 @@ export function EditScreen({ postId, fallback }: { postId: string; fallback: Pos
 function EditForm({
   post,
   accountId,
-  gone,
+  held,
+  heldMessage,
   onClose,
   onHoldingChange,
 }: {
   post: Extract<Post, { state: 'published' }>;
   accountId: string;
   /**
-   * The post left every view or stands as its placeholder (#48), and the form holds what the writer
-   * had in it (`PostEditGone`).
+   * The post left every view, stands as its placeholder (#48) or an operator hid it (#50), and the
+   * form holds what the writer had in it (`PostEditGone`).
    */
-  gone: boolean;
+  held: boolean;
+  /** Why, while held (`postEditHeldMessage`): a hiding's refusal (#50) or a deletion's. */
+  heldMessage: string;
   onClose: () => void;
   onHoldingChange: (holding: boolean) => void;
 }) {
@@ -165,7 +191,8 @@ function EditForm({
         saved={update.isSuccess}
         errorMessage={refusal}
         refusedImageIds={refusedImageIds(update.error)}
-        gone={gone}
+        gone={held}
+        goneMessage={heldMessage}
         onClose={onClose}
         onHoldingChange={onHoldingChange}
         onSubmit={({ title, body }) => {
