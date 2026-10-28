@@ -10,20 +10,27 @@ import { phoneHash } from './phone-hash.js';
  * number as one that received the start Coin, and SQL cannot compute the hash without the key —
  * so the CLI does it inside the api container, with the deployment's PHONE_HASH_KEY, and prints
  * the hash only, never the key (docs/OPERATIONS.md). The same CLI picks the confirmation code
- * the operator texts to the new number before changing it (`--code`, ADR-0071 7-29).
+ * the operator texts to the new number before changing it (`--code`, ADR-0071 7-29), and hashes
+ * the account's old number for the same change (`--psql-old`): the likes the account inherited
+ * from a withdrawn account on that number go with it to the new one (#49, owner decision
+ * 2026-10-21, ADR-0076).
  */
 
 export const PHONE_HASH_CLI_USAGE =
-  'usage: phone-hash-cli.js [--psql] — mobile numbers on stdin, one per line; ' +
+  'usage: phone-hash-cli.js [--psql | --psql-old] — mobile numbers on stdin, one per line; ' +
   'phone-hash-cli.js --code — one 6-digit confirmation code';
 
 /**
  * - `hash`: one line per number, its hash (64 lower-case hex) — the stable value of `phoneHash`;
  * - `psql`: for the first number only, the two psql lines docs/OPERATIONS.md pastes before its
  *   SQL — `\set new_phone` and `\set new_hash` from the one typed number, so the number changed
- *   and the number recorded cannot differ.
+ *   and the number recorded cannot differ;
+ * - `psql-old`: the same for the account's number before the change — `\set old_phone` and
+ *   `\set old_hash` from the one typed number, so the number the change's UPDATE checks the
+ *   account still holds and the hash the likes it inherited carry cannot differ (owner decision
+ *   2026-10-21, ADR-0076).
  */
-export type PhoneHashCliFormat = 'hash' | 'psql';
+export type PhoneHashCliFormat = 'hash' | 'psql' | 'psql-old';
 
 /**
  * What the CLI does: hash the numbers typed (`hash` or `psql`), or `code` — read nothing, use no
@@ -31,10 +38,14 @@ export type PhoneHashCliFormat = 'hash' | 'psql';
  */
 export type PhoneHashCliMode = PhoneHashCliFormat | 'code';
 
-/** The CLI's arguments: none, `--psql` or `--code`. Null for anything else (a usage error). */
+/**
+ * The CLI's arguments: none, `--psql`, `--psql-old` or `--code`. Null for anything else (a usage
+ * error).
+ */
 export function phoneHashCliMode(argv: readonly string[]): PhoneHashCliMode | null {
   if (argv.length === 0) return 'hash';
   if (argv.length === 1 && argv[0] === '--psql') return 'psql';
+  if (argv.length === 1 && argv[0] === '--psql-old') return 'psql-old';
   if (argv.length === 1 && argv[0] === '--code') return 'code';
   return null;
 }
@@ -73,9 +84,12 @@ export function phoneHashCliLine(
     return { ok: false, error: 'not a Korean mobile number (01X, digits with spaces or -)' };
   }
   const hash = phoneHash(key, parsed.data);
-  return format === 'hash'
-    ? { ok: true, lines: [hash] }
-    : { ok: true, lines: [`\\set new_phone '${parsed.data}'`, `\\set new_hash '${hash}'`] };
+  if (format === 'hash') return { ok: true, lines: [hash] };
+  const which = format === 'psql' ? 'new' : 'old';
+  return {
+    ok: true,
+    lines: [`\\set ${which}_phone '${parsed.data}'`, `\\set ${which}_hash '${hash}'`],
+  };
 }
 
 /**

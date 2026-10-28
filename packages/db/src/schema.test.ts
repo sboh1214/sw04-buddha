@@ -22,6 +22,7 @@ import {
   auditFailures,
   balances,
   categories,
+  commentLikes,
   consentRecords,
   fills,
   ledgerEntries,
@@ -46,6 +47,7 @@ import {
   postCommentRevisions,
   postComments,
   postImages,
+  postLikes,
   postRevisions,
   posts,
   profileInterestCategories,
@@ -64,9 +66,11 @@ import {
   createMarket,
   createMarketLink,
   createComment,
+  createCommentLike,
   createMedia,
   createPhoneVerification,
   createPost,
+  createPostLike,
   createPosition,
   createSearch,
   createSettlementStep,
@@ -1327,6 +1331,129 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       } finally {
         await closeDb(owner);
       }
+    });
+  });
+
+  describe('likes on posts and comments (migration 0035, #49)', () => {
+    /** A post with a 댓글 under it, by a new account, and two other accounts that like them. */
+    async function likeFixture() {
+      const { user: author } = await createUser(t.db);
+      const { user: a } = await createUser(t.db);
+      const { user: b } = await createUser(t.db);
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: author.id });
+      const comment = await createComment(t.db, { postId: post.id, authorId: author.id });
+      return { author, a, b, post, comment };
+    }
+
+    it('stores a like of a post and of a comment, the relations both ways', async () => {
+      const { author, a, post, comment } = await likeFixture();
+      const postLike = await createPostLike(t.db, { postId: post.id, userId: a.id });
+      const commentLike = await createCommentLike(t.db, { commentId: comment.id, userId: a.id });
+      expect(postLike).toMatchObject({ postId: post.id, userId: a.id });
+      expect(postLike.phoneHash).toMatch(/^[0-9a-f]{64}$/);
+      expect(commentLike).toMatchObject({ commentId: comment.id, userId: a.id });
+      // Liking one's own is allowed (#49): nothing here tells the author apart.
+      await createPostLike(t.db, { postId: post.id, userId: author.id });
+      const withLikes = await t.db.query.posts.findFirst({
+        where: eq(posts.id, post.id),
+        with: { likes: true },
+      });
+      expect(withLikes?.likes.map((row) => row.userId).sort()).toEqual([a.id, author.id].sort());
+      const commentWith = await t.db.query.postComments.findFirst({
+        where: eq(postComments.id, comment.id),
+        with: { likes: { with: { user: true } } },
+      });
+      expect(commentWith?.likes.map((row) => row.user.id)).toEqual([a.id]);
+      const likerWith = await t.db.query.user.findFirst({
+        where: eq(user.id, a.id),
+        with: { postLikes: true, commentLikes: true },
+      });
+      expect(likerWith?.postLikes.map((row) => row.postId)).toEqual([post.id]);
+      expect(likerWith?.commentLikes.map((row) => row.commentId)).toEqual([comment.id]);
+    });
+
+    it('holds one like per verified number and one per account, whoever writes (decision 7)', async () => {
+      const { a, b, post, comment } = await likeFixture();
+      const hash = randomPhoneHash();
+      await createPostLike(t.db, { postId: post.id, userId: a.id, phoneHash: hash });
+      await createCommentLike(t.db, { commentId: comment.id, userId: a.id, phoneHash: hash });
+      // The same number on another account — A withdrew and signed up again as B — likes nothing
+      // twice.
+      await expect(
+        createPostLike(t.db, { postId: post.id, userId: b.id, phoneHash: hash }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'post_likes_phone_hash_post_id_pk',
+      );
+      await expect(
+        createCommentLike(t.db, { commentId: comment.id, userId: b.id, phoneHash: hash }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' && sqlConstraint(e) === 'comment_likes_phone_hash_comment_id_pk',
+      );
+      // The same account on another number — changed outside the operator's procedure, which
+      // carries the account's likes to the new number (ADR-0076) — neither.
+      await expect(createPostLike(t.db, { postId: post.id, userId: a.id })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'post_likes_user_id_post_id_unique',
+      );
+      await expect(
+        createCommentLike(t.db, { commentId: comment.id, userId: a.id }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' && sqlConstraint(e) === 'comment_likes_user_id_comment_id_unique',
+      );
+      // The same number on another post or comment is another like.
+      const other = await createPost(t.db, { marketId: post.marketId, authorId: b.id });
+      await createPostLike(t.db, { postId: other.id, userId: a.id, phoneHash: hash });
+      expect(await t.db.select().from(postLikes)).toHaveLength(2);
+      expect(await t.db.select().from(commentLikes)).toHaveLength(1);
+    });
+
+    it('takes a keyed hash only, and keeps the target and the liker while a like stands', async () => {
+      const { a, post, comment } = await likeFixture();
+      for (const phoneHash of ['01012345678', 'A'.repeat(64), 'g'.repeat(64), 'a'.repeat(63)]) {
+        await expect(
+          createPostLike(t.db, { postId: post.id, userId: a.id, phoneHash }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'post_likes_phone_hash_check',
+        );
+        await expect(
+          createCommentLike(t.db, { commentId: comment.id, userId: a.id, phoneHash }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'comment_likes_phone_hash_check',
+        );
+      }
+      await createPostLike(t.db, { postId: post.id, userId: a.id });
+      await createCommentLike(t.db, { commentId: comment.id, userId: a.id });
+      // RESTRICT: a withdrawn account's likes stay and keep counting (#37-17), and nothing deletes
+      // a liked post or comment.
+      await expect(t.db.delete(user).where(eq(user.id, a.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      await expect(
+        t.db.delete(postComments).where(eq(postComments.id, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23503');
+    });
+
+    it('lets buddha_app insert and delete a like, never rewrite one', async () => {
+      const { a, b, post, comment } = await likeFixture();
+      await createPostLike(t.db, { postId: post.id, userId: a.id });
+      await createCommentLike(t.db, { commentId: comment.id, userId: a.id });
+      await expect(
+        t.db.update(postLikes).set({ userId: b.id }).where(eq(postLikes.postId, post.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      await expect(
+        t.db
+          .update(commentLikes)
+          .set({ userId: b.id })
+          .where(eq(commentLikes.commentId, comment.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      // Unliking deletes the row; a repeated like after it is a new one.
+      await t.db.delete(postLikes).where(eq(postLikes.postId, post.id));
+      await t.db.delete(commentLikes).where(eq(commentLikes.commentId, comment.id));
+      await createPostLike(t.db, { postId: post.id, userId: a.id });
+      expect((await t.db.select().from(postLikes)).map((row) => row.userId)).toEqual([a.id]);
+      expect(await t.db.select().from(commentLikes)).toEqual([]);
     });
   });
 
@@ -3517,7 +3644,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'market_settlement_steps', 'release_settings',
             'approval_requests', 'market_watches', 'market_watch_events', 'market_searches',
             'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
-            'profile_interest_categories')
+            'profile_interest_categories', 'post_likes', 'comment_likes')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -3562,6 +3689,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         'SELECT',
         'UPDATE',
       ]);
+      // Migration 0035 (#49): a like is inserted and an unlike deletes it, never rewritten.
+      expect(privs('post_likes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
+      expect(privs('comment_likes')).toEqual(['DELETE', 'INSERT', 'SELECT']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

@@ -44,6 +44,7 @@ const card = (n: number): PostSummary => ({
   createdAt: '2026-10-18T00:00:00.000Z',
   editedAt: null,
   commentCount: 0,
+  likeCount: 0,
 });
 
 /** `count` cards, newest first, numbered from `from` down. */

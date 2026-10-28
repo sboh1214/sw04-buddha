@@ -21,6 +21,7 @@ export * from './guards/notifications.js';
 export * from './guards/private-data.js';
 export * from './guards/realtime-events.js';
 export * from './jobs.js';
+export * from './like.js';
 export * from './lmsr.js';
 export * from './market.js';
 export * from './market-maker/ladder.js';

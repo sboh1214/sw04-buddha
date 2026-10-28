@@ -36,6 +36,7 @@ import {
   repliesOnScreenOf,
   resolveCommentDrafts,
 } from '@/lib/comments';
+import { withCommentLikeCount } from '@/lib/likes';
 import { communityPostsKey, marketPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
@@ -90,6 +91,7 @@ const published = (
   },
   createdAt: '2026-10-19T00:00:00.000Z',
   editedAt: null,
+  likeCount: 0,
 });
 
 const thread = (comment: PublishedComment): CommentThread => ({
@@ -2161,6 +2163,61 @@ describe('a new 댓글', () => {
         reached.unsubscribe();
       });
 
+      it('a later 댓글’s read that reaches it puts it in its place, placed no more, at the like count held — the pages that read takes at the counts held are still the read’s (#49, ADR-0076 7-27)', async () => {
+        const NEXT = LATER_ROOTS[0]!;
+        /** The pages held after NEXT is written, as the account on screen. */
+        const writeNext = async (queryClient: QueryClient) => {
+          vi.spyOn(api, 'POST').mockResolvedValue(answer(published(NEXT)));
+          await new MutationObserver(
+            onScreen(queryClient),
+            createCommentOptions(queryClient, POST, () => undefined),
+          ).mutate({ parentId: null, body: '댓글', expectedAccountId: 'user-1' });
+        };
+        const likesOf = (queryClient: QueryClient) =>
+          commentThreadsOf(queryClient.getQueryData(postCommentsKey(post))).map(({ comment }) =>
+            comment.state === 'published' ? comment.likeCount : null,
+          );
+        // MINE past the five pages: placed at the end; a like on it pressed meanwhile (the
+        // toggle's count, held), and five of the older 댓글 deleted in another tab since.
+        const all = [...olderIds(0, 8), MINE];
+        const reached = holdingFirst();
+        servingList(() => all);
+        await write(reached.queryClient);
+        expect(placedHeld(reached.queryClient)).toEqual([`-:${MINE}`]);
+        reached.queryClient.setQueryData<CommentPages>(postCommentsKey(post), (pages) =>
+          withCommentLikeCount(pages, MINE, 1),
+        );
+        all.splice(3, 5);
+        all.push(NEXT);
+        // NEXT's read reaches MINE's page and then NEXT's, within the five: both in their place,
+        // MINE at the count held and no longer placed — not taken off its page to the end again.
+        await writeNext(reached.queryClient);
+        expect(threadIds(reached.queryClient)).toEqual([...olderIds(0, 3), MINE, NEXT]);
+        expect(likesOf(reached.queryClient)).toEqual([0, 0, 0, 1, 0]);
+        expect(placedHeld(reached.queryClient)).toEqual([]);
+        await reached.comments.refetch();
+        expect(threadIds(reached.queryClient)).toEqual([...olderIds(0, 3), MINE, NEXT]);
+        reached.unsubscribe();
+
+        // NEXT's read failing after the last page held read again, which holds MINE now: that
+        // page in place of the held one, MINE in its place on it — placed no more — and NEXT
+        // placed at the end of it.
+        const failed = holdingFirst();
+        servingList(() => [...olderIds(0, 8), MINE]);
+        await write(failed.queryClient);
+        getComments(({ params }) => {
+          if (params.query.cursor !== undefined) throw new TypeError('Failed to fetch');
+          return {
+            items: [thread(published(olderIds(0, 1)[0]!)), thread(published(MINE))],
+            nextCursor: 'c2',
+          };
+        });
+        await writeNext(failed.queryClient);
+        expect(threadIds(failed.queryClient)).toEqual([...olderIds(0, 1), MINE, NEXT]);
+        expect(placedHeld(failed.queryClient)).toEqual([`-:${NEXT}`]);
+        failed.unsubscribe();
+      });
+
       it('comes back with what was written under it and its edit — as a placeholder once deleted with a 답글 under it — and not once nothing of it is left', async () => {
         const { queryClient, comments, unsubscribe } = holdingFirst();
         serving(8);
@@ -2265,10 +2322,18 @@ describe('a new 댓글', () => {
 });
 
 describe('a read of the pages on its way when an answer lands', () => {
+  /** A 댓글 another reader wrote meanwhile, which only a read of the pages brings. */
+  const NEWER = '9d8c7b6a-5f4e-4d3c-8b2a-190807060504';
+
+  /**
+   * Each write: what it sends, what its answer leaves in the pages held, and the threads the
+   * server holds after it — what a read of the pages that leaves after it answers, with NEWER.
+   */
   const writes: [
     string,
     (queryClient: QueryClient) => Promise<unknown>,
     (pages: CommentPages | undefined) => void,
+    CommentThread[],
   ][] = [
     [
       'a deletion',
@@ -2280,6 +2345,7 @@ describe('a read of the pages on its way when an answer lands', () => {
         ).mutate({ commentId: COMMENT, expectedAccountId: 'user-1' });
       },
       (pages) => expect(commentThreadsOf(pages)).toEqual([]),
+      [],
     ],
     [
       'an edit',
@@ -2294,6 +2360,7 @@ describe('a read of the pages on its way when an answer lands', () => {
         const [first] = commentThreadsOf(pages);
         expect(first?.comment.state === 'published' && first.comment.body).toBe('고친 댓글');
       },
+      [thread(published(commentId, null, '고친 댓글'))],
     ],
     [
       'a new 대댓글',
@@ -2306,11 +2373,12 @@ describe('a read of the pages on its way when an answer lands', () => {
       },
       (pages) =>
         expect(commentThreadsOf(pages)[0]?.replies.map((reply) => reply.id)).toEqual([MINE]),
+      [{ ...thread(published(commentId)), replies: [published(MINE, commentId, '답글')] }],
     ],
   ];
 
   for (const [name, writeOf, written] of writes) {
-    it(`is cancelled first, so it cannot undo ${name}; another post's read lands`, async () => {
+    it(`as a 더 보기 is cancelled first, so it cannot undo ${name}, and is not made again; another post's read lands`, async () => {
       const queryClient = seeded('c2');
       queryClient.setQueryData(postCommentsKey(OTHER_POST), held('o2'));
       const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
@@ -2320,7 +2388,7 @@ describe('a read of the pages on its way when an answer lands', () => {
       );
       const unsubscribe = [comments.subscribe(() => undefined), others.subscribe(() => undefined)];
       const read = onItsWay();
-      getComments(async () => {
+      const asked = getComments(async () => {
         await read.arrived;
         return { items: [thread(published(OLDER))], nextCursor: null };
       });
@@ -2330,11 +2398,61 @@ describe('a read of the pages on its way when an answer lands', () => {
       read.arrive();
       await Promise.all(more);
       written(queryClient.getQueryData(postCommentsKey(post)));
-      // The cancelled 더 보기 is there to press again.
+      // The cancelled 더 보기 is there to press again, and is not made again (ADR-0076 7-28).
       expect(comments.getCurrentResult().hasNextPage).toBe(true);
+      expect(asked).toHaveLength(2);
+      expect(queryClient.getQueryState(postCommentsKey(post))?.fetchStatus).toBe('idle');
       // Only this post's pages: the other post's read is its own, and lands.
       expect(threadIds(queryClient, OTHER_POST)).toEqual([commentId, OLDER]);
       for (const stop of unsubscribe) stop();
+    });
+  }
+
+  for (const [name, writeOf, written, afterWrite] of writes) {
+    it(`of every page held is cancelled first and made again after ${name}, which it then reads (ADR-0076 7-28)`, async () => {
+      const queryClient = seeded();
+      const comments = new InfiniteQueryObserver(queryClient, commentsInfiniteQueryOptions(POST));
+      const unsubscribe = comments.subscribe(() => undefined);
+      const before = onItsWay();
+      const after = onItsWay();
+      const signals: (AbortSignal | undefined)[] = [];
+      vi.spyOn(api, 'GET').mockImplementation(
+        async (_path: string, request: { signal?: AbortSignal }) => {
+          signals.push(request.signal);
+          // The first read left before the write committed; the one after it reads it, and NEWER.
+          if (signals.length === 1) {
+            await before.arrived;
+            return answer([thread(published(commentId))], { nextCursor: null });
+          }
+          await after.arrived;
+          return answer([...afterWrite, thread(published(NEWER))], { nextCursor: null });
+        },
+      );
+      // A read of every page held (a focus, 30 seconds, a like's failure), left before the answer.
+      const focus = comments.refetch();
+      await vi.waitFor(() => {
+        expect(signals).toHaveLength(1);
+      });
+      // Done once its answer is in: the write does not wait for the read made again.
+      await writeOf(queryClient);
+      written(queryClient.getQueryData(postCommentsKey(post)));
+      expect(signals).toHaveLength(2);
+      expect(signals[0]?.aborted).toBe(true);
+      expect(queryClient.getQueryState(postCommentsKey(post))?.fetchStatus).toBe('fetching');
+      // The read cancelled answers late: it does not land.
+      before.arrive();
+      await focus;
+      written(queryClient.getQueryData(postCommentsKey(post)));
+      // The read made again lands with the write, and with what only a read brings.
+      after.arrive();
+      await vi.waitFor(() => {
+        expect(queryClient.getQueryState(postCommentsKey(post))?.fetchStatus).toBe('idle');
+      });
+      expect(commentThreadsOf(queryClient.getQueryData(postCommentsKey(post)))).toEqual([
+        ...afterWrite,
+        thread(published(NEWER)),
+      ]);
+      unsubscribe();
     });
   }
 });

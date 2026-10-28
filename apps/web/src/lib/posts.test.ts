@@ -332,6 +332,7 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
       createdAt: '2026-10-19T00:00:00.000Z',
       editedAt: null,
       commentCount: 1,
+      likeCount: 0,
     };
     const deleted: Post = { state: 'deleted', id, market: postMarket, commentCount: 1 };
     const hidden: Post = { state: 'hidden', id, market: postMarket, commentCount: 1 };
@@ -533,6 +534,7 @@ describe('a post page’s metadata', () => {
       createdAt: '2026-10-19T00:00:00.000Z',
       editedAt: null,
       commentCount: 0,
+      likeCount: 0,
     };
     const answers: (Post | null)[] = [
       published,

@@ -3,12 +3,14 @@
  * psql: the member cannot change the number, an operator does it in the database by hand (ADR-0069
  * decision 1 #57-3), and the new number is recorded as one that received the start Coin as well —
  * beside the account's grant, `source` 'operator' — so that a later account verifying it gets
- * nothing (owner decision 2026-10-18, ADR-0071). Three psql variables: `user_id` (the account),
+ * nothing (owner decision 2026-10-18, ADR-0071). Five psql variables: `user_id` (the account),
  * `new_phone` (its digits) and `new_hash` (the keyed hash of those digits, from the API's
  * phone-hash CLI, apps/api/src/identity/phone-hash-cli.ts — SQL cannot compute it without the
- * key). The doc runs it only for a request that came from the account's current email and passed
- * sender authentication (the operator's own mail provider's verdict, the topmost
- * Authentication-Results line: SPF and DKIM both passing for the sender's domain, or DMARC
+ * key), and `old_phone` and `old_hash`, the same for the number the account holds now, read with
+ * OPERATOR_CURRENT_NUMBER_SQL and hashed by the same CLI (`--psql-old`, owner decision 2026-10-21,
+ * ADR-0076 — step 4 below). The doc runs it only for a request that came from the account's
+ * current email and passed sender authentication (the operator's own mail provider's verdict, the
+ * topmost Authentication-Results line: SPF and DKIM both passing for the sender's domain, or DMARC
  * passing), whose new number passed the pre-check before any SMS (OPERATOR_NUMBER_PRECHECK_SQL),
  * and whose member confirmed the number by sending back, from that email within 30 minutes, the
  * last code the operator texted to it — at most three codes per request (owner decisions
@@ -20,9 +22,15 @@
  * with psql's ON_ERROR_ROLLBACK off, reading the results first and then ending it with the COMMIT
  * or ROLLBACK the doc's result table gives for them:
  *
- * 1. The number itself, `UPDATE 1` (0: no such account). `phone_verifications.phone` stays UNIQUE
- *    and digits only (its constraints — another account's verified number is a 23505 here), and
- *    `verified_at` keeps the member's own confirmation.
+ * 1. The number itself, `UPDATE 1` — 0: no such account, or the account does not hold
+ *    `old_phone` (the operator typed another number into the CLI, or runs the lines again after
+ *    the change committed: the old number is read and hashed again, ADR-0076 7-24). `UPDATE 0`
+ *    only says so: the transaction goes on, and the statements after it run. Step 3's DO block
+ *    refuses it before any of them is kept (below), so neither the INSERT nor a hash of another
+ *    number moving likes in step 4 outlives it, a COMMIT typed after it included.
+ *    `phone_verifications.phone` stays UNIQUE and digits only (its constraints — another
+ *    account's verified number is a 23505 here), and `verified_at` keeps the member's own
+ *    confirmation.
  * 2. The record, `INSERT 0 1` — or `INSERT 0 0`: the account has no grant to record it beside
  *    (not onboarded yet, so its grant records the new number itself when #58 records it; verified
  *    on a number used already, so it got none, and gets one only if the grant is called again —
@@ -37,14 +45,45 @@
  *    number stays as it was. The index decides as the row is written: a grant recording the
  *    number or a cancellation freeing it meanwhile is waited for and counts as it ends; a grant
  *    paid meanwhile is still refused, and asking again goes through (ADR-0071 7-25).
- * 3. The same refusal for an account with no grant, which step 2 has no row to refuse with (owner
- *    decision 2026-10-19 3차, answer 4): the DO block raises when the account has a 본인확인
- *    record and a waiting grant of another account holds the new number. psql writes no variable
- *    into a dollar-quoted body, so the two SET LOCAL lines hand it `user_id` and `new_hash` for
- *    this transaction only. It reads what is committed: a cancellation or payment of that grant
- *    still in flight is not waited for, and the change is refused until asked again (ADR-0071
- *    7-26).
- * 4. What now holds the new number: one row or none (the account has no grant yet). `this_account`
+ * 3. The refusals the UPDATE and the INSERT cannot make, in one DO block. First an `UPDATE 0`
+ *    (ADR-0076 7-24): unless this transaction's UPDATE changed the account's 본인확인 row — it set
+ *    `updated_at` to `now()`, the time this transaction began, kept to the millisecond as the
+ *    column keeps it (`timestamptz(3)`), which another transaction's write would have to hit — the
+ *    block raises (`refused: the account does not hold old_phone`). The transaction is aborted and
+ *    a COMMIT answers ROLLBACK, as for every other refusal: nothing of the INSERT or of step 4 is
+ *    kept, whether or not the operator read the `UPDATE 0`. Then the refusal of step 2 for an
+ *    account with no grant, which step 2 has no row to refuse with (owner decision 2026-10-19 3차,
+ *    answer 4): it raises when the account has a 본인확인 record and a waiting grant of another account
+ *    holds the new number. psql writes no variable into a dollar-quoted body, so the SET LOCAL
+ *    lines hand it `user_id` and `new_hash` (and the likes' block `old_hash` too) for this
+ *    transaction only. It reads what is committed: a cancellation or payment of that grant still in
+ *    flight is not waited for, and the change is refused until asked again (ADR-0071 7-26).
+ * 4. The account's likes (#49, owner decisions 2026-10-20 and 2026-10-21, ADR-0076): «좋아요 한 번»
+ *    counts per verified number (ADR-0069 decision 7), so the likes that are the account's go over
+ *    to the new number's hash and no longer hold the old number — its own `post_likes` and
+ *    `comment_likes` rows (those whose account it is), and the likes it inherited from a withdrawn
+ *    account on the old number (rows under `old_hash` whose account has no 본인확인 record left, which
+ *    it saw as its own, ADR-0076 7-3): the old number's next holder likes freely. Where the new
+ *    number already liked a target one of those likes, one like stays. A withdrawn account's row
+ *    there (one that held the number) gives way to the one coming with the account: it is deleted
+ *    first (only on those targets: the new number's likes of any other target stay, and the account
+ *    sees them as its own, ADR-0076 7-18). A live account's row there stays — only a number changed
+ *    outside this procedure leaves one under another number than the one it holds (ADR-0076 7-19),
+ *    and a live account's like is its own (7-3), never deleted for another's — and the one coming
+ *    with the account gives way to it (ADR-0076 7-26, Codex review on PR #222). Then the rows are
+ *    deleted and inserted again under the new hash with their account, target and time (buddha_app
+ *    has no UPDATE on them, migration 0035) — the account's own first, then the inherited ones,
+ *    which give way where the account's own like of the same target is there already (only a number
+ *    changed outside this procedure leaves the two on different hashes, ADR-0076 7-23). Every one
+ *    of those inserts skips a row whose target the new number's hash still holds a like of — a live
+ *    account's — (`ON CONFLICT DO NOTHING`): that like leaves the old number and is not kept. A
+ *    second DO block with the SET LOCAL values; it answers `DO` and nothing to read. After step 1,
+ *    which holds the account's 본인확인 row: a like of the account's in flight has committed by then
+ *    (it holds that row FOR KEY SHARE, LikesService) and is moved too, and a later one waits for
+ *    the COMMIT and is made under the new hash; the old number cannot be verified by another
+ *    account before the COMMIT either (its UNIQUE entry is the uncommitted UPDATE's). Run again —
+ *    the old number read again is the new one — it moves nothing.
+ * 5. What now holds the new number: one row or none (the account has no grant yet). `this_account`
  *    t: recorded for this account. f: another account's paid grant holds it (`paid` t — after
  *    `UPDATE 1` a waiting one failed step 2 or 3), and `has_grant` says whether this account has a
  *    grant. It has none (`has_grant` f): it then gets no start Coin on this number while that row
@@ -53,19 +92,20 @@
  *    after COMMIT, not before, so the open transaction does not hold the account's
  *    phone_verifications row lock while the reply is written (ADR-0071 7-27).
  *
- * Every refusal here — `UPDATE 0` (the account gone meanwhile), another account's verified number
- * (23505 on the UPDATE), either refusal of a waiting grant's number — is told to the member with
- * the same one sentence and no reason, after the ROLLBACK, and the member asks again later (owner
- * decisions 2026-10-19 3차, answer 3, and 4차, answer 1). The pre-check has already turned away
- * before the confirmation SMS what it could see then, so these come only from what changed after
- * it (ADR-0071 7-31).
+ * Every refusal here — `UPDATE 0`, whatever follows it (the account gone meanwhile; not a mistyped
+ * id or old number, which the operator runs again with the right one), another account's verified
+ * number (23505 on the UPDATE), either refusal of a waiting grant's number — is told to the member
+ * with the same one sentence and no reason, after the ROLLBACK, and the member asks again later
+ * (owner decisions 2026-10-19 3차, answer 3, and 4차, answer 1). The pre-check has already turned
+ * away before the confirmation SMS what it could see then, so these come only from what changed
+ * after it (ADR-0071 7-31).
  *
- * Kept here with the procedure's two read-only statements below, each one text in two places
+ * Kept here with the procedure's three read-only statements below, each one text in two places
  * like the wipe statement (wipe.ts): phone-change.test.ts reads docs/OPERATIONS.md for them and
  * runs them against the test database the way psql does.
  */
 export const OPERATOR_PHONE_CHANGE_SQL = `UPDATE phone_verifications SET phone = :'new_phone', updated_at = now()
-  WHERE user_id = :'user_id';
+  WHERE user_id = :'user_id' AND phone = :'old_phone';
 INSERT INTO start_grant_numbers (phone_hash, grant_id, source)
   SELECT :'new_hash', g.id, 'operator' FROM start_grants g
   WHERE g.user_id = :'user_id' AND g.cancelled_at IS NULL
@@ -74,7 +114,13 @@ INSERT INTO start_grant_numbers (phone_hash, grant_id, source)
         AND (h.id = g.id OR h.granted_at IS NOT NULL));
 SET LOCAL phone_change.user_id = :'user_id';
 SET LOCAL phone_change.new_hash = :'new_hash';
+SET LOCAL phone_change.old_hash = :'old_hash';
 DO $$BEGIN
+  IF NOT EXISTS (SELECT 1 FROM phone_verifications
+      WHERE user_id = current_setting('phone_change.user_id')
+        AND updated_at = now()::timestamptz(3)) THEN
+    RAISE EXCEPTION 'refused: the account does not hold old_phone';
+  END IF;
   IF EXISTS (SELECT 1 FROM phone_verifications pv
       JOIN start_grant_numbers n ON n.phone_hash = current_setting('phone_change.new_hash')
         AND n.released_at IS NULL
@@ -83,6 +129,52 @@ DO $$BEGIN
         AND h.user_id <> pv.user_id AND h.granted_at IS NULL) THEN
     RAISE EXCEPTION 'refused: a waiting start grant of another account holds the new number';
   END IF;
+END$$;
+DO $$BEGIN
+  DELETE FROM post_likes o USING post_likes a
+    WHERE o.post_id = a.post_id AND o.phone_hash = current_setting('phone_change.new_hash')
+      AND a.phone_hash <> o.phone_hash
+      AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = o.user_id)
+      AND (a.user_id = current_setting('phone_change.user_id')
+        OR (a.phone_hash = current_setting('phone_change.old_hash')
+          AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = a.user_id)));
+  DELETE FROM comment_likes o USING comment_likes a
+    WHERE o.comment_id = a.comment_id AND o.phone_hash = current_setting('phone_change.new_hash')
+      AND a.phone_hash <> o.phone_hash
+      AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = o.user_id)
+      AND (a.user_id = current_setting('phone_change.user_id')
+        OR (a.phone_hash = current_setting('phone_change.old_hash')
+          AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = a.user_id)));
+  WITH moved AS (DELETE FROM post_likes
+      WHERE user_id = current_setting('phone_change.user_id')
+        AND phone_hash <> current_setting('phone_change.new_hash')
+      RETURNING post_id, user_id, created_at)
+    INSERT INTO post_likes (post_id, user_id, phone_hash, created_at)
+      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
+  WITH moved AS (DELETE FROM comment_likes
+      WHERE user_id = current_setting('phone_change.user_id')
+        AND phone_hash <> current_setting('phone_change.new_hash')
+      RETURNING comment_id, user_id, created_at)
+    INSERT INTO comment_likes (comment_id, user_id, phone_hash, created_at)
+      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
+  WITH moved AS (DELETE FROM post_likes l
+      WHERE l.phone_hash = current_setting('phone_change.old_hash')
+        AND l.phone_hash <> current_setting('phone_change.new_hash')
+        AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = l.user_id)
+      RETURNING post_id, user_id, created_at)
+    INSERT INTO post_likes (post_id, user_id, phone_hash, created_at)
+      SELECT post_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
+  WITH moved AS (DELETE FROM comment_likes l
+      WHERE l.phone_hash = current_setting('phone_change.old_hash')
+        AND l.phone_hash <> current_setting('phone_change.new_hash')
+        AND NOT EXISTS (SELECT 1 FROM phone_verifications pv WHERE pv.user_id = l.user_id)
+      RETURNING comment_id, user_id, created_at)
+    INSERT INTO comment_likes (comment_id, user_id, phone_hash, created_at)
+      SELECT comment_id, user_id, current_setting('phone_change.new_hash'), created_at FROM moved
+      ON CONFLICT DO NOTHING;
 END$$;
 SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NULL AS paid,
     EXISTS (SELECT 1 FROM start_grants o
@@ -104,6 +196,17 @@ SELECT g.user_id = :'user_id' AS this_account, n.source, g.granted_at IS NOT NUL
 export const OPERATOR_ACCOUNT_LOOKUP_SQL = `SELECT u.id, pv.user_id IS NOT NULL AS verified
   FROM "user" u LEFT JOIN phone_verifications pv ON pv.user_id = u.id
   WHERE u.email = lower(:'sender');`;
+
+/**
+ * Step 3, after the member's reply and before step 5 (owner decision 2026-10-21, ADR-0076): the
+ * number the account holds now — the old number — which the operator types into the hash CLI's
+ * `--psql-old` for step 5's `old_phone` and `old_hash`. The change moves the likes the account
+ * inherited from a withdrawn account on that number, and SQL cannot hash it without the key. Read
+ * only; `user_id` from the lookup. No row: no 본인확인 record (the lookup said `verified` f, or the
+ * account withdrew since) — nothing to change. Read again for every run of step 5: after the
+ * change it is the new number.
+ */
+export const OPERATOR_CURRENT_NUMBER_SQL = `SELECT phone FROM phone_verifications WHERE user_id = :'user_id';`;
 
 /**
  * Step 1, after the lookup and before every confirmation code is picked and texted (owner decision

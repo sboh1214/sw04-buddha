@@ -156,24 +156,29 @@ describe('the public shapes', () => {
         createdAt,
         editedAt: null,
         commentCount: 3,
+        likeCount: 5,
       }).success,
     ).toBe(true);
-    // The comment count (#48) is a count: a whole number, never below zero.
-    for (const commentCount of [-1, 1.5, undefined]) {
-      expect(
-        postSummarySchema.safeParse({
-          id: MARKET,
-          title: null,
-          excerpt: '근거',
-          thumbnailUrl: null,
-          author,
-          market,
-          createdAt,
-          editedAt: null,
-          commentCount,
-        }).success,
-        String(commentCount),
-      ).toBe(false);
+    // The comment count (#48) and the like count (#49) are counts: whole numbers, never below zero.
+    for (const count of [-1, 1.5, undefined]) {
+      for (const key of ['commentCount', 'likeCount'] as const) {
+        expect(
+          postSummarySchema.safeParse({
+            id: MARKET,
+            title: null,
+            excerpt: '근거',
+            thumbnailUrl: null,
+            author,
+            market,
+            createdAt,
+            editedAt: null,
+            commentCount: 0,
+            likeCount: 0,
+            [key]: count,
+          }).success,
+          `${key} ${String(count)}`,
+        ).toBe(false);
+      }
     }
     expect(
       postSchema.safeParse({
@@ -186,15 +191,14 @@ describe('the public shapes', () => {
         createdAt,
         editedAt: createdAt,
         commentCount: 0,
+        likeCount: 0,
       }).success,
     ).toBe(true);
+    // A placeholder takes no like and shows no count (#49): it carries none, and strips one sent.
     for (const state of ['deleted', 'hidden'] as const) {
-      expect(postSchema.parse({ state, id: MARKET, market, commentCount: 2 })).toEqual({
-        state,
-        id: MARKET,
-        market,
-        commentCount: 2,
-      });
+      expect(
+        postSchema.parse({ state, id: MARKET, market, commentCount: 2, likeCount: 4 }),
+      ).toEqual({ state, id: MARKET, market, commentCount: 2 });
     }
     expect(postDeletionSchema.parse({ id: MARKET, placeholder: false }).placeholder).toBe(false);
     expect(postNotEditableDetailsSchema.parse({ reason: 'hidden' })).toEqual({ reason: 'hidden' });

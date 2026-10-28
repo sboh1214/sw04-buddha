@@ -9,6 +9,7 @@ import {
   LEDGER_QUERY_KEY,
   PAYMENTS_QUERY_KEY,
 } from '@/hooks/use-wallet';
+import { LIKES_KEY, myPostLikesKey } from './likes';
 import {
   CATEGORIES_QUERY_KEY,
   DEFAULT_MARKET_FILTERS,
@@ -274,6 +275,8 @@ describe('isPrivateQueryKey', () => {
       ['watchlistPagesKey', watchlistPagesKey({})],
       ['watchStateKey', watchStateKey(ID)],
       ['SEARCH_HISTORY_KEY', SEARCH_HISTORY_KEY],
+      ['LIKES_KEY', LIKES_KEY],
+      ['myPostLikesKey', myPostLikesKey(ID)],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
@@ -284,7 +287,9 @@ describe('isPrivateQueryKey', () => {
     // member sees a watchlist (#37, ADR-0064). 'search-history' came with #15 (ADR-0066): the
     // recent searches are the session's own, read with the member's cookie, so they are never
     // fetched on the server or dehydrated (who else may see them is #37 item 11) — this PR
-    // changed the list, so the expectation changed with it.
+    // changed the list, so the expectation changed with it. 'likes' came with #49 (ADR-0076):
+    // whether the reader liked a post or a comment is theirs alone (PRIVATE_DATA `likers`), read
+    // with their cookie; the counts are public and live under the posts' root.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -296,6 +301,7 @@ describe('isPrivateQueryKey', () => {
         'positions',
         'watchlist',
         'search-history',
+        'likes',
       ].sort(),
     );
     expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);

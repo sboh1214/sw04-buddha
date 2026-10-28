@@ -27,14 +27,18 @@ afterEach(() => {
 const KEY = 'operator-test-phone-hash-key-0123456789';
 
 describe('phoneHashCliMode', () => {
-  it('takes no argument (a hash per line), --psql or --code, and nothing else', () => {
+  it('takes no argument (a hash per line), --psql, --psql-old or --code, and nothing else', () => {
     expect(phoneHashCliMode([])).toBe('hash');
     expect(phoneHashCliMode(['--psql'])).toBe('psql');
+    expect(phoneHashCliMode(['--psql-old'])).toBe('psql-old');
     expect(phoneHashCliMode(['--code'])).toBe('code');
     // Not a number on the command line: it would stay in the shell history.
     for (const argv of [
       ['01012345678'],
       ['--psql', '01012345678'],
+      ['--psql-old', '01012345678'],
+      ['--psql', '--psql-old'],
+      ['--old'],
       ['--code', '--psql'],
       ['--code', '6'],
       ['--key'],
@@ -96,6 +100,16 @@ describe('phoneHashCliLine', () => {
     });
   });
 
+  it('prints the old number’s two psql lines the same way (owner decision 2026-10-21)', () => {
+    // The change checks the account still holds `old_phone` and moves the likes it inherited
+    // under `old_hash` (ADR-0076): both from the one number typed, so they cannot differ.
+    const hash = phoneHash(KEY, '01012345678');
+    expect(phoneHashCliLine(KEY, '010 1234 5678', 'psql-old')).toEqual({
+      ok: true,
+      lines: ["\\set old_phone '01012345678'", `\\set old_hash '${hash}'`],
+    });
+  });
+
   it('skips a blank line and refuses what is not a mobile number, without repeating it', () => {
     expect(phoneHashCliLine(KEY, '   ', 'hash')).toBeNull();
     for (const line of ['0212345678', 'abc', "01012345678'; DROP TABLE x; --", '+821012345678']) {
@@ -106,7 +120,7 @@ describe('phoneHashCliLine', () => {
   });
 
   it('never prints the key', () => {
-    for (const format of ['hash', 'psql'] as const) {
+    for (const format of ['hash', 'psql', 'psql-old'] as const) {
       const result = phoneHashCliLine(KEY, '01012345678', format);
       expect(JSON.stringify(result)).not.toContain(KEY);
     }

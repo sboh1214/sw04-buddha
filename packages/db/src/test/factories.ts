@@ -27,6 +27,7 @@ import {
   adminActions,
   balances,
   categories,
+  commentLikes,
   consentRecords,
   fills,
   ledgerEntries,
@@ -42,6 +43,7 @@ import {
   positions,
   postComments,
   postImages,
+  postLikes,
   posts,
   profiles,
   releaseSettings,
@@ -849,4 +851,49 @@ export async function createComment(db: Db, input: CreateCommentInput) {
     })
     .returning();
   return comment!;
+}
+
+export interface CreateLikeInput {
+  /** The account that likes. */
+  userId: string;
+  /**
+   * The keyed hash of its number (64 lower-case hex). Default: a random one, so two likes never
+   * share a number; a test about "the same number" passes one hash twice, or the API's hash of
+   * the account's verified number.
+   */
+  phoneHash?: string;
+  /** Default: the database clock. */
+  createdAt?: Date;
+}
+
+/**
+ * A like on a post (#49) as `PUT /posts/:postId/like` leaves it: the `post_likes` row. Checks
+ * nothing the API checks (the onboarding, the post's state); the database holds once per number
+ * and once per account, so a second like of either throws.
+ */
+export async function createPostLike(db: Db, input: CreateLikeInput & { postId: string }) {
+  const [like] = await db
+    .insert(postLikes)
+    .values({
+      postId: input.postId,
+      userId: input.userId,
+      phoneHash: input.phoneHash ?? randomPhoneHash(),
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return like!;
+}
+
+/** A like on a 댓글 or a 대댓글 (#49), as `createPostLike` makes a post's. */
+export async function createCommentLike(db: Db, input: CreateLikeInput & { commentId: string }) {
+  const [like] = await db
+    .insert(commentLikes)
+    .values({
+      commentId: input.commentId,
+      userId: input.userId,
+      phoneHash: input.phoneHash ?? randomPhoneHash(),
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  return like!;
 }

@@ -282,6 +282,9 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   'admin',
   'watchlist',
   'search-history',
+  // 좋아요 (#49, ADR-0076): what the reader liked on a post page (`LIKES_KEY`, lib/likes.ts). The
+  // counts are public and ride on the post and its comments; whose like is nobody else's.
+  'likes',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

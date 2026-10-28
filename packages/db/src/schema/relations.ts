@@ -16,6 +16,7 @@ import { couponRedemptions, coupons } from './coupons.js';
 import { fills } from './fills.js';
 import { profileInterestCategories } from './interest-categories.js';
 import { ledgerEntries } from './ledger.js';
+import { commentLikes, postLikes } from './likes.js';
 import { marketEvents } from './market-events.js';
 import { marketLinks } from './market-links.js';
 import { marketSearches } from './market-searches.js';
@@ -158,6 +159,7 @@ export const postsRelations = relations(posts, ({ one, many }) => ({
   revisions: many(postRevisions),
   images: many(postImages),
   comments: many(postComments),
+  likes: many(postLikes),
 }));
 
 export const postCommentsRelations = relations(postComments, ({ one, many }) => ({
@@ -171,6 +173,19 @@ export const postCommentsRelations = relations(postComments, ({ one, many }) => 
   }),
   replies: many(postComments, { relationName: 'post_comment_parent' }),
   revisions: many(postCommentRevisions),
+  likes: many(commentLikes),
+}));
+
+// 좋아요 (#49): the target and the account that liked. No relation reads a target's likers in
+// public; the like counts are aggregates (apps/api likes/like-queries.ts).
+export const postLikesRelations = relations(postLikes, ({ one }) => ({
+  post: one(posts, { fields: [postLikes.postId], references: [posts.id] }),
+  user: one(user, { fields: [postLikes.userId], references: [user.id] }),
+}));
+
+export const commentLikesRelations = relations(commentLikes, ({ one }) => ({
+  comment: one(postComments, { fields: [commentLikes.commentId], references: [postComments.id] }),
+  user: one(user, { fields: [commentLikes.userId], references: [user.id] }),
 }));
 
 export const postCommentRevisionsRelations = relations(postCommentRevisions, ({ one }) => ({
@@ -307,6 +322,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   marketLinks: many(marketLinks),
   posts: many(posts),
   postComments: many(postComments),
+  postLikes: many(postLikes),
+  commentLikes: many(commentLikes),
   media: many(mediaObjects),
   adminActions: many(adminActions),
   releaseSettingUpdates: many(releaseSettings),

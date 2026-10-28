@@ -38,6 +38,7 @@ export const PRIVATE_DATA_IDS = [
   'time-zone',
   'watchlist',
   'search-history',
+  'likers',
   'identity-verification',
   'consent',
   'former-nickname',
@@ -264,6 +265,18 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       words: ['search', 'query', 'queries', 'keyword', 'keywords'],
       whose: WHOSE_OR_VIEWER,
     },
+  },
+  {
+    id: 'likers',
+    name: '좋아요를 누른 계정(누가 눌렀는지와 보는 사람이 눌렀는지)',
+    basis: 'ADR-0069 결정 4(#49: 수만 보이고 누른 사람 목록은 없으며 본인은 자기가 눌렀는지 본다)',
+    // A like's count is public (`likeCount` beside a post and a comment, #49); who liked is
+    // nobody's to see (no list of likers), and whether the reader liked it is the reader's alone,
+    // on an owner-only route (`GET /me/likes/posts/:postId`, ADR-0076). So a public shape never
+    // says that somebody liked something (`liked`, `likedBy`, `isLiked`, `likedByMe`) nor lists
+    // likers (`likers`, `likerIds`) — not even the reader's own flag, which would make a public
+    // answer differ by who asks. `myLikes` is a person's by the fills item's `my`.
+    fields: [['liked'], ['liker'], ['likers']],
   },
   {
     id: 'identity-verification',

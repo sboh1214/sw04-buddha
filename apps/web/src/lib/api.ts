@@ -98,6 +98,14 @@ export type PublishedComment = components['schemas']['PublishedComment'];
 export type CommentDeletion = components['schemas']['CommentDeletion'];
 export type CreateCommentBody = components['schemas']['CreateCommentBody'];
 export type UpdateCommentBody = components['schemas']['UpdateCommentBody'];
+/**
+ * 좋아요 (#49, ADR-0076): the answer of a like or an unlike (the caller's state and the target's
+ * count), its body, and what the caller liked on one post page (`GET /me/likes/posts/:postId`,
+ * owner-only — whether somebody liked something is theirs alone).
+ */
+export type LikeState = components['schemas']['LikeState'];
+export type UpdateLikeBody = components['schemas']['UpdateLikeBody'];
+export type MyPostLikes = components['schemas']['MyPostLikes'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 export type AdminPayment = components['schemas']['AdminPayment'];

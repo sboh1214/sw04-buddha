@@ -34,7 +34,9 @@ export async function generateMetadata({
  * limit as every reader's request is — the web's own requests to the API are not, and a page any
  * visitor can have drawn must not read what a thread holds. Nothing personal is read: whether the
  * viewer wrote it or a comment — and so 수정 and 삭제 — is decided in the browser once `GET /me` has
- * answered.
+ * answered, and whether they liked any of it once `GET /me/likes/posts/:postId` has (#49,
+ * ADR-0076); the like counts are public — the post's in the HTML with the post, the comments' with
+ * the comments the browser reads.
  */
 export default async function PostPage({ params }: { params: Promise<{ postId: string }> }) {
   const { postId } = await params;

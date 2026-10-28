@@ -122,9 +122,72 @@ function lastOfEach<T>(items: readonly T[], idOf: (item: T) => string): T[] {
  * after what is held, and a 대댓글 the writer just wrote — put at the end of the replies held when
  * the pages before it could not be read (`withNewComment`) — stays where its page puts it, after
  * the 대댓글 written before it, as `commentThreadsOf` keeps a 댓글.
+ *
+ * Such a 대댓글, held and on the page both, keeps the like count held (#49, ADR-0076 7-17): the
+ * page carries the count from when it was read, and while the 대댓글 is on screen its count is the
+ * like toggle's to write — a like pressed while the page was on its way ('답글 더 보기', a new
+ * 대댓글's read on) would otherwise go back to the count from before it, beside a pressed toggle,
+ * until the next read of the pages. The page brings the rest of it (its state, its text) and its
+ * place; a placeholder has no count to keep.
  */
 function repliesWith(held: readonly PostComment[], more: readonly PostComment[]): PostComment[] {
-  return lastOfEach([...held, ...more], (reply) => reply.id);
+  const counts = likeCountsOf(held);
+  const brought = more.map((reply) => withHeldLikeCount(reply, counts));
+  return lastOfEach([...held, ...brought], (reply) => reply.id);
+}
+
+/** The like counts of the published comments among `comments`, by id (a placeholder has none). */
+function likeCountsOf(comments: Iterable<PostComment>): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const comment of comments) {
+    if (comment.state === 'published') counts.set(comment.id, comment.likeCount);
+  }
+  return counts;
+}
+
+/** `comment` as a page brought it, at the like count held for it when it is held published. */
+function withHeldLikeCount(comment: PostComment, counts: ReadonlyMap<string, number>): PostComment {
+  if (comment.state !== 'published') return comment;
+  const count = counts.get(comment.id);
+  return count === undefined || count === comment.likeCount
+    ? comment
+    : { ...comment, likeCount: count };
+}
+
+/**
+ * The pages a new 댓글's read to the end read (`readOnToTheEnd`, hooks/use-comments.ts — the last
+ * page held and every page after it, which take the place of the held ones from that page on),
+ * each 댓글 and 대댓글 the pages `held` hold published at the like count held (#49, ADR-0076
+ * 7-27), as `repliesWith` keeps a 대댓글's: that read is no read of the query — the comment
+ * section's write calls the query's function itself — so the like toggle neither sees it on its
+ * way nor reads the pages again after it, and a like pressed while it was out would otherwise go
+ * back to the count from when the page was read, beside a pressed toggle, until the next read of
+ * the pages (a focus, 30 seconds). A comment the pages did not hold (the new 댓글, older ones read
+ * for the first time) comes at the page's count, and the rest of each (its state, its text, its
+ * place) is the page's. The count held may be one a failed press put back while its read again of
+ * the pages was on its way — a press whose answer was lost after it committed; putting these pages
+ * in cancels that read and makes it again (`writePages`, ADR-0076 7-28), which ends on the server's.
+ * Each page is still the read's (`samePageRead`): the query client reads the server's word on the
+ * writer's own comments placed at the end of what is held from the pages a read brought
+ * (`keepPlacedComments`, 오너 결정 2026-10-24), and these are such pages until they land.
+ */
+export function withHeldLikeCounts(
+  pages: readonly CommentPage[],
+  held: CommentPages | undefined,
+): CommentPage[] {
+  const counts = likeCountsOf(
+    commentThreadsOf(held).flatMap((thread) => [thread.comment, ...thread.replies]),
+  );
+  return pages.map((page) =>
+    samePageRead(page, {
+      ...page,
+      items: page.items.map((thread) => ({
+        ...thread,
+        comment: withHeldLikeCount(thread.comment, counts),
+        replies: thread.replies.map((reply) => withHeldLikeCount(reply, counts)),
+      })),
+    }),
+  );
 }
 
 /**

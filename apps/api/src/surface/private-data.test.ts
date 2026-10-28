@@ -5,8 +5,8 @@
  * and session, a balance and a ledger memo, orders and the fill one of them got against another
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
  * recorded search (#15), its consent records with the address and browser they came with, a
- * nickname it gave up (#58), a post with an image on the market it trades (#46) and comments under
- * it (#48). Then:
+ * nickname it gave up (#58), a post with an image on the market it trades (#46), comments under
+ * it (#48) and A's likes of both, made with the keyed hash of A's number (#49). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -40,9 +40,11 @@ import {
   createMarket,
   createMarketLink,
   createComment,
+  createCommentLike,
   createMedia,
   createPhoneVerification,
   createPost,
+  createPostLike,
   createSearch,
   createStartGrant,
   createUser,
@@ -527,6 +529,25 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
     params: { commentId: (fixture) => fixture.comment.id },
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
+  },
+  // B's cookie naming A's account (#49), taking back A's likes: refused before anything is read
+  // or written — A's likes stay, B has none (below).
+  'PUT /posts/:postId/like': {
+    params: { postId: (fixture) => fixture.post.id },
+    body: (fixture) => ({ liked: false, expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  'PUT /comments/:commentId/like': {
+    params: { commentId: (fixture) => fixture.comment.id },
+    body: (fixture) => ({ liked: false, expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B asking what it liked on A's post, which A liked with A's comment: B's own state, nothing
+  // (checked below). The answer is yes or no and comment ids, public ones, so no `own` label can
+  // show the check is not blind; below, A hears A's.
+  'GET /me/likes/posts/:postId': {
+    params: { postId: (fixture) => fixture.post.id },
+    status: 200,
   },
   // The file is the body, so the account rides in the query: B naming A is refused before the
   // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
@@ -1014,6 +1035,11 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       deletedAt: new Date(),
     });
     await createComment(t.db, { postId: post.id, authorId: a.id, parentId: deletedComment.id });
+    // A's likes (#49) of A's own post and 댓글 — allowed — held by A's account and the keyed hash
+    // of A's number, as LikesService writes them: who liked is nobody's to see, and the hash is
+    // nobody's either (`NEVER_SHOWN`), whatever answer counts them.
+    await createPostLike(t.db, { postId: post.id, userId: a.id, phoneHash });
+    await createCommentLike(t.db, { commentId: comment.id, userId: a.id, phoneHash });
 
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
@@ -1402,6 +1428,9 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         // #48: the comments and their history B's refused comment writes would have written.
         t.db.select().from(schema.postComments).orderBy(schema.postComments.id),
         t.db.select().from(schema.postCommentRevisions),
+        // #49: the likes B's refused unlikes would have taken back.
+        t.db.select().from(schema.postLikes),
+        t.db.select().from(schema.commentLikes),
       ])),
       [...t.storage.objects.keys()].sort(),
     ];
@@ -1501,6 +1530,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       (await call(stateRoute, { params, cookie })).json<{ data: unknown }>().data;
     expect(await stateOf(f.b.cookie)).toEqual({ watched: false });
     expect(await stateOf(f.a.cookie)).toEqual({ watched: true });
+
+    // B's refused unlikes left A's likes (in `postState` below), and B asking what it liked on A's
+    // post heard its own nothing while A hears A's (#49).
+    const likesRoute = routeOf('GET /me/likes/posts/:postId');
+    const likesOf = async (cookie: string) =>
+      (await call(likesRoute, { params: { postId: f.post.id }, cookie })).json<{ data: unknown }>()
+        .data;
+    expect(await likesOf(f.b.cookie)).toEqual({ postLiked: false, likedCommentIds: [] });
+    expect(await likesOf(f.a.cookie)).toEqual({
+      postLiked: true,
+      likedCommentIds: [f.comment.id],
+    });
 
     // B's refused writes left A's search and wrote nothing for B (#15). B's delete naming A's
     // entry as B itself is accepted and reaches nothing: the entry is looked up among B's rows.

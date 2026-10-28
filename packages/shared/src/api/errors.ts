@@ -103,6 +103,12 @@ export const ERROR_CODES = [
    * deleted. Details carry the reason, commentNotEditableDetailsSchema.
    */
   'COMMENT_NOT_EDITABLE',
+  /**
+   * The post or comment takes no like now, nor the taking back of one: its author deleted it and
+   * it stays as its placeholder, or an operator hid it (#49). Details carry the reason,
+   * likeNotAllowedDetailsSchema.
+   */
+  'LIKE_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -19,6 +19,7 @@ import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
+import { commentLikeCountSql } from '../likes/like-queries.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { postAuthorOf, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
@@ -42,6 +43,7 @@ interface CommentRow {
   deletedAt: Date | null;
   hiddenAt: Date | null;
   author: { publicId: string; nickname: string; role: Role };
+  likeCount: number;
 }
 
 /**
@@ -71,6 +73,7 @@ function publishedOf(row: CommentRow): PublishedComment {
     author: postAuthorOf(row.author),
     createdAt: row.createdAt.toISOString(),
     editedAt: row.editedAt?.toISOString() ?? null,
+    likeCount: row.likeCount,
   };
 }
 
@@ -119,7 +122,10 @@ export class CommentsService {
     private readonly cursors: CommentCursors,
   ) {}
 
-  /** What the public reads select: the comment and its author's public face, never the id. */
+  /**
+   * What the public reads select: the comment, its author's public face (never the id) and how
+   * many like it (#49, the same for every reader; a placeholder drops it).
+   */
   private readonly columns = {
     id: schema.postComments.id,
     parentId: schema.postComments.parentId,
@@ -133,6 +139,7 @@ export class CommentsService {
       nickname: schema.profiles.nickname,
       role: schema.profiles.role,
     },
+    likeCount: commentLikeCountSql(schema.postComments.id),
   };
 
   /**
@@ -249,7 +256,8 @@ export class CommentsService {
    * first within each: a LATERAL subquery per 댓글 that walks its undeleted replies' index
    * (`post_comments_live_parent_id_created_at_id_idx`) and stops at the limit, so a thread of any
    * size — and any number of 대댓글 deleted in it — costs its first page and one row more (whether
-   * more follow).
+   * more follow). Each carries its like count (#49), as `columns` gives every public read — counted
+   * in the outer select, so only for the rows the LATERAL read returns.
    */
   private async firstReplies(threadIds: string[]): Promise<CommentRow[]> {
     if (threadIds.length === 0) return [];
@@ -284,6 +292,7 @@ export class CommentsService {
         deletedAt: reply.deletedAt,
         hiddenAt: reply.hiddenAt,
         author: { publicId: reply.publicId, nickname: reply.nickname, role: reply.role },
+        likeCount: commentLikeCountSql(reply.id),
       })
       .from(thread)
       .crossJoinLateral(reply)

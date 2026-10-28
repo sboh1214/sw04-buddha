@@ -163,6 +163,8 @@ test.describe('시장 상세 · 토론', () => {
     await expect(newest.getByTestId('post-card-excerpt')).toHaveText(titles[20] ?? '');
     await expect(newest.getByTestId('post-author-admin')).toHaveText(copy.postAuthorAdmin);
     await expect(newest.getByTestId('post-card-comments')).toHaveText(`${copy.commentsHeading} 0`);
+    // The card's like count, as on the community list (#49, ADR-0076).
+    await expect(newest.getByTestId('post-card-likes')).toHaveText(`${copy.likeToggle} 0`);
     // No market line on any card: they are all this market's (owner decision 2026-10-20 6).
     await expect(section(page).getByTestId('post-card-market')).toHaveCount(0);
     await expect(list).not.toContainText(market.title);

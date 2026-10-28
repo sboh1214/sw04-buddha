@@ -2,6 +2,7 @@ import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { uuidSchema } from './api/uuid.js';
 import { marketStatusSchema } from './enums.js';
+import { likeCountSchema } from './like.js';
 import { marketCategoryFilterSchema } from './market.js';
 import { codePointLength, postDocumentInputSchema, postDocumentSchema } from './post-document.js';
 import { publicIdSchema } from './public-id.js';
@@ -96,8 +97,8 @@ const commentCountSchema = z.number().int().min(0);
 /**
  * One card of the community list (owner decisions 2026-10-18: a preview card — the title, two lines
  * of the text without formatting, the first image as a small square thumbnail, the comment count,
- * the author, the time and the market's title). The like count the owner listed comes with the
- * likes (#49): nothing here counts what does not exist yet.
+ * the like count (#49), the author, the time and the market's title). The counts are the same for
+ * everyone: whether the reader liked the post is theirs alone (`GET /me/likes/posts/:postId`).
  */
 export const postSummarySchema = z
   .object({
@@ -113,6 +114,7 @@ export const postSummarySchema = z
     /** The last edit ('수정됨'), or null while the post was never edited. */
     editedAt: z.iso.datetime().nullable(),
     commentCount: commentCountSchema,
+    likeCount: likeCountSchema,
   })
   .meta({ id: 'PostSummary' });
 export type PostSummary = z.infer<typeof postSummarySchema>;
@@ -128,7 +130,8 @@ export type PostState = (typeof POST_STATES)[number];
  * '운영 정책에 따라 숨긴 글입니다', nothing of the post but its market. Neither placeholder names the
  * author or keeps a word of the post; the original stays for operators only. The comments under
  * any of the three stay readable (`GET /posts/:postId/comments`, #48), and `commentCount` counts
- * them on every state, as the card does.
+ * them on every state, as the card does. `likeCount` (#49) is the published post's only: a
+ * placeholder takes no like and shows no count.
  */
 export const postSchema = z
   .discriminatedUnion('state', [
@@ -143,6 +146,7 @@ export const postSchema = z
         createdAt: z.iso.datetime(),
         editedAt: z.iso.datetime().nullable(),
         commentCount: commentCountSchema,
+        likeCount: likeCountSchema,
       })
       .meta({ id: 'PublishedPost' }),
     z
