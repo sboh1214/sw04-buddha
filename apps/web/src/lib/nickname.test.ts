@@ -6,7 +6,12 @@ import {
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError } from './api';
-import { nicknameFailure, nicknameFormSchema, nicknameRefusalNeedsRefresh } from './nickname';
+import {
+  nicknameFailure,
+  nicknameFormSchema,
+  nicknameRefusalNeedsRefresh,
+  settingsNicknameFailure,
+} from './nickname';
 
 /**
  * 닉네임 규칙 (#58, ADR-0069 decision 1 #57-6) as the onboarding's nickname step and MY 설정's card
@@ -138,6 +143,33 @@ describe('nicknameFailure', () => {
       kind: 'notice',
       message: copy.errUnknown,
     });
+  });
+});
+
+describe('settingsNicknameFailure', () => {
+  it('says MY 설정’s sentence for the onboarding’s refusal the card could not move on from — not the stepper’s', () => {
+    // PATCH /me answers a re-consent too (ADR-0078 7-27); the card moves to the step unless the
+    // re-read of `GET /me` failed or named no step, and then says what the 소개’s card says there.
+    const onboarding = refused(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] });
+    expect(settingsNicknameFailure(onboarding, formatDate)).toEqual({
+      kind: 'refresh',
+      message: copy.errPostOnboarding,
+    });
+    expect(copy.errPostOnboarding).not.toBe(copy.errOnboardingStepsFirst);
+  });
+
+  it('reads every other refusal as the onboarding’s step does', () => {
+    for (const error of [
+      refused(409, 'NICKNAME_NOT_ALLOWED', { reason: 'already_set' }),
+      refused(409, 'NICKNAME_NOT_ALLOWED', { reason: 'taken' }),
+      refused(400, 'VALIDATION_ERROR', [{ path: ['nickname'], message: 'x' }]),
+      refused(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'x' }]),
+      refused(500, 'INTERNAL'),
+    ]) {
+      expect(settingsNicknameFailure(error, formatDate)).toEqual(
+        nicknameFailure(error, formatDate),
+      );
+    }
   });
 });
 

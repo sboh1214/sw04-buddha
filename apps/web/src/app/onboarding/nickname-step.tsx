@@ -28,9 +28,10 @@ import { nicknameFailure, nicknameFormSchema, type NicknameFormValues } from '@/
  * the line stays only when `['me']` did not move (its read failed), and then it says what to do.
  *
  * `nickname` seeds the input once: the stepper keys this step on the account, so a session switched
- * under it mounts a fresh one.
+ * under it mounts a fresh one. `accountId` is that account (the stepper's `me.id`), which the
+ * answer names (`expectedAccountId`) — never the session's (use-onboarding.ts, ADR-0078 7-29).
  */
-export function NicknameStep({ nickname }: { nickname: string }) {
+export function NicknameStep({ nickname, accountId }: { nickname: string; accountId: string }) {
   const save = useSetOnboardingNickname();
   const formatDate = useFormatDateTime();
   const [notice, setNotice] = useState<string | null>(null);
@@ -46,8 +47,6 @@ export function NicknameStep({ nickname }: { nickname: string }) {
   });
 
   const onSubmit = handleSubmit(async (values) => {
-    const accountId = save.accountId;
-    if (accountId === undefined) return;
     setNotice(null);
     try {
       await save.mutateAsync({ nickname: values.nickname, expectedAccountId: accountId });
@@ -89,13 +88,7 @@ export function NicknameStep({ nickname }: { nickname: string }) {
               {errors.nickname?.message}
             </Field.ErrorText>
           </Field.Root>
-          <Button
-            type="submit"
-            size="lg"
-            loading={isSubmitting}
-            disabled={!save.ready}
-            data-testid="nickname-step-submit"
-          >
+          <Button type="submit" size="lg" loading={isSubmitting} data-testid="nickname-step-submit">
             {copy.nicknameStepSubmit}
           </Button>
         </Stack>

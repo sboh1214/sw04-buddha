@@ -166,6 +166,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/me (integration)', () => {
   });
 
   it('PATCH /me with an invalid nickname or no account named -> 400 VALIDATION_ERROR from the zod schema', async () => {
+    // An onboarded account: OnboardedGuard answers any other before the body is read (ADR-0078).
+    await completeOnboarding(t.db, { userId: user.id });
     const res = await patchMe(user, { nickname: 'a', expectedAccountId: user.id });
     expect(res.statusCode).toBe(400);
     const { error } = errorEnvelopeSchema.parse(res.json());

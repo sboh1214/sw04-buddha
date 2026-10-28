@@ -117,6 +117,24 @@ export function nicknameFailure(
   return { kind: 'notice', message: copy.errUnknown };
 }
 
+/**
+ * `nicknameFailure` as MY 설정's nickname card reads it (#41, ADR-0078 7-24·7-27): the onboarding's
+ * refusal (ONBOARDING_REQUIRED — `PATCH /me` is for an account done with its steps, a re-consent
+ * included) is said, where the card cannot move on to the step (`afterRefusal` — `['me']` not read
+ * again, or naming no step), with the sentence the 소개 and the interest categories say on that page
+ * (`profileItemFailure`): '앞 단계를 먼저 마쳐 주세요.' is the onboarding stepper's, whose earlier
+ * steps MY 설정 does not show. Every other refusal reads as `nicknameFailure` says.
+ */
+export function settingsNicknameFailure(
+  error: unknown,
+  formatDate: (iso: string) => string,
+): NicknameFailure {
+  const failure = nicknameFailure(error, formatDate);
+  return isApiError(error, 'ONBOARDING_REQUIRED')
+    ? { ...failure, message: copy.errPostOnboarding }
+    : failure;
+}
+
 /** Whether a refusal says `['me']` is out of date for the account (`nicknameFailure`'s `refresh`). */
 export function nicknameRefusalNeedsRefresh(error: unknown): boolean {
   if (isApiError(error, 'ONBOARDING_REQUIRED') || isApiError(error, 'VERIFICATION_REQUIRED')) {

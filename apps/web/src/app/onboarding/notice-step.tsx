@@ -15,9 +15,11 @@ import { startGrantNotice } from '@/lib/onboarding';
  * categories (#57-7).
  *
  * Nothing here is recorded: the server granted (or left waiting) with the nickname step, and this
- * screen only says so. `startGrant` is `['me']`'s, so a payment that lands while it is open (the
- * amount entered meanwhile: `user:balance`, then `GET /me` again, realtime-provider.tsx) shows the
- * amount in place of the sentence. The amount is a fact, not a heading: no number or score stands
+ * screen only says so. Leaving it — anywhere but its 다음, 로그아웃 included — skips the interests
+ * step, which the stepper tells the server (`useInterestsLeaveReport`, ADR-0078; the cases it
+ * cannot reach are 7-23's). `startGrant` is `['me']`'s, so a payment that lands while it is open
+ * (the amount entered meanwhile: `user:balance`, then `GET /me` again, realtime-provider.tsx) shows
+ * the amount in place of the sentence. The amount is a fact, not a heading: no number or score stands
  * out beyond it (N04 §4), and nothing here buys or offers Coin (N06).
  */
 export function NoticeStep({

@@ -79,13 +79,15 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
  * reach it too (오너 결정 2026-10-20, ADR-0073). Unlike ONBOARDING_EXEMPT_PATHS an entry is exactly
  * one page, never the pages under it: the post page is exempt, its edit screen is not. What the
  * page offers that the onboarding still keeps from the account — writing, editing, the comment
- * boxes (#48) and 좋아요 (#49, owner decision 2026-10-20, ADR-0076) — sends it to its step instead
- * of opening the form or sending the press (`onboardingEntryPath`, hooks/use-onboarding-entry.ts),
- * so the exemption opens the page and never a write.
+ * boxes (#48) and 좋아요 (#49, owner decision 2026-10-20, ADR-0076), a public profile item's new
+ * value (#41) — sends it to its step instead of opening the form or sending the press
+ * (`onboardingEntryPath`, hooks/use-onboarding-entry.ts), so the exemption opens the page and never
+ * a write the server would refuse it.
  *
  * Only for an account that finished its onboarding once and has a re-consent alone left
  * (`hasOnlyReconsentLeft`, 오너 결정 2026-10-20 3차 답 1): what it did before the revision — its
- * own posts — is what it may still remove. An account that has not finished — a new one that signed
+ * own posts, and its public profile's 소개 and interest categories (오너 결정 2026-10-21 답 2,
+ * #41) — is what it may still remove. An account that has not finished — a new one that signed
  * up or signed in from the page, `next` bringing it back there — is sent on from it like from any
  * page, with the page as `next`, and comes back to it at the end (#57-9).
  */
@@ -103,7 +105,14 @@ export interface OnboardingExemptPage {
  * The pages exempt for a login-only action. Later issues add theirs here: #77 the proposal list
  * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
  * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
- * do its 좋아요 (#49, components/post/like-button.tsx).
+ * do its 좋아요 (#49, components/post/like-button.tsx). #41's MY 설정 clears the public profile's
+ * 소개 and drops its interest categories; a new 소개, a category added, a nickname change (owner
+ * decision 2026-10-22 answer 1) and the marketing switch — a consent record, which the consent
+ * step's items come with — go to the step (app/my/settings: `profileItemSaveGoesToStep`,
+ * lib/profile.ts), the 소개 typed, the categories picked and the nickname typed kept in the tab for
+ * the return (lib/profile-drafts.ts, answer 3 and 2026-10-22 (2nd) answer 2). Its account cards —
+ * email, password, linked sign-ins, real name, time zone, theme — write what the server takes with
+ * a session alone (ADR-0078 7-24). The re-consent step links to it (`settingsLinkOnStep`, answer 2).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
  * onboarding prompt (#89 — the owner wrote the screen in).
  */
@@ -112,6 +121,11 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
     route: '/community/posts/[postId]',
     reason:
       'an author facing a re-consent deletes their own post and their own comments with a session alone (owner decisions 2026-10-19 answer 2 and 2026-10-20, #46, #48); its edit entry, its comment writes and its likes (#49) go to the step',
+  },
+  {
+    route: '/my/settings',
+    reason:
+      'a member facing a re-consent clears the 소개 and drops interest categories of their public profile with a session alone (owner decision 2026-10-21 answer 2, #41), and keeps the account cards; a new 소개, a category added, a nickname change (owner decision 2026-10-22 answer 1) and the marketing switch go to the step',
   },
 ];
 
@@ -248,7 +262,11 @@ export function gatedPagePath(pathname: string, location: { pathname: string; se
  * the notice (it says what the nickname step's answer, `startGrant`, and two fixed facts say) nor
  * that the interests were shown, and an account that left at either has skipped the interests —
  * the gate does not send it back, and /onboarding opened again goes straight on (오너 결정
- * 2026-10-19 (2차) 5: the interest step is shown once).
+ * 2026-10-19 (2차) 5: the interest step is shown once). The stepper tells the server that skip as
+ * the account leaves (`leavingSkipsInterests`, owner decision 2026-10-21 (2nd) answer 2,
+ * ADR-0078), so the step's first answer — which a restriction lets through — is the screen's own,
+ * and the server takes it as one within 24 hours of the nickname step only (owner decision
+ * 2026-10-21 (3rd) answer 1).
  */
 export const ONBOARDING_SCREENS = [
   'consent',
@@ -283,6 +301,20 @@ export function onboardingScreen(
   if (onboarding.nextStep !== null) return onboarding.nextStep;
   if (!visit.reachedNickname || onboarding.interests) return null;
   return visit.noticeRead ? 'interests' : 'notice';
+}
+
+/**
+ * Whether leaving the stepper now skips the interests step (ADR-0072: leaving the start-Coin notice
+ * or the interests screen is skipping it), so the server is to be told (owner decision 2026-10-21
+ * (2nd) answer 2, ADR-0078): the screen is one of those two and no answer of the step is on its
+ * way (`answering` — the pick or the 건너뛰기 sent; it answers the step itself). Any other screen
+ * has not reached the step — or, null, has nothing left to show: the step answered.
+ */
+export function leavingSkipsInterests(
+  screen: OnboardingScreen | null,
+  answering: boolean,
+): boolean {
+  return (screen === 'notice' || screen === 'interests') && !answering;
 }
 
 /** Whether `to` comes before `from` among the screens: the server sent the account back. */
@@ -322,6 +354,21 @@ export function onboardingReturnReason(
 ): OnboardingReturnReason | null {
   if (screen === 'consent' && isReconsent(onboarding)) return 'reconsent';
   return sentBack && screen !== null ? 'earlier_step' : null;
+}
+
+/**
+ * Whether the stepper offers the way to MY 설정 (오너 결정 2026-10-22 답 2, ADR-0078: «재동의 단계
+ * 화면에 MY 설정 링크»): on the consent step of an account facing a re-consent alone — the one account
+ * that MY 설정 is open to with a step left (`ONBOARDING_EXEMPT_PAGES`, `hasOnlyReconsentLeft`), where
+ * it clears its public profile's items and keeps its account cards before agreeing again. Never on
+ * a first onboarding — nor on the re-consent of an account that left before its 본인확인, which MY
+ * 설정 would send straight back — and never on another step.
+ */
+export function settingsLinkOnStep(
+  onboarding: Onboarding,
+  screen: OnboardingScreen | null,
+): boolean {
+  return screen === 'consent' && hasOnlyReconsentLeft(onboarding);
 }
 
 /**
@@ -430,10 +477,11 @@ export function withInterest(
 }
 
 /**
- * The ids `PUT /me/interest-categories` is sent: what is picked among the categories on screen
+ * The ids an interests write is sent (the step's `POST /me/onboarding/interests`, MY 설정's
+ * `PUT /me/interest-categories`): what is picked among the categories on screen
  * (one retired since the list loaded is not there to pick, and one picked before a reload that no
  * longer lists it is dropped), in id order — the order `Me.profile.interestCategoryIds` answers in.
- * Empty is the skip (#57-7).
+ * Empty is the step's skip (#57-7), or MY 설정's dropping them all.
  */
 export function interestIds(
   picked: ReadonlySet<number>,

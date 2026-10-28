@@ -5,14 +5,17 @@ import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tansta
 import { copy } from '@/copy';
 import {
   api,
+  isApiError,
   isForAnotherAccount,
   unwrap,
   type Me,
+  type UpdateBioBody,
   type UpdateMeBody,
   type UpdateTimeZoneBody,
 } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
 import { applyBalanceEvent } from '@/lib/market-live';
+import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
 import { useSession } from '@/lib/use-session';
 
 /** Query key rule from PLAN 11.5. */
@@ -102,19 +105,25 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
 
 /**
  * The profile field a profile write owns: the one `storeMe` takes from its answer. A nickname
- * change brings when the nickname may change next with it (#58: once in 30 days).
+ * change brings when the nickname may change next with it (#58: once in 30 days); the 소개 is the
+ * public profile's (#41, `PUT /me/bio`).
  */
-export type ProfileField = 'nickname' | 'timeZone';
+export type ProfileField = 'nickname' | 'timeZone' | 'bio';
 
 /** `held`'s profile with what the `field` write changed taken from `answer`. */
 function withProfileField(held: Me, answer: Me, field: ProfileField): Me['profile'] {
-  return field === 'nickname'
-    ? {
+  switch (field) {
+    case 'nickname':
+      return {
         ...held.profile,
         nickname: answer.profile.nickname,
         nicknameChangeAvailableAt: answer.profile.nicknameChangeAvailableAt,
-      }
-    : { ...held.profile, timeZone: answer.profile.timeZone };
+      };
+    case 'timeZone':
+      return { ...held.profile, timeZone: answer.profile.timeZone };
+    case 'bio':
+      return { ...held.profile, bio: answer.profile.bio };
+  }
 }
 
 /**
@@ -130,8 +139,9 @@ export async function refreshOwnMe(queryClient: QueryClient, account: string): P
 }
 
 /**
- * Writes the profile a profile write answered with (`PATCH /me`, `PUT /me/time-zone`) into
- * `['me']`, so every observer — TimeZoneProvider, the header — takes it without a refetch.
+ * Writes the profile a profile write answered with (`PATCH /me`, `PUT /me/time-zone`,
+ * `PUT /me/bio`) into `['me']`, so every observer — TimeZoneProvider, the header — takes it
+ * without a refetch.
  *
  * Only the field the write changed (`field`): the answer is a whole `Me`, but the write changed
  * nothing else. Two profile writes can overlap — a nickname save and a time-zone save from the
@@ -249,7 +259,12 @@ async function putTimeZone(body: UpdateTimeZoneBody): Promise<Me> {
  * is the hook's session refetch and `patch` stands in the request; both parameters so a test can
  * watch them. Since #58 the body names the account the screen shows (`expectedAccountId`), so the
  * 403 for another account asks for the session again, as the time zone's does: nothing was
- * written, and SessionCacheGuard puts the account really signed in on screen.
+ * written, and SessionCacheGuard puts the account really signed in on screen. A refusal that says
+ * `['me']` is out of date for the account (`nicknameRefusalNeedsRefresh` — ONBOARDING_REQUIRED: a
+ * revision asked for the consent again while the screen was open, and the server changes no
+ * nickname of an account that has not done its onboarding, owner decision 2026-10-22 answer 1)
+ * asks `['me']` again before the promise rejects, as the 소개's does, so the gate or MY 설정's step
+ * (`useSettingsStep`) takes the member on from what the server says now.
  */
 export function updateNicknameOptions(
   queryClient: QueryClient,
@@ -260,8 +275,14 @@ export function updateNicknameOptions(
     mutationFn: patch,
     // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
     onSuccess: (me: Me) => storeMe(queryClient, me, 'nickname', onSessionChanged),
-    onError: (error: Error) => {
-      if (isForAnotherAccount(error)) onSessionChanged();
+    onError: async (error: Error, body: UpdateMeBody) => {
+      if (isForAnotherAccount(error)) {
+        onSessionChanged();
+        return;
+      }
+      if (nicknameRefusalNeedsRefresh(error)) {
+        await refreshOwnMe(queryClient, body.expectedAccountId);
+      }
     },
   };
 }
@@ -271,6 +292,48 @@ export function useUpdateNickname() {
   const queryClient = useQueryClient();
   const { refetch: refetchSession } = useSession();
   return useMutation(updateNicknameOptions(queryClient, () => void refetchSession()));
+}
+
+async function putBio(body: UpdateBioBody): Promise<Me> {
+  return unwrap(await api.PUT('/api/v1/me/bio', { body })).data;
+}
+
+/**
+ * `PUT /api/v1/me/bio` (#41, ADR-0078) as mutation options: the 소개 of the public profile, edited
+ * in MY 설정 (ADR-0069 decision 4 #41) — the text, or `null` to clear it — and the account the card
+ * shows (`expectedAccountId`). The answer's 소개 goes into `['me']` through `storeMe`, as the
+ * nickname's does, so the card shows what the server kept (normalised: trimmed, line breaks as
+ * `\n`). The 403 for another account asks for the session again, so SessionCacheGuard puts the
+ * account really signed in on screen; an ONBOARDING_REQUIRED — a revision asked for the consent
+ * again while the screen was open — asks `['me']` again, and the gate, or on MY 설정 the step
+ * (`useSettingsStep`), takes the member on.
+ */
+export function updateBioOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  put: (body: UpdateBioBody) => Promise<Me> = putBio,
+) {
+  return {
+    mutationFn: put,
+    // Returned, so `mutateAsync` settles only once `['me']` holds the answer.
+    onSuccess: (me: Me) => storeMe(queryClient, me, 'bio', onSessionChanged),
+    onError: async (error: Error, body: UpdateBioBody) => {
+      if (isForAnotherAccount(error)) {
+        onSessionChanged();
+        return;
+      }
+      if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+        await refreshOwnMe(queryClient, body.expectedAccountId);
+      }
+    },
+  };
+}
+
+/** `updateBioOptions` as MY 설정's 소개 card's mutation. */
+export function useUpdateBio() {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  return useMutation(updateBioOptions(queryClient, () => void refetchSession()));
 }
 
 /**

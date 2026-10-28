@@ -10,7 +10,8 @@ import { OnboardingService } from './onboarding.service.js';
 
 /**
  * 가입 직후 온보딩 (#58, ADR-0072): `POST /me/consents`, `POST /me/onboarding/nickname` (the one
- * caller of the start grant, #70) and `PUT /me/interest-categories`. Exports `OnboardedGuard`, the
+ * caller of the start grant, #70), `POST /me/onboarding/interests` (the interests step) and MY
+ * 설정's `PUT /me/interest-categories` (#41, ADR-0078). Exports `OnboardedGuard`, the
  * check every action #57-8 keeps from an account that has not finished (#46…#77).
  */
 @Module({

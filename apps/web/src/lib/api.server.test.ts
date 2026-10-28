@@ -6,6 +6,7 @@ import type {
   fetchNoticeServer as FetchNotice,
   fetchPinnedNoticesServer as FetchPinnedNotices,
   fetchPostsPageServer as FetchPostsPage,
+  fetchProfileServer as FetchProfile,
   fetchRelatedMarketsPageServer as FetchRelatedMarketsPage,
   lookUpWriteMarketServer as LookUpWriteMarket,
 } from './api.server';
@@ -55,6 +56,7 @@ let fetchPostsPageServer: typeof FetchPostsPage;
 let lookUpWriteMarketServer: typeof LookUpWriteMarket;
 let fetchPinnedNoticesServer: typeof FetchPinnedNotices;
 let fetchNoticeServer: typeof FetchNotice;
+let fetchProfileServer: typeof FetchProfile;
 
 beforeAll(async () => {
   vi.stubGlobal('fetch', fakeFetch);
@@ -66,6 +68,7 @@ beforeAll(async () => {
     lookUpWriteMarketServer,
     fetchPinnedNoticesServer,
     fetchNoticeServer,
+    fetchProfileServer,
   } = await import('./api.server'));
 });
 afterAll(() => {
@@ -217,5 +220,40 @@ describe('the notice reads (#138)', () => {
     requests.length = 0;
     await expect(fetchNoticeServer(MISSING_NOTICE)).resolves.toBeNull();
     expect(requests.map((url) => url.pathname)).toEqual([`/api/v1/notices/${MISSING_NOTICE}`]);
+  });
+});
+
+describe('fetchProfileServer', () => {
+  it('asks for a profile by its public id, and answers null for NOT_FOUND only (#41)', async () => {
+    requests.length = 0;
+    const answer = (status: number, body: unknown) =>
+      Promise.resolve(
+        new Response(JSON.stringify(body), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        }),
+      );
+    fakeFetch.mockImplementationOnce((input: Request) => {
+      requests.push(new URL(input.url));
+      return answer(200, { data: { member: { publicId: 'k7m2p9qx4z' } } });
+    });
+    await expect(fetchProfileServer('k7m2p9qx4z')).resolves.toMatchObject({
+      member: { publicId: 'k7m2p9qx4z' },
+    });
+    // An unknown public id (and, with #140, a withdrawn account) is a 404 to the visitor.
+    fakeFetch.mockImplementationOnce((input: Request) => {
+      requests.push(new URL(input.url));
+      return answer(404, { error: { code: 'NOT_FOUND', message: 'Profile not found' } });
+    });
+    await expect(fetchProfileServer('zzzzzzzzzz')).resolves.toBeNull();
+    // Anything else is the error boundary's, not a 404.
+    fakeFetch.mockImplementationOnce(() =>
+      answer(500, { error: { code: 'INTERNAL', message: 'boom' } }),
+    );
+    await expect(fetchProfileServer('k7m2p9qx4y')).rejects.toThrow('boom');
+    expect(requests.map((url) => url.pathname)).toEqual([
+      '/api/v1/profiles/k7m2p9qx4z',
+      '/api/v1/profiles/zzzzzzzzzz',
+    ]);
   });
 });

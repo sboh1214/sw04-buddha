@@ -1,11 +1,17 @@
 import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
-import { ApiError, type Me, type UpdateTimeZoneBody } from '@/lib/api';
+import { ApiError, type Me, type UpdateBioBody, type UpdateTimeZoneBody } from '@/lib/api';
 import { getQueryClient } from '@/lib/query-client';
-import { ME_QUERY_KEY, storeMe, updateNicknameOptions, updateTimeZoneOptions } from './use-me';
+import {
+  ME_QUERY_KEY,
+  storeMe,
+  updateBioOptions,
+  updateNicknameOptions,
+  updateTimeZoneOptions,
+} from './use-me';
 
 /**
- * The profile writes' cache writes (`PATCH /me`, `PUT /me/time-zone`), driven through the REAL
+ * The profile writes' cache writes (`PATCH /me`, `PUT /me/time-zone`, `PUT /me/bio`), driven through the REAL
  * QueryClient (`getQueryClient()` answers a fresh one per call under node). Nothing renders:
  * apps/web runs vitest under `environment: 'node'`, which is why `storeMe` and the two mutations'
  * options are exported apart from their hooks. The `['me']` observer stands in for
@@ -25,6 +31,7 @@ const following: Me = {
     timeZone: null,
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
+    bio: null,
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
@@ -291,6 +298,30 @@ describe('storeMe', () => {
     }
   });
 
+  it('takes the 소개 alone from a PUT /me/bio answer (#41)', async () => {
+    // The 소개's answer is a snapshot of the whole profile too: a nickname it read before a
+    // nickname save committed must not come back with it.
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(inNewYork));
+    try {
+      await me.observer.refetch();
+      const withBio: Me = {
+        ...following,
+        profile: { ...following.profile, nickname: '옛이름', bio: '첫 줄\n둘째 줄' },
+      };
+
+      await storeMe(queryClient, withBio, 'bio', () => undefined);
+
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
+        ...inNewYork.profile,
+        bio: '첫 줄\n둘째 줄',
+      });
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
   it('keeps a balance that changed while the write ran, taking only the profile from the answer', async () => {
     // THE HAZARD: the answer's balance is what the server read right after the UPDATE. A fill
     // that committed after that read reached the tab first as `user:balance`, which patched
@@ -459,6 +490,161 @@ describe('the profile mutations', () => {
       expect(session.count()).toBe(1);
       await expect(rename.mutate(body)).rejects.toThrow('taken');
       expect(session.count()).toBe(1);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks GET /me again before the nickname PATCH’s ONBOARDING_REQUIRED reaches the card (owner decision 2026-10-22 answer 1)', async () => {
+    // The server changes no nickname of an account that has not done its onboarding — a revision
+    // asked for the consent again while MY 설정 was open: the refusal settles only once `['me']` says
+    // so, and MY 설정's step (`useSettingsStep().afterRefusal`) reads where to go from it. A refused
+    // nickname (the rules) asks nothing.
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const onboarded: Me = {
+      ...following,
+      onboarding: {
+        ...following.onboarding,
+        consent: true,
+        verification: true,
+        nickname: true,
+        completed: true,
+        nextStep: null,
+      },
+    };
+    const reconsent: Me = {
+      ...onboarded,
+      onboarding: {
+        ...onboarded.onboarding,
+        consent: false,
+        completed: false,
+        nextStep: 'consent',
+      },
+    };
+    const me = meObserver(queryClient, (request) =>
+      Promise.resolve(request === 1 ? onboarded : reconsent),
+    );
+    const failures = [
+      new ApiError(409, {
+        code: 'ONBOARDING_REQUIRED',
+        message: 'onboarding',
+        details: { steps: ['consent'] },
+      }),
+      new ApiError(409, {
+        code: 'NICKNAME_NOT_ALLOWED',
+        message: 'reserved',
+        details: { reason: 'reserved_word' },
+      }),
+    ];
+    const rename = new MutationObserver(
+      queryClient,
+      updateNicknameOptions(queryClient, session.refetch, () =>
+        Promise.reject(failures.shift() ?? new Error('no failure left')),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      const body = { nickname: '새이름', expectedAccountId: following.id };
+
+      await expect(rename.mutate(body)).rejects.toThrow('onboarding');
+      // No settling first: the new `['me']` is there as the refusal arrives.
+      expect(me.requests()).toBe(2);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.onboarding.nextStep).toBe('consent');
+      await expect(rename.mutate(body)).rejects.toThrow('reserved');
+      await settle();
+      expect(me.requests()).toBe(2);
+      expect(session.count()).toBe(0);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('writes the 소개 PUT /me/bio answered — set and cleared — into every observer (#41)', async () => {
+    const queryClient = getQueryClient();
+    const sent: UpdateBioBody[] = [];
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const save = new MutationObserver(
+      queryClient,
+      updateBioOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          sent.push(body);
+          return Promise.resolve({
+            ...following,
+            profile: { ...following.profile, bio: body.bio },
+          });
+        },
+      ),
+    );
+    try {
+      await me.observer.refetch();
+
+      const body = { bio: '안녕하세요', expectedAccountId: following.id };
+      await save.mutate(body);
+      expect(me.observer.getCurrentResult().data?.profile.bio).toBe('안녕하세요');
+
+      // Clearing is a `null` (decision 7: open during a restriction), and it lands the same way.
+      const clear = { bio: null, expectedAccountId: following.id };
+      await save.mutate(clear);
+      expect(me.observer.getCurrentResult().data?.profile.bio).toBeNull();
+      expect(sent).toEqual([body, clear]);
+      expect(me.requests()).toBe(1);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session on another account, and GET /me again on ONBOARDING_REQUIRED (#41)', async () => {
+    // MY 설정 is reached onboarded: ONBOARDING_REQUIRED says another tab or a revision changed
+    // that, so `['me']` is asked again and the gate follows it. A refused 소개 (too long) is
+    // neither.
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const failures = [
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'other account',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      }),
+      new ApiError(409, {
+        code: 'ONBOARDING_REQUIRED',
+        message: 'onboarding',
+        details: { steps: ['consent'] },
+      }),
+      new ApiError(400, {
+        code: 'VALIDATION_ERROR',
+        message: 'invalid',
+        details: [{ path: ['bio'], message: 'at most 160 characters, not 161' }],
+      }),
+    ];
+    const save = new MutationObserver(
+      queryClient,
+      updateBioOptions(queryClient, session.refetch, () =>
+        Promise.reject(failures.shift() ?? new Error('no failure left')),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      const body = { bio: '소개', expectedAccountId: following.id };
+
+      await expect(save.mutate(body)).rejects.toThrow('other account');
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(1);
+      await expect(save.mutate(body)).rejects.toThrow('onboarding');
+      await settle();
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(2);
+      await expect(save.mutate(body)).rejects.toThrow('invalid');
+      await settle();
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(2);
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
     } finally {
       me.unsubscribe();

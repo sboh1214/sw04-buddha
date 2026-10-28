@@ -15,7 +15,8 @@ import { gatedPagePath, needsOnboarding, onboardingPath } from '@/lib/onboarding
  * routes (lib/onboarding.ts, where the decision lives and is tested: the auth and legal screens,
  * and — for an account that finished its onboarding once and faces a re-consent alone — the pages
  * of a login-only action: the post page, where an author deletes their own post, 오너 결정
- * 2026-10-20), and resumes at that step. A post draft on the page it replaces is kept in
+ * 2026-10-20, and MY 설정, where a member clears its public profile's 소개 and interest categories,
+ * 오너 결정 2026-10-21 답 2), and resumes at that step. A post draft on the page it replaces is kept in
  * the tab as the form goes, and comes back with the form after the step (lib/post-drafts.ts); the
  * leave confirm asks nothing here — `router.replace` is the screen's own move. A notice's form on
  * an admin screen (#138) keeps its draft the same way (오너 결정 2026-10-21 (3차), ADR-0077 decision

@@ -15,12 +15,14 @@ import {
   isReconsent,
   isRoutePage,
   isStepBack,
+  leavingSkipsInterests,
   needsOnboarding,
   onboardingEntryPath,
   onboardingNext,
   onboardingPath,
   onboardingReturnReason,
   onboardingScreen,
+  settingsLinkOnStep,
   startGrantNotice,
   takeOnboardingAnswer,
   withInterest,
@@ -137,9 +139,10 @@ const POST_ID = '0b6f6c1e-3f7a-4c51-9d0e-6a1f2b3c4d5e';
 const POST_PAGE = `/community/posts/${POST_ID}`;
 
 describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', () => {
-  it('lists exactly the post page, each entry with its reason', () => {
+  it('lists exactly the post page and MY 설정 (#41), each entry with its reason', () => {
     expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).toEqual([
       '/community/posts/[postId]',
+      '/my/settings',
     ]);
     for (const page of ONBOARDING_EXEMPT_PAGES) expect(page.reason.trim()).not.toBe('');
   });
@@ -222,6 +225,65 @@ describe('the pages exempt for a login-only action (오너 결정 2026-10-20)', 
     expect(needsOnboarding(POST_PAGE, undefined)).toBe(false);
     expect(needsOnboarding(POST_PAGE, COMPLETED)).toBe(false);
     expect(needsOnboarding(POST_PAGE, DONE)).toBe(false);
+  });
+});
+
+describe('MY 설정 for an account facing a re-consent (#41, 오너 결정 2026-10-21 답 2)', () => {
+  it('is MY 설정 alone — not MY, its other tabs or anything under MY 설정', () => {
+    expect(isOnboardingExemptPage('/my/settings')).toBe(true);
+    // Not exempt for every account, as the auth and legal screens are.
+    expect(isOnboardingExempt('/my/settings')).toBe(false);
+    for (const path of ['/my', '/my/wallet', '/my/posts', '/my/settings/x', '/my/settingsx']) {
+      expect(isOnboardingExemptPage(path), path).toBe(false);
+    }
+  });
+
+  it('lets an account that finished once and faces a re-consent alone stay there, to clear its 소개 and categories', () => {
+    expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
+    // MY's other screens still send it on.
+    for (const path of ['/my', '/my/wallet', '/my/posts']) {
+      expect(needsOnboarding(path, RECONSENT), path).toBe(true);
+    }
+  });
+
+  it('sends an account that has not finished its onboarding on from it, MY 설정 as next', () => {
+    const agreedThenLeft: Onboarding = { ...CONSENTED, consent: false, nextStep: 'consent' };
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, agreedThenLeft]) {
+      expect(needsOnboarding('/my/settings', onboarding), String(onboarding.nextStep)).toBe(true);
+    }
+    expect(onboardingPath('/my/settings')).toBe('/onboarding?next=%2Fmy%2Fsettings');
+  });
+
+  it('takes a re-consent’s new value to the step, which comes back to MY 설정', () => {
+    const path = onboardingEntryPath('/my/settings', RECONSENT);
+    expect(path).toBe('/onboarding?next=%2Fmy%2Fsettings');
+    expect(onboardingNext(new URL(path, 'https://x.invalid').searchParams.get('next'))).toBe(
+      '/my/settings',
+    );
+    expect(onboardingEntryPath('/my/settings', DONE)).toBe('/my/settings');
+  });
+});
+
+describe('the way to MY 설정 on the re-consent step (오너 결정 2026-10-22 답 2)', () => {
+  it('is on the consent step of an account facing a re-consent alone — the one MY 설정 keeps', () => {
+    expect(settingsLinkOnStep(RECONSENT, 'consent')).toBe(true);
+    // The page it leads to keeps that account (the gate's exception), so the link never bounces.
+    expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
+  });
+
+  it('is on no first onboarding, no other step and no re-consent of an account that never finished', () => {
+    expect(settingsLinkOnStep(FRESH, 'consent')).toBe(false);
+    // Agreed once, left before its 본인확인, then a revision: a re-consent the gate does not let
+    // stay on MY 설정, which would send it straight back.
+    const agreedThenLeft: Onboarding = { ...CONSENTED, consent: false, nextStep: 'consent' };
+    expect(isReconsent(agreedThenLeft)).toBe(true);
+    expect(settingsLinkOnStep(agreedThenLeft, 'consent')).toBe(false);
+    for (const screen of ['verification', 'nickname', 'notice', 'interests', null] as const) {
+      expect(settingsLinkOnStep(RECONSENT, screen), String(screen)).toBe(false);
+    }
+    for (const onboarding of [CONSENTED, VERIFIED, COMPLETED, DONE]) {
+      expect(settingsLinkOnStep(onboarding, 'consent'), String(onboarding.nextStep)).toBe(false);
+    }
   });
 });
 
@@ -414,6 +476,23 @@ describe('onboardingScreen', () => {
   });
 });
 
+describe('leavingSkipsInterests (owner decision 2026-10-21 (2nd) answer 2)', () => {
+  it('skips the interests step when the notice or the interests screen is left unanswered', () => {
+    expect(leavingSkipsInterests('notice', false)).toBe(true);
+    expect(leavingSkipsInterests('interests', false)).toBe(true);
+  });
+
+  it('does not while the step’s own answer is on its way, nor before or after the step', () => {
+    // The pick or the 건너뛰기 sent answers the step itself.
+    expect(leavingSkipsInterests('notice', true)).toBe(false);
+    expect(leavingSkipsInterests('interests', true)).toBe(false);
+    // The three steps: the step not reached. Null: nothing left — the step answered.
+    for (const screen of ['consent', 'verification', 'nickname', null] as const) {
+      expect(leavingSkipsInterests(screen, false)).toBe(false);
+    }
+  });
+});
+
 describe('why the account is on an earlier step (오너 결정 2026-10-19 (2차) 6)', () => {
   it('tells a step back from a step forward', () => {
     expect(isStepBack('nickname', 'consent')).toBe(true);
@@ -481,6 +560,7 @@ describe('takeOnboardingAnswer', () => {
       timeZone: 'America/New_York',
       nicknameChangeAvailableAt: null,
       interestCategoryIds: [],
+      bio: null,
     },
     balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [],

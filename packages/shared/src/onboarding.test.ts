@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { INT4_MAX } from './constants.js';
 import {
   INTEREST_CATEGORIES_INPUT_MAX,
+  INTERESTS_FIRST_ANSWER_WINDOW_HOURS,
   REQUIRED_ONBOARDING_STEPS,
+  answerInterestsStepBodySchema,
   missingOnboardingSteps,
   onboardingRequiredDetailsSchema,
   onboardingSchema,
@@ -111,11 +113,15 @@ describe('onboarding bodies', () => {
     ).toBe(false);
   });
 
-  it('takes any number of category ids within the input bound, none for the skip', () => {
+  it.each([
+    ['the onboarding step', answerInterestsStepBodySchema],
+    ['MY 설정', setInterestCategoriesBodySchema],
+  ])('takes any number of category ids within the input bound, none included (%s)', (_, schema) => {
     for (const categoryIds of [[], [1], [3, 1, 3]]) {
-      expect(
-        setInterestCategoriesBodySchema.parse({ categoryIds, expectedAccountId: 'u1' }),
-      ).toEqual({ categoryIds, expectedAccountId: 'u1' });
+      expect(schema.parse({ categoryIds, expectedAccountId: 'u1' })).toEqual({
+        categoryIds,
+        expectedAccountId: 'u1',
+      });
     }
     for (const categoryIds of [
       [0],
@@ -123,10 +129,14 @@ describe('onboarding bodies', () => {
       [INT4_MAX + 1],
       Array.from({ length: INTEREST_CATEGORIES_INPUT_MAX + 1 }, (_, i) => i + 1),
     ]) {
-      expect(
-        setInterestCategoriesBodySchema.safeParse({ categoryIds, expectedAccountId: 'u1' }).success,
-      ).toBe(false);
+      expect(schema.safeParse({ categoryIds, expectedAccountId: 'u1' }).success).toBe(false);
     }
-    expect(setInterestCategoriesBodySchema.safeParse({ categoryIds: [] }).success).toBe(false);
+    expect(schema.safeParse({ categoryIds: [] }).success).toBe(false);
+  });
+});
+
+describe('the interests step’s first answer (owner decision 2026-10-21 (3rd) answer 1)', () => {
+  it('stays open 24 hours after the nickname step, the value the owner set', () => {
+    expect(INTERESTS_FIRST_ANSWER_WINDOW_HOURS).toBe(24);
   });
 });

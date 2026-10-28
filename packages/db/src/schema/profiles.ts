@@ -52,10 +52,21 @@ export const profiles = pgTable(
     nicknameChangedAt: timestampTz(),
     /**
      * When the onboarding's interest categories step was answered, categories chosen or skipped
-     * (#58, #57-7: never asked again), or null while it was not. The categories themselves are
+     * (#58, #57-7: never asked again) — the skip also what its screen sends when the account leaves
+     * it, or the start-Coin notice before it, unanswered, and a first pick in MY 설정 answering it
+     * too (ADR-0078) — or null while it was not. The categories themselves are
      * `profile_interest_categories`.
      */
     interestsAnsweredAt: timestampTz(),
+    /**
+     * The 소개 of the public profile (#41, ADR-0069 decision 3 #37-3): plain text the member writes
+     * in MY 설정, at most BIO_MAX_LENGTH characters (`varchar` counts characters as
+     * `codePointLength` does), line breaks kept, never drawn as a link; null while there is none,
+     * and then the profile shows nothing. Normalised by `bioInputSchema` (@buddha/shared), which
+     * turns a blank one into null — the CHECK below holds that. During a writing or an account
+     * restriction it can be emptied but not set anew (#37-9, decision 7).
+     */
+    bio: varchar({ length: 160 }),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -87,5 +98,7 @@ export const profiles = pgTable(
     index('profiles_created_at_user_id_idx').on(desc(t.createdAt), desc(t.userId)),
     /** Ten of the 32 characters of PUBLIC_ID_ALPHABET (no 0/o, 1/i). */
     check('profiles_public_id_check', sql`${t.publicId} ~ '^[2-9a-hj-np-z]{10}$'`),
+    /** A bio is absent or has text: the API stores a blank one as none, as a post's title. */
+    check('profiles_bio_check', sql`${t.bio} IS NULL OR btrim(${t.bio}) <> ''`),
   ],
 );

@@ -14,6 +14,7 @@ describe('meSchema', () => {
       timeZone: null,
       nicknameChangeAvailableAt: null,
       interestCategoryIds: [],
+      bio: null,
     },
     balance: { availableCoin: '0', lockedCoin: '0' },
     linkedAccounts: [
@@ -146,6 +147,13 @@ describe('meSchema', () => {
       meSchema.safeParse({ ...sample, onboarding: { ...sample.onboarding, nextStep: 'grant' } })
         .success,
     ).toBe(false);
+  });
+
+  it('carries the 소개, or null while there is none, and requires the key (#41)', () => {
+    const withBio = { ...sample, profile: { ...sample.profile, bio: '첫 줄\n둘째 줄' } };
+    expect(meSchema.parse(withBio)).toEqual(withBio);
+    const { bio: _dropped, ...profileWithoutBio } = sample.profile;
+    expect(meSchema.safeParse({ ...sample, profile: profileWithoutBio }).success).toBe(false);
   });
 
   it('validates PATCH /me bodies: the nickname and the account the screen shows', () => {

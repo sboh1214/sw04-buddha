@@ -140,6 +140,7 @@ const me: Me = {
     timeZone: null,
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
+    bio: null,
   },
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],

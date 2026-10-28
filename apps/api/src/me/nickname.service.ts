@@ -19,6 +19,7 @@ import { eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { DB } from '../infra/db/db.provider.js';
+import { assertPublicItemEdit } from './public-items.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -65,24 +66,31 @@ export class NicknameService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
   /**
-   * `PATCH /me`: the change of MY 설정. Refused (ONBOARDING_REQUIRED) before the onboarding's
-   * nickname step: until then the account sets its nickname there, where the choice is not a
-   * change.
+   * `PATCH /me`: the change of MY 설정, for an account that has done the onboarding's three steps
+   * (ONBOARDING_REQUIRED naming those left otherwise). Before the nickname step the account sets
+   * its nickname there, where the choice is not a change; and an account the consent step holds
+   * back after a revision that changed members' rights (재동의) changes it once it has agreed again
+   * — the server's side of MY 설정 sending the change to the remaining step (owner decision
+   * 2026-10-22 answer 1, ADR-0078). `OnboardedGuard` on the route said so before the body was
+   * read; this holds it until the write commits (docs/GUARDS.md, step 4). Refused too under a
+   * writing or an account restriction (`assertPublicItemEdit`, #41).
    */
   async change(userId: string, nickname: string): Promise<void> {
     await this.db.transaction(async (tx) => {
       const profile = await this.lockProfile(tx, userId);
-      if (profile.nicknameConfirmedAt === null) {
-        const steps = await missingOnboardingStepsOf(tx, userId);
+      const steps = await missingOnboardingStepsOf(tx, userId);
+      if (steps.length > 0 || profile.nicknameConfirmedAt === null) {
         const details: OnboardingRequiredDetails = {
           steps: steps.length > 0 ? steps : ['nickname'],
         };
         throw new AppError('ONBOARDING_REQUIRED', {
-          message: 'The nickname is set in the onboarding first',
+          message: 'The onboarding is not done: the nickname changes once it is',
           details,
         });
       }
       if (nickname === profile.nickname) return;
+      // A public item (#37-9): no change of the nickname under a writing or an account restriction.
+      await assertPublicItemEdit(tx, userId, 'replace');
       const now = await clockTimestamp(tx);
       if (profile.nicknameChangedAt !== null) {
         const next = new Date(

@@ -2,10 +2,12 @@ import { type BlockList } from 'node:net';
 import { Body, Controller, HttpCode, Inject, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import {
+  answerInterestsStepBodySchema,
   meSchema,
   recordConsentsBodySchema,
   setInterestCategoriesBodySchema,
   setOnboardingNicknameBodySchema,
+  type AnswerInterestsStepBody,
   type Me,
   type RecordConsentsBody,
   type SetInterestCategoriesBody,
@@ -21,13 +23,13 @@ import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { RateLimit } from '../rate-limit/rate-limit.decorator.js';
 import { clientAddress } from '../rate-limit/rate-limit.tracker.js';
 import { UNCOUNTED_PEERS } from '../rate-limit/uncounted-peers.js';
-import { OnboardedGuard } from './onboarded.guard.js';
 import { OnboardingService } from './onboarding.service.js';
 
 /**
  * 가입 직후 온보딩 (#58) under `/api/v1/me`: the consent step, the nickname step (which grants the
- * start Coin) and the interest categories. The 본인확인 between the first two is #183's
- * (`/me/phone-verification/*`), and where an account stands is `GET /me`'s `onboarding`.
+ * start Coin), the interests step, and MY 설정's interest categories (#41). The 본인확인 between the
+ * first two is #183's (`/me/phone-verification/*`), and where an account stands is `GET /me`'s
+ * `onboarding`.
  * Owner-only: the session decides whose onboarding is written, and every write names the account
  * the screen shows (`expectedAccountId`, assertExpectedAccount, as every owner write since
  * A-PG-24) — a window still showing account A after another one signed in as B would otherwise
@@ -115,18 +117,58 @@ export class OnboardingController {
   }
 
   /**
-   * The interest categories (#57-7): after the start Coin, so for onboarded accounts only. An
-   * empty list is the skip; either way the step is answered and not asked again.
+   * The interests step (#57-7), from the onboarding's screen: the categories picked, or none — the
+   * skip, which the screen also sends when the account leaves it, or the start-Coin notice before
+   * it, without an answer, so the server records the skip (owner decision 2026-10-21 (2nd) answer
+   * 2, ADR-0078). While the step is unanswered, within 24 hours of the nickname step
+   * (INTERESTS_FIRST_ANSWER_WINDOW_HOURS, owner decision 2026-10-21 (3rd) answer 1), this is its
+   * first answer: for onboarded accounts only, and let through a writing or an account restriction
+   * (a first choice, owner decision 2026-10-21 answer 4). Past those hours the step's picks are a
+   * change as in MY 설정 and its skip records the skip. Once answered, a skip changes nothing and
+   * picks are a change as in MY 설정 (`PUT /me/interest-categories`). No OnboardedGuard: the service
+   * asks the onboarding in its transaction (`assertPublicItemOnboarding`), as for MY 설정's write —
+   * or, for the skip past those hours, which gives no public item a value, `assertOnboarded` alone.
    */
-  @Put('interest-categories')
-  @UseGuards(OnboardedGuard)
+  @Post('onboarding/interests')
+  @HttpCode(200)
   @ApiOperation({
-    operationId: 'setMyInterestCategories',
-    summary: 'Set the interest categories (none: skip the step)',
+    operationId: 'answerMyInterestsStep',
+    summary: 'Answer the onboarding interests step: categories picked, or none to skip it',
   })
   @ApiData(meSchema)
-  // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done.
+  // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
+  // write answers the step (picks or the skip while it is unanswered) or adds a category.
+  // FORBIDDEN (no field named): a category added under a writing or an account restriction once
+  // the step is answered, or 24 hours after the nickname step while it is not.
   // VALIDATION_ERROR: a category that does not exist or is not active (details name each).
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  answerInterestsStep(
+    @CurrentUser() user: SessionUser,
+    @Body({ schema: answerInterestsStepBodySchema }) body: AnswerInterestsStepBody,
+  ): Promise<Me> {
+    assertExpectedAccount(user.id, body.expectedAccountId);
+    return this.onboarding.answerInterestsStep(user.id, body.categoryIds);
+  }
+
+  /**
+   * MY 설정's interest categories (#41): replaced by the list sent. Never the interests step's
+   * first answer — an account that left the onboarding's screens skipped the step (owner decision
+   * 2026-10-21 (2nd) answer 2), so a first pick here is a change like any later one. A category
+   * added is for onboarded accounts only and refused under a restriction (#37-9); dropping picks
+   * needs sign-in only, an account held back by a re-consent included (owner decision 2026-10-21
+   * answer 2) — so no OnboardedGuard: the service asks the onboarding in its transaction for an
+   * addition only (`assertPublicItemOnboarding`).
+   */
+  @Put('interest-categories')
+  @ApiOperation({
+    operationId: 'setMyInterestCategories',
+    summary: 'Set the interest categories in MY settings (none: drop them all)',
+  })
+  @ApiData(meSchema)
+  // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
+  // write adds a category. FORBIDDEN (no field named): a category added under a writing or an
+  // account restriction. VALIDATION_ERROR: a category that does not exist or is not active
+  // (details name each).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
   setInterestCategories(
     @CurrentUser() user: SessionUser,

@@ -18,7 +18,8 @@ import { nicknameSchema } from './nickname.js';
  * them only browses, and the server refuses it what needs them (ONBOARDING_REQUIRED, #57-8), and
  * they are where an account resumes. The interest categories are not: the onboarding screen shows
  * them once, after the notice that follows the nickname step, and an account that left there has
- * skipped them — nothing sends it back (오너 결정 2026-10-19 (2차) 5, ADR-0072).
+ * skipped them — nothing sends it back (오너 결정 2026-10-19 (2차) 5, ADR-0072), and the screen
+ * tells the server so (owner decision 2026-10-21, ADR-0078).
  *
  * REQUIRED_ONBOARDING_STEPS: the steps the onboarding is done with (#57-8, D18), in their order
  * (decision 4 #58).
@@ -54,8 +55,10 @@ export const onboardingSchema = z
     /** The three required steps done: the account may do what #57-8 keeps from the rest. */
     completed: z.boolean(),
     /**
-     * The interest categories picked or skipped on their step (#57-7). Not a step to resume at: an
-     * account that left the onboarding screen before answering them has skipped them.
+     * The interest categories' step answered (#57-7): picked, skipped, or left — the screen sends
+     * the skip when the account leaves it or the start-Coin notice before it without an answer
+     * (owner decision 2026-10-21, ADR-0078) — or a first pick made in MY 설정 instead. Not a step to
+     * resume at: an account that left the onboarding screen before answering them has skipped them.
      */
     interests: z.boolean(),
     /**
@@ -117,17 +120,42 @@ export type SetOnboardingNicknameBody = z.infer<typeof setOnboardingNicknameBody
  */
 export const INTEREST_CATEGORIES_INPUT_MAX = 200;
 
+/** The category ids one interests write names: active categories, top-level or sub (#57-7). */
+const interestCategoryIdsSchema = z
+  .array(z.number().int().min(1).max(INT4_MAX))
+  .max(INTEREST_CATEGORIES_INPUT_MAX);
+
 /**
- * `PUT /me/interest-categories`: the account's interest categories (N04 §2's 관심 카테고리, a
- * public profile item once #41 shows it), replacing what it had — top-level and sub-categories
- * alike (#57-7), active ones only. An empty list is the skip: the step is answered either way and
- * never asked again (#57-7) — nor is it once the account left the screen before it. Ids repeat
- * harmlessly.
+ * `POST /me/onboarding/interests`: the onboarding's interests step (#57-7), from its screen — the
+ * categories picked, top-level and sub-categories alike, active ones only; an empty list is the
+ * skip, which the screen also sends when the account leaves it, or the start-Coin notice before it,
+ * without an answer (owner decision 2026-10-21, ADR-0078). The step is answered either way and never
+ * asked again. Ids repeat harmlessly.
+ */
+export const answerInterestsStepBodySchema = z
+  .object({ categoryIds: interestCategoryIdsSchema, expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'AnswerInterestsStepBody' });
+export type AnswerInterestsStepBody = z.infer<typeof answerInterestsStepBodySchema>;
+
+/**
+ * How long after the nickname step (`profiles.nickname_confirmed_at`) the interests step's answer
+ * from its screen (`POST /me/onboarding/interests`) still counts as the step's first answer — the
+ * account's first choice of a public profile item, which a writing or an account restriction lets
+ * through. After it, an unanswered step's picks are a change as MY 설정's (refused under a
+ * restriction; outside one saved, the step answered with them), and its skip records the skip. The
+ * owner set it (owner decision 2026-10-21 (3rd) answer 1, ADR-0078): the screen comes right after
+ * the nickname step, so this bounds the first answer of an account whose leaving the server never
+ * heard of (ADR-0078 decision 7-23). A fixed value, not a release setting (docs/SETTINGS.md).
+ */
+export const INTERESTS_FIRST_ANSWER_WINDOW_HOURS = 24;
+
+/**
+ * `PUT /me/interest-categories`: MY 설정's interest categories (N04 §2's 관심 카테고리, a public
+ * profile item, #41), replacing what the account had — top-level and sub-categories alike, active
+ * ones only; an empty list drops them all. Never the onboarding step's answer
+ * (`answerInterestsStepBodySchema`). Ids repeat harmlessly.
  */
 export const setInterestCategoriesBodySchema = z
-  .object({
-    categoryIds: z.array(z.number().int().min(1).max(INT4_MAX)).max(INTEREST_CATEGORIES_INPUT_MAX),
-    expectedAccountId: expectedAccountIdSchema,
-  })
+  .object({ categoryIds: interestCategoryIdsSchema, expectedAccountId: expectedAccountIdSchema })
   .meta({ id: 'SetInterestCategoriesBody' });
 export type SetInterestCategoriesBody = z.infer<typeof setInterestCategoriesBodySchema>;

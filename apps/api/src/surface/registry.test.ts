@@ -245,12 +245,18 @@ describe('public and owner-only routes (static)', () => {
 
   it('flags exactly the routes behind OnboardedGuard, each after SessionGuard (#58, #57-8)', () => {
     const guarded = routes.filter((route) => guardsOf(route).includes(OnboardedGuard));
-    // A sanity check on the walk: the interest categories are behind it today.
-    expect(guarded.map((route) => route.key)).toContain('PUT /me/interest-categories');
-    // A post's writes are behind it — but not deleting one's own post, which asks for a session
-    // alone (owner decision 2026-10-19, ADR-0073): no guard and no `onboarded` mark.
+    // A sanity check on the walk: a post's writes are behind it — but not deleting one's own post,
+    // which asks for a session alone (owner decision 2026-10-19, ADR-0073): no guard and no
+    // `onboarded` mark. (The interest categories and the 소개 are not either: their service asks
+    // the onboarding for a new value only, ADR-0078.) The nickname change is: an account facing a
+    // re-consent changes it once it has agreed again (owner decision 2026-10-22 answer 1).
     expect(guarded.map((route) => route.key)).toEqual(
-      expect.arrayContaining(['POST /posts', 'PUT /posts/:postId', 'POST /media/images']),
+      expect.arrayContaining([
+        'POST /posts',
+        'PUT /posts/:postId',
+        'POST /media/images',
+        'PATCH /me',
+      ]),
     );
     const deletePost = routes.find((route) => route.key === 'POST /posts/:postId/delete');
     expect(deletePost && guardsOf(deletePost)).toEqual([SessionGuard]);
@@ -531,13 +537,22 @@ describe('the public API document (static)', () => {
 
   it('documents ONBOARDING_REQUIRED (409) on every route behind OnboardedGuard (#58)', () => {
     // The admin surface included (오너 결정 2026-10-19, ADR-0072): a client reads the refusal it
-    // can get from the document, as for every other code.
-    const guarded = new Set(
-      routes.filter((route) => guardsOf(route).includes(OnboardedGuard)).map((route) => route.key),
-    );
+    // can get from the document, as for every other code. And the public profile items, whose
+    // service asks the onboarding for a new value only (owner decision 2026-10-21, ADR-0078).
+    const asksInService = [
+      'PUT /me/bio',
+      'POST /me/onboarding/interests',
+      'PUT /me/interest-categories',
+    ];
+    const guarded = new Set([
+      ...routes
+        .filter((route) => guardsOf(route).includes(OnboardedGuard))
+        .map((route) => route.key),
+      ...asksInService,
+    ]);
     const documented = operations.filter(({ key }) => guarded.has(key));
     expect(documented.map(({ key }) => key)).toEqual(
-      expect.arrayContaining(['PUT /me/interest-categories', 'GET /admin/release-settings']),
+      expect.arrayContaining(['POST /posts', 'GET /admin/release-settings', ...asksInService]),
     );
     const missing = documented
       .filter(({ operation }) => {
@@ -548,11 +563,11 @@ describe('the public API document (static)', () => {
     expect(missing).toEqual([]);
   });
 
-  it('shows a person only where a public route says why, and then by its public face alone (#46, #47, #48)', () => {
-    // ADR-0069 decision 5: a public answer may name a person — a post's or a comment's author — only on a route
-    // registered with the reason, and then by the public id, the nickname, the image and the
-    // 운영자 mark. The account id stays forbidden there (the `counterparty` item of PRIVATE_DATA,
-    // checked above for every public answer).
+  it('shows a person only where a public route says why, and then by its public face alone (#46, #47, #48, #41)', () => {
+    // ADR-0069 decision 5: a public answer may name a person — a post's or a comment's author, a
+    // profile's member — only on a route registered with the reason, and then by the public id,
+    // the nickname, the image and the 운영자 mark. The account id stays forbidden there (the
+    // `counterparty` item of PRIVATE_DATA, checked above for every public answer).
     const PERSON_FIELDS = ['publicId', 'nickname'];
     const showing = Object.entries(PUBLIC_ROUTES)
       .filter(([, entry]) => entry.showsPerson !== undefined)
@@ -563,6 +578,7 @@ describe('the public API document (static)', () => {
       'GET /posts',
       'GET /posts/:postId',
       'GET /posts/:postId/comments',
+      'GET /profiles/:publicId',
     ]);
     for (const key of showing) expect(PUBLIC_ROUTES[key]!.showsPerson!.trim(), key).not.toBe('');
     expect(

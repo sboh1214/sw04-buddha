@@ -36,6 +36,7 @@ export * from './payment-gateway.js';
 export * from './phone-verification.js';
 export * from './post.js';
 export * from './post-document.js';
+export * from './profile.js';
 export * from './public-id.js';
 export * from './rate-limit.js';
 export * from './realtime.js';
