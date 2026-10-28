@@ -563,7 +563,7 @@ describe('the public API document (static)', () => {
     expect(missing).toEqual([]);
   });
 
-  it('shows a person only where a public route says why, and then by its public face alone (#46, #47, #48, #41)', () => {
+  it('shows a person only where a public route says why, and then by its public face alone (#46, #47, #48, #41, #51)', () => {
     // ADR-0069 decision 5: a public answer may name a person — a post's or a comment's author, a
     // profile's member — only on a route registered with the reason, and then by the public id,
     // the nickname, the image and the 운영자 mark. The account id stays forbidden there (the
@@ -579,6 +579,8 @@ describe('the public API document (static)', () => {
       'GET /posts/:postId',
       'GET /posts/:postId/comments',
       'GET /profiles/:publicId',
+      'GET /profiles/:publicId/comments',
+      'GET /profiles/:publicId/posts',
     ]);
     for (const key of showing) expect(PUBLIC_ROUTES[key]!.showsPerson!.trim(), key).not.toBe('');
     expect(

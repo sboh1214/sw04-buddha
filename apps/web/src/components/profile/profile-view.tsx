@@ -1,10 +1,10 @@
 import { Avatar, Badge, Box, Card, HStack, Heading, Stack, Tag, Text } from '@chakra-ui/react';
-import { EmptyState } from '@/components/ui/empty-state';
 import { copy } from '@/copy';
 import { type PublicProfile } from '@/lib/api';
 import { nameInitial } from '@/lib/posts';
 import { interestCategoryLabel, joinedMonthText, profileCounts } from '@/lib/profile';
 import { OwnProfileLink } from './own-profile-link';
+import { ProfileAuthored } from './profile-authored';
 
 /**
  * A member's public profile (#41, ADR-0078; ADR-0069 decision 3 #37), drawn from the one public
@@ -23,12 +23,13 @@ import { OwnProfileLink } from './own-profile-link';
  *   what it counts and never a score, a rank or a skill (N05 §2, D5);
  * - on the member's own profile, the link to MY 설정 (decision 4 #41, `OwnProfileLink` — decided in
  *   the browser);
- * - the posts and comments area, '준비 중' until #51 fills it (#37-14).
+ * - the posts and comments area (#37-14, #51 — ADR-0080): the member's 글 and 댓글 on two tabs,
+ *   read in the browser (`ProfileAuthored`), the items the counts count.
  *
  * Nothing else of the account is on the page or in its answer (#37-8, #37-11~13): no balance,
  * order, holding, fill, PnL, watched market, proposal, verification mark, restriction, email, real
  * name or number. No directive: the server renders it into the HTML (the page reads the answer on
- * the server); only the owner's link is a client component.
+ * the server); the owner's link and the lists are client components.
  */
 export function ProfileView({ profile }: { profile: PublicProfile }) {
   const { member } = profile;
@@ -146,7 +147,7 @@ export function ProfileView({ profile }: { profile: PublicProfile }) {
           </Heading>
         </Card.Header>
         <Card.Body>
-          <EmptyState message={copy.comingSoon} data-testid="profile-posts-coming-soon" />
+          <ProfileAuthored publicId={member.publicId} />
         </Card.Body>
       </Card.Root>
     </Stack>

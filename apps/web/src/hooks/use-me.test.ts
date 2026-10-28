@@ -9,8 +9,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ApiError,
   api,
+  type AuthoredComment,
   type DeleteProfileImageBody,
   type Me,
+  type MyComment,
+  type MyPost,
   type Post,
   type PostAuthor,
   type PostComment,
@@ -18,6 +21,13 @@ import {
   type UpdateBioBody,
   type UpdateTimeZoneBody,
 } from '@/lib/api';
+import {
+  AUTHORED_KEY,
+  type AuthoredPage,
+  MY_AUTHORED_KEY,
+  myAuthoredKey,
+  profileAuthoredKey,
+} from '@/lib/authored';
 import {
   type CommentPage,
   type CommentPages,
@@ -2032,6 +2042,155 @@ describe('the member’s faces the tab holds, after a profile image change (#141
       expect(reads.map(({ cursor }) => cursor)).toEqual(['c1', 'c1', undefined, 'c1']);
     } finally {
       unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('puts the new address on a member’s lists too — a profile’s 글 and 댓글 tabs, MY 내 글’s two with the summary’s preview (#51, ADR-0080 7-24) — and null once deleted, another member’s profile, the hidden marks, the cursors and each entry’s time and stale mark as they were, with no read', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(ME_QUERY_KEY, {
+      ...following,
+      profile: { ...following.profile, imageUrl: OLD },
+    });
+    const readAt = Date.now() - 60_000;
+    const seed = (key: readonly unknown[], data: unknown) =>
+      queryClient.setQueryData(key, data, { updatedAt: readAt });
+    const listed = (
+      id: string,
+      author: PostAuthor,
+      parentId: string | null = null,
+    ): AuthoredComment => ({
+      id,
+      parentId,
+      body: '댓글',
+      author,
+      createdAt: '2026-10-19T00:00:00.000Z',
+      editedAt: null,
+      likeCount: 0,
+      post: { state: 'published', id: POST, title: '제목', excerpt: '본문' },
+      market,
+    });
+    const pagesOf = <Row>(...pages: Row[][]): InfiniteData<AuthoredPage<Row>> => ({
+      pages: pages.map((items, at) => ({
+        items,
+        nextCursor: at === pages.length - 1 ? null : `c${at + 1}`,
+      })),
+      pageParams: pages.map((_, at) => (at === 0 ? undefined : `c${at}`)),
+    });
+    const hidden = { reason: { code: 'spam', note: '광고' } } as const;
+    const myPost = (id: string, image: string | null, mark: MyPost['hidden']): MyPost => ({
+      ...card(id, face(OWN, image)),
+      hidden: mark,
+    });
+    const myComment = (
+      id: string,
+      image: string | null,
+      mark: MyComment['hidden'],
+      parentId: string | null = null,
+    ): MyComment => ({ ...listed(id, face(OWN, image), parentId), hidden: mark });
+    // The member's own profile, its 글 tab two pages long; someone else's profile, both tabs.
+    seed(
+      profileAuthoredKey(OWN, 'posts'),
+      pagesOf([card(POST, face(OWN, OLD))], [card(FORMER_POST, face(OWN, OLD))]),
+    );
+    seed(
+      profileAuthoredKey(OWN, 'comments'),
+      pagesOf([listed(R2, face(OWN, OLD), C1), listed(C1, face(OWN, OLD))]),
+    );
+    const otherPosts = pagesOf([card(OTHER_POST, face(OTHER, OTHER_IMAGE))]);
+    const otherComments = pagesOf([listed(C3, face(OTHER, null))]);
+    seed(profileAuthoredKey(OTHER, 'posts'), otherPosts);
+    seed(profileAuthoredKey(OTHER, 'comments'), otherComments);
+    // MY '내 글': a post and a comment an operator hid among them.
+    seed(
+      myAuthoredKey('posts'),
+      pagesOf([myPost(POST, OLD, null), myPost(FORMER_POST, OLD, hidden)]),
+    );
+    seed(
+      myAuthoredKey('comments'),
+      pagesOf([myComment(R2, OLD, hidden, C1), myComment(C1, OLD, null)]),
+    );
+    // A deletion from MY marked its lists to be read again: they stay so.
+    await queryClient.invalidateQueries({ queryKey: MY_AUTHORED_KEY, refetchType: 'none' });
+
+    /** Every face of the member's the two roots hold, as `[where, imageUrl]`. */
+    const listedFaces = () => {
+      const faces: [string, string | null][] = [];
+      for (const root of [AUTHORED_KEY, MY_AUTHORED_KEY])
+        for (const [key, held] of queryClient.getQueriesData<
+          InfiniteData<AuthoredPage<{ id: string; author: PostAuthor }>>
+        >({ queryKey: root }))
+          for (const page of held?.pages ?? [])
+            for (const row of page.items)
+              if (row.author.kind === 'member' && row.author.publicId === OWN)
+                faces.push([`${JSON.stringify(key)} ${row.id}`, row.author.imageUrl]);
+      return faces;
+    };
+    expect(listedFaces().map(([, image]) => image)).toEqual(Array(8).fill(OLD));
+
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve({ ...following, profile: { ...following.profile, imageUrl: NEW } }),
+      ),
+    );
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve(following),
+      ),
+    );
+    try {
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      // Eight faces: the profile's two cards and two comments, MY's two posts and two comments.
+      const faces = listedFaces();
+      expect(faces).toHaveLength(8);
+      expect(faces.filter(([, image]) => image !== NEW)).toEqual([]);
+      // Someone else's profile, untouched — the very objects held.
+      expect(queryClient.getQueryData(profileAuthoredKey(OTHER, 'posts'))).toBe(otherPosts);
+      expect(queryClient.getQueryData(profileAuthoredKey(OTHER, 'comments'))).toBe(otherComments);
+      // The rest of each row and page as it was: the hidden marks, the cursors.
+      const mine = queryClient.getQueryData<InfiniteData<AuthoredPage<MyPost>>>(
+        myAuthoredKey('posts'),
+      );
+      expect(mine?.pages[0]?.items.map((row) => row.hidden)).toEqual([null, hidden]);
+      expect(
+        queryClient.getQueryData<InfiniteData<AuthoredPage<MyComment>>>(myAuthoredKey('comments'))
+          ?.pages[0]?.items[0],
+      ).toEqual(myComment(R2, NEW, hidden, C1));
+      const profile = queryClient.getQueryData<InfiniteData<AuthoredPage<PostSummary>>>(
+        profileAuthoredKey(OWN, 'posts'),
+      );
+      expect(profile?.pages.map((page) => page.nextCursor)).toEqual(['c1', null]);
+      expect(profile?.pageParams).toEqual([undefined, 'c1']);
+      // Each entry's time and stale mark as they were, and nothing read.
+      for (const key of [
+        profileAuthoredKey(OWN, 'posts'),
+        profileAuthoredKey(OWN, 'comments'),
+        myAuthoredKey('posts'),
+        myAuthoredKey('comments'),
+      ]) {
+        expect(queryClient.getQueryState(key)?.dataUpdatedAt).toBe(readAt);
+      }
+      expect(queryClient.getQueryState(myAuthoredKey('posts'))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(profileAuthoredKey(OWN, 'posts'))?.isInvalidated).toBe(
+        false,
+      );
+      expect(queryClient.isFetching()).toBe(0);
+
+      // Deleted: no image on any of them — the nickname's first letter is drawn.
+      await remove.mutate({ expectedAccountId: following.id });
+      expect(listedFaces().map(([, image]) => image)).toEqual(Array(8).fill(null));
+      expect(queryClient.getQueryData(profileAuthoredKey(OTHER, 'posts'))).toBe(otherPosts);
+      expect(queryClient.isFetching()).toBe(0);
+    } finally {
       queryClient.clear();
     }
   });

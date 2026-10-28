@@ -46,6 +46,7 @@ describe('PRIVATE_DATA (#113)', () => {
         'former-nickname',
         'risk-flag',
         'author-holding',
+        'moderation',
         'market-maker',
       ]),
     );
@@ -141,6 +142,17 @@ describe('findPrivateField', () => {
     ['isSuspended', 'risk-flag'],
     ['authorPosition', 'author-holding'],
     ['author_side', 'author-holding'],
+    ['hidden', 'moderation'],
+    ['hiddenAt', 'moderation'],
+    ['isHidden', 'moderation'],
+    ['hiddenReason', 'moderation'],
+    ['hide_reason', 'moderation'],
+    ['hidingReason', 'moderation'],
+    ['moderationStatus', 'moderation'],
+    ['moderations', 'moderation'],
+    ['moderatedAt', 'moderation'],
+    ['moderatorId', 'moderation'],
+    ['moderators', 'moderation'],
     ['hasBot', 'market-maker'],
     ['bot_status', 'market-maker'],
     ['marketMakerInventory', 'market-maker'],
@@ -223,6 +235,12 @@ describe('findPrivateField', () => {
     'likeCount',
     'like_count',
     'likes',
+    // A post's state says a placeholder is one (#45-5), and a reason on its own is a refusal's
+    // (`details.reason`): only a hiding's mark and reason are the author's (ADR-0080).
+    'state',
+    'reason',
+    'commentCount',
+    'excerpt',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

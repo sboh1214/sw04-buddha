@@ -25,6 +25,7 @@ import {
   useHoldings,
   useSessionEnded,
 } from './portfolio';
+import { MyAuthoredPreview } from './posts/my-authored';
 import { LedgerRow } from './wallet/ledger-list';
 import { StartGrantPendingNotice } from './wallet/start-grant-notice';
 import { WatchlistBody } from './watchlist/watchlist';
@@ -38,10 +39,10 @@ function tab(key: MyTabKey) {
 /**
  * `/my`, MY's first screen (owner decision 2026-10-13): 잔고 요약 — the old portfolio's card —
  * and a preview of each tab, the first `MY_PREVIEW_ROWS` rows through the tab's own list body
- * with a 전체 보기 to the tab. 설정 has no rows to preview; the tabs with no content yet say 준비 중
- * (내 글 #51, 알림 #53). The previews run in the tab bar's order (MY_TABS, the owner's), so 관심
- * 시장 — rows since #89 (ADR-0064), the newest three watches as market cards — sits between the
- * 준비 중 of 내 글 and of 알림.
+ * with a 전체 보기 to the tab. 설정 has no rows to preview; the tab with no content yet says 준비 중
+ * (알림 #53). The previews run in the tab bar's order (MY_TABS, the owner's): 내 글 — rows since
+ * #51 (ADR-0080), the newest three posts and the newest three comments — then 관심 시장 — rows since
+ * #89 (ADR-0064), the newest three watches as market cards — then the 준비 중 of 알림.
  *
  * The holdings, 정산 이력 and the orders are read once here and handed to every card that shows
  * them, so the summary card and the previews are drawn from one price and one list.
@@ -86,7 +87,7 @@ export function MySummary() {
         </Stack>
       </Section>
       <WalletPreview />
-      <ComingSoonPreview tabKey="posts" />
+      <PostsPreview />
       <WatchlistPreview />
       <ComingSoonPreview tabKey="notifications" />
     </Stack>
@@ -114,6 +115,20 @@ function ViewOwnProfileLink() {
 /** The preview of a tab whose content its own issue brings: 준비 중 (ADR-0054 decision 1-7). */
 function ComingSoonPreview({ tabKey }: { tabKey: MyTabKey }) {
   return <ComingSoonTab title={tab(tabKey).label} testId={`my-preview-${tabKey}`} />;
+}
+
+/**
+ * 내 글's preview (#51, ADR-0080): the tab's own two bodies with their first `MY_PREVIEW_ROWS` rows
+ * each, and the tab's 전체 보기 for the rest. Its own component so its queries live only as long as
+ * the summary does.
+ */
+function PostsPreview() {
+  const postsTab = tab('posts');
+  return (
+    <Section title={postsTab.label} testId="my-preview-posts" href={postsTab.href}>
+      <MyAuthoredPreview limit={MY_PREVIEW_ROWS} />
+    </Section>
+  );
 }
 
 /**

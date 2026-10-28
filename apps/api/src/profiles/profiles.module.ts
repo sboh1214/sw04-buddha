@@ -12,5 +12,7 @@ import { ProfilesService } from './profiles.service.js';
   imports: [DbModule],
   controllers: [ProfilesController],
   providers: [ProfilesService],
+  // The profile's lists (#51, AuthoredModule) find the member by the same rule.
+  exports: [ProfilesService],
 })
 export class ProfilesModule {}

@@ -83,9 +83,11 @@ const LEADING_BLANKS = `^${TRIM_WHITESPACE_CLASS}+`;
  * the blanks around its line breaks taken out first — what `postExcerpt` drops anyway — and only then
  * cut to LIST_TEXT_HEAD, so the excerpt the API makes from it is the one the whole text gives.
  * Cutting first left nothing to show when a body opened with more blank lines than the cut kept
- * (a code block of empty lines is text; only the whole body must not be blank).
+ * (a code block of empty lines is text; only the whole body must not be blank). What every list that
+ * shows a post's start reads — the community list and, through #51, a member's posts and the posts
+ * their comments sit under — so a post starts the same wherever it is listed.
  */
-function cardText(bodyText: AnyColumn): SQL<string> {
+export function cardText(bodyText: AnyColumn): SQL<string> {
   return sql<string>`left(regexp_replace(regexp_replace(${bodyText}, ${BLANKS_AROUND_BREAKS}, ${'\n'}, 'g'), ${LEADING_BLANKS}, ''), ${LIST_TEXT_HEAD})`;
 }
 
@@ -130,7 +132,7 @@ export function postAuthorOf(row: AuthorRow): PostAuthor {
 }
 
 /** The market a post belongs to, as a card and the post page link to it. */
-function postMarketOf(row: {
+export function postMarketOf(row: {
   id: string;
   slug: string;
   title: string;

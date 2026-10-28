@@ -22,7 +22,8 @@ import {
  * reaches a profile from a byline — the post's, a comment's, a community card's — signed in or not,
  * and reads the same public items and counts (the likes received leave out the member's own, which
  * the post still counts); only the member gets the link to MY 설정, an admin's profile says
- * '운영자', and an old link shows the new nickname. Every answer is `noindex`, the HTML is the
+ * '운영자', and an old link shows the new nickname. The posts and comments on a profile are
+ * authored.spec.ts's (#51). Every answer is `noindex`, the HTML is the
  * server's and holds nothing private, and an unknown public id is a 404. A member facing a
  * re-consent stays on MY 설정 to clear the 소개 and drop categories, and keeps its account cards (the
  * time zone, 2026-10-22 answer 1); a new 소개, a category added, a
@@ -230,7 +231,8 @@ test.describe('공개 프로필', () => {
       `${top.nameKo} › ${sub.nameKo}`,
     );
     await expectCounts(page, 0, 0, 0);
-    await expect(page.getByTestId('profile-posts-coming-soon')).toHaveText(copy.comingSoon);
+    // The 글·댓글 area (#51, ADR-0080): nothing written yet, said on the tab shown first.
+    await expect(page.getByTestId('profile-posts-list-empty')).toHaveText(copy.authoredPostsEmpty);
     await expect(page.locator('meta[name="robots"]')).toHaveAttribute('content', /noindex/);
     // A category named at length (32 characters a name, the seed's today and the operators' with
     // #17) stays inside the line: its chip is cut short, and the page never scrolls sideways at

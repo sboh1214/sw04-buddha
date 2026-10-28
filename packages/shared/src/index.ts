@@ -6,6 +6,7 @@ export * from './api/path-param.js';
 export * from './api/uuid.js';
 export * from './approvals.js';
 export * from './auth.js';
+export * from './authored.js';
 export * from './charge-package.js';
 export * from './comment.js';
 export * from './consent.js';

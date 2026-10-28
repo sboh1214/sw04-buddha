@@ -316,6 +316,29 @@ export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 export const approvalStatusSchema = z.enum(APPROVAL_STATUSES).meta({ id: 'ApprovalStatus' });
 
+// ---- community moderation (#45-10, #50, #51) ---------------------------------------
+/**
+ * 신고 사유 (ADR-0069 decision 2 #45-10): the eight a report picks one of, in the owner's order —
+ * N05 §5's six (스팸, 괴롭힘, 개인정보 노출, 사칭, 공모·조작 유도, 기타) with 시장과 무관 and 권리
+ * 침해 (명예훼손·저작권) set apart from 기타. The same list names why an operator hid a post or a
+ * comment: the reason a hiding carries is one of these and the operator's explanation, if any
+ * (owner decision 2026-10-22, ADR-0080; `hiddenReasonSchema`, authored.ts). #50 takes reports with
+ * them and records a hiding's; nothing stores them yet, so no Postgres type is built from this
+ * tuple until #50 adds one. Labels: copy.ts (`reportReason*`, the web's `reportReasonLabel`).
+ */
+export const REPORT_REASONS = [
+  'spam',
+  'harassment',
+  'personal_info',
+  'impersonation',
+  'collusion_manipulation',
+  'off_topic',
+  'rights_infringement',
+  'other',
+] as const;
+export type ReportReason = (typeof REPORT_REASONS)[number];
+export const reportReasonSchema = z.enum(REPORT_REASONS).meta({ id: 'ReportReason' });
+
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections
  * (PLAN 0.2). These are the second row of the header and, through their leaves, the home

@@ -56,18 +56,25 @@ test.describe('MY', () => {
 
     // The summary: 잔고 요약 with a new account's 0 (creating an account grants nothing since #70,
     // ADR-0071), a preview per tab with content, 준비 중 for the rest. 관심 시장 has its content
-    // since #89 (ADR-0064): a fresh account's is empty.
+    // since #89 (ADR-0064) and 내 글 since #51 (ADR-0080): a fresh account's are empty.
     await expect(page.getByTestId('portfolio-available')).toHaveText('0 Coin');
-    for (const key of ['positions', 'orders', 'history', 'wallet', 'watchlist']) {
+    for (const key of ['positions', 'orders', 'history', 'wallet', 'posts', 'watchlist']) {
       const preview = page.getByTestId(`my-preview-${key}`);
       await expect(preview).toBeVisible();
       await expect(preview.getByRole('link', { name: copy.myViewAll })).toBeVisible();
     }
     await expect(page.getByTestId('my-preview-watchlist')).toContainText(copy.watchlistEmpty);
     await expect(page.getByTestId('my-preview-watchlist-coming-soon')).toHaveCount(0);
-    for (const key of ['posts', 'notifications']) {
-      await expect(page.getByTestId(`my-preview-${key}-coming-soon`)).toHaveText(copy.comingSoon);
-    }
+    await expect(page.getByTestId('my-preview-posts-list-empty')).toHaveText(
+      copy.authoredPostsEmpty,
+    );
+    await expect(page.getByTestId('my-preview-comments-list-empty')).toHaveText(
+      copy.authoredCommentsEmpty,
+    );
+    await expect(page.getByTestId('my-preview-posts-coming-soon')).toHaveCount(0);
+    await expect(page.getByTestId('my-preview-notifications-coming-soon')).toHaveText(
+      copy.comingSoon,
+    );
     // The previews, 준비 중 ones included, run in the tab bar's order (the owner's; 설정 has
     // none), so 관심 시장 is not drawn above 내 글.
     const previews = await page
