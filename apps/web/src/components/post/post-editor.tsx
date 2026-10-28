@@ -280,6 +280,14 @@ export interface PostEditorProps {
   describedBy?: string;
   /** Images the server refused (`refusedImageIds`), drawn with a border until they are replaced. */
   refusedImageIds?: readonly string[];
+  /** The empty editor's hint: a post's by default; a notice's (#138) says what a notice holds. */
+  placeholder?: string;
+  /**
+   * Where an image already in the document is drawn from, by its media id: the public
+   * `GET /media/:id` by default; a notice's edit screen passes the admin route (#138), since the
+   * public one serves a pinned notice's current images only. Read when the editor is made.
+   */
+  imageSrc?: (mediaId: string) => string;
 }
 
 export function PostEditor({
@@ -296,6 +304,8 @@ export function PostEditor({
   invalid = false,
   describedBy,
   refusedImageIds = [],
+  placeholder = copy.postWriteBodyPlaceholder,
+  imageSrc = mediaPath,
 }: PostEditorProps) {
   /**
    * Previews of this session's uploads, by media id; read by the image node's `srcOf` whenever
@@ -329,13 +339,13 @@ export function PostEditor({
       PostTextStyle,
       PaletteColor,
       PostImageNode.configure({
-        srcOf: (mediaId) => previews.get(mediaId) ?? mediaPath(mediaId),
+        srcOf: (mediaId) => previews.get(mediaId) ?? imageSrc(mediaId),
       }),
       Table.configure({ resizable: false }),
       TableRow,
       TableHeader,
       TableCell,
-      Placeholder.configure({ placeholder: copy.postWriteBodyPlaceholder }),
+      Placeholder.configure({ placeholder }),
     ],
     content: initialDocument ?? '',
     editable: !disabled,

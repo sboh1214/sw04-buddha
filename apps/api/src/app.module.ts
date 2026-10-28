@@ -15,6 +15,7 @@ import { LikesModule } from './likes/likes.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MediaModule } from './media/media.module.js';
 import { MeModule } from './me/me.module.js';
+import { NoticesModule } from './notices/notices.module.js';
 import { OnboardingModule } from './onboarding/onboarding.module.js';
 import { AdminSmsStatusModule } from './phone-verification/admin-sms-status.module.js';
 import { PhoneVerificationModule } from './phone-verification/phone-verification.module.js';
@@ -75,6 +76,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 좋아요 (#49): likes of posts and comments, and what the caller liked on a post page. After the
     // comments, whose routes it follows in the document, and the onboarding, whose guard it uses.
     LikesModule,
+    // 운영 공지 (#138): the pinned notices above the community list, a notice page and the admins'
+    // writes, pins and unpins. After the posts and the comments, whose community it joins.
+    NoticesModule,
   ],
   controllers: [HealthController],
 })

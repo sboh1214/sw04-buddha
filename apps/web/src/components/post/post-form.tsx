@@ -18,17 +18,27 @@ import {
   POST_TITLE_MAX_LENGTH,
   type PostDocument,
 } from '@buddha/shared';
-import { type RefObject, useEffect, useId, useReducer, useRef, useState } from 'react';
+import {
+  type ReactNode,
+  type RefObject,
+  useEffect,
+  useId,
+  useReducer,
+  useRef,
+  useState,
+} from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
 import { useKeepPostDraftForOnboarding } from '@/hooks/use-post-draft';
 import {
+  type DraftStart,
   bodyChangedFrom,
   countEditorDocument,
   countWithUploads,
   createImageSlots,
   draftChanged,
+  landedDraftStart,
   titleTooLong,
 } from '@/lib/post-editor';
 import {
@@ -37,6 +47,7 @@ import {
   type PostDraftKey,
   clearSessionPostDraft,
   hasDraftToKeep,
+  heldDraftVersion,
   nextRestoredDraftState,
   readSessionPostDraft,
   restoredDraftState,
@@ -47,18 +58,39 @@ import { PostEditor } from './post-editor';
 export interface PostFormValues {
   title: string | null;
   body: unknown;
+  /**
+   * The version of the screen's subject what is sent was typed on (`heldDraftVersion`): a draft
+   * taken back's own, else the screen's `draftVersion`. Undefined for a post's form.
+   */
+  version: string | null | undefined;
 }
 
 export interface PostFormProps {
   initialTitle?: string | null;
   initialDocument?: PostDocument;
-  /** Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts). */
+  /**
+   * Which screen's draft this is, where the onboarding gate keeps it (lib/post-drafts.ts): a post's
+   * write or edit screen, or a notice's (#138 — the admin screens are gated like the rest, and a
+   * notice's draft is kept the same way, 오너 결정 2026-10-21 (3차), ADR-0077).
+   */
   draftKey: PostDraftKey;
+  /**
+   * The version of the screen's subject the form starts from, for a screen that saves against one
+   * (a notice's edit screen: the version it was opened from, moved by each save that lands). Kept
+   * with the draft when the gate takes it, and what a draft taken back is saved against
+   * (`PostFormValues['version']`). Absent for a post's form.
+   */
+  draftVersion?: string | null;
   accountId: string | undefined;
   submitLabel: string;
   /** Sending, or sent and on the way to the post: the form is locked. */
   pending: boolean;
-  /** The write succeeded: the draft is the server's and is not kept. */
+  /**
+   * The write succeeded: the draft is the server's and is not kept. Each time it turns true, what
+   * the form holds becomes its start (`landedDraftStart`) — a screen that stays on the form after
+   * a save (a notice's edit screen, #138) has nothing to lose, or to keep, until the form changes
+   * again.
+   */
   saved: boolean;
   /** The last refusal, in Korean; undefined when there is none. */
   errorMessage: string | undefined;
@@ -80,6 +112,34 @@ export interface PostFormProps {
    * changes, and false as the form goes: what the edit screen keeps should its post go (`gone`).
    */
   onHoldingChange?: (holding: boolean) => void;
+  /** A notice's form (#138): a required title; absent, a post's, whose title is optional. */
+  notice?: NoticeFormOptions;
+  /**
+   * What the refusal offers beside its message, if anything: a notice's edit refused because the
+   * notice was saved since — whoever saved it — offers its latest version (#138, owner decisions
+   * 2026-10-21).
+   */
+  errorAction?: ReactNode;
+  /** Where the editor draws an image already in the document (`PostEditor`'s `imageSrc`). */
+  imageSrc?: (mediaId: string) => string;
+  /**
+   * Focus the title when the form mounts: a notice's edit form opened again on the latest version
+   * (최신 내용 불러오기, #138) replaces the form the focus was in, which would leave it on nothing.
+   */
+  autoFocusTitle?: boolean;
+}
+
+/**
+ * The same form for an operator's notice (#138, ADR-0077 — «글과 같은 서식 편집기»): its title is
+ * required, so the send waits for one and the field says so, and the labels say what a notice
+ * holds. A notice's title limit is the post title's (`NOTICE_TITLE_MAX_LENGTH`, lib/notices.test.ts
+ * checks they are one number), so the count below holds for both.
+ */
+export interface NoticeFormOptions {
+  titleRequired: true;
+  titleLabel: string;
+  titlePlaceholder: string;
+  bodyPlaceholder: string;
 }
 
 /**
@@ -100,7 +160,9 @@ export interface PostFormProps {
  * Leaving with a draft asks first (owner decision 2026-10-19, `useLeaveGuard`): while the title or
  * the body differs from what the form started with, or an image is uploading, and nothing is being
  * sent — once the screen sends (`pending`, which the screens hold through the move to the post) the
- * draft is the server's.
+ * draft is the server's. A notice's forms ask the same (#138, owner decision 2026-10-21 8); the
+ * notice's edit screen stays on the form after a save, and what the save sent is the form's start
+ * from then on (`saved`, `landedDraftStart`); a refused save moves nothing.
  *
  * The onboarding gate taking the account to a step left keeps the draft in this tab instead, and
  * asks nothing (오너 결정 2026-10-20, lib/post-drafts.ts) — a title or a body changed, or a draft
@@ -111,7 +173,10 @@ export interface PostFormProps {
  * a dialog that says so (오너 결정 2026-10-20 3차 답 3, `nextRestoredDraftState`), and a discard
  * says so in a toast like the app's other completions — on screen and, once, to screen readers
  * (오너 결정 2026-10-20 3차 답 5, `POST_DRAFT_DISCARDED_TOAST`). Taken back, it is removed from the
- * storage: the form holds it, and guards it like any draft.
+ * storage: the form holds it, and guards it like any draft. A notice's forms do the same (#138,
+ * 오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20) — a notice edit's draft with the version it was typed
+ * on (`draftVersion`), which its save sends — and a write that lands ends what was taken back
+ * (`landed`): the notice's edit screen stays on the form, holding the server's content then.
  *
  * The post an edit form edits can be deleted while it is open — in another tab: a save refused as
  * NOT_FOUND, or a read of it that answers so (the edit screen's `postGoneAfter`) or answers the
@@ -144,6 +209,13 @@ export function PostForm(props: PostFormProps) {
     draft: accountId === undefined ? null : readSessionPostDraft(draftKey, accountId),
   }));
   const [held, send] = useReducer(nextRestoredDraftState, kept.draft, restoredDraftState);
+  // Whether the screen's write had landed as of the last render: its turning true ends what was
+  // taken back (a notice's edit screen stays on the form after a save; a post's screen leaves).
+  const [landed, setLanded] = useState(props.saved);
+  if (landed !== props.saved) {
+    setLanded(props.saved);
+    if (props.saved) send('landed');
+  }
   // The title field of the fields on screen: where a discard leaves the focus.
   const titleRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -252,6 +324,7 @@ function PostFormFields({
   initialTitle = null,
   initialDocument,
   draftKey,
+  draftVersion,
   accountId,
   submitLabel,
   pending,
@@ -262,6 +335,10 @@ function PostFormFields({
   gone = false,
   onClose,
   onHoldingChange,
+  notice,
+  errorAction,
+  imageSrc,
+  autoFocusTitle = false,
   restored,
   focusTitle,
   titleRef,
@@ -278,6 +355,12 @@ function PostFormFields({
   const [body, setBody] = useState<unknown>(
     restored?.body ?? initialDocument ?? { type: 'doc', content: [] },
   );
+  // What "changed" is measured from: the title the form started with and the editor's own first
+  // JSON (`baseline`, the null body) — and once a write of the form lands (`saved` turns true),
+  // what that write sent (`landedDraftStart`). Taken when the form is made, as the editor takes its
+  // document: a screen that reads its subject again in the background (a notice's edit screen) does
+  // not move it under what is typed.
+  const [start, setStart] = useState<DraftStart>({ title: initialTitle, body: null });
   const [uploading, setUploading] = useState(false);
   // The uploads on their way (`createImageSlots`), one set of slots for the form's life (a discard
   // draws a new form, and editor, with new ones): told of every change as it happens, from the
@@ -285,14 +368,25 @@ function PostFormFields({
   // land in one render.
   const [imagesUploading, setImagesUploading] = useState(0);
   const [imageSlots] = useState(() => createImageSlots(POST_IMAGES_MAX, setImagesUploading));
-  // The editor's own JSON when it was made (`onReady`), and whether the body differs from it now.
+  // The editor's own JSON when it was made (`onReady`), and whether the body differs now from the
+  // start (`start.body`, or this baseline while the start has no body of its own).
   const baseline = useRef<string | null>(null);
   const [bodyChanged, setBodyChanged] = useState(false);
+  // Whether the screen's write had landed as of the last render: its turning true moves the start.
+  const [landed, setLanded] = useState(saved);
+  if (landed !== saved) {
+    setLanded(saved);
+    if (saved) {
+      setStart(landedDraftStart(start, { title, body, bodyChanged }));
+      setBodyChanged(false);
+    }
+  }
   // The uploads' small previews, by media id, for a draft the gate keeps: the ones taken back with
   // it, and each new upload's once the editor has drawn it small.
   const [previews] = useState(() => new Map(Object.entries(restored?.previews ?? {})));
   // A draft taken back is something to lose until it is sent or discarded, as typed text is.
-  const dirty = restored !== null || draftChanged({ title, initialTitle, bodyChanged, uploading });
+  const dirty =
+    restored !== null || draftChanged({ title, initialTitle: start.title, bodyChanged, uploading });
   // Held once the post is gone (오너 결정 2026-10-24): leaving asks until the writer closes it.
   useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);
   // What the edit screen keeps should the post go: what leaving would lose, while no write of it
@@ -302,16 +396,31 @@ function PostFormFields({
     onHoldingChange?.(holding);
   }, [holding, onHoldingChange]);
   useEffect(() => () => onHoldingChange?.(false), [onHoldingChange]);
-  useKeepPostDraftForOnboarding({
-    key: draftKey,
-    accountId,
-    // What the kept draft can carry: not an upload in flight, which leaving still loses (above).
-    hasDraft: hasDraftToKeep({ title, initialTitle, bodyChanged, restored: restored !== null }),
-    saved,
+  // What the kept draft can carry: not an upload in flight, which leaving still loses (above).
+  const hasDraft = hasDraftToKeep({
     title,
-    body: body as PostDraft['body'],
-    previews,
+    initialTitle: start.title,
+    bodyChanged,
+    restored: restored !== null,
   });
+  // The version what the form holds was typed on: a draft taken back's, else the screen's.
+  const version = heldDraftVersion(restored, draftVersion);
+  useKeepPostDraftForOnboarding(
+    {
+      key: draftKey,
+      accountId,
+      // Once a write lands, measured from what it sent (the start moved, and what was taken back
+      // ended): a change after it — on a notice's edit screen, which stays on the form — is a
+      // draft to keep again. Until the form shows it saved, the landing counts by its moment.
+      hasDraft,
+      title,
+      body: body as PostDraft['body'],
+      previews,
+      ...(version === undefined ? {} : { version }),
+    },
+    // Locked for a send: what the form holds is what it sent, whatever renders it again meanwhile.
+    pending,
+  );
   const noticeRef = useRef<HTMLDivElement>(null);
   const noticeTextId = useId();
   useEffect(() => {
@@ -322,9 +431,11 @@ function PostFormFields({
   // '이미지 n / 10장' counts the uploads on their way too (owner decision 2026-10-21).
   const count = countWithUploads(countEditorDocument(body), imagesUploading);
   const titleInvalid = titleTooLong(title);
+  const titleMissing = notice?.titleRequired === true && title.trim() === '';
   const blocked =
     gone ||
     pending ||
+    titleMissing ||
     uploading ||
     accountId === undefined ||
     count.empty ||
@@ -340,7 +451,7 @@ function PostFormFields({
         event.preventDefault();
         if (blocked) return;
         const trimmed = title.trim();
-        onSubmit({ title: trimmed === '' ? null : trimmed, body });
+        onSubmit({ title: trimmed === '' ? null : trimmed, body, version });
       }}
       data-testid="post-form"
     >
@@ -372,19 +483,20 @@ function PostFormFields({
         </Alert.Root>
       )}
 
-      <Field.Root invalid={titleInvalid}>
-        <Field.Label>{copy.postWriteTitleLabel}</Field.Label>
+      <Field.Root invalid={titleInvalid} required={notice?.titleRequired}>
+        <Field.Label>{notice?.titleLabel ?? copy.postWriteTitleLabel}</Field.Label>
         <Input
           ref={titleRef}
           value={title}
           // UTF-16 units: twice the code points, so an emoji title is never cut short; the count
           // below is the rule.
           maxLength={POST_TITLE_MAX_LENGTH * 2}
-          placeholder={copy.postWriteTitlePlaceholder}
+          placeholder={notice?.titlePlaceholder ?? copy.postWriteTitlePlaceholder}
           // Read-only rather than disabled once the post is gone: its text is still the writer's to
           // select and copy.
           readOnly={gone}
           disabled={pending && !gone}
+          autoFocus={autoFocusTitle}
           onChange={(event) => setTitle(event.target.value.replace(/[\r\n]+/g, ' '))}
           data-testid="post-title-input"
         />
@@ -403,7 +515,7 @@ function PostFormFields({
           }}
           onChange={(json) => {
             setBody(json);
-            setBodyChanged(bodyChangedFrom(baseline.current, json));
+            setBodyChanged(bodyChangedFrom(start.body ?? baseline.current, json));
           }}
           onPreview={(mediaId, preview) => {
             previews.set(mediaId, preview);
@@ -416,6 +528,8 @@ function PostFormFields({
           invalid={count.tooLong || count.tooManyImages}
           describedBy="post-body-length post-body-images post-body-errors"
           refusedImageIds={refusedImageIds}
+          placeholder={notice?.bodyPlaceholder}
+          imageSrc={imageSrc}
         />
         <HStack gap="3" justify="flex-end" textStyle="bodyXs" color="fg.muted">
           <Text
@@ -456,6 +570,7 @@ function PostFormFields({
           <Alert.Indicator />
           <Alert.Content>
             <Alert.Description>{errorMessage}</Alert.Description>
+            {errorAction}
           </Alert.Content>
         </Alert.Root>
       )}

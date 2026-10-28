@@ -6,7 +6,10 @@
  * account's resting order, a position with its PnL, a payment, two watched markets (#89), a
  * recorded search (#15), its consent records with the address and browser they came with, a
  * nickname it gave up (#58), a post with an image on the market it trades (#46), comments under
- * it (#48) and A's likes of both, made with the keyed hash of A's number (#49). Then:
+ * it (#48) and A's likes of both, made with the keyed hash of A's number (#49), and a pinned
+ * notice whose operator — its writer, editor and pinner, and its image's uploader — is A, with an
+ * earlier version kept for operators, and a notice A wrote and never pinned, which is not public
+ * (#138). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -42,6 +45,7 @@ import {
   createComment,
   createCommentLike,
   createMedia,
+  createNotice,
   createPhoneVerification,
   createPost,
   createPostLike,
@@ -123,6 +127,12 @@ interface Fixture {
    * with, so the comment list names A as an author and B's refused writes aim at A's comment.
    */
   comment: { id: string };
+  /**
+   * A pinned notice (#138) whose operator is A in every record the API keeps — A wrote, edited and
+   * pinned it (`admin_actions`) and uploaded its image — though A holds no admin role: what the
+   * notice routes are called with, so an answer naming the notice's operator would carry A.
+   */
+  notice: { id: string };
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -264,7 +274,10 @@ function forbiddenFields(body: string): string[] {
 
 // ---- the cases ---------------------------------------------------------------------------
 
-/** Path parameters of the public routes, by name: A's market, A's post and the image in it. */
+/**
+ * Path parameters of the public routes, by name: A's market, A's post and the image in it, and the
+ * notice A operated.
+ */
 const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
   id: (fixture) => fixture.market.id,
   idOrSlug: (fixture) => fixture.market.slug,
@@ -272,6 +285,7 @@ const PUBLIC_PARAMS: Readonly<Record<string, (fixture: Fixture) => string>> = {
   mediaId: (fixture) => fixture.post.mediaId,
   // A's 댓글, whose 대댓글 the reply page reads (#48, '답글 더 보기').
   commentId: (fixture) => fixture.comment.id,
+  noticeId: (fixture) => fixture.notice.id,
 };
 
 /**
@@ -317,6 +331,10 @@ const NEVER_SHOWN: readonly string[] = [
   // placeholder ('삭제된 글입니다', a 대댓글 under it).
   'comment revision',
   'deleted comment',
+  // #138: an earlier version of a notice, kept for operators only, and a notice A wrote and never
+  // pinned — only a pinned notice is public (owner decision 2026-10-21).
+  'notice revision',
+  'unpinned notice',
 ];
 
 interface OwnerCase {
@@ -1041,6 +1059,57 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     await createPostLike(t.db, { postId: post.id, userId: a.id, phoneHash });
     await createCommentLike(t.db, { commentId: comment.id, userId: a.id, phoneHash });
 
+    // A notice (#138) A operated, pinned, with A's image in it (its object in the test's store)
+    // and an earlier version kept for operators: the notice routes are called with it, and
+    // nothing of its operator — A — may ride on them. A is no admin; the records are written here
+    // as the admin routes write them, so whatever a notice answer might read of its operator
+    // would be A's.
+    const noticeMedia = await createMedia(t.db, { ownerId: a.id, contentType: 'image/png' });
+    await t.storage.put(
+      noticeMedia.storageKey,
+      new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      'image/png',
+    );
+    const notice = await createNotice(t.db, {
+      title: `운영 공지 ${tag}`,
+      imageIds: [noticeMedia.id],
+      editedAt: new Date(),
+      pinSlot: 1,
+    });
+    const noticeRevisionText = `leak-notice-revision-${tag}`;
+    await t.db.insert(schema.noticeRevisions).values({
+      noticeId: notice.id,
+      title: noticeRevisionText,
+      body: {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: noticeRevisionText }] }],
+      },
+      bodyText: noticeRevisionText,
+      imageIds: [],
+      writtenAt: notice.createdAt,
+    });
+    await t.db.insert(schema.adminActions).values(
+      (['notice_create', 'notice_update', 'notice_pin'] as const).map((type) => ({
+        adminId: a.id,
+        type,
+        targetType: 'notice',
+        targetId: notice.id,
+      })),
+    );
+    // And a notice A wrote and never pinned: not public, so no answer may hold its words — the
+    // fixed area lists the pinned one alone (owner decision 2026-10-21, ADR-0077).
+    const unpinnedNoticeText = `leak-unpinned-notice-${tag}`;
+    const unpinnedNotice = await createNotice(t.db, {
+      title: unpinnedNoticeText,
+      text: unpinnedNoticeText,
+    });
+    await t.db.insert(schema.adminActions).values({
+      adminId: a.id,
+      type: 'notice_create',
+      targetType: 'notice',
+      targetId: unpinnedNotice.id,
+    });
+
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
     const search = await createSearch(t.db, { userId: a.id, query: searchTerm });
@@ -1083,6 +1152,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       relatedMarket: related,
       post: { id: post.id, mediaId: media.id },
       comment: { id: comment.id },
+      notice: { id: notice.id },
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
@@ -1104,6 +1174,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('deleted post', deletedText),
         text('comment revision', commentRevisionText),
         text('deleted comment', deletedCommentText),
+        text('notice revision', noticeRevisionText),
+        text('unpinned notice', unpinnedNoticeText),
         text('time zone', timeZone),
         text('real name', realName),
         text('phone', phone),
@@ -1267,6 +1339,13 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       data: { state: 'published', id: f.post.id },
     });
     expect(bodies.get('GET /media/:mediaId')).toContain('PNG');
+    // The notice routes answered the notice A operated (#138): the fixed area lists it and its
+    // page shows it — with nothing of A, whose values the check above found in neither.
+    const pinned = parse(bodies.get('GET /notices')!) as { data: { id: string }[] };
+    expect(pinned.data.map((row) => row.id)).toEqual([f.notice.id]);
+    expect(parse(bodies.get('GET /notices/:noticeId')!)).toMatchObject({
+      data: { id: f.notice.id },
+    });
     // The comment route answered A's 댓글 with its 대댓글 and the placeholder of the deleted one.
     const threads = parse(bodies.get('GET /posts/:postId/comments')!) as {
       data: {

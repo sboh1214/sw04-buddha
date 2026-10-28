@@ -18,7 +18,11 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  *   the draft was written in; another tab, another window and a later visit never see it, and it
  *   goes with the tab. (`localStorage` would outlive the tab and reach every tab of the browser.)
  * - Keyed by the screen: a new post per market, an edit per post (`postDraftStorageKey`), and held
- *   for the account that wrote it — another account signed in on the tab never reads it.
+ *   for the account that wrote it — another account signed in on the tab never reads it. An
+ *   operator notice's write and edit screens (#138) use the same form and keep their drafts the
+ *   same way (오너 결정 2026-10-21 (3차), ADR-0077: the gate moves an admin as it moves anyone): one key
+ *   for the new notice, one per notice edited — and an edit's draft keeps the version it was typed
+ *   on (`PostDraft['version']`).
  * - Gone: once taken back (the form holds it again and guards it like any draft — leaving asks,
  *   and the gate keeps it again should it send the account on once more), once a write or an edit
  *   of that screen by the same account succeeds (one in flight when the gate took the account
@@ -42,8 +46,15 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  * window's quota, blocked site data) keeps nothing and restores nothing.
  */
 
-/** Which screen's draft: a new post on a market, or an edit of a post. */
-export type PostDraftKey = { kind: 'new'; marketId: string } | { kind: 'edit'; postId: string };
+/**
+ * Which screen's draft: a new post on a market, an edit of a post, and — the same form, kept the
+ * same way (#138, 오너 결정 2026-10-21 (3차), ADR-0077) — a new operator notice and an edit of a notice.
+ */
+export type PostDraftKey =
+  | { kind: 'new'; marketId: string }
+  | { kind: 'edit'; postId: string }
+  | { kind: 'notice-new' }
+  | { kind: 'notice-edit'; noticeId: string };
 
 /** What the screen takes back. */
 export interface PostDraft {
@@ -53,6 +64,15 @@ export interface PostDraft {
   body: JSONContent;
   /** Small previews of the uploads, by media id: `data:image/…;base64,` URLs. */
   previews: Readonly<Record<string, string>>;
+  /**
+   * The version of the screen's subject the draft was typed on, for a screen that saves against
+   * one: a notice's edit screen, whose save sends the version it was opened from
+   * (`expectedEditedAt` — the notice's `editedAt` then, null when never edited; 오너 결정 2026-10-21
+   * 7). A draft taken back is saved against it, not against the version the screen opened on after
+   * the step: a save made meanwhile — by another admin, or this one in another tab — still refuses
+   * it. Absent for a post's draft (a post's save names no version).
+   */
+  version?: string | null;
 }
 
 /** The part of the Web Storage API the drafts use. */
@@ -83,9 +103,16 @@ export const DRAFT_PREVIEW_MAX_SIDE = 640;
 export const POST_DRAFT_PREFIX = 'buddha.postDraft:';
 
 export function postDraftStorageKey(key: PostDraftKey): string {
-  return key.kind === 'new'
-    ? `${POST_DRAFT_PREFIX}new:${key.marketId.toLowerCase()}`
-    : `${POST_DRAFT_PREFIX}edit:${key.postId.toLowerCase()}`;
+  switch (key.kind) {
+    case 'new':
+      return `${POST_DRAFT_PREFIX}new:${key.marketId.toLowerCase()}`;
+    case 'edit':
+      return `${POST_DRAFT_PREFIX}edit:${key.postId.toLowerCase()}`;
+    case 'notice-new':
+      return `${POST_DRAFT_PREFIX}notice-new`;
+    case 'notice-edit':
+      return `${POST_DRAFT_PREFIX}notice-edit:${key.noticeId.toLowerCase()}`;
+  }
 }
 
 /**
@@ -110,12 +137,14 @@ export function hasDraftToKeep(state: {
 
 /**
  * Whether a screen going away keeps its draft: it holds one to keep (`hasDraft` —
- * `hasDraftToKeep`), the write it sent did not succeed (`saved`), and the account has an
- * onboarding step left — what the gate is taking it to. Any other leave keeps nothing: a link or
- * Back asked first, and «쓰던 내용이 사라집니다» stays true. A write still in flight is kept: the
- * gate may take the account away while the refusal that sent it (409) is being handled, and a
- * write that lands after all clears the draft (`postDraftLanded`) — a success being handled before
- * the form renders `saved` counts as saved (`postDraftLandedSince`, hooks/use-post-draft.ts).
+ * `hasDraftToKeep`, measured from what the last write that landed sent: a notice's edit screen
+ * stays on the form after a save, and what is typed after it is a draft again), a write that
+ * landed since did not send it (`saved`), and the account has an onboarding step left — what the
+ * gate is taking it to. Any other leave keeps nothing: a link or Back asked first, and «쓰던 내용이
+ * 사라집니다» stays true. A write still in flight is kept: the gate may take the account away while
+ * the refusal that sent it (409) is being handled, and a write that lands after all clears the
+ * draft (`postDraftLanded`) — a success being handled before the form renders it counts as saved
+ * (`postDraftLandedSince`, hooks/use-post-draft.ts).
  */
 export function shouldKeepPostDraft(state: {
   hasDraft: boolean;
@@ -133,6 +162,8 @@ interface StoredDraft {
   title: string;
   body: JSONContent;
   previews: Record<string, string>;
+  /** `PostDraft['version']` — the subject's version, not the item's format (`version`). */
+  opened?: string | null;
 }
 
 const MEDIA_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -163,11 +194,14 @@ function parseStored(raw: string): StoredDraft | null {
     return null;
   }
   if (!isRecord(value) || value.version !== 1) return null;
-  const { accountId, savedAt, title, body, previews } = value;
+  const { accountId, savedAt, title, body, previews, opened } = value;
   if (typeof accountId !== 'string' || typeof savedAt !== 'number' || typeof title !== 'string') {
     return null;
   }
   if (!isRecord(body) || body.type !== 'doc') return null;
+  // A version that is not one is no draft: taken back without it, the draft would be saved against
+  // whatever the screen opened on.
+  if (opened !== undefined && opened !== null && typeof opened !== 'string') return null;
   return {
     version: 1,
     accountId,
@@ -175,6 +209,7 @@ function parseStored(raw: string): StoredDraft | null {
     title,
     body,
     previews: previewsOf(previews),
+    ...(opened === undefined ? {} : { opened }),
   };
 }
 
@@ -250,6 +285,7 @@ export function keepPostDraft(
       title: draft.title,
       body: draft.body,
       previews,
+      ...(draft.version === undefined ? {} : { opened: draft.version }),
     } satisfies StoredDraft);
   for (const previews of [previewsOf(draft.previews), {}]) {
     try {
@@ -286,7 +322,12 @@ export function readPostDraft(
     tryRemove(storage, storageKey);
     return null;
   }
-  return { title: stored.title, body: stored.body, previews: stored.previews };
+  return {
+    title: stored.title,
+    body: stored.body,
+    previews: stored.previews,
+    ...(stored.opened === undefined ? {} : { version: stored.opened }),
+  };
 }
 
 /** Removes what was kept for `key`. */
@@ -342,6 +383,10 @@ export function previewSize(
  *   with what the screen started with (`generation`, the fields' React key — a new post's empty
  *   form, or the saved post), and `discarded` sends the dialog's focus to the redrawn title field.
  *   The form says so in a toast (`POST_DRAFT_DISCARDED_TOAST`).
+ * - `landed` (a write of the form succeeded): what the form holds is the server's now, so nothing
+ *   taken back is left to lose or to discard — the notice and its button go, the fields stay as
+ *   they are (no redraw). A post's screen leaves for the post then; a notice's edit screen stays on
+ *   the form (#138), where a discard would otherwise put back the version before the save.
  */
 export interface RestoredDraftState {
   /** The draft taken back, until it is discarded (or sent: the screen goes then). */
@@ -354,7 +399,7 @@ export interface RestoredDraftState {
   readonly discarded: boolean;
 }
 
-export type RestoredDraftEvent = 'ask' | 'cancel' | 'discard';
+export type RestoredDraftEvent = 'ask' | 'cancel' | 'discard' | 'landed';
 
 /** A form made with `restored` taken back (null: none), nothing asked yet. */
 export function restoredDraftState(restored: PostDraft | null): RestoredDraftState {
@@ -375,7 +420,22 @@ export function nextRestoredDraftState(
       return state.asking && state.restored !== null
         ? { restored: null, asking: false, generation: state.generation + 1, discarded: true }
         : state;
+    case 'landed':
+      return state.restored === null ? state : { ...state, restored: null, asking: false };
   }
+}
+
+/**
+ * The version of the subject the form's draft is typed on (`PostDraft['version']`): a draft taken
+ * back carries its own, which it keeps until it is discarded or a write of it lands; otherwise the
+ * screen's (`screen` — a notice's edit screen's opened version, moved by each save that lands;
+ * undefined for a post's screen, whose drafts carry none).
+ */
+export function heldDraftVersion(
+  restored: PostDraft | null,
+  screen: string | null | undefined,
+): string | null | undefined {
+  return restored !== null && restored.version !== undefined ? restored.version : screen;
 }
 
 /**
@@ -426,11 +486,14 @@ export function clearSessionPostDrafts(): void {
  * When a write or an edit of each screen last landed in this tab, by the account that sent it and
  * the screen's storage key (lib/draft-landings.ts — the comment drafts keep theirs the same way).
  * TanStack Query runs a mutation's `onSuccess` before it marks the mutation succeeded, and the
- * form renders `saved` later still; a form the gate takes away in between holds `saved: false`
- * from its last render, and would keep — after the success cleared it — a draft the post already
- * holds, which its screen would then "restore" for a second post. So the success records its
- * moment here, and the form going away counts a write landed after its last render as saved
- * (`postDraftLandedSince`). The form is locked while it sends, so that render held what was sent.
+ * form renders `saved` later still; a form the gate takes away in between holds a draft from its
+ * last render, and would keep — after the success cleared it — what the post already holds, which
+ * its screen would then "restore" for a second post. So the success records its moment here, and
+ * the form going away counts a write landed after its last render's moment as saved
+ * (`postDraftLandedSince`). The form is locked while it sends, and holds what was sent: a render
+ * of it while locked — the success itself renders the form again, putting its answer in the cache
+ * (a notice's edit screen reads it) — keeps the moment of the render that sent (`heldPostDraftAt`,
+ * hooks/use-post-draft.ts), so it never comes after the landing.
  *
  * By account (ADR-0073 9-48 — the gap Codex's review of #48 found in the comment drafts, PR #220):
  * a write sent by account A can land after the tab changed to account B, and B can have the same

@@ -472,9 +472,10 @@ export class PostsService {
   /**
    * The body's images, locked against the orphan clean-up (which skips locked rows) and against
    * another write taking the same upload: each must be an upload of the author's for a post, not
-   * taken by another post. An image the clean-up removed meanwhile is no upload any more. Refused
-   * as a VALIDATION_ERROR naming `body`, one issue per image (`postImageNotUsableMessage`, which
-   * names it) — the editor uploads it again.
+   * taken by another post nor by a notice (#138: an admin uploads a notice's images through the
+   * same editor, and NoticesService locks them the same way). An image the clean-up removed
+   * meanwhile is no upload any more. Refused as a VALIDATION_ERROR naming `body`, one issue per
+   * image (`postImageNotUsableMessage`, which names it) — the editor uploads it again.
    *
    * Two statements, on purpose. Under READ COMMITTED a locking statement that waited for another
    * transaction re-reads only the rows it locked: a `post_images` row joined into it would still
@@ -490,7 +491,7 @@ export class PostsService {
     postId: string,
   ): Promise<void> {
     if (imageIds.length === 0) return;
-    const { mediaObjects, postImages } = schema;
+    const { mediaObjects, noticeImages, postImages } = schema;
     const ids = [...imageIds];
     await tx
       .select({ id: mediaObjects.id })
@@ -504,9 +505,11 @@ export class PostsService {
         ownerId: mediaObjects.ownerId,
         kind: mediaObjects.kind,
         postId: postImages.postId,
+        noticeId: noticeImages.noticeId,
       })
       .from(mediaObjects)
       .leftJoin(postImages, eq(postImages.mediaId, mediaObjects.id))
+      .leftJoin(noticeImages, eq(noticeImages.mediaId, mediaObjects.id))
       .where(inArray(mediaObjects.id, ids));
     const usable = new Set(
       rows
@@ -514,6 +517,7 @@ export class PostsService {
           (row) =>
             row.ownerId === authorId &&
             row.kind === 'post_image' &&
+            row.noticeId === null &&
             (row.postId === null || row.postId === postId),
         )
         .map((row) => row.id),

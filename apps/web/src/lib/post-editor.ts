@@ -276,6 +276,33 @@ export function bodyChangedFrom(baseline: string | null, json: unknown): boolean
   return baseline !== null && JSON.stringify(json) !== baseline;
 }
 
+/**
+ * What the write or edit form measures "changed" from (`draftChanged`, `bodyChangedFrom`): a title,
+ * and a body as the editor's JSON serialised — null for the editor's own JSON when it was made
+ * (`PostEditor`'s `onReady`, the form's `baseline`).
+ */
+export interface DraftStart {
+  title: string | null;
+  body: string | null;
+}
+
+/**
+ * The form's start once a write of it landed (`saved`): what the form holds then is what was saved,
+ * so there is nothing to lose until it changes again — on a screen that stays on the form after a
+ * save, a notice's edit screen (#138, owner decision 2026-10-21 8: leaving asks only while
+ * something typed would be lost). The title as it stands, and the body as the editor last gave it
+ * when it changed from `start` (`bodyChanged`; `body` is then the editor's JSON) — otherwise the
+ * body is still `start`'s, and so stays measured from it (a body the form never changed may be the
+ * stored one, which is no baseline — `bodyChangedFrom`). The form is locked while it sends, so what
+ * it holds when the write lands is what it sent.
+ */
+export function landedDraftStart(
+  start: DraftStart,
+  form: { title: string; body: unknown; bodyChanged: boolean },
+): DraftStart {
+  return { title: form.title, body: form.bodyChanged ? JSON.stringify(form.body) : start.body };
+}
+
 /** The editor's image slots (`createImageSlots`). */
 export interface ImageSlots {
   /** Uploads taken and not yet in the document, nor given up. */

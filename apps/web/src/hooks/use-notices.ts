@@ -1,0 +1,383 @@
+'use client';
+
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type QueryClient,
+} from '@tanstack/react-query';
+import { type NoticeListState } from '@buddha/shared';
+import { ME_QUERY_KEY } from '@/hooks/use-me';
+import {
+  type AdminNotice,
+  type AdminNoticeAction,
+  type AdminNoticeRevision,
+  type AdminNoticeRevisionSummary,
+  type AdminNoticeSummary,
+  type AdminNoticeUpdateResult,
+  type CreateNoticeBody,
+  type NoticeSummary,
+  type UpdateNoticeBody,
+  api,
+  isApiError,
+  unwrap,
+} from '@/lib/api';
+import {
+  ADMIN_NOTICES_KEY,
+  type AdminNoticePage,
+  NOTICES_KEY,
+  PINNED_NOTICES_KEY,
+  adminNoticeActionsKey,
+  adminNoticeKey,
+  adminNoticeListKey,
+  adminNoticeListQuery,
+  adminNoticePageQuery,
+  adminNoticeRevisionKey,
+  adminNoticeRevisionsKey,
+  noticeEditConflict,
+} from '@/lib/notices';
+import { postDraftLanded } from '@/lib/post-drafts';
+
+/**
+ * 운영 공지 (#138, ADR-0077): the community list's fixed area, and the admin screens' lists, notice
+ * and writes. Keys and requests live in lib/notices.ts — the community page seeds the fixed area
+ * under its key on the server, and a server component cannot take a key from a `'use client'`
+ * module. The option factories are exported apart from the hooks so the node test runner reaches
+ * them (use-notices.test.ts), as use-posts.ts does.
+ */
+
+/**
+ * The fixed area above the community list: `GET /notices`, every pinned notice (at most
+ * NOTICE_PIN_LIMIT), the latest pinned first. The community page seeds it, so the HTML holds the
+ * area and the browser picks it up rather than reading it again.
+ */
+export function pinnedNoticesQueryOptions() {
+  return {
+    queryKey: PINNED_NOTICES_KEY,
+    queryFn: async (): Promise<NoticeSummary[]> => unwrap(await api.GET('/api/v1/notices')).data,
+  };
+}
+
+export function usePinnedNotices() {
+  return useQuery(pinnedNoticesQueryOptions());
+}
+
+/**
+ * One of the admin screen's lists (`GET /admin/notices?state=`), one page per 더 보기: `pinned` —
+ * the fixed area's notices in its order, never more than one page (at most NOTICE_PIN_LIMIT) —
+ * and `unpinned`, every other notice, the newest written first.
+ */
+export function adminNoticesInfiniteQueryOptions(state: NoticeListState) {
+  return {
+    queryKey: adminNoticeListKey(state),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminNoticePage<AdminNoticeSummary>> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/notices', {
+          params: { query: adminNoticeListQuery(state, pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminNoticePage<AdminNoticeSummary>) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminNotices(state: NoticeListState) {
+  return useInfiniteQuery(adminNoticesInfiniteQueryOptions(state));
+}
+
+/**
+ * A notice's operation records (`GET /admin/notices/:noticeId/actions`, owner decision 2026-10-21):
+ * who wrote, edited, pinned and unpinned it, and when — newest first, one page per 더 보기.
+ */
+export function adminNoticeActionsInfiniteQueryOptions(noticeId: string) {
+  const id = noticeId.toLowerCase();
+  return {
+    queryKey: adminNoticeActionsKey(id),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminNoticePage<AdminNoticeAction>> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/notices/{noticeId}/actions', {
+          params: { path: { noticeId: id }, query: adminNoticePageQuery(pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminNoticePage<AdminNoticeAction>) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminNoticeActions(noticeId: string) {
+  return useInfiniteQuery(adminNoticeActionsInfiniteQueryOptions(noticeId));
+}
+
+/**
+ * A notice's earlier versions (`GET /admin/notices/:noticeId/revisions`, owner decision
+ * 2026-10-21): each title, who wrote and who replaced it and when — newest first, one page per
+ * 더 보기.
+ */
+export function adminNoticeRevisionsInfiniteQueryOptions(noticeId: string) {
+  const id = noticeId.toLowerCase();
+  return {
+    queryKey: adminNoticeRevisionsKey(id),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminNoticePage<AdminNoticeRevisionSummary>> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/notices/{noticeId}/revisions', {
+          params: { path: { noticeId: id }, query: adminNoticePageQuery(pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminNoticePage<AdminNoticeRevisionSummary>) =>
+      last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminNoticeRevisions(noticeId: string) {
+  return useInfiniteQuery(adminNoticeRevisionsInfiniteQueryOptions(noticeId));
+}
+
+/**
+ * One earlier version, whole and read-only (`GET /admin/notices/:noticeId/revisions/:revisionId`).
+ * The path segment goes as it came: the API refuses one that is not a version id (400), which the
+ * screen reads as no version, as it reads an unknown one (404). A version never changes (the app
+ * role cannot UPDATE `notice_revisions`), so once read it never goes stale on its own: no refocus
+ * or return to the screen reads it again. Only a write to that notice, or a refused edit of it,
+ * reads it again, since they mark everything under the notice's key stale (`afterNoticeWrite`,
+ * `afterNoticeRefusal`) — one needless read, never a different version.
+ */
+export function adminNoticeRevisionQueryOptions(noticeId: string, revisionId: string) {
+  const id = noticeId.toLowerCase();
+  return {
+    staleTime: Infinity,
+    queryKey: adminNoticeRevisionKey(id, revisionId),
+    queryFn: async (): Promise<AdminNoticeRevision> =>
+      unwrap(
+        await api.GET('/api/v1/admin/notices/{noticeId}/revisions/{revisionId}', {
+          params: { path: { noticeId: id, revisionId } },
+        }),
+      ).data,
+  };
+}
+
+export function useAdminNoticeRevision(noticeId: string, revisionId: string) {
+  return useQuery(adminNoticeRevisionQueryOptions(noticeId, revisionId));
+}
+
+/**
+ * One notice as the admin's edit screen loads it (`GET /admin/notices/:noticeId`) — read again
+ * every time the screen opens, however fresh the copy held: the edit form opens only on a read made
+ * since the screen opened (`adminNoticeReadView`), since it saves against the version it opens on
+ * and a copy from an earlier visit (or a pin's answer on the list) may predate a later save.
+ */
+export function adminNoticeQueryOptions(noticeId: string) {
+  const id = noticeId.toLowerCase();
+  return {
+    refetchOnMount: 'always' as const,
+    queryKey: adminNoticeKey(id),
+    queryFn: async (): Promise<AdminNotice> =>
+      unwrap(
+        await api.GET('/api/v1/admin/notices/{noticeId}', { params: { path: { noticeId: id } } }),
+      ).data,
+  };
+}
+
+export function useAdminNotice(noticeId: string) {
+  return useQuery(adminNoticeQueryOptions(noticeId));
+}
+
+/**
+ * What every admin write does with its answer: the notice it answered with replaces the held one,
+ * and both admin lists, that notice's records and earlier versions, and every public notice read
+ * are marked stale — a write, an edit, a pin and an unpin each move a row between or within the
+ * lists and add a record (an edit a version too), and the fixed area shows the pinned ones'
+ * titles. The community list's fixed area in this browser follows on its next read.
+ *
+ * A read of the notice still on its way is cancelled before the answer goes in (ADR-0077 8-27, as
+ * a post's edit does — ADR-0073 9-49): one that left before the write was saved — a window's focus
+ * on the edit screen — and answered after it would otherwise put the earlier version back over the
+ * saved one, and the edit screen's next save would send that version's `expectedEditedAt` and be
+ * refused as overtaken by its own save. A cancelled read's answer is dropped when it comes, and the
+ * write follows the cancel with nothing in between, so the next read is one that left after it.
+ */
+async function afterNoticeWrite(queryClient: QueryClient, notice: AdminNotice): Promise<void> {
+  await queryClient.cancelQueries({ queryKey: adminNoticeKey(notice.id), exact: true });
+  queryClient.setQueryData<AdminNotice>(adminNoticeKey(notice.id), notice);
+  await Promise.all([
+    queryClient.invalidateQueries({ queryKey: [...ADMIN_NOTICES_KEY, 'list'] }),
+    queryClient.invalidateQueries({ queryKey: adminNoticeActionsKey(notice.id) }),
+    queryClient.invalidateQueries({ queryKey: adminNoticeRevisionsKey(notice.id) }),
+    queryClient.invalidateQueries({ queryKey: NOTICES_KEY }),
+  ]);
+}
+
+/**
+ * A refused admin write's side effects: a refusal for the onboarding reads `['me']` again, so the
+ * onboarding gate takes the admin to its step (and a notice's form, going, keeps its draft in this
+ * tab — hooks/use-post-draft.ts, 오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20); a full
+ * fixed area (NOTICE_PIN_LIMIT_REACHED) reads the lists again, since another admin may have pinned
+ * what this screen does not show yet; an edit another save overtook, whoever made it
+ * (NOTICE_EDIT_CONFLICT, `noticeId` given), reads that notice, its records and versions and the
+ * lists again, so the screen shows what was saved meanwhile — the form keeps what is typed (it
+ * holds its own draft).
+ */
+async function afterNoticeRefusal(
+  queryClient: QueryClient,
+  error: Error,
+  noticeId?: string,
+): Promise<void> {
+  if (noticeId !== undefined && noticeEditConflict(error)) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: adminNoticeKey(noticeId) }),
+      queryClient.invalidateQueries({ queryKey: [...ADMIN_NOTICES_KEY, 'list'] }),
+      queryClient.invalidateQueries({ queryKey: NOTICES_KEY }),
+    ]);
+  }
+  if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+    await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+  }
+  if (isApiError(error, 'NOTICE_PIN_LIMIT_REACHED')) {
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: [...ADMIN_NOTICES_KEY, 'list'] }),
+      queryClient.invalidateQueries({ queryKey: NOTICES_KEY }),
+    ]);
+  }
+}
+
+/**
+ * The admin whose form sends a write — `NoticeWriterGate`'s `accountId`, the account the form was
+ * drawn for — held by the client only: the request's body is the notice's (`CreateNoticeBody`,
+ * `UpdateNoticeBody`), and `mutationFn` takes it out before it sends. A landing is that account's
+ * (`postDraftLanded`, ADR-0073 9-48): the tab may be another's by the time it lands. Not the
+ * account read as the success lands — the tab's by then, maybe another's, the gap 9-48 closes —
+ * nor one added to the API's body, whose contract the landing has no part in (ADR-0077 8-20).
+ */
+interface NoticeWriter {
+  accountId: string;
+}
+
+/** A new notice: its title and body, and the admin whose form sends it. */
+export interface CreateNoticeVariables extends CreateNoticeBody, NoticeWriter {}
+
+/**
+ * `POST /admin/notices`: a new notice, not pinned (pinning is its own action and record). A draft
+ * of the write screen the onboarding gate kept in this tab for the admin who sent it is the notice
+ * now and is removed — here, not on the screen, and recorded first (`postDraftLanded`), as a
+ * post's write does (use-posts.ts): the gate may take the screen away while the write is in
+ * flight or its success is handled. Both for that admin only (`accountId`): another account's
+ * draft and form of the screen, the tab changed hands meanwhile, are left as they are.
+ */
+export function createNoticeOptions(queryClient: QueryClient) {
+  return {
+    mutationFn: async ({
+      accountId: _accountId,
+      ...body
+    }: CreateNoticeVariables): Promise<AdminNotice> =>
+      unwrap(await api.POST('/api/v1/admin/notices', { body })).data,
+    onSuccess: (notice: AdminNotice, { accountId }: CreateNoticeVariables) => {
+      postDraftLanded({ kind: 'notice-new' }, accountId);
+      return afterNoticeWrite(queryClient, notice);
+    },
+    onError: (error: Error) => afterNoticeRefusal(queryClient, error),
+  };
+}
+
+/**
+ * An edit: the notice, the title and body that replace its own, the version the edit screen was
+ * opened from (`expectedEditedAt`, the notice's `editedAt` then — null when never edited), and the
+ * admin whose form sends it.
+ */
+export interface UpdateNoticeVariables extends UpdateNoticeBody, NoticeWriter {
+  noticeId: string;
+}
+
+/**
+ * `PUT /admin/notices/:noticeId`, by any admin (#45-8). A change marks the notice edited and keeps
+ * the earlier version for operators; the same content changes nothing. The answer says which
+ * (`changed`), and the screen's toast reads that. Only the notice goes into the cache. A save from
+ * a version a save has replaced since — another admin's, or the same admin's from another tab — is
+ * refused (NOTICE_EDIT_CONFLICT, owner decisions 2026-10-21) and nothing is written: the notice is
+ * read again (`afterNoticeRefusal`). A save that lands removes a draft of that notice's edit screen
+ * the gate kept for the admin who sent it, as a new notice's write does — the more so as this
+ * screen stays on the form after a save: a landing counted for the wrong account would leave its
+ * draft unkept, or keep the one just saved.
+ */
+export function updateNoticeOptions(queryClient: QueryClient) {
+  return {
+    mutationFn: async ({
+      noticeId,
+      accountId: _accountId,
+      ...body
+    }: UpdateNoticeVariables): Promise<AdminNoticeUpdateResult> =>
+      unwrap(
+        await api.PUT('/api/v1/admin/notices/{noticeId}', {
+          params: { path: { noticeId: noticeId.toLowerCase() } },
+          body,
+        }),
+      ).data,
+    onSuccess: (
+      result: AdminNoticeUpdateResult,
+      { noticeId, accountId }: UpdateNoticeVariables,
+    ) => {
+      postDraftLanded({ kind: 'notice-edit', noticeId }, accountId);
+      return afterNoticeWrite(queryClient, result.notice);
+    },
+    onError: (error: Error, variables: UpdateNoticeVariables) =>
+      afterNoticeRefusal(queryClient, error, variables.noticeId),
+  };
+}
+
+/**
+ * `POST /admin/notices/:noticeId/pin` or `/unpin`. The server holds the limit, race-safe: a pin
+ * while NOTICE_PIN_LIMIT are pinned is refused (NOTICE_PIN_LIMIT_REACHED) and none is unpinned to
+ * make room. Pinning a pinned notice, or unpinning one that is not, changes nothing.
+ */
+export function pinNoticeOptions(queryClient: QueryClient, action: 'pin' | 'unpin') {
+  return {
+    mutationFn: async (noticeId: string): Promise<AdminNotice> => {
+      const params = { params: { path: { noticeId: noticeId.toLowerCase() } } };
+      return unwrap(
+        action === 'pin'
+          ? await api.POST('/api/v1/admin/notices/{noticeId}/pin', params)
+          : await api.POST('/api/v1/admin/notices/{noticeId}/unpin', params),
+      ).data;
+    },
+    onSuccess: (notice: AdminNotice) => afterNoticeWrite(queryClient, notice),
+    onError: (error: Error) => afterNoticeRefusal(queryClient, error),
+  };
+}
+
+export function useCreateNotice() {
+  const queryClient = useQueryClient();
+  return useMutation(createNoticeOptions(queryClient));
+}
+
+export function useUpdateNotice() {
+  const queryClient = useQueryClient();
+  return useMutation(updateNoticeOptions(queryClient));
+}
+
+export function usePinNotice() {
+  const queryClient = useQueryClient();
+  return useMutation(pinNoticeOptions(queryClient, 'pin'));
+}
+
+export function useUnpinNotice() {
+  const queryClient = useQueryClient();
+  return useMutation(pinNoticeOptions(queryClient, 'unpin'));
+}

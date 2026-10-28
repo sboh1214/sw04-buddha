@@ -28,11 +28,17 @@ import { hasTestInfra } from '../test/setup-env.js';
 const routes = discoverRoutes();
 const adminRoutes = routes.filter((route) => isAdminPath(route.path));
 
-/** The operation records (N01 §9, N03 §8, N04 §6): admins only, like every admin function. */
+/**
+ * The operation records (N01 §9, N03 §8, N04 §6): admins only, like every admin function. A
+ * notice's records and earlier versions (#138, owner decision 2026-10-21) answer an empty page for
+ * a notice that is not there, so they are asked here with the walk's placeholder id too.
+ */
 const OPERATION_RECORDS = [
   'GET /admin/audit-failures',
   'GET /admin/release-settings/changes',
   'GET /admin/admins/changes',
+  'GET /admin/notices/:noticeId/actions',
+  'GET /admin/notices/:noticeId/revisions',
 ];
 
 describe('admin access (static)', () => {

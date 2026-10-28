@@ -47,6 +47,13 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // The target's state refuses the like (a deleted post's or 댓글's placeholder, or hidden, #49):
   // a conflict with that state.
   LIKE_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The pinned notices are at their limit (#45-8: at most three, none unpinned automatically): a
+  // conflict with that state, which the same request passes once an admin unpins one.
+  NOTICE_PIN_LIMIT_REACHED: HttpStatus.CONFLICT,
+  // The notice moved on since the edit screen read it (saved since, whoever saved it — another
+  // admin or the same one from another tab, owner decisions 2026-10-21 7 and (2차) 1): a conflict
+  // with its version, which a save from the latest one passes.
+  NOTICE_EDIT_CONFLICT: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

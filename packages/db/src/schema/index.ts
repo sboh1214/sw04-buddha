@@ -32,6 +32,7 @@ export * from './markets.js';
 export * from './media-deletions.js';
 export * from './media-objects.js';
 export * from './nickname-holds.js';
+export * from './notices.js';
 export * from './orders.js';
 export * from './payment-events.js';
 export * from './payments.js';

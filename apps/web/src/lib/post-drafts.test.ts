@@ -12,6 +12,7 @@ import {
   clearPostDraftOf,
   clearPostDrafts,
   hasDraftToKeep,
+  heldDraftVersion,
   keepPostDraft,
   nextRestoredDraftState,
   postDraftLandedSince,
@@ -83,6 +84,11 @@ const POST = 'b2c3d4e5-0000-4000-8000-000000000002';
 const IMAGE = 'c3d4e5f6-0000-4000-8000-000000000003';
 const NEW: { kind: 'new'; marketId: string } = { kind: 'new', marketId: MARKET };
 const EDIT: { kind: 'edit'; postId: string } = { kind: 'edit', postId: POST };
+const NOTICE = 'D4E5F6A7-0000-4000-8000-000000000008';
+/** A notice's write and edit screens (#138, 오너 결정 2026-10-21 (3차), ADR-0077). */
+const NOTICE_NEW = { kind: 'notice-new' } as const;
+const NOTICE_EDIT = { kind: 'notice-edit', noticeId: NOTICE } as const;
+const EDITED_AT = '2026-10-22T01:02:03.456Z';
 const NOW = Date.UTC(2026, 9, 20, 3, 0, 0);
 const PREVIEW = `data:image/webp;base64,${'A'.repeat(64)}`;
 
@@ -108,6 +114,102 @@ describe('where a draft is kept', () => {
     expect(postDraftStorageKey({ kind: 'new', marketId: POST })).not.toBe(
       postDraftStorageKey({ kind: 'edit', postId: POST }),
     );
+  });
+
+  it('is one item for the new notice and one per notice edited, under the same prefix (#138, 오너 결정 2026-10-21 (3차))', () => {
+    expect(postDraftStorageKey(NOTICE_NEW)).toBe(`${POST_DRAFT_PREFIX}notice-new`);
+    expect(postDraftStorageKey(NOTICE_EDIT)).toBe(
+      `${POST_DRAFT_PREFIX}notice-edit:${NOTICE.toLowerCase()}`,
+    );
+    // Never a post's screen, whatever the id: four kinds, four keys.
+    const keys = [
+      postDraftStorageKey({ kind: 'new', marketId: NOTICE }),
+      postDraftStorageKey({ kind: 'edit', postId: NOTICE }),
+      postDraftStorageKey(NOTICE_NEW),
+      postDraftStorageKey(NOTICE_EDIT),
+    ];
+    expect(new Set(keys).size).toBe(4);
+    // Signing out clears them with the posts' (the prefix).
+    const storage = new MemoryStorage();
+    keepPostDraft(storage, NOTICE_NEW, ACCOUNT, DRAFT, NOW);
+    keepPostDraft(storage, NOTICE_EDIT, ACCOUNT, { ...DRAFT, version: null }, NOW);
+    keepPostDraft(storage, NEW, ACCOUNT, DRAFT, NOW);
+    clearPostDrafts(storage);
+    expect(storage.items.size).toBe(0);
+  });
+});
+
+describe('the version a notice edit’s draft was typed on (#138, 오너 결정 2026-10-21 (3차))', () => {
+  it('is kept and taken back with the draft — a time, or null for a notice never edited', () => {
+    for (const version of [EDITED_AT, null]) {
+      const storage = new MemoryStorage();
+      expect(keepPostDraft(storage, NOTICE_EDIT, ACCOUNT, { ...DRAFT, version }, NOW)).toBe(true);
+      const taken = readPostDraft(storage, NOTICE_EDIT, ACCOUNT, NOW + 1_000);
+      expect(taken).toEqual({ ...DRAFT, version });
+      expect(taken !== null && 'version' in taken).toBe(true);
+    }
+  });
+
+  it('is absent from a draft kept without one — a post’s', () => {
+    const storage = new MemoryStorage();
+    keepPostDraft(storage, EDIT, ACCOUNT, DRAFT, NOW);
+    const taken = readPostDraft(storage, EDIT, ACCOUNT, NOW);
+    expect(taken).toEqual(DRAFT);
+    expect(taken !== null && 'version' in taken).toBe(false);
+  });
+
+  it('stays when the draft is kept without its previews', () => {
+    const withoutPreviews = JSON.stringify({
+      version: 1,
+      accountId: ACCOUNT,
+      savedAt: NOW,
+      title: DRAFT.title,
+      body: DRAFT.body,
+      previews: {},
+      opened: EDITED_AT,
+    });
+    const storage = new MemoryStorage(
+      postDraftStorageKey(NOTICE_EDIT).length + withoutPreviews.length,
+    );
+    expect(
+      keepPostDraft(storage, NOTICE_EDIT, ACCOUNT, { ...DRAFT, version: EDITED_AT }, NOW),
+    ).toBe(true);
+    expect(readPostDraft(storage, NOTICE_EDIT, ACCOUNT, NOW)).toEqual({
+      ...DRAFT,
+      previews: {},
+      version: EDITED_AT,
+    });
+  });
+
+  it('makes an item whose version is not one no draft: taken back without it, it would be saved against the wrong version', () => {
+    for (const opened of [1, true, {}, []]) {
+      const storage = new MemoryStorage();
+      const raw = JSON.stringify({
+        version: 1,
+        accountId: ACCOUNT,
+        savedAt: NOW,
+        title: '',
+        body: { type: 'doc', content: [] },
+        previews: {},
+        opened,
+      });
+      storage.setItem(postDraftStorageKey(NOTICE_EDIT), raw);
+      expect(readPostDraft(storage, NOTICE_EDIT, ACCOUNT, NOW), raw).toBeNull();
+      expect(storage.items.size, raw).toBe(0);
+    }
+  });
+
+  it('is what the form holds is typed on: a draft taken back’s until it ends, else the screen’s', () => {
+    expect(heldDraftVersion({ ...DRAFT, version: EDITED_AT }, '2026-10-22T05:00:00.000Z')).toBe(
+      EDITED_AT,
+    );
+    // Null is a version (never edited), not none: the screen's does not replace it.
+    expect(heldDraftVersion({ ...DRAFT, version: null }, '2026-10-22T05:00:00.000Z')).toBeNull();
+    expect(heldDraftVersion(null, EDITED_AT)).toBe(EDITED_AT);
+    expect(heldDraftVersion(null, null)).toBeNull();
+    // A post's: none either way.
+    expect(heldDraftVersion(DRAFT, undefined)).toBeUndefined();
+    expect(heldDraftVersion(null, undefined)).toBeUndefined();
   });
 });
 
@@ -367,6 +469,24 @@ describe('discarding a draft taken back (오너 결정 2026-10-20 3차 답 3)', 
     expect(nextRestoredDraftState(none, 'cancel')).toBe(none);
   });
 
+  it('ends what was taken back once a write of the form lands: nothing left to discard, the form not drawn again', () => {
+    // A notice's edit screen stays on the form after a save (#138): the restore notice and its
+    // discard go, which would otherwise put back the version before the save.
+    expect(nextRestoredDraftState(restored, 'landed')).toEqual({ ...restored, restored: null });
+    const asking = nextRestoredDraftState(restored, 'ask');
+    expect(nextRestoredDraftState(asking, 'landed')).toEqual({
+      restored: null,
+      asking: false,
+      generation: 0,
+      discarded: false,
+    });
+    // Nothing taken back, or discarded already: nothing changes.
+    const none = restoredDraftState(null);
+    expect(nextRestoredDraftState(none, 'landed')).toBe(none);
+    const discarded = nextRestoredDraftState(asking, 'discard');
+    expect(nextRestoredDraftState(discarded, 'landed')).toBe(discarded);
+  });
+
   it('asks and announces in the owner’s sentences', () => {
     expect(copy.postDraftDiscardQuestion).toBe(
       '되살린 내용을 버릴까요? 그 뒤에 쓴 내용도 사라집니다.',
@@ -427,6 +547,16 @@ describe('a write that landed', () => {
     clearPostDraftOf(storage, NEW, ACCOUNT);
     expect(storage.items.size).toBe(0);
     expect(() => clearPostDraftOf(refusing, NEW, ACCOUNT)).not.toThrow();
+  });
+
+  it('counts for a notice’s screen the same way, and for that screen alone (#138)', () => {
+    const before = postDraftMoment();
+    postDraftLanded({ kind: 'notice-edit', noticeId: NOTICE.toLowerCase() }, ACCOUNT);
+    expect(postDraftLandedSince(NOTICE_EDIT, ACCOUNT, before)).toBe(true);
+    expect(postDraftLandedSince(NOTICE_NEW, ACCOUNT, before)).toBe(false);
+    expect(postDraftLandedSince({ kind: 'edit', postId: NOTICE }, ACCOUNT, before)).toBe(false);
+    // The admin's who sent it, as a post's (ADR-0073 9-48).
+    expect(postDraftLandedSince(NOTICE_EDIT, OTHER_ACCOUNT, before)).toBe(false);
   });
 });
 

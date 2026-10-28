@@ -253,6 +253,13 @@
       "when": 1792431573974,
       "tag": "0035_likes",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1792510539280,
+      "tag": "0036_notices",
+      "breakpoints": true
     }
   ]
 }

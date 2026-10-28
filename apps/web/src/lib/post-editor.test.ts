@@ -38,6 +38,7 @@ import {
   imageUploadErrorMessage,
   insertHeldImage,
   isPostTextColor,
+  landedDraftStart,
   linkInputHref,
   pastedLinkHref,
   postTextColorToken,
@@ -377,6 +378,79 @@ describe('bodyChangedFrom', () => {
     expect(bodyChangedFrom(baseline, typed)).toBe(true);
     // Typed and taken out again: nothing to lose.
     expect(bodyChangedFrom(baseline, structuredClone(made))).toBe(false);
+  });
+});
+
+describe('landedDraftStart', () => {
+  // A screen that stays on the form after a save — a notice's edit screen (#138, owner decision
+  // 2026-10-21 8): what the save sent is the form's start, so leaving asks nothing until the form
+  // changes again. The form measures a body from `start.body ?? baseline` (PostForm).
+  const made = { type: 'doc', content: [{ type: 'paragraph', attrs: { textAlign: null } }] };
+  const typed = {
+    type: 'doc',
+    content: [
+      { type: 'paragraph', attrs: { textAlign: null }, content: [{ type: 'text', text: '공지' }] },
+    ],
+  };
+  const typedMore = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        attrs: { textAlign: null },
+        content: [{ type: 'text', text: '공지 더' }],
+      },
+    ],
+  };
+  const baseline = JSON.stringify(made);
+  const started = { title: '처음 제목', body: null };
+
+  it('takes what a landed save sent — the title and the changed body — as the start', () => {
+    const start = landedDraftStart(started, { title: '고친 제목', body: typed, bodyChanged: true });
+    expect(start).toEqual({ title: '고친 제목', body: JSON.stringify(typed) });
+    // Nothing to lose right after the save…
+    const measured = (json: unknown) => bodyChangedFrom(start.body ?? baseline, json);
+    expect(measured(typed)).toBe(false);
+    expect(
+      draftChanged({
+        title: '고친 제목',
+        initialTitle: start.title,
+        bodyChanged: measured(typed),
+        uploading: false,
+      }),
+    ).toBe(false);
+    // …until the title or the body changes again; back to what was saved, nothing again.
+    expect(measured(typedMore)).toBe(true);
+    expect(measured(structuredClone(typed))).toBe(false);
+    expect(
+      draftChanged({
+        title: '또 고친 제목',
+        initialTitle: start.title,
+        bodyChanged: false,
+        uploading: false,
+      }),
+    ).toBe(true);
+    // The form started with its title is no change to lose any more: the save replaced it.
+    expect(
+      draftChanged({
+        title: '처음 제목',
+        initialTitle: start.title,
+        bodyChanged: false,
+        uploading: false,
+      }),
+    ).toBe(true);
+  });
+
+  it('keeps measuring an unchanged body from where it was measured', () => {
+    // The body never changed: the form's `body` may be the stored document, no baseline — the
+    // start keeps the editor's own (null), or the body an earlier save took.
+    expect(
+      landedDraftStart(started, { title: '고친 제목', body: made, bodyChanged: false }),
+    ).toEqual({ title: '고친 제목', body: null });
+    const earlier = { title: '고친 제목', body: JSON.stringify(typed) };
+    expect(
+      landedDraftStart(earlier, { title: '다시 고친 제목', body: typed, bodyChanged: false }),
+    ).toEqual({ title: '다시 고친 제목', body: JSON.stringify(typed) });
   });
 });
 

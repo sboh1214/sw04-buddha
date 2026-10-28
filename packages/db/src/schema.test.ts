@@ -4,6 +4,7 @@ import {
   CONSENT_ITEMS,
   COUNTERPARTY_TYPES,
   NICKNAME_HOLD_DAYS,
+  NOTICE_PIN_LIMIT,
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
   MARKET_STATUSES,
@@ -36,6 +37,9 @@ import {
   mediaDeletions,
   mediaObjects,
   nicknameHolds,
+  noticeImages,
+  noticeRevisions,
+  notices,
   orders,
   paymentEvents,
   payments,
@@ -68,6 +72,7 @@ import {
   createComment,
   createCommentLike,
   createMedia,
+  createNotice,
   createPhoneVerification,
   createPost,
   createPostLike,
@@ -1454,6 +1459,126 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       await createPostLike(t.db, { postId: post.id, userId: a.id });
       expect((await t.db.select().from(postLikes)).map((row) => row.userId)).toEqual([a.id]);
       expect(await t.db.select().from(commentLikes)).toEqual([]);
+    });
+  });
+
+  describe('notices (migration 0036, #138)', () => {
+    it('stores a notice with its text and images derived, unpinned, and gives an image to one notice only', async () => {
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const media = await createMedia(t.db, { ownerId: admin.id });
+      const notice = await createNotice(t.db, {
+        title: '점검 안내',
+        text: '첫 줄\n둘째 줄',
+        imageIds: [media.id],
+      });
+      expect(notice).toMatchObject({
+        title: '점검 안내',
+        bodyText: '첫 줄\n둘째 줄',
+        imageIds: [media.id],
+        editedAt: null,
+        pinnedAt: null,
+        pinSlot: null,
+      });
+      expect(await t.db.select().from(noticeImages)).toEqual([
+        { noticeId: notice.id, mediaId: media.id, createdAt: expect.any(Date) as unknown },
+      ]);
+      const [attached] = await t.db.select().from(mediaObjects);
+      expect(attached?.attachedAt).toBeInstanceOf(Date);
+      // One notice per image, as one post per image. Whether a post may hold it too is not the
+      // database's to say (no constraint spans post_images and notice_images): the API refuses it
+      // (notices.controller.test.ts).
+      await expect(createNotice(t.db, { imageIds: [media.id] })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'notice_images_media_id_unique',
+      );
+      // The relations resolve both ways.
+      const withAll = await t.db.query.notices.findFirst({
+        where: eq(notices.id, notice.id),
+        with: { images: { with: { media: { with: { notice: true } } } } },
+      });
+      expect(withAll?.images.map((image) => image.media.notice?.noticeId)).toEqual([notice.id]);
+    });
+
+    it('requires a title with text', async () => {
+      for (const title of ['', '   ']) {
+        await expect(createNotice(t.db, { title })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'notices_title_check',
+        );
+      }
+    });
+
+    it('holds the pin limit itself: a slot each, one to NOTICE_PIN_LIMIT, and a time with it', async () => {
+      const pinned = [];
+      for (let slot = 1; slot <= NOTICE_PIN_LIMIT; slot += 1) {
+        pinned.push(await createNotice(t.db, { pinSlot: slot }));
+      }
+      expect(pinned.map((notice) => notice.pinnedAt)).toEqual(
+        pinned.map(() => expect.any(Date) as unknown),
+      );
+      // A fourth pin has no slot to take, whoever writes: a slot taken, or one past the limit.
+      await expect(createNotice(t.db, { pinSlot: 1 })).rejects.toSatisfy(
+        (e) => sqlState(e) === '23505' && sqlConstraint(e) === 'notices_pin_slot_unique',
+      );
+      for (const slot of [0, NOTICE_PIN_LIMIT + 1]) {
+        await expect(createNotice(t.db, { pinSlot: slot })).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'notices_pin_slot_check',
+        );
+      }
+      // Pinned means a time and a slot together.
+      const unpinned = await createNotice(t.db);
+      await expect(
+        t.db.update(notices).set({ pinnedAt: new Date() }).where(eq(notices.id, unpinned.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'notices_pinned_check',
+      );
+      await expect(
+        t.db.update(notices).set({ pinSlot: null }).where(eq(notices.id, pinned[0]!.id)),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'notices_pinned_check',
+      );
+      // Unpinning frees the slot for another notice; unpinned notices are as many as written.
+      await t.db
+        .update(notices)
+        .set({ pinnedAt: null, pinSlot: null })
+        .where(eq(notices.id, pinned[0]!.id));
+      await t.db
+        .update(notices)
+        .set({ pinnedAt: new Date(), pinSlot: 1 })
+        .where(eq(notices.id, unpinned.id));
+      const [count] = await t.db
+        .select({ n: sql<number>`count(*)::int` })
+        .from(notices)
+        .where(sql`${notices.pinSlot} IS NOT NULL`);
+      expect(count?.n).toBe(NOTICE_PIN_LIMIT);
+    });
+
+    it('keeps an edit’s history append-only, and deletable should a later decision ask', async () => {
+      const notice = await createNotice(t.db);
+      const [revision] = await t.db
+        .insert(noticeRevisions)
+        .values({
+          noticeId: notice.id,
+          title: notice.title,
+          body: notice.body,
+          bodyText: notice.bodyText,
+          imageIds: [],
+          writtenAt: notice.createdAt,
+        })
+        .returning();
+      await expect(
+        t.db
+          .update(noticeRevisions)
+          .set({ bodyText: 'rewritten' })
+          .where(eq(noticeRevisions.id, revision!.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '42501');
+      // A notice is not deleted while its history names it.
+      await expect(t.db.delete(notices).where(eq(notices.id, notice.id))).rejects.toSatisfy(
+        (e) => sqlState(e) === '23503',
+      );
+      // DELETE stays, as on post_revisions: the owner keeps a notice's history with no retention
+      // period, so nothing deletes a version, and the database can still delete one should a later
+      // decision ask (owner decision 2026-10-21, ADR-0077: «DB는 나중에 지울 수 있게»).
+      await t.db.delete(noticeRevisions).where(eq(noticeRevisions.id, revision!.id));
+      expect(await t.db.select().from(noticeRevisions)).toEqual([]);
     });
   });
 

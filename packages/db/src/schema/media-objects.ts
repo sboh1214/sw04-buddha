@@ -11,17 +11,21 @@ import { createdAt, timestampTz } from './columns.js';
  * keeps only the bytes; nothing outside the API reads either (`GET /media/:mediaId` decides
  * whether an image may be shown).
  *
- * - `owner_id`: the account that uploaded it, the only one whose post may use it.
+ * - `owner_id`: the account that uploaded it, the only one whose post may use it — or, for an
+ *   admin, add it to a notice (#138; a notice keeps its images through any admin's edit).
  * - `kind`: what it is for (MEDIA_KINDS in @buddha/shared). #141 adds the profile image to the
  *   same store, as ADR-0069 decision 3 #37-6 asks.
  * - `content_type`: one of IMAGE_CONTENT_TYPES, what the conversion wrote (its own encoder's type,
  *   never the browser's claim), and the `Content-Type` it is served with.
- * - `attached_at`: when a post first used it (`post_images`), or NULL while nothing has. An upload
- *   left unattached ORPHAN_MEDIA_HOURS is removed by the worker (`media.orphan_cleanup`): the row,
- *   its object key queued in the same transaction (`media_deletions`), then the object, and the key
- *   only once the store has removed it. Once attached it stays as long as the post's history
- *   needs it: a post's earlier versions and its deleted original are kept for operators (#45-4,
- *   #45-5), and their removal after the retention period is #184's.
+ * - `attached_at`: when a post first used it (`post_images`) — or a notice (`notice_images`,
+ *   #138: written in the posts' editor, so its images are this kind too) — or NULL while nothing
+ *   has. An upload left unattached ORPHAN_MEDIA_HOURS is removed by the worker
+ *   (`media.orphan_cleanup`): the row, its object key queued in the same transaction
+ *   (`media_deletions`), then the object, and the key only once the store has removed it. Once
+ *   attached it stays as long as the post's history needs it: a post's earlier versions and its
+ *   deleted original are kept for operators (#45-4, #45-5), and their removal after the retention
+ *   period is #184's. A notice's images stay with its history, which has no retention period
+ *   (owner decision 2026-10-21, ADR-0077).
  *
  * Rows outlive a withdrawal (`user` RESTRICT, like every record #140 anonymises around).
  */

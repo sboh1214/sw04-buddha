@@ -2,8 +2,14 @@ import { Container } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
-import { fetchCategoriesServer, fetchMarketServer, fetchPostsPageServer } from '@/lib/api.server';
+import {
+  fetchCategoriesServer,
+  fetchMarketServer,
+  fetchPinnedNoticesServer,
+  fetchPostsPageServer,
+} from '@/lib/api.server';
 import { dehydratePublic } from '@/lib/market-keys';
+import { PINNED_NOTICES_KEY } from '@/lib/notices';
 import {
   type CommunitySearchParams,
   communityFiltersFromSearchParams,
@@ -34,13 +40,14 @@ export const metadata: Metadata = {
  * term searched in the title and the text. Public: anyone reads (N05 §2), and 글쓰기 asks a visitor
  * to sign in on the write screen.
  *
- * The URL is normalised ONCE, here, and handed down (the home's rule). The first page of the list
- * is read here and dehydrated, so the cards are in the HTML — without JavaScript too, the search
- * box being a plain form — and the client picks the page up under the same key; a failed read is
- * not dehydrated, and the browser then reads the page itself and shows its own failure. The market
- * a `?market=` names is read for its title (the filter's chip), and the categories for the
- * category select's first paint; either failing leaves the screen its fallbacks. Nothing personal
- * is read: this HTML is the same for every visitor.
+ * The URL is normalised ONCE, here, and handed down (the home's rule). The pinned notices (#138,
+ * ADR-0077) and the first page of the list are read here and dehydrated, so the fixed area and the
+ * cards are in the HTML — without JavaScript too, the search box being a plain form — and the
+ * client picks them up under the same keys; a failed read is not dehydrated, and the browser then
+ * reads it itself and shows its own failure. The market a `?market=` names is read for its title
+ * (the filter's chip), and the categories for the category select's first paint; either failing
+ * leaves the screen its fallbacks. Nothing personal is read: this HTML is the same for every
+ * visitor.
  */
 export default async function CommunityPage({
   searchParams,
@@ -49,7 +56,7 @@ export default async function CommunityPage({
 }) {
   const filters = communityFiltersFromSearchParams(await searchParams);
   const queryClient = getQueryClient();
-  const [, categories, market] = await Promise.all([
+  const [, , categories, market] = await Promise.all([
     queryClient.prefetchInfiniteQuery({
       queryKey: communityPostsKey(filters),
       queryFn: ({ pageParam }: { pageParam: string | undefined }) =>
@@ -58,6 +65,9 @@ export default async function CommunityPage({
       // picked up rather than fetched again.
       initialPageParam: undefined as string | undefined,
     }),
+    // The pinned notices' fixed area (#138): public, the same for every visitor, so in the HTML
+    // too. A failed read is not dehydrated, and the browser reads the area itself.
+    queryClient.prefetchQuery({ queryKey: PINNED_NOTICES_KEY, queryFn: fetchPinnedNoticesServer }),
     fetchCategoriesServer().catch(() => undefined),
     filters.market === undefined
       ? Promise.resolve(null)

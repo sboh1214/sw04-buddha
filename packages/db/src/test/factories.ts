@@ -38,6 +38,8 @@ import {
   marketWatches,
   markets,
   mediaObjects,
+  noticeImages,
+  notices,
   orders,
   phoneVerifications,
   positions,
@@ -896,4 +898,78 @@ export async function createCommentLike(db: Db, input: CreateLikeInput & { comme
     })
     .returning();
   return like!;
+}
+
+export interface CreateNoticeInput {
+  /** Default: '공지 <tag>'. */
+  title?: string;
+  /**
+   * The body as text: one paragraph per line. Default: '공지 내용 <tag>'. Ignored with `document`.
+   */
+  text?: string;
+  /** The whole body, as `sanitizePostDocument` would have stored it. */
+  document?: PostDocument;
+  /**
+   * Uploads (`createMedia`) the body shows after its paragraphs, in order: attached to the notice
+   * as the API attaches them. Ignored with `document`, whose own images are attached instead.
+   */
+  imageIds?: string[];
+  /** Default: the database clock. A list's order test sets it. */
+  createdAt?: Date;
+  editedAt?: Date;
+  /**
+   * Pinned in this slot (1..NOTICE_PIN_LIMIT, the database holds the range and one notice per
+   * slot), since `pinnedAt` (default: the database clock). Default: not pinned.
+   */
+  pinSlot?: number;
+  pinnedAt?: Date;
+}
+
+/**
+ * A notice (#138) as `POST /admin/notices` leaves it — the row with its body's text and images
+ * derived as the API derives them, each image attached (`notice_images`, the upload's
+ * `attached_at`) — or, with `pinSlot`, as a pin left it. No revision or audit rows: those are the
+ * API's to write.
+ */
+export async function createNotice(db: Db, input: CreateNoticeInput = {}) {
+  const document: PostDocument = input.document ?? {
+    type: 'doc',
+    content: [
+      ...(input.text ?? `공지 내용 ${tag()}`)
+        .split('\n')
+        .map((line) =>
+          line === ''
+            ? { type: 'paragraph' as const }
+            : { type: 'paragraph' as const, content: [{ type: 'text' as const, text: line }] },
+        ),
+      ...(input.imageIds ?? []).map((mediaId) => ({ type: 'image' as const, attrs: { mediaId } })),
+    ],
+  };
+  const read = readPostDocument(document);
+  return db.transaction(async (tx) => {
+    const [notice] = await tx
+      .insert(notices)
+      .values({
+        title: input.title ?? `공지 ${tag()}`,
+        body: document,
+        bodyText: read.text,
+        imageIds: read.imageIds,
+        ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+        ...(input.editedAt === undefined ? {} : { editedAt: input.editedAt }),
+        ...(input.pinSlot === undefined
+          ? {}
+          : { pinSlot: input.pinSlot, pinnedAt: input.pinnedAt ?? sql`now()` }),
+      })
+      .returning();
+    if (read.imageIds.length > 0) {
+      await tx
+        .insert(noticeImages)
+        .values(read.imageIds.map((mediaId) => ({ noticeId: notice!.id, mediaId })));
+      await tx
+        .update(mediaObjects)
+        .set({ attachedAt: sql`now()` })
+        .where(inArray(mediaObjects.id, read.imageIds));
+    }
+    return notice!;
+  });
 }

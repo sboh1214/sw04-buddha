@@ -5,6 +5,8 @@ import {
   type ChargePackage,
   type Market,
   type MarketSummary,
+  type Notice,
+  type NoticeSummary,
   type Post,
   type PriceSeries,
   isApiError,
@@ -207,6 +209,34 @@ export const fetchPostServer = cache(async (postId: string): Promise<Post | null
   try {
     return unwrap(await serverApi.GET('/api/v1/posts/{postId}', { params: { path: { postId } } }))
       .data;
+  } catch (error) {
+    if (isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR')) return null;
+    throw error;
+  }
+});
+
+/**
+ * The fixed area's notices (`GET /notices`, #138): every pinned one, the latest pinned first, for
+ * the community page to seed under `PINNED_NOTICES_KEY` (the browser's `queryFn` asks the same
+ * route). Public, and the same for every visitor. Rejects on failure, which the page's prefetch
+ * swallows: the area then reads them in the browser and shows its own failure.
+ */
+export async function fetchPinnedNoticesServer(): Promise<NoticeSummary[]> {
+  return unwrap(await serverApi.GET('/api/v1/notices')).data;
+}
+
+/**
+ * `GET /notices/:noticeId` for the notice page (#138), memoised for the request like the post, so
+ * `generateMetadata` and the page cost one round trip. `null` for NOT_FOUND and for the
+ * VALIDATION_ERROR a segment that is not a uuid earns; both are a 404 to a visitor, as a notice
+ * that is not pinned is (the API answers it NOT_FOUND, owner decision 2026-10-21). Any other
+ * failure throws.
+ */
+export const fetchNoticeServer = cache(async (noticeId: string): Promise<Notice | null> => {
+  try {
+    return unwrap(
+      await serverApi.GET('/api/v1/notices/{noticeId}', { params: { path: { noticeId } } }),
+    ).data;
   } catch (error) {
     if (isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR')) return null;
     throw error;
