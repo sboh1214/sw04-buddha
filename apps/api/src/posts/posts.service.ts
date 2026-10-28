@@ -89,25 +89,42 @@ function cardText(bodyText: AnyColumn): SQL<string> {
   return sql<string>`left(regexp_replace(regexp_replace(${bodyText}, ${BLANKS_AROUND_BREAKS}, ${'\n'}, 'g'), ${LEADING_BLANKS}, ''), ${LIST_TEXT_HEAD})`;
 }
 
-/** The account behind a post, as a query reads it. */
+/** The account behind a post, as a query reads it (`authorColumns`). */
 interface AuthorRow {
   publicId: string;
   nickname: string;
   role: Role;
+  /** `profiles.image_id`: the profile image (#141), or null. */
+  imageId: string | null;
 }
 
 /**
+ * The columns of `profiles` a person's public face is made of (`postAuthorOf`): every query that
+ * names a person selects these, so the face cannot be made from less — or more: the account id is
+ * not even read on the public path.
+ */
+export const authorColumns = {
+  publicId: schema.profiles.publicId,
+  nickname: schema.profiles.nickname,
+  role: schema.profiles.role,
+  imageId: schema.profiles.imageId,
+};
+
+/**
  * Who wrote a post, as every public answer names a person (ADR-0069 decision 5): the public id,
- * the CURRENT nickname (#37-3), the image and the 운영자 mark (#45-9: an admin account's every
- * post). Never the account id. The one place an author is shown, so #140 makes a withdrawn author
- * `{ kind: 'former_member' }` here ('탈퇴한 사용자', #37-16) and #141 fills `imageUrl` here.
+ * the CURRENT nickname (#37-3), the profile image (#141, #37-6: the one the member uploaded, as its
+ * address — a new upload is a new address — or null, and the web draws the nickname's first
+ * letter; never a social login's photo) and the 운영자 mark (#45-9: an admin account's every post).
+ * Never the account id. The one place a person is shown — a post's, a comment's author and the
+ * public profile's member — so #140 makes a withdrawn author `{ kind: 'former_member' }` here
+ * ('탈퇴한 사용자', #37-16).
  */
 export function postAuthorOf(row: AuthorRow): PostAuthor {
   return {
     kind: 'member',
     publicId: row.publicId,
     nickname: row.nickname,
-    imageUrl: null,
+    imageUrl: row.imageId === null ? null : mediaPath(row.imageId),
     isAdmin: row.role === 'admin',
   };
 }
@@ -171,11 +188,7 @@ export class PostsService {
     deletedAt: schema.posts.deletedAt,
     hiddenAt: schema.posts.hiddenAt,
     // The author's public face only: the account id is not even read on the public path.
-    author: {
-      publicId: schema.profiles.publicId,
-      nickname: schema.profiles.nickname,
-      role: schema.profiles.role,
-    },
+    author: authorColumns,
     market: {
       id: schema.markets.id,
       slug: schema.markets.slug,

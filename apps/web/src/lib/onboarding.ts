@@ -87,9 +87,10 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
  * Only for an account that finished its onboarding once and has a re-consent alone left
  * (`hasOnlyReconsentLeft`, 오너 결정 2026-10-20 3차 답 1): what it did before the revision — its
  * own posts, and its public profile's 소개 and interest categories (오너 결정 2026-10-21 답 2,
- * #41) — is what it may still remove. An account that has not finished — a new one that signed
- * up or signed in from the page, `next` bringing it back there — is sent on from it like from any
- * page, with the page as `next`, and comes back to it at the end (#57-9).
+ * #41) and image (오너 결정 2026-10-22, #141) — is what it may still remove. An account that has
+ * not finished — a new one that signed up or signed in from the page, `next` bringing it back
+ * there — is sent on from it like from any page, with the page as `next`, and comes back to it at
+ * the end (#57-9).
  */
 export interface OnboardingExemptPage {
   /**
@@ -106,11 +107,12 @@ export interface OnboardingExemptPage {
  * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
  * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
  * do its 좋아요 (#49, components/post/like-button.tsx). #41's MY 설정 clears the public profile's
- * 소개 and drops its interest categories; a new 소개, a category added, a nickname change (owner
- * decision 2026-10-22 answer 1) and the marketing switch — a consent record, which the consent
- * step's items come with — go to the step (app/my/settings: `profileItemSaveGoesToStep`,
- * lib/profile.ts), the 소개 typed, the categories picked and the nickname typed kept in the tab for
- * the return (lib/profile-drafts.ts, answer 3 and 2026-10-22 (2nd) answer 2). Its account cards —
+ * 소개 and drops its interest categories, and deletes its image (#141, ADR-0079); a new 소개, a
+ * category added, a new image, a nickname change (owner decision 2026-10-22 answer 1) and the
+ * marketing switch — a consent record, which the consent step's items come with — go to the step
+ * (app/my/settings: `profileItemSaveGoesToStep`, lib/profile.ts), the 소개 typed, the categories
+ * picked and the nickname typed kept in the tab for the return (lib/profile-drafts.ts, answer 3
+ * and 2026-10-22 (2nd) answer 2). Its account cards —
  * email, password, linked sign-ins, real name, time zone, theme — write what the server takes with
  * a session alone (ADR-0078 7-24). The re-consent step links to it (`settingsLinkOnStep`, answer 2).
  * ADR-0061's watchlist is not one: its server asks for a session alone, and its screens keep the
@@ -125,7 +127,7 @@ export const ONBOARDING_EXEMPT_PAGES: readonly OnboardingExemptPage[] = [
   {
     route: '/my/settings',
     reason:
-      'a member facing a re-consent clears the 소개 and drops interest categories of their public profile with a session alone (owner decision 2026-10-21 answer 2, #41), and keeps the account cards; a new 소개, a category added, a nickname change (owner decision 2026-10-22 answer 1) and the marketing switch go to the step',
+      'a member facing a re-consent clears the 소개, drops interest categories and deletes the image of their public profile with a session alone (owner decisions 2026-10-21 answer 2, #41, and 2026-10-22, #141), and keeps the account cards; a new 소개, a category added, a new image, a nickname change (owner decision 2026-10-22 answer 1) and the marketing switch go to the step',
   },
 ];
 

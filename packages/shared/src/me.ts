@@ -60,6 +60,12 @@ export const meSchema = z
        * its line breaks, or null while there is none.
        */
       bio: z.string().nullable(),
+      /**
+       * The profile image (#141, ADR-0079), as MY 설정 shows and replaces it: its address
+       * (`mediaPath`, root-relative — the public face carries the same one), or null while there
+       * is none.
+       */
+      imageUrl: z.string().nullable(),
     }),
     balance: z.object({ availableCoin: coinAmountSchema, lockedCoin: coinAmountSchema }),
     linkedAccounts: z.array(linkedAccountSchema),

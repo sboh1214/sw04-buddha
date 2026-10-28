@@ -5,7 +5,8 @@
 //   node scripts/image-memory/measure.mjs --width 2000 --height 1000 --channels 4 [--depth 16]
 //     [--interlaced] [--palette 8] [--transparent] [--profile | --icc file.icc] [--orientation 6]
 //     [--via sharp|api] [--out results.jsonl]
-//   node scripts/image-memory/measure.mjs --file photo.webp [--via sharp|api] [--encoder '{...}']
+//   node scripts/image-memory/measure.mjs --file photo.webp [--via sharp|api|profile]
+//     [--encoder '{...}']
 //
 // --via sharp (default): processImage's pipeline without its header checks (the header read, then
 //   autoOrient, a resize to fit inside the build's `outputBox` — IMAGE_MAX_DIMENSION, and
@@ -15,6 +16,8 @@
 //   setting before image.ts takes it).
 // --via api: the API's built processImage itself, header checks included; a refusal prints its
 //   reason (`refused`) and the mark of what it decoded (nothing, for a header refusal).
+// --via profile: the API's built processProfileImage (#141, ADR-0079) the same way — a profile
+//   image's own pipeline (its header checks, the middle square at most 512px, `profileSquare`).
 //
 // Prints one JSON line: highMiB (libvips' high-water mark, MiB); rssBeforeMiB (the process's RSS
 // just before the conversion — node, sharp, the build and the file); peakMiB (the most the RSS rose
@@ -52,14 +55,16 @@ const { values } = parseArgs({
     ...KIND_OPTIONS,
   },
 });
-if (values.via !== 'sharp' && values.via !== 'api') throw new Error('--via is sharp or api');
+if (!['sharp', 'api', 'profile'].includes(values.via)) {
+  throw new Error('--via is sharp, api or profile');
+}
 
 const sharp = loadSharp();
 // Loaded before the baseline RSS is taken (both ways: `--via sharp` takes the build's encoder
 // options). The API's image.js sets the cache and the threads below on import.
 const api = await loadApi();
 const encoderOverride = values.encoder === undefined ? {} : JSON.parse(values.encoder);
-if (values.via === 'api' && values.encoder !== undefined) {
+if (values.via !== 'sharp' && values.encoder !== undefined) {
   throw new Error('--encoder is for --via sharp: the API encodes with its own options');
 }
 const { IMAGE_MAX_INPUT_PIXELS } = await loadShared();
@@ -131,9 +136,10 @@ const rssBeforeMiB = Math.round(rssBefore / MiB);
 const started = performance.now();
 let out;
 let refused;
-if (values.via === 'api') {
+if (values.via === 'api' || values.via === 'profile') {
   try {
-    const image = await api.processImage(new Uint8Array(bytes));
+    const convert = values.via === 'api' ? api.processImage : api.processProfileImage;
+    const image = await convert(new Uint8Array(bytes));
     out = { width: image.width, height: image.height, bytes: image.body.length };
   } catch (error) {
     if (error?.code !== 'IMAGE_NOT_ALLOWED') throw error;

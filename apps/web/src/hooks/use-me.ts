@@ -1,21 +1,39 @@
 'use client';
 
 import { type UserBalanceEvent } from '@buddha/shared';
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query';
+import {
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type Query,
+  type QueryClient,
+  type QueryKey,
+} from '@tanstack/react-query';
 import { copy } from '@/copy';
 import {
   api,
   isApiError,
   isForAnotherAccount,
   unwrap,
+  type DeleteProfileImageBody,
   type Me,
   type UpdateBioBody,
   type UpdateMeBody,
   type UpdateTimeZoneBody,
 } from '@/lib/api';
 import { authClient, authErrorMessage } from '@/lib/auth-client';
+import { logWriteForEveryPost } from '@/lib/comment-writes';
+import { COMMENT_PAGES_KEY, commentPagesWithAuthorImage } from '@/lib/comments';
 import { applyBalanceEvent } from '@/lib/market-live';
 import { nicknameRefusalNeedsRefresh } from '@/lib/nickname';
+import { type UploadRetrySteps, pause, sendRetrying } from '@/lib/post-editor';
+import {
+  POST_LIST_KEY,
+  POST_PAGE_KEY,
+  postPagesWithAuthorImage,
+  postWithAuthorImage,
+} from '@/lib/posts';
+import { profileImageContentType } from '@/lib/profile';
 import { useSession } from '@/lib/use-session';
 
 /** Query key rule from PLAN 11.5. */
@@ -106,9 +124,10 @@ export function meBelongsTo(queryClient: QueryClient, account: string): boolean 
 /**
  * The profile field a profile write owns: the one `storeMe` takes from its answer. A nickname
  * change brings when the nickname may change next with it (#58: once in 30 days); the 소개 is the
- * public profile's (#41, `PUT /me/bio`).
+ * public profile's (#41, `PUT /me/bio`), and so is the image's address (#141, `PUT /me/profile-image`
+ * and its deletion).
  */
-export type ProfileField = 'nickname' | 'timeZone' | 'bio';
+export type ProfileField = 'nickname' | 'timeZone' | 'bio' | 'image';
 
 /** `held`'s profile with what the `field` write changed taken from `answer`. */
 function withProfileField(held: Me, answer: Me, field: ProfileField): Me['profile'] {
@@ -123,6 +142,8 @@ function withProfileField(held: Me, answer: Me, field: ProfileField): Me['profil
       return { ...held.profile, timeZone: answer.profile.timeZone };
     case 'bio':
       return { ...held.profile, bio: answer.profile.bio };
+    case 'image':
+      return { ...held.profile, imageUrl: answer.profile.imageUrl };
   }
 }
 
@@ -140,8 +161,8 @@ export async function refreshOwnMe(queryClient: QueryClient, account: string): P
 
 /**
  * Writes the profile a profile write answered with (`PATCH /me`, `PUT /me/time-zone`,
- * `PUT /me/bio`) into `['me']`, so every observer — TimeZoneProvider, the header — takes it
- * without a refetch.
+ * `PUT /me/bio`, `PUT /me/profile-image` and its deletion) into `['me']`, so every observer —
+ * TimeZoneProvider, the header — takes it without a refetch.
  *
  * Only the field the write changed (`field`): the answer is a whole `Me`, but the write changed
  * nothing else. Two profile writes can overlap — a nickname save and a time-zone save from the
@@ -198,6 +219,111 @@ export async function storeMe(
     return;
   }
   await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY, exact: true });
+}
+
+/**
+ * The reads that carry members' faces (ADR-0069 decision 5: public id, nickname, image, 운영자), by
+ * prefix, each with what puts a member's new profile image on what it holds (ADR-0079 7-21): the
+ * community list's and every market's 토론's cards (`POST_LIST_KEY`), the post pages and their
+ * comment pages — the 대댓글 '답글 더 보기' read among them. Every one is under the posts' root; a read
+ * that comes to carry faces elsewhere joins here. `['me']` is not one: `storeMe` writes it.
+ */
+const AUTHOR_FACE_READS: readonly {
+  queryKey: QueryKey;
+  withImage: (held: never, publicId: string, imageUrl: string | null) => unknown;
+}[] = [
+  { queryKey: POST_LIST_KEY, withImage: postPagesWithAuthorImage },
+  { queryKey: POST_PAGE_KEY, withImage: postWithAuthorImage },
+  { queryKey: COMMENT_PAGES_KEY, withImage: commentPagesWithAuthorImage },
+];
+
+/**
+ * The profile image the member `publicId` has now (#141) — its address, or null once deleted —
+ * on every face of theirs the tab holds (`AUTHOR_FACE_READS`; Codex review on PR #225, ADR-0079
+ * 7-21). Without it a card, a post or a comment read before the change kept the old address until
+ * its next read (30 seconds, a focus): Back to it showed the image just replaced — or, its file
+ * removed at once (decision 4 #141), a broken one — and the deleted image instead of the
+ * nickname's first letter.
+ *
+ * Each entry is patched where it is, not read again: it changes nothing but the faces, so its
+ * time, its stale mark and a failed read's error stay as they were — what was due to be read is
+ * still due, and nothing fresh is read early — and no request is sent, the pages a comment section held among them (each
+ * a request in the reader's address limit). A read of the entry on its way may have left before
+ * the write and land after it, putting the old face back: it is cancelled first, and a read of
+ * every page held so cancelled is made again (not waited for) — the rule `writePages`
+ * (use-comments.ts) keeps for a comment's write, a 더 보기 cancelled left to be pressed again.
+ *
+ * The comment section's three reads toward a place — a new 댓글's read to the end, a new 대댓글's
+ * read on, '답글 더 보기' — are not the query's and nothing cancels them: what they read before the
+ * change, put in after it, would bring the old address back (a new 댓글's read goes on after its
+ * write's answer, whatever screen the tab moved to — the profile's MY 설정 among them). So the
+ * change first goes into the log of every one of them on its way (lib/comment-writes.ts, ADR-0074
+ * 7-34), done again over what it puts in (ADR-0079 7-22): the same function of the pages held as
+ * the patch here — the member's faces only, the same again when done again — so its place in the
+ * order of the writes does not matter. First, before any of the waits below: a read landing during
+ * them must find it logged.
+ */
+export async function storeAuthorImage(
+  queryClient: QueryClient,
+  publicId: string,
+  imageUrl: string | null,
+): Promise<void> {
+  logWriteForEveryPost(
+    queryClient,
+    (held) => held && commentPagesWithAuthorImage(held, publicId, imageUrl),
+  );
+  const cache = queryClient.getQueryCache();
+  await Promise.all(
+    AUTHOR_FACE_READS.flatMap(({ queryKey, withImage }) =>
+      cache
+        .findAll({ queryKey })
+        .map((query) =>
+          putAuthorImage(queryClient, query, (held) =>
+            withImage(held as never, publicId, imageUrl),
+          ),
+        ),
+    ),
+  );
+}
+
+/** `storeAuthorImage` for one entry: `withImage` on what it holds, once no read can undo it. */
+async function putAuthorImage(
+  queryClient: QueryClient,
+  query: Query,
+  withImage: (held: unknown) => unknown,
+): Promise<void> {
+  const { queryKey } = query;
+  const reading = query.state.fetchStatus !== 'idle';
+  const readAgain = reading && query.state.fetchMeta?.fetchMore === undefined;
+  if (reading) await queryClient.cancelQueries({ queryKey, exact: true });
+  // As the cancellation left it: what it held before that read.
+  const { data } = query.state;
+  if (data !== undefined) {
+    const next = withImage(data);
+    // The data alone, as hydration writes an entry: `setQueryData` would also stamp it read now,
+    // drop its stale mark and turn a failed read into a success — the error a screen shows, a
+    // post page's NOT_FOUND that draws its 404 (post-screen.tsx), gone with it.
+    if (next !== data) query.setState({ data: next });
+  }
+  if (readAgain) void queryClient.invalidateQueries({ queryKey, exact: true });
+}
+
+/**
+ * A profile image write's answer — an upload's (`PUT /me/profile-image`) or a deletion's — in the
+ * caches, for both mutations: the image's address into `['me']` (`storeMe`, only while it holds
+ * the account written) and onto every face of the member the tab holds (`storeAuthorImage` —
+ * whoever `['me']` holds: the faces are public, and the answer is the server's word on the account
+ * it names).
+ */
+export async function storeProfileImage(
+  queryClient: QueryClient,
+  me: Me,
+  onSessionChanged: () => void,
+): Promise<void> {
+  await Promise.all([
+    storeMe(queryClient, me, 'image', onSessionChanged),
+    storeAuthorImage(queryClient, me.profile.publicId, me.profile.imageUrl),
+  ]);
 }
 
 /**
@@ -334,6 +460,117 @@ export function useUpdateBio() {
   const queryClient = useQueryClient();
   const { refetch: refetchSession } = useSession();
   return useMutation(updateBioOptions(queryClient, () => void refetchSession()));
+}
+
+/** A profile image to upload: the picked file, and the account the card shows. */
+export interface ProfileImageUpload {
+  file: Blob & { type: string };
+  expectedAccountId: string;
+}
+
+/**
+ * `PUT /api/v1/me/profile-image` (#141, ADR-0079): the file itself as the body (no multipart), under
+ * its own type or `application/octet-stream` (`profileImageContentType`), with the account the card
+ * shows in the query — the body is the file, so it cannot ride there — as a post's image goes
+ * (`uploadPostImage`). The answer is the whole profile, its new image's address in it.
+ */
+export async function putProfileImage({
+  file,
+  expectedAccountId,
+}: ProfileImageUpload): Promise<Me> {
+  return unwrap(
+    await api.PUT('/api/v1/me/profile-image', {
+      params: { query: { expectedAccountId } },
+      // openapi-fetch would JSON-encode the body: the file goes as it is.
+      body: file as unknown as string,
+      bodySerializer: (body: unknown) => body as BodyInit,
+      headers: { 'Content-Type': profileImageContentType(file) },
+    }),
+  ).data;
+}
+
+/**
+ * The waits of a profile upload sent again (`sendRetrying`): the page's clock, and never given up —
+ * the member picked the file, and the image is the profile's whether or not the card is still on
+ * screen when it lands (its answer goes into `['me']`).
+ */
+const PROFILE_UPLOAD_RETRY: UploadRetrySteps = { sleep: pause, alive: () => true };
+
+/**
+ * `PUT /me/profile-image` as mutation options: the answer's image address goes into `['me']`
+ * through `storeMe`, as the 소개's does, so the card and every observer show the new image at once,
+ * and onto every face of the member a card, a post or a comment the tab holds carries
+ * (`storeProfileImage`, ADR-0079 7-21) — a new upload is a new address, so the browser shows no
+ * old image under it, and no face held keeps the old address. A 429 that asks to
+ * wait at most 10 seconds — the API busy for the moment: the uploads it receives, the account's
+ * three in flight, its memory, the conversion queue — is waited out and the file sent again, twice
+ * at most, the mutation pending meanwhile ('올리는 중'), as the post editor sends its images again
+ * (`sendRetrying`, #46's owner decision 2026-10-22 (2차) answer 3 — the same upload path,
+ * ADR-0079 7-18). The 403 for another account asks for the session again; an ONBOARDING_REQUIRED — a
+ * revision asked for the consent again while the screen was open — asks `['me']` again, and the
+ * gate, or on MY 설정 the step (`useSettingsStep`), takes the member on. A refused file
+ * (IMAGE_NOT_ALLOWED) is neither: the card says why.
+ */
+export function uploadProfileImageOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  put: (upload: ProfileImageUpload) => Promise<Me> = putProfileImage,
+  retry: UploadRetrySteps = PROFILE_UPLOAD_RETRY,
+) {
+  return {
+    mutationFn: (upload: ProfileImageUpload) => sendRetrying(() => put(upload), retry),
+    // Returned, so `mutateAsync` settles only once `['me']` and the faces hold the answer.
+    onSuccess: (me: Me) => storeProfileImage(queryClient, me, onSessionChanged),
+    onError: async (error: Error, upload: ProfileImageUpload) => {
+      if (isForAnotherAccount(error)) {
+        onSessionChanged();
+        return;
+      }
+      if (isApiError(error, 'ONBOARDING_REQUIRED')) {
+        await refreshOwnMe(queryClient, upload.expectedAccountId);
+      }
+    },
+  };
+}
+
+/** `uploadProfileImageOptions` as MY 설정's 프로필 이미지 card's upload. */
+export function useUploadProfileImage() {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  return useMutation(uploadProfileImageOptions(queryClient, () => void refetchSession()));
+}
+
+async function postDeleteProfileImage(body: DeleteProfileImageBody): Promise<Me> {
+  return unwrap(await api.POST('/api/v1/me/profile-image/delete', { body })).data;
+}
+
+/**
+ * `POST /me/profile-image/delete` (#141) as mutation options: the image goes at once, and the
+ * answer's `imageUrl: null` goes into `['me']` and onto every face of the member the tab holds
+ * (`storeProfileImage`, as an upload's answer), so the card, every observer and every byline draw
+ * the nickname's first letter again. Sign-in is all it needs (a deletion — re-consent accounts too,
+ * owner decision 2026-10-22, as the 소개 and the categories on #41), so the only refusal it acts on
+ * is the 403 for another account: the session is asked again.
+ */
+export function deleteProfileImageOptions(
+  queryClient: QueryClient,
+  onSessionChanged: () => void,
+  post: (body: DeleteProfileImageBody) => Promise<Me> = postDeleteProfileImage,
+) {
+  return {
+    mutationFn: post,
+    onSuccess: (me: Me) => storeProfileImage(queryClient, me, onSessionChanged),
+    onError: (error: Error) => {
+      if (isForAnotherAccount(error)) onSessionChanged();
+    },
+  };
+}
+
+/** `deleteProfileImageOptions` as MY 설정's 프로필 이미지 card's deletion. */
+export function useDeleteProfileImage() {
+  const queryClient = useQueryClient();
+  const { refetch: refetchSession } = useSession();
+  return useMutation(deleteProfileImageOptions(queryClient, () => void refetchSession()));
 }
 
 /**

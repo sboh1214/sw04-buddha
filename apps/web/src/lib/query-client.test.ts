@@ -1,9 +1,11 @@
 import { InfiniteQueryObserver, QueryObserver, type InfiniteData } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
+import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
 import { type Position } from './api';
 import { POSITIONS_KEY } from './market-keys';
 import {
+  ME_KEY,
   cancelFirstFetch,
   getQueryClient,
   listSection,
@@ -603,5 +605,11 @@ describe('a 더 보기 that failed (owner decision 2026-10-20 7, ADR-0075)', () 
     } finally {
       list.done();
     }
+  });
+});
+
+describe('ME_KEY', () => {
+  it("is `['me']` as hooks/use-me.ts keys it, named again here for the server side of this file (ADR-0079 7-23)", () => {
+    expect(ME_KEY).toEqual(ME_QUERY_KEY);
   });
 });

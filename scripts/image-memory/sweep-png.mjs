@@ -5,6 +5,7 @@
 //   node scripts/image-memory/sweep-png.mjs --channels 4 [--depth 16] [--interlaced]
 //     [--palette 8 --transparent] [--no-profile | --icc file.icc] [--pixels 19700000] [--coarse]
 //     [--jobs 4] [--via sharp|api] [--out cases.jsonl]
+//   node scripts/image-memory/sweep-png.mjs --channels 4 --profile-image ...
 //   node scripts/image-memory/sweep-png.mjs --channels 4 --search [--from P] [--to P]
 //     [--target 124] [--limit 126] ...
 //
@@ -18,6 +19,12 @@
 //      factors of it) whose factor is closest under the step, where a conversion holds the most;
 //   c. (not --coarse) a quarter turn by EXIF (orientation 6) from 1:1 to 4:1, 50 px apart.
 // --pixels defaults to the kind's bound in the API's build (PNG_LARGEST_FRAME_PIXELS).
+//
+// --profile-image: a profile image's pipeline instead (#141, ADR-0079 — the API's built
+// processProfileImage, `measure.mjs --via profile`): the middle square cut from the file and scaled
+// to 512px, whose shrink steps up with the square's side, not the frame's width. Shapes a and c as
+// above, and in place of b the heights (the square's side) from 40 px under to 4 px over each
+// multiple of 512 × 4, 6, 8 … — a factor just under a step — at the widest width the pixels allow.
 //
 // --search: the value as ADR-0073 9-8 found it. First the largest multiple of 100,000 between
 // --from (default: the kind's bound) and --to (default: IMAGE_MAX_INPUT_PIXELS) whose coarse sweep
@@ -60,6 +67,7 @@ const { values } = parseArgs({
     limit: { type: 'string' },
     jobs: { type: 'string' },
     via: { type: 'string', default: 'sharp' },
+    'profile-image': { type: 'boolean', default: false },
     out: { type: 'string' },
   },
 });
@@ -72,7 +80,9 @@ const bound =
   api.PNG_LARGEST_FRAME_PIXELS[decoded.channels][decoded.depth][kind.interlaced ? 1 : 0];
 const ratio = api.IMAGE_MAX_SIDE_RATIO;
 const jobs = int(values.jobs, 'jobs', 4);
-const name = kindName(kind);
+const profileImage = values['profile-image'];
+const via = profileImage ? 'profile' : values.via;
+const name = profileImage ? `${kindName(kind)} (profile image)` : kindName(kind);
 
 /** The shapes of at most `pixels` (above): [{ width, height, orientation, why }]. */
 function shapes(pixels, coarse) {
@@ -88,6 +98,19 @@ function shapes(pixels, coarse) {
     add(width, Math.floor(pixels / width), undefined, 'a');
   }
   if (coarse) return [...list.values()];
+  if (profileImage) {
+    // The square's side is the short side; the shrink to PROFILE_IMAGE_SIZE steps up as it grows.
+    const side = 512;
+    for (let step = 4; step * side <= square + 4; step += 2) {
+      for (let height = step * side - 40; height <= step * side + 4; height += 1) {
+        add(Math.floor(pixels / height), height, undefined, 'p');
+      }
+    }
+    for (let width = square; width <= Math.min(widest, Math.sqrt(4 * pixels)); width += 50) {
+      add(width, Math.floor(pixels / width), 6, 'c');
+    }
+    return [...list.values()];
+  }
 
   // The factor left for the reduce after the integral shrink: the closer under a step, the more
   // input rows it holds.
@@ -128,7 +151,7 @@ async function sweep(pixels, coarse) {
       String(shape.height),
       ...kindFlags({ ...kind, orientation: shape.orientation }),
       '--via',
-      values.via,
+      via,
     ]);
     keep({ sweep: name, sweepPixels: pixels, why: shape.why, ...result }, values.out);
     return { ...shape, ...result };

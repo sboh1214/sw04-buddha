@@ -1,10 +1,14 @@
 import {
+  IMAGE_CONTENT_TYPES,
   IMAGE_MAX_BYTES,
   IMAGE_MAX_DIMENSION,
   IMAGE_MAX_INPUT_PIXELS,
+  PROFILE_IMAGE_CONTENT_TYPES,
+  PROFILE_IMAGE_SIZE,
   type ImageContentType,
   type ImageNotAllowedDetails,
   type ImageRefusal,
+  type ProfileImageContentType,
 } from '@buddha/shared';
 import sharp, {
   type GifOptions,
@@ -12,6 +16,7 @@ import sharp, {
   type Metadata,
   type OutputInfo,
   type PngOptions,
+  type Sharp,
   type WebpOptions,
 } from 'sharp';
 import { AppError } from '../common/errors/app-error.js';
@@ -101,7 +106,9 @@ export const IMAGE_DECODE_BUDGET_BYTES = 128 * 1024 * 1024;
  * components (`decodeBytesPerPixel` — at the three-component one, CMYK took ~158MiB), the size a
  * still WebP with alpha is written at (WEBP_ALPHA_MAX_OUTPUT_PIXELS) and the bounds of WebP
  * animations and GIF animations below; `image-memory.test.ts` converts each kind's costliest
- * case.
+ * case. A profile image (#141) converts in the same turn and within the same share:
+ * `profile-image-memory.test.ts` converts its costliest cases — a progressive CMYK JPEG at 32:1,
+ * its square cut from the file, the dearest at ~120MiB on arm64 and ~124 on x64 (ADR-0079 결정 10).
  */
 export const IMAGE_CONVERSION_PEAK_BYTES = 144 * 1024 * 1024;
 
@@ -267,8 +274,10 @@ type PngChannels = Metadata['channels'];
  * `image-memory.test.ts` converts each kind's costliest frame — only those shapes, so a change to
  * IMAGE_MAX_DIMENSION (which places the shrink's steps), the budget, the ratio or
  * IMAGE_MAX_INPUT_PIXELS, or to sharp or libvips, needs the measurement again (ADR-0073 결과 5).
- * The values are this pipeline's: another — a profile image's square cut to 512px (#141) — has
- * costliest shapes of its own and is measured on its own before it uses them.
+ * The values are this pipeline's: another has costliest shapes of its own and is measured on its
+ * own before it uses them — a profile image's square, cut from the file and scaled to 512px (#141),
+ * was, and takes these bounds as they are: its costliest shape of each kind took 31–97MiB, an
+ * interlaced one the most (decoded whole), `profile-image-memory.test.ts` and ADR-0079 결정 10.
  */
 export const PNG_LARGEST_FRAME_PIXELS: Readonly<
   Record<PngChannels, Readonly<Record<8 | 16, readonly [plain: number, interlaced: number]>>>
@@ -471,89 +480,119 @@ export interface ProcessedImage {
   readonly height: number;
 }
 
+/** An upload the header checks let through, and what the conversion is to make of it. */
+interface InspectedImage<T extends ImageContentType> {
+  readonly contentType: T;
+  /** How the decoder reads it: every frame of an animation, or the first frame only. */
+  readonly input: { readonly animated: boolean; readonly limitInputPixels: number };
+  /**
+   * Its header as the conversion meets it: a file read for its first frame only is a still image
+   * here (`pages` 1), whatever frames it has — that one frame is all that is decoded, encoded and
+   * counted.
+   */
+  readonly metadata: Metadata;
+  /** One frame as stored, before any EXIF orientation turns it. */
+  readonly width: number;
+  readonly height: number;
+}
+
 /**
- * Checks and converts an upload (#45-3) — what the server stores is always its own encoding,
- * never the bytes it received:
+ * The most pixels one frame may have (`inspectImage`), by the image's header (`metadata`, as the
+ * conversion meets it) and one frame's size as stored.
+ */
+type LargestFrame<T extends ImageContentType> = (
+  contentType: T,
+  metadata: Metadata,
+  width: number,
+  height: number,
+) => number;
+
+/**
+ * Steps 1 to 3 of `processImage`, and the same of `processProfileImage` — one header step for both
+ * kinds of upload, before anything is decoded (a decompression bomb is a few bytes):
  *
  * 1. Not empty, at most IMAGE_MAX_BYTES (the content-type parser stops a larger body first).
- * 2. One of the four types by its magic number (`sniffImageType`), and the decoder agrees — a
- *    JPEG of at most JPEG_MAX_COMPONENTS components.
- * 3. Small enough to convert, read from the header before anything is decoded (a decompression
- *    bomb is a few bytes): one frame no thinner than IMAGE_MAX_SIDE_RATIO allows and no larger
- *    than its kind's largest frame (`largestFramePixels` — within IMAGE_DECODE_BUDGET_BYTES by
- *    libvips' count and IMAGE_CONVERSION_PEAK_BYTES by the process's), else `pixels`; every frame
- *    together within IMAGE_MAX_INPUT_PIXELS (a WebP animation's own bound, `largestImagePixels`),
- *    else `frames` for an animation and `pixels` for a still — sharp's own limit is a second
- *    fence.
- * 4. Turned upright by its EXIF orientation, then shrunk to fit IMAGE_MAX_DIMENSION on its long side
- *    — a still WebP with alpha to WEBP_ALPHA_MAX_OUTPUT_PIXELS too (`outputBox`) — never
- *    enlarged; an animated GIF or WebP keeps every frame and its timing.
- * 5. Encoded again in its own type, with the settings that bound the encoder's memory
- *    (`encoderOptions`). sharp writes no metadata unless asked, so EXIF (the place and the device a
- *    photo was taken with), XMP, IPTC and the ICC profile are gone — the pixels are turned into
- *    sRGB first, so the colours stay.
+ * 2. One of `types` by its magic number (`sniffImageType`), and the decoder agrees — a JPEG of at
+ *    most JPEG_MAX_COMPONENTS components.
+ * 3. Small enough to convert, read from the header: one frame no thinner than IMAGE_MAX_SIDE_RATIO
+ *    allows — a post's image and a profile image alike (owner decisions 2026-10-22, ADR-0079) — and
+ *    no larger than `largestFrame` (within IMAGE_DECODE_BUDGET_BYTES by libvips' count and
+ *    IMAGE_CONVERSION_PEAK_BYTES by the process's), else `pixels`; every frame read together
+ *    within IMAGE_MAX_INPUT_PIXELS (a WebP animation's own bound, `largestImagePixels`), else
+ *    `frames` for an animation and `pixels` for a still — sharp's own limit is a second fence.
  *
- * Steps 4 and 5 run one conversion at a time (`imageConversions`), each once the API's memory has
- * room for IMAGE_CONVERSION_PEAK_BYTES (`memoryAdmission`) — waiting for it until
- * `memoryWaits.conversionMs` after the conversion joined the queue; a refusal from the header
- * waits for nothing. Throws IMAGE_NOT_ALLOWED with the reason for anything
- * it refuses, and RATE_LIMITED when too many conversions are already waiting or the memory had no
- * room in time.
+ * `animated` reads every frame of a GIF or a WebP — a post's image keeps them — and false reads the
+ * first frame only, which is then all that is decoded, encoded and counted: the header the rest
+ * meets is a still image's.
  */
-export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
+async function inspectImage<T extends ImageContentType>(
+  bytes: Uint8Array,
+  types: readonly T[],
+  animated: (contentType: T) => boolean,
+  largestFrame: LargestFrame<T>,
+): Promise<InspectedImage<T>> {
   if (bytes.length === 0) throw imageRefused('empty');
   if (bytes.length > IMAGE_MAX_BYTES) throw imageRefused('size');
-  const contentType = sniffImageType(bytes);
+  const sniffed = sniffImageType(bytes);
+  const contentType = types.find((type) => type === sniffed);
   if (contentType === undefined) throw imageRefused('type');
 
-  // Every frame of an animation (GIF, animated WebP); a still image has one page either way.
-  const animated = contentType === 'image/gif' || contentType === 'image/webp';
-  const input = { animated, limitInputPixels: IMAGE_MAX_INPUT_PIXELS } as const;
-  let metadata: Metadata;
+  const input = { animated: animated(contentType), limitInputPixels: IMAGE_MAX_INPUT_PIXELS };
+  let header: Metadata;
   try {
     // The header only: nothing is decoded, so no pixel limit is needed to read it (sharp's own
     // would refuse a bomb here as a failure to read, not as what it is).
-    metadata = await sharp(bytes, { ...input, limitInputPixels: false }).metadata();
+    header = await sharp(bytes, { ...input, limitInputPixels: false }).metadata();
   } catch {
     throw imageRefused('unreadable');
   }
-  if (metadata.format !== SHARP_FORMAT[contentType]) throw imageRefused('unreadable');
-  if (contentType === 'image/jpeg' && metadata.channels > JPEG_MAX_COMPONENTS) {
+  if (header.format !== SHARP_FORMAT[contentType]) throw imageRefused('unreadable');
+  if (contentType === 'image/jpeg' && header.channels > JPEG_MAX_COMPONENTS) {
     throw imageRefused('unreadable');
   }
+  const metadata: Metadata = input.animated ? header : { ...header, pages: 1 };
   const width = metadata.width;
-  // `height` is every frame stacked; `pageHeight` one frame's (none for a still image).
+  // `height` is every frame read stacked (one, unless `animated`); `pageHeight` one frame's (none
+  // for a still image).
   const totalHeight = metadata.height;
   if (!width || !totalHeight) throw imageRefused('unreadable');
   const frameHeight = metadata.pageHeight ?? totalHeight;
   if (
     Math.max(width, frameHeight) > IMAGE_MAX_SIDE_RATIO * Math.min(width, frameHeight) ||
-    width * frameHeight > largestFramePixels(contentType, metadata)
+    width * frameHeight > largestFrame(contentType, metadata, width, frameHeight)
   ) {
     throw imageRefused('pixels');
   }
   if (width * totalHeight > largestImagePixels(contentType, metadata)) {
     throw imageRefused(frameHeight < totalHeight ? 'frames' : 'pixels');
   }
+  return { contentType, input, metadata, width, height: frameHeight };
+}
 
-  const pipeline = sharp(bytes, input)
-    .autoOrient()
-    .resize({ ...outputBox(contentType, metadata), fit: 'inside', withoutEnlargement: true })
-    .toFormat(SHARP_FORMAT[contentType], encoderOptions(contentType, metadata));
-  // The memory's wait counts from when the conversion joins the queue, not from its turn: one
-  // queued behind a conversion that waited in vain is refused at once if there is still no room,
-  // rather than waiting its own whole time after that one's (ADR-0073 9-46).
+/** A conversion's output: the encoded bytes and what sharp says of them. */
+type Converted = { data: Buffer; info: OutputInfo };
+
+/**
+ * Runs a conversion — all of `task`, however many passes it makes — as one turn of the API's queue
+ * (`imageConversions`: one at a time, process-wide), once the API's memory has room for
+ * IMAGE_CONVERSION_PEAK_BYTES (`memoryAdmission`, owner decision 2026-10-22 answer 3), and refuses
+ * what the decoder cannot read. The memory's wait counts from when the conversion joins the queue,
+ * not from its turn: one queued behind a conversion that waited in vain is refused at once if there
+ * is still no room, rather than waiting its own whole time after that one's (ADR-0073 9-46).
+ * RATE_LIMITED when too many conversions are waiting already, or the memory had no room by
+ * `memoryWaits.conversionMs` after it joined.
+ */
+async function convert(task: () => Promise<Converted>): Promise<Converted> {
   const deadline = Date.now() + memoryWaits.conversionMs;
-  let output: { data: Buffer; info: OutputInfo };
   try {
-    output = await imageConversions.run(async () => {
+    return await imageConversions.run(async () => {
       const release = await memoryAdmission.admit(IMAGE_CONVERSION_PEAK_BYTES, {
         kind: 'conversion',
         waitMs: Math.max(0, deadline - Date.now()),
       });
       if (release === null) throw imageMemoryBusy();
       try {
-        return await pipeline.toBuffer({ resolveWithObject: true });
+        return await task();
       } finally {
         release();
       }
@@ -563,10 +602,245 @@ export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
     if (error instanceof Error && /pixel limit/i.test(error.message)) throw imageRefused('pixels');
     throw imageRefused('unreadable');
   }
+}
+
+/**
+ * Checks and converts an upload (#45-3) — what the server stores is always its own encoding,
+ * never the bytes it received:
+ *
+ * 1–3. The header step (`inspectImage`): empty, too large, not one of the four types by its magic
+ *    number or not decoding as one, too thin, a frame larger than its kind's largest frame
+ *    (`largestFramePixels`), too many frames.
+ * 4. Turned upright by its EXIF orientation, then shrunk to fit IMAGE_MAX_DIMENSION on its long side
+ *    — a still WebP with alpha to WEBP_ALPHA_MAX_OUTPUT_PIXELS too (`outputBox`) — never
+ *    enlarged; an animated GIF or WebP keeps every frame and its timing.
+ * 5. Encoded again in its own type, with the settings that bound the encoder's memory
+ *    (`encoderOptions`). sharp writes no metadata unless asked, so EXIF (the place and the device a
+ *    photo was taken with), XMP, IPTC and the ICC profile are gone — the pixels are turned into
+ *    sRGB first, so the colours stay.
+ *
+ * Steps 4 and 5 run one conversion at a time, each once the API's memory has room for
+ * IMAGE_CONVERSION_PEAK_BYTES (`convert`); a refusal from the header waits for nothing. Throws
+ * IMAGE_NOT_ALLOWED with the reason for anything it refuses, and RATE_LIMITED when too many
+ * conversions are already waiting or the memory had no room in time.
+ */
+export async function processImage(bytes: Uint8Array): Promise<ProcessedImage> {
+  // Every frame of an animation (GIF, animated WebP); a still image has one page either way.
+  const { contentType, input, metadata } = await inspectImage(
+    bytes,
+    IMAGE_CONTENT_TYPES,
+    (type) => type === 'image/gif' || type === 'image/webp',
+    (type, header) => largestFramePixels(type, header),
+  );
+  const output = await convert(() =>
+    sharp(bytes, input)
+      .autoOrient()
+      .resize({ ...outputBox(contentType, metadata), fit: 'inside', withoutEnlargement: true })
+      .toFormat(SHARP_FORMAT[contentType], encoderOptions(contentType, metadata))
+      .toBuffer({ resolveWithObject: true }),
+  );
   return {
     body: new Uint8Array(output.data),
     contentType,
     width: output.info.width,
     height: output.info.pageHeight ?? output.info.height,
   };
+}
+
+/**
+ * A profile image as it is stored: a square of one of its three types, PROFILE_IMAGE_SIZE at most —
+ * the upload's short side when that is smaller.
+ */
+export interface ProcessedProfileImage extends ProcessedImage {
+  readonly contentType: ProfileImageContentType;
+}
+
+/**
+ * Checks and converts a profile image (#141, ADR-0069 decision 3 #37-6: «JPEG·PNG·WebP, 5MB, 서버에서
+ * 정사각 512px로 자르고 EXIF 제거») — as a post's image is (`processImage`), through the same header
+ * step and the same conversion turn, but:
+ *
+ * - JPEG, PNG or WebP only (PROFILE_IMAGE_CONTENT_TYPES): a GIF is refused as `type`, as anything
+ *   else that is not one of the three is.
+ * - The first frame of an animated WebP only: the decoder reads that one frame, so the header
+ *   checks count that frame alone, as a still WebP — and the stored image is still (ADR-0079).
+ * - A frame's bound is its own pipeline's (`profileLargestFramePixels`): a PNG's kind and a JPEG's
+ *   as a post's image's, measured on this pipeline too; a WebP whose square is cut from the file
+ *   at what that costs, more than a post's image of it.
+ * - Turned upright by its EXIF orientation, and the middle of it cropped to a square: the upload's
+ *   short side, scaled down to PROFILE_IMAGE_SIZE when it is longer, never enlarged — a 300×200
+ *   upload is stored 200×200 (owner decisions 2026-10-22: the centre, no crop box; 512 is the most).
+ *   How it gets there is bounded by memory (`profileSquare`).
+ * - Encoded again in its own type with a post's image's encoder settings (`encoderOptions`, as a
+ *   still image), without EXIF or any other metadata. At most PROFILE_IMAGE_SIZE² pixels, a WebP
+ *   with alpha is always within what such a WebP is written at (WEBP_ALPHA_MAX_OUTPUT_PIXELS), so it
+ *   is never written smaller than its square.
+ *
+ * Throws as `processImage` does, from the header and from the conversion's turn (`convert`).
+ */
+export async function processProfileImage(bytes: Uint8Array): Promise<ProcessedProfileImage> {
+  const inspected = await inspectImage(
+    bytes,
+    PROFILE_IMAGE_CONTENT_TYPES,
+    () => false,
+    profileLargestFramePixels,
+  );
+  const output = await convert(() => profileSquare(bytes, inspected));
+  return {
+    body: new Uint8Array(output.data),
+    contentType: inspected.contentType,
+    width: output.info.width,
+    height: output.info.height,
+  };
+}
+
+/**
+ * The square itself — the middle square of the upload, at its full resolution, scaled to `target`
+ * (PROFILE_IMAGE_SIZE, or the short side when that is smaller: never enlarged) — in two ways chosen
+ * for memory (ADR-0073 9-8; ADR-0079 7-16 and the table of its 결정 4). Scaling the
+ * whole upload straight to the square ('cover') scales by the SHORT side: a long panorama then gets
+ * no shrink-on-load and is decoded, turned and resized at full size — a 300KB JPEG of 60000×833
+ * with a quarter turn peaked near 400 MiB, the API's whole container.
+ *
+ * - Scaled first, for a JPEG or a WebP whose short side stays longer than `target` once its long
+ *   side fits inside IMAGE_MAX_DIMENSION — a photo less than four times wider than tall, or one
+ *   whose long side is that small already: `processImage`'s own pass (turned upright, fitted
+ *   inside IMAGE_MAX_DIMENSION, so the decoder shrinks by the LONG side as it reads — libjpeg's
+ *   shrink-on-load, libwebp's scaled decoding) as raw pixels (at most 2048×2048×4 bytes), then the
+ *   middle square of that scaled to `target`. The cheapest way: the same memory as a post's image
+ *   of the same file.
+ * - Cut first (`cutsSquareFirst`), for a PNG — no decoder shrinks it, so a first pass would gain
+ *   nothing, and its long-side reduce is what makes a long PNG cost the most — and for a JPEG or a
+ *   WebP longer than that, whose first pass would leave a short side under `target` (a square then
+ *   enlarged, soft): the middle square is cut in the orientation the file is stored in — the same
+ *   square once turned, since a turn or a mirror keeps the middle in the middle — read from the
+ *   file at its full resolution (no shrink-on-load: the decoder reads the rows and keeps the
+ *   square's columns), scaled to `target` and then turned upright (sharp turns after the resize
+ *   when `extract` comes before `autoOrient`; the EXIF tests in image.test.ts would see a square
+ *   turned the wrong way). A long JPEG is read row by row this way (~62 MiB for 50 megapixels at
+ *   32:1, IMAGE_MAX_SIDE_RATIO). A long WebP is decoded whole — up to 16.8 bytes a pixel, more than the 15 its format is
+ *   charged — so the header check charges it PROFILE_WEBP_CUT_BYTES_PER_PIXEL
+ *   (`profileDecodeBytesPerPixel`), which keeps it within IMAGE_DECODE_BUDGET_BYTES (126 MiB at
+ *   most at its bound). Both more than a post's image of the same file (ADR-0079 결정 4's table,
+ *   profile-image-memory.test.ts).
+ */
+function profileSquare(
+  bytes: Uint8Array,
+  { contentType, input, metadata, width, height }: InspectedImage<ProfileImageContentType>,
+): Promise<Converted> {
+  const target = profileSquareSide(width, height);
+  // A post's image's encoder settings, as a still image (`metadata`, read for the first frame).
+  const toSquare = (pipeline: Sharp, size: number) =>
+    pipeline
+      .resize({ width: size, height: size, fit: 'cover', position: 'centre' })
+      .toFormat(SHARP_FORMAT[contentType], encoderOptions(contentType, metadata))
+      .toBuffer({ resolveWithObject: true });
+  if (cutsSquareFirst(contentType, width, height)) {
+    const side = Math.min(width, height);
+    return toSquare(
+      sharp(bytes, input)
+        .extract({
+          left: Math.floor((width - side) / 2),
+          top: Math.floor((height - side) / 2),
+          width: side,
+          height: side,
+        })
+        .autoOrient(),
+      target,
+    );
+  }
+  return sharp(bytes, input)
+    .autoOrient()
+    .resize({
+      width: IMAGE_MAX_DIMENSION,
+      height: IMAGE_MAX_DIMENSION,
+      fit: 'inside',
+      withoutEnlargement: true,
+    })
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+    .then(({ data, info }) =>
+      toSquare(
+        sharp(data, { raw: { width: info.width, height: info.height, channels: info.channels } }),
+        // Never more than the first pass left: nothing is enlarged.
+        Math.min(target, info.width, info.height),
+      ),
+    );
+}
+
+/** The side of a profile image's square: the upload's short side, PROFILE_IMAGE_SIZE at most. */
+export function profileSquareSide(width: number, height: number): number {
+  return Math.min(PROFILE_IMAGE_SIZE, width, height);
+}
+
+/**
+ * Whether `profileSquare` cuts the square from the file at its full resolution — a PNG always, and
+ * a JPEG or a WebP whose short side would be no longer than the square once its long side is fitted
+ * inside IMAGE_MAX_DIMENSION — rather than taking `processImage`'s long-side pass first. The header
+ * check asks it too (`profileDecodeBytesPerPixel`), so the two cannot disagree.
+ */
+export function cutsSquareFirst(
+  contentType: ProfileImageContentType,
+  width: number,
+  height: number,
+): boolean {
+  if (contentType === 'image/png') return true;
+  const long = Math.max(width, height);
+  // Scaled first only when the short side stays strictly longer than the square, so the first
+  // pass's rounded short side is at least the square too.
+  return (
+    long > IMAGE_MAX_DIMENSION &&
+    Math.min(width, height) * IMAGE_MAX_DIMENSION <= profileSquareSide(width, height) * long
+  );
+}
+
+/**
+ * A WebP whose profile square is cut from the file, per pixel: measured on `profileSquare` (sharp
+ * 0.35.5, cache off, one thread, libvips' own high-water mark) at the WebP's bound and at 4:1 to
+ * 40:1, a quarter turn by EXIF or none, lossy and lossless — up to 16.8 with an alpha channel (15.4
+ * without), rounded up. At the 15 a post's WebP is charged, a long one of ~8.9 megapixels took
+ * 129–143 MiB, over IMAGE_DECODE_BUDGET_BYTES; at this, ~7.9 megapixels, 126 MiB at most (121 at
+ * IMAGE_MAX_SIDE_RATIO; ADR-0079 7-16, profile-image-memory.test.ts). The whole conversion, its
+ * alpha and colour noise, took at most ~106MiB on Linux arm64 (~110 on x64, at 30:1) within
+ * IMAGE_CONVERSION_PEAK_BYTES (ADR-0079 결정 10).
+ */
+export const PROFILE_WEBP_CUT_BYTES_PER_PIXEL = 17;
+
+/**
+ * What a profile image's conversion holds per pixel of a JPEG or WebP frame at its peak, in bytes:
+ * what a post's image of its format does (`decodeBytesPerPixel`), but
+ * PROFILE_WEBP_CUT_BYTES_PER_PIXEL for a WebP whose square `profileSquare` cuts from the file
+ * (`cutsSquareFirst`) — that one is decoded whole, with none of libwebp's scaled decoding a post's
+ * image of the same file gets. `width`×`height` is one frame as stored. A PNG has no cost per pixel
+ * (PNG_LARGEST_FRAME_PIXELS).
+ */
+export function profileDecodeBytesPerPixel(
+  contentType: Exclude<ProfileImageContentType, 'image/png'>,
+  metadata: Pick<Metadata, 'channels' | 'isProgressive'>,
+  width: number,
+  height: number,
+): number {
+  return contentType === 'image/webp' && cutsSquareFirst(contentType, width, height)
+    ? PROFILE_WEBP_CUT_BYTES_PER_PIXEL
+    : decodeBytesPerPixel(contentType, metadata);
+}
+
+/**
+ * The most pixels one frame of a profile image may have (its header check, `inspectImage`): a PNG's
+ * as a post's image's — its kind's largest frame (PNG_LARGEST_FRAME_PIXELS, owner decision
+ * 2026-10-22 on #46 and #141), measured on this pipeline too — and a JPEG's or a WebP's from
+ * IMAGE_DECODE_BUDGET_BYTES and what its conversion holds per pixel (`profileDecodeBytesPerPixel`;
+ * a JPEG's is a post's image's, a JPEG of four components included). `metadata` is a still
+ * image's: only the first frame of an animated WebP is read, so an animation's bounds do not apply.
+ */
+export function profileLargestFramePixels(
+  contentType: ProfileImageContentType,
+  metadata: Pick<Metadata, 'channels' | 'depth' | 'isProgressive' | 'pages'>,
+  width: number,
+  height: number,
+): number {
+  if (contentType === 'image/png') return largestFramePixels(contentType, metadata);
+  return Math.floor(
+    IMAGE_DECODE_BUDGET_BYTES / profileDecodeBytesPerPixel(contentType, metadata, width, height),
+  );
 }

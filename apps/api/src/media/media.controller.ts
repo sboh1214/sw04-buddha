@@ -26,20 +26,20 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { RawResponse } from '../common/decorators/raw-response.decorator.js';
-import { AppError } from '../common/errors/app-error.js';
 import { ApiData, ApiErrors } from '../common/openapi/api-response.decorators.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
-import { IMAGE_UPLOAD_CONTENT_TYPES, runUploadWork } from './image-body.js';
+import { IMAGE_UPLOAD_CONTENT_TYPES, handleUpload } from './image-body.js';
 import { IMAGE_BINARY, answerImage } from './image-response.js';
-import { IMAGE_BUSY_RETRY_SECONDS, WEBP_ALPHA_MAX_OUTPUT_PIXELS } from './image.js';
+import { IMAGE_MAX_SIDE_RATIO, WEBP_ALPHA_MAX_OUTPUT_PIXELS } from './image.js';
 import { MediaService } from './media.service.js';
 
 /**
  * `/api/v1/media` (#46, ADR-0073): a post's images in and out. The upload is owner-only and open to
  * accounts that finished the onboarding (#57-8: writing a post is), the read is public — a post's
  * images are as public as the post — and both go through the API: the bucket is private and the
- * browser never touches it (ADR-0069 decision 2 #45-3).
+ * browser never touches it (ADR-0069 decision 2 #45-3). The read serves a member's profile image
+ * too (#141, ADR-0079 — as public as the profile); its upload is `PUT /me/profile-image`.
  */
 @ApiTags('media')
 @Controller('media')
@@ -53,9 +53,10 @@ export class MediaController {
    * alone would put the upload on whichever account signed in last in another tab.
    *
    * The conversion and the store run as part of the upload the body parser's gate let in
-   * (`runUploadWork`, image-body.ts): the account's place among its three uploads in flight is held
-   * until they settle, even when the client has hung up meanwhile, and a client gone before they
-   * start has nothing stored — there is no one to answer.
+   * (`handleUpload` — `runUploadWork`, image-body.ts, the profile image's upload's too): the
+   * account's place among its three uploads in flight is held until they settle, even when the
+   * client has hung up meanwhile, and a client gone before they start has nothing stored — there is
+   * no one to answer.
    */
   @Post('images')
   @UseGuards(SessionGuard, OnboardedGuard)
@@ -64,9 +65,10 @@ export class MediaController {
     operationId: 'uploadImage',
     summary:
       `An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most ${String(IMAGE_MAX_BYTES)} ` +
-      `bytes. Stored without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a ` +
-      `still WebP with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF ` +
-      'still moving. Its id goes into the post’s image node; it is served once a post shows it, and ' +
+      `bytes, its long side at most ${String(IMAGE_MAX_SIDE_RATIO)} times its short side. Stored ` +
+      `without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a still WebP ` +
+      `with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF still moving. Its ` +
+      'id goes into the post’s image node; it is served once a post shows it, and ' +
       `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
@@ -99,36 +101,17 @@ export class MediaController {
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<UploadedImage | undefined> {
     assertExpectedAccount(user.id, query.expectedAccountId);
-    if (!(body instanceof Buffer)) {
-      throw new AppError('VALIDATION_ERROR', {
-        message: 'The body must be the image file itself',
-        details: [
-          { path: [], message: `send the file as ${IMAGE_UPLOAD_CONTENT_TYPES.join(', ')}` },
-        ],
-      });
-    }
-    const work = runUploadWork(request, () =>
-      this.media.uploadPostImage(user.id, new Uint8Array(body)),
+    return handleUpload(request, reply, body, (bytes) =>
+      this.media.uploadPostImage(user.id, bytes),
     );
-    // The client has gone already: there is no one to answer.
-    if (work === undefined) return undefined;
-    try {
-      return await work;
-    } catch (error) {
-      // Too many conversions waiting, or no room in the API's memory for one in time (image.ts):
-      // the header every other 429 of the API carries, with the same seconds as
-      // `details.retryAfterSeconds`.
-      if (error instanceof AppError && error.code === 'RATE_LIMITED') {
-        void reply.header('retry-after', String(IMAGE_BUSY_RETRY_SECONDS));
-      }
-      throw error;
-    }
   }
 
   /**
-   * The image itself, while a post or a pinned notice (#138) shows it (MediaService.findShown):
-   * otherwise NOT_FOUND — an upload nothing took, an image an edit removed, every image of a
-   * deleted or hidden post (#45-5) and of a notice that is not pinned (owner decision 2026-10-21).
+   * The image itself, while a post or a pinned notice (#138) shows it, or it is a member's profile
+   * image (#141; MediaService.findShown): otherwise NOT_FOUND — an upload nothing took, an image an
+   * edit removed, every image of a deleted or hidden post (#45-5) and of a notice that is not
+   * pinned (owner decision 2026-10-21), and a profile image replaced, deleted or kept for operators
+   * (#37-10).
    *
    * `Cache-Control: public, no-cache` with a strong ETag (`answerImage`): a browser keeps the image
    * but asks every time, so hiding or deleting a post, or unpinning a notice, stops its images at
@@ -159,9 +142,9 @@ export class MediaController {
   @ApiOperation({
     operationId: 'getImage',
     summary:
-      'An image a post or a pinned notice shows (NOT_FOUND for any other: not attached, removed ' +
-      'by an edit, of a deleted or hidden post, or of a notice not pinned). Revalidated on every ' +
-      'use (ETag)',
+      'An image a post or a pinned notice shows, or a member’s profile image (NOT_FOUND for any ' +
+      'other: not attached, removed by an edit, of a deleted or hidden post, of a notice not ' +
+      'pinned, or no profile’s image now). Revalidated on every use (ETag)',
   })
   @ApiProduces(...IMAGE_CONTENT_TYPES)
   @ApiResponse({

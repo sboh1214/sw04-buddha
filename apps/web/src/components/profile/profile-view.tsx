@@ -10,9 +10,11 @@ import { OwnProfileLink } from './own-profile-link';
  * A member's public profile (#41, ADR-0078; ADR-0069 decision 3 #37), drawn from the one public
  * answer every reader gets (`GET /profiles/:publicId`) — signed in or not, the member or not:
  *
- * - the image area: the round image, the nickname's first letter until #141 brings uploads, never
- *   a social login's photo (#37-6); the CURRENT nickname (#37-3) as the page's heading, '운영자' on
- *   an admin account (#45-9, #37-7: operating rights only); '2026년 10월 가입' (#37-3);
+ * - the image area: the round image the member uploaded in MY 설정 (#141, ADR-0079 — served by
+ *   `GET /media/:mediaId`, a new address per upload), or the nickname's first letter while there
+ *   is none — never a social login's photo (#37-6); the CURRENT nickname (#37-3) as the page's
+ *   heading, '운영자' on an admin account (#45-9, #37-7: operating rights only); '2026년 10월 가입'
+ *   (#37-3);
  * - the 소개, plain text with its line breaks and never a link (#37-3: «링크 없음» — it is a text
  *   node, so an address in it stays words), and nothing at all when there is none;
  * - every interest category picked (#37-5), a sub-category after its top-level one, and nothing at
@@ -36,7 +38,9 @@ export function ProfileView({ profile }: { profile: PublicProfile }) {
         <HStack gap="4" align="center" minW="0">
           <Avatar.Root size="2xl" flexShrink="0" aria-hidden="true" data-testid="profile-avatar">
             <Avatar.Fallback>{nameInitial(member.nickname)}</Avatar.Fallback>
-            {member.imageUrl !== null && <Avatar.Image src={member.imageUrl} alt="" />}
+            {member.imageUrl !== null && (
+              <Avatar.Image src={member.imageUrl} alt="" data-testid="profile-avatar-image" />
+            )}
           </Avatar.Root>
           <Stack gap="1" minW="0">
             <HStack gap="2" minW="0" flexWrap="wrap">

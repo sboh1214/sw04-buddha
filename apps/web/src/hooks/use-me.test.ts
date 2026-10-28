@@ -1,17 +1,57 @@
-import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
-import { ApiError, type Me, type UpdateBioBody, type UpdateTimeZoneBody } from '@/lib/api';
+import {
+  InfiniteQueryObserver,
+  MutationObserver,
+  QueryObserver,
+  type InfiniteData,
+  type QueryClient,
+} from '@tanstack/react-query';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  ApiError,
+  api,
+  type DeleteProfileImageBody,
+  type Me,
+  type Post,
+  type PostAuthor,
+  type PostComment,
+  type PostSummary,
+  type UpdateBioBody,
+  type UpdateTimeZoneBody,
+} from '@/lib/api';
+import {
+  type CommentPage,
+  type CommentPages,
+  commentPageRead,
+  postCommentsKey,
+} from '@/lib/comments';
+import {
+  type CountedPostPage,
+  type PostPage,
+  communityPostsKey,
+  marketPostsKey,
+  postKey,
+} from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
+import { createCommentOptions, readMoreReplies } from './use-comments';
 import {
   ME_QUERY_KEY,
+  type ProfileImageUpload,
+  deleteProfileImageOptions,
+  putProfileImage,
   storeMe,
   updateBioOptions,
   updateNicknameOptions,
   updateTimeZoneOptions,
+  uploadProfileImageOptions,
 } from './use-me';
 
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
 /**
- * The profile writes' cache writes (`PATCH /me`, `PUT /me/time-zone`, `PUT /me/bio`), driven through the REAL
+ * The profile writes' cache writes (`PATCH /me`, `PUT /me/time-zone`, `PUT /me/bio`, the profile
+ * image's upload and deletion), driven through the REAL
  * QueryClient (`getQueryClient()` answers a fresh one per call under node). Nothing renders:
  * apps/web runs vitest under `environment: 'node'`, which is why `storeMe` and the two mutations'
  * options are exported apart from their hooks. The `['me']` observer stands in for
@@ -32,6 +72,7 @@ const following: Me = {
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
     bio: null,
+    imageUrl: null,
   },
   balance: { availableCoin: '0', lockedCoin: '0' },
   linkedAccounts: [],
@@ -76,6 +117,10 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+
+/** A stored profile image's id, as `GET /media/:mediaId` serves it. */
+const IMAGE = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+const NEXT_IMAGE = '9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d';
 
 /** Lets a late answer run every callback it has queued before the test looks. */
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -315,6 +360,28 @@ describe('storeMe', () => {
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
         ...inNewYork.profile,
         bio: '첫 줄\n둘째 줄',
+      });
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('takes the image’s address alone from a profile image answer (#141)', async () => {
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(inNewYork));
+    try {
+      await me.observer.refetch();
+      const withImage: Me = {
+        ...following,
+        profile: { ...following.profile, nickname: '옛이름', imageUrl: `/api/v1/media/${IMAGE}` },
+      };
+
+      await storeMe(queryClient, withImage, 'image', () => undefined);
+
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile).toEqual({
+        ...inNewYork.profile,
+        imageUrl: `/api/v1/media/${IMAGE}`,
       });
     } finally {
       me.unsubscribe();
@@ -648,6 +715,1323 @@ describe('the profile mutations', () => {
       expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
     } finally {
       me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+describe('the profile image (#141)', () => {
+  it('sends the file itself, under its type, with the account in the query', async () => {
+    const answered: Me = {
+      ...following,
+      profile: { ...following.profile, imageUrl: `/api/v1/media/${IMAGE}` },
+    };
+    // openapi-fetch's `{ data, response }`, the shape `unwrap` reads.
+    const reply: never = {
+      data: { data: answered },
+      response: new Response(null, { status: 200 }),
+    } as never;
+    const put = vi.spyOn(api, 'PUT').mockResolvedValue(reply);
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/webp' });
+
+    await expect(putProfileImage({ file, expectedAccountId: following.id })).resolves.toEqual(
+      answered,
+    );
+
+    const [path, init] = put.mock.calls[0] as unknown as [
+      string,
+      {
+        params: unknown;
+        body: unknown;
+        headers: Record<string, string>;
+        bodySerializer: (body: unknown) => unknown;
+      },
+    ];
+    expect(path).toBe('/api/v1/me/profile-image');
+    expect(init.params).toEqual({ query: { expectedAccountId: following.id } });
+    expect(init.headers).toEqual({ 'Content-Type': 'image/webp' });
+    // The file as it is: neither JSON nor a form.
+    expect(init.bodySerializer(init.body)).toBe(file);
+  });
+
+  it('writes the address each upload answers into every observer, and null once deleted', async () => {
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const sent: ProfileImageUpload[] = [];
+    const answers = [IMAGE, NEXT_IMAGE];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          sent.push(body);
+          const id = answers.shift() ?? IMAGE;
+          return Promise.resolve({
+            ...following,
+            profile: { ...following.profile, imageUrl: `/api/v1/media/${id}` },
+          });
+        },
+      ),
+    );
+    const deletions: DeleteProfileImageBody[] = [];
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          deletions.push(body);
+          return Promise.resolve(following);
+        },
+      ),
+    );
+    const image = () => me.observer.getCurrentResult().data?.profile.imageUrl;
+    try {
+      await me.observer.refetch();
+      const file = new Blob([new Uint8Array([1])], { type: 'image/png' });
+
+      await upload.mutate({ file, expectedAccountId: following.id });
+      expect(image()).toBe(`/api/v1/media/${IMAGE}`);
+      // A replacement is a new address (a new id per upload), so no cache shows the old image.
+      await upload.mutate({ file, expectedAccountId: following.id });
+      expect(image()).toBe(`/api/v1/media/${NEXT_IMAGE}`);
+      await remove.mutate({ expectedAccountId: following.id });
+      expect(image()).toBeNull();
+
+      expect(sent.map((body) => body.expectedAccountId)).toEqual([following.id, following.id]);
+      expect(deletions).toEqual([{ expectedAccountId: following.id }]);
+      expect(me.requests()).toBe(1);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session on another account, GET /me again on ONBOARDING_REQUIRED, and neither for a refused file', async () => {
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const failures = [
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'other account',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      }),
+      new ApiError(409, {
+        code: 'ONBOARDING_REQUIRED',
+        message: 'onboarding',
+        details: { steps: ['consent'] },
+      }),
+      new ApiError(422, {
+        code: 'IMAGE_NOT_ALLOWED',
+        message: 'refused',
+        details: { reason: 'type' },
+      }),
+    ];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(queryClient, session.refetch, () =>
+        Promise.reject(failures.shift() ?? new Error('no failure left')),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      const body = {
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      };
+
+      await expect(upload.mutate(body)).rejects.toThrow('other account');
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(1);
+      await expect(upload.mutate(body)).rejects.toThrow('onboarding');
+      await settle();
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(2);
+      await expect(upload.mutate(body)).rejects.toThrow('refused');
+      await settle();
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(2);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('sends a profile image again after a 429 that asks to wait, twice at most, as the post editor does (ADR-0079 7-18)', async () => {
+    const queryClient = getQueryClient();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const busy = (seconds: number) =>
+      new ApiError(429, {
+        code: 'RATE_LIMITED',
+        message: 'busy',
+        details: { retryAfterSeconds: seconds },
+      });
+    const slept: number[] = [];
+    const retry = {
+      sleep: (ms: number) => {
+        slept.push(ms);
+        return Promise.resolve();
+      },
+      alive: () => true,
+    };
+    const answers: (() => Promise<Me>)[] = [];
+    const sent: ProfileImageUpload[] = [];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        (body) => {
+          sent.push(body);
+          return answers.shift()!();
+        },
+        retry,
+      ),
+    );
+    const body = {
+      file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+      expectedAccountId: following.id,
+    };
+    try {
+      await me.observer.refetch();
+      // Busy twice, then stored: the third send is the outcome.
+      answers.push(
+        () => Promise.reject(busy(2)),
+        () => Promise.reject(busy(2)),
+        () =>
+          Promise.resolve({
+            ...following,
+            profile: { ...following.profile, imageUrl: `/api/v1/media/${IMAGE}` },
+          }),
+      );
+      await upload.mutate(body);
+      expect(sent).toEqual([body, body, body]);
+      expect(slept).toEqual([2_000, 2_000]);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.imageUrl).toBe(
+        `/api/v1/media/${IMAGE}`,
+      );
+      // Busy three times: the third refusal is the outcome.
+      sent.length = 0;
+      slept.length = 0;
+      answers.push(
+        () => Promise.reject(busy(2)),
+        () => Promise.reject(busy(2)),
+        () => Promise.reject(busy(2)),
+      );
+      await expect(upload.mutate(body)).rejects.toThrow('busy');
+      expect(sent).toHaveLength(3);
+      expect(slept).toEqual([2_000, 2_000]);
+      // A wait longer than 10 seconds, and any other refusal, is the outcome at once.
+      sent.length = 0;
+      slept.length = 0;
+      answers.push(() => Promise.reject(busy(60)));
+      await expect(upload.mutate(body)).rejects.toThrow('busy');
+      answers.push(() =>
+        Promise.reject(
+          new ApiError(422, {
+            code: 'IMAGE_NOT_ALLOWED',
+            message: 'refused',
+            details: { reason: 'type' },
+          }),
+        ),
+      );
+      await expect(upload.mutate(body)).rejects.toThrow('refused');
+      expect(sent).toHaveLength(2);
+      expect(slept).toEqual([]);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('asks for the session again when a deletion is refused for another account', async () => {
+    const queryClient = getQueryClient();
+    const session = sessionRefetches();
+    const me = meObserver(queryClient, () => Promise.resolve(following));
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(queryClient, session.refetch, () =>
+        Promise.reject(
+          new ApiError(403, {
+            code: 'FORBIDDEN',
+            message: 'other account',
+            details: [
+              { path: ['expectedAccountId'], message: 'session belongs to another account' },
+            ],
+          }),
+        ),
+      ),
+    );
+    try {
+      await me.observer.refetch();
+      await expect(remove.mutate({ expectedAccountId: following.id })).rejects.toThrow(
+        'other account',
+      );
+      expect(session.count()).toBe(1);
+      expect(me.requests()).toBe(1);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)).toEqual(following);
+    } finally {
+      me.unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
+
+/**
+ * The faces of the member a card, a post or a comment the tab holds carries, after the member's
+ * profile image changed (Codex review on PR #225, ADR-0079 7-21): every one of them shows the new
+ * address — or none, once deleted — at once, the rest of each entry as it was.
+ */
+describe('the member’s faces the tab holds, after a profile image change (#141, ADR-0079 7-21)', () => {
+  const OWN = following.profile.publicId;
+  const OTHER = 'a2b3c4d5e6';
+  const POST = 'b7c9a1d2-6f34-4e58-9b0a-2d1e5f8c7a46';
+  const OTHER_POST = '6f9619ff-8b86-d011-b42d-00c04fc964ff';
+  const FORMER_POST = '0b1c2d3e-4f5a-4b6c-8d7e-9f0a1b2c3d4e';
+  const MARKET = 'd3b07384-d9a0-4c9b-8e2f-2d1c0f8a4b11';
+  const OLD = `/api/v1/media/${IMAGE}`;
+  const NEW = `/api/v1/media/${NEXT_IMAGE}`;
+  const OTHER_IMAGE = '/api/v1/media/5a1d2f3e-6b7c-4d8e-9f0a-1b2c3d4e5f60';
+  const market = {
+    id: MARKET,
+    slug: 'rate-cut',
+    title: '금리 인하?',
+    status: 'open',
+    category: { slug: 'economy', nameKo: '경제' },
+  } as const;
+
+  const face = (publicId: string, imageUrl: string | null): PostAuthor => ({
+    kind: 'member',
+    publicId,
+    nickname: publicId === OWN ? following.profile.nickname : '근거왕',
+    imageUrl,
+    isAdmin: false,
+  });
+  const card = (id: string, author: PostAuthor): PostSummary => ({
+    id,
+    title: '제목',
+    excerpt: '본문',
+    thumbnailUrl: null,
+    author,
+    market,
+    createdAt: '2026-10-18T00:00:00.000Z',
+    editedAt: null,
+    commentCount: 2,
+    likeCount: 1,
+  });
+  const postOf = (id: string, author: PostAuthor): Post => ({
+    state: 'published',
+    id,
+    title: '제목',
+    body: {
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: '본문' }] }],
+    },
+    author,
+    market,
+    createdAt: '2026-10-18T00:00:00.000Z',
+    editedAt: null,
+    commentCount: 2,
+    likeCount: 1,
+  });
+  const comment = (
+    id: string,
+    author: PostAuthor,
+    parentId: string | null = null,
+  ): PostComment => ({
+    state: 'published',
+    id,
+    parentId,
+    body: '댓글',
+    author,
+    createdAt: '2026-10-19T00:00:00.000Z',
+    editedAt: null,
+    likeCount: 0,
+  });
+  const C1 = '11111111-1111-4111-8111-111111111111';
+  const C2 = '22222222-2222-4222-8222-222222222222';
+  const C3 = '33333333-3333-4333-8333-333333333333';
+  const R1 = '44444444-4444-4444-8444-444444444444';
+  const R2 = '55555555-5555-4555-8555-555555555555';
+  const R3 = '66666666-6666-4666-8666-666666666666';
+  const R4 = '77777777-7777-4777-8777-777777777777';
+
+  /** The member's own 댓글 C1 (a 대댓글 of someone else's, one of theirs and a hidden one under it,
+   * more to read by '답글 더 보기'), a deleted 댓글 with their 대댓글, and someone else's 댓글. */
+  const commentPage = (image: string | null, nextCursor: string | null = null): CommentPage => ({
+    items: [
+      {
+        comment: comment(C1, face(OWN, image)),
+        replies: [
+          comment(R1, face(OTHER, OTHER_IMAGE), C1),
+          comment(R2, face(OWN, image), C1),
+          { state: 'hidden', id: R3 },
+        ],
+        repliesNextCursor: 'r1',
+      },
+      {
+        comment: { state: 'deleted', id: C2 },
+        replies: [comment(R4, face(OWN, image), C2)],
+        repliesNextCursor: null,
+      },
+      { comment: comment(C3, face(OTHER, null)), replies: [], repliesNextCursor: null },
+    ],
+    nextCursor,
+  });
+
+  /** Every face of the member's the entries hold, as `[where, imageUrl]`. */
+  function ownFaces(queryClient: QueryClient): [string, string | null][] {
+    const faces: [string, string | null][] = [];
+    const add = (where: string, author: PostAuthor) => {
+      if (author.kind === 'member' && author.publicId === OWN) faces.push([where, author.imageUrl]);
+    };
+    for (const [key, held] of queryClient.getQueriesData<
+      InfiniteData<PostPage> | Post | CommentPages
+    >({ queryKey: ['posts'] })) {
+      const where = JSON.stringify(key);
+      if (held === undefined) continue;
+      if ('state' in held) {
+        if (held.state === 'published') add(where, held.author);
+      } else if (key[1] === 'comments') {
+        for (const page of (held as CommentPages).pages)
+          for (const thread of page.items)
+            for (const each of [thread.comment, ...thread.replies])
+              if (each.state === 'published') add(`${where} ${each.id}`, each.author);
+      } else {
+        for (const page of (held as InfiniteData<PostPage>).pages)
+          for (const item of page.items) add(`${where} ${item.id}`, item.author);
+      }
+    }
+    return faces;
+  }
+
+  it('puts the new address on every one of the member’s faces — the cards, a market’s 토론, the post page, its 댓글 and 대댓글 — and null once deleted, everyone else’s and each entry’s time, stale mark and failed read as they were, with no read', async () => {
+    const queryClient = getQueryClient();
+    const withOld: Me = { ...following, profile: { ...following.profile, imageUrl: OLD } };
+    queryClient.setQueryData(ME_QUERY_KEY, withOld);
+    // Read a minute ago: stale by time, which the patch must not change.
+    const readAt = Date.now() - 60_000;
+    const seed = (key: readonly unknown[], data: unknown) =>
+      queryClient.setQueryData(key, data, { updatedAt: readAt });
+    const list: InfiniteData<PostPage> = {
+      pages: [
+        {
+          items: [card(POST, face(OWN, OLD)), card(OTHER_POST, face(OTHER, OTHER_IMAGE))],
+          nextCursor: 'c1',
+        },
+        { items: [card(FORMER_POST, { kind: 'former_member' })], nextCursor: null },
+      ],
+      pageParams: [undefined, 'c1'],
+    };
+    const searched: InfiniteData<PostPage> = {
+      pages: [{ items: [card(OTHER_POST, face(OTHER, OTHER_IMAGE))], nextCursor: null }],
+      pageParams: [undefined],
+    };
+    const discussion: InfiniteData<CountedPostPage> = {
+      pages: [{ items: [card(POST, face(OWN, OLD))], nextCursor: null, total: 1 }],
+      pageParams: [undefined],
+    };
+    const otherPost = postOf(OTHER_POST, face(OTHER, OTHER_IMAGE));
+    const otherComments: CommentPages = {
+      pages: [
+        {
+          items: [
+            { comment: comment(C3, face(OTHER, null)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: null,
+        },
+      ],
+      pageParams: [undefined],
+    };
+    seed(communityPostsKey({}), list);
+    seed(communityPostsKey({ q: '금리' }), searched);
+    seed(marketPostsKey(MARKET), discussion);
+    seed(postKey(POST), postOf(POST, face(OWN, OLD)));
+    seed(postKey(OTHER_POST), otherPost);
+    seed(postKey(FORMER_POST), { state: 'hidden', id: FORMER_POST, market, commentCount: 0 });
+    seed(postCommentsKey(POST), { pages: [commentPage(OLD)], pageParams: [undefined] });
+    seed(postCommentsKey(OTHER_POST), otherComments);
+    // A write elsewhere marked the comment pages to be read again: they stay so.
+    await queryClient.invalidateQueries({
+      queryKey: postCommentsKey(POST),
+      exact: true,
+      refetchType: 'none',
+    });
+    // The post's last read failed — deleted in another tab: its NOT_FOUND, which the post page
+    // draws as its 404 (post-screen.tsx), stays with the post held.
+    const gone = new ApiError(404, { code: 'NOT_FOUND', message: 'gone' });
+    await queryClient
+      .fetchQuery({ queryKey: postKey(POST), queryFn: () => Promise.reject(gone), retry: false })
+      .catch(() => undefined);
+    expect(queryClient.getQueryState(postKey(POST))?.status).toBe('error');
+    expect(ownFaces(queryClient).map(([, image]) => image)).toEqual(Array(6).fill(OLD));
+
+    const answers: Me[] = [{ ...following, profile: { ...following.profile, imageUrl: NEW } }];
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve(answers.shift() ?? following),
+      ),
+    );
+    const remove = new MutationObserver(
+      queryClient,
+      deleteProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve(following),
+      ),
+    );
+    try {
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      // Six faces: a community card, a 토론 card, the post's byline, 댓글 C1, 대댓글 R2 and R4.
+      const faces = ownFaces(queryClient);
+      expect(faces).toHaveLength(6);
+      expect(faces.filter(([, image]) => image !== NEW)).toEqual([]);
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.imageUrl).toBe(NEW);
+      // Everyone else's, untouched — the very objects held.
+      const listHeld = queryClient.getQueryData<InfiniteData<PostPage>>(communityPostsKey({}));
+      expect(listHeld?.pages[0]?.items[1]).toBe(list.pages[0]?.items[1]);
+      expect(listHeld?.pages[1]).toBe(list.pages[1]);
+      expect(queryClient.getQueryData(communityPostsKey({ q: '금리' }))).toBe(searched);
+      expect(queryClient.getQueryData(postKey(OTHER_POST))).toBe(otherPost);
+      expect(queryClient.getQueryData(postCommentsKey(OTHER_POST))).toBe(otherComments);
+      const thread = queryClient.getQueryData<CommentPages>(postCommentsKey(POST))?.pages[0]
+        ?.items[0];
+      expect(thread?.replies[0]).toEqual(comment(R1, face(OTHER, OTHER_IMAGE), C1));
+      expect(thread?.replies[2]).toEqual({ state: 'hidden', id: R3 });
+      expect(thread?.repliesNextCursor).toBe('r1');
+      expect(
+        queryClient.getQueryData<InfiniteData<CountedPostPage>>(marketPostsKey(MARKET))?.pages[0]
+          ?.total,
+      ).toBe(1);
+      // Each entry's time and stale mark as they were, and nothing read.
+      for (const key of [
+        communityPostsKey({}),
+        marketPostsKey(MARKET),
+        postKey(POST),
+        postCommentsKey(POST),
+      ]) {
+        expect(queryClient.getQueryState(key)?.dataUpdatedAt).toBe(readAt);
+      }
+      expect(queryClient.getQueryState(postCommentsKey(POST))?.isInvalidated).toBe(true);
+      expect(queryClient.getQueryState(marketPostsKey(MARKET))?.isInvalidated).toBe(false);
+      expect(queryClient.getQueryState(postKey(POST))).toMatchObject({
+        status: 'error',
+        error: gone,
+      });
+      expect(queryClient.isFetching()).toBe(0);
+
+      // Deleted: no image on any of them — the nickname's first letter is drawn.
+      await remove.mutate({ expectedAccountId: following.id });
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual(Array(6).fill(null));
+      expect(queryClient.getQueryData<Me>(ME_QUERY_KEY)?.profile.imageUrl).toBeNull();
+      expect(queryClient.getQueryState(postCommentsKey(POST))?.dataUpdatedAt).toBe(readAt);
+      expect(queryClient.isFetching()).toBe(0);
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it('cancels a read on its way, which may have left before the change, and makes it again; a 더 보기 on its way is cancelled and left to press again', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(ME_QUERY_KEY, {
+      ...following,
+      profile: { ...following.profile, imageUrl: OLD },
+    });
+    const postReads: ReturnType<typeof deferred<Post>>[] = [];
+    const post = new QueryObserver<Post>(queryClient, {
+      queryKey: postKey(POST),
+      queryFn: () => {
+        const read = deferred<Post>();
+        postReads.push(read);
+        return read.promise;
+      },
+      retry: false,
+    });
+    const pageReads: ReturnType<typeof deferred<CommentPage>>[] = [];
+    const comments = new InfiniteQueryObserver<
+      CommentPage,
+      Error,
+      CommentPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: postCommentsKey(POST),
+      queryFn: () => {
+        const read = deferred<CommentPage>();
+        pageReads.push(read);
+        return read.promise;
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = [post.subscribe(() => undefined), comments.subscribe(() => undefined)];
+    const postImage = () => {
+      const held = post.getCurrentResult().data;
+      return held?.state === 'published' && held.author.kind === 'member'
+        ? held.author.imageUrl
+        : 'none';
+    };
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve({ ...following, profile: { ...following.profile, imageUrl: NEW } }),
+      ),
+    );
+    try {
+      postReads[0]?.resolve(postOf(POST, face(OWN, OLD)));
+      pageReads[0]?.resolve(commentPage(OLD, 'c1'));
+      await settle();
+      // A read of the post (a focus) and a 더 보기 of the comments leave before the write commits.
+      void post.refetch();
+      void comments.fetchNextPage();
+      await settle();
+      expect(postReads).toHaveLength(2);
+      expect(pageReads).toHaveLength(2);
+
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      await settle();
+      expect(postImage()).toBe(NEW);
+      // The post's read was made again; the 더 보기 was not — its button is there to press.
+      expect(postReads).toHaveLength(3);
+      expect(pageReads).toHaveLength(2);
+      // The reads that left before land late, and change nothing.
+      postReads[1]?.resolve(postOf(POST, face(OWN, OLD)));
+      pageReads[1]?.resolve({
+        items: [{ comment: comment(C2, face(OWN, OLD)), replies: [], repliesNextCursor: null }],
+        nextCursor: null,
+      });
+      await settle();
+      expect(postImage()).toBe(NEW);
+      const pages = comments.getCurrentResult();
+      expect(pages.data?.pages).toHaveLength(1);
+      expect(pages.hasNextPage).toBe(true);
+      expect(pages.isFetchingNextPage).toBe(false);
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual(Array(4).fill(NEW));
+      // The read made again reads the change.
+      postReads[2]?.resolve(postOf(POST, face(OWN, NEW)));
+      await settle();
+      expect(postImage()).toBe(NEW);
+      expect(post.getCurrentResult().isFetching).toBe(false);
+    } finally {
+      for (const stop of unsubscribe) stop();
+      queryClient.clear();
+    }
+  });
+
+  it('puts it on the member’s own 댓글 and 대댓글 placed at the end of what is held too, and every read of the pages after puts them back with it (#48, 오너 결정 2026-10-24)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(ME_QUERY_KEY, {
+      ...following,
+      profile: { ...following.profile, imageUrl: OLD },
+    });
+    // The server's first page: someone else's 댓글 C3, its first 대댓글 R1 and more after it, and
+    // more 댓글 after the page — neither the member's C1 nor their R2 is on it.
+    const firstPage = (): CommentPage => ({
+      items: [
+        {
+          comment: comment(C3, face(OTHER, null)),
+          replies: [comment(R1, face(OTHER, OTHER_IMAGE), C3)],
+          repliesNextCursor: 'r1',
+        },
+      ],
+      nextCursor: 'c1',
+    });
+    // What the member's writes left: C1 placed at the end of the pages, R2 at the end of C3's
+    // 대댓글 (their reads toward their place stopped short of them).
+    const held: CommentPages = {
+      pages: [
+        {
+          items: [
+            {
+              ...firstPage().items[0]!,
+              replies: [...firstPage().items[0]!.replies, comment(R2, face(OWN, OLD), C3)],
+            },
+            { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId: following.id },
+        { id: R2, threadId: C3, accountId: following.id },
+      ],
+    };
+    queryClient.setQueryData(postCommentsKey(POST), held);
+    const comments = new InfiniteQueryObserver<
+      CommentPage,
+      Error,
+      CommentPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: postCommentsKey(POST),
+      // Marked as a read's, as the browser's `queryFn` does (`commentPageRead`).
+      queryFn: () => Promise.resolve(commentPageRead(firstPage())),
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = comments.subscribe(() => undefined);
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve({ ...following, profile: { ...following.profile, imageUrl: NEW } }),
+      ),
+    );
+    const view = () => {
+      const pages = queryClient.getQueryData<CommentPages>(postCommentsKey(POST))!;
+      return {
+        threads: pages.pages.flatMap((page) =>
+          page.items.map((thread) => [thread.comment.id, thread.replies.map((reply) => reply.id)]),
+        ),
+        placed: (pages.placed ?? []).map((entry) => entry.id),
+      };
+    };
+    try {
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      await settle();
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual([NEW, NEW]);
+      expect(view().placed).toEqual([C1, R2]);
+      // Read again (a focus, 30 seconds on), the page brings neither: both are put back at the end
+      // of what is held — the copies held, with the new address, not the one they were written
+      // with (the file deleted at once).
+      for (let reads = 0; reads < 2; reads += 1) {
+        await comments.refetch();
+        expect(view()).toEqual({
+          threads: [
+            [C3, [R1, R2]],
+            [C1, []],
+          ],
+          placed: [C1, R2],
+        });
+        expect(ownFaces(queryClient)).toEqual([
+          [JSON.stringify(postCommentsKey(POST)) + ` ${R2}`, NEW],
+          [JSON.stringify(postCommentsKey(POST)) + ` ${C1}`, NEW],
+        ]);
+      }
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it('reaches what a read toward a place puts in after it, read before it — a new 댓글’s read to the end and ‘답글 더 보기’ — whose pages come with the old address (ADR-0074 7-34, ADR-0079 7-22)', async () => {
+    const queryClient = getQueryClient();
+    queryClient.setQueryData(ME_QUERY_KEY, {
+      ...following,
+      profile: { ...following.profile, imageUrl: OLD },
+    });
+    const MINE = '88888888-8888-4888-8888-888888888888';
+    // The pages held: someone else's 댓글 C3 — whose 대댓글 go on behind 'r1' — and the member's
+    // C1, the end of the list.
+    const held = (): CommentPage => ({
+      items: [
+        {
+          comment: comment(C3, face(OTHER, null)),
+          replies: [comment(R1, face(OTHER, OTHER_IMAGE), C3)],
+          repliesNextCursor: 'r1',
+        },
+        { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+      ],
+      nextCursor: null,
+    });
+    queryClient.setQueryData<CommentPages>(postCommentsKey(POST), {
+      pages: [held()],
+      pageParams: [undefined],
+    });
+    // Every read answers when the test says, by its route: the new 댓글's read of the last page
+    // held, and '답글 더 보기' of C3.
+    const reads = new Map<string, ReturnType<typeof deferred<unknown>>>();
+    vi.spyOn(api, 'GET').mockImplementation(((path: string) => {
+      const read = deferred<unknown>();
+      reads.set(path, read);
+      return read.promise;
+    }) as never);
+    const commentsRead = () => reads.get('/api/v1/posts/{postId}/comments');
+    const repliesRead = () => reads.get('/api/v1/comments/{commentId}/replies');
+    const page = (data: unknown) => ({
+      data: { data, meta: { nextCursor: null } },
+      response: new Response(null, { status: 200 }),
+    });
+    vi.spyOn(api, 'POST').mockResolvedValue({
+      data: { data: comment(MINE, face(OWN, OLD)) },
+      response: new Response(null, { status: 201 }),
+    });
+    const upload = new MutationObserver(
+      queryClient,
+      uploadProfileImageOptions(
+        queryClient,
+        () => undefined,
+        () => Promise.resolve({ ...following, profile: { ...following.profile, imageUrl: NEW } }),
+      ),
+    );
+    try {
+      const written = new MutationObserver(
+        queryClient,
+        createCommentOptions(queryClient, POST, () => undefined),
+      ).mutate({ parentId: null, body: '댓글', expectedAccountId: following.id });
+      const more = readMoreReplies(queryClient, POST, C3);
+      await vi.waitFor(() => expect(reads.size).toBe(2));
+      // The image changes while both are out; what the pages hold takes it at once.
+      await upload.mutate({
+        file: new Blob([new Uint8Array([1])], { type: 'image/png' }),
+        expectedAccountId: following.id,
+      });
+      await settle();
+      expect(ownFaces(queryClient).map(([, image]) => image)).toEqual([NEW]);
+      // Both answer now, as the server held it before the change: C1, MINE and the member's R2
+      // under C3 at the old address.
+      commentsRead()?.resolve(
+        page([
+          ...held().items,
+          { comment: comment(MINE, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+        ]),
+      );
+      repliesRead()?.resolve(page([comment(R2, face(OWN, OLD), C3)]));
+      await Promise.all([written, more]);
+      await settle();
+      expect(ownFaces(queryClient)).toEqual([
+        [JSON.stringify(postCommentsKey(POST)) + ` ${R2}`, NEW],
+        [JSON.stringify(postCommentsKey(POST)) + ` ${C1}`, NEW],
+        [JSON.stringify(postCommentsKey(POST)) + ` ${MINE}`, NEW],
+      ]);
+      // Someone else's faces are as the pages brought them.
+      const threads = queryClient.getQueryData<CommentPages>(postCommentsKey(POST))!.pages[0]!
+        .items;
+      expect(threads[0]?.replies[0]).toEqual(comment(R1, face(OTHER, OTHER_IMAGE), C3));
+    } finally {
+      queryClient.clear();
+    }
+  });
+
+  it("puts the image `['me']` holds on the member’s own 댓글 and 대댓글 placed at the end of what is held once it changed since they were placed — a change made in another tab, read into `['me']` since — and leaves the address their write answered with until then (ADR-0079 7-23)", async () => {
+    const queryClient = getQueryClient();
+    const meWith = (imageUrl: string | null) =>
+      queryClient.setQueryData(ME_QUERY_KEY, {
+        ...following,
+        profile: { ...following.profile, imageUrl },
+      });
+    // The server's first page of each post: someone else's 댓글 C3 and its first 대댓글 R1, more
+    // of each after them — neither the member's C1 nor their R2 is on it.
+    const firstPage = (): CommentPage => ({
+      items: [
+        {
+          comment: comment(C3, face(OTHER, null)),
+          replies: [comment(R1, face(OTHER, OTHER_IMAGE), C3)],
+          repliesNextCursor: 'r1',
+        },
+      ],
+      nextCursor: 'c1',
+    });
+    // What the member's writes left: C1 at the end of the pages, R2 at the end of C3's 대댓글, both
+    // with the address their write's answer carried.
+    const placedFor = (accountId: string, image: string | null): CommentPages => ({
+      pages: [
+        {
+          items: [
+            {
+              ...firstPage().items[0]!,
+              replies: [...firstPage().items[0]!.replies, comment(R2, face(OWN, image), C3)],
+            },
+            { comment: comment(C1, face(OWN, image)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId },
+        { id: R2, threadId: C3, accountId },
+      ],
+    });
+    const unsubscribes: (() => void)[] = [];
+    /** The pages of `post`, read as the browser reads them (the first page, marked a read's). */
+    const observe = (post: string) => {
+      const observer = new InfiniteQueryObserver<
+        CommentPage,
+        Error,
+        CommentPages,
+        readonly unknown[],
+        string | undefined
+      >(queryClient, {
+        queryKey: postCommentsKey(post),
+        queryFn: () => Promise.resolve(commentPageRead(firstPage())),
+        initialPageParam: undefined,
+        getNextPageParam: (last) => last.nextCursor ?? undefined,
+        retry: false,
+      });
+      unsubscribes.push(observer.subscribe(() => undefined));
+      return observer;
+    };
+    /** The member's faces `post`'s pages hold, as `[comment, imageUrl]`. */
+    const faces = (post: string) => {
+      const pages = JSON.stringify(postCommentsKey(post));
+      return ownFaces(queryClient)
+        .filter(([where]) => where.startsWith(`${pages} `))
+        .map(([where, image]) => [where.slice(pages.length + 1), image]);
+    };
+    const both = (image: string | null) => [
+      [R2, image],
+      [C1, image],
+    ];
+    try {
+      // Placed while `['me']` held the address they were written with.
+      meWith(OLD);
+      queryClient.setQueryData(postCommentsKey(POST), placedFor(following.id, OLD));
+      const comments = observe(POST);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(both(OLD));
+      // `GET /me` read again (a focus) after the member changed the image in another tab: this
+      // tab's faces were never patched (`storeAuthorImage` is this tab's change). The next write
+      // of the pages — a read, which brings neither — puts them back with the image `['me']`
+      // holds, and so does every one after it.
+      meWith(NEW);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(both(NEW));
+      await comments.refetch();
+      expect(faces(POST)).toEqual(both(NEW));
+      // Deleted since in the other tab: none.
+      meWith(null);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(both(null));
+      // With no `['me']` held for a while, as they were; `['me']` read again with an image since:
+      // that image.
+      queryClient.removeQueries({ queryKey: ME_QUERY_KEY });
+      await comments.refetch();
+      expect(faces(POST)).toEqual(both(null));
+      meWith(NEW);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(both(NEW));
+
+      // `['me']` read before a change made in another tab, and a 댓글 and a 대댓글 written here
+      // before it is read again (within its 30 seconds): their write's answer carries the new
+      // address, which `['me']` does not know yet — it stays through every read.
+      meWith(OLD);
+      queryClient.setQueryData(postCommentsKey(OTHER_POST), placedFor(following.id, NEW));
+      const others = observe(OTHER_POST);
+      expect(faces(OTHER_POST)).toEqual(both(NEW));
+      await others.refetch();
+      await others.refetch();
+      expect(faces(OTHER_POST)).toEqual(both(NEW));
+      // `['me']` read again, with the same address: as they are. Deleted since: none.
+      meWith(NEW);
+      await others.refetch();
+      expect(faces(OTHER_POST)).toEqual(both(NEW));
+      meWith(null);
+      await others.refetch();
+      expect(faces(OTHER_POST)).toEqual(both(null));
+
+      // Placed for another account than `['me']`'s: as written, whatever `['me']` reads.
+      meWith(OLD);
+      queryClient.setQueryData(postCommentsKey(FORMER_POST), placedFor(otherMe.id, OLD));
+      const formers = observe(FORMER_POST);
+      meWith(NEW);
+      await formers.refetch();
+      expect(faces(FORMER_POST)).toEqual(both(OLD));
+    } finally {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  it("puts it on them as `['me']` is read when a read of the pages landed first — both due on a focus, in either order — with no write of the pages after it: the data alone, no request (ADR-0079 7-23)", async () => {
+    const queryClient = getQueryClient();
+    const meWith = (imageUrl: string | null): Me => ({
+      ...following,
+      profile: { ...following.profile, imageUrl },
+    });
+    // `GET /me` as the browser reads it, answering the image the member has now.
+    let served = meWith(OLD);
+    const me = new QueryObserver(queryClient, {
+      queryKey: ME_QUERY_KEY,
+      queryFn: () => Promise.resolve(served),
+      retry: false,
+    });
+    const unsubscribes = [me.subscribe(() => undefined)];
+    // The server's first page: someone else's 댓글 C3, a 대댓글 R1 of the member's under it (more to
+    // read by '답글 더 보기'), more 댓글 after it — with the image the member has as it is read.
+    const firstPage = (image: string | null): CommentPage => ({
+      items: [
+        {
+          comment: comment(C3, face(OTHER, null)),
+          replies: [comment(R1, face(OWN, image), C3)],
+          repliesNextCursor: 'r1',
+        },
+      ],
+      nextCursor: 'c1',
+    });
+    // What the member's writes left: C1 at the end of the pages, R2 at the end of C3's 대댓글.
+    const placedFor = (accountId: string, image: string | null): CommentPages => ({
+      pages: [
+        {
+          items: [
+            {
+              ...firstPage(image).items[0]!,
+              replies: [...firstPage(image).items[0]!.replies, comment(R2, face(OWN, image), C3)],
+            },
+            { comment: comment(C1, face(OWN, image)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId },
+        { id: R2, threadId: C3, accountId },
+      ],
+    });
+    let reads = 0;
+    const observe = (post: string) => {
+      const observer = new InfiniteQueryObserver<
+        CommentPage,
+        Error,
+        CommentPages,
+        readonly unknown[],
+        string | undefined
+      >(queryClient, {
+        queryKey: postCommentsKey(post),
+        queryFn: () => {
+          reads += 1;
+          return Promise.resolve(commentPageRead(firstPage(served.profile.imageUrl)));
+        },
+        initialPageParam: undefined,
+        getNextPageParam: (last) => last.nextCursor ?? undefined,
+        retry: false,
+      });
+      unsubscribes.push(observer.subscribe(() => undefined));
+      return observer;
+    };
+    /** The member's faces `post`'s pages hold, as `[comment, imageUrl]`, in the order drawn. */
+    const faces = (post: string) => {
+      const pages = JSON.stringify(postCommentsKey(post));
+      return ownFaces(queryClient)
+        .filter(([where]) => where.startsWith(`${pages} `))
+        .map(([where, image]) => [where.slice(pages.length + 1), image]);
+    };
+    const all = (read: string | null, placed: string | null) => [
+      [R1, read],
+      [R2, placed],
+      [C1, placed],
+    ];
+    try {
+      await me.refetch();
+      queryClient.setQueryData(postCommentsKey(POST), placedFor(following.id, OLD));
+      queryClient.setQueryData(postCommentsKey(FORMER_POST), placedFor(otherMe.id, OLD));
+      const comments = observe(POST);
+      const formers = observe(FORMER_POST);
+      await comments.refetch();
+      await formers.refetch();
+      expect(faces(POST)).toEqual(all(OLD, OLD));
+
+      // Changed in another tab. The pages' read lands first: what it read carries the new image,
+      // the placed copies — carried over while `['me']` still holds the old one — do not.
+      served = meWith(NEW);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(all(NEW, OLD));
+      // `['me']`'s read lands, and nothing writes the pages after it: its write puts the image on
+      // them at once — without a read of the pages, the entry's time and stale mark as they were.
+      const before = queryClient.getQueryState(postCommentsKey(POST));
+      const readsBefore = reads;
+      await me.refetch();
+      expect(faces(POST)).toEqual(all(NEW, NEW));
+      const after = queryClient.getQueryState(postCommentsKey(POST));
+      expect(after?.dataUpdatedAt).toBe(before?.dataUpdatedAt);
+      expect(after?.isInvalidated).toBe(before?.isInvalidated);
+      expect(reads).toBe(readsBefore);
+      // A read of the pages after it keeps it.
+      await comments.refetch();
+      expect(faces(POST)).toEqual(all(NEW, NEW));
+      // Read again with the same image: nothing is written.
+      const held = queryClient.getQueryData(postCommentsKey(POST));
+      await me.refetch();
+      expect(queryClient.getQueryData(postCommentsKey(POST))).toBe(held);
+      // Deleted in the other tab, the pages read first again: none on them as `['me']` lands.
+      served = meWith(null);
+      await comments.refetch();
+      expect(faces(POST)).toEqual(all(null, NEW));
+      await me.refetch();
+      expect(faces(POST)).toEqual(all(null, null));
+      // Placed for another account than `['me']`'s (its pages not read since): as written,
+      // whatever `['me']` reads.
+      expect(faces(FORMER_POST)).toEqual(all(OLD, OLD));
+    } finally {
+      for (const unsubscribe of unsubscribes) unsubscribe();
+      queryClient.clear();
+    }
+  });
+
+  for (const [how, leaving] of [
+    ['‘답글 더 보기’ brings the 대댓글 placed before it into its place', 'reply'],
+    ['더 보기 brings the 댓글 placed before it into its place', 'comment'],
+  ] as const) {
+    it(`keeps the image noted on the one still placed when an entry placed before it leaves — ${how}, which shifts it in \`placed\` and the query client's structural sharing copies it — so a change \`['me']\` reads after it reaches it, and every read of the pages keeps it (Codex 4368092473, ADR-0079 7-23)`, async () => {
+      const queryClient = getQueryClient();
+      const meWith = (imageUrl: string | null) =>
+        queryClient.setQueryData(ME_QUERY_KEY, {
+          ...following,
+          profile: { ...following.profile, imageUrl },
+        });
+      // The server's pages, with the image the member has as they are read: someone else's 댓글 C3
+      // with someone else's R1 and — behind 'r1', read on once '답글 더 보기' has read it — the
+      // member's R2; the member's C1 on the next page.
+      let served: string | null = OLD;
+      let threadReadOn = false;
+      const pageOf = (cursor: string | undefined): CommentPage =>
+        cursor === undefined
+          ? {
+              items: [
+                {
+                  comment: comment(C3, face(OTHER, null)),
+                  replies: [
+                    comment(R1, face(OTHER, OTHER_IMAGE), C3),
+                    ...(threadReadOn ? [comment(R2, face(OWN, served), C3)] : []),
+                  ],
+                  repliesNextCursor: threadReadOn ? null : 'r1',
+                },
+              ],
+              nextCursor: 'c1',
+            }
+          : {
+              items: [
+                { comment: comment(C1, face(OWN, served)), replies: [], repliesNextCursor: null },
+              ],
+              nextCursor: null,
+            };
+      // What the member's writes left, the one that leaves placed first: R2 at the end of C3's
+      // 대댓글, C1 at the end of the pages.
+      const r2 = { id: R2, threadId: C3, accountId: following.id };
+      const c1 = { id: C1, threadId: null, accountId: following.id };
+      meWith(OLD);
+      queryClient.setQueryData<CommentPages>(postCommentsKey(POST), {
+        pages: [
+          {
+            items: [
+              {
+                ...pageOf(undefined).items[0]!,
+                replies: [...pageOf(undefined).items[0]!.replies, comment(R2, face(OWN, OLD), C3)],
+              },
+              { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+            ],
+            nextCursor: 'c1',
+          },
+        ],
+        pageParams: [undefined],
+        placed: leaving === 'reply' ? [r2, c1] : [c1, r2],
+      });
+      const comments = new InfiniteQueryObserver<
+        CommentPage,
+        Error,
+        CommentPages,
+        readonly unknown[],
+        string | undefined
+      >(queryClient, {
+        queryKey: postCommentsKey(POST),
+        // Marked as a read's, as the browser's `queryFn` does (`commentPageRead`).
+        queryFn: ({ pageParam }) => Promise.resolve(commentPageRead(pageOf(pageParam))),
+        initialPageParam: undefined,
+        getNextPageParam: (last) => last.nextCursor ?? undefined,
+        retry: false,
+      });
+      const unsubscribe = comments.subscribe(() => undefined);
+      const held = () => queryClient.getQueryData<CommentPages>(postCommentsKey(POST))!;
+      /** The member's faces the pages hold, as `[comment, imageUrl]`, in the order drawn. */
+      const faces = () => {
+        const pages = JSON.stringify(postCommentsKey(POST));
+        return ownFaces(queryClient).map(([where, image]) => [
+          where.slice(pages.length + 1),
+          image,
+        ]);
+      };
+      try {
+        const staying = held().placed?.[1];
+        if (leaving === 'reply') {
+          vi.spyOn(api, 'GET').mockResolvedValue({
+            data: { data: [comment(R2, face(OWN, served), C3)], meta: { nextCursor: null } },
+            response: new Response(null, { status: 200 }),
+          } as never);
+          threadReadOn = true;
+          await readMoreReplies(queryClient, POST, C3);
+        } else {
+          await comments.fetchNextPage();
+        }
+        // The one placed before it is in its place; the one still placed stands first in `placed`,
+        // a copy of the entry held.
+        const still = leaving === 'reply' ? C1 : R2;
+        expect(held().placed?.map((entry) => entry.id)).toEqual([still]);
+        expect(held().placed?.[0]).not.toBe(staying);
+        expect(faces()).toEqual([
+          [R2, OLD],
+          [C1, OLD],
+        ]);
+        // Changed in another tab, `['me']` read again: the one still placed takes the new image at
+        // once; the one in its place is as its read brought it, until it is read again.
+        served = NEW;
+        meWith(NEW);
+        expect(faces()).toEqual([
+          [R2, leaving === 'reply' ? OLD : NEW],
+          [C1, leaving === 'reply' ? NEW : OLD],
+        ]);
+        // Every read of the pages after it: the one still placed put back with it.
+        for (let reads = 0; reads < 2; reads += 1) {
+          await comments.refetch();
+          expect(held().placed?.map((entry) => entry.id)).toEqual([still]);
+          expect(faces()).toEqual([
+            [R2, NEW],
+            [C1, NEW],
+          ]);
+        }
+      } finally {
+        unsubscribe();
+        queryClient.clear();
+      }
+    });
+  }
+
+  it("cancels a 더 보기 on its way as `['me']` puts its image on them — the 더 보기 brings the pages held as it left, with the image they carried then — and leaves it to press again; a read of every page on its way is let land, as it takes them from what is held (the review of Codex 4368092473, ADR-0079 7-23)", async () => {
+    const queryClient = getQueryClient();
+    const meWith = (imageUrl: string | null) =>
+      queryClient.setQueryData(ME_QUERY_KEY, {
+        ...following,
+        profile: { ...following.profile, imageUrl },
+      });
+    // The server's pages: someone else's 댓글 C3 with someone else's R1 (the member's R2 behind
+    // 'r1'), and behind 'c1' someone else's C2, more after it (the member's C1 further on).
+    const pageOf = (cursor: string | undefined): CommentPage =>
+      cursor === undefined
+        ? {
+            items: [
+              {
+                comment: comment(C3, face(OTHER, null)),
+                replies: [comment(R1, face(OTHER, OTHER_IMAGE), C3)],
+                repliesNextCursor: 'r1',
+              },
+            ],
+            nextCursor: 'c1',
+          }
+        : {
+            items: [
+              { comment: comment(C2, face(OTHER, null)), replies: [], repliesNextCursor: null },
+            ],
+            nextCursor: 'c2',
+          };
+    // What the member's writes left: C1 at the end of the pages, R2 at the end of C3's 대댓글.
+    meWith(OLD);
+    queryClient.setQueryData<CommentPages>(postCommentsKey(POST), {
+      pages: [
+        {
+          items: [
+            {
+              ...pageOf(undefined).items[0]!,
+              replies: [...pageOf(undefined).items[0]!.replies, comment(R2, face(OWN, OLD), C3)],
+            },
+            { comment: comment(C1, face(OWN, OLD)), replies: [], repliesNextCursor: null },
+          ],
+          nextCursor: 'c1',
+        },
+      ],
+      pageParams: [undefined],
+      placed: [
+        { id: C1, threadId: null, accountId: following.id },
+        { id: R2, threadId: C3, accountId: following.id },
+      ],
+    });
+    const reads: { cursor: string | undefined; read: ReturnType<typeof deferred<CommentPage>> }[] =
+      [];
+    const comments = new InfiniteQueryObserver<
+      CommentPage,
+      Error,
+      CommentPages,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: postCommentsKey(POST),
+      queryFn: ({ pageParam }) => {
+        const read = deferred<CommentPage>();
+        reads.push({ cursor: pageParam, read });
+        // Marked as a read's, as the browser's `queryFn` does (`commentPageRead`).
+        return read.promise.then(commentPageRead);
+      },
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = comments.subscribe(() => undefined);
+    /** The member's faces the pages hold, as `[comment, imageUrl]`, in the order drawn. */
+    const faces = () => {
+      const pages = JSON.stringify(postCommentsKey(POST));
+      return ownFaces(queryClient).map(([where, image]) => [where.slice(pages.length + 1), image]);
+    };
+    const both = (image: string | null) => [
+      [R2, image],
+      [C1, image],
+    ];
+    try {
+      // A 더 보기 leaves; changed in another tab, `['me']` is read again before it lands.
+      void comments.fetchNextPage();
+      await settle();
+      expect(reads.map(({ cursor }) => cursor)).toEqual(['c1']);
+      meWith(NEW);
+      await settle();
+      expect(faces()).toEqual(both(NEW));
+      // The 더 보기 was cancelled, not made again: its button is there to press.
+      expect(comments.getCurrentResult()).toMatchObject({
+        isFetchingNextPage: false,
+        hasNextPage: true,
+      });
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(1);
+      // Its answer lands late, beside the pages held as it left — the old image on the placed
+      // ones: nothing changes.
+      reads[0]!.read.resolve(pageOf('c1'));
+      await settle();
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(1);
+      expect(faces()).toEqual(both(NEW));
+      // Pressed again, it brings its page, and the placed ones stay with the new image.
+      void comments.fetchNextPage();
+      await settle();
+      reads[1]!.read.resolve(pageOf('c1'));
+      await settle();
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(2);
+      expect(faces()).toEqual(both(NEW));
+
+      // A read of every page held leaves; deleted in another tab, `['me']` is read again before
+      // it lands: the placed ones take it at once, and the read goes on — not cancelled and made
+      // again — and lands with them as held.
+      void comments.refetch();
+      await settle();
+      meWith(null);
+      expect(faces()).toEqual(both(null));
+      expect(comments.getCurrentResult().isFetching).toBe(true);
+      reads[2]!.read.resolve(pageOf(undefined));
+      await settle();
+      reads[3]!.read.resolve(pageOf('c1'));
+      await settle();
+      expect(comments.getCurrentResult().isFetching).toBe(false);
+      expect(comments.getCurrentResult().data?.pages).toHaveLength(2);
+      expect(faces()).toEqual(both(null));
+      expect(reads.map(({ cursor }) => cursor)).toEqual(['c1', 'c1', undefined, 'c1']);
+    } finally {
+      unsubscribe();
       queryClient.clear();
     }
   });

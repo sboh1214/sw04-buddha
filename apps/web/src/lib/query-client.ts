@@ -1,6 +1,19 @@
-import { QueryCache, QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
-import { type Market, type Position, isApiError } from './api';
-import { type CommentPages, COMMENT_PAGES_KEY, keepPlacedComments } from './comments';
+import {
+  type Query,
+  QueryCache,
+  QueryClient,
+  hashKey,
+  isServer,
+  replaceEqualDeep,
+} from '@tanstack/react-query';
+import { type Market, type Me, type Position, isApiError } from './api';
+import {
+  type CommentPages,
+  type PlacedCommentsOwner,
+  COMMENT_PAGES_KEY,
+  keepPlacedComments,
+  placedWithOwnFace,
+} from './comments';
 import {
   MARKETS_KEY,
   MARKET_KEY,
@@ -103,15 +116,86 @@ function makeQueryClient() {
   // a reconnection, a stale thread's read again), its 더 보기, or a new 댓글's read — and come
   // without it; this is the one place every one of those writes passes, so `keepPlacedComments`
   // carries it over here and puts it back, or settles it against what the read just brought.
-  // `['posts', 'comments']` never reaches `['posts', 'post', id]` or the lists.
+  // `['posts', 'comments']` never reaches `['posts', 'post', id]` or the lists. The writer's own
+  // comments placed so take the profile image `['me']` holds once it has changed since they were
+  // placed (#141, ADR-0079 7-23): read from this client as each write passes, so a `['me']` read
+  // since — a change made in another tab — reaches them on the next write of the pages, and on the
+  // write of `['me']` itself (below).
   client.setQueryDefaults(COMMENT_PAGES_KEY, {
     structuralSharing: (held, incoming) =>
       replaceEqualDeep(
         held,
-        keepPlacedComments(held as CommentPages | undefined, incoming as CommentPages),
+        keepPlacedComments(
+          held as CommentPages | undefined,
+          incoming as CommentPages,
+          placedCommentsOwner(client),
+        ),
       ),
   });
+  // And as `['me']` itself is written (ADR-0079 7-23): a read of the pages that lands before a read
+  // of `['me']` — both due on a window's focus, in either order — carries those comments over with
+  // the image `['me']` held then, the old one after a change made in another tab, while it brings
+  // the member's other comments with the new one; and no write of the pages need follow `['me']`'s.
+  // So each write of `['me']` — its read landing, `setQueryData` — puts the image it now holds on
+  // them where it changed, in every post's pages held (`putOwnFace`).
+  const meHash = hashKey(ME_KEY);
+  client.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || event.query.queryHash !== meHash) return;
+    if (event.action.type !== 'success' && event.action.type !== 'setState') return;
+    for (const query of client.getQueryCache().findAll({ queryKey: COMMENT_PAGES_KEY })) {
+      void putOwnFace(client, query);
+    }
+  });
   return client;
+}
+
+/**
+ * A write of `['me']` on one post's comment pages (`query`): the image it now holds on the writer's
+ * own comments placed at the end of them where it changed (`placedWithOwnFace`, ADR-0079 7-23) —
+ * the data alone, as `storeAuthorImage` (hooks/use-me.ts) writes a face: their time, stale mark and
+ * a failed read's error kept, no request. Nothing when it changes nothing — `['me']` is written far
+ * more often than its image changes (a balance event, a profile write).
+ *
+ * A read of every page held on its way is let land: its pages are all read, so the placed copy it
+ * puts back comes from what is held as it lands — the new image — and the image noted with it is
+ * `['me']`'s. A 더 보기 on its way is not: its answer is the pages held as it left, with the next
+ * one after them (query-core's `fetchNextPage`), so the placed copy it carries — the one on those
+ * pages, or a 대댓글 in a thread on them — is the old image, put back over the new one while the
+ * image noted, taken from what is held, says the new one was carried: it stood there, the old
+ * (deleted) address, through every read until its own page was read. So it is cancelled first —
+ * which puts back the pages it left from, the image on them and the one noted agreeing — and the
+ * write made on what that leaves, as `storeAuthorImage` and a comment's write (`writePages`,
+ * use-comments.ts) cancel it; its button is there to press again.
+ */
+async function putOwnFace(client: QueryClient, query: Query): Promise<void> {
+  const held = query.state.data as CommentPages | undefined;
+  if (held === undefined || placedWithOwnFace(held, placedCommentsOwner(client)) === held) return;
+  if (query.state.fetchStatus !== 'idle' && query.state.fetchMeta?.fetchMore !== undefined) {
+    await client.cancelQueries({ queryKey: query.queryKey, exact: true });
+  }
+  // As the cancellation left it, and for the account `['me']` holds now.
+  const data = query.state.data as CommentPages | undefined;
+  if (data === undefined) return;
+  const next = placedWithOwnFace(data, placedCommentsOwner(client));
+  if (next !== data) query.setState({ data: next });
+}
+
+/**
+ * `['me']` — `ME_QUERY_KEY` (hooks/use-me.ts), named here again: that is a client module, and this
+ * file runs on the server too (query-client.test.ts pins the two together).
+ */
+export const ME_KEY = ['me'] as const;
+
+/**
+ * The account `client` holds in `['me']`, as `keepPlacedComments` takes it; undefined while it holds
+ * none — or anything short of a profile: this runs on every write of every post's comment pages,
+ * and throwing there would lose the write.
+ */
+function placedCommentsOwner(client: QueryClient): PlacedCommentsOwner | undefined {
+  const me = client.getQueryData<Partial<Me>>(ME_KEY);
+  const profile = me?.profile;
+  if (me?.id === undefined || profile === undefined) return undefined;
+  return { accountId: me.id, publicId: profile.publicId, imageUrl: profile.imageUrl };
 }
 
 let browserQueryClient: QueryClient | undefined;

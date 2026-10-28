@@ -1,9 +1,16 @@
-import { BIO_MAX_LENGTH, bioTooLongMessage, findExcludedText } from '@buddha/shared';
+import {
+  BIO_MAX_LENGTH,
+  IMAGE_MAX_BYTES,
+  PROFILE_IMAGE_CONTENT_TYPES,
+  bioTooLongMessage,
+  findExcludedText,
+} from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type PublicProfile } from './api';
 import { type Onboarding, isOnboardingExemptPage } from './onboarding';
 import {
+  PROFILE_IMAGE_ACCEPT,
   PROFILE_SETTINGS_PATH,
   bioDraft,
   bioEdit,
@@ -16,6 +23,11 @@ import {
   isOwnProfile,
   joinedMonthText,
   profileCounts,
+  profileImageContentType,
+  profileImageDeleteFailure,
+  profileImagePrecheck,
+  profileImageRefusalMessage,
+  profileImageUploadFailure,
   profileItemFailure,
   profileItemRefusalMove,
   profileItemSaveGoesToStep,
@@ -25,7 +37,8 @@ import {
 
 /**
  * 공개 프로필 on the web (#41, ADR-0078): the address, what the page says of the public items, and
- * MY 설정's 소개 and interest categories — pure functions, so they run here under node.
+ * MY 설정's image (#141, ADR-0079), 소개 and interest categories — pure functions, so they run here
+ * under node.
  */
 
 const profile = (over: Partial<PublicProfile> = {}): PublicProfile => ({
@@ -285,10 +298,87 @@ describe('MY 설정 for an account facing a re-consent (owner decision 2026-10-2
   });
 });
 
+describe('MY 설정: the image (#141, #37-6)', () => {
+  const refused = (reason: string) => refusal(422, 'IMAGE_NOT_ALLOWED', { reason });
+
+  it('offers and sends the three types the server takes, and no GIF', () => {
+    expect(PROFILE_IMAGE_CONTENT_TYPES).toEqual(['image/jpeg', 'image/png', 'image/webp']);
+    expect(PROFILE_IMAGE_ACCEPT).toBe('image/jpeg,image/png,image/webp');
+    expect(profileImageContentType({ type: 'image/webp' })).toBe('image/webp');
+    expect(profileImageContentType({ type: 'image/jpeg' })).toBe('image/jpeg');
+    // No declared type: the bytes go as bytes, and the server reads them.
+    expect(profileImageContentType({ type: '' })).toBe('application/octet-stream');
+  });
+
+  it('refuses before sending what the server would refuse anyway, with its reason', () => {
+    expect(profileImagePrecheck({ type: 'image/png', size: 0 })).toBe('empty');
+    expect(profileImagePrecheck({ type: 'image/jpeg', size: IMAGE_MAX_BYTES + 1 })).toBe('size');
+    expect(profileImagePrecheck({ type: 'image/jpeg', size: IMAGE_MAX_BYTES })).toBeUndefined();
+    // A post takes a GIF; a profile image does not (#37-6: «JPEG·PNG·WebP»).
+    expect(profileImagePrecheck({ type: 'image/gif', size: 100 })).toBe('type');
+    expect(profileImagePrecheck({ type: 'image/heic', size: 100 })).toBe('type');
+    // Nothing declared: it goes up, and the server decides by the bytes.
+    expect(profileImagePrecheck({ type: '', size: 100 })).toBeUndefined();
+  });
+
+  it('says the profile image’s own rule for a type or a size, and a post image’s words otherwise', () => {
+    expect(profileImageRefusalMessage('type')).toBe(copy.errProfileImageType);
+    expect(profileImageRefusalMessage('size')).toBe(copy.errProfileImageSize);
+    expect(copy.errProfileImageType).toContain('JPEG·PNG·WebP');
+    expect(copy.errProfileImageType).not.toContain('GIF');
+    expect(copy.errProfileImageSize).toContain('5MB');
+    // The card's hint says the same rule before anything is picked.
+    expect(copy.settingsProfileImageHint).toContain('JPEG·PNG·WebP');
+    expect(copy.settingsProfileImageHint).not.toContain('GIF');
+    expect(copy.settingsProfileImageHint).toContain('5MB');
+    expect(profileImageRefusalMessage('pixels')).toBe(copy.errImageTooLarge);
+    expect(profileImageRefusalMessage('unreadable')).toBe(copy.errImageUnreadable);
+    expect(profileImageRefusalMessage('empty')).toBe(copy.errImageEmpty);
+  });
+
+  it('says what each refused upload means', () => {
+    expect(profileImageUploadFailure(refused('type'))).toBe(copy.errProfileImageType);
+    expect(profileImageUploadFailure(refused('size'))).toBe(copy.errProfileImageSize);
+    expect(profileImageUploadFailure(refused('unreadable'))).toBe(copy.errImageUnreadable);
+    // A reason the route does not name is a failed upload.
+    expect(profileImageUploadFailure(refused('later'))).toBe(copy.errImageUpload);
+    // Fastify's own cut-off, twice the limit: the size.
+    expect(profileImageUploadFailure(refusal(413, 'VALIDATION_ERROR'))).toBe(
+      copy.errProfileImageSize,
+    );
+    expect(
+      profileImageUploadFailure(
+        refusal(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBe(copy.sessionChanged);
+    expect(
+      profileImageUploadFailure(refusal(409, 'ONBOARDING_REQUIRED', { steps: ['consent'] })),
+    ).toBe(copy.errPostOnboarding);
+    // A restriction's refusal names no field: a failed upload until #185/#139 word it.
+    expect(profileImageUploadFailure(refusal(403, 'FORBIDDEN'))).toBe(copy.errImageUpload);
+    expect(profileImageUploadFailure(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
+  });
+
+  it('says what a refused deletion means', () => {
+    expect(
+      profileImageDeleteFailure(
+        refusal(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBe(copy.sessionChanged);
+    expect(profileImageDeleteFailure(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
+    expect(profileImageDeleteFailure(refusal(500, 'INTERNAL'))).toBe(copy.errProfileImageDelete);
+  });
+});
+
 describe('where the public items are written', () => {
   it('says they show on the public profile, which anyone reads, wherever they are written (#37-1, #37-5)', () => {
-    // MY 설정's two cards, the 소개 box itself, and the onboarding's step, where most picks are made.
+    // MY 설정's cards, the 소개 box itself, and the onboarding's step, where most picks are made.
     for (const key of [
+      'settingsProfileImageHint',
       'settingsBioHint',
       'bioPlaceholder',
       'settingsInterestsHint',

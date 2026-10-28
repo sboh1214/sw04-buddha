@@ -21,7 +21,7 @@ import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { commentLikeCountSql } from '../likes/like-queries.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
-import { postAuthorOf, publicStateOf } from '../posts/posts.service.js';
+import { authorColumns, postAuthorOf, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { CommentCursors } from './comment-cursor.js';
 import {
@@ -42,7 +42,7 @@ interface CommentRow {
   editedAt: Date | null;
   deletedAt: Date | null;
   hiddenAt: Date | null;
-  author: { publicId: string; nickname: string; role: Role };
+  author: { publicId: string; nickname: string; role: Role; imageId: string | null };
   likeCount: number;
 }
 
@@ -134,11 +134,8 @@ export class CommentsService {
     editedAt: schema.postComments.editedAt,
     deletedAt: schema.postComments.deletedAt,
     hiddenAt: schema.postComments.hiddenAt,
-    author: {
-      publicId: schema.profiles.publicId,
-      nickname: schema.profiles.nickname,
-      role: schema.profiles.role,
-    },
+    // The author's public face only (`authorColumns`, the posts' own).
+    author: authorColumns,
     likeCount: commentLikeCountSql(schema.postComments.id),
   };
 
@@ -275,6 +272,8 @@ export class CommentsService {
         publicId: profiles.publicId,
         nickname: profiles.nickname,
         role: profiles.role,
+        // The author's profile image (#141), as `authorColumns` reads it for every other face.
+        imageId: profiles.imageId,
       })
       .from(postComments)
       .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
@@ -291,7 +290,12 @@ export class CommentsService {
         editedAt: reply.editedAt,
         deletedAt: reply.deletedAt,
         hiddenAt: reply.hiddenAt,
-        author: { publicId: reply.publicId, nickname: reply.nickname, role: reply.role },
+        author: {
+          publicId: reply.publicId,
+          nickname: reply.nickname,
+          role: reply.role,
+          imageId: reply.imageId,
+        },
         likeCount: commentLikeCountSql(reply.id),
       })
       .from(thread)

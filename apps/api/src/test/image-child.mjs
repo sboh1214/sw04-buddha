@@ -1,4 +1,5 @@
-// A process of its own for `media/image-memory.test.ts` (#46, ADR-0073 9-8): what one whole
+// A process of its own for `media/image-memory.test.ts` (#46, ADR-0073 9-8) and
+// `media/profile-image-memory.test.ts` (#141, ADR-0079), through `image-children.ts`: what one whole
 // conversion — decode, resize and encode — adds to a process's resident memory, which neither
 // libvips' own count (the encoders allocate outside it) nor a test process that has converted
 // before (the allocator keeps what it freed, and reuses it) can tell.
@@ -14,10 +15,16 @@
 //     cache off and one thread, and prints one JSON line: `peakBytes` (the most the process's RSS
 //     rose above what it held before, sampled every millisecond), the output's size and its
 //     SHA-256 (the test checks this pipeline converts byte for byte what processImage does).
+//   node image-child.mjs convert-profile <file> <options json>
+//     the same for processProfileImage's pipeline (#141, ADR-0079 — `profileSquare`): the first
+//     frame only, then either the middle square cut from the file (`cut`), turned upright and scaled
+//     to `side`, or the frame turned upright and fitted inside `box` as raw pixels first, then the
+//     middle square of that scaled to `side` (never more than the pass left) — and the encoder.
 //
 // Plain JavaScript: a child cannot load the API's TypeScript, so the test hands it what image.ts
-// decides (`outputBox`, `encoderOptions`, the limits) as JSON — and the allocator's setting the
-// API's image runs with (MALLOC_MMAP_THRESHOLD_, Dockerfile) in its environment.
+// decides (`outputBox`, `encoderOptions`, the limits; for a profile image `cutsSquareFirst` and
+// `profileSquareSide`) as JSON — and the allocator's setting the API's image runs with
+// (MALLOC_MMAP_THRESHOLD_, Dockerfile) in its environment.
 
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -86,21 +93,21 @@ async function make(spec, out) {
   writeFileSync(out, await image.toBuffer());
 }
 
-async function convert(file, options) {
+/**
+ * Runs `pipeline` (the conversion, given the file's bytes) sampling the process's RSS every
+ * millisecond, and prints the line `convert` and `convert-profile` print.
+ */
+async function measured(file, options, pipeline) {
   const bytes = readFileSync(file);
-  const input = { animated: options.animated, limitInputPixels: options.limitInputPixels };
   const before = process.memoryUsage.rss();
   let top = before;
   const sample = () => {
     top = Math.max(top, process.memoryUsage.rss());
   };
   const sampler = setInterval(sample, 1);
-  await sharp(bytes, { ...input, limitInputPixels: false }).metadata();
-  const { data, info } = await sharp(bytes, input)
-    .autoOrient()
-    .resize({ ...options.box, fit: 'inside', withoutEnlargement: true })
-    .toFormat(options.format, options.encoder)
-    .toBuffer({ resolveWithObject: true });
+  const header = { animated: options.animated, limitInputPixels: false };
+  await sharp(bytes, header).metadata();
+  const { data, info } = await pipeline(bytes);
   clearInterval(sampler);
   sample();
   process.stdout.write(
@@ -114,6 +121,43 @@ async function convert(file, options) {
   );
 }
 
+async function convert(file, options) {
+  const input = { animated: options.animated, limitInputPixels: options.limitInputPixels };
+  await measured(file, options, (bytes) =>
+    sharp(bytes, input)
+      .autoOrient()
+      .resize({ ...options.box, fit: 'inside', withoutEnlargement: true })
+      .toFormat(options.format, options.encoder)
+      .toBuffer({ resolveWithObject: true }),
+  );
+}
+
+async function convertProfile(file, options) {
+  const input = { animated: false, limitInputPixels: options.limitInputPixels };
+  const square = (image, side) =>
+    image
+      .resize({ width: side, height: side, fit: 'cover', position: 'centre' })
+      .toFormat(options.format, options.encoder)
+      .toBuffer({ resolveWithObject: true });
+  await measured(file, { animated: false }, async (bytes) => {
+    if (options.cut !== undefined) {
+      return square(sharp(bytes, input).extract(options.cut).autoOrient(), options.side);
+    }
+    const { data, info } = await sharp(bytes, input)
+      .autoOrient()
+      .resize({ ...options.box, fit: 'inside', withoutEnlargement: true })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    const raw = { width: info.width, height: info.height, channels: info.channels };
+    return square(sharp(data, { raw }), Math.min(options.side, info.width, info.height));
+  });
+}
+
 if (mode === 'make') await make(JSON.parse(first), second);
 else if (mode === 'convert') await convert(first, JSON.parse(second));
-else throw new Error('usage: image-child.mjs make <spec> <out> | convert <file> <options>');
+else if (mode === 'convert-profile') await convertProfile(first, JSON.parse(second));
+else {
+  throw new Error(
+    'usage: image-child.mjs make <spec> <out> | convert <file> <options> | convert-profile <file> <options>',
+  );
+}

@@ -51,9 +51,10 @@ export const sanctionInForce: SanctionCheck = () => Promise.resolve(false);
  * Callers: the onboarding's nickname step (`POST /me/onboarding/nickname`, OnboardingService,
  * always `first`), the nickname change (`PATCH /me`, NicknameService), the 소개 (`PUT /me/bio`,
  * MeService), the interests step (`POST /me/onboarding/interests`, OnboardingService — `first`
- * while the step is unanswered, within 24 hours of the nickname step) and MY 설정's interest
- * categories (`PUT /me/interest-categories`, OnboardingService — never `first`); the image (#141)
- * joins them. `sanctioned` is the lookup — `sanctionInForce` but in unit tests.
+ * while the step is unanswered, within 24 hours of the nickname step), MY 설정's interest
+ * categories (`PUT /me/interest-categories`, OnboardingService — never `first`) and the image
+ * (#141, ProfileImageService: `replace` for an upload — asked before the conversion too — and
+ * `clear` for a deletion). `sanctioned` is the lookup — `sanctionInForce` but in unit tests.
  *
  * The refusal is a 403 FORBIDDEN that names no field (the web tells the other account's cookie by
  * its `expectedAccountId` detail) — until #185 and #139, which give it a code of its own carrying
@@ -88,9 +89,12 @@ export async function assertPublicItemEdit(
  * clears is known only against what the account has, read under the write's lock — this is asked
  * there, in the write's transaction, before the sanction (`assertPublicItemEdit`), so an account
  * that has to finish the onboarding hears that first. Callers: `PUT /me/bio` (MeService),
- * `POST /me/onboarding/interests` and `PUT /me/interest-categories` (OnboardingService). Whether
- * the image's deletion (#141) is open the same way is #141's to settle (the answer named the 소개
- * and the categories).
+ * `POST /me/onboarding/interests` (OnboardingService, the interests step's answer),
+ * `PUT /me/interest-categories` (OnboardingService) and the profile image (#141,
+ * ProfileImageService) — whose deletion is open the same way (owner decision 2026-10-22, ADR-0079:
+ * as the 소개 and the categories of the owner's 2026-10-21 answer 2 on #41), while its upload,
+ * always a new value, also has OnboardedGuard on the route: the upload's body is the file, and the
+ * guard refuses before the conversion is paid for.
  */
 export async function assertPublicItemOnboarding(
   executor: Executor,

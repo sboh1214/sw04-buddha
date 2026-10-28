@@ -5,7 +5,7 @@ import { and, asc, eq, isNull, or, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
-import { postAuthorOf } from '../posts/posts.service.js';
+import { authorColumns, postAuthorOf } from '../posts/posts.service.js';
 import { readProfileCounts } from './profile-queries.js';
 
 /** Unknown, malformed and withdrawn alike (#37-16: «없는 계정처럼 응답한다»). */
@@ -37,9 +37,8 @@ export class ProfilesService {
     const [row] = await this.db
       .select({
         userId: profiles.userId,
-        publicId: profiles.publicId,
-        nickname: profiles.nickname,
-        role: profiles.role,
+        // The member's public face (`postAuthorOf`), its profile image (#141) included.
+        ...authorColumns,
         bio: profiles.bio,
         // #37-3: the year and month, nothing finer, so the answer carries no more than the screen
         // shows. In Korea time for every reader (owner decision 2026-10-21 answer 1: «한국 시간으로

@@ -49,11 +49,13 @@ export function useKeepForStep(keep: () => void): void {
 
 /**
  * MY 설정's way to the remaining step (#41, ADR-0078 7-24). The gate lets an account facing a
- * re-consent alone stay on the page so it can clear its public profile's 소개 and drop interest
- * categories with a session alone (ONBOARDING_EXEMPT_PAGES, owner decision 2026-10-21 answer 2);
- * what the onboarding still keeps from it there — a new 소개, a category added, a nickname change
- * (owner decision 2026-10-22 answer 1) and the marketing switch — goes to its step first, which
- * comes back to MY 설정 once done — as the post page's writes do (`useOnboardingEntry`, ADR-0073):
+ * re-consent alone stay on the page so it can clear its public profile's 소개, drop interest
+ * categories and delete its image with a session alone (ONBOARDING_EXEMPT_PAGES, owner decisions
+ * 2026-10-21 answer 2 and 2026-10-22 for the image, #141);
+ * what the onboarding still keeps from it there — a new 소개, a category added, a new image, a
+ * nickname change (owner decision 2026-10-22 answer 1) and the marketing switch — goes to its step
+ * first, which comes back to MY 설정 once done — as the post page's writes do
+ * (`useOnboardingEntry`, ADR-0073):
  * - `stepLeft`: `GET /me` names a step left (false while it is not known) — on this page, a
  *   re-consent;
  * - `toStep()`: to that step, nothing sent (`profileItemSaveGoesToStep` says when), the cards

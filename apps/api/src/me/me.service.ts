@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { readOnboarding, schema, startGrantHoldsNumber, type Db } from '@buddha/db';
 import {
   NICKNAME_CHANGE_INTERVAL_DAYS,
+  mediaPath,
   onboardingState,
   serializeCoinAmount,
   type Me,
@@ -38,6 +39,7 @@ export class MeService {
           timeZone: schema.profiles.timeZone,
           nicknameChangedAt: schema.profiles.nicknameChangedAt,
           bio: schema.profiles.bio,
+          imageId: schema.profiles.imageId,
           availableCoin: schema.balances.availableCoin,
           lockedCoin: schema.balances.lockedCoin,
           realName: schema.phoneVerifications.realName,
@@ -125,6 +127,8 @@ export class MeService {
               ).toISOString(),
         interestCategoryIds: interests.map((pick) => pick.categoryId),
         bio: row.bio,
+        // The address every public face carries (`postAuthorOf`), so MY 설정 shows what others see.
+        imageUrl: row.imageId === null ? null : mediaPath(row.imageId),
       },
       balance: {
         availableCoin: serializeCoinAmount(row.availableCoin),

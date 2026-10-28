@@ -8,8 +8,9 @@ import { type PostAuthor as Author } from '@/lib/api';
 import { authorView } from '@/lib/posts';
 
 /**
- * A post's byline (#46, ADR-0073): the author's small round image — the nickname's first letter
- * until #141 brings uploads, never a social login's photo (#37-6) — the CURRENT nickname (#37-3),
+ * A post's byline (#46, ADR-0073): the author's small round image — the profile image the member
+ * uploaded (#141, ADR-0079; #37-6: «작은 원형 + 닉네임»), or the nickname's first letter while there
+ * is none, never a social login's photo (#37-6) — the CURRENT nickname (#37-3),
  * '운영자' for an account with the admin role (#45-9: operating rights, not a forecasting
  * credential), the time it was written in the viewer's zone (ADR-0063) and '수정됨' once edited
  * (#45-4). A withdrawn author (#140) is '탈퇴한 사용자' on a blank image, and no link (#37-16).
@@ -51,7 +52,7 @@ export const PostByline = memo(function PostByline({
       <Avatar.Root size={size === 'md' ? 'sm' : 'xs'} flexShrink="0" aria-hidden="true">
         <Avatar.Fallback>{view.initial}</Avatar.Fallback>
         {view.kind === 'member' && view.imageUrl !== null && (
-          <Avatar.Image src={view.imageUrl} alt="" />
+          <Avatar.Image src={view.imageUrl} alt="" data-testid="post-author-image" />
         )}
       </Avatar.Root>
       <Text

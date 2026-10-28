@@ -207,7 +207,8 @@ describe('the public shapes', () => {
 
 describe('uploaded images', () => {
   it('fixes the owner’s rules', () => {
-    expect(MEDIA_KINDS).toEqual(['post_image']);
+    // A post's image (#46) and a member's profile image (#141).
+    expect(MEDIA_KINDS).toEqual(['post_image', 'profile_image']);
     expect(IMAGE_CONTENT_TYPES).toEqual(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
     expect(IMAGE_MAX_BYTES).toBe(5_242_880);
     expect(IMAGE_MAX_DIMENSION).toBe(2_048);

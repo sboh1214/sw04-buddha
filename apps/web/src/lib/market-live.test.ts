@@ -141,6 +141,7 @@ const me: Me = {
     nicknameChangeAvailableAt: null,
     interestCategoryIds: [],
     bio: null,
+    imageUrl: null,
   },
   balance: { availableCoin: '100000', lockedCoin: '0' },
   linkedAccounts: [],

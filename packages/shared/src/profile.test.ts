@@ -1,6 +1,13 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { findPrivateField } from './guards/private-data.js';
+import {
+  IMAGE_CONTENT_TYPES,
+  IMAGE_MAX_BYTES,
+  PROFILE_IMAGE_CONTENT_TYPES,
+  PROFILE_IMAGE_SIZE,
+  uploadImageQuerySchema,
+} from './media.js';
 import { type PostAuthor } from './post.js';
 import {
   BIO_MAX_LENGTH,
@@ -8,6 +15,7 @@ import {
   bioInputSchema,
   bioRefusalOf,
   bioTooLongMessage,
+  deleteProfileImageBodySchema,
   normaliseBio,
   profileMemberSchema,
   publicProfileSchema,
@@ -74,6 +82,32 @@ describe('the 소개 (#37-3)', () => {
     expect(updateBioBodySchema.safeParse({ bio: '안녕', expectedAccountId: '' }).success).toBe(
       false,
     );
+  });
+});
+
+describe('the profile image (#141, #37-6)', () => {
+  it('fixes the owner’s rules: JPEG, PNG or WebP, 5MB, a square of 512px at most', () => {
+    expect(PROFILE_IMAGE_CONTENT_TYPES).toEqual(['image/jpeg', 'image/png', 'image/webp']);
+    // A post's types but the GIF: the store serves both from the same list.
+    expect(IMAGE_CONTENT_TYPES).toEqual(expect.arrayContaining([...PROFILE_IMAGE_CONTENT_TYPES]));
+    expect(PROFILE_IMAGE_CONTENT_TYPES).not.toContain('image/gif');
+    expect(IMAGE_MAX_BYTES).toBe(5 * 1024 * 1024);
+    expect(PROFILE_IMAGE_SIZE).toBe(512);
+  });
+
+  it('is uploaded and deleted naming the account the screen shows', () => {
+    expect(uploadImageQuerySchema.parse({ expectedAccountId: 'u1' })).toEqual({
+      expectedAccountId: 'u1',
+    });
+    expect(deleteProfileImageBodySchema.parse({ expectedAccountId: 'u1' })).toEqual({
+      expectedAccountId: 'u1',
+    });
+    expect(deleteProfileImageBodySchema.safeParse({}).success).toBe(false);
+    expect(deleteProfileImageBodySchema.safeParse({ expectedAccountId: '' }).success).toBe(false);
+    // Nothing else rides on the deletion: no image id to aim at another member's.
+    expect(deleteProfileImageBodySchema.parse({ expectedAccountId: 'u1', imageId: 'x' })).toEqual({
+      expectedAccountId: 'u1',
+    });
   });
 });
 

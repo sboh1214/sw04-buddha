@@ -23,7 +23,7 @@ import {
   validationField,
   validationMessage,
 } from './api';
-import { POSTS_KEY, isOwnPost } from './posts';
+import { POSTS_KEY, isOwnPost, mapKept, withAuthorImage } from './posts';
 
 /**
  * 댓글·대댓글 (#48, ADR-0074) as the post page reads them: the cache key and request of a post's
@@ -46,7 +46,9 @@ import { POSTS_KEY, isOwnPost } from './posts';
 /**
  * Every post's comment pages, by prefix (`postCommentsKey`): under it the query client keeps the
  * writer's own comments placed at the end of what is held through every read
- * (`keepPlacedComments`, lib/query-client.ts — 오너 결정 2026-10-24).
+ * (`keepPlacedComments`, lib/query-client.ts — 오너 결정 2026-10-24), and a member's new
+ * profile image goes onto every face of theirs the pages hold (`storeAuthorImage`,
+ * hooks/use-me.ts).
  */
 export const COMMENT_PAGES_KEY = [...POSTS_KEY, 'comments'] as const;
 
@@ -376,6 +378,45 @@ export function threadWithReplies(thread: CommentThread, page: ReplyPage): Comme
   };
 }
 
+// ---- a member's new image on the pages held ------------------------------------------------
+
+/** A comment with the member's new image (`withAuthorImage`); a placeholder names nobody. */
+function commentWithAuthorImage(
+  comment: PostComment,
+  publicId: string,
+  imageUrl: string | null,
+): PostComment {
+  if (comment.state !== 'published') return comment;
+  const author = withAuthorImage(comment.author, publicId, imageUrl);
+  return author === comment.author ? comment : { ...comment, author };
+}
+
+/**
+ * A post's comment pages (`postCommentsKey`) with the profile image the member `publicId` has now
+ * (#141, ADR-0079 7-21) on every 댓글 and 대댓글 of theirs they hold — the 대댓글 '답글 더 보기'
+ * brought among them, which sit in their thread (`withMoreReplies`). The pages themselves when none
+ * is theirs or each already shows it; nothing else of a thread changes (its cursor, the like
+ * counts, a placeholder).
+ */
+export function commentPagesWithAuthorImage(
+  held: CommentPages,
+  publicId: string,
+  imageUrl: string | null,
+): CommentPages {
+  const withImage = (comment: PostComment) => commentWithAuthorImage(comment, publicId, imageUrl);
+  const pages = mapKept(held.pages, (page) => {
+    const items = mapKept(page.items, (thread) => {
+      const comment = withImage(thread.comment);
+      const replies = mapKept(thread.replies, withImage);
+      return comment === thread.comment && replies === thread.replies
+        ? thread
+        : { ...thread, comment, replies };
+    });
+    return items === page.items ? page : { ...page, items };
+  });
+  return pages === held.pages ? held : { ...held, pages };
+}
+
 // ---- what the author's own writes do to the pages held -------------------------------------
 
 function mapThreads(
@@ -530,6 +571,14 @@ export interface PlacedComment {
   threadId: string | null;
   /** The account that wrote it: placed for that account only. */
   accountId: string;
+  /**
+   * The profile image `['me']` held — its address, or null — as a write of the pages last carried
+   * it for `accountId` (`withOwnFace`, #141 ADR-0079 7-23); absent until the first such write. Kept
+   * on the entry, as data, so it goes wherever the entry goes: the query client's
+   * `replaceEqualDeep` rebuilds an entry whose place in `placed` another's leaving shifted — a copy,
+   * not the object — and the copy carries it.
+   */
+  ownImageCarried?: string | null;
 }
 
 /**
@@ -544,7 +593,7 @@ export const PLACED_REPLIES_KEPT = COMMENT_REPLIES_PAGE_SIZE;
 /** `pages` with `entry` placed for `accountId` (`withNewComment`), within the bounds above. */
 function withPlaced(
   pages: CommentPages,
-  entry: Omit<PlacedComment, 'accountId'>,
+  entry: Pick<PlacedComment, 'id' | 'threadId'>,
   accountId: string,
 ): CommentPages {
   const kind = (one: Pick<PlacedComment, 'threadId'>) => one.threadId === null;
@@ -621,10 +670,22 @@ function threadsById(pages: readonly CommentPage[]): Map<string, CommentThread> 
  *   (`withMoreReplies`). A thread that left the view takes its own with it.
  * - Anything placed that no longer stands where a write left it — deleted by the writer
  *   (`withoutComment`) — is no longer placed.
+ * - Each one still placed for `own.accountId` — the account `['me']` holds, its own comments —
+ *   takes the profile image `['me']` holds once that has changed since it was placed (#141,
+ *   ADR-0079 7-23, `withOwnFace` — the image last carried noted on the entry,
+ *   `PlacedComment.ownImageCarried`): the copy carried over is the one its write's answer
+ *   brought, and no read brings it again until its page arrives, so a change made elsewhere —
+ *   another tab, another device — would otherwise leave the old address on it (the file deleted at
+ *   once) through every read, beside the member's other comments the read brought with the new
+ *   one. A read of
+ *   the pages that lands before `['me']`'s carries it over with the old image `['me']` still
+ *   holds; the write of `['me']` then puts the new one on it (`placedWithOwnFace`,
+ *   lib/query-client.ts). A change in this tab patches it where it is (`storeAuthorImage`).
  */
 export function keepPlacedComments(
   held: CommentPages | undefined,
   incoming: CommentPages,
+  own?: PlacedCommentsOwner,
 ): CommentPages {
   const read = new Set(incoming.pages.filter((page) => pagesRead.has(page)));
   for (const page of read) pagesRead.delete(page);
@@ -696,7 +757,79 @@ export function keepPlacedComments(
   const stillPlaced = placed.filter((entry) => kept.has(entry));
   return stillPlaced.length === 0
     ? { pages, pageParams: incoming.pageParams }
-    : { pages, pageParams: incoming.pageParams, placed: stillPlaced };
+    : { ...withOwnFace(pages, stillPlaced, own), pageParams: incoming.pageParams };
+}
+
+/**
+ * The account `['me']` holds, as `keepPlacedComments` reads it for the writer's own comments placed
+ * at the end of what is held: its id, its public id and its profile image's address (or null).
+ */
+export interface PlacedCommentsOwner {
+  accountId: string;
+  publicId: string;
+  imageUrl: string | null;
+}
+
+/**
+ * `pages` with the image `['me']` holds now (`own`) on the comments placed in them for its account,
+ * where it has changed since a write last carried them (`withOwnFace`) — for a write of `['me']`
+ * itself (lib/query-client.ts): a read of the comment pages that lands before `['me']`'s, after a
+ * change made in another tab, carried the placed copy over with the old image and brought the
+ * member's other comments with the new one, and no write of the pages follows `['me']`'s to put it
+ * right (ADR-0079 7-23). The image it holds is noted on those entries as on a write of the pages
+ * (`PlacedComment.ownImageCarried`), so a change after it is told from it. The same object when
+ * nothing changes — neither a face nor a note.
+ */
+export function placedWithOwnFace(
+  pages: CommentPages,
+  own: PlacedCommentsOwner | undefined,
+): CommentPages {
+  const placed = pages.placed ?? [];
+  if (placed.length === 0) return pages;
+  const next = withOwnFace(pages.pages, placed, own);
+  return next.pages === pages.pages && next.placed === placed ? pages : { ...pages, ...next };
+}
+
+/**
+ * `pages` with `own`'s image on each comment placed for `own` whose image `['me']` has changed
+ * since a write last carried it (`keepPlacedComments`, ADR-0079 7-23) — read again since, after a
+ * change made in another tab or on another device — and `placed` with the image `['me']` holds now
+ * noted on each entry placed for `own` (`PlacedComment.ownImageCarried`). Not one that merely
+ * differs: the copy placed is its write's answer — the server's face as it wrote it, or as it
+ * edited it since — and `['me']` may have been read before that (a change made in another tab,
+ * then a 댓글 written here within the 30 seconds `['me']` is not read again), so the first write
+ * that carries it leaves it as it came and notes the image `['me']` held then. Each as it was, the
+ * same object, when nothing changes.
+ */
+function withOwnFace(
+  pages: CommentPage[],
+  placed: readonly PlacedComment[],
+  own: PlacedCommentsOwner | undefined,
+): { pages: CommentPage[]; placed: readonly PlacedComment[] } {
+  if (own === undefined) return { pages, placed };
+  const ids = new Set<string>();
+  let noted = false;
+  const carried = placed.map((entry) => {
+    if (entry.accountId !== own.accountId || entry.ownImageCarried === own.imageUrl) return entry;
+    if (entry.ownImageCarried !== undefined) ids.add(entry.id);
+    noted = true;
+    return { ...entry, ownImageCarried: own.imageUrl };
+  });
+  const nextPlaced = noted ? carried : placed;
+  if (ids.size === 0) return { pages, placed: nextPlaced };
+  const withImage = (comment: PostComment) =>
+    ids.has(comment.id) ? commentWithAuthorImage(comment, own.publicId, own.imageUrl) : comment;
+  const nextPages = mapKept(pages, (page) => {
+    const items = mapKept(page.items, (thread) => {
+      const comment = withImage(thread.comment);
+      const replies = mapKept(thread.replies, withImage);
+      return comment === thread.comment && replies === thread.replies
+        ? thread
+        : { ...thread, comment, replies };
+    });
+    return items === page.items ? page : { ...page, items };
+  });
+  return { pages: nextPages, placed: nextPlaced };
 }
 
 // ---- drafts -------------------------------------------------------------------------------------

@@ -1122,8 +1122,8 @@ export const copy = {
   likeMineUnavailable: '내가 누른 좋아요를 불러오지 못했습니다.',
 
   // --- 공개 프로필 (#41, ADR-0078) ---
-  // /u/<공개 id>: 누구나 보고 검색 엔진에는 노출하지 않는다(#37-1). 지금 닉네임·이미지(없으면 닉네임 첫
-  // 글자)·관리자 계정의 '운영자'(postAuthorAdmin, 운영 권한만 뜻한다)·소개(평문, 링크 없음)·고른 관심
+  // /u/<공개 id>: 누구나 보고 검색 엔진에는 노출하지 않는다(#37-1). 지금 닉네임·이미지(회원이 올린 것,
+  // #141 — 없으면 닉네임 첫 글자)·관리자 계정의 '운영자'(postAuthorAdmin, 운영 권한만 뜻한다)·소개(평문, 링크 없음)·고른 관심
   // 카테고리(고르지 않았으면 표시 없음)·가입 연·월('2026년 10월 가입', 누구에게나 한국 시간의 달)과 글·댓글 수, 받은 좋아요 합계
   // (#37-4 — 그 회원이 자기 글·댓글에 스스로 누른 것은 빼고, 수일 뿐이고 점수·순위로 부르지 않는다).
   // 글·댓글 목록은 #51이 채운다(그때까지 '준비 중').
@@ -1163,6 +1163,27 @@ export const copy = {
   // 단계에 갔다 오면 쓰던 소개·고른 카테고리·쓰던 닉네임을 그 카드에 되살렸을 때 — 토스트로 한 번(오너 결정
   // 2026-10-22 답 3·2026-10-22 (2차) 답 2, 글·댓글의 postDraftRestored·commentDraftRestored와 같은 말).
   profileDraftRestored: '쓰던 내용을 되살렸습니다.',
+  // 프로필 이미지(#141, ADR-0079; #37-6): MY 설정에서 직접 올린다(소셜 로그인 사진은 쓰지 않는다).
+  // JPEG·PNG·WebP, 5MB. 서버가 가운데를 정사각형(512px까지 줄이고, 작은 것은 제 크기 — 오너 결정
+  // 2026-10-22)으로 잘라 촬영 위치·기기 정보 같은 부가 정보를 지우고 둔다. 공개 프로필과 글·댓글의
+  // 작성자 표기에 보이고, 없으면 닉네임의 첫 글자다. 바꾸거나 삭제한 이전 이미지는 곧바로 지운다
+  // (결정 4 #141) — 삭제는 되살릴 수 없다고 한 번 묻는다.
+  settingsProfileImage: '프로필 이미지',
+  settingsProfileImageHint:
+    '공개 프로필과 글·댓글의 작성자 표기에 보입니다. JPEG·PNG·WebP 이미지를 5MB까지 올릴 수 있고, 가운데를 정사각형으로 잘라 촬영 위치 같은 부가 정보를 지운 뒤 저장합니다. 이미지가 없으면 닉네임의 첫 글자가 보입니다.',
+  profileImageUpload: '이미지 올리기',
+  profileImageReplace: '이미지 바꾸기',
+  profileImageUploading: '올리는 중',
+  profileImageSaved: '프로필 이미지를 저장했습니다.',
+  profileImageDelete: '이미지 삭제',
+  profileImageDeleteTitle: '프로필 이미지를 삭제합니다',
+  profileImageDeleteBody: '삭제한 이미지는 되살릴 수 없습니다. 계속할까요?',
+  profileImageDeleteConfirm: '삭제하기',
+  profileImageDeleted: '프로필 이미지를 삭제했습니다.',
+  // 글의 이미지(errImageType·errImageSize)와 형식이 다르다: GIF는 받지 않는다(#37-6).
+  errProfileImageType: 'JPEG·PNG·WebP 이미지만 올릴 수 있습니다.',
+  errProfileImageSize: '프로필 이미지는 5MB까지 올릴 수 있습니다.',
+  errProfileImageDelete: '프로필 이미지를 삭제하지 못했습니다. 다시 시도해 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.
   adminMarketPreview: '미리보기',

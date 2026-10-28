@@ -120,6 +120,8 @@ export type PublicProfile = components['schemas']['PublicProfile'];
 export type ProfileMember = components['schemas']['ProfileMember'];
 export type ProfileInterestCategory = components['schemas']['ProfileInterestCategory'];
 export type UpdateBioBody = components['schemas']['UpdateBioBody'];
+/** `POST /me/profile-image/delete` (#141, ADR-0079): the account the screen shows. */
+export type DeleteProfileImageBody = components['schemas']['DeleteProfileImageBody'];
 /** `POST /media/images`'s answer: the stored image's id, which the editor's image node carries. */
 export type UploadedImage = components['schemas']['UploadedImage'];
 /**

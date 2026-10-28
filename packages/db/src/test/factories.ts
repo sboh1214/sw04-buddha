@@ -734,6 +734,42 @@ export async function createMedia(db: Db, input: CreateMediaInput) {
   return row!;
 }
 
+export interface CreateProfileImageInput {
+  userId: string;
+  /** Default: image/webp. One of a profile image's three types (#37-6). */
+  contentType?: Exclude<ImageContentType, 'image/gif'>;
+}
+
+/**
+ * A profile image as `PUT /me/profile-image` leaves it (#141): an upload of `userId`'s of the
+ * profile image's kind, 512px square (a large upload's), attached from the start, and the
+ * profile's image — replacing the profile's earlier one, whose row stays as an operator's removal
+ * leaves it (#50). Only the rows — the object is the test's store's to hold or not; its key is the
+ * API's shape, `profile-images/<id>.<ext>`.
+ */
+export async function createProfileImage(db: Db, input: CreateProfileImageInput) {
+  const id = randomUUID();
+  const contentType = input.contentType ?? 'image/webp';
+  return db.transaction(async (tx) => {
+    const [row] = await tx
+      .insert(mediaObjects)
+      .values({
+        id,
+        ownerId: input.userId,
+        kind: 'profile_image',
+        storageKey: `profile-images/${id}.${EXTENSION_OF[contentType]}`,
+        contentType,
+        byteSize: 2_048,
+        width: 512,
+        height: 512,
+        attachedAt: sql`now()`,
+      })
+      .returning();
+    await tx.update(profiles).set({ imageId: id }).where(eq(profiles.userId, input.userId));
+    return row!;
+  });
+}
+
 export interface CreatePostInput {
   marketId: string;
   authorId: string;
