@@ -22,6 +22,7 @@ import { type ReactNode } from 'react';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { CoinText } from '@/components/ui/coin-text';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { listSection, listView, profileView } from '@/lib/query-client';
 import { useMarketSocket } from '@/hooks/use-market-socket';
@@ -434,17 +435,26 @@ export function OrdersBody({
   const section = listSection(orders, rows.length);
   const testId = kind === 'pending' ? 'my-orders' : 'my-order-history';
   const more = showMoreOrders(orders.hasNextPage, rows.length, limit) && (
-    <Button
-      alignSelf="center"
-      size="sm"
-      variant="ghost"
-      mt="1"
-      loading={orders.isFetchingNextPage}
-      onClick={() => void orders.fetchNextPage()}
-      data-testid={`${testId}-more`}
-    >
-      {copy.loadMore}
-    </Button>
+    <>
+      {/* A 더 보기 that failed: the rows stay, the message above the button that asks again (owner
+          decision 2026-10-20 7). */}
+      <LoadMoreFailed
+        list={orders}
+        message={copy.errUnknown}
+        data-testid={`${testId}-more-failed`}
+      />
+      <Button
+        alignSelf="center"
+        size="sm"
+        variant="ghost"
+        mt="1"
+        loading={orders.isFetchingNextPage}
+        onClick={() => void orders.fetchNextPage()}
+        data-testid={`${testId}-more`}
+      >
+        {copy.loadMore}
+      </Button>
+    </>
   );
   return (
     <>

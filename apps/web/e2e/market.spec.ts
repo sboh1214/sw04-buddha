@@ -147,7 +147,10 @@ test.describe('시장 상세', () => {
      * 매수 bar is in the HTML of an open market with its two entry points and no price on either;
      * its sheet is not (it mounts on a press). The public 준비 중 slots are there — 공개 판정 기록,
      * like 배경 and 규칙, once for each width's place, since the two widths draw them in different
-     * places and each reads its own copy where it is drawn (ADR-0067); CSS shows one. The personal
+     * places and each reads its own copy where it is drawn (ADR-0067); CSS shows one. So is 토론's
+     * frame, public too and no longer one of them (#47, ADR-0075) — its heading, 글쓰기 and its
+     * loading state, for its posts, its count and its empty notice are read in the browser only
+     * (owner decision 2026-10-20 1; discussion.spec.ts reads them). The personal
      * areas — 내 포지션, 내 거래, 내 대기 주문 — never are, for nobody, and neither is the one
      * sign-in prompt a signed-out visitor gets in their place (owner decision 2026-10-17): the
      * admin context's HTML below carries a session cookie and must hold no more than the
@@ -164,6 +167,10 @@ test.describe('시장 상세', () => {
     for (const slot of ['market-order-book', 'market-discussion', 'market-related']) {
       expect(html, slot).toContain(`data-testid="${slot}"`);
     }
+    expect(html).toContain('data-testid="market-discussion-loading"');
+    expect(html).not.toContain(copy.marketDiscussionEmpty);
+    expect(html).not.toContain('data-testid="market-discussion-count"');
+    expect(html).not.toContain('data-testid="market-discussion-coming-soon"');
     expect(html).toContain(copy.marketRelatedEmpty);
     for (const width of ['md', 'base']) {
       for (const section of ['market-background', 'market-rules', 'market-judging-record']) {

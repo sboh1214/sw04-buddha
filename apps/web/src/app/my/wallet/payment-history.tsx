@@ -3,10 +3,12 @@
 import { Alert, Badge, Button, Card, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { formatKrw, formatCoin, parseCoinAmount } from '@buddha/shared';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { usePayments } from '@/hooks/use-wallet';
 import { type Payment } from '@/lib/api';
 import { paymentHistoryReason, paymentMethodLabel, paymentStatusView } from '@/lib/payments';
+import { readFailed } from '@/lib/query-client';
 
 /**
  * 결제 내역 (ADR-0042): the account's own charges, newest first, 20 per page with 더 보기 —
@@ -15,8 +17,8 @@ import { paymentHistoryReason, paymentMethodLabel, paymentStatusView } from '@/l
  * (PAID_COIN_SALES_ENABLED, ADR-0049; app/my/wallet/page.tsx).
  */
 export function PaymentHistory() {
-  const { data, isPending, isError, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } =
-    usePayments();
+  const list = usePayments();
+  const { data, isPending, fetchNextPage, hasNextPage, isFetchingNextPage, refetch } = list;
   const payments = data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
@@ -27,7 +29,7 @@ export function PaymentHistory() {
       <Card.Body>
         {isPending ? (
           <Skeleton height="16" />
-        ) : isError ? (
+        ) : readFailed(list) ? (
           <Stack gap="3" align="flex-start">
             <Alert.Root status="error" role="alert">
               <Alert.Indicator />
@@ -42,22 +44,34 @@ export function PaymentHistory() {
         ) : payments.length === 0 ? (
           <Text color="fg.muted">{copy.paymentHistoryEmpty}</Text>
         ) : (
-          <Stack gap="3" divideY="1px">
-            {payments.map((payment) => (
-              <PaymentRow key={payment.id} payment={payment} />
-            ))}
+          <Stack gap="3">
+            <Stack gap="3" divideY="1px">
+              {payments.map((payment) => (
+                <PaymentRow key={payment.id} payment={payment} />
+              ))}
+            </Stack>
             {hasNextPage && (
-              <Button
-                alignSelf="center"
-                size="sm"
-                variant="ghost"
-                mt="3"
-                loading={isFetchingNextPage}
-                onClick={() => void fetchNextPage()}
-                data-testid="payment-history-more"
-              >
-                {copy.loadMore}
-              </Button>
+              <>
+                {/* A 더 보기 that failed: the rows stay, the message above the button that asks
+                    again (owner decision 2026-10-20 7). Outside the divided rows, so no row
+                    divider is drawn over it. */}
+                <LoadMoreFailed
+                  list={list}
+                  message={copy.errUnknown}
+                  data-testid="payment-history-more-failed"
+                />
+                <Button
+                  alignSelf="center"
+                  size="sm"
+                  variant="ghost"
+                  mt="3"
+                  loading={isFetchingNextPage}
+                  onClick={() => void fetchNextPage()}
+                  data-testid="payment-history-more"
+                >
+                  {copy.loadMore}
+                </Button>
+              </>
             )}
           </Stack>
         )}

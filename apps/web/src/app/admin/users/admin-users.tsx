@@ -23,12 +23,14 @@ import {
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
 import { api, isApiError, unwrap, type AdminUser } from '@/lib/api';
 import { boundedInteger } from '@/lib/form-schema';
+import { readFailed } from '@/lib/query-client';
 
 const ADMIN_USERS_KEY = ['admin', 'users'] as const;
 
@@ -79,7 +81,7 @@ export function AdminUsers() {
 
       {users.isPending ? (
         <Skeleton height="24" />
-      ) : users.isError ? (
+      ) : readFailed(users) ? (
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
           <Alert.Content>
@@ -94,16 +96,23 @@ export function AdminUsers() {
             <UserCard key={user.id} user={user} />
           ))}
           {users.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={users.isFetchingNextPage}
-              onClick={() => void users.fetchNextPage()}
-              data-testid="admin-users-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={users}
+                message={copy.errUnknown}
+                data-testid="admin-users-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={users.isFetchingNextPage}
+                onClick={() => void users.fetchNextPage()}
+                data-testid="admin-users-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

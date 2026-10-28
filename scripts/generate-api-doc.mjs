@@ -70,7 +70,8 @@ const BANNER = `<!-- 이 파일은 scripts/generate-api-doc.mjs 가 생성합니
 /**
  * 개요. Read from packages/shared/src/api/{envelope,pagination,coin-amount}.ts, the document's own
  * `info.description`, apps/api/src/main.ts's prefix/versioning (mirrored in openapi-export.ts),
- * apps/api/src/openapi/document.ts (operationIdFactory) and apps/web/next.config.ts (the rewrite).
+ * apps/api/src/openapi/document.ts (operationIdFactory), apps/web/next.config.ts (the rewrite),
+ * apps/api/src/infra/http/security-headers.ts (`X-Robots-Tag`) and apps/web/src/app/robots.ts.
  */
 const OVERVIEW = `## 개요
 
@@ -80,7 +81,9 @@ const OVERVIEW = `## 개요
   문서에 \`servers\` 가 없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
   rewrite(\`/api/:path*\` → \`NEXT_PUBLIC_API_URL\`)를 거쳐 같은 오리진으로 호출한다.
 - **성공 봉투** — 단일 리소스는 \`{ "data": ... }\`, 커서 목록은
-  \`{ "data": [...], "meta": { "nextCursor": ... } }\`.
+  \`{ "data": [...], "meta": { "nextCursor": ... } }\`. 화면이 목록 전체의 수를 보이는 목록은
+  \`meta\` 에 그 수 \`total\` 도 싣는다(\`CountedPageMeta\` — 그 페이지와 같은 시점에 센 수, 지금은
+  시장 상세의 토론 \`GET /api/v1/markets/{id}/posts\`).
 - **실패 봉투** — \`{ "error": { "code": ..., "message": ..., "details"?: ... } }\`. \`details\` 는
   값이 없으면 키 자체가 없다(\`undefined\` 로 넣지 않는다). \`VALIDATION_ERROR\` 의 \`details\` 는
   \`{ path, message }\` 배열(\`ValidationIssue\`)이다. \`message\` 는 개발자용 영어 문자열이고,
@@ -97,6 +100,9 @@ const OVERVIEW = `## 개요
   긴 문자열은 파싱하기 전에 거절한다: 백만 자리 \`BigInt()\` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 \`application/json\` 이다.
   \`application/x-www-form-urlencoded\` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
+- **검색 엔진** — 모든 응답(\`/api/auth/*\`·헬스체크·오류 응답까지)에 \`X-Robots-Tag: noindex\` 가
+  붙는다(\`apps/api/src/infra/http/security-headers.ts\`, ADR-0075). 웹의 \`/robots.txt\` 는 검색
+  로봇에게 \`/api/\` 를 막는다. API 의 답은 검색 엔진이 담을 화면이 아니다.
 - **operationId** — 오퍼레이션마다 \`@ApiOperation({ operationId })\` 로 명시한다. 명시하지 않은
   오퍼레이션만 컨트롤러의 메서드 이름을 쓴다(\`openapi/document.ts\` 의 \`operationIdFactory\`).`;
 

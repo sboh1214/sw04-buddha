@@ -103,8 +103,8 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
       expect(new Set(drawn).size, width).toBe(drawn.length);
       expect([...drawn].sort(), width).toEqual([...drawnOrder('md')].sort());
     }
-    // The chart, the switch with 최근 체결, 요약 with 관심 등록, 내 포지션 and 관련 시장 hold state
-    // or fetch: one slot each, so each is mounted once.
+    // The chart, the switch with 최근 체결, 요약 with 관심 등록, 내 포지션, 토론 and 관련 시장 hold
+    // state or fetch: one slot each, so each is mounted once.
     const copied = DETAIL_SLOTS.filter((slot) => slot.width !== 'all');
     expect(copied.map((slot) => slot.section).sort()).toEqual([
       'background',
@@ -159,6 +159,17 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
     expect(source).toContain('Record<SharedSection, ReactNode>');
     expect(source).toContain('Record<CopiedSection, Record<DetailWidth, ReactNode>>');
     expect(source).not.toMatch(/\border=\{/);
+  });
+
+  it('draws 토론 as its posts now, no longer a 준비 중 slot (#47, ADR-0075)', () => {
+    // ADR-0067 left 토론 its title and 준비 중; #47 fills the slot with the section of this market's
+    // posts, which reads them by the market's id. The other 준비 중 slots are untouched.
+    const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
+    expect(source).toContain('discussion: <MarketDiscussion marketId={marketId} />');
+    expect(source).not.toContain('copy.marketDiscussion');
+    for (const slot of ['market-order-book', 'market-my-trades', 'market-my-open-orders']) {
+      expect(source, slot).toContain(`testId="${slot}"`);
+    }
   });
 });
 

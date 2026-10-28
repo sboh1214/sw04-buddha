@@ -17,11 +17,13 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { api, isApiError, unwrap, type Coupon } from '@/lib/api';
 import { formatKst, kstLocalToIso } from '@/lib/datetime';
 import { boundedInteger, optionalCouponCode } from '@/lib/form-schema';
+import { readFailed } from '@/lib/query-client';
 
 const ADMIN_COUPONS_KEY = ['admin', 'coupons'] as const;
 
@@ -179,7 +181,7 @@ export function AdminCoupons() {
 
       {coupons.isPending ? (
         <Skeleton height="24" />
-      ) : coupons.isError ? (
+      ) : readFailed(coupons) ? (
         <Alert.Root status="error" role="alert">
           <Alert.Indicator />
           <Alert.Content>
@@ -230,16 +232,23 @@ export function AdminCoupons() {
             </HStack>
           ))}
           {coupons.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={coupons.isFetchingNextPage}
-              onClick={() => void coupons.fetchNextPage()}
-              data-testid="admin-coupons-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={coupons}
+                message={copy.errUnknown}
+                data-testid="admin-coupons-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={coupons.isFetchingNextPage}
+                onClick={() => void coupons.fetchNextPage()}
+                data-testid="admin-coupons-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

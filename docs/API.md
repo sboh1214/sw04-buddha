@@ -25,7 +25,9 @@
   문서에 `servers` 가 없으므로 경로는 API 오리진 기준 상대 경로다. 브라우저는 Next.js
   rewrite(`/api/:path*` → `NEXT_PUBLIC_API_URL`)를 거쳐 같은 오리진으로 호출한다.
 - **성공 봉투** — 단일 리소스는 `{ "data": ... }`, 커서 목록은
-  `{ "data": [...], "meta": { "nextCursor": ... } }`.
+  `{ "data": [...], "meta": { "nextCursor": ... } }`. 화면이 목록 전체의 수를 보이는 목록은
+  `meta` 에 그 수 `total` 도 싣는다(`CountedPageMeta` — 그 페이지와 같은 시점에 센 수, 지금은
+  시장 상세의 토론 `GET /api/v1/markets/{id}/posts`).
 - **실패 봉투** — `{ "error": { "code": ..., "message": ..., "details"?: ... } }`. `details` 는
   값이 없으면 키 자체가 없다(`undefined` 로 넣지 않는다). `VALIDATION_ERROR` 의 `details` 는
   `{ path, message }` 배열(`ValidationIssue`)이다. `message` 는 개발자용 영어 문자열이고,
@@ -42,6 +44,9 @@
   긴 문자열은 파싱하기 전에 거절한다: 백만 자리 `BigInt()` 는 요청 스레드에서 실제로 CPU 를 쓴다).
 - **본문 형식** — 요청·응답 모두 `application/json` 이다.
   `application/x-www-form-urlencoded` 파서는 꺼져 있다(HTML 폼이 바로 CSRF 의 모양이다).
+- **검색 엔진** — 모든 응답(`/api/auth/*`·헬스체크·오류 응답까지)에 `X-Robots-Tag: noindex` 가
+  붙는다(`apps/api/src/infra/http/security-headers.ts`, ADR-0075). 웹의 `/robots.txt` 는 검색
+  로봇에게 `/api/` 를 막는다. API 의 답은 검색 엔진이 담을 화면이 아니다.
 - **operationId** — 오퍼레이션마다 `@ApiOperation({ operationId })` 로 명시한다. 명시하지 않은
   오퍼레이션만 컨트롤러의 메서드 이름을 쓴다(`openapi/document.ts` 의 `operationIdFactory`).
 
@@ -107,7 +112,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | `COMMENT_NOT_EDITABLE` | 409 | 그 댓글은 지금 작성자가 고칠 수 없다(#48). `details.reason` 이 까닭을 말한다 — `hidden`(운영 정책에 따라 숨긴 댓글이다. 숨긴 댓글은 지울 수는 있다). |
 | `INTERNAL` | 500 | 그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다. |
 
-## 오퍼레이션 (75개)
+## 오퍼레이션 (76개)
 
 태그별로 묶었고, 태그 안의 순서는 OpenAPI 문서의 경로 순서 그대로다.
 
@@ -223,6 +228,7 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | GET | `/api/v1/posts/{postId}` | A post page: the whole post, or a placeholder for a hidden post and for a deleted one that comments not deleted (hidden ones too) still hang under; a deleted post with none is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 | PUT | `/api/v1/posts/{postId}` | The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `POST_NOT_EDITABLE`, `RATE_LIMITED` |
 | POST | `/api/v1/posts/{postId}/delete` | The author deletes the post (a hidden one too), signed in whatever their onboarding: it stays as the placeholder 삭제된 글입니다 while comments not deleted (hidden ones too) hang under it, and is gone from every view otherwise. Never restored | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
+| GET | `/api/v1/markets/{id}/posts` | A market’s discussion: its posts as the community list’s cards, newest first, never a deleted or hidden one, and meta.total, how many the whole list holds; readable in every public status, ended markets too. A draft or unknown market is NOT_FOUND | — | `VALIDATION_ERROR`, `NOT_FOUND`, `RATE_LIMITED` |
 
 ### `media`
 
@@ -241,12 +247,12 @@ API 는 이 목록 밖의 코드를 내지 않는다.
 | PUT | `/api/v1/comments/{commentId}` | The author replaces the body; the comment shows as edited and the earlier version is kept for operators. The same text changes nothing. A hidden comment cannot be edited (COMMENT_NOT_EDITABLE) | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `ONBOARDING_REQUIRED`, `COMMENT_NOT_EDITABLE`, `RATE_LIMITED` |
 | POST | `/api/v1/comments/{commentId}/delete` | The author deletes the comment (a hidden one too): a 댓글 stays as the placeholder 삭제된 글입니다 while 대댓글 hang under it, and anything else is gone from every view. Never restored | 🔒 | `VALIDATION_ERROR`, `UNAUTHENTICATED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED` |
 
-## 스키마 (116개)
+## 스키마 (117개)
 
 요청·응답 본문의 실제 모양은 `apps/api/openapi.json` 의 `components.schemas` 에 있다. 이름만
 적어 두니 거기서 찾아 읽는다. 이름은 zod 스키마의 `.meta({ id })` 에서 온다.
 
-`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `CommentDeletion`, `CommentThread`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCommentBody`, `CreateCouponBody`, `CreateMarketBody`, `CreatePostBody`, `CursorQuery`, `DeleteCommentBody`, `DeletePostBody`, `DeletedComment`, `DeletedPost`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `HiddenComment`, `HiddenPost`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `NextPath`, `Nickname`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `Post`, `PostAuthor`, `PostBlock`, `PostComment`, `PostDeletion`, `PostDocument`, `PostInline`, `PostListItem`, `PostMark`, `PostMarket`, `PostSummary`, `PostTableRow`, `PriceSeries`, `PriceTick`, `PublishedComment`, `PublishedPost`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCommentBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdatePostBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UploadedImage`, `UserRole`, `WatchState`
+`AdminAccount`, `AdminAccountActor`, `AdminBalanceAdjustResult`, `AdminGrantBody`, `AdminMarket`, `AdminPayment`, `AdminRelatedMarket`, `AdminRevokeBody`, `AdminRoleChange`, `AdminRoleChangeType`, `AdminSettlementStep`, `AdminSmsStatus`, `AdminUser`, `AdminUserQuery`, `AuditFailure`, `Balance`, `BalanceAdjustBody`, `Category`, `ChargeBody`, `ChargePackage`, `ChargeResult`, `CoinAmount`, `CommentDeletion`, `CommentThread`, `ConfirmPhoneVerificationBody`, `ConsentItem`, `ConsentRecord`, `CountedPageMeta`, `Coupon`, `CouponCode`, `CreateChargePackageBody`, `CreateCommentBody`, `CreateCouponBody`, `CreateMarketBody`, `CreatePostBody`, `CursorQuery`, `DeleteCommentBody`, `DeletePostBody`, `DeletedComment`, `DeletedPost`, `ErrorCode`, `ErrorEnvelope`, `Fill`, `HiddenComment`, `HiddenPost`, `LedgerEntry`, `LinkRelatedMarketBody`, `LinkedAccount`, `Market`, `MarketEvent`, `MarketSummary`, `Me`, `NextPath`, `Nickname`, `OkResult`, `Onboarding`, `OnboardingStep`, `Order`, `PageMeta`, `Password`, `Payment`, `PaymentProviderInfo`, `PhoneVerification`, `PhoneVerificationCodeSent`, `Position`, `Post`, `PostAuthor`, `PostBlock`, `PostComment`, `PostDeletion`, `PostDocument`, `PostInline`, `PostListItem`, `PostMark`, `PostMarket`, `PostSummary`, `PostTableRow`, `PriceSeries`, `PriceTick`, `PublishedComment`, `PublishedPost`, `RecentSearch`, `RecordConsentsBody`, `RecordSearchBody`, `RedeemCouponBody`, `RedeemCouponResult`, `RefundPaymentBody`, `RegisterBody`, `RegisterResult`, `ReleaseSetting`, `ReleaseSettingActor`, `ReleaseSettingChange`, `ReleaseSettingChangeBody`, `ReleaseSettingState`, `ReleaseSettingStatus`, `RequestPhoneVerificationCodeBody`, `ResolveMarketBody`, `SearchHistoryWriteBody`, `SetInterestCategoriesBody`, `SetOnboardingNicknameBody`, `SetPasswordBody`, `SettlementStep`, `SettlementStepStatus`, `SmsSendDay`, `StartGrant`, `UpdateChargePackageBody`, `UpdateCommentBody`, `UpdateCouponBody`, `UpdateMarketBody`, `UpdateMeBody`, `UpdatePostBody`, `UpdateRealNameBody`, `UpdateTimeZoneBody`, `UpdateWatchBody`, `UploadedImage`, `UserRole`, `WatchState`
 
 ## 헬스체크 (문서 밖)
 

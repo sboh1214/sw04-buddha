@@ -9,11 +9,12 @@ import {
   Query,
   UseGuards,
 } from '@nestjs/common';
-import { ApiCookieAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
+import { ApiCookieAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
 import {
   POST_BODY_MAX_LENGTH,
   POST_IMAGES_MAX,
   createPostBodySchema,
+  cursorQuerySchema,
   deletePostBodySchema,
   postDeletionSchema,
   postListQuerySchema,
@@ -21,6 +22,8 @@ import {
   postSummarySchema,
   updatePostBodySchema,
   uuidParamSchema,
+  type CountedPageMeta,
+  type CursorQuery,
   type DeletePostBody,
   type Post as PostShape,
   type PostDeletion,
@@ -34,7 +37,13 @@ import { CurrentUser } from '../auth/current-user.decorator.js';
 import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
-import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
+import {
+  ApiCountedPageOf,
+  ApiData,
+  ApiErrors,
+  ApiPageOf,
+} from '../common/openapi/api-response.decorators.js';
+import { CURSOR_QUERY_PARAMS } from '../common/openapi/cursor-query.js';
 import { OnboardedGuard } from '../onboarding/onboarded.guard.js';
 import { SESSION_SECURITY_SCHEME } from '../openapi/document.js';
 import { PostsService } from './posts.service.js';
@@ -171,5 +180,40 @@ export class PostsController {
   ): Promise<PostDeletion> {
     assertExpectedAccount(user.id, body.expectedAccountId);
     return this.posts.delete(user.id, postId);
+  }
+}
+
+/**
+ * `/api/v1/markets/:id/posts` (#47): the market detail's 토론, public like the community list it
+ * narrows (N02 §2 «공개 토론», N05 §2) and naming each author by its public face only, as that list
+ * does (registry.ts `showsPerson`). Every post of the market in the detail itself, a page per 더
+ * 보기, with the count the section shows (ADR-0069 decision 4, #47: «상세 안에서 모두(더 보기)
+ * (글 수 표시, 20개씩 더 불러옴)»). A sub-resource of a market, so `:id` is the uuid, never the
+ * slug (the fills, the ticks and the related markets take it the same way). `cursorQuerySchema`
+ * carries a component id, so its two parameters are declared by hand.
+ */
+@ApiTags('posts')
+@Controller('markets/:id/posts')
+export class MarketPostsController {
+  constructor(private readonly posts: PostsService) {}
+
+  @Get()
+  @ApiOperation({
+    operationId: 'listMarketPosts',
+    summary:
+      'A market’s discussion: its posts as the community list’s cards, newest first, never a ' +
+      'deleted or hidden one, and meta.total, how many the whole list holds; readable in every ' +
+      'public status, ended markets too. A draft or unknown market is NOT_FOUND',
+  })
+  @ApiQuery(CURSOR_QUERY_PARAMS[0])
+  @ApiQuery(CURSOR_QUERY_PARAMS[1])
+  @ApiCountedPageOf(postSummarySchema)
+  @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
+  async list(
+    @Param('id', { schema: uuidParamSchema }) marketId: string,
+    @Query({ schema: cursorQuerySchema }) query: CursorQuery,
+  ): Promise<ApiPage<PostSummary, CountedPageMeta>> {
+    const { items, nextCursor, total } = await this.posts.listForMarket(marketId, query);
+    return new ApiPage(items, { nextCursor, total });
   }
 }

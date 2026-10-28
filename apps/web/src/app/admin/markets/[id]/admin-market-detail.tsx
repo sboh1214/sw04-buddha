@@ -26,6 +26,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
 import { type ReactNode, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { SEARCH_INPUT_MAX_LENGTH } from '@/lib/market-search';
@@ -926,16 +927,23 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                     );
                   })}
                   {searchSection.more && (
-                    <Button
-                      alignSelf="center"
-                      size="sm"
-                      variant="ghost"
-                      loading={search.isFetchingNextPage}
-                      onClick={() => void search.fetchNextPage()}
-                      data-testid="admin-related-search-more"
-                    >
-                      {copy.loadMore}
-                    </Button>
+                    <>
+                      <LoadMoreFailed
+                        list={search}
+                        message={copy.errUnknown}
+                        data-testid="admin-related-search-more-failed"
+                      />
+                      <Button
+                        alignSelf="center"
+                        size="sm"
+                        variant="ghost"
+                        loading={search.isFetchingNextPage}
+                        onClick={() => void search.fetchNextPage()}
+                        data-testid="admin-related-search-more"
+                      >
+                        {copy.loadMore}
+                      </Button>
+                    </>
                   )}
                 </Stack>
               )}

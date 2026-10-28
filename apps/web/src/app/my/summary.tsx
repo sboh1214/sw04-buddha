@@ -9,6 +9,7 @@ import { useOrders, usePositions } from '@/hooks/use-portfolio';
 import { useLedger } from '@/hooks/use-wallet';
 import { useWatchlist } from '@/hooks/use-watchlist';
 import { MY_PREVIEW_ROWS, MY_TABS, MY_WALLET_PATH, type MyTabKey } from '@/lib/my';
+import { readFailed } from '@/lib/query-client';
 import { ComingSoonTab } from './coming-soon';
 import {
   BalanceSummary,
@@ -110,6 +111,11 @@ function WatchlistPreview() {
  * the start Coin waits for its amount (`StartGrantPendingNotice`, owner decision 2026-10-18) — and
  * the newest ledger rows. A failed `GET /me` is reported once, by 잔고 요약 above, so the balance
  * here is a dash then, and there is no notice.
+ *
+ * The rows are the wallet tab's own query (`useLedger`), so its failure rung is `readFailed`, not
+ * `isError`: a 더 보기 that failed on the wallet tab leaves that query in `error` with its pages
+ * kept, and on `isError` this preview — which has no 더 보기 — swapped its rows for an error on the
+ * way back, and through the refetch that follows (ADR-0075 5-18).
  */
 function WalletPreview() {
   const me = useMe();
@@ -156,7 +162,7 @@ function WalletPreview() {
           </Heading>
           {ledger.isPending ? (
             <Skeleton height="24" />
-          ) : ledger.isError ? (
+          ) : readFailed(ledger) ? (
             <LoadFailed message={copy.errUnknown} onRetry={() => void ledger.refetch()} />
           ) : entries.length === 0 ? (
             <Text color="fg.muted">{copy.ledgerEmpty}</Text>

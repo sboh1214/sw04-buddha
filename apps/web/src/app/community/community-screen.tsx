@@ -23,6 +23,7 @@ import { useState } from 'react';
 import { MarketPicker } from '@/components/post/market-picker';
 import { PostCard } from '@/components/post/post-card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { useCommunityPosts } from '@/hooks/use-posts';
@@ -38,6 +39,7 @@ import {
   postReadErrorMessage,
   writePath,
 } from '@/lib/posts';
+import { refreshFailed } from '@/lib/query-client';
 import { PILL_BUTTON, PILL_SELECT } from '../market-filters';
 
 /** Placeholders at a card's height while the first page loads. */
@@ -224,14 +226,16 @@ function SearchBox({ filters }: { filters: CommunityFilters }) {
  * The cards with their rungs, the search results' (N02 §3): the skeleton while loading, a first
  * load that failed (said apart from an unreachable server, with 다시 시도), the empty list — '조건에
  * 맞는 글이 없습니다' when a filter is on, an invitation to the first post when none is — the cards
- * with 더 보기, and a notice above them when a later refresh failed.
+ * with 더 보기, a notice above them when a later refresh failed, and the first read's message above
+ * 더 보기 when it failed (`LoadMoreFailed`, owner decision 2026-10-20 7).
  */
 function PostList({ filters }: { filters: CommunityFilters }) {
   const list = useCommunityPosts(filters);
   const rows = list.data?.pages.flatMap((page) => page.items) ?? [];
   return (
     <Stack as="section" gap="3" aria-label={copy.communityListLabel} data-testid="community-posts">
-      {list.isRefetchError && (
+      {/* Not the bare flag: a refetch after a failed 더 보기 reports a refresh that never failed. */}
+      {refreshFailed(list) && (
         <Alert.Root status="warning" role="status" data-testid="community-refresh-failed">
           <Alert.Indicator />
           <Alert.Content>
@@ -264,20 +268,27 @@ function PostList({ filters }: { filters: CommunityFilters }) {
             <PostCard key={post.id} post={post} />
           ))}
           {list.hasNextPage && (
-            <Button
-              alignSelf="center"
-              variant="outline"
-              borderRadius="pill"
-              borderColor="border.emphasized"
-              h="40px"
-              px="4"
-              textStyle="emphasisSm"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-              data-testid="community-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={list}
+                message={postReadErrorMessage(list.error)}
+                data-testid="community-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                variant="outline"
+                borderRadius="pill"
+                borderColor="border.emphasized"
+                h="40px"
+                px="4"
+                textStyle="emphasisSm"
+                loading={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+                data-testid="community-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </>
       )}

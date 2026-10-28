@@ -10,6 +10,7 @@ import {
   mediaPath,
   postExcerpt,
   postImageNotUsableMessage,
+  type CursorQuery,
   type MarketStatus,
   type Post,
   type PostAuthor,
@@ -22,7 +23,19 @@ import {
   type Role,
   type SanitizedPostDocument,
 } from '@buddha/shared';
-import { type AnyColumn, type SQL, and, desc, eq, ilike, inArray, isNull, sql } from 'drizzle-orm';
+import {
+  type AnyColumn,
+  type SQL,
+  and,
+  count,
+  desc,
+  eq,
+  ilike,
+  inArray,
+  isNull,
+  ne,
+  sql,
+} from 'drizzle-orm';
 import {
   postHasComments,
   postHasCommentsSql,
@@ -37,6 +50,13 @@ import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import { type Page } from '../wallet/wallet.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
+/** Reads that run either inside a transaction or on the pool. */
+type Executor = Db | Tx;
+
+/** A page of cards and how many the whole list holds (`CountedPageMeta`). */
+export interface CountedPage<T> extends Page<T> {
+  total: number;
+}
 
 /** What a post write sends, the body normalised by `postDocumentInputSchema`. */
 export interface PostContent {
@@ -167,16 +187,72 @@ export class PostsService {
 
   /**
    * `GET /posts`: the community list (#45-7), newest first — the only order — never a deleted or
-   * a hidden post (the list's partial index holds exactly the rest). `marketId` narrows to one
-   * market, `category` to a category on either level (a top-level slug includes its children, as
-   * `GET /markets` reads it), `q` to a case-insensitive partial match in the title or the text
-   * (`search_text`'s trigram index serves a term of three characters or more). A cursor that does
-   * not decode serves the first page.
+   * a hidden post (`listed`). `marketId` narrows to one market, `category` to a category on either
+   * level (a top-level slug includes its children, as `GET /markets` reads it), `q` to a
+   * case-insensitive partial match in the title or the text (`search_text`'s trigram index serves
+   * a term of three characters or more). A cursor that does not decode serves the first page.
    */
   async list(query: PostListQuery): Promise<Page<PostSummary>> {
+    const { posts } = schema;
+    return this.cards(
+      this.db,
+      and(
+        query.marketId === undefined ? undefined : eq(posts.marketId, query.marketId),
+        query.category === undefined ? undefined : inCategory(this.db, query.category),
+        query.q === undefined ? undefined : ilike(posts.searchText, likePattern(query.q)),
+      ),
+      query,
+    );
+  }
+
+  /**
+   * `GET /markets/:id/posts`: the market detail's 토론 (#47, ADR-0069 decision 4 — every post in
+   * the detail, 20 more per 더 보기, and the count shown). The community list narrowed to the
+   * market — the same cards, newest first, never a deleted or a hidden post — and `total`, how many
+   * the whole list holds, which is what the section counts. Readable in every public status, ended
+   * markets too (N05 §3; #45-6 takes posts on all of them); NOT_FOUND for a draft and an unknown
+   * market, as the detail and its other sub-resources answer.
+   *
+   * One read-only REPEATABLE READ transaction, so the count and the page come from one snapshot,
+   * the one its first statement takes: a post committed between two statements cannot make one
+   * answer's count disagree with its cards (under READ COMMITTED each statement reads anew, and a
+   * post committed while the cards wait — on a lock, say — would be a card the count missed).
+   */
+  async listForMarket(marketId: string, query: CursorQuery): Promise<CountedPage<PostSummary>> {
+    const { markets, posts } = schema;
+    return this.db.transaction(
+      async (tx) => {
+        const [market] = await tx
+          .select({ id: markets.id })
+          .from(markets)
+          .where(and(eq(markets.id, marketId), ne(markets.status, 'draft')))
+          .limit(1);
+        if (!market) throw new AppError('NOT_FOUND', { message: 'Market not found' });
+        const inMarket = eq(posts.marketId, marketId);
+        const [counted] = await tx
+          .select({ total: count() })
+          .from(posts)
+          .where(and(listed(), inMarket));
+        const page = await this.cards(tx, inMarket, query);
+        return { ...page, total: counted?.total ?? 0 };
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
+  }
+
+  /**
+   * One page of cards of the posts the public lists (`listed`) that `where` keeps, newest first on
+   * the (created at, id) keyset. One row past the limit says whether a cursor follows, so a full
+   * last page has none and 더 보기 never loads an empty page.
+   */
+  private async cards(
+    executor: Executor,
+    where: SQL | undefined,
+    query: CursorQuery,
+  ): Promise<Page<PostSummary>> {
     const { posts, profiles, markets, categories } = schema;
     const cursor = decodeKeyset(query.cursor, 'uuid');
-    const rows = await this.db
+    const rows = await executor
       .select({
         ...this.columns,
         textHead: cardText(posts.bodyText),
@@ -187,11 +263,8 @@ export class PostsService {
       .innerJoin(categories, eq(categories.id, markets.categoryId))
       .where(
         and(
-          isNull(posts.deletedAt),
-          isNull(posts.hiddenAt),
-          query.marketId === undefined ? undefined : eq(posts.marketId, query.marketId),
-          query.category === undefined ? undefined : inCategory(this.db, query.category),
-          query.q === undefined ? undefined : ilike(posts.searchText, likePattern(query.q)),
+          listed(),
+          where,
           cursor === undefined
             ? undefined
             : keysetPredicate(posts.createdAt, posts.id, cursor, 'uuid'),
@@ -475,6 +548,19 @@ export class PostsService {
     if (post.state !== 'published') throw postNotFound();
     return post;
   }
+}
+
+/**
+ * The posts a list shows (#45-5, #45-7): neither deleted nor hidden — the rows the community list's
+ * partial index holds. A deleted post with comments under it stays a placeholder on its own page
+ * and out of the community list («이대로», ADR-0074 decision 1 — the owner's answer was about that
+ * list). The market detail's 토론 follows the same rule, card and count alike, as this PR's choice
+ * until the owner says whether such a post should stand there as a placeholder card (ADR-0075 5-4,
+ * 결과 4).
+ */
+function listed(): SQL | undefined {
+  const { posts } = schema;
+  return and(isNull(posts.deletedAt), isNull(posts.hiddenAt));
 }
 
 function postNotFound(): AppError {

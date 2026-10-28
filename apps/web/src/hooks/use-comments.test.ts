@@ -36,7 +36,7 @@ import {
   repliesOnScreenOf,
   resolveCommentDrafts,
 } from '@/lib/comments';
-import { communityPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
+import { communityPostsKey, marketPostsKey, postKey, postReadErrorMessage } from '@/lib/posts';
 import { getQueryClient } from '@/lib/query-client';
 import {
   commentsInfiniteQueryOptions,
@@ -111,12 +111,19 @@ const answer = (data: unknown, meta?: unknown) =>
     response: new Response(null, { status: 200 }),
   }) as never;
 
-/** A client holding the post's comments, the post ('댓글 1') and a community list page. */
+/** The market the post is on, whose detail's 토론 (#47) holds the post's card too. */
+const MARKET = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+
+/**
+ * A client holding the post's comments, the post ('댓글 1'), a community list page and the
+ * market's 토론 page.
+ */
 function seeded(nextCursor: string | null = null) {
   const queryClient = getQueryClient();
   queryClient.setQueryData(postCommentsKey(post), held(nextCursor));
   queryClient.setQueryData(postKey(post), { state: 'published', id: post, commentCount: 1 });
   queryClient.setQueryData(communityPostsKey({}), { pages: [], pageParams: [] });
+  queryClient.setQueryData(marketPostsKey(MARKET), { pages: [], pageParams: [] });
   return queryClient;
 }
 
@@ -356,6 +363,8 @@ describe('the writes', () => {
     expect(commentCountOf(queryClient)).toBe(2);
     expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(true);
     expect(queryClient.getQueryState(communityPostsKey({}))?.isInvalidated).toBe(true);
+    // …and the market detail's 토론, whose card carries the same '댓글 N' (#47, ADR-0075).
+    expect(queryClient.getQueryState(marketPostsKey(MARKET))?.isInvalidated).toBe(true);
     // The pages themselves are not read again: the answer is in them.
     expect(queryClient.getQueryState(postCommentsKey(post))?.isInvalidated).toBe(false);
   });

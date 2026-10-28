@@ -17,6 +17,7 @@ import { PAID_COIN_SALES_ENABLED, formatKrw, formatCoin, parseCoinAmount } from 
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useAdminPayments, useRefundPayment } from '@/hooks/use-admin-payments';
@@ -35,6 +36,7 @@ import {
   refundFormSchema,
   refundKeepsDialog,
 } from '@/lib/payments';
+import { readFailed } from '@/lib/query-client';
 
 /**
  * PLAN 12 결제 목록: every charge, newest first, 20 per page with 더 보기 (A-M2-5), with the
@@ -47,7 +49,7 @@ export function AdminPayments() {
   const rows = payments.data?.pages.flatMap((page) => page.items) ?? [];
 
   if (payments.isPending) return <Skeleton height="24" />;
-  if (payments.isError) {
+  if (readFailed(payments)) {
     return (
       <Alert.Root status="error" role="alert">
         <Alert.Indicator />
@@ -65,16 +67,23 @@ export function AdminPayments() {
         <PaymentRow key={payment.id} payment={payment} />
       ))}
       {payments.hasNextPage && (
-        <Button
-          alignSelf="center"
-          size="sm"
-          variant="ghost"
-          loading={payments.isFetchingNextPage}
-          onClick={() => void payments.fetchNextPage()}
-          data-testid="admin-payments-more"
-        >
-          {copy.loadMore}
-        </Button>
+        <>
+          <LoadMoreFailed
+            list={payments}
+            message={copy.errUnknown}
+            data-testid="admin-payments-more-failed"
+          />
+          <Button
+            alignSelf="center"
+            size="sm"
+            variant="ghost"
+            loading={payments.isFetchingNextPage}
+            onClick={() => void payments.fetchNextPage()}
+            data-testid="admin-payments-more"
+          >
+            {copy.loadMore}
+          </Button>
+        </>
       )}
     </Stack>
   );

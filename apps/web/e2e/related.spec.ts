@@ -79,9 +79,12 @@ test.describe('관련 시장', () => {
     await expect(related(page).getByTestId('markets-empty')).toHaveText(copy.marketRelatedEmpty);
     await expectBelow(page, 'market-discussion', 'market-related');
     // No card around the section (owner decision 2026-10-17): the heading and the grid stand on
-    // the page, where the sections above it are cards with a border.
+    // the page, where the sections that hold no cards of their own are cards with a border — 호가창
+    // is one. 토론 right above holds the post cards and has no card around it either since #47
+    // (ADR-0075).
     await expect(related(page)).toHaveCSS('border-top-width', '0px');
-    await expect(page.getByTestId('market-discussion')).not.toHaveCSS('border-top-width', '0px');
+    await expect(page.getByTestId('market-order-book')).not.toHaveCSS('border-top-width', '0px');
+    await expect(page.getByTestId('market-discussion')).toHaveCSS('border-top-width', '0px');
 
     // --- the admin links B from A's admin detail, found by title.
     const adminContext = await browser.newContext();

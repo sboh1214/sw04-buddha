@@ -31,7 +31,14 @@ import { RelatedMarkets } from './related-markets';
  * Nothing personal is read here. `api.server.ts` forwards no cookie and `dehydratePublic`
  * filters the private roots, so the HTML is byte-identical for a signed-in and an anonymous
  * visitor; 내 포지션, the personal slots (내 거래, 내 대기 주문) — or a signed-out visitor's one
- * sign-in prompt in their place — and the balance chip fill in on the client.
+ * sign-in prompt in their place — and the balance chip fill in on the client. 토론's 글쓰기 is one
+ * link for everyone (market-discussion.tsx), so it does not tell visitors apart either.
+ *
+ * 토론's posts are not read here at all (#47, ADR-0075, owner decision 2026-10-20 1): the section
+ * reads them in the browser, so neither the HTML nor the dehydrated state carries a post's title,
+ * text or author — the post page and the community list are kept out of search, and so are the
+ * posts here. `app/robots.ts` keeps crawlers off `/api/`, where the browser reads them. The page
+ * itself stays open to search engines (no `robots` in `generateMetadata`).
  */
 
 /**
@@ -78,10 +85,12 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   // already in hand. Only the row may 404 or 500 this route (api.server.ts).
   //
   // 관련 시장 (#65) is read beside it, as the home reads its list (`prefetchRelatedMarkets`), so
-  // the section's first page is in the HTML. Public (ADR-0061 decision 1, item 18), so it is the
-  // same page for every visitor. The two reads run together, so the page waits for the slower of
-  // them; the related read is tried once, never retried here, and a failure is swallowed — the
+  // the section's first page is in the HTML. It is public (ADR-0061 decision 1, item 18), so this
+  // is the same page for every visitor. The two reads run together, so the page waits for the
+  // slower; the section's read is tried once, never retried here, and a failure is swallowed — the
   // section then reads its page in the browser and shows its own failure (lib/market-ssr.ts).
+  // 토론 (#47) is NOT read here: it loads in the browser only (owner decision 2026-10-20 1, the
+  // header comment above), its loading state in the HTML.
   const queryClient = getQueryClient();
   const [series] = await Promise.all([
     fetchTicksServer(market.id, DEFAULT_TICK_RANGE),
@@ -142,7 +151,9 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
             base: <LiveRulesSection fallback={market} width="base" />,
           }}
           // 관련 시장 (#65, ADR-0068), the last section at both widths, so one node: the home's
-          // cards for the markets an admin linked to this one, first page read above.
+          // cards for the markets an admin linked to this one, first page read above. 토론 (#47)
+          // needs nothing from here: `MarketDetail` builds it from the id, and it reads its posts
+          // in the browser.
           related={
             <RelatedMarkets
               marketId={market.id}

@@ -11,12 +11,13 @@ import { RAW_RESPONSE_METADATA, markRawResponse } from '../decorators/raw-respon
 
 /**
  * Return an ApiPage from a handler to emit `{ data: items, meta: { nextCursor } }`
- * (PLAN 7 cursor pagination). Plain return values become `{ data }`.
+ * (PLAN 7 cursor pagination). Plain return values become `{ data }`. A page that counts its whole
+ * list carries `CountedPageMeta` (`meta.total` beside the cursor, `ApiCountedPageOf`).
  */
-export class ApiPage<T> {
+export class ApiPage<T, M extends PageMeta = PageMeta> {
   constructor(
     readonly items: readonly T[],
-    readonly meta: PageMeta,
+    readonly meta: M,
   ) {}
 }
 
@@ -45,7 +46,11 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
     }
     return next.handle().pipe(
       map((body: unknown): DataEnvelope<unknown> => {
-        if (body instanceof ApiPage) return { data: body.items, meta: body.meta };
+        if (body instanceof ApiPage) {
+          // `instanceof` cannot recover the type arguments; every meta is a PageMeta at least.
+          const page = body as ApiPage<unknown>;
+          return { data: page.items, meta: page.meta };
+        }
         return { data: body ?? null };
       }),
     );

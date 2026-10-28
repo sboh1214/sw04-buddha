@@ -6,6 +6,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { MARKET_GRID_COLUMNS, MarketCard } from '@/components/market/market-card';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useMarkets } from '@/hooks/use-markets';
@@ -19,7 +20,7 @@ import {
 } from '@/lib/home-view';
 import { type HomeFilters, type MarketFilters, type WatchlistViewFilters } from '@/lib/market-keys';
 import { type MarketPage } from '@/lib/market-live';
-import { sessionListSection } from '@/lib/query-client';
+import { refreshFailed, sessionListSection } from '@/lib/query-client';
 
 /**
  * The home grid (PLAN 11.3): one `MarketCard` per row, live. Two sources, one per view of the URL
@@ -136,16 +137,21 @@ export interface CardList {
   isPending: boolean;
   isLoadingError: boolean;
   isRefetchError: boolean;
+  /** What `refreshFailed` and `moreFailed` read to tell a failed 더 보기 from a failed refresh. */
+  error: unknown;
+  failureReason: unknown;
   hasNextPage: boolean;
   isFetchingNextPage: boolean;
+  isFetchNextPageError: boolean;
   fetchNextPage: () => Promise<unknown>;
   refetch: () => Promise<unknown>;
 }
 
 /**
  * The card grid with its rungs: skeleton, a first load that failed (its message, `errorMessage`,
- * and 다시 시도), the empty message, the cards with 더 보기, and a notice above the cards when a
- * later refresh failed. The home's two lists draw it, and so do the search screen's results
+ * and 다시 시도), the empty message, the cards with 더 보기, a notice above the cards when a later
+ * refresh failed, and the same message above 더 보기 when it failed (`LoadMoreFailed`, owner
+ * decision 2026-10-20 7). The home's two lists draw it, and so do the search screen's results
  * (app/search/market-search.tsx), whose failure says whether the server could be reached at all,
  * and the detail's 관련 시장 (app/markets/[slug]/related-markets.tsx, #65, ADR-0068) under its
  * heading, with no card around it, whose e2e (related.spec.ts) reads this grid's own test ids.
@@ -182,8 +188,9 @@ export function MarketGrid({
       {/* A background refetch that failed — `refetchOnWindowFocus` is on — keeps its pages, and
           must keep the grid with them: replacing a screenful of live cards because one 503
           landed on a focus event loses more than the stale prices cost. Only a FIRST load that
-          failed leaves nothing to show, and that is `isLoadingError` below. */}
-      {list.isRefetchError && (
+          failed leaves nothing to show, and that is `isLoadingError` below. `refreshFailed`, not
+          the bare flag: a refetch running after a failed 더 보기 reports one that never failed. */}
+      {refreshFailed(list) && (
         <Alert.Root status="warning" role="status" data-testid="markets-refresh-failed">
           <Alert.Indicator />
           <Alert.Content>
@@ -224,21 +231,28 @@ export function MarketGrid({
             ))}
           </Grid>
           {list.hasNextPage && (
-            // The same pill as the headline bar's controls: 40px, outlined, no fill.
-            <Button
-              alignSelf="center"
-              variant="outline"
-              borderRadius="pill"
-              borderColor="border.emphasized"
-              h="40px"
-              px="4"
-              textStyle="emphasisSm"
-              loading={list.isFetchingNextPage}
-              onClick={() => void list.fetchNextPage()}
-              data-testid="markets-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={list}
+                message={errorMessage}
+                data-testid="markets-more-failed"
+              />
+              {/* The same pill as the headline bar's controls: 40px, outlined, no fill. */}
+              <Button
+                alignSelf="center"
+                variant="outline"
+                borderRadius="pill"
+                borderColor="border.emphasized"
+                h="40px"
+                px="4"
+                textStyle="emphasisSm"
+                loading={list.isFetchingNextPage}
+                onClick={() => void list.fetchNextPage()}
+                data-testid="markets-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </>
       )}

@@ -1212,14 +1212,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       })),
     );
     // The allowance is not vacuous: every route that may show a person showed A, the author of
-    // the post it was called with, to everyone — the list and the post page (#46) and the post's
-    // comments (#48).
+    // the post it was called with, to everyone — the list and the post page (#46), the post's
+    // comments and a comment's reply page (#48) and the 토론 of the market the post is on (#47).
     expect(persons.map(({ route }) => route)).toEqual(
       expect.arrayContaining([
         'GET /posts',
         'GET /posts/:postId',
         'GET /posts/:postId/comments',
         'GET /comments/:commentId/replies',
+        'GET /markets/:id/posts',
       ]),
     );
     expect(persons).toEqual(
@@ -1228,6 +1229,14 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // The post routes answered A's post, and the image route served A's upload.
     const listed = parse(bodies.get('GET /posts')!) as { data: { id: string }[] };
     expect(listed.data.map((row) => row.id)).toEqual([f.post.id]);
+    // The market's 토론 (#47) answered the same card and counted it alone: A's deleted post is in
+    // neither its cards nor its count.
+    const discussion = parse(bodies.get('GET /markets/:id/posts')!) as {
+      data: { id: string }[];
+      meta: { total: number };
+    };
+    expect(discussion.data.map((row) => row.id)).toEqual([f.post.id]);
+    expect(discussion.meta.total).toBe(1);
     expect(parse(bodies.get('GET /posts/:postId')!)).toMatchObject({
       data: { state: 'published', id: f.post.id },
     });

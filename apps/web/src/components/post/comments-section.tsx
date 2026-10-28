@@ -29,6 +29,7 @@ import {
   useState,
 } from 'react';
 import { EmptyState } from '@/components/ui/empty-state';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
@@ -90,6 +91,7 @@ import {
 } from '@/lib/comments';
 import { loginPathBackTo } from '@/lib/next-path';
 import { isOwnPost, postKey, postPath, postReadErrorMessage } from '@/lib/posts';
+import { refreshFailed } from '@/lib/query-client';
 import { useSession } from '@/lib/use-session';
 import { CommentText } from './comment-text';
 import { HeldCommentText, useHeldCommentTexts } from './held-comment-text';
@@ -588,7 +590,8 @@ export function CommentsSection({
             {commentCountText(post.commentCount)}
           </Heading>
         )}
-        {!gone && comments.isRefetchError && (
+        {/* Not the bare flag: a refetch after a failed 더 보기 reports a refresh that never failed. */}
+        {!gone && refreshFailed(comments) && (
           <Alert.Root status="warning" role="status" data-testid="comments-refresh-failed">
             <Alert.Indicator />
             <Alert.Content>
@@ -636,20 +639,29 @@ export function CommentsSection({
           </Stack>
         )}
         {!gone && comments.hasNextPage && (
-          <Button
-            alignSelf="center"
-            variant="outline"
-            borderRadius="pill"
-            borderColor="border.emphasized"
-            h="40px"
-            px="4"
-            textStyle="emphasisSm"
-            loading={comments.isFetchingNextPage}
-            onClick={() => void readMoreComments(comments)}
-            data-testid="comments-more"
-          >
-            {copy.loadMore}
-          </Button>
+          <>
+            {/* A 더 보기 that failed: the comments stay, and the first read's message stands above
+                the button that asks again (owner decision 2026-10-20 7). */}
+            <LoadMoreFailed
+              list={comments}
+              message={postReadErrorMessage(comments.error)}
+              data-testid="comments-more-failed"
+            />
+            <Button
+              alignSelf="center"
+              variant="outline"
+              borderRadius="pill"
+              borderColor="border.emphasized"
+              h="40px"
+              px="4"
+              textStyle="emphasisSm"
+              loading={comments.isFetchingNextPage}
+              onClick={() => void readMoreComments(comments)}
+              data-testid="comments-more"
+            >
+              {copy.loadMore}
+            </Button>
+          </>
         )}
         <HeldTexts held={placed.rest} onClose={onCloseHeld} />
         {gone ? null : post.state !== 'published' ? (

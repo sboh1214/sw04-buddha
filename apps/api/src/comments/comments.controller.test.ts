@@ -1214,7 +1214,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     expect((await card(elsewhere.id))?.commentCount).toBe(0);
   });
 
-  it('reads a post’s count from its counter: neither the list nor the post page walks its comments to count them, however many (Codex review on PR #220, ADR-0074 7-33)', async () => {
+  it('reads a post’s count from its counter: neither the list, the market’s discussion (#47) nor the post page walks its comments to count them, however many (Codex review on PR #220, ADR-0074 7-33)', async () => {
     // 3,000 comments in view on the post and as many on another, the tables measured as autovacuum
     // would. Every statement the list and the post page run is explained as it runs: the list
     // reads no comment at all — each card's count is its post's row of `post_comment_counts` —
@@ -1258,6 +1258,9 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
         for (const child of plan.Plans ?? []) walk(child);
       };
       for (const { text, values } of statements) {
+        // A transaction's own statements (`begin …`, `commit` — #47's discussion reads its count
+        // and its cards in one) read no table.
+        if (!/^\s*select\b/i.test(text)) continue;
         const explained = await t.db.$client.query<{ 'QUERY PLAN': [{ Plan: ExplainedPlan }] }>(
           `EXPLAIN (ANALYZE, FORMAT JSON) ${text}`,
           values,
@@ -1277,6 +1280,17 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
     const listing = await readBy(() => service.list({ limit: 20 }));
     expect(listing.relations).toContain('post_comment_counts');
     expect(listing.relations).not.toContain('post_comments');
+    // #47's discussion of the market reads its cards as the list does (ADR-0075).
+    const discussed = await service.listForMarket(market.id, { limit: 20 });
+    expect(discussed.items.map(({ id, commentCount }) => [id, commentCount]).sort()).toEqual(
+      [
+        [post.id, MANY],
+        [elsewhere.id, MANY],
+      ].sort(),
+    );
+    const discussion = await readBy(() => service.listForMarket(market.id, { limit: 20 }));
+    expect(discussion.relations).toContain('post_comment_counts');
+    expect(discussion.relations).not.toContain('post_comments');
     const shown = await service.get(post.id);
     expect(shown.state === 'published' && shown.commentCount).toBe(MANY);
     const reading = await readBy(() => service.get(post.id));

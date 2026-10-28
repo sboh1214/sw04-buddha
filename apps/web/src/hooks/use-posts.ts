@@ -24,15 +24,20 @@ import { postDraftLanded } from '@/lib/post-drafts';
 import { uploadContentType } from '@/lib/post-editor';
 import {
   type CommunityFilters,
+  type CountedPostPage,
   POST_LIST_KEY,
   type PostPage,
   communityPostsKey,
+  marketPostsKey,
+  marketPostsQuery,
   postKey,
   postListQuery,
 } from '@/lib/posts';
 
 /**
- * 근거 글 (#46, ADR-0073): the community list, a post page, the writes and the image upload.
+ * 근거 글 (#46, ADR-0073): the community list, a post page, the writes and the image upload — and a
+ * market detail's 토론 (#47, ADR-0075), the same cards narrowed to the market, under the lists' root
+ * so the writes below mark it stale with the community list.
  *
  * Keys and requests live in lib/posts.ts — the server pages seed the cache under those keys, and a
  * server component cannot take a key from a `'use client'` module (the rule use-markets.ts states).
@@ -63,6 +68,34 @@ export function communityPostsInfiniteQueryOptions(filters: CommunityFilters) {
 
 export function useCommunityPosts(filters: CommunityFilters) {
   return useInfiniteQuery(communityPostsInfiniteQueryOptions(filters));
+}
+
+/**
+ * A market detail's 토론 (#47, ADR-0075): `GET /markets/:id/posts`, the market's posts newest first,
+ * 20 a page per 더 보기 (ADR-0069 decision 4 #47), each page with the count of the whole list. Read
+ * in the browser only — the detail's server page does not seed it, so no post reaches the HTML a
+ * search engine gets (owner decision 2026-10-20 1). No `keepPreviousData`: the key never changes
+ * under a mounted section (one market per page).
+ */
+export function marketPostsInfiniteQueryOptions(marketId: string) {
+  const id = marketId.toLowerCase();
+  return {
+    queryKey: marketPostsKey(id),
+    queryFn: async ({ pageParam }: { pageParam: string | undefined }): Promise<CountedPostPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/markets/{id}/posts', {
+          params: { path: { id }, query: marketPostsQuery(pageParam) },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor, total: meta.total };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: CountedPostPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useMarketPosts(marketId: string) {
+  return useInfiniteQuery(marketPostsInfiniteQueryOptions(marketId));
 }
 
 /** One post page (`GET /posts/:postId`), keyed and requested by the lower-cased uuid. */

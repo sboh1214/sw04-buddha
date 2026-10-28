@@ -18,6 +18,7 @@ import {
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import {
@@ -43,6 +44,7 @@ import {
 } from '@/lib/admin-accounts';
 import { type AdminAccount, type AdminRoleChange, type AdminUser } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
+import { readFailed } from '@/lib/query-client';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -222,7 +224,7 @@ function GrantSearch() {
 
       {term === '' ? null : candidates.isPending ? (
         <Skeleton height="16" />
-      ) : candidates.isError ? (
+      ) : readFailed(candidates) ? (
         <ErrorAlert />
       ) : rows.length === 0 ? (
         stale ? (
@@ -246,16 +248,23 @@ function GrantSearch() {
             />
           ))}
           {!stale && candidates.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={candidates.isFetchingNextPage}
-              onClick={() => void candidates.fetchNextPage()}
-              data-testid="admin-grant-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={candidates}
+                message={copy.errUnknown}
+                data-testid="admin-grant-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={candidates.isFetchingNextPage}
+                onClick={() => void candidates.fetchNextPage()}
+                data-testid="admin-grant-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}
@@ -494,7 +503,7 @@ function ChangeLog() {
       </Heading>
       {changes.isPending ? (
         <Skeleton height="24" />
-      ) : changes.isError ? (
+      ) : readFailed(changes) ? (
         <ErrorAlert />
       ) : rows.length === 0 ? (
         <Text color="fg.muted" data-testid="admin-role-changes-empty">
@@ -506,16 +515,23 @@ function ChangeLog() {
             <ChangeRow key={entry.id} entry={entry} />
           ))}
           {changes.hasNextPage && (
-            <Button
-              alignSelf="center"
-              size="sm"
-              variant="ghost"
-              loading={changes.isFetchingNextPage}
-              onClick={() => void changes.fetchNextPage()}
-              data-testid="admin-role-changes-more"
-            >
-              {copy.loadMore}
-            </Button>
+            <>
+              <LoadMoreFailed
+                list={changes}
+                message={copy.errUnknown}
+                data-testid="admin-role-changes-more-failed"
+              />
+              <Button
+                alignSelf="center"
+                size="sm"
+                variant="ghost"
+                loading={changes.isFetchingNextPage}
+                onClick={() => void changes.fetchNextPage()}
+                data-testid="admin-role-changes-more"
+              >
+                {copy.loadMore}
+              </Button>
+            </>
           )}
         </Stack>
       )}

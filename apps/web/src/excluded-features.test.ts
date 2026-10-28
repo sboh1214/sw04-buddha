@@ -239,14 +239,16 @@ function internalPath(text: string): string | undefined {
  * (`favicon.ico`, `sitemap`, `robots`, `manifest`, an Open Graph or Twitter image, an icon under
  * `app/`, generated or static), a Pages Router API route (`pages/api/`) or a server action (a
  * `'use server'` file or function) answers a request with whatever it returns, outside the API's
- * registry and its private-data checks. Reads and writes go to the API, so only the proxy is here;
- * one added fails below until it is written here with what it answers and why it may. Keyed by the
- * file under `src/`, and a route handler by its file and each HTTP method it exports
- * (`app/feed/route.ts GET`): each is a handler of its own. docs/GUARDS.md has the rule.
+ * registry and its private-data checks. Reads and writes go to the API, so only the proxy and
+ * `robots.txt` are here; one added fails below until it is written here with what it answers and
+ * why it may. Keyed by the file under `src/`, and a route handler by its file and each HTTP method
+ * it exports (`app/feed/route.ts GET`): each is a handler of its own. docs/GUARDS.md has the rule.
  */
 const WEB_SERVER_ENDPOINTS: Readonly<Record<string, string>> = {
   'proxy.ts':
     'Next 프록시(middleware의 후속): /admin·/my 요청에만 맞춰, 관리자·MY 게이트가 로그인 뒤 돌아올 주소를 만들도록 요청의 경로와 쿼리를 x-pathname·x-search 헤더에 덮어써 넘긴다(NextResponse.next). 스스로 답하지 않는다.',
+  'app/robots.ts':
+    '/robots.txt(#47, ADR-0075, 오너 결정 2026-10-20 1): 모든 검색 로봇에게 /api/를 막고 나머지는 연다. 고정된 두 줄(User-Agent·Disallow)만 답하고 요청도 세션도 읽지 않으며 사람·계정에 관한 것은 싣지 않는다. 시장 상세의 토론이 브라우저에서 읽는 근거 글(GET /api/v1/markets/:id/posts)을 검색 로봇이 가져가지 못하게 한다.',
 };
 
 /** Next's proxy (the successor to `middleware`): a script of that name beside `app/`. */

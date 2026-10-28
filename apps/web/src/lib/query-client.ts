@@ -1,4 +1,4 @@
-import { QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
+import { QueryCache, QueryClient, isServer, replaceEqualDeep } from '@tanstack/react-query';
 import { type Market, type Position, isApiError } from './api';
 import { type CommentPages, COMMENT_PAGES_KEY, keepPlacedComments } from './comments';
 import {
@@ -13,6 +13,13 @@ import { type CachedSeries, joinSeries } from './ticks';
 
 function makeQueryClient() {
   const client = new QueryClient({
+    // Tells a 더 보기's failure from every other the moment it lands, while the query still says
+    // which fetch failed (`moreFailures` below).
+    queryCache: new QueryCache({
+      onError: (error, query) => {
+        noteMoreFailure(error, query.state.fetchMeta);
+      },
+    }),
     defaultOptions: {
       queries: {
         // Do not refetch immediately on mount; the realtime socket patches the caches with
@@ -209,16 +216,20 @@ export type ListView = 'pending' | 'failed' | 'stale' | 'ready';
  * which is the reading `market-list.tsx` already takes. It is the caller's job to render the rows
  * AND say so, with a way back.
  *
+ * `stale` is `refreshFailed`, not the bare flag: a refetch running after a failed 더 보기 answers
+ * `isRefetchError` while no refresh has failed (`moreFailures`), and must not say one did.
+ *
  * `pending` is checked first because a query refetching after a failure reports both.
  */
 export function listView(query: {
   isPending: boolean;
   isLoadingError: boolean;
   isRefetchError: boolean;
+  error: unknown;
 }): ListView {
   if (query.isPending) return 'pending';
   if (query.isLoadingError) return 'failed';
-  return query.isRefetchError ? 'stale' : 'ready';
+  return refreshFailed(query) ? 'stale' : 'ready';
 }
 
 /**
@@ -233,13 +244,104 @@ export function listView(query: {
  * nothing while the balance beside it already moved.
  */
 export function listSection(
-  query: { isPending: boolean; isLoadingError: boolean; isRefetchError: boolean },
+  query: { isPending: boolean; isLoadingError: boolean; isRefetchError: boolean; error: unknown },
   rowCount: number,
 ): { stale: boolean; body: 'pending' | 'failed' | 'empty' | 'rows' } {
   const view = listView(query);
   if (view === 'pending') return { stale: false, body: 'pending' };
   if (view === 'failed') return { stale: false, body: 'failed' };
   return { stale: view === 'stale', body: rowCount === 0 ? 'empty' : 'rows' };
+}
+
+/**
+ * The errors a 더 보기 ended in — the next page refused through the client's retries — told apart
+ * from every other failure AT THE MOMENT IT LANDS, by the query cache (`makeQueryClient`), while the
+ * query still says which fetch failed.
+ *
+ * THE HOLE IT FILLS: TanStack reports a failed next page only through flags that later events
+ * reset. `isFetchNextPageError` is `isError` plus the direction of the LAST fetch (`fetchMeta`), so:
+ * - a cache write — the socket's `setQueriesData` on every held market card (realtime-provider.tsx:
+ *   the home's, the search's and 관련 시장's grids and MY 관심 시장, on every `market:tick` and
+ *   `market:status` that changes a card on screen), the reader's own comment written into the
+ *   comments — dispatches `success`, which sets the status back to `success`: the flag goes false
+ *   though no page came and 더 보기 is still there, and the notice above it vanished;
+ * - any refetch — a refocus (a failed query is invalidated, so at once), an invalidation, a poll —
+ *   resets `fetchMeta` and leaves the status at `error` while it runs: the flag goes false and
+ *   `isRefetchError` true, so a list said its refresh had failed (`listView`'s `stale`), and a list
+ *   whose rung reads `isError` swapped every held row for its error (`readFailed`), while nothing
+ *   but the 더 보기 had failed and the refetch was still on its way.
+ *
+ * An error OBJECT is what outlives both: a cache write keeps `failureReason` (only a fetch's own
+ * success clears it), and a refetch keeps `error` until it lands. So the cache's `onError` marks
+ * the error a forward fetch ended in, and the helpers below ask the mark instead of the flags. A
+ * WeakSet: an error is never held past its query, and the mark is a fact about that one object —
+ * it does not need a per-client home (a server render's client never fetches a next page).
+ */
+const moreFailures = new WeakSet<object>();
+
+/** Marks `error` as a 더 보기's when the fetch it ended was one (`fetchNextPage`'s `fetchMore`). */
+function noteMoreFailure(
+  error: unknown,
+  fetchMeta: { fetchMore?: { direction: string } } | null,
+): void {
+  if (fetchMeta?.fetchMore?.direction !== 'forward') return;
+  if (typeof error === 'object' && error !== null) moreFailures.add(error);
+}
+
+/** Whether `error` is the one a 더 보기 ended in (marked by the client's query cache). */
+function isMoreFailure(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && moreFailures.has(error);
+}
+
+/**
+ * A 더 보기 that failed and is not being asked again: what every 더 보기 list says above its button
+ * (owner decision 2026-10-20 7, ADR-0075), through `LoadMoreFailed` (components/ui/load-more-failed.tsx).
+ *
+ * `listView` and `listSection` never see it — TanStack leaves `isRefetchError` false for it — so a
+ * 더 보기 that failed used to stop spinning and say nothing: the screen as it was before the press,
+ * nothing for a screen reader. The rows stay (they are real), 더 보기 stays to ask again, and while
+ * it is being asked again (`isFetchingNextPage`) the notice is withdrawn, to come back if it fails
+ * again. It stays through a cache write (`failureReason` is still the marked error), and goes while
+ * a refetch runs (which clears `failureReason`) and with the page that comes: a refetch that lands
+ * re-reads the pages held, a 더 보기 that lands brings the next. `isFetchNextPageError` is kept beside
+ * the mark so a list on a client without the mark still says it at once.
+ */
+export function moreFailed(query: {
+  isFetchNextPageError: boolean;
+  isFetchingNextPage: boolean;
+  failureReason: unknown;
+}): boolean {
+  if (query.isFetchingNextPage) return false;
+  return query.isFetchNextPageError || isMoreFailure(query.failureReason);
+}
+
+/**
+ * For the lists whose failure rung reads `isError` rather than `listSection`'s flags (MY's 거래
+ * 내역 and 결제 내역, the admin lists): whether the list failed at its first read or at a refresh —
+ * NOT at a 더 보기. `isError` is true after a failed 더 보기 as well (the query's status is `error`
+ * with its pages kept), and stays true through any refetch that follows until it lands — so a rung
+ * on `isError` alone replaced every row read so far with its error the moment one 더 보기 failed,
+ * and `isFetchNextPageError` alone (false once a refetch starts) did it again on the next refocus,
+ * invalidation or poll. The marked error is what tells them apart: with this the rows stay, under
+ * `moreFailed`'s notice, and through the refetch. A refresh that really failed keeps its rung, also
+ * while it is asked again.
+ */
+export function readFailed(query: {
+  isError: boolean;
+  isFetchNextPageError: boolean;
+  error: unknown;
+}): boolean {
+  return query.isError && !query.isFetchNextPageError && !isMoreFailure(query.error);
+}
+
+/**
+ * A refresh that failed over rows that are kept — `isRefetchError`, save the one TanStack reports
+ * by mistake: a refetch running after a failed 더 보기 answers `isRefetchError` (the status is still
+ * `error`, the direction already reset) while no refresh has failed (see `moreFailures`). `listView`
+ * reads it, and so does a list that draws the refresh notice from the query itself.
+ */
+export function refreshFailed(query: { isRefetchError: boolean; error: unknown }): boolean {
+  return query.isRefetchError && !isMoreFailure(query.error);
 }
 
 /**
@@ -257,6 +359,7 @@ export function sessionListSection(
     isPending: boolean;
     isLoadingError: boolean;
     isRefetchError: boolean;
+    error: unknown;
   },
   rowCount: number,
 ): { stale: boolean; body: 'signedOut' | 'pending' | 'failed' | 'empty' | 'rows' } {

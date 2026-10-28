@@ -16,9 +16,9 @@ export const metadata: Metadata = {
 /**
  * The write screen (#46, ADR-0073): a post on the market `?market=<id>` names, or — opened from
  * the community list with none — a picker that finds one by its title first (#45-1: «두 곳 모두에서»;
- * the market detail's own 글쓰기 comes with its discussion section, #47, and lands here with the
- * market). Any public status takes a post (#45-6); a draft or an unknown id reads as no market, so
- * the picker shows. A read that fails otherwise (the API down for a moment) is said as such
+ * the market detail's own 글쓰기, in its 토론 section, lands here with the market — #47, ADR-0075).
+ * Any public status takes a post (#45-6); a draft or an unknown id reads as no market, so the
+ * picker shows. A read that fails otherwise (the API down for a moment) is said as such
  * (`lookUpWriteMarketServer`): the screen keeps a form it shows, draft and all, or offers to read
  * again.
  *

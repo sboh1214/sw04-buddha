@@ -27,6 +27,10 @@ import { RetriedImage } from './retried-image';
  * 수정됨) and '댓글 N' (#48, ADR-0074: the 댓글 and 대댓글 the public reads). The like count the
  * owner listed comes with #49; nothing is drawn for a count that does not exist yet.
  *
+ * `showMarket={false}` leaves the market line out — the market's title and its status badge — for a
+ * list that is one market's already: the market detail's 토론 (#47, owner decision 2026-10-20 6), where
+ * the line would name the page it is on and link to it from every card. The community list keeps it.
+ *
  * `LinkBox`/`LinkOverlay`, as the market card: the whole card opens the post, and Chakra's
  * `LinkBox` raises the nested market link above the overlay, so both stay one click each. A post
  * without a title is named by its first line, in a heading only a screen reader sees (the excerpt
@@ -35,10 +39,13 @@ import { RetriedImage } from './retried-image';
 export function PostCard({
   post,
   titleAs = 'h3',
+  showMarket = true,
 }: {
   post: PostSummary;
   /** One below the heading of the list it sits in. */
   titleAs?: 'h2' | 'h3' | 'h4';
+  /** The market line above the title; off in a list of one market's posts (토론). */
+  showMarket?: boolean;
 }) {
   const href = postPath(post.id) as Route;
   const firstLine = postFirstLine(post.excerpt);
@@ -58,34 +65,43 @@ export function PostCard({
     >
       <HStack align="flex-start" gap="4">
         <Stack gap="1.5" flex="1" minW="0">
-          <HStack gap="2" minW="0">
-            <ChakraLink
-              asChild
-              textStyle="overline"
-              color="fg.muted"
-              truncate
-              minW="0"
-              _hover={{ color: 'fg' }}
-            >
-              <NextLink
-                href={`/markets/${post.market.slug}` as Route}
-                prefetch={false}
-                data-testid="post-card-market"
+          {showMarket && (
+            <HStack gap="2" minW="0">
+              <ChakraLink
+                asChild
+                textStyle="overline"
+                color="fg.muted"
+                truncate
+                minW="0"
+                _hover={{ color: 'fg' }}
               >
-                {post.market.title}
-              </NextLink>
-            </ChakraLink>
-            {post.market.status !== 'open' && (
-              <Badge
-                size="sm"
-                variant="subtle"
-                flexShrink="0"
-                colorPalette={MARKET_STATUS_PALETTE[post.market.status]}
-              >
-                {MARKET_STATUS_LABEL[post.market.status]}
-              </Badge>
-            )}
-          </HStack>
+                <NextLink
+                  href={`/markets/${post.market.slug}` as Route}
+                  prefetch={false}
+                  data-testid="post-card-market"
+                >
+                  {post.market.title}
+                </NextLink>
+              </ChakraLink>
+              {post.market.status !== 'open' && (
+                // The market card's badge props, in its order (market-card.tsx): its style props —
+                // `colorPalette`, then `flexShrink` — are the same set as this one's, and Chakra's
+                // style memo keeps the order of whichever drew it first in the process. With
+                // `flexShrink` first, a server that had drawn a market card's badge (the home, 관련
+                // 시장) gave this badge that order and a fresh browser this one: a hydration
+                // mismatch on the community list's closed-market cards (seen in #47's e2e run once
+                // the 토론 stopped drawing these cards on the server).
+                <Badge
+                  size="sm"
+                  colorPalette={MARKET_STATUS_PALETTE[post.market.status]}
+                  variant="subtle"
+                  flexShrink="0"
+                >
+                  {MARKET_STATUS_LABEL[post.market.status]}
+                </Badge>
+              )}
+            </HStack>
+          )}
           <LinkOverlay asChild>
             <NextLink href={href} data-testid="post-card-link">
               {post.title !== null ? (

@@ -1,4 +1,4 @@
-import { QueryObserver } from '@tanstack/react-query';
+import { InfiniteQueryObserver, QueryObserver, type InfiniteData } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { positionsKey } from '@/hooks/use-portfolio';
 import { type Position } from './api';
@@ -8,7 +8,9 @@ import {
   getQueryClient,
   listSection,
   listView,
+  moreFailed,
   profileView,
+  readFailed,
   sessionListSection,
 } from './query-client';
 
@@ -119,30 +121,30 @@ describe('listView', () => {
     // refetch that fails after data exists answers `isLoadingError: false, isRefetchError: true`
     // and KEEPS the rows — so 보유 포지션 and 체결 내역 went on rendering a list that had stopped
     // being refreshed, with nothing on screen to say so and no way back.
-    expect(listView({ isPending: false, isLoadingError: false, isRefetchError: true })).toBe(
-      'stale',
-    );
+    expect(
+      listView({ isPending: false, isLoadingError: false, isRefetchError: true, error: null }),
+    ).toBe('stale');
   });
 
   it('keeps the two failures apart, because only one of them has rows to show', () => {
     // A FIRST fetch that exhausts its retries has nothing to render, so the section is replaced
     // by `LoadFailed`. A failed refetch keeps its answer, and dropping a screenful because one
     // refresh failed loses more than the staleness costs — the reading `market-list.tsx` takes.
-    expect(listView({ isPending: false, isLoadingError: true, isRefetchError: false })).toBe(
-      'failed',
-    );
+    expect(
+      listView({ isPending: false, isLoadingError: true, isRefetchError: false, error: null }),
+    ).toBe('failed');
   });
 
   it('reports pending first, because a query retrying after a failure reports both', () => {
-    expect(listView({ isPending: true, isLoadingError: false, isRefetchError: true })).toBe(
-      'pending',
-    );
+    expect(
+      listView({ isPending: true, isLoadingError: false, isRefetchError: true, error: null }),
+    ).toBe('pending');
   });
 
   it('is ready only when nothing failed', () => {
-    expect(listView({ isPending: false, isLoadingError: false, isRefetchError: false })).toBe(
-      'ready',
-    );
+    expect(
+      listView({ isPending: false, isLoadingError: false, isRefetchError: false, error: null }),
+    ).toBe('ready');
   });
 });
 
@@ -152,7 +154,10 @@ describe('listSection', () => {
     // — the ONLY path a new order arrives by, since nothing patches `['orders']` in place —
     // landed on the ordinary rows arm with no notice and no way back.
     expect(
-      listSection({ isPending: false, isLoadingError: false, isRefetchError: true }, 1),
+      listSection(
+        { isPending: false, isLoadingError: false, isRefetchError: true, error: null },
+        1,
+      ),
     ).toEqual({ stale: true, body: 'rows' });
   });
 
@@ -164,16 +169,22 @@ describe('listSection', () => {
     // it stays — but it does not stay unlabelled. A ladder that spent `stale` as a fourth arm
     // would replace it and say nothing at all.
     expect(
-      listSection({ isPending: false, isLoadingError: false, isRefetchError: true }, 0),
+      listSection(
+        { isPending: false, isLoadingError: false, isRefetchError: true, error: null },
+        0,
+      ),
     ).toEqual({ stale: true, body: 'empty' });
   });
 
   it('never marks a first-load failure stale — there is nothing to keep', () => {
     expect(
-      listSection({ isPending: false, isLoadingError: true, isRefetchError: false }, 0),
+      listSection(
+        { isPending: false, isLoadingError: true, isRefetchError: false, error: null },
+        0,
+      ),
     ).toEqual({ stale: false, body: 'failed' });
     expect(
-      listSection({ isPending: true, isLoadingError: false, isRefetchError: true }, 0),
+      listSection({ isPending: true, isLoadingError: false, isRefetchError: true, error: null }, 0),
     ).toEqual({ stale: false, body: 'pending' });
   });
 });
@@ -240,7 +251,13 @@ describe('sessionListSection', () => {
     // paid out — that it never participated. The empty rung is the one that most needs a label.
     expect(
       sessionListSection(
-        { isLoggedIn: true, isPending: false, isLoadingError: false, isRefetchError: true },
+        {
+          isLoggedIn: true,
+          isPending: false,
+          isLoadingError: false,
+          isRefetchError: true,
+          error: null,
+        },
         0,
       ),
     ).toEqual({ stale: true, body: 'empty' });
@@ -249,7 +266,13 @@ describe('sessionListSection', () => {
   it('keeps the rows and still says they stopped being refreshed', () => {
     expect(
       sessionListSection(
-        { isLoggedIn: true, isPending: false, isLoadingError: false, isRefetchError: true },
+        {
+          isLoggedIn: true,
+          isPending: false,
+          isLoadingError: false,
+          isRefetchError: true,
+          error: null,
+        },
         1,
       ),
     ).toEqual({ stale: true, body: 'rows' });
@@ -260,7 +283,13 @@ describe('sessionListSection', () => {
     // a notice offers could only 401. The session rung has to be answered first.
     expect(
       sessionListSection(
-        { isLoggedIn: false, isPending: false, isLoadingError: false, isRefetchError: true },
+        {
+          isLoggedIn: false,
+          isPending: false,
+          isLoadingError: false,
+          isRefetchError: true,
+          error: null,
+        },
         0,
       ),
     ).toEqual({ stale: false, body: 'signedOut' });
@@ -269,7 +298,13 @@ describe('sessionListSection', () => {
   it('lets pending win over signedOut, so no prompt flashes through hydration', () => {
     expect(
       sessionListSection(
-        { isLoggedIn: false, isPending: true, isLoadingError: false, isRefetchError: true },
+        {
+          isLoggedIn: false,
+          isPending: true,
+          isLoadingError: false,
+          isRefetchError: true,
+          error: null,
+        },
         0,
       ),
     ).toEqual({ stale: false, body: 'pending' });
@@ -280,9 +315,293 @@ describe('sessionListSection', () => {
     // error and its 다시 시도 take the whole card as they always did.
     expect(
       sessionListSection(
-        { isLoggedIn: true, isPending: false, isLoadingError: true, isRefetchError: false },
+        {
+          isLoggedIn: true,
+          isPending: false,
+          isLoadingError: true,
+          isRefetchError: false,
+          error: null,
+        },
         0,
       ),
     ).toEqual({ stale: false, body: 'failed' });
+  });
+});
+
+describe('a 더 보기 that failed (owner decision 2026-10-20 7, ADR-0075)', () => {
+  /** A page of a list: its rows and the next cursor. */
+  interface Page {
+    items: number[];
+    nextCursor: string | null;
+  }
+
+  /**
+   * A list driven through the REAL client and an infinite observer, as every 더 보기 list's
+   * `useInfiniteQuery` holds it — with no retry, so a refusal lands at once. `answer` says how a
+   * read goes: the first page (no cursor) and the next ('c2').
+   */
+  function observeList(answer: (cursor: string | undefined) => Promise<Page>) {
+    const queryClient = getQueryClient();
+    const observer = new InfiniteQueryObserver<
+      Page,
+      Error,
+      InfiniteData<Page>,
+      readonly unknown[],
+      string | undefined
+    >(queryClient, {
+      queryKey: ['a-list'],
+      queryFn: ({ pageParam }) => answer(pageParam),
+      initialPageParam: undefined,
+      getNextPageParam: (last) => last.nextCursor ?? undefined,
+      retry: false,
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    const now = () => observer.getCurrentResult();
+    return {
+      queryClient,
+      observer,
+      now,
+      /** What a list section reads: its rung, the 더 보기 notice and an `isError` list's rung. */
+      reads: () => ({
+        section: listSection(now(), now().data?.pages.flatMap((page) => page.items).length ?? 0),
+        moreFailed: moreFailed(now()),
+        readFailed: readFailed(now()),
+      }),
+      settled: async (ready: () => boolean) => {
+        for (let i = 0; i < 100 && !ready(); i += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 5));
+        }
+        expect(ready()).toBe(true);
+      },
+      done: () => {
+        unsubscribe();
+        queryClient.clear();
+      },
+    };
+  }
+
+  const first: Page = { items: [3, 2], nextCursor: 'c2' };
+  const rest: Page = { items: [1], nextCursor: null };
+  const refused = () => Promise.reject(new Error('503'));
+
+  /** An answer held open until the test lets it land — a refetch caught on its way. */
+  function held(): { promise: Promise<Page>; land: (page: Page) => void; fail: () => void } {
+    let land: (page: Page) => void = () => undefined;
+    let fail: () => void = () => undefined;
+    const promise = new Promise<Page>((resolve, reject) => {
+      land = resolve;
+      fail = () => {
+        reject(new Error('503'));
+      };
+    });
+    return { promise, land, fail };
+  }
+
+  it('is said above 더 보기 with the rows kept, withdrawn while asked again, gone once the page came', async () => {
+    // THE HOLE: query-core reports it as `isFetchNextPageError` with `isRefetchError` false, so
+    // `listSection` sees an ordinary list; and `isError` is true, so a rung on it alone dropped
+    // every row read so far.
+    let down = true;
+    const list = observeList((cursor) =>
+      cursor === undefined ? Promise.resolve(first) : down ? refused() : Promise.resolve(rest),
+    );
+    try {
+      await list.settled(() => list.now().isSuccess);
+      await list.observer.fetchNextPage();
+      expect(list.now()).toMatchObject({
+        isError: true,
+        isFetchNextPageError: true,
+        isRefetchError: false,
+        hasNextPage: true,
+      });
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: true,
+        readFailed: false,
+      });
+      expect(list.now().data?.pages).toEqual([first]);
+
+      down = false;
+      const again = list.observer.fetchNextPage();
+      expect(list.now().isFetchingNextPage).toBe(true);
+      expect(list.reads()).toMatchObject({ moreFailed: false, readFailed: false });
+      await again;
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: false,
+        readFailed: false,
+      });
+      expect(list.now().data?.pages).toEqual([first, rest]);
+    } finally {
+      list.done();
+    }
+  });
+
+  it('is not a first read that failed, nor a refresh that failed — those are the rungs', async () => {
+    const failing = observeList(refused);
+    try {
+      await failing.settled(() => failing.now().isLoadingError);
+      expect(failing.reads()).toEqual({
+        section: { stale: false, body: 'failed' },
+        moreFailed: false,
+        readFailed: true,
+      });
+    } finally {
+      failing.done();
+    }
+
+    let down = false;
+    const refreshing = observeList(() => (down ? refused() : Promise.resolve(rest)));
+    try {
+      await refreshing.settled(() => refreshing.now().isSuccess);
+      down = true;
+      await refreshing.observer.refetch();
+      expect(refreshing.reads()).toEqual({
+        section: { stale: true, body: 'rows' },
+        moreFailed: false,
+        readFailed: true,
+      });
+    } finally {
+      refreshing.done();
+    }
+  });
+
+  it('stays through a cache write, which sets the status back to success with no page come', async () => {
+    // THE SOCKET'S WRITE: `market:tick` and `market:status` patch every held card page with
+    // `setQueriesData` (realtime-provider.tsx — the home's, the search's and 관련 시장's grids and
+    // MY 관심 시장), and the reader's own comment goes into the comments the same way. Each write
+    // dispatches `success`: TanStack's own flags then say nothing failed, while 더 보기 is still
+    // there and the next page never came — so the notice vanished on the next trade.
+    let down = true;
+    const list = observeList((cursor) =>
+      cursor === undefined ? Promise.resolve(first) : down ? refused() : Promise.resolve(rest),
+    );
+    try {
+      await list.settled(() => list.now().isSuccess);
+      await list.observer.fetchNextPage();
+      expect(list.reads()).toMatchObject({ moreFailed: true });
+
+      list.queryClient.setQueriesData<InfiniteData<Page>>({ queryKey: ['a-list'] }, (data) =>
+        data === undefined
+          ? data
+          : { ...data, pages: data.pages.map((page) => ({ ...page, items: [30, 2] })) },
+      );
+      // What the flags say after the write: nothing failed, a next page to read.
+      expect(list.now()).toMatchObject({
+        isError: false,
+        isFetchNextPageError: false,
+        hasNextPage: true,
+      });
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: true,
+        readFailed: false,
+      });
+      expect(list.now().data?.pages).toEqual([{ items: [30, 2], nextCursor: 'c2' }]);
+
+      // Asked again: withdrawn while it runs, gone with the page.
+      down = false;
+      const again = list.observer.fetchNextPage();
+      expect(list.reads()).toMatchObject({ moreFailed: false });
+      await again;
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: false,
+        readFailed: false,
+      });
+    } finally {
+      list.done();
+    }
+  });
+
+  it('says no failure while a refetch runs after it — no refresh failed, and the rows stay', async () => {
+    // THE FALSE FAILURE: a refetch — a refocus (a failed query is invalidated, so at once), an
+    // invalidation, a poll — resets the direction TanStack reads `isFetchNextPageError` from and
+    // leaves the status at `error` while it runs. Its flags then say a refresh failed: a list on
+    // `listSection` said '최신 정보를 불러오지 못했습니다' and a list on `isError` swapped every row
+    // for its error, until the refetch landed.
+    let answer: () => Promise<Page> = refused;
+    const list = observeList((cursor) =>
+      cursor === undefined ? (answer === refused ? Promise.resolve(first) : answer()) : refused(),
+    );
+    try {
+      await list.settled(() => list.now().isSuccess);
+      await list.observer.fetchNextPage();
+      expect(list.reads()).toMatchObject({ moreFailed: true, readFailed: false });
+
+      const succeeding = held();
+      answer = () => succeeding.promise;
+      const refetch = list.observer.refetch();
+      // What the flags say while it runs: a refresh that failed, over the rows held.
+      expect(list.now()).toMatchObject({
+        isError: true,
+        isFetchNextPageError: false,
+        isRefetchError: true,
+        isRefetching: true,
+      });
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: false,
+        readFailed: false,
+      });
+      expect(list.now().data?.pages).toEqual([first]);
+      succeeding.land(first);
+      await refetch;
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: false,
+        readFailed: false,
+      });
+
+      // A refetch that then REALLY fails is a refresh that failed — its rungs, not the 더 보기's.
+      await list.observer.fetchNextPage();
+      expect(list.reads()).toMatchObject({ moreFailed: true });
+      const failing = held();
+      answer = () => failing.promise;
+      const refetchAgain = list.observer.refetch();
+      expect(list.reads()).toMatchObject({ section: { stale: false }, readFailed: false });
+      failing.fail();
+      await refetchAgain;
+      expect(list.reads()).toEqual({
+        section: { stale: true, body: 'rows' },
+        moreFailed: false,
+        readFailed: true,
+      });
+    } finally {
+      list.done();
+    }
+  });
+
+  it('leaves a refresh that really failed saying so while it is asked again', async () => {
+    // The mark is what tells the two apart, not whether something is running: a failed refresh
+    // keeps its notice and its rung through its own retry, as it always did.
+    let answer: () => Promise<Page> = () => Promise.resolve(rest);
+    const list = observeList(() => answer());
+    try {
+      await list.settled(() => list.now().isSuccess);
+      answer = refused;
+      await list.observer.refetch();
+      const failed = {
+        section: { stale: true, body: 'rows' },
+        moreFailed: false,
+        readFailed: true,
+      };
+      expect(list.reads()).toEqual(failed);
+
+      const retry = held();
+      answer = () => retry.promise;
+      const again = list.observer.refetch();
+      expect(list.now().isRefetching).toBe(true);
+      expect(list.reads()).toEqual(failed);
+      retry.land(rest);
+      await again;
+      expect(list.reads()).toEqual({
+        section: { stale: false, body: 'rows' },
+        moreFailed: false,
+        readFailed: false,
+      });
+    } finally {
+      list.done();
+    }
   });
 });
