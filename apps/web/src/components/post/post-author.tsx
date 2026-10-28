@@ -1,6 +1,7 @@
 import { Avatar, Badge, Link as ChakraLink, HStack, Text } from '@chakra-ui/react';
 import type { Route } from 'next';
 import NextLink from 'next/link';
+import { memo } from 'react';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { type PostAuthor as Author } from '@/lib/api';
@@ -20,10 +21,18 @@ import { authorView } from '@/lib/posts';
  * nickname alone: the image is hidden from a screen reader, and '운영자' stands beside the link. Not
  * prefetched: a list can hold many authors, and a profile is read when it is opened.
  *
+ * Memoised: it draws again only when its own author or times change. A post page draws every 댓글
+ * and 대댓글 read so far (thousands, once threads are opened to their end), and every write to the
+ * comment pages draws the whole list again; the query client keeps an unchanged 댓글's `author` the
+ * same object (structural sharing, lib/query-client.ts), so its byline — the link above — is
+ * skipped. Without it a new 댓글's read of the pages on a post with 1,900 of them missed its 15 s
+ * on CI (PR #224, ADR-0078 7-31). The time zone reaches `DateTimeText` through its context, past
+ * the memo.
+ *
  * No directive: it renders inside the post page's client component and the cards alike; the time
  * is `DateTimeText`'s, whose hook lives in its own client module.
  */
-export function PostByline({
+export const PostByline = memo(function PostByline({
   author,
   createdAt,
   editedAt,
@@ -92,4 +101,4 @@ export function PostByline({
       )}
     </HStack>
   );
-}
+});

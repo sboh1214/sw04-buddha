@@ -5,6 +5,7 @@ import {
   commentBodyTooLongMessage,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
+import { PostByline } from '@/components/post/post-author';
 import { copy } from '@/copy';
 import {
   ApiError,
@@ -60,6 +61,7 @@ import {
 import { NO_COMMENT_DRAFTS, type CommentDrafts } from './comment-drafts';
 import { isPrivateQueryKey } from './market-keys';
 import { POSTS_KEY, postKey } from './posts';
+import { getQueryClient } from './query-client';
 
 /**
  * 댓글·대댓글 on the web (#48, ADR-0074): the key, what the author's writes do to the pages held,
@@ -1577,5 +1579,33 @@ describe('an edit’s text held apart whose thread is read to its end without it
         },
       ]),
     ).toEqual([]);
+  });
+});
+
+describe('a byline through a read of the pages (PR #224, ADR-0078 7-31)', () => {
+  it('draws again only for its own author or times, and a read keeps an unchanged 댓글’s author the same object', () => {
+    // A post page draws every 댓글 and 대댓글 read so far, and each write to the pages draws the
+    // whole list again: the byline is skipped for props that did not change.
+    expect(PostByline).toMatchObject({ $$typeof: Symbol.for('react.memo'), compare: null });
+    const queryClient = getQueryClient();
+    const key = postCommentsKey(POST);
+    queryClient.setQueryData<CommentPages>(
+      key,
+      pagesOf([[thread(comment('a'), comment('a1', 'a')), thread(comment('b'))]]),
+    );
+    // A read's answer is parsed anew — equal objects, never the same ones — and here b's author
+    // took a new nickname meanwhile.
+    const answer = structuredClone(
+      pagesOf([[thread(comment('a'), comment('a1', 'a')), thread(comment('b'))]]),
+    );
+    answer.pages[0]!.items[1]!.comment = {
+      ...comment('b'),
+      author: { ...author, nickname: '새이름' },
+    };
+    queryClient.setQueryData<CommentPages>(key, answer);
+    const [a, b] = commentThreadsOf(queryClient.getQueryData<CommentPages>(key));
+    expect(a!.comment.state === 'published' && a!.comment.author).toBe(author);
+    expect(a!.replies[0]!.state === 'published' && a!.replies[0]!.author).toBe(author);
+    expect(b!.comment).toMatchObject({ author: { nickname: '새이름' } });
   });
 });
