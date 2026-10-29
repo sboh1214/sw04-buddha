@@ -14,7 +14,6 @@ import {
   type MyPost,
   type PostSummary,
   type ReportReason,
-  type Role,
 } from '@buddha/shared';
 import { and, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
@@ -28,6 +27,7 @@ import {
   postAuthorOf,
   postMarketOf,
   publicStateOf,
+  type AuthorRow,
 } from '../posts/posts.service.js';
 import { ProfilesService } from '../profiles/profiles.service.js';
 import { type Page } from '../wallet/wallet.service.js';
@@ -56,14 +56,6 @@ interface MarketRow {
   status: MarketStatus;
   categorySlug: string;
   categoryNameKo: string;
-}
-
-/** The account behind an item, as the queries read it (`authorColumns`): its public face only. */
-interface AuthorRow {
-  publicId: string;
-  nickname: string;
-  role: Role;
-  imageId: string | null;
 }
 
 interface PostRow {

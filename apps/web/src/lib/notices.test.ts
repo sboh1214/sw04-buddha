@@ -204,6 +204,8 @@ describe('the records and earlier versions (owner decision 2026-10-21)', () => {
     expect(noticeActorName({ nickname: '운영자하나' })).toBe('운영자하나');
     expect(noticeActorName(null)).toBe(copy.adminNoticeActorUnknown);
     expect(noticeActorName({ nickname: '' })).toBe(copy.adminNoticeActorUnknown);
+    // An operator who closed the account since (#140, once the role was revoked).
+    expect(noticeActorName({ nickname: null })).toBe(copy.postAuthorFormer);
   });
 });
 

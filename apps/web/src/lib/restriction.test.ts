@@ -9,6 +9,7 @@ import {
   restrictedMessage,
   restrictionEndText,
   restrictionOf,
+  restrictionSentence,
   restrictionTermText,
   restrictionsShown,
   WRITE_PAGE_RESTRICTION_KINDS,
@@ -151,6 +152,35 @@ describe('RESTRICTED of an account restriction (#139, ADR-0085)', () => {
         expect(message).not.toContain(BUSINESS_INFO.email);
       }
     }
+  });
+});
+
+describe('a closure kept closed by a restriction (#140, ADR-0086)', () => {
+  it('names the restriction that keeps it closed and until when, with nothing open (ADR-0069 decision 4 #140)', () => {
+    expect(restrictedMessage(restricted(END), 'closure', formatKst)).toBe(
+      `작성 제한 중에는 탈퇴할 수 없습니다(${formatKst(END)}까지).`,
+    );
+    expect(restrictedMessage(accountRestricted(null), 'closure', formatKst)).toBe(
+      '계정 제한 중에는 탈퇴할 수 없습니다(무기한).',
+    );
+    // The confirmation screen's read says it in the words a refusal of the closure would use.
+    for (const kind of ['writing', 'account'] as const) {
+      for (const endsAt of [END, null]) {
+        const message = restrictionSentence({ kind, endsAt }, 'closure', formatKst);
+        expect(message).toBe(
+          restrictedMessage(refused(403, 'RESTRICTED', { kind, endsAt }), 'closure', formatKst),
+        );
+        expect(message).not.toContain(copy.errRestrictedClearAllowed);
+        expect(message).not.toContain(copy.errRestrictedSkipAllowed);
+        expect(message).not.toContain('이의');
+        expect(message).not.toContain('운영자');
+        expect(message).not.toContain(BUSINESS_INFO.email);
+      }
+    }
+    // The other writes say what they said before.
+    expect(restrictionSentence({ kind: 'account', endsAt: END }, 'profile', formatKst)).toBe(
+      restrictedMessage(accountRestricted(END), 'profile', formatKst),
+    );
   });
 });
 

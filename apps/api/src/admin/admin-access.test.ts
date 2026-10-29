@@ -227,7 +227,7 @@ describe.skipIf(!hasTestInfra)(
         .select()
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, user.id));
-      return { ...user, nickname: profile!.nickname, publicId: profile!.publicId };
+      return { ...user, nickname: profile!.nickname!, publicId: profile!.publicId };
     }
 
     const read = async (url: string, who: TestUser) => {

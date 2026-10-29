@@ -7,10 +7,11 @@ import {
   type AdminBalanceAdjustResult,
   type AdminPayment,
   type AdminUser,
+  type AdminUserStatus,
   type AuditFailure,
   type Role,
 } from '@buddha/shared';
-import { and, desc, eq, ilike, or, sql } from 'drizzle-orm';
+import { and, desc, eq, ilike, isNotNull, isNull, or, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { clockTimestamp } from '../infra/db/clock.js';
@@ -31,7 +32,8 @@ const userColumns = {
 interface UserRow {
   id: string;
   email: string;
-  nickname: string;
+  /** Null for an account its member closed (#140). */
+  nickname: string | null;
   role: Role;
   availableCoin: bigint;
   lockedCoin: bigint;
@@ -68,7 +70,8 @@ const adminPaymentColumns = {
 };
 
 type AdminPaymentRow = Omit<typeof schema.payments.$inferSelect, 'idempotencyKey' | 'updatedAt'> & {
-  nickname: string;
+  /** Null for an account its member closed (#140). */
+  nickname: string | null;
   cancelConfirmed: boolean | null;
 };
 
@@ -97,8 +100,15 @@ function toAdminPayment(row: AdminPaymentRow): AdminPayment {
 export class AdminService {
   constructor(@Inject(DB) private readonly db: Db) {}
 
+  /**
+   * `GET /admin/users`: accounts newest first, matched by email or nickname, every one or only the
+   * open (`status=open`) or closed (`status=closed`) ones — a closed account (its member closed it,
+   * #140) stays in the list with its placeholder address and no nickname, while the admin role's
+   * grant search asks for the open ones only (owner decision 2026-10-23 (2차) 5, ADR-0086).
+   */
   async listUsers(
     q: string | undefined,
+    status: AdminUserStatus | undefined,
     cursor: string | undefined,
     limit: number,
   ): Promise<Page<AdminUser>> {
@@ -114,6 +124,8 @@ export class AdminService {
           pattern
             ? or(ilike(schema.user.email, pattern), ilike(schema.profiles.nickname, pattern))
             : undefined,
+          status === 'open' ? isNull(schema.profiles.closedAt) : undefined,
+          status === 'closed' ? isNotNull(schema.profiles.closedAt) : undefined,
           // `profiles.user_id`, not `user.id`: the two hold the same value (the FK guarantees
           // it, so the cursor a client already has keeps working), but a row comparison can only
           // become an index condition when both halves come from ONE table. Measured at 384 ms
@@ -175,6 +187,16 @@ export class AdminService {
         .where(eq(schema.balances.userId, userId))
         .limit(1)
         .for('update');
+      // A closed account takes no ledger entry after its forfeiture (#140, migration 0043): read
+      // after the balance's lock, which a closure holds until it commits, so one in flight is seen.
+      const [profile] = await tx
+        .select({ closedAt: schema.profiles.closedAt })
+        .from(schema.profiles)
+        .where(eq(schema.profiles.userId, userId))
+        .limit(1);
+      if (profile?.closedAt != null) {
+        throw new AppError('ACCOUNT_CLOSED', { message: 'The account was closed by its member' });
+      }
       const adjustedAt = await clockTimestamp(tx);
 
       const [action] = await tx

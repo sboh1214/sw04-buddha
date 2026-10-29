@@ -115,6 +115,9 @@ export class AdminAccountsService {
       const grant = grantOf.get(admin.id);
       return {
         ...admin,
+        // An admin's account is open (profiles_closed_check: a closed account is never an admin,
+        // #140), so it has its nickname.
+        nickname: admin.nickname!,
         grantedAt: grant?.createdAt.toISOString() ?? null,
         grantedBy: grant ? { id: grant.actorId, nickname: grant.actorNickname } : null,
       };
@@ -125,19 +128,29 @@ export class AdminAccountsService {
    * Makes `userId` an admin: refused (ROLE_CHANGE_NOT_ALLOWED) for an admin, an unverified email
    * or an account that has not completed the SMS verification (ADR-0069 decision 4 #58,
    * ADR-0070; owner decision 2026-10-13 for the rest). No other admin's approval: the two-person
-   * rule does not cover role changes.
+   * rule does not cover role changes. An account its member closed (#140) is refused first as
+   * ACCOUNT_CLOSED — its address is unverified then, and `email_not_verified` would tell the
+   * operator to wait for a verification that never comes. A closure takes the admin-roles lock
+   * (shared) before it closes, so under this exclusive one the read sees a closure committed.
    */
   async grant(actorId: string, userId: string, reason: string): Promise<AdminRoleChange> {
     const recordId = await this.db.transaction(async (tx) => {
       await lockAdminRoles(tx, 'exclusive');
       await this.assertAdmin(tx, actorId);
       const [target] = await tx
-        .select({ role: schema.profiles.role, emailVerified: schema.user.emailVerified })
+        .select({
+          role: schema.profiles.role,
+          closedAt: schema.profiles.closedAt,
+          emailVerified: schema.user.emailVerified,
+        })
         .from(schema.user)
         .innerJoin(schema.profiles, eq(schema.profiles.userId, schema.user.id))
         .where(eq(schema.user.id, userId))
         .limit(1);
       if (!target) throw new AppError('NOT_FOUND', { message: 'User not found' });
+      if (target.closedAt !== null) {
+        throw new AppError('ACCOUNT_CLOSED', { message: 'The account was closed by its member' });
+      }
       if (target.role === 'admin') throw roleChangeNotAllowed('already_admin');
       if (!target.emailVerified) throw roleChangeNotAllowed('email_not_verified');
       if (!(await isPhoneVerified(tx, userId))) throw roleChangeNotAllowed('phone_not_verified');
@@ -194,8 +207,8 @@ export class AdminAccountsService {
 
   /**
    * Grants and revokes, newest first (keyset over admin_actions' `(created_at, id)`), of one
-   * account when `userId` is given. An account deleted since keeps its records, with no email or
-   * nickname.
+   * account when `userId` is given. An account its member closed since (#140) keeps its records
+   * with no nickname and its closed placeholder address; one deleted since, with neither.
    */
   async listChanges(
     userId: string | undefined,

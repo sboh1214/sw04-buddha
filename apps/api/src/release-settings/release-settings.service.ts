@@ -67,7 +67,7 @@ function toReleaseSetting(
     updatedAt: row?.updatedAt.toISOString() ?? null,
     // Every account has a profile (trigger 0002); the join is LEFT only so that a missing one
     // could never hide a stored value behind `undecided`.
-    updatedBy: row ? { id: row.updatedBy, nickname: row.nickname ?? '' } : null,
+    updatedBy: row ? { id: row.updatedBy, nickname: row.nickname } : null,
   };
 }
 

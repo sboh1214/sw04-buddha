@@ -483,12 +483,17 @@ export type MyModerationAction = z.infer<typeof myModerationActionSchema>;
 
 // ---- operators -----------------------------------------------------------------------------------
 
-/** An account as the moderation screens name it: the account id, the public face and the role. */
+/**
+ * An account as the moderation screens name it: the account id, the public face and the role. The
+ * nickname is null for an account its member closed (#140, ADR-0069 decision 3 #37-16: the public
+ * items went with the closure, and its profile answers as for no account) — its reports, actions
+ * and posts stay for operators (#57-18).
+ */
 export const moderationUserSchema = z
   .object({
     id: z.string(),
     publicId: publicIdSchema,
-    nickname: z.string(),
+    nickname: z.string().nullable(),
     role: roleSchema,
   })
   .meta({ id: 'ModerationUser' });
@@ -679,8 +684,11 @@ export const adminReportGroupSchema = z
     state: moderationItemStateSchema,
     /** A post's title; null for the rest and for a post without one. */
     title: z.string().nullable(),
-    /** The start of a post's or a comment's text, a profile's nickname. */
-    excerpt: z.string(),
+    /**
+     * The start of a post's or a comment's text, a profile's nickname — null for the profile of a
+     * member who closed the account (#140: the nickname went with the closure).
+     */
+    excerpt: z.string().nullable(),
     pendingCount: z.number().int().min(0),
     reportCount: z.number().int().positive(),
     reporterCount: z.number().int().positive(),
@@ -926,10 +934,20 @@ export const accountRestrictionRequestSchema = z
     requestedBy: adminAccountActorSchema.nullable(),
     requestedAt: z.iso.datetime(),
     status: approvalStatusSchema,
-    /** Who decided it; null while pending, once retracted, and for the admin it is about. */
+    /**
+     * Who decided it; null while pending, once retracted, for the admin it is about, and for one
+     * the member's closure closed (`closedByAccountClosure`).
+     */
     decidedBy: adminAccountActorSchema.nullable(),
     decisionReason: z.string().nullable(),
     decidedAt: z.iso.datetime().nullable(),
+    /**
+     * Whether the member it is about closed their account while it waited (#140, owner decision
+     * 2026-10-23, ADR-0085 결과 5): then it is `rejected` by no admin, at the closure, with the
+     * reason '탈퇴' (ACCOUNT_CLOSURE_DECISION_REASON) — a pending request never keeps a closure
+     * from going ahead.
+     */
+    closedByAccountClosure: z.boolean(),
     /**
      * When the one who asked retracted it (`retracted`); null otherwise. Who retracted it is who
      * asked (`requestedBy`) — no one else can.
@@ -1213,7 +1231,12 @@ export type DismissedReports = z.infer<typeof dismissedReportsSchema>;
  * - `not_account_restriction`: a request to shorten, lift or cancel an action that is no account
  *   restriction (#139);
  * - `no_decider`: an account restriction request no admin could decide — there is none but the one
- *   asking and the member it is about (#139, owner decision 2026-10-23: refused when asked).
+ *   asking and the member it is about (#139, owner decision 2026-10-23: refused when asked);
+ * - `closed`: a new action against an account its member closed (탈퇴 #140, owner decision
+ *   2026-10-23 (2차) 1, ADR-0086) — a warning, a writing restriction, an account restriction
+ *   request and the approval of one. Hiding a post or a comment of theirs is not refused (it stays
+ *   public), nor is the cancellation of an earlier action; a nickname reset, a 소개 cleared and an
+ *   image removed have nothing to take away (`nothing_to_remove`).
  */
 export const MODERATION_REFUSALS = [
   'own',
@@ -1230,6 +1253,7 @@ export const MODERATION_REFUSALS = [
   'approval_required',
   'not_account_restriction',
   'no_decider',
+  'closed',
 ] as const;
 export type ModerationRefusal = (typeof MODERATION_REFUSALS)[number];
 export const moderationNotAllowedDetailsSchema = z

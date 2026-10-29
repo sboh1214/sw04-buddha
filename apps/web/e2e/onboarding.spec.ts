@@ -8,6 +8,7 @@ import {
   agreeThroughApi,
   createOpenMarket,
   expect,
+  expectOnboardingClosureLink,
   freshEmail,
   freshPhone,
   freshTag,
@@ -73,6 +74,47 @@ function freshNickname(prefix: string): string {
 }
 
 /**
+ * Holds the in-app navigation to `pathname` — the server-component request (`RSC: 1`) that
+ * `router.replace` sends; a prefetch or a document load passes — until `release`, so a test can
+ * look at the screen being left while it is on its way: `reached` settles once that request is out.
+ */
+async function holdNavigation(
+  page: Page,
+  pathname: string,
+): Promise<{ reached: Promise<void>; release: () => void }> {
+  let markReached = (): void => undefined;
+  const reached = new Promise<void>((resolve) => {
+    markReached = resolve;
+  });
+  let release = (): void => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route(
+    (url) => url.pathname === pathname,
+    async (route) => {
+      const headers = route.request().headers();
+      if (headers.rsc === '1' && headers['next-router-prefetch'] === undefined) {
+        markReached();
+        await released;
+      }
+      await route.fallback();
+    },
+  );
+  return { reached, release };
+}
+
+/**
+ * The stepper's own placeholder on screen — an account with nothing left, on its way to `next` —
+ * with 로그아웃 under it and no '탈퇴하기': the link is a step's (ADR-0086 7-35).
+ */
+async function expectOnItsWayWithoutClosureLink(page: Page): Promise<void> {
+  await expect(page.getByTestId('onboarding-logout')).toBeVisible();
+  await expect(page.getByTestId('onboarding-heading')).toHaveCount(0);
+  await expect(page.getByTestId('onboarding-closure')).toHaveCount(0);
+}
+
+/**
  * An account at the nickname step, quickly: a fresh email sign-up with its password, the consent
  * and the 본인확인 through the API, then /onboarding — which resumes at the nickname (#57-8).
  */
@@ -133,6 +175,8 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page.getByTestId('onboarding-heading')).not.toBeFocused();
     await expect(page.getByTestId('onboarding-heading')).not.toHaveAttribute('aria-describedby');
     await expect(page.getByTestId('onboarding-position')).toHaveText('1 / 5');
+    // Every screen ends with the small way to 탈퇴, under 로그아웃 (오너 결정 2026-10-23 (4차) 1).
+    await expectOnboardingClosureLink(page);
     for (const item of ['terms', 'privacy', 'age', 'marketing']) {
       await expect(consent.getByTestId(`consent-${item}`).getByRole('checkbox')).not.toBeChecked();
     }
@@ -176,11 +220,13 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page.getByTestId('verification-step')).toBeVisible();
     await expect(page.getByTestId('onboarding-heading')).toBeFocused();
     await expect(page.getByTestId('onboarding-position')).toHaveText('2 / 5');
+    await expectOnboardingClosureLink(page);
     await verifyPhone(page);
 
     // --- 닉네임: the auto nickname offered, and confirmed as it is (#57-6).
     const input = page.getByTestId('nickname-step-input');
     await expect(input).toHaveValue(/^user_/);
+    await expectOnboardingClosureLink(page);
     const autoNickname = await input.inputValue();
     await page.getByTestId('nickname-step-submit').click();
 
@@ -196,6 +242,7 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     }
     await expect(page.getByTestId('notice-facts')).toContainText(copy.onboardingNoticeNoCash);
     await expect(page.getByTestId('notice-facts')).toContainText(copy.onboardingNoticeCounterparty);
+    await expectOnboardingClosureLink(page);
     await page.getByTestId('notice-next').click();
 
     // --- 관심 카테고리, skipped (#57-7) — and back on the market. The step's answer is the one
@@ -208,7 +255,13 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     });
     await expect(page.getByTestId('interests-step')).toBeVisible();
     await expect(page.getByTestId('interests-list')).toBeVisible();
+    await expectOnboardingClosureLink(page);
+    // The way back held, to see the screen between: the step answered, nothing is left to show.
+    const back = await holdNavigation(page, marketPath);
     await page.getByTestId('interests-skip').click();
+    await back.reached;
+    await expectOnItsWayWithoutClosureLink(page);
+    back.release();
     await expect(page).toHaveURL(marketPath);
     expect(stepWrites).toEqual(['POST']);
 
@@ -548,8 +601,13 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(page).toHaveURL('/');
     expect((await skip).postDataJSON()).toEqual({ categoryIds: [], expectedAccountId: me.id });
     await expect.poll(async () => (await meOf(page.request)).onboarding.interests).toBe(true);
-    // Not shown again.
+    // Not shown again: the stepper sends the account straight on, with no step — and so no way to
+    // 탈퇴 — on the screen it leaves (held, to see it).
+    const home = await holdNavigation(page, '/');
     await page.goto('/onboarding');
+    await home.reached;
+    await expectOnItsWayWithoutClosureLink(page);
+    home.release();
     await expect(page).toHaveURL('/');
 
     // The first pick is MY 설정's, a change the server takes as one (this account is under no
@@ -967,6 +1025,12 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(
       page.getByRole('link', { name: copy.onboardingReconsentSettingsLink }),
     ).toHaveAttribute('href', '/my/settings');
+    // A member who would rather leave than agree again has the way to 탈퇴 here too ((4차) 1) —
+    // at the very bottom, under the line of the way to MY 설정 as well (ADR-0086 결과 5 (9)).
+    await expectOnboardingClosureLink(page);
+    const settingsLine = await page.getByTestId('onboarding-settings-link').boundingBox();
+    const closureLink = await page.getByTestId('onboarding-closure').boundingBox();
+    expect(closureLink!.y).toBeGreaterThan(settingsLine!.y + settingsLine!.height - 1);
     await expect(consent.getByTestId('consent-terms').getByRole('checkbox')).not.toBeChecked();
     await page.getByTestId('consent-submit').click();
     await expect(page.getByTestId('consent-required-error')).toBeVisible();
@@ -1135,6 +1199,8 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await page.route('**/api/v1/me', (route) => route.abort());
     await page.goto('/onboarding');
     await expect(page.getByTestId('onboarding-unavailable')).toBeVisible();
+    // The way to 탈퇴 is a step's (ADR-0086 7-35): not on this rung, which shows none.
+    await expect(page.getByTestId('onboarding-closure')).toHaveCount(0);
     await page.getByTestId('onboarding-logout').click();
     await expect(page).toHaveURL('/');
     await expect(page.getByRole('link', { name: copy.login })).toBeVisible();

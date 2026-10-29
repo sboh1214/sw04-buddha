@@ -1,9 +1,13 @@
 import { PAID_COIN_SALES_ENABLED } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
+import { copy } from '@/copy';
+import { MY_CLOSURE_PATH } from './account-closure';
 import { type Me } from './api';
 import {
+  ONBOARDING_CLOSURE_LINK,
   ONBOARDING_EXEMPT_PAGES,
   ONBOARDING_EXEMPT_PATHS,
+  ONBOARDING_PATH,
   ONBOARDING_SCREENS,
   afterVerification,
   gatedPagePath,
@@ -70,12 +74,14 @@ const DONE: Onboarding = { ...COMPLETED, interests: true };
 const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
 describe('isOnboardingExempt', () => {
-  it('lists exactly the routes ADR-0043 names, plus /api', () => {
+  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, plus /api', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',
         // The public charge guide, only while paid Coin is on sale (ADR-0049).
         ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
+        // 탈퇴 (#140, owner decision 2026-10-23 (2차) 3): an account not onboarded closes itself.
+        '/my/settings/closure',
         '/login',
         '/onboarding',
         '/privacy',
@@ -99,6 +105,7 @@ describe('isOnboardingExempt', () => {
       '/privacy',
       '/refund',
       '/terms/',
+      '/my/settings/closure',
       '/reset-password/confirm',
       '/api/auth/callback/kakao',
       '/api/auth/sign-out',
@@ -119,6 +126,8 @@ describe('isOnboardingExempt', () => {
       '/my',
       '/my/wallet',
       '/my/settings',
+      '/my/settings/closurex',
+      '/my/moderation',
       '/community',
       '/markets/btc-100k',
       '/admin/users',
@@ -341,6 +350,27 @@ describe('needsOnboarding', () => {
     expect(needsOnboarding('/terms', RECONSENT)).toBe(false);
   });
 
+  it('leaves the 탈퇴 screen to an account with any step left, a re-consent included, and only it (2026-10-23 (2차) 3)', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      expect(needsOnboarding('/my/settings/closure', onboarding), String(onboarding.nextStep)).toBe(
+        false,
+      );
+    }
+    // MY 설정, where its card is, stays gated for an account that has not finished: the screen is
+    // reached by the link at the bottom of every onboarding screen ((4차) 1, below) or by its
+    // address.
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED]) {
+      expect(needsOnboarding('/my/settings', onboarding), String(onboarding.nextStep)).toBe(true);
+    }
+    // An account facing a re-consent alone keeps MY 설정 (#41, ADR-0078 — ONBOARDING_EXEMPT_PAGES),
+    // so it reaches the screen from the card there too; the rest of MY stays gated for it.
+    expect(needsOnboarding('/my/settings', RECONSENT)).toBe(false);
+    expect(needsOnboarding('/my', RECONSENT)).toBe(true);
+    // The screen is every such account's, never a page only a re-consent opens (ADR-0086 결과 5 (9)).
+    expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_CLOSURE_PATH);
+    expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_CLOSURE_PATH);
+  });
+
   it('never redirects while the answer is unknown, or once nothing is left', () => {
     expect(needsOnboarding('/my/wallet', undefined)).toBe(false);
     expect(needsOnboarding('/my/wallet', DONE)).toBe(false);
@@ -357,6 +387,27 @@ describe('needsOnboarding', () => {
     // `useSignOut` lands on home, where a signed-out tab asks no `GET /me`: the onboarding is
     // unknown.
     expect(needsOnboarding('/', undefined)).toBe(false);
+  });
+});
+
+describe('the 탈퇴 link at the very bottom of every onboarding screen (오너 결정 2026-10-23 (4차) 1)', () => {
+  it('goes to the 탈퇴 screen, which the gate never sends back here, whatever step is left', () => {
+    expect(ONBOARDING_CLOSURE_LINK).toBe(MY_CLOSURE_PATH);
+    // Every screen that shows it: a first consent, a re-consent, the 본인확인, the nickname, and
+    // the notice and the interests once the three are done.
+    for (const onboarding of [FRESH, RECONSENT, CONSENTED, VERIFIED, COMPLETED]) {
+      expect(
+        needsOnboarding(ONBOARDING_CLOSURE_LINK, onboarding),
+        String(onboarding.nextStep),
+      ).toBe(false);
+    }
+    // Leaving for it is leaving the onboarding: never a path under /onboarding itself.
+    expect(ONBOARDING_CLOSURE_LINK.startsWith(ONBOARDING_PATH)).toBe(false);
+  });
+
+  it("says '탈퇴하기', the words of MY 설정's card that opens the same screen", () => {
+    expect(copy.onboardingClosureLink).toBe('탈퇴하기');
+    expect(copy.onboardingClosureLink).toBe(copy.closureOpen);
   });
 });
 

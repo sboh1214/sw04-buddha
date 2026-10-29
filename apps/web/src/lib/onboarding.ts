@@ -5,6 +5,7 @@ import {
   type ConsentRecord,
   type Onboarding as SharedOnboarding,
 } from '@buddha/shared';
+import { MY_CLOSURE_PATH } from './account-closure';
 import type { Me } from './api';
 import { safeNextPath } from './next-path';
 
@@ -53,6 +54,15 @@ export const ONBOARDING_PATH = '/onboarding';
  *   three legal documents — the consent step links /terms and /privacy in a new tab — and the
  *   public charge guide (ADR-0044) while paid Coin is on sale — `/charge` is not found otherwise
  *   (PAID_COIN_SALES_ENABLED, ADR-0049).
+ * - The 탈퇴 screen, /my/settings/closure (#140, owner decision 2026-10-23 (2차) 3, ADR-0086): an
+ *   account that has not finished its onboarding — a re-consent left included — may still close
+ *   itself, as it may delete its own items with sign-in only (#46, #77); the API's closure is
+ *   sign-in only too (`SessionGuard`, no `OnboardedGuard`). Only that screen, for every account
+ *   with a step left: the rest of MY stays gated — its 설정 tab too, but for an account facing a
+ *   re-consent alone, which ONBOARDING_EXEMPT_PAGES opens it to (#41), so that one also reaches the
+ *   screen from MY 설정's card (and the re-consent step's link to MY 설정, `settingsLinkOnStep`). It
+ *   stays here, not there: moved to the pages a re-consent alone opens, a first onboarding would
+ *   lose it. Every onboarding screen links to it (`ONBOARDING_CLOSURE_LINK`).
  * - /api: never a page — the layout the gate lives in does not render for it — but the list is
  *   total so the decision could move into `proxy.ts` without ever answering an API call (the
  *   auth routes included) with a redirect to an HTML form.
@@ -70,6 +80,7 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
   '/privacy',
   '/refund',
   ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
+  MY_CLOSURE_PATH,
   '/api',
 ];
 
@@ -278,6 +289,21 @@ export const ONBOARDING_SCREENS = [
   'interests',
 ] as const;
 export type OnboardingScreen = (typeof ONBOARDING_SCREENS)[number];
+
+/**
+ * Where the small '탈퇴하기' link at the very bottom of every onboarding screen goes — under
+ * 로그아웃, on each of the screens above, the consent step of a re-consent included (오너 결정
+ * 2026-10-23 (4차) 1, ADR-0086 7-35): the 탈퇴 screen, which the gate leaves to an account with any
+ * step left (`ONBOARDING_EXEMPT_PATHS`), so the link lands there and never back here. It carries no
+ * `next`: that screen's own links (MY 설정, 조치·신고 내역) are gated like the rest of MY and send
+ * such an account back through its remaining steps ((4차) 2). Following it is a plain navigation —
+ * leaving the notice or the interests by it skips the interests step like any other way out
+ * (`useInterestsLeaveReport`, ADR-0078). Only while a step is shown (`onboardingScreen` not null):
+ * not under the profile being read or that could not be, the session that ended, nor the stepper's
+ * own placeholder while it sends an account with nothing left on to `next` — just after the last
+ * step, or an account that arrives done — nor the gate's placeholder on other pages (no form).
+ */
+export const ONBOARDING_CLOSURE_LINK = MY_CLOSURE_PATH;
 
 /** What the stepper remembers of the visit, beside `GET /me`. */
 export interface StepperVisit {

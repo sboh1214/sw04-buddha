@@ -42,6 +42,7 @@ import {
   revokesSelf,
   screenAccountId,
 } from '@/lib/admin-accounts';
+import { nicknameShown } from '@/lib/account-closure';
 import { type AdminAccount, type AdminRoleChange, type AdminUser } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { readFailed } from '@/lib/query-client';
@@ -71,7 +72,9 @@ export function AdminAccounts() {
  */
 interface PendingRoleChange {
   kind: 'grant' | 'revoke';
-  account: Pick<AdminAccount, 'id' | 'nickname' | 'email'>;
+  // A search match is `AdminUser`, whose nickname is nullable (#140) — never null here: the
+  // search lists open accounts only.
+  account: Pick<AdminAccount, 'id' | 'email'> & { nickname: string | null };
 }
 
 function AdminList() {
@@ -177,10 +180,12 @@ function AdminRow({
 }
 
 /**
- * The grant: the 사용자 search (email or nickname), each match with its role — an admin is
- * badged, everyone else offered 부여. Whether the account may become one (verified email, real
- * name and phone) is the server's to say, and the dialog shows its answer. While a new term
- * loads, the previous term's matches stay dimmed with no 부여 (`grantSearchRows`).
+ * The grant: the 사용자 search (email or nickname) over open accounts — one its member closed is not
+ * listed at all (#140, owner decision 2026-10-23 (2차) 5) — each match with its role: an admin is
+ * badged, everyone else is offered 부여. Whether the account may become one (verified email, real
+ * name and phone) is the server's to say, and the dialog shows its answer — an account closed
+ * since the search included (ACCOUNT_CLOSED). While a new term loads, the previous term's matches
+ * stay dimmed with no 부여 (`grantSearchRows`).
  */
 function GrantSearch() {
   const [query, setQuery] = useState('');
@@ -297,7 +302,7 @@ function CandidateRow({
     >
       <Stack gap="0.5" minW="0">
         <HStack gap="2" flexWrap="wrap">
-          <Text fontWeight="semibold">{user.nickname}</Text>
+          <Text fontWeight="semibold">{nicknameShown(user.nickname)}</Text>
           {user.role === 'admin' && (
             <Badge colorPalette="brand" variant="subtle" data-testid="admin-grant-candidate-admin">
               {copy.adminTitle}
@@ -428,7 +433,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
             <Dialog.Body>
               <Stack gap="4">
                 <Stack gap="0.5">
-                  <Text fontWeight="medium">{change.account.nickname}</Text>
+                  <Text fontWeight="medium">{nicknameShown(change.account.nickname)}</Text>
                   <Text fontSize="sm" color="fg.muted" wordBreak="break-all">
                     {change.account.email}
                   </Text>
@@ -569,7 +574,7 @@ function ChangeRow({ entry }: { entry: AdminRoleChange }) {
         {entry.reason}
       </Text>
       <Text fontSize="xs" color="fg.muted" data-testid="admin-role-change-actor">
-        {copy.adminAccountsChangeActor} {entry.actor.nickname}
+        {copy.adminAccountsChangeActor} {nicknameShown(entry.actor.nickname)}
       </Text>
     </Stack>
   );

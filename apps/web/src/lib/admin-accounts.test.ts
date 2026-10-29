@@ -102,6 +102,13 @@ describe('refusals', () => {
     });
   });
 
+  it('explains a grant to an account its member closed since the search, not as an email to verify (#140)', () => {
+    expect(adminRoleChangeRefusal(apiError(409, 'ACCOUNT_CLOSED'))).toEqual({
+      alert: copy.adminGrantClosed,
+    });
+    expect(copy.adminGrantClosed).not.toBe(copy.errAdminGrantEmailNotVerified);
+  });
+
   it('puts a refused reason under the field', () => {
     expect(
       adminRoleChangeRefusal(
@@ -181,6 +188,11 @@ describe('how a grant reads', () => {
     expect(formatAdminGrant({ grantedAt: null, grantedBy: null })).toBe(
       copy.adminAccountsGrantUnknown,
     );
+    // A granting admin who closed the account since (#140, once the role was revoked): no
+    // nickname, named as every byline names a closed account — never 'null'.
+    expect(formatAdminGrant({ grantedAt: at, grantedBy: { id: 'a', nickname: null } })).toBe(
+      `${copy.adminAccountsGrantedAt} ${formatKst(at)} · ${copy.postAuthorFormer}`,
+    );
   });
 
   it('counts the admins', () => {
@@ -203,6 +215,16 @@ describe('the record', () => {
     expect(adminRoleChangeTarget({ target: { id: 'u', email: null, nickname: null } })).toBe(
       copy.adminAccountsTargetGone,
     );
+  });
+
+  it('names an account its member closed apart from a deleted one (#140)', () => {
+    // The closure keeps the account and replaces its address with the closed placeholder; only
+    // the nickname goes.
+    expect(
+      adminRoleChangeTarget({
+        target: { id: 'u', email: 'closed_u@noemail.buddha.local', nickname: null },
+      }),
+    ).toBe(copy.postAuthorFormer);
   });
 });
 

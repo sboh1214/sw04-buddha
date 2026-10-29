@@ -54,7 +54,13 @@ const doc = (...paragraphs: string[]) => ({
 describe('the public face of a post (static)', () => {
   it('names the author by public id, nickname, image and the 운영자 mark, never more', () => {
     expect(
-      postAuthorOf({ publicId: 'abcdefgh23', nickname: '예측가', role: 'admin', imageId: null }),
+      postAuthorOf({
+        publicId: 'abcdefgh23',
+        nickname: '예측가',
+        role: 'admin',
+        imageId: null,
+        closedAt: null,
+      }),
     ).toEqual({
       kind: 'member',
       publicId: 'abcdefgh23',
@@ -63,13 +69,38 @@ describe('the public face of a post (static)', () => {
       isAdmin: true,
     });
     expect(
-      postAuthorOf({ publicId: 'abcdefgh23', nickname: 'x', role: 'user', imageId: null }),
+      postAuthorOf({
+        publicId: 'abcdefgh23',
+        nickname: 'x',
+        role: 'user',
+        imageId: null,
+        closedAt: null,
+      }),
     ).toMatchObject({ isAdmin: false });
     // The profile image (#141) as its address, read through the API like a post's image.
     const imageId = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
     expect(
-      postAuthorOf({ publicId: 'abcdefgh23', nickname: 'x', role: 'user', imageId }),
+      postAuthorOf({
+        publicId: 'abcdefgh23',
+        nickname: 'x',
+        role: 'user',
+        imageId,
+        closedAt: null,
+      }),
     ).toMatchObject({ imageUrl: `/api/v1/media/${imageId}` });
+  });
+
+  it('names a member who closed the account as a former member and nothing else (#140, #37-16)', () => {
+    // '탈퇴한 사용자' with no profile link: not the public id, the image or the 운영자 mark.
+    expect(
+      postAuthorOf({
+        publicId: 'abcdefgh23',
+        nickname: null,
+        role: 'user',
+        imageId: null,
+        closedAt: new Date(),
+      }),
+    ).toEqual({ kind: 'former_member' });
   });
 
   it('shows a deleted post as a placeholder only while comments not deleted hang under it (#45-5)', () => {

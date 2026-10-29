@@ -42,6 +42,7 @@ import { postFirstLine, postPath } from '@/lib/posts';
 import {
   ActionRows,
   Block,
+  ClosedMemberNotice,
   type DialogSpec,
   Line,
   LoadFailedNotice,
@@ -190,32 +191,41 @@ function ActionBar({
           {hide.label}
         </Button>
       )}
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => onOpen(warnDialog(author, warnSubject))}
-        data-testid="moderation-warn"
-      >
-        {copy.adminModerationWarn}
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        colorPalette="no"
-        onClick={() => onOpen(restrictDialog(author, itemSubjects(warnSubject)))}
-        data-testid="moderation-restrict"
-      >
-        {copy.adminModerationRestrict}
-      </Button>
-      <Button
-        size="sm"
-        variant="outline"
-        colorPalette="no"
-        onClick={() => onOpen(accountRestrictDialog(author, itemSubjects(warnSubject)))}
-        data-testid="moderation-account-restrict"
-      >
-        {copy.adminModerationAccountRestrict}
-      </Button>
+      {/* An author who closed the account (#140, the only one with no nickname) takes no new
+          action (owner decision 2026-10-23 (2차) 1); the item is still hidden, and its reports
+          dismissed, as any. */}
+      {author.nickname === null ? (
+        <ClosedMemberNotice />
+      ) : (
+        <>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => onOpen(warnDialog(author, warnSubject))}
+            data-testid="moderation-warn"
+          >
+            {copy.adminModerationWarn}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            colorPalette="no"
+            onClick={() => onOpen(restrictDialog(author, itemSubjects(warnSubject)))}
+            data-testid="moderation-restrict"
+          >
+            {copy.adminModerationRestrict}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            colorPalette="no"
+            onClick={() => onOpen(accountRestrictDialog(author, itemSubjects(warnSubject)))}
+            data-testid="moderation-account-restrict"
+          >
+            {copy.adminModerationAccountRestrict}
+          </Button>
+        </>
+      )}
       {pendingReportIds(reports).length > 0 && (
         <Button
           size="sm"

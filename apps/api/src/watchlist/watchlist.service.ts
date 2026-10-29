@@ -9,6 +9,7 @@ import {
 } from '@buddha/shared';
 import { and, desc, eq, ne } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { closedAccountRefusal } from '../common/errors/closed-account.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import {
@@ -126,11 +127,13 @@ export class WatchlistService {
   /**
    * Sets the caller's watch of one public market and answers the state it is in now. Idempotent
    * both ways; only a change writes its event (`watch` or `unwatch`). Nothing else is touched:
-   * no order, position, balance or market statistic (#89 AC).
+   * no order, position, balance or market statistic (#89 AC). A watch of an account closed since
+   * the request passed SessionGuard is refused by the database (migration 0043, #140) and answered
+   * as the session that ended (`closedAccountRefusal`).
    */
   async set(userId: string, marketId: string, watched: boolean): Promise<WatchState> {
     const { markets, marketWatches, marketWatchEvents } = schema;
-    return this.db.transaction(async (tx) => {
+    const write = this.db.transaction(async (tx) => {
       const [market] = await tx
         .select({ id: markets.id })
         .from(markets)
@@ -154,6 +157,9 @@ export class WatchlistService {
           .values({ userId, marketId, action: watched ? 'watch' : 'unwatch' });
       }
       return { watched };
+    });
+    return write.catch((error: unknown) => {
+      throw closedAccountRefusal(error) ?? error;
     });
   }
 }

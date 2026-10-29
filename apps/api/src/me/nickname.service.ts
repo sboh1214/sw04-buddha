@@ -219,8 +219,11 @@ export class NicknameService {
       .where(eq(schema.profiles.userId, userId))
       .limit(1)
       .for('update');
-    if (!profile) throw new AppError('NOT_FOUND', { message: 'Profile not found' });
-    return profile;
+    // A closed account (#140) has no nickname — and no session to ask with: no account here.
+    if (!profile || profile.nickname === null) {
+      throw new AppError('NOT_FOUND', { message: 'Profile not found' });
+    }
+    return { ...profile, nickname: profile.nickname };
   }
 
   /**

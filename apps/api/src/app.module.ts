@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { AccountClosureModule } from './account-closure/account-closure.module.js';
 import { AdminAccountsModule } from './admin-accounts/admin-accounts.module.js';
 import { AdminModule } from './admin/admin.module.js';
 import { ApprovalsModule } from './approvals/approvals.module.js';
@@ -94,11 +95,15 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // member lookup it uses.
     AuthoredModule,
     // 신고와 운영 처리 (#50): the reports, the operators' queue and actions, and MY's records of
-    // both. Last, so the document keeps the routes before it where they were.
+    // both. After the modules above, so the document keeps the routes before it where they were.
     ModerationModule,
-    // 반복 링크 검토 목록 (#187): the operators' review list of repeated links. Last, so the
-    // document keeps every route before it where it was. Its screen is a page of #50's area.
+    // 반복 링크 검토 목록 (#187): the operators' review list of repeated links. After the modules
+    // above, so the document keeps every route before it where it was. Its screen is a page of
+    // #50's area.
     AdminLinkFlagsModule,
+    // 탈퇴 (#140): the member's closure of the account. Last, so the document keeps the routes
+    // before it where they were.
+    AccountClosureModule,
   ],
   controllers: [HealthController],
 })

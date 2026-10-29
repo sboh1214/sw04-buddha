@@ -20,6 +20,13 @@ import { mediaObjects } from './media-objects.js';
  * Nickname is mandatory from day one (PLAN 6.3); charset: nicknameSchema in @buddha/shared.
  * Unique ignoring case (#58, ADR-0069 decision 1 #57-6): the unique index is on `lower(nickname)`,
  * so 'Abc' keeps 'abc' out (`nicknameKey` in @buddha/shared is the same comparison).
+ *
+ * The row outlives the member's closure of the account (#140, ADR-0069 decision 1 #57-17 and
+ * decision 3 #37-16): `closed_at` marks it, and the public items are gone — no nickname (null only
+ * then), no 소개, no image (the interest categories are deleted with it) — so every public face made
+ * from it is '탈퇴한 사용자' (`postAuthorOf` in apps/api) and its profile answers as for no account.
+ * The public id stays: nothing shows it any more, and it is never handed to another account. A
+ * closed row never changes again (migration 0043).
  */
 export const profiles = pgTable(
   'profiles',
@@ -27,7 +34,8 @@ export const profiles = pgTable(
     userId: text()
       .primaryKey()
       .references(() => user.id, { onDelete: 'cascade' }),
-    nickname: varchar({ length: 20 }).notNull(),
+    /** Null exactly once the account closed (#140, `profiles_closed_check`). */
+    nickname: varchar({ length: 20 }),
     /**
      * The account's public id (#46, ADR-0069 decision 3 #37-2 and decision 5): what public answers
      * name the account by — a post's author, #41's `/u/<publicId>` — so the account id never
@@ -99,6 +107,15 @@ export const profiles = pgTable(
     imageKind: varchar({ length: 16 }).generatedAlwaysAs(
       sql`CASE WHEN image_id IS NOT NULL THEN 'profile_image' END`,
     ),
+    /**
+     * When the member closed the account (탈퇴, #140, ADR-0069 decision 1 #57-15…#57-18), from the
+     * database clock; null while it is open. Set once, never cleared (#57-17: no restoration), and
+     * at the commit that sets it the closure is whole: the Coin forfeited, the sign-in methods,
+     * sessions, verified number, watchlist and search history gone, the address replaced
+     * (migration 0043's `profiles_closed_completely`). What #184's retention of the account's
+     * remaining records counts from (decision 4 #184 «탈퇴 시각부터»).
+     */
+    closedAt: timestampTz(),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
   },
@@ -132,6 +149,15 @@ export const profiles = pgTable(
     check('profiles_public_id_check', sql`${t.publicId} ~ '^[2-9a-hj-np-z]{10}$'`),
     /** A bio is absent or has text: the API stores a blank one as none, as a post's title. */
     check('profiles_bio_check', sql`${t.bio} IS NULL OR btrim(${t.bio}) <> ''`),
+    /**
+     * An open account has a nickname; a closed one has none, nor a 소개 or an image (#37-16: the
+     * public items go with the closure), and is never an admin (#57-17: an admin closes only once
+     * the role is revoked — and a closed account is never given it).
+     */
+    check(
+      'profiles_closed_check',
+      sql`(${t.nickname} IS NULL) = (${t.closedAt} IS NOT NULL) AND (${t.closedAt} IS NULL OR (${t.bio} IS NULL AND ${t.imageId} IS NULL AND ${t.role} = 'user'))`,
+    ),
     /**
      * The profile image is a profile image of this very account (#141): the database holds it,
      * whoever writes — never another member's upload, nor a post's image (which the public reads

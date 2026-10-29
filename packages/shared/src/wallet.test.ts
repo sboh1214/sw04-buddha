@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ADJUST_MAX_ABS_COIN,
+  ADMIN_USER_STATUSES,
   adminPaymentSchema,
   adminUserQuerySchema,
   auditFailureSchema,
@@ -171,5 +172,15 @@ describe('response schemas', () => {
   it('takes an optional search term on the admin user query', () => {
     expect(adminUserQuerySchema.parse({ q: ' 홍길동 ' })).toMatchObject({ q: '홍길동', limit: 20 });
     expect(adminUserQuerySchema.safeParse({ q: '' }).success).toBe(false);
+  });
+
+  it('lists every account unless asked for the open or the closed ones only (#140)', () => {
+    expect(ADMIN_USER_STATUSES).toEqual(['open', 'closed']);
+    expect(adminUserQuerySchema.parse({}).status).toBeUndefined();
+    expect(adminUserQuerySchema.parse({ q: 'a', status: 'open' })).toMatchObject({
+      q: 'a',
+      status: 'open',
+    });
+    expect(adminUserQuerySchema.safeParse({ status: 'deleted' }).success).toBe(false);
   });
 });

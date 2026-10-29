@@ -16,6 +16,7 @@ import {
   validationField,
   validationMessage,
 } from './api';
+import { nicknameShown } from './account-closure';
 import { formatKst } from './datetime';
 
 /**
@@ -43,7 +44,7 @@ export function isAdminRoleChangeRefusal(value: unknown): value is AdminRoleChan
 /** The list's line under an admin: when and by whom it was granted, or that no record says. */
 export function formatAdminGrant(account: Pick<AdminAccount, 'grantedAt' | 'grantedBy'>): string {
   if (account.grantedAt === null) return copy.adminAccountsGrantUnknown;
-  const by = account.grantedBy === null ? '' : ` · ${account.grantedBy.nickname}`;
+  const by = account.grantedBy === null ? '' : ` · ${nicknameShown(account.grantedBy.nickname)}`;
   return `${copy.adminAccountsGrantedAt} ${formatKst(account.grantedAt)}${by}`;
 }
 
@@ -63,9 +64,14 @@ export const ADMIN_ROLE_CHANGE_PALETTE: Readonly<Record<AdminRoleChangeType, str
   admin_revoke: 'red',
 };
 
-/** Whose role changed: its nickname now, or 삭제된 계정 once the account is gone. */
+/**
+ * Whose role changed: its nickname now, '탈퇴한 사용자' once its member closed it (#140 — the
+ * nickname goes, the account and its placeholder address stay), or 삭제된 계정 once the account is
+ * gone.
+ */
 export function adminRoleChangeTarget(change: Pick<AdminRoleChange, 'target'>): string {
-  return change.target.nickname ?? copy.adminAccountsTargetGone;
+  if (change.target.nickname !== null) return change.target.nickname;
+  return change.target.email === null ? copy.adminAccountsTargetGone : nicknameShown(null);
 }
 
 /** One page of the grant search (`useAdminGrantCandidates`), with the term it answers. */
@@ -157,7 +163,8 @@ export type AdminRoleReasonValues = z.infer<typeof adminRoleReasonFormSchema>;
  * What a dialog does with a refused grant or revoke.
  * - `field`: the reason was refused; the message goes under it and the dialog stays.
  * - `alert`: the rules refused it (ROLE_CHANGE_NOT_ALLOWED): why, inside the dialog, which stays
- *   so the admin reads it — an unverified phone, an unverified email, fewer than two admins left.
+ *   so the admin reads it — an unverified phone, an unverified email, fewer than two admins left;
+ *   or a grant to an account its member closed since the search (ACCOUNT_CLOSED, #140).
  * - `toast`: anything else, a change of the signed-in account among it (`sessionChanged`).
  *   `keepDialog` only when the request never came back (nothing was decided, so the admin may
  *   send it again); an answer from the API closes it.
@@ -180,6 +187,9 @@ export function adminRoleChangeRefusal(error: unknown): AdminRoleChangeOutcome {
         : copy.errUnknown,
     };
   }
+  // Closed by its member since the search was read (#140): the grant's own sentence, in the dialog
+  // like the rules' refusals — the account will never take the role.
+  if (isApiError(error, 'ACCOUNT_CLOSED')) return { alert: copy.adminGrantClosed };
   if (isApiError(error, 'NOT_FOUND')) {
     return { toast: copy.errAdminAccountNotFound, keepDialog: false };
   }

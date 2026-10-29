@@ -73,10 +73,11 @@ describe('enums', () => {
     // one removal so far (MARKET_VOID_REFUND) recreated the type on an emptied table (0017).
     expect(enums.PAYMENT_STATUSES.slice(0, 3)).toEqual(['pending', 'succeeded', 'failed']);
     expect(enums.PAYMENT_STATUSES.slice(3)).toEqual(['cancelled', 'refunding', 'refunded']);
-    expect(enums.LEDGER_ENTRY_TYPES.slice(-3)).toEqual([
+    expect(enums.LEDGER_ENTRY_TYPES.slice(-4)).toEqual([
       'PAYMENT_CANCEL',
       'PAYMENT_CANCEL_REVERSAL',
       'START_GRANT',
+      'CLOSURE_FORFEIT',
     ]);
     expect(enums.paymentStatusSchema.parse('refunding')).toBe('refunding');
     expect(enums.ledgerEntryTypeSchema.parse('PAYMENT_CANCEL_REVERSAL')).toBe(
@@ -162,5 +163,12 @@ describe('enums', () => {
     expect(enums.ledgerEntryTypeSchema.parse('START_GRANT')).toBe('START_GRANT');
     expect(enums.ledgerRefTypeSchema.parse('start_grant')).toBe('start_grant');
     expect(enums.LEDGER_ENTRY_TYPES).toContain('BONUS');
+  });
+
+  it('gives the forfeiture of a closure a ledger type of its own (#140)', () => {
+    // ADR-0069 decision 1 #57-16: the Coin left is forfeited under its own type '탈퇴 소멸',
+    // referring to the closed account itself.
+    expect(enums.ledgerEntryTypeSchema.parse('CLOSURE_FORFEIT')).toBe('CLOSURE_FORFEIT');
+    expect(enums.ledgerRefTypeSchema.parse('account_closure')).toBe('account_closure');
   });
 });

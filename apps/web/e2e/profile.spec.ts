@@ -5,6 +5,7 @@ import {
   E2E_REAL_NAME,
   createOpenMarket,
   expect,
+  expectOnboardingClosureLink,
   freshEmail,
   freshTag,
   logOut,
@@ -472,6 +473,15 @@ test.describe('공개 프로필', () => {
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(bio);
 
+    // --- 탈퇴 (#140) from MY 설정's last card: the screen is open to the account as to any with a
+    // step left, and its way back stays on MY 설정, open to this one (ADR-0086 결과 5 (9)).
+    await page.getByTestId('settings-closure-open').click();
+    await expect(page).toHaveURL('/my/settings/closure');
+    await expect(page.getByTestId('closure-coin')).toBeVisible();
+    await page.getByTestId('closure-back').click();
+    await expect(page).toHaveURL(settings);
+    await expect(bioInput).toHaveValue(bio);
+
     // --- a new 소개: not sent — the step, which links back to MY 설정 (owner decision 2026-10-22
     // answer 2); agreed, back on MY 설정 with the 소개 typed put back in its box, unsaved (answer 3).
     await bioInput.fill(`${bio} 더`);
@@ -483,6 +493,12 @@ test.describe('공개 프로필', () => {
     await expect(
       settingsLink.getByRole('link', { name: copy.onboardingReconsentSettingsLink }),
     ).toHaveAttribute('href', settings);
+    // The step's '탈퇴하기' (#140) stays at the very bottom, under this line too (ADR-0086 결과 5
+    // (9), 오너 결정 2026-10-23 (4차) 1).
+    await expectOnboardingClosureLink(page);
+    const line = await settingsLink.boundingBox();
+    const leave = await page.getByTestId('onboarding-closure').boundingBox();
+    expect(leave!.y).toBeGreaterThan(line!.y + line!.height - 1);
     await agreeAgain(page);
     await expect(page).toHaveURL(settings);
     await expect(bioInput).toHaveValue(`${bio} 더`);

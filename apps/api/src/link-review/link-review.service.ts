@@ -501,7 +501,7 @@ export class LinkReviewService {
           outcome: body.outcome,
           note,
           reviewedAt: now.toISOString(),
-          admin: { userId: adminId, nickname: admin?.nickname ?? '' },
+          admin: { userId: adminId, nickname: admin?.nickname ?? null },
         },
       };
     });

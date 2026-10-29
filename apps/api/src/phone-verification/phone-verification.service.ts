@@ -13,6 +13,7 @@ import {
 } from '@buddha/shared';
 import { and, desc, eq, gt, lt, ne, sql, type SQL } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
+import { closedAccountRefusal } from '../common/errors/closed-account.js';
 import { findPgError, isPgError, PG_UNIQUE_VIOLATION } from '../common/errors/pg-error.js';
 import { type Env } from '../config/env.js';
 import { clockTimestamp } from '../infra/db/clock.js';
@@ -394,7 +395,9 @@ export class PhoneVerificationService {
 
   /**
    * A transaction whose failures leave without the values it wrote: an AppError as thrown,
-   * `known(error)` when it names one, and anything else as `verificationWriteFailure`.
+   * `known(error)` when it names one, a send or a confirmation of an account closed since the
+   * request passed SessionGuard as the session that ended (migration 0043 refuses the row, #140 —
+   * `closedAccountRefusal`), and anything else as `verificationWriteFailure`.
    */
   private async write<T>(
     work: (tx: Tx) => Promise<T>,
@@ -404,7 +407,7 @@ export class PhoneVerificationService {
       return await this.db.transaction(work);
     } catch (error) {
       if (error instanceof AppError) throw error;
-      throw known(error) ?? verificationWriteFailure(error);
+      throw known(error) ?? closedAccountRefusal(error) ?? verificationWriteFailure(error);
     }
   }
 }

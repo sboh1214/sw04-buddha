@@ -13,7 +13,6 @@ import {
   type CommentThread,
   type PostComment,
   type PublishedComment,
-  type Role,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -23,7 +22,12 @@ import { DB } from '../infra/db/db.provider.js';
 import { commentLikeCountSql } from '../likes/like-queries.js';
 import { LinkReviewService } from '../link-review/link-review.service.js';
 import { assertWriter } from '../moderation/restrictions.js';
-import { authorColumns, postAuthorOf, publicStateOf } from '../posts/posts.service.js';
+import {
+  authorColumns,
+  postAuthorOf,
+  publicStateOf,
+  type AuthorRow,
+} from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { WriteLimitsService, type Writer } from '../write-limits/write-limits.service.js';
 import { CommentCursors } from './comment-cursor.js';
@@ -45,7 +49,7 @@ interface CommentRow {
   editedAt: Date | null;
   deletedAt: Date | null;
   hiddenAt: Date | null;
-  author: { publicId: string; nickname: string; role: Role; imageId: string | null };
+  author: AuthorRow;
   likeCount: number;
 }
 
@@ -279,6 +283,8 @@ export class CommentsService {
         role: profiles.role,
         // The author's profile image (#141), as `authorColumns` reads it for every other face.
         imageId: profiles.imageId,
+        // Whether the author closed the account (#140): then '탈퇴한 사용자', as every other face.
+        closedAt: profiles.closedAt,
       })
       .from(postComments)
       .innerJoin(profiles, eq(profiles.userId, postComments.authorId))
@@ -300,6 +306,7 @@ export class CommentsService {
           nickname: reply.nickname,
           role: reply.role,
           imageId: reply.imageId,
+          closedAt: reply.closedAt,
         },
         likeCount: commentLikeCountSql(reply.id),
       })

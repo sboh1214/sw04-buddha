@@ -143,8 +143,10 @@ export const ERROR_CODES = [
    * was cancelled already, a report was processed already, a warning or a restriction names a
    * post or a comment of another member, or a shortening or a lift is not of a writing
    * restriction, of one that ended already, or not to an earlier end still to come — or an account
-   * restriction request no admin could decide (none but the one asking and the member). Details
-   * carry the reason, moderationNotAllowedDetailsSchema.
+   * restriction request no admin could decide (none but the one asking and the member), or a new
+   * warning, writing restriction or account restriction request, or the approval of one, against
+   * an account its member closed (#140). Details carry the reason,
+   * moderationNotAllowedDetailsSchema.
    */
   'MODERATION_NOT_ALLOWED',
   /**
@@ -165,6 +167,19 @@ export const ERROR_CODES = [
    * retryAfterSeconds, writeLimitedDetailsSchema.
    */
   'WRITE_LIMITED',
+  /**
+   * A closure of the account by its member, 탈퇴 #140, that the rules refuse: the account holds
+   * the admin role and closes once the role is revoked, it holds contracts not settled yet, a
+   * payment of it is pending or refunding, or it has orders waiting. Details carry the reason,
+   * accountClosureNotAllowedDetailsSchema. A restriction refuses it as RESTRICTED.
+   */
+  'CLOSURE_NOT_ALLOWED',
+  /**
+   * The account was closed by its member, #140: an operator write that would give it Coin or take
+   * Coin from it is refused, as the ledger of a closed account takes no entry after the closure,
+   * and so is an admin grant, as a closed account signs in no more and its profile never changes.
+   */
+  'ACCOUNT_CLOSED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

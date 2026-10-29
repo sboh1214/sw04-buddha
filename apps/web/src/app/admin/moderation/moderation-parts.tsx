@@ -32,6 +32,7 @@ import { type ReactNode, useId, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { type ModerationVariables, useModerate } from '@/hooks/use-admin-moderation';
+import { nicknameShown } from '@/lib/account-closure';
 import { screenAccountId } from '@/lib/admin-accounts';
 import {
   type AccountRestrictionRequest,
@@ -84,6 +85,7 @@ import {
   reportReasonOf,
   reportStatusLabel,
   reportTargetTypeLabel,
+  requestDecisionLine,
   requestStanding,
   restrictionStanding,
   restrictionTermLabel,
@@ -158,7 +160,7 @@ export function UserName({ user, link = true }: { user: ModerationUser; link?: b
   const name = (
     <HStack as="span" gap="1.5" display="inline-flex">
       <Text as="span" fontWeight="medium" wordBreak="break-word">
-        {user.nickname}
+        {nicknameShown(user.nickname)}
       </Text>
       {user.role === 'admin' && (
         <Badge size="sm" variant="subtle" colorPalette="gray">
@@ -174,6 +176,34 @@ export function UserName({ user, link = true }: { user: ModerationUser; link?: b
         {name}
       </NextLink>
     </ChakraLink>
+  );
+}
+
+/**
+ * The '탈퇴' marker beside an account its member closed (#140, owner decision 2026-10-23 (2차) 5,
+ * ADR-0086): the account stays on the operators' screens — the account list, the member's page —
+ * named '탈퇴한 사용자' as every byline names it, and this says apart that it is closed. A closed
+ * account is the only one with no nickname (profiles_closed_check, migration 0043).
+ */
+export function ClosedBadge() {
+  return (
+    <Badge size="sm" variant="outline" colorPalette="gray" data-testid="admin-closed-badge">
+      {copy.adminClosedBadge}
+    </Badge>
+  );
+}
+
+/**
+ * In place of 경고, 작성 제한 and 계정 제한 요청 for a member who closed the account (#140, owner
+ * decision 2026-10-23 (2차) 1): the server takes no new action against a closed account
+ * (MODERATION_NOT_ALLOWED `closed`, the same sentence when the page was read before the closure).
+ * Hiding the item, dismissing reports and cancelling an earlier action stay where they are.
+ */
+export function ClosedMemberNotice() {
+  return (
+    <Text fontSize="sm" color="fg.muted" data-testid="moderation-closed">
+      {copy.errModerationClosed}
+    </Text>
   );
 }
 
@@ -709,6 +739,7 @@ export function RequestRows({
         const standing = requestStanding(request, operatorId);
         const mootNotice = accountRequestMootNotice(request, standing);
         const viewer = request.aboutViewer;
+        const decision = requestDecisionLine(request, viewer);
         return (
           <Stack
             as="li"
@@ -804,14 +835,17 @@ export function RequestRows({
                 </Alert.Content>
               </Alert.Root>
             )}
-            {request.decidedAt !== null && (
+            {decision !== null && (
               <>
                 <Line
-                  label={
-                    viewer ? copy.adminAccountRequestDecidedAt : copy.adminAccountRequestDecidedBy
+                  label={decision.label}
+                  testId={
+                    request.closedByAccountClosure
+                      ? 'account-request-closed-by-closure'
+                      : 'account-request-decided'
                   }
                 >
-                  {operatorLineText(request.decidedBy, request.decidedAt, viewer)}
+                  {decision.text}
                 </Line>
                 {request.decisionReason !== null && (
                   <Line label={copy.adminAccountRequestDecisionReason}>
@@ -1341,7 +1375,7 @@ export function cancelDialog(action: AdminModerationAction): DialogSpec {
     testId: 'moderation-cancel-dialog',
     details: (
       <Text fontSize="sm" fontWeight="medium">
-        {moderationActionLabel(action.type)} · {action.user.nickname} ·{' '}
+        {moderationActionLabel(action.type)} · {nicknameShown(action.user.nickname)} ·{' '}
         {formatKst(action.createdAt)}
       </Text>
     ),
@@ -1357,8 +1391,9 @@ export function cancelDialog(action: AdminModerationAction): DialogSpec {
 function RestrictionSummary({ action }: { action: AdminModerationAction }) {
   return (
     <Text fontSize="sm" fontWeight="medium">
-      {moderationActionLabel(action.type)} · {action.user.nickname} · {formatKst(action.createdAt)}{' '}
-      · {copy.moderationEndsAt} {adminRestrictionEndText(action.endsAt)}
+      {moderationActionLabel(action.type)} · {nicknameShown(action.user.nickname)} ·{' '}
+      {formatKst(action.createdAt)} · {copy.moderationEndsAt}{' '}
+      {adminRestrictionEndText(action.endsAt)}
     </Text>
   );
 }
@@ -1527,7 +1562,7 @@ function RequestSummary({ request }: { request: AccountRestrictionRequest }) {
   return (
     <Stack gap="1">
       <Text fontSize="sm" fontWeight="medium">
-        {accountRequestChangeLabel(request.change)} · {request.user.nickname} ·{' '}
+        {accountRequestChangeLabel(request.change)} · {nicknameShown(request.user.nickname)} ·{' '}
         {formatKst(request.requestedAt)}
       </Text>
       <RequestDetails request={request} />
@@ -1628,7 +1663,7 @@ export function dismissDialog(reports: readonly AdminReport[]): DialogSpec {
             <li key={report.id}>
               {[
                 reportReasonLabel(report.reason),
-                ...(report.reporter === null ? [] : [report.reporter.nickname]),
+                ...(report.reporter === null ? [] : [nicknameShown(report.reporter.nickname)]),
                 formatKst(report.createdAt),
               ].join(' · ')}
             </li>

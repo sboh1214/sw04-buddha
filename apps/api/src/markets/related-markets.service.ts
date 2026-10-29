@@ -275,7 +275,7 @@ export class RelatedMarketsService {
       .orderBy(desc(marketLinks.createdAt), desc(markets.id));
     return rows.map((row) => ({
       ...toMarketSummary(row.market, row.category),
-      linkedBy: { id: row.linkedBy, nickname: row.linkedByNickname ?? '' },
+      linkedBy: { id: row.linkedBy, nickname: row.linkedByNickname },
       linkedAt: row.linkedAt.toISOString(),
     }));
   }

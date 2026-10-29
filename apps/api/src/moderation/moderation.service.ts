@@ -188,7 +188,8 @@ export class ModerationService {
   /**
    * `POST /admin/moderation/users/:userId/warn` (#45-11: a record and the member's notice only).
    * With a subject — the member's post, comment or profile — the pending reports on it are
-   * resolved by the warning; one not the member's is `not_theirs`.
+   * resolved by the warning; one not the member's is `not_theirs`. Never on an account its member
+   * closed (`closed`, #140).
    */
   async warn(
     adminId: string,
@@ -197,7 +198,7 @@ export class ModerationService {
   ): Promise<AdminModerationAction> {
     const id = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
-      await this.lockProfile(tx, userId);
+      await this.lockOpenProfile(tx, userId);
       const subject = body.subject;
       const { postId, commentId, target } = await this.subjectOf(tx, userId, subject);
       return this.record(
@@ -225,8 +226,9 @@ export class ModerationService {
    * write locks it — so a write in flight commits before it and none after gets past it. A member
    * restricted already keeps the one that ends later (#45-12): this is recorded as its own action
    * and the latest end among the standing ones governs (`writingRestrictionOf`), so a shorter one
-   * changes nothing and a longer one takes over at once. Never on the acting operator (`own`).
-   * What the member wrote stays as it is (#139·#45-12 «그대로 둔다»).
+   * changes nothing and a longer one takes over at once. Never on the acting operator (`own`), nor
+   * on an account its member closed (`closed`, #140 — owner decision 2026-10-23 (2차) 1). What the
+   * member wrote stays as it is (#139·#45-12 «그대로 둔다»).
    */
   async restrictWriting(
     adminId: string,
@@ -235,7 +237,7 @@ export class ModerationService {
   ): Promise<AdminModerationAction> {
     const id = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
-      await this.lockProfile(tx, userId);
+      await this.lockOpenProfile(tx, userId);
       const subject = body.subject;
       const { postId, commentId, target } = await this.subjectOf(tx, userId, subject);
       const now = await clockTimestamp(tx);
@@ -310,9 +312,11 @@ export class ModerationService {
     const id = await this.db.transaction(async (tx) => {
       if (userId === adminId) throw refused('own');
       const profile = await this.lockProfile(tx, userId);
-      if (isAutoNickname(profile.nickname)) throw refused('nothing_to_remove');
+      // A closed account has no nickname at all (#140): nothing to take away either.
+      const { nickname } = profile;
+      if (nickname === null || isAutoNickname(nickname)) throw refused('nothing_to_remove');
       const now = await clockTimestamp(tx);
-      await this.giveAutoNickname(tx, userId, profile.nickname);
+      await this.giveAutoNickname(tx, userId, nickname);
       await tx
         .update(schema.profiles)
         .set({ nicknameChangedAt: null })
@@ -325,12 +329,12 @@ export class ModerationService {
         { targetType: 'profile', targetKey: userId },
         'moderation_nickname_reset',
         {},
-        { nickname: profile.nickname },
+        { nickname },
         now,
       );
       await tx
         .insert(schema.nicknameHolds)
-        .values({ nickname: profile.nickname, userId: null, releasedAt: now, actionId });
+        .values({ nickname, userId: null, releasedAt: now, actionId });
       return actionId;
     });
     return this.answer(id, adminId);
@@ -753,7 +757,19 @@ export class ModerationService {
    * A reset whose hold is gone (#184 removes it past the 30 days) hands nothing.
    */
   private async handHoldOver(tx: Tx, actionId: string, userId: string): Promise<void> {
-    const { nicknameHolds } = schema;
+    const { nicknameHolds, profiles } = schema;
+    // A member who closed the account gets nothing back (#140, ADR-0081 결과 5): the closure cut
+    // every hold's link to it (#57-18 «계정과의 연결을 끊은 채»), and this one stays held from
+    // everybody for the rest of its 30 days. FOR KEY SHARE waits for a closure in flight (it holds
+    // the profile FOR UPDATE), so its commit is seen; taken before the nickname's lock, the order
+    // the closure takes them in. Migration 0043 refuses a hold naming a closed account anyway.
+    const [member] = await tx
+      .select({ closedAt: profiles.closedAt })
+      .from(profiles)
+      .where(eq(profiles.userId, userId))
+      .limit(1)
+      .for('key share');
+    if (member?.closedAt != null) return;
     const [hold] = await tx
       .select({ id: nicknameHolds.id, nickname: nicknameHolds.nickname })
       .from(nicknameHolds)
@@ -771,12 +787,31 @@ export class ModerationService {
   async lockProfile(tx: Tx, userId: string) {
     const { profiles } = schema;
     const [profile] = await tx
-      .select({ nickname: profiles.nickname, bio: profiles.bio, imageId: profiles.imageId })
+      .select({
+        nickname: profiles.nickname,
+        bio: profiles.bio,
+        imageId: profiles.imageId,
+        closedAt: profiles.closedAt,
+      })
       .from(profiles)
       .where(eq(profiles.userId, userId))
       .limit(1)
       .for('update');
     if (!profile) throw notFound('User');
+    return profile;
+  }
+
+  /**
+   * The member's profile row locked as `lockProfile` does, for a new action against them — a
+   * warning, a writing restriction, an account restriction request and its approval: refused
+   * (`closed`) once the member closed the account (탈퇴 #140, owner decision 2026-10-23 (2차) 1,
+   * ADR-0086). The closure holds the same row FOR UPDATE from its start, so an action in flight
+   * commits before it (and the closure, refused by none of them but a standing restriction, sees
+   * it), and one that comes later waits for the closure and reads the account closed.
+   */
+  async lockOpenProfile(tx: Tx, userId: string) {
+    const profile = await this.lockProfile(tx, userId);
+    if (profile.closedAt !== null) throw refused('closed');
     return profile;
   }
 

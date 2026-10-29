@@ -15,6 +15,7 @@ import path from 'node:path';
 import {
   EVERY_ROUTE_PATH_FEATURES,
   PAID_COIN_SALES_ENABLED,
+  accountClosureCheckSchema,
   errorEnvelopeSchema,
   findExcludedIdentifier,
   findPrivateField,
@@ -240,6 +241,15 @@ describe('public and owner-only routes (static)', () => {
       ...AUTH_ROUTES,
     })) {
       expect(entry.reason.trim(), key).not.toBe('');
+    }
+  });
+
+  it("names in the 탈퇴 check's reason every field it answers with (#140, ADR-0086)", () => {
+    // The reason lists what the route answers and ends with '만' (only these): a field added to
+    // the answer (`startGrantReceived`, owner decision 2026-10-23 (3차) 9) must be named there too.
+    const reason = OWNER_ROUTES['GET /me/closure']?.reason ?? '';
+    for (const field of Object.keys(accountClosureCheckSchema.shape)) {
+      expect(reason, field).toContain(field);
     }
   });
 
@@ -582,6 +592,8 @@ describe('the public API document (static)', () => {
       'PUT /me/interest-categories',
       'POST /me/onboarding/interests',
       'PUT /me/profile-image',
+      // 탈퇴 (#140, ADR-0069 decision 4 #140): until either restriction ends or is lifted.
+      'POST /me/closure',
     ];
     // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
     // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is
@@ -609,8 +621,8 @@ describe('the public API document (static)', () => {
       'POST /payments/charge',
       'POST /coupons/redeem',
     ];
-    // A new owner write — #77's market proposal, #140's withdrawal — fails here until it is put
-    // in one list or the other: whether a writing restriction refuses it is decided, not missed.
+    // A new owner write — #77's market proposal — fails here until it is put in one list or the
+    // other: whether a writing restriction refuses it is decided, not missed.
     const writes = Object.keys(OWNER_ROUTES).filter((key) => !key.startsWith('GET '));
     expect([...REFUSED, ...OPEN].sort()).toEqual([...writes].sort());
     const documented = operations

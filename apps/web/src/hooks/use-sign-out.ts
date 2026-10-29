@@ -1,6 +1,6 @@
 'use client';
 
-import { useQueryClient } from '@tanstack/react-query';
+import { type QueryClient, useQueryClient } from '@tanstack/react-query';
 import { useRouter } from 'next/navigation';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -53,10 +53,33 @@ export async function signOutInOrder(steps: SignOutSteps): Promise<void> {
 }
 
 /**
+ * What an account leaves in the tab, gone with it — on 로그아웃 (`useSignOut`) and on 탈퇴, which
+ * ends the session too (app/my/settings/closure/account-closure.tsx, ADR-0086 7-20).
+ *
+ * The query cache, everything, not just `['me']`. The browser QueryClient is a singleton for the
+ * tab's lifetime (lib/query-client.ts) and none of the keys carry a user id, so a ledger, payment
+ * list or admin memo left behind here would be served — fresh, for the 30s staleTime, so not even
+ * refetched — to whoever logs in next on this browser. This covers the tab that clicked; every
+ * other tab learns of the sign-out from better-auth (a localStorage broadcast) and is emptied by
+ * SessionCacheGuard when its session identity changes.
+ *
+ * So are the post, comment and MY 설정 drafts an onboarding step kept in this tab
+ * (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts — owner decisions 2026-10-22
+ * answer 3 and (2nd) answer 2, the nickname's too): each is its writer's only, and whoever signs in
+ * next here never sees one — nor does a closed account's text stay behind it.
+ */
+export function forgetAccountInTab(queryClient: QueryClient): void {
+  queryClient.clear();
+  clearSessionPostDrafts();
+  clearAllSessionCommentDrafts();
+  clearSessionProfileDrafts();
+}
+
+/**
  * 로그아웃, as one action for every control that offers it (`SignOutButton`: MY, /onboarding,
- * /set-password): sign out, empty the tab's cache and go home. A failure is a toast and nothing
- * else. `beforeSignOut` is what the screen has to tell the server before the session ends
- * (`signOutInOrder`): /onboarding's leave report.
+ * /set-password): sign out, empty the tab of the account (`forgetAccountInTab`) and go home. A
+ * failure is a toast and nothing else. `beforeSignOut` is what the screen has to tell the server
+ * before the session ends (`signOutInOrder`): /onboarding's leave report.
  */
 export function useSignOut(beforeSignOut?: () => Promise<void>): () => Promise<void> {
   const router = useRouter();
@@ -68,21 +91,7 @@ export function useSignOut(beforeSignOut?: () => Promise<void>): () => Promise<v
       signOut,
       onFailed: () => toaster.create({ type: 'error', title: copy.logoutFailed }),
       onSignedOut: () => {
-        // Everything, not just `['me']`. The browser QueryClient is a singleton for the tab's
-        // lifetime (lib/query-client.ts) and none of the keys carry a user id, so a ledger,
-        // payment list or admin memo left behind here would be served — fresh, for the 30s
-        // staleTime, so not even refetched — to whoever logs in next on this browser. This
-        // covers the tab that clicked; every other tab learns of the sign-out from better-auth
-        // (a localStorage broadcast) and is emptied by SessionCacheGuard when its session
-        // identity changes.
-        queryClient.clear();
-        // So are the post, comment and MY 설정 drafts an onboarding step kept in this tab
-        // (lib/post-drafts.ts, lib/comment-drafts.ts, lib/profile-drafts.ts — owner decisions
-        // 2026-10-22 answer 3 and (2nd) answer 2, the nickname's too): each is its writer's only,
-        // and whoever signs in next here never sees one.
-        clearSessionPostDrafts();
-        clearAllSessionCommentDrafts();
-        clearSessionProfileDrafts();
+        forgetAccountInTab(queryClient);
         router.push('/');
         router.refresh();
       },

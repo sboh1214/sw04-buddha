@@ -218,7 +218,7 @@ export class NoticesService {
         return {
           id: row.id,
           type,
-          actor: { id: row.adminId, nickname: row.nickname ?? '' },
+          actor: { id: row.adminId, nickname: row.nickname },
           createdAt: row.createdAt.toISOString(),
           revisionId: type === 'notice_update' ? revisionIdOf(row.id, row.payload) : null,
         };
@@ -362,7 +362,7 @@ export class NoticesService {
     let created: AdminAccountActor | null = null;
     const replacedBy = new Map<number, AdminAccountActor>();
     for (const row of rows) {
-      const actor = { id: row.adminId, nickname: row.nickname ?? '' };
+      const actor = { id: row.adminId, nickname: row.nickname };
       if (row.type === 'notice_create') created = actor;
       else replacedBy.set(revisionIdOf(row.id, row.payload), actor);
     }

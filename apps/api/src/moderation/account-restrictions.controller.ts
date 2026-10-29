@@ -109,7 +109,8 @@ export class AdminAccountRestrictionsController {
       'writing, likes, reports and the watchlist stay open, and the term counts from the ' +
       'approval. With a subject (the member’s post, comment or profile) its pending reports are ' +
       'resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is ' +
-      '`own`; with no admin but the acting one and the member to decide it, `no_decider`. An ' +
+      '`own`; an account its member closed (탈퇴) is `closed`; with no admin but the acting one ' +
+      'and the member to decide it, `no_decider`. An ' +
       'optional `memo` is for the operators (not the admin it is about), never the member',
   })
   @ApiData(accountRestrictionRequestSchema)
@@ -205,7 +206,8 @@ export class AdminAccountRestrictionsController {
       'forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` ' +
       '`requester`), nor the member (`own`); a decided request is `decided`, a retracted one ' +
       '`retracted`; what the restriction outgrew since the request is refused (`cancelled`, ' +
-      '`ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the ' +
+      '`ended`, `not_earlier`, `end_passed`) — reject it instead — and so is a restriction of an ' +
+      'account its member closed (`closed`). Answers the request and the ' +
       'restriction as it stands',
   })
   @ApiData(accountRestrictionDecisionSchema)

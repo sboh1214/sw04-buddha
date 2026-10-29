@@ -82,8 +82,9 @@ export class AdminAccountsController {
   })
   @ApiData(adminRoleChangeSchema, 201)
   // ROLE_CHANGE_NOT_ALLOWED: details[0].message is `already_admin`, `email_not_verified` or
-  // `phone_not_verified` (ADMIN_GRANT_REFUSALS). FORBIDDEN: also an actor revoked meanwhile, or a
-  // body whose `expectedAccountId` is not the cookie's account (details name the field).
+  // `phone_not_verified` (ADMIN_GRANT_REFUSALS). ACCOUNT_CLOSED: its member closed the account
+  // (#140). FORBIDDEN: also an actor revoked meanwhile, or a body whose `expectedAccountId` is
+  // not the cookie's account (details name the field).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -91,6 +92,7 @@ export class AdminAccountsController {
     'NOT_FOUND',
     'VALIDATION_ERROR',
     'ROLE_CHANGE_NOT_ALLOWED',
+    'ACCOUNT_CLOSED',
   )
   grant(
     @CurrentUser() admin: SessionUser,

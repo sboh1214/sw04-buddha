@@ -68,6 +68,12 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   RESTRICTED: HttpStatus.FORBIDDEN,
   // A write limit of #187 (ADR-0083), refused like a rate limit: the same write passes later.
   WRITE_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
+  // The account's state refuses its closure until it changes (#140): the role revoked, the
+  // contracts settled, the payment over, the orders cancelled — a conflict with that state, which
+  // the same request passes once it is gone.
+  CLOSURE_NOT_ALLOWED: HttpStatus.CONFLICT,
+  // The account's state — closed by its member (#140) — refuses the operator's write for good.
+  ACCOUNT_CLOSED: HttpStatus.CONFLICT,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

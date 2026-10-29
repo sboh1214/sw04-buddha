@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
-import { ORPHAN_MEDIA_RETRY_SLACK_MINUTES, orphanMediaRetryHours } from '@buddha/shared';
 import { type ObjectStorage } from '@buddha/storage';
 import { eq, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
@@ -9,12 +8,8 @@ import { DB } from '../infra/db/db.provider.js';
 import { assertPublicItemEdit, assertPublicItemOnboarding } from '../me/public-items.js';
 import { IMAGE_EXTENSION, processProfileImage } from '../media/image.js';
 import { OBJECT_STORAGE } from '../media/object-storage.provider.js';
-import {
-  LAST_ERROR_MAX_LENGTH,
-  logLine,
-  reasonOf,
-  removeUnrecordedUpload,
-} from '../media/unrecorded-upload.js';
+import { queueRemoval, removeQueuedObject } from '../media/queued-removal.js';
+import { removeUnrecordedUpload } from '../media/unrecorded-upload.js';
 import { WriteLimitsService } from '../write-limits/write-limits.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -166,10 +161,10 @@ export class ProfileImageService {
    * #46): once the row is gone nothing else names the object, so the key is kept until the store
    * has removed it — the write commits with it or not at all (owner decision 2026-10-22:
    * «이전 파일은 #46의 삭제 대기열(media_deletions)에 넣어 지울 때까지 다시 시도», ADR-0079). It is
-   * due for the worker only after the first wait of the queue's schedule (`orphanMediaRetryHours`,
-   * less ORPHAN_MEDIA_RETRY_SLACK_MINUTES): `removeObject` tries it first, right after the commit,
-   * and a run of the worker meanwhile does not race that try. Returns the object's key, for
-   * `removeObject` — or null when the row was gone already.
+   * due for the worker only after the first wait of the queue's schedule (`queueRemoval`, media/
+   * queued-removal.ts, shared with the closure of an account, #140): `removeObject` tries it
+   * first, right after the commit, and a run of the worker meanwhile does not race that try.
+   * Returns the object's key, for `removeObject` — or null when the row was gone already.
    */
   private async removeRow(tx: Tx, imageId: string): Promise<string | null> {
     const [removed] = await tx
@@ -177,80 +172,27 @@ export class ProfileImageService {
       .where(eq(schema.mediaObjects.id, imageId))
       .returning({ storageKey: schema.mediaObjects.storageKey });
     if (removed === undefined) return null;
-    await tx
-      .insert(schema.mediaDeletions)
-      .values({ storageKey: removed.storageKey, nextAttemptAt: firstRetryAt() })
-      // A key is one object's, and a new upload a new key: never queued already.
-      .onConflictDoNothing({ target: schema.mediaDeletions.storageKey });
+    await queueRemoval(tx, removed.storageKey);
     return removed.storageKey;
   }
 
   /**
    * Removes the object of an image whose row went with a committed write — after the commit, as the
-   * worker's orphan clean-up does (ADR-0073 decision 6), never inside the transaction: a slow store
-   * then holds no profile lock and no pooled connection (Postgres ends a session idle in a
-   * transaction after 30 seconds), and a commit lost after the object went can never leave a
-   * profile naming an image without bytes. The key leaves the queue once the object is gone. A
-   * store that will not remove it now leaves the key queued, this refusal counted as its first
-   * (`attempts` 1, its error kept, due again after the queue's first wait counted from now), and
-   * logged; the worker's `media.orphan_cleanup` tries it again then, and on every later refusal
-   * twice as late, at most daily, until the store lets it go (owner decision 2026-10-22, ADR-0079
-   * 7-5). The member's change stands either way: its bytes are named by no row and reachable by no
-   * reader meanwhile. Each line logs its words and fields as one string, the reasons as plain text
-   * (`logLine`·`reasonOf`, as `removeUnrecordedUpload` does): Nest's `Logger` loses an Error's
-   * message given as an object.
+   * worker's orphan clean-up does (ADR-0073 decision 6), never inside the transaction
+   * (`removeQueuedObject`, media/queued-removal.ts): a slow store then holds no profile lock and no
+   * pooled connection, and a commit lost after the object went can never leave a profile naming an
+   * image without bytes. The key leaves the queue once the object is gone. A store that will not
+   * remove it now leaves the key queued, this refusal counted as its first and logged; the worker's
+   * `media.orphan_cleanup` tries it again, until the store lets it go (owner decision 2026-10-22,
+   * ADR-0079 7-5). The member's change stands either way: its bytes are named by no row and
+   * reachable by no reader meanwhile.
    */
   private async removeObject(storageKey: string): Promise<void> {
-    try {
-      await this.storage.delete(storageKey);
-    } catch (error) {
-      const refusal = reasonOf(error);
-      this.logger.error(
-        logLine(
-          'could not remove a replaced or deleted profile image; its key stays queued for the worker',
-          { storageKey, refusal },
-        ),
-      );
-      await this.db
-        .update(schema.mediaDeletions)
-        .set({
-          attempts: 1,
-          lastError: refusal.slice(0, LAST_ERROR_MAX_LENGTH),
-          nextAttemptAt: firstRetryAt(),
-        })
-        .where(eq(schema.mediaDeletions.storageKey, storageKey))
-        .catch((queue: unknown) => {
-          // The key is queued either way (the write's transaction); only the count is lost.
-          this.logger.error(
-            logLine('could not count a refused removal', {
-              storageKey,
-              refusal,
-              counting: reasonOf(queue),
-            }),
-          );
-        });
-      return;
-    }
-    await this.db
-      .delete(schema.mediaDeletions)
-      .where(eq(schema.mediaDeletions.storageKey, storageKey))
-      .catch((queue: unknown) => {
-        // Left queued, the worker removes it again: the store answers a removal of nothing as done.
-        this.logger.error(
-          logLine('could not unqueue a removed profile image', {
-            storageKey,
-            unqueueing: reasonOf(queue),
-          }),
-        );
-      });
+    const { db, storage, logger } = this;
+    await removeQueuedObject(
+      { db, storage, logger },
+      storageKey,
+      'a replaced or deleted profile image',
+    );
   }
-}
-
-/**
- * When a queued key is due for the worker after the API's own try (`removeRow`, `removeObject`):
- * the queue's first wait from now, less its slack — as a refusal on a run of the worker is due
- * again (apps/worker media-orphan-cleanup.ts).
- */
-function firstRetryAt() {
-  return sql`now() + make_interval(hours => ${orphanMediaRetryHours(1)}, mins => ${-ORPHAN_MEDIA_RETRY_SLACK_MINUTES})`;
 }

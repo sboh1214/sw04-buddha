@@ -530,11 +530,13 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
       'adminRestrictionEndText',
       'endChangeText',
       'operatorLineText',
+      'requestDecisionLine',
     ],
     reason:
       'the admin moderation pages (#50, ADR-0081): who processed, acted or cancelled, and when; ' +
       'a writing restriction’s end and each change of it (#185, ADR-0082); the account ' +
-      'restriction a change request changes (#139, ADR-0085)',
+      'restriction a change request changes (#139, ADR-0085); when a member’s closure closed a ' +
+      'request (#140, ADR-0086)',
   },
   'lib/admin-link-flags.ts': {
     names: ['labelledTime'],

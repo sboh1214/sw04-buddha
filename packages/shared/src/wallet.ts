@@ -100,8 +100,10 @@ export type BalanceAdjustBody = z.infer<typeof balanceAdjustBodySchema>;
 export const adminUserSchema = z
   .object({
     id: z.string(),
+    /** A closed account's is its placeholder (`closedAccountEmail`, #140): the address is gone. */
     email: z.email(),
-    nickname: z.string(),
+    /** Null for an account its member closed (#140): the nickname went with the closure. */
+    nickname: z.string().nullable(),
     role: z.enum(['user', 'admin']),
     balance: balanceSchema,
     createdAt: z.iso.datetime(),
@@ -109,15 +111,32 @@ export const adminUserSchema = z
   .meta({ id: 'AdminUser' });
 export type AdminUser = z.infer<typeof adminUserSchema>;
 
-/** `GET /admin/users`: free-text search over email and nickname (PLAN 7.3). */
+/**
+ * Which accounts `GET /admin/users` lists: `open` ones only, or `closed` ones only (their member
+ * closed them, #140); every account when absent. The account list (`/admin/users`) keeps the
+ * closed ones beside the rest with their own '탈퇴' marker, and the admin role's grant search asks
+ * for `open` ones only — a closed account never takes the role, so it is not offered at all (owner
+ * decision 2026-10-23 (2차) 5, ADR-0086; ACCOUNT_CLOSED stays the grant's own guard).
+ */
+export const ADMIN_USER_STATUSES = ['open', 'closed'] as const;
+export type AdminUserStatus = (typeof ADMIN_USER_STATUSES)[number];
+
+/** `GET /admin/users`: free-text search over email and nickname (PLAN 7.3), all or by status. */
 export const adminUserQuerySchema = cursorQuerySchema
-  .extend({ q: z.string().trim().min(1).max(100).optional() })
+  .extend({
+    q: z.string().trim().min(1).max(100).optional(),
+    status: z.enum(ADMIN_USER_STATUSES).optional(),
+  })
   .meta({ id: 'AdminUserQuery' });
 export type AdminUserQuery = z.infer<typeof adminUserQuerySchema>;
 
 /** `GET /admin/payments`: every charge, with the account it belongs to. */
 export const adminPaymentSchema = paymentSchema
-  .extend({ userId: z.string(), nickname: z.string() })
+  .extend({
+    userId: z.string(),
+    /** Null for an account its member closed (#140): the nickname went with the closure. */
+    nickname: z.string().nullable(),
+  })
   .meta({ id: 'AdminPayment' });
 export type AdminPayment = z.infer<typeof adminPaymentSchema>;
 

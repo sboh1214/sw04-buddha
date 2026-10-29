@@ -5,11 +5,16 @@
  */
 import { randomBytes, randomInt, randomUUID } from 'node:crypto';
 import {
+  ACCOUNT_CLOSURE_DECISION_REASON,
+  AUTH_USER_NAME,
   CONSENT_ITEMS,
+  ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PRICE_MAX,
   PRICE_MIN,
   currentConsentVersion,
   SETTLEMENT_STEPS,
+  closedAccountEmail,
+  orphanMediaRetryHours,
   readPostDocument,
   relatedMarketPair,
   type ImageContentType,
@@ -27,9 +32,10 @@ import {
   type LinkFlagReason,
   type WriteLimitAction,
 } from '@buddha/shared';
-import { eq, inArray, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
+  account,
   adminActions,
   approvalRequests,
   balances,
@@ -46,8 +52,10 @@ import {
   marketWatchEvents,
   marketWatches,
   markets,
+  mediaDeletions,
   mediaObjects,
   moderationActions,
+  nicknameHolds,
   noticeImages,
   notices,
   orders,
@@ -57,11 +65,15 @@ import {
   postImages,
   postLikes,
   posts,
+  profileInterestCategories,
   profileItemRemovals,
   profiles,
   releaseSettings,
   reports,
+  session,
+  startGrants,
   user,
+  verification,
   writeLimitEvents,
 } from '../schema/index.js';
 import { storedReleaseSettingValue } from '../release-settings.js';
@@ -1357,4 +1369,128 @@ export async function createLinkFlag(db: Db, input: CreateLinkFlagInput) {
     })
     .returning();
   return row!;
+}
+
+/**
+ * A member's closure of the account (#140) as the API's AccountClosureService leaves it, in one
+ * transaction — for a test whose subject needs a closed account rather than the closure itself
+ * (a read, an audit): a waiting start grant cancelled (its numbers freed by migration 0031's
+ * trigger), the Coin left forfeited by a CLOSURE_FORFEIT entry, the nickname held unlinked and the
+ * holds naming the account unlinked, the profile closed without its public items, the interest
+ * categories, the profile image's row with its object's key queued for removal (`media_deletions`;
+ * the object is the test's store's), the time zone, the 본인확인 record, the watchlist (each
+ * watch's unwatch event written), the search history, the sessions, sign-in methods and reset
+ * tokens gone, the address replaced and the name and photo emptied, and the account restriction
+ * requests about the member still waiting rejected by no admin, '탈퇴'. Returns the closure's
+ * instant. Throws where migration 0043 would refuse the commit (Coin reserved, say).
+ */
+export async function closeAccount(db: Db, userId: string): Promise<Date> {
+  return db.transaction(async (tx) => {
+    const [profile] = await tx
+      .select()
+      .from(profiles)
+      .where(eq(profiles.userId, userId))
+      .for('update');
+    if (!profile?.nickname) throw new Error(`closeAccount: ${userId} is not an open account`);
+    const closedAt = (await tx.execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`))
+      .rows[0]!.now;
+    const at = new Date(closedAt);
+    await tx
+      .update(startGrants)
+      .set({ cancelledAt: at })
+      .where(
+        and(
+          eq(startGrants.userId, userId),
+          sql`${startGrants.grantedAt} IS NULL AND ${startGrants.cancelledAt} IS NULL`,
+        ),
+      );
+    const [balance] = await tx
+      .select()
+      .from(balances)
+      .where(eq(balances.userId, userId))
+      .for('update');
+    if (balance!.availableCoin > 0n) {
+      await tx.insert(ledgerEntries).values({
+        userId,
+        type: 'CLOSURE_FORFEIT',
+        amountCoin: -balance!.availableCoin,
+        balanceAfterCoin: 0n,
+        refType: 'account_closure',
+        refId: userId,
+        createdAt: at,
+      });
+      await tx.update(balances).set({ availableCoin: 0n }).where(eq(balances.userId, userId));
+    }
+    await tx.update(nicknameHolds).set({ userId: null }).where(eq(nicknameHolds.userId, userId));
+    await tx
+      .insert(nicknameHolds)
+      .values({ nickname: profile.nickname, userId: null, releasedAt: at });
+    await tx
+      .update(profiles)
+      .set({ closedAt: at, nickname: null, bio: null, imageId: null, timeZone: null })
+      .where(eq(profiles.userId, userId));
+    await tx.delete(profileInterestCategories).where(eq(profileInterestCategories.userId, userId));
+    if (profile.imageId !== null) {
+      const [image] = await tx
+        .delete(mediaObjects)
+        .where(eq(mediaObjects.id, profile.imageId))
+        .returning({ storageKey: mediaObjects.storageKey });
+      // Its object's key queued with the row's deletion (#46's queue), as the API's closure does.
+      if (image) {
+        await tx
+          .insert(mediaDeletions)
+          .values({
+            storageKey: image.storageKey,
+            nextAttemptAt: sql`now() + make_interval(hours => ${orphanMediaRetryHours(1)}, mins => ${-ORPHAN_MEDIA_RETRY_SLACK_MINUTES})`,
+          })
+          .onConflictDoNothing({ target: mediaDeletions.storageKey });
+      }
+    }
+    await tx.delete(phoneVerifications).where(eq(phoneVerifications.userId, userId));
+    const unwatched = await tx
+      .delete(marketWatches)
+      .where(eq(marketWatches.userId, userId))
+      .returning({ marketId: marketWatches.marketId });
+    if (unwatched.length > 0) {
+      await tx
+        .insert(marketWatchEvents)
+        .values(
+          unwatched.map(({ marketId }) => ({ userId, marketId, action: 'unwatch', createdAt: at })),
+        );
+    }
+    await tx.delete(marketSearches).where(eq(marketSearches.userId, userId));
+    await tx.delete(session).where(eq(session.userId, userId));
+    await tx.delete(account).where(eq(account.userId, userId));
+    await tx.delete(verification).where(eq(verification.value, userId));
+    await tx
+      .update(user)
+      .set({
+        email: closedAccountEmail(userId),
+        emailVerified: false,
+        name: AUTH_USER_NAME,
+        image: null,
+      })
+      .where(eq(user.id, userId));
+    const actions = tx
+      .select({ id: sql<string>`${moderationActions.id}::text` })
+      .from(moderationActions)
+      .where(eq(moderationActions.userId, userId));
+    await tx
+      .update(approvalRequests)
+      .set({
+        status: 'rejected',
+        decisionReason: ACCOUNT_CLOSURE_DECISION_REASON,
+        decidedAt: sql`greatest(${at}::timestamptz, ${approvalRequests.requestedAt} + interval '1 millisecond')`,
+      })
+      .where(
+        and(
+          eq(approvalRequests.status, 'pending'),
+          sql`((${approvalRequests.kind} = 'account_restriction' AND ${approvalRequests.targetType} = 'user' AND ${approvalRequests.targetId} = ${userId})
+            OR (${approvalRequests.kind} IN ('account_restriction_shorten', 'account_restriction_lift', 'account_restriction_cancel')
+                AND ${approvalRequests.targetType} = 'moderation_action'
+                AND ${approvalRequests.targetId} IN (${actions})))`,
+        ),
+      );
+    return at;
+  });
 }

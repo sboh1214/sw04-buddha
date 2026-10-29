@@ -1,6 +1,8 @@
 /** SQLSTATE codes the API reacts to. */
 export const PG_UNIQUE_VIOLATION = '23505';
 export const PG_CHECK_VIOLATION = '23514';
+/** A trigger's refusal (RAISE … USING ERRCODE = 'integrity_constraint_violation'). */
+export const PG_INTEGRITY_CONSTRAINT_VIOLATION = '23000';
 
 interface PgErrorShape {
   code: string;

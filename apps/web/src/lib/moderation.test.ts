@@ -89,6 +89,7 @@ import {
   reasonCountsText,
   recordReasonDraft,
   removedItemLabel,
+  requestDecisionLine,
   reportButtonName,
   reportDialogTitle,
   reportDraft,
@@ -1293,6 +1294,8 @@ describe('operators', () => {
     ).toBe(`${reportReasonLabel('spam')} 3 · ${reportReasonLabel('other')} 1`);
     expect(queueEntryText({ title: '제목', excerpt: '본문' })).toBe('제목');
     expect(queueEntryText({ title: null, excerpt: '\n첫 줄\n둘째' })).toBe('첫 줄');
+    // The profile of a member who closed the account (#140): no nickname to show.
+    expect(queueEntryText({ title: null, excerpt: null })).toBe(copy.postAuthorFormer);
   });
 
   it('names who processed or acted and when, the time alone on a record about the reader (owner decision 2026-10-21)', () => {
@@ -1304,6 +1307,10 @@ describe('operators', () => {
       `${copy.adminAccountsTargetGone} · ${formatKst(at)}`,
     );
     expect(operatorLineText(null, at, true)).toBe(formatKst(at));
+    // An operator who closed the account since (#140, once the role was revoked): no nickname.
+    expect(operatorLineText({ nickname: null }, at, false)).toBe(
+      `${copy.postAuthorFormer} · ${formatKst(at)}`,
+    );
     expect(copy.adminModerationWithheldReport).toContain('신고자');
     expect(copy.adminModerationWithheldAction).toContain('운영자');
   });
@@ -1491,10 +1498,48 @@ describe('operators', () => {
       decidedBy: null,
       decisionReason: null,
       decidedAt: null,
+      closedByAccountClosure: false,
       retractedAt: null,
       moot: null,
       aboutViewer: false,
       ...overrides,
+    });
+
+    it('says who decided a request and when, and a request the member’s closure closed as closed by it (#140)', () => {
+      expect(requestDecisionLine(request({}), false)).toBeNull();
+      const decidedAt = '2026-10-23T04:00:00.000Z';
+      const approved = request({
+        status: 'approved',
+        decidedBy: { id: 'admin-b', nickname: '운영자B' },
+        decisionReason: '확인했습니다',
+        decidedAt,
+      });
+      expect(requestDecisionLine(approved, false)).toEqual({
+        label: copy.adminAccountRequestDecidedBy,
+        text: `운영자B · ${formatKst(decidedAt)}`,
+      });
+      // About the admin reading it: the time alone (owner decision 2026-10-21).
+      expect(requestDecisionLine({ ...approved, decidedBy: null }, true)).toEqual({
+        label: copy.adminAccountRequestDecidedAt,
+        text: formatKst(decidedAt),
+      });
+      // Closed by the member's closure (owner decision 2026-10-23, ADR-0085 결과 5): rejected by no
+      // admin, so it names none — never '삭제된 계정' — and says it closed with the closure.
+      const closed = request({
+        status: 'rejected',
+        decidedBy: null,
+        decisionReason: '탈퇴',
+        decidedAt,
+        closedByAccountClosure: true,
+      });
+      for (const aboutViewer of [false, true]) {
+        const line = requestDecisionLine(closed, aboutViewer);
+        expect(line).toEqual({
+          label: copy.adminAccountRequestDecidedAt,
+          text: `${copy.adminAccountRequestClosedByClosure} · ${formatKst(decidedAt)}`,
+        });
+        expect(line?.text).not.toContain(copy.adminAccountsTargetGone);
+      }
     });
 
     it('lists its own requests’ page in the area and keeps it under admin', () => {
@@ -1741,6 +1786,12 @@ describe('operators', () => {
         message: copy.errModerationNoDecider,
       });
       expect(copy.errModerationNoDecider).toContain('결정할 운영자가 없습니다');
+      // A new action against an account its member closed (#140, owner decision 2026-10-23 (2차)
+      // 1): the same sentence the member's screen shows in place of the three buttons.
+      expect(moderationFailure(notAllowed('closed'))).toEqual({
+        kind: 'alert',
+        message: copy.errModerationClosed,
+      });
     });
   });
 
