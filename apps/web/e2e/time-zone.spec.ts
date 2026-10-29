@@ -6,8 +6,10 @@ import {
   detailCopyTestId,
   expect,
   freshEmail,
+  meOf,
   signIn,
   signUp,
+  switchAccountUnderScreen,
   test,
 } from './helpers';
 
@@ -18,7 +20,8 @@ import {
  * (playwright.config.ts), so "follow the browser" is Seoul unless a context says otherwise.
  *
  * The market's close is a day out, so New York reads it as EDT or EST depending on the calendar:
- * the marker is matched as either.
+ * the marker is matched as either. A 시간대 card still showing the account a tab was signed in as
+ * after the tab switched to another names the account it shows and is refused (ADR-0090).
  */
 
 /** `formatInTimeZone`'s style with no marker: what Seoul, and every admin screen, reads. */
@@ -251,6 +254,66 @@ test.describe('사용자 시간대', () => {
       await expect(page.locator('main')).not.toContainText(ANY_MARKER);
     } finally {
       await context.close();
+    }
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 MY 설정이 남아 있으면 시간대 저장은 그 화면의 계정을 대어 거절되고, 어느 계정의 시간대도 바뀌지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0090 (the remaining sibling of PR #224's Codex fix, ADR-0078 7-29 (3)): in the render
+    // between the session naming B and SessionCacheGuard's reset the 시간대 card still shows A's
+    // zone while the session already says B, and a save naming the session's account would be
+    // taken with B's cookie — B's times switched to the zone picked on A's screen. The card names
+    // the account of the `Me` it was drawn from, so the server refuses it as another account's.
+    // That render is held here: B's cookie in this tab and the session read again, while `GET /me`
+    // still answers as A (`switchAccountUnderScreen`).
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await page.goto('/my/settings');
+      await profileLoaded(page);
+      const select = page.getByTestId('time-zone-select');
+      await expect(select).toHaveValue('');
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes: unknown[] = [];
+      page.on('request', (request) => {
+        if (new URL(request.url()).pathname === '/api/v1/me/time-zone') {
+          writes.push(request.postDataJSON());
+        }
+      });
+      // A's card, drawn again from A's `Me` after the guard's reset.
+      await expect(select).toHaveValue('');
+      await select.selectOption('America/New_York');
+      const saved = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/v1/me/time-zone',
+      );
+      await page.getByTestId('time-zone-save').click();
+      expect((await saved).status()).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+
+      expect(writes).toEqual([{ timeZone: 'America/New_York', expectedAccountId: a.id }]);
+      // Nothing written, to B or to A: both still follow their browsers.
+      expect((await meOf(other.request)).profile.timeZone).toBeNull();
+      expect(b.profile.timeZone).toBeNull();
+      expect((await meOf(shownContext.request)).profile.timeZone).toBeNull();
+      expect(a.profile.timeZone).toBeNull();
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
     }
   });
 });

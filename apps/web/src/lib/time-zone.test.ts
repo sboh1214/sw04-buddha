@@ -612,3 +612,25 @@ describe('member screens read absolute times in the display zone (ADR-0063)', ()
     expect(outside).toEqual([]);
   });
 });
+
+describe('the 시간대 card’s account (ADR-0090)', () => {
+  it('is the one the card was drawn for, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the card still
+    // shows A's zone, and a save naming the session's account would be taken with B's cookie — B's
+    // times switched to the zone picked on A's screen. No component renders under node, so the
+    // wiring is pinned in the sources: the card hands its fields its `Me`'s id, they send it, and
+    // the hook offers no account (no session id, no `ready`). e2e time-zone.spec.ts ('탭의 계정이
+    // …') drives it.
+    const card = readFileSync(path.join(SRC, 'app/my/settings/time-zone-section.tsx'), 'utf8');
+    expect(card).toContain(
+      '<TimeZoneFields key={me.id} picked={me.profile.timeZone} accountId={me.id} />',
+    );
+    expect(card).toContain('expectedAccountId: accountId,');
+    expect(card).not.toMatch(/\bupdate\.(accountId|ready)\b/);
+    const hooks = readFileSync(path.join(SRC, 'hooks/use-me.ts'), 'utf8');
+    const start = hooks.indexOf('export function useUpdateTimeZone()');
+    expect(start).toBeGreaterThan(-1);
+    const hook = hooks.slice(start, hooks.indexOf('\n}\n', start));
+    expect(hook).not.toMatch(/user\.id|\baccountId\b|\bready\b/);
+  });
+});

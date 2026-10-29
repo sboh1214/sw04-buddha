@@ -1,6 +1,7 @@
 import type { APIRequestContext, APIResponse, Page, Route } from '@playwright/test';
 import type { Category, Me, ReleaseSetting, StartGrant } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { E2E_CONSENT_VERSIONS } from './consent-versions';
 import {
   E2E_PASSWORD,
   E2E_REAL_NAME,
@@ -1127,6 +1128,114 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await expect(
       page.getByTestId('settings-marketing').getByRole('checkbox', { name: copy.consentMarketing }),
     ).not.toBeChecked();
+  });
+
+  test('MY 설정의 마케팅 정보 수신 스위치는 바꾸기가 거절되면 서버의 값으로 돌아오고, 다시 누르면 다시 보낸다', async ({
+    page,
+  }) => {
+    // ADR-0090: the switch's input (zag's hidden checkbox) takes the pressed position at once and
+    // follows the switch's `checked` only when that changes. The switch showed the account's answer
+    // alone, which a refusal leaves where it was — so the box stayed checked with nothing recorded,
+    // and the next press, turning it back, was no change to report and sent nothing. Now it shows
+    // the answer asked while the record is out and the account's again after a refusal. The account's
+    // `consent` bucket (five a minute) stands in for any refusal, answered here as the server words
+    // it (rate-limit.guard.ts: the `Retry-After` header and `retryAfterSeconds`). Once a change is
+    // recorded the switch is the server's answer again, so an answer another tab records afterwards,
+    // brought in by a window-focus refetch, is what it shows (ADR-0090 결정 4-4) — the page's clock
+    // makes `['me']` older than its `staleTime` (30 s), as posts.spec.ts does.
+    await signUp(page, freshEmail());
+    await page.clock.install();
+    await page.goto('/my/settings');
+    const card = page.getByTestId('settings-marketing');
+    const box = card.getByRole('checkbox', { name: copy.consentMarketing });
+    const control = card.locator('[data-scope="switch"][data-part="control"]');
+    await expect(box).not.toBeChecked();
+    await expect(box).toBeEnabled();
+    const asked: boolean[] = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/v1/me/consents') {
+        const body = request.postDataJSON() as { consents: { marketing: { agreed: boolean } } };
+        asked.push(body.consents.marketing.agreed);
+      }
+    });
+    const refuse = () =>
+      page.route('**/api/v1/me/consents', (route) =>
+        route.fulfill({
+          status: 429,
+          headers: { 'Retry-After': '60' },
+          json: {
+            error: {
+              code: 'RATE_LIMITED',
+              message: 'Too many requests',
+              details: { retryAfterSeconds: 60 },
+            },
+          },
+        }),
+      );
+    const marketingAnswer = async () =>
+      (await meOf(page.request)).onboarding.consents.find((answer) => answer.item === 'marketing');
+    /** Presses the switch and waits for the answer to its record: `status`, and `toast` said. */
+    const press = async (status: number, toast: string) => {
+      const answered = page.waitForResponse(
+        (response) => new URL(response.url()).pathname === '/api/v1/me/consents',
+      );
+      await card.getByTestId('settings-marketing-switch').click();
+      expect((await answered).status()).toBe(status);
+      await expect(page.locator('[data-scope="toast"]').getByText(toast).first()).toBeVisible();
+      await expect(box).toBeEnabled();
+    };
+
+    // On, refused: off again, the box and the switch alike.
+    await refuse();
+    await press(429, copy.errConsentTooManyRequests);
+    await expect(box).not.toBeChecked();
+    await expect(control).toHaveAttribute('data-state', 'unchecked');
+    expect((await marketingAnswer())?.agreed).toBe(false);
+
+    // The next press asks for on again, and is recorded.
+    await page.unroute('**/api/v1/me/consents');
+    await press(200, copy.marketingConsentOn);
+    await expect(box).toBeChecked();
+    await expect(control).toHaveAttribute('data-state', 'checked');
+    expect((await marketingAnswer())?.agreed).toBe(true);
+
+    // Off, refused: on again; and the next press turns it off.
+    await refuse();
+    await press(429, copy.errConsentTooManyRequests);
+    await expect(box).toBeChecked();
+    await expect(control).toHaveAttribute('data-state', 'checked');
+    expect((await marketingAnswer())?.agreed).toBe(true);
+    await page.unroute('**/api/v1/me/consents');
+    await press(200, copy.marketingConsentOff);
+    await expect(box).not.toBeChecked();
+    expect((await marketingAnswer())?.agreed).toBe(false);
+
+    expect(asked).toEqual([true, true, false, false]);
+
+    // Another tab turns it on, and a window-focus refetch brings that answer in: the switch shows
+    // it — not the off the last press asked — and the next press turns it off.
+    const { id } = await meOf(page.request);
+    const recorded = await page.request.post('/api/v1/me/consents', {
+      data: {
+        consents: { marketing: { version: E2E_CONSENT_VERSIONS.marketing, agreed: true } },
+        expectedAccountId: id,
+      },
+    });
+    expect(recorded.status(), await recorded.text()).toBe(200);
+    const meRead = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/me',
+    );
+    await page.clock.fastForward('00:31');
+    await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+    await meRead;
+    await expect(box).toBeChecked();
+    await expect(control).toHaveAttribute('data-state', 'checked');
+    await press(200, copy.marketingConsentOff);
+    await expect(box).not.toBeChecked();
+    await expect(control).toHaveAttribute('data-state', 'unchecked');
+    expect(asked.at(-1)).toBe(false);
+    expect((await marketingAnswer())?.agreed).toBe(false);
   });
 
   test('비밀번호만 정하면 온보딩으로 가고, 본인확인한 번호는 설정에서 읽기만 하며 실명은 고친다', async ({

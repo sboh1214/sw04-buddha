@@ -152,8 +152,13 @@ interface CodeEntry {
  *   moves on from there. The step comes after the consent (ADR-0069 decision 4 #58): a code request
  *   the server refuses for want of it (ONBOARDING_REQUIRED) asks `['me']` again, and the stepper
  *   goes back to the consent step.
+ * - Every write names the account the step was drawn for (`accountId`, the stepper's `me.id`),
+ *   never the session's: in the render between the session naming another account and
+ *   SessionCacheGuard's reset the session already says B while this is still A's step, and a
+ *   name and a number sent as B's would be texted and verified for B (ADR-0090). The server
+ *   refuses the body as another account's, and the hook asks for the session again.
  */
-export function VerificationStep() {
+export function VerificationStep({ accountId }: { accountId: string }) {
   const request = useRequestVerificationCode();
   const confirm = useConfirmPhoneVerification();
   // The code input, while a code may still be confirmed: opened by a send, by 이미 받은 인증번호
@@ -208,10 +213,7 @@ export function VerificationStep() {
   };
 
   const onSend = details.handleSubmit(async (values) => {
-    // The account the screen shows rides along (`expectedAccountId`, A-PG-24). Unreachable
-    // while the button honours `ready`.
-    const accountId = request.accountId;
-    if (accountId === undefined) return;
+    // The account the step was drawn for rides along (`expectedAccountId`, A-PG-24).
     setNotice(null);
     try {
       const sent = await request.mutateAsync({ ...values, expectedAccountId: accountId });
@@ -254,8 +256,6 @@ export function VerificationStep() {
   });
 
   const onConfirm = codeForm.handleSubmit(async (values) => {
-    const accountId = confirm.accountId;
-    if (accountId === undefined) return;
     // What this code stands with stays (`CodeEntry.standing`); any other notice goes.
     setNotice(entry?.standing ?? null);
     try {
@@ -354,7 +354,6 @@ export function VerificationStep() {
                 type="button"
                 variant="ghost"
                 onClick={onEnterWaitingCode}
-                disabled={!confirm.ready}
                 data-testid="verification-enter-code"
               >
                 {copy.verificationCodeEnter}
@@ -364,7 +363,7 @@ export function VerificationStep() {
               type="submit"
               variant={locked ? 'outline' : 'solid'}
               loading={request.isPending}
-              disabled={!request.ready || resendLeft > 0}
+              disabled={resendLeft > 0}
               data-testid="verification-send"
             >
               {`${locked ? copy.verificationResend : copy.verificationSend}${resendWait}`}
@@ -404,7 +403,6 @@ export function VerificationStep() {
               type="submit"
               size="lg"
               loading={confirm.isPending}
-              disabled={!confirm.ready}
               data-testid="verification-confirm"
             >
               {copy.verificationConfirm}
