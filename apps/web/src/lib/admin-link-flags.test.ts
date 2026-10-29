@@ -16,6 +16,7 @@ import {
   linkFlagGroupKey,
   linkFlagGroupLatest,
   linkFlagItemPath,
+  linkFlagItemText,
   linkFlagKindLabel,
   linkFlagOutcomeLabel,
   linkFlagReasonLabel,
@@ -27,7 +28,7 @@ import {
   toLinkFlagReviewBody,
 } from './admin-link-flags';
 import { type AdminLinkFlag, type AdminLinkFlagGroup, ApiError } from './api';
-import { adminCommentModerationPath, adminPostModerationPath } from './moderation';
+import { adminCommentModerationPath, adminPostModerationPath, queueEntryText } from './moderation';
 import { postPath } from './posts';
 
 /** 반복 링크 검토 목록 (#187, ADR-0083; owner decision 2026-10-22) as the admin screen words it. */
@@ -93,6 +94,40 @@ describe('the review list’s words', () => {
       adminCommentModerationPath(COMMENT),
     );
     expect(linkFlagItemPath(flag().target)).not.toBe(postPath(POST));
+  });
+
+  it('names the link to the item by what it says, and one #184’s retention emptied as the report queue does (ADR-0087 7-26)', () => {
+    expect(linkFlagItemText(flag().target)).toBe('근거');
+    expect(
+      linkFlagItemText(flag({ kind: 'comment', commentId: COMMENT, excerpt: '댓글 근거' }).target),
+    ).toBe('댓글 근거');
+    // Emptied — deleted, then the 지운 글 원문 period passed while the entry's own (신고·제재 기록,
+    // from its flag) has not: no title and no text is left, and the link is still named.
+    const deletedAt = '2026-10-21T06:20:00.000Z';
+    const comment = flag({ kind: 'comment', commentId: COMMENT, excerpt: '', deletedAt }).target;
+    expect(linkFlagItemText(comment)).toBe(copy.adminModerationPurgedLine);
+    expect(linkFlagItemText(flag({ excerpt: '', deletedAt }).target)).toBe(
+      copy.adminModerationUntitled,
+    );
+    // As the report queue's line names the same item (`queueEntryText`), and its page then says it
+    // was emptied (`purgedAt`).
+    expect(
+      queueEntryText({
+        target: { type: 'comment', commentId: COMMENT, postId: POST },
+        title: null,
+        excerpt: '',
+      }),
+    ).toBe(linkFlagItemText(comment));
+    expect(
+      queueEntryText({ target: { type: 'post', postId: POST }, title: null, excerpt: '' }),
+    ).toBe(linkFlagItemText(flag({ excerpt: '' }).target));
+    // A withdrawn member's still-hidden one, emptied with its hiding kept (owner decision
+    // 2026-10-24 3), alike.
+    expect(
+      linkFlagItemText(
+        flag({ kind: 'comment', commentId: COMMENT, excerpt: '', hiddenAt: deletedAt }).target,
+      ),
+    ).toBe(copy.adminModerationPurgedLine);
   });
 
   it('writes the times in Korean time, labelled', () => {

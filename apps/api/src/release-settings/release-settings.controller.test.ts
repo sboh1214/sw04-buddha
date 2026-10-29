@@ -9,10 +9,13 @@
 import { schema } from '@buddha/db';
 import { completeOnboarding } from '@buddha/db/test';
 import {
+  CONSENT_RECORDS_RETENTION_SETTING,
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   RELEASE_SETTINGS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
+  RETENTION_PERIOD_MAX_DAYS,
+  RETENTION_PERIOD_SETTINGS,
   START_COIN_SETTING,
   defineReleaseSetting,
   defineReleaseSettings,
@@ -580,8 +583,12 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  it('lists the start grant amount (#70), undecided until an admin enters a value', async () => {
-    expect([...RELEASE_SETTINGS.keys()]).toEqual([START_COIN_SETTING.key]);
+  it('lists the start grant amount (#70) and the retention periods (#184), undecided until an admin enters a value', async () => {
+    const retention = Object.values(RETENTION_PERIOD_SETTINGS);
+    expect([...RELEASE_SETTINGS.keys()]).toEqual([
+      START_COIN_SETTING.key,
+      ...retention.map((definition) => definition.key),
+    ]);
     const res = await t.app.inject({
       method: 'GET',
       url: BASE,
@@ -604,6 +611,21 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
         updatedAt: null,
         updatedBy: null,
       },
+      ...retention.map((definition) => ({
+        key: definition.key,
+        label: definition.label,
+        unit: '일',
+        description: definition.description,
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 1,
+          maximum: RETENTION_PERIOD_MAX_DAYS,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      })),
     ]);
     const settings = t.app.get(ReleaseSettingsService);
     expect(await settings.get(START_COIN_SETTING)).toEqual({
@@ -635,5 +657,33 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
       expect(refused.statusCode, String(value)).toBe(400);
     }
     expect((await settings.get(START_COIN_SETTING)).value).toBe(10_000);
+  });
+
+  it('takes a retention period in whole days and keeps its status as given (#184)', async () => {
+    const settings = t.app.get(ReleaseSettingsService);
+    const key = CONSENT_RECORDS_RETENTION_SETTING.key;
+    const change = await t.app.inject({
+      method: 'PATCH',
+      url: `${BASE}/${key}`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { status: 'proposal', value: 1_095, reason: '설계 제안' },
+    });
+    expect(change.statusCode).toBe(200);
+    // Read with its status: the worker applies only an approved one (ADR-0069 decision 7).
+    expect(await settings.get(CONSENT_RECORDS_RETENTION_SETTING)).toEqual({
+      key,
+      status: 'proposal',
+      value: 1_095,
+    });
+    for (const value of [0, 1.5, '30', RETENTION_PERIOD_MAX_DAYS + 1]) {
+      const refused = await t.app.inject({
+        method: 'PATCH',
+        url: `${BASE}/${key}`,
+        headers: { ...jsonHeaders, cookie: admin.cookie },
+        payload: { status: 'approved', value, reason: '잘못된 값' },
+      });
+      expect(refused.statusCode, String(value)).toBe(400);
+    }
+    expect((await settings.get(CONSENT_RECORDS_RETENTION_SETTING)).value).toBe(1_095);
   });
 });

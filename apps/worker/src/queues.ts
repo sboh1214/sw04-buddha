@@ -46,6 +46,7 @@ export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
   wallet: [JOB_NAMES.startGrantPay],
   media: [JOB_NAMES.mediaOrphanCleanup],
   community: [JOB_NAMES.communityRecordsPurge],
+  retention: [JOB_NAMES.retentionPurge],
 };
 
 /**
@@ -113,6 +114,15 @@ export const JOB_SCHEDULES = [
     queue: 'community',
     name: JOB_NAMES.communityRecordsPurge,
     repeat: { pattern: '37 * * * *', tz: 'Asia/Seoul' },
+  },
+  // #184 (ADR-0087): the records past their retention period, once a day at 04:30 KST — after the
+  // ledger audit (04:00), in the quiet hours. A period counts in days, so the hour is immaterial,
+  // and a run while every period is undecided only reads the settings and the expired holds.
+  {
+    id: 'retention-purge-daily',
+    queue: 'retention',
+    name: JOB_NAMES.retentionPurge,
+    repeat: { pattern: '30 4 * * *', tz: 'Asia/Seoul' },
   },
 ] as const satisfies readonly {
   id: string;

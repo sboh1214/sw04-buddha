@@ -489,8 +489,9 @@ export class ModerationReadsService {
 
   /**
    * `GET /admin/moderation/posts/:postId`: the post whatever its state — its deleted original too
-   * (#45-5) — with its earlier versions (#45-4), every comment under it (`postComments`), its
-   * reports, its actions and its author's record.
+   * (#45-5), until #184's retention empties it (`purgedAt`) — with its earlier versions (#45-4)
+   * still kept, every comment under it (`postComments`), its reports, its actions and its author's
+   * record.
    */
   async postPage(postId: string, viewerId: string): Promise<AdminPostModeration> {
     const { posts, markets, postRevisions } = schema;
@@ -503,6 +504,7 @@ export class ModerationReadsService {
         editedAt: posts.editedAt,
         deletedAt: posts.deletedAt,
         hiddenAt: posts.hiddenAt,
+        purgedAt: posts.purgedAt,
         hasComments: postHasCommentsSql(posts.id),
         market: { id: markets.id, slug: markets.slug, title: markets.title },
         author: memberColumns,
@@ -533,6 +535,7 @@ export class ModerationReadsService {
       editedAt: row.editedAt?.toISOString() ?? null,
       deletedAt: row.deletedAt?.toISOString() ?? null,
       hiddenAt: row.hiddenAt?.toISOString() ?? null,
+      purgedAt: row.purgedAt?.toISOString() ?? null,
       revisions: revisions.map((revision) => ({
         id: revision.id,
         title: revision.title,
@@ -604,6 +607,7 @@ export class ModerationReadsService {
         editedAt: postComments.editedAt,
         deletedAt: postComments.deletedAt,
         hiddenAt: postComments.hiddenAt,
+        purgedAt: postComments.purgedAt,
         hasReplies: commentHasRepliesSql(postComments.id),
         post: {
           id: posts.id,
@@ -644,6 +648,7 @@ export class ModerationReadsService {
       editedAt: row.editedAt?.toISOString() ?? null,
       deletedAt: row.deletedAt?.toISOString() ?? null,
       hiddenAt: row.hiddenAt?.toISOString() ?? null,
+      purgedAt: row.purgedAt?.toISOString() ?? null,
       revisions: revisions.map((revision) => ({
         id: revision.id,
         body: revision.body,

@@ -31,6 +31,7 @@ import {
 import { formatKst } from '@/lib/datetime';
 import {
   ADMIN_REPORTS_PATH,
+  adminCommentLine,
   adminCommentModerationPath,
   adminPostModerationPath,
   concernsOperator,
@@ -38,7 +39,7 @@ import {
   moderationItemStateLabel,
   pendingReportIds,
 } from '@/lib/moderation';
-import { postFirstLine, postPath } from '@/lib/posts';
+import { postPath } from '@/lib/posts';
 import {
   ActionRows,
   Block,
@@ -61,11 +62,13 @@ import {
  * The moderation pages of a 근거 글 and of a 댓글 or 대댓글 (#50, ADR-0081; #50 guidance: «target
  * detail (content incl. deleted original and revision history, reporter count, past actions on the
  * user), action dialogs with required reason»): the item whatever its state — the deleted original
- * and a hidden one too, its images at their operator address (`adminMediaPath`) — its earlier
- * versions (#45-4), the reports on it with their reporters, the actions about it and every action
- * its author received — and, on a post's page, every comment under it with the way to its own
- * page (`CommentRows`), reported or not. The actions, chosen by the violation's weight (#45-11):
- * 숨기기 (while it is public), 경고 (about this item or about nothing in particular), 작성 제한 of
+ * and a hidden one too (until #184's retention empties it once its period has passed — a hidden
+ * one only a withdrawn member's, owner decision 2026-10-24 3: then that it was emptied, and when),
+ * its images at their operator address (`adminMediaPath`) — its earlier versions (#45-4) still
+ * kept, the reports on it with their reporters, the actions about it and every action its author
+ * received — and, on a post's page, every comment under it with the way to its own page
+ * (`CommentRows`), reported or not. The actions, chosen by the violation's weight
+ * (#45-11): 숨기기 (while it is public), 경고 (about this item or about nothing in particular), 작성 제한 of
  * its author (#185, ADR-0082 — a term and a reason, about this item, whose pending reports it
  * resolves, or nothing in particular), the request of its author's 계정 제한 (#139, ADR-0085 —
  * the report queue's way to it, ADR-0069 decision 2 #45-11: about this item, whose pending reports
@@ -103,7 +106,13 @@ function StateBadge({
   );
 }
 
-/** The item's times: written, edited, deleted by its author, hidden by an operator. */
+/**
+ * The item's times: written, edited, deleted by its author, hidden by an operator — and when #184's
+ * retention emptied it (`purgedAt`): a deleted original once its period had passed since the
+ * deletion, or a withdrawn member's item an operator still hides once the 신고·제재 period had
+ * passed since the later of the withdrawal and the hiding (owner decision 2026-10-24 3 — it stays
+ * hidden, its hiding's action deleted).
+ */
 function Times({
   item,
 }: {
@@ -112,6 +121,7 @@ function Times({
     editedAt: string | null;
     deletedAt: string | null;
     hiddenAt: string | null;
+    purgedAt: string | null;
   };
 }) {
   return (
@@ -126,7 +136,26 @@ function Times({
       {item.hiddenAt !== null && (
         <Line label={copy.adminModerationHiddenAt}>{formatKst(item.hiddenAt)}</Line>
       )}
+      {item.purgedAt !== null && (
+        <Line label={copy.adminModerationPurgedAt} testId="moderation-purged-at">
+          {formatKst(item.purgedAt)}
+        </Line>
+      )}
     </Stack>
+  );
+}
+
+/**
+ * In place of a deleted or a still-hidden original #184's retention emptied: that it is gone. The
+ * row stays — the comments, likes, reports and actions that name it keep naming it — with no
+ * title, text or image (`posts_purged_check`, `post_comments_purged_check`), and nothing brings it
+ * back.
+ */
+function PurgedNotice() {
+  return (
+    <Text fontSize="sm" color="fg.muted" data-testid="moderation-purged">
+      {copy.adminModerationPurged}
+    </Text>
   );
 }
 
@@ -284,7 +313,7 @@ function CommentRows({ comments }: { comments: readonly AdminPostComment[] }) {
               href={adminCommentModerationPath(comment.id) as Route}
               data-testid="moderation-comment-open"
             >
-              {postFirstLine(comment.excerpt)}
+              {adminCommentLine(comment.excerpt)}
             </NextLink>
           </ChakraLink>
         </Stack>
@@ -430,12 +459,16 @@ function PostView({
           ) : undefined
         }
       >
-        <Stack gap="3">
-          <Text fontWeight="semibold" wordBreak="break-word" data-testid="moderation-post-title">
-            {post.title ?? copy.adminModerationUntitled}
-          </Text>
-          <PostBody document={post.body} imageSrc={adminMediaPath} headingFrom={5} />
-        </Stack>
+        {post.purgedAt !== null ? (
+          <PurgedNotice />
+        ) : (
+          <Stack gap="3">
+            <Text fontWeight="semibold" wordBreak="break-word" data-testid="moderation-post-title">
+              {post.title ?? copy.adminModerationUntitled}
+            </Text>
+            <PostBody document={post.body} imageSrc={adminMediaPath} headingFrom={5} />
+          </Stack>
+        )}
       </Block>
       <RecordBlocks
         item={post}
@@ -558,9 +591,13 @@ function CommentView({
           ) : undefined
         }
       >
-        <Box whiteSpace="pre-wrap" wordBreak="break-word" data-testid="moderation-comment-body">
-          {comment.body}
-        </Box>
+        {comment.purgedAt !== null ? (
+          <PurgedNotice />
+        ) : (
+          <Box whiteSpace="pre-wrap" wordBreak="break-word" data-testid="moderation-comment-body">
+            {comment.body}
+          </Box>
+        )}
       </Block>
       <RecordBlocks
         item={comment}

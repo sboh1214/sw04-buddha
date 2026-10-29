@@ -23,9 +23,10 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * 쿠폰 and 결제 are listed only while paid Coin is on sale (PAID_COIN_SALES_ENABLED, ADR-0049):
  * hidden from the menu, their pages still open by address, and the API keeps the package and
  * coupon admin open (owner decision 2026-10-13) while it closes the refund. 운영자 계정 is #171's
- * (ADR-0056), 출시 설정 #170's (ADR-0055), SMS 발송 #183's (ADR-0070), 공지 #138's (ADR-0077),
- * 신고·조치 #50's (ADR-0081 — the report queue, whose own row of links leads on to the action log
- * and to #187's 반복 링크, ADR-0083). The row wraps rather than scrolling sideways at phone width.
+ * (ADR-0056), 출시 설정 #170's (ADR-0055), 보존기간 처리 #184's (ADR-0087 — beside the settings
+ * that hold its periods), SMS 발송 #183's (ADR-0070), 공지 #138's (ADR-0077), 신고·조치 #50's
+ * (ADR-0081 — the report queue, whose own row of links leads on to the action log and to #187's
+ * 반복 링크, ADR-0083). The row wraps rather than scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
@@ -41,6 +42,7 @@ const NAV: { href: Route; label: string }[] = [
       ]
     : []),
   { href: '/admin/settings', label: copy.adminReleaseSettings },
+  { href: '/admin/retention', label: copy.adminRetention },
   { href: '/admin/sms', label: copy.adminSms },
   { href: '/admin/audit-failures', label: copy.adminAuditFailures },
 ];

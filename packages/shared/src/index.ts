@@ -46,6 +46,7 @@ export * from './rate-limit.js';
 export * from './realtime.js';
 export * from './related-markets.js';
 export * from './release-settings.js';
+export * from './retention.js';
 export * from './search-history.js';
 export * from './start-grant.js';
 export * from './terms.js';

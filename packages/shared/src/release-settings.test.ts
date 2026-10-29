@@ -6,6 +6,7 @@ import {
   JSONB_NUL_MESSAGE,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
+  RETENTION_PERIOD_SETTINGS,
   START_COIN_SETTING,
   defineReleaseSetting,
   defineReleaseSettings,
@@ -19,6 +20,7 @@ import {
   releaseSettingValueJsonSchema,
   type ReleaseSettingValue,
 } from './release-settings.js';
+import { RETENTION_PERIODS, RETENTION_PERIOD_MAX_DAYS } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
 /** U+0000: PostgreSQL's jsonb cannot hold it. */
@@ -41,9 +43,96 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70)', () => {
-    expect([...RELEASE_SETTINGS.keys()]).toEqual(['grant.start_coin']);
+  it('ships the items the issues that use them registered: the start grant (#70) and the retention periods (#184)', () => {
+    expect([...RELEASE_SETTINGS.keys()]).toEqual([
+      'grant.start_coin',
+      'retention.consent_records',
+      'retention.phone_verification_records',
+      'retention.deleted_posts',
+      'retention.moderation_records',
+      'retention.removed_profile_items',
+    ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
+    // The worker reads each period through the very object the registry holds.
+    for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
+      expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
+    }
+  });
+
+  it('takes a retention period in whole days, 1 to RETENTION_PERIOD_MAX_DAYS (#184)', () => {
+    expect(Object.keys(RETENTION_PERIOD_SETTINGS)).toEqual([...RETENTION_PERIODS]);
+    for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
+      const accepts = (value: unknown) => definition.schema.safeParse(value).success;
+      expect(definition.unit, definition.key).toBe('일');
+      expect(definition.label, definition.key).toMatch(/보존기간$/);
+      // Every description says only an approved value deletes (ADR-0069 decision 7).
+      expect(definition.description, definition.key).toContain('승인됨일 때만 지우고');
+      expect(accepts(1)).toBe(true);
+      expect(accepts(365)).toBe(true);
+      expect(accepts(RETENTION_PERIOD_MAX_DAYS)).toBe(true);
+      for (const value of [0, -1, 1.5, '30', RETENTION_PERIOD_MAX_DAYS + 1]) {
+        expect(accepts(value), `${definition.key} ${String(value)}`).toBe(false);
+      }
+      expect(
+        readReleaseSetting(RELEASE_SETTINGS, definition, { status: 'approved', value: 30 }),
+      ).toEqual({
+        key: definition.key,
+        status: 'approved',
+        value: 30,
+      });
+    }
+  });
+
+  it('names, where the owner approves the 신고·제재 period, every action the worker deletes under it (#184)', () => {
+    // The worker's moderation_actions step takes every type of action on a withdrawn member, the
+    // profile actions among them; the screen the owner approves the period on lists them all.
+    const { description } = RETENTION_PERIOD_SETTINGS.moderation_records;
+    for (const action of [
+      '경고',
+      '숨김',
+      '닉네임 강제 변경',
+      '소개 비우기',
+      '프로필 이미지 삭제',
+      '작성 제한',
+      '계정 제한',
+    ]) {
+      expect(description, action).toContain(action);
+    }
+  });
+
+  it('tells the owner, where the periods are approved, what the answers of 2026-10-24 and 2026-10-24 (2차) changed (#184)', () => {
+    const { moderation_records: moderation, deleted_posts: deleted } = RETENTION_PERIOD_SETTINGS;
+    // 1: the reports a withdrawn member received go too; 3: a hidden item is emptied, kept hidden.
+    expect(moderation.description).toContain('탈퇴한 회원이 받은 신고와 조치');
+    expect(moderation.description).toContain('숨긴 채로 남은 것은 지운 원문처럼 내용을 비우고');
+    // 12: what a pending account restriction request cites waits for its decision — a condition of
+    // its own beside a pending report's (4), not a kind of request.
+    expect(deleted.description).toContain('결정을 기다리는 계정 제한 요청이 근거로 든');
+    expect(deleted.description).toContain('처리 중인 신고가 있는 글·댓글과 결정을 기다리는');
+    expect(deleted.description).toContain('신고가 처리되거나 요청이 결정·철회될 때까지');
+    expect(deleted.description).not.toContain('신고가 있거나 결정을 기다리는');
+    // (2차) 2: the hidden item's edit history goes with its content, under the 신고·제재 period —
+    // and the edit history's own item says so too, whatever its own status and value: the rule at
+    // its end (only an approved value deletes) does not hold it back.
+    expect(moderation.description).toContain(
+      '그 수정 이력(이전 내용과 그것만 쓰던 이미지)과 숨김 조치도 함께 지운다',
+    );
+    expect(deleted.description).toContain(
+      "숨긴 채로 남은 것의 수정 이력은 이 항목의 상태·값과 상관없이 그 내용을 비울 때('신고·제재 기록 보존기간') 함께 지운다",
+    );
+    expect(deleted.description).not.toContain('이 기간 전이라도');
+    // 13: #187's repeated-link review list, from the later of the flag and its '확인함' mark —
+    // whoever wrote the items — while the mark's record keeps the link.
+    expect(moderation.description).toContain(
+      "반복 링크 검토 목록의 항목은 작성자의 탈퇴와 상관없이 탐지된 시각과 '확인함'으로 표시된 시각 가운데 늦은 쪽부터",
+    );
+    expect(moderation.description).toContain("('확인함' 운영 기록과 그 주소는 남는다)");
+    // 14: a kind that failed is recorded as such.
+    for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
+      expect(definition.description, definition.key).toContain(
+        '오류로 끝내지 못한 종류는 실패로 남긴다',
+      );
+    }
   });
 
   it('takes a whole Coin amount for the start grant, up to START_GRANT_MAX_COIN (#70)', () => {

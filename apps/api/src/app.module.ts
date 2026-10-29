@@ -29,6 +29,7 @@ import { ProfilesModule } from './profiles/profiles.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
+import { RetentionModule } from './retention/retention.module.js';
 import { SearchHistoryModule } from './search-history/search-history.module.js';
 import { StartGrantModule } from './start-grant/start-grant.module.js';
 import { TradesModule } from './trades/trades.module.js';
@@ -101,9 +102,12 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // above, so the document keeps every route before it where it was. Its screen is a page of
     // #50's area.
     AdminLinkFlagsModule,
-    // 탈퇴 (#140): the member's closure of the account. Last, so the document keeps the routes
-    // before it where they were.
+    // 탈퇴 (#140): the member's closure of the account. After the modules above, so the document
+    // keeps the routes before it where they were.
     AccountClosureModule,
+    // 개인정보 보존기간 (#184): the admins' read of what the worker's retention purge deleted. Last,
+    // so the document keeps the routes before it where they were.
+    RetentionModule,
   ],
   controllers: [HealthController],
 })

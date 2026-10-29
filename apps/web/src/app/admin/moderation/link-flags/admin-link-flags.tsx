@@ -37,6 +37,7 @@ import {
   linkFlagGroupKey,
   linkFlagGroupLatest,
   linkFlagItemPath,
+  linkFlagItemText,
   linkFlagKindLabel,
   linkFlagOutcomeLabel,
   linkFlagReasonLabel,
@@ -352,9 +353,10 @@ function LinkFlagItems({ id, group }: { id: string; group: AdminLinkFlagGroup })
 }
 
 /**
- * One entry: the item — a 근거 글 or a 댓글, its excerpt linking to its moderation page (#50) — its
- * author (their moderation page), its market (the admin market screen), when it was caught and
- * written, and what became of it since (edited, deleted, hidden).
+ * One entry: the item — a 근거 글 or a 댓글, its excerpt linking to its moderation page (#50), or
+ * for one #184's retention emptied what it is (`linkFlagItemText`) — its author (their moderation
+ * page), its market (the admin market screen), when it was caught and written, and what became of
+ * it since (edited, deleted, hidden).
  */
 function LinkFlagEntry({ flag }: { flag: AdminLinkFlag }) {
   const { target } = flag;
@@ -377,7 +379,7 @@ function LinkFlagEntry({ flag }: { flag: AdminLinkFlag }) {
             data-testid="admin-link-flag-item"
             style={{ overflowWrap: 'anywhere' }}
           >
-            {target.excerpt}
+            {linkFlagItemText(target)}
           </NextLink>
         </ChakraLink>
       </HStack>

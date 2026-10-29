@@ -463,9 +463,13 @@ export class CommentsService {
    * this post, or — when that is a 대댓글 — its 댓글 (#45-2). The named comment must be in view and
    * open: one that left every view, or is on another post, is NOT_FOUND naming `parentId`; a hidden
    * one, or a 댓글 hidden or deleted to its placeholder, takes no 대댓글 (COMMENT_NOT_ALLOWED).
-   * Locks the named comment, then its 댓글: a deletion or a hiding locks one row only, so the order
-   * cannot deadlock against them. Its `created_at` goes with it: the new 대댓글 carries it
-   * (`parent_created_at`, which the parent's foreign key holds to it).
+   * Locks the named comment, then its 댓글 — the child first, so not in id order: a deletion, an
+   * edit or a hiding locks one comment only, and #184's retention run takes comments SKIP LOCKED,
+   * never waiting for one, so the order cannot deadlock against them. A write that waited for two
+   * comments in id order could: a retention run that did — its comment versions' step — held the
+   * 댓글 while waiting for the 대댓글 this held, and this then waited for the 댓글 (40P01, ADR-0087
+   * 7-29). Its `created_at` goes with it: the new 대댓글 carries it (`parent_created_at`, which the
+   * parent's foreign key holds to it).
    */
   private async lockParent(
     tx: Tx,

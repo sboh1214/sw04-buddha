@@ -1456,6 +1456,34 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       ).toBe('not_theirs');
     });
 
+    it('holds the post or comment a restriction cites while a 조기 해제 or 취소 request of it is written, as a report holds its target: #184’s retention run, which locks the item FOR NO KEY UPDATE before it asks what awaits it, and the request wait for each other (ADR-0087 7-29)', async () => {
+      const comment = await createComment(t.db, { postId: post.id, authorId: member.id });
+      const onPost = await restrict(7, member, { subject: { type: 'post', postId: post.id } });
+      const onComment = await restrict(30, member, {
+        subject: { type: 'comment', commentId: comment.id },
+      });
+      const cases = [
+        { action: onPost, kind: 'lift', table: 'posts', itemId: post.id },
+        { action: onComment, kind: 'cancel', table: 'post_comments', itemId: comment.id },
+      ] as const;
+      for (const { action, kind, table, itemId } of cases) {
+        // The run's lock on the item, held: the request waits for it, and is answered after.
+        const run = await t.db.$client.connect();
+        try {
+          await run.query('BEGIN');
+          await run.query(`SELECT 1 FROM ${table} WHERE id = $1 FOR NO KEY UPDATE`, [itemId]);
+          const asking = askChange(action.id, kind);
+          await waitForLockWaiter(run, `the ${kind} request behind the run’s lock on its item`);
+          await run.query('COMMIT');
+          const request = requestOf(await asking);
+          expect(request).toMatchObject({ change: kind, actionId: action.id, status: 'pending' });
+        } finally {
+          await run.query('ROLLBACK').catch(() => undefined);
+          run.release();
+        }
+      }
+    });
+
     it('lists the pending requests oldest first and the decided latest first, a page at a time to the last', async () => {
       const first = requestOf(await ask(7));
       const otherRequest = requestOf(await ask(3, other));

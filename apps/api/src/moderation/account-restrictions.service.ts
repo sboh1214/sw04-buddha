@@ -202,6 +202,8 @@ export class AccountRestrictionService {
           userId: moderationActions.userId,
           endsAt: moderationActions.endsAt,
           cancelledAt: moderationActions.cancelledAt,
+          postId: moderationActions.postId,
+          commentId: moderationActions.commentId,
         })
         .from(moderationActions)
         .where(eq(moderationActions.id, actionId))
@@ -220,6 +222,26 @@ export class AccountRestrictionService {
         .from(schema.profiles)
         .where(eq(schema.profiles.userId, action.userId))
         .for('key share');
+      // The post or comment the restriction cites, held FOR SHARE until the request commits, as a
+      // report holds its target: #184's retention run keeps what a pending request cites — a deleted
+      // original, the edit history and the images only it used (`nothingAwaits`, ADR-0087 7-29) —
+      // and asks only once it holds the item FOR NO KEY UPDATE, so a request in flight commits
+      // first and is seen. After the member's profile, the order an edit or an apply's approval
+      // takes the two in; nothing that holds such an item waits for a profile this holds.
+      if (action.postId !== null) {
+        await tx
+          .select({ one: sql`1` })
+          .from(schema.posts)
+          .where(eq(schema.posts.id, action.postId))
+          .for('share');
+      }
+      if (action.commentId !== null) {
+        await tx
+          .select({ one: sql`1` })
+          .from(schema.postComments)
+          .where(eq(schema.postComments.id, action.commentId))
+          .for('share');
+      }
       const moot = accountRestrictionMoot(action, change, await clockTimestamp(tx), endsAt ?? null);
       if (moot !== null) throw refused(moot);
       await this.assertDecider(tx, adminId, action.userId);

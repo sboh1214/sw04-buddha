@@ -10,8 +10,16 @@ import {
 } from './queues.js';
 
 describe('queues', () => {
-  it('declares the queues from PLAN 9, the start grant’s wallet queue (#70), the media queue (#46) and the community queue (#187)', () => {
-    expect(QUEUE_NAMES).toEqual(['markets', 'audit', 'stats', 'wallet', 'media', 'community']);
+  it('declares the queues from PLAN 9, the start grant’s wallet queue (#70), the media queue (#46), the community queue (#187) and the retention queue (#184)', () => {
+    expect(QUEUE_NAMES).toEqual([
+      'markets',
+      'audit',
+      'stats',
+      'wallet',
+      'media',
+      'community',
+      'retention',
+    ]);
   });
 
   it('takes its names from @buddha/shared, the module the API produces with', () => {
@@ -48,7 +56,7 @@ describe('queues', () => {
     expect(DEFAULT_JOB_OPTIONS.backoff).toEqual({ type: 'exponential', delay: 1_000 });
   });
 
-  it('schedules the daily audit, the per-minute scans and payment, and the hourly clean-ups', () => {
+  it('schedules the daily audit, the per-minute scans and payment, the hourly clean-ups and the daily retention purge', () => {
     expect(JOB_SCHEDULES.map((schedule) => schedule.id)).toEqual([
       'ledger-audit-daily',
       'market-close-scan',
@@ -56,6 +64,7 @@ describe('queues', () => {
       'start-grant-pay',
       'media-orphan-cleanup',
       'community-records-purge',
+      'retention-purge-daily',
     ]);
     const byId = Object.fromEntries(JOB_SCHEDULES.map((schedule) => [schedule.id, schedule]));
     expect(byId['market-close-scan']).toMatchObject({
@@ -85,6 +94,12 @@ describe('queues', () => {
       queue: 'community',
       name: JOB_NAMES.communityRecordsPurge,
       repeat: { pattern: '37 * * * *', tz: 'Asia/Seoul' },
+    });
+    // #184 (ADR-0087): the records past their retention period, once a day in the quiet hours.
+    expect(byId['retention-purge-daily']).toMatchObject({
+      queue: 'retention',
+      name: JOB_NAMES.retentionPurge,
+      repeat: { pattern: '30 4 * * *', tz: 'Asia/Seoul' },
     });
     // A scan carries no market id: that is what makes the handler scan (marketJobDataSchema).
     for (const schedule of JOB_SCHEDULES) {
