@@ -17,6 +17,7 @@ import {
   unwrap,
   type DeleteProfileImageBody,
   type Me,
+  type SetPasswordBody,
   type UpdateBioBody,
   type UpdateMeBody,
   type UpdateTimeZoneBody,
@@ -69,28 +70,24 @@ export function useMe() {
  * linked-account list, which decides whether the settings screen offers "set" or "change" and
  * /set-password its "already set" branch.
  *
- * The body names the account the screen shows (`expectedAccountId`, A-PG-24), read from the
- * session as `useCharge` reads it: the cookie decides whose password is set, and a settings tab
- * left open beside a window that signed in as somebody else would otherwise give THAT account a
- * first password typed here — one whoever typed it knows. The server refuses the mismatch
- * before better-auth is asked; the refusal refetches the session so SessionCacheGuard shows
- * the account that is really signed in. `ready` is false until the session is known, and the
- * form keeps its submit disabled until then.
+ * The body names the account the screen shows (`expectedAccountId`, A-PG-24): the cookie decides
+ * whose password is set, and a tab left open beside a window that signed in as somebody else would
+ * otherwise give THAT account a first password typed here — one whoever typed it knows. That
+ * account is the one of the `Me` the form was drawn from — /set-password's `me.id`, MY 설정's `Me`
+ * — which the form passes in, never the session's: in the render between the session naming
+ * another account and SessionCacheGuard's reset the session already says B while the form is
+ * still A's, and a body naming B would be taken with B's cookie (ADR-0091, as ADR-0090 did for the
+ * 본인확인 step). The server refuses the mismatch before better-auth is asked; the refusal
+ * refetches the session so SessionCacheGuard shows the account that is really signed in. So it
+ * offers no account of its own, and nothing waits for the session: both forms are drawn only once
+ * `GET /me` answered.
  */
 export function useSetPassword() {
   const queryClient = useQueryClient();
-  const { data: session, refetch: refetchSession } = useSession();
-  const accountId = session?.user.id;
-  const mutation = useMutation({
-    mutationFn: async (newPassword: string) => {
-      // Unreachable while the form honours `ready`.
-      if (!accountId) throw new Error('password set before the session was known');
-      return unwrap(
-        await api.POST('/api/v1/me/password', {
-          body: { newPassword, expectedAccountId: accountId },
-        }),
-      ).data;
-    },
+  const { refetch: refetchSession } = useSession();
+  return useMutation({
+    mutationFn: async (body: SetPasswordBody) =>
+      unwrap(await api.POST('/api/v1/me/password', { body })).data,
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY });
     },
@@ -98,7 +95,6 @@ export function useSetPassword() {
       if (isForAnotherAccount(error)) void refetchSession();
     },
   });
-  return { ...mutation, ready: accountId !== undefined };
 }
 
 /**

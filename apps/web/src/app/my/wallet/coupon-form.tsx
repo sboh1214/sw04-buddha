@@ -12,6 +12,7 @@ import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import { isCouponRejection, useRedeemCoupon } from '@/hooks/use-wallet';
 import { isApiError, isForAnotherAccount } from '@/lib/api';
 import { isUnavailable } from '@/lib/payments';
@@ -26,8 +27,35 @@ type FormValues = z.infer<typeof schema>;
 /**
  * Redeeming an admin-issued coupon (ADR-0026): Coin arrives as a BONUS ledger entry. Not drawn
  * while paid Coin is closed (PAID_COIN_SALES_ENABLED, ADR-0049; app/my/wallet/page.tsx).
+ *
+ * A redemption names the account the wallet was drawn for — the balance card's `Me`, read here
+ * from the same `['me']` — never the session's (`useRedeemCoupon`, ADR-0091): in the render
+ * between the session naming another account and SessionCacheGuard's reset the wallet still shows
+ * A's balance, and a code sent as B's would be spent for B with B's cookie. The server refuses it
+ * as another account's. The field and 등록 wait for that account (`GET /me`), so nothing is typed
+ * before it is known, and the fields are keyed by it: `['me']` can also turn from A to B in place,
+ * before the session does and so with no reset of SessionCacheGuard's (a window-focus refetch of
+ * `GET /me` answered with B's cookie ahead of better-auth's session refetch, a realtime
+ * resnapshot — ADR-0090 결정 4-2). Unkeyed, the code typed on A's wallet would stay with 등록 on,
+ * now naming B — B's `Me` — with B's cookie: a one-use coupon spent for B. Keyed, the field starts
+ * again empty for B.
  */
 export function CouponForm() {
+  const accountId = useMe().data?.id;
+  return (
+    <Card.Root data-testid="coupon-form">
+      <Card.Header>
+        <Text fontWeight="semibold">{copy.couponTitle}</Text>
+      </Card.Header>
+      <Card.Body>
+        <CouponFields key={accountId ?? ''} accountId={accountId} />
+      </Card.Body>
+    </Card.Root>
+  );
+}
+
+/** The code field and 등록, for the account the wallet was drawn for (none until it is known). */
+function CouponFields({ accountId }: { accountId: string | undefined }) {
   const redeem = useRedeemCoupon();
   const {
     register,
@@ -38,8 +66,11 @@ export function CouponForm() {
   } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { code: '' } });
 
   const submit = handleSubmit(async ({ code }) => {
+    // Unreachable while 등록 waits for the account.
+    if (accountId === undefined) return;
     try {
-      const result = await redeem.mutateAsync(code);
+      // The account the wallet was drawn for rides along (`expectedAccountId`, A-M2-9).
+      const result = await redeem.mutateAsync({ code, expectedAccountId: accountId });
       toaster.create({
         type: 'success',
         title: copy.couponRedeemed,
@@ -68,37 +99,30 @@ export function CouponForm() {
   });
 
   return (
-    <Card.Root data-testid="coupon-form">
-      <Card.Header>
-        <Text fontWeight="semibold">{copy.couponTitle}</Text>
-      </Card.Header>
-      <Card.Body>
-        <form onSubmit={(e) => void submit(e)} noValidate>
-          <Field.Root invalid={!!errors.code}>
-            <Field.Label>{copy.couponCode}</Field.Label>
-            <HStack w="full" align="start">
-              <Input
-                autoComplete="off"
-                autoCapitalize="characters"
-                maxLength={COUPON_CODE_MAX_LENGTH}
-                placeholder={copy.couponPlaceholder}
-                data-testid="coupon-code"
-                {...register('code')}
-              />
-              <Button
-                type="submit"
-                loading={isSubmitting}
-                disabled={!redeem.ready}
-                data-testid="coupon-submit"
-              >
-                {copy.couponSubmit}
-              </Button>
-            </HStack>
-            <Field.HelperText>{copy.couponHint}</Field.HelperText>
-            <Field.ErrorText>{errors.code?.message}</Field.ErrorText>
-          </Field.Root>
-        </form>
-      </Card.Body>
-    </Card.Root>
+    <form onSubmit={(e) => void submit(e)} noValidate>
+      <Field.Root invalid={!!errors.code} disabled={accountId === undefined}>
+        <Field.Label>{copy.couponCode}</Field.Label>
+        <HStack w="full" align="start">
+          <Input
+            autoComplete="off"
+            autoCapitalize="characters"
+            maxLength={COUPON_CODE_MAX_LENGTH}
+            placeholder={copy.couponPlaceholder}
+            data-testid="coupon-code"
+            {...register('code')}
+          />
+          <Button
+            type="submit"
+            loading={isSubmitting}
+            disabled={accountId === undefined}
+            data-testid="coupon-submit"
+          >
+            {copy.couponSubmit}
+          </Button>
+        </HStack>
+        <Field.HelperText>{copy.couponHint}</Field.HelperText>
+        <Field.ErrorText>{errors.code?.message}</Field.ErrorText>
+      </Field.Root>
+    </form>
   );
 }

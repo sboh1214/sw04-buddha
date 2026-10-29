@@ -1,6 +1,7 @@
 import {
   NO_EMAIL_DOMAIN,
   appealWindowEndOf,
+  type AdminUserModeration,
   type Me,
   type MyModerationAction,
 } from '@buddha/shared';
@@ -15,8 +16,13 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  secondAdminAccount,
+  nextMeRead,
   signIn,
   signUp,
+  swapCookieUnderScreen,
+  switchAccountUnderScreen,
+  switchMeBeforeSession,
   test,
 } from './helpers';
 
@@ -75,7 +81,11 @@ import {
  *   refusal — in the form's place, atop a held form, under the form for a save whose read after
  *   it failed — the way to 조치·신고 내역 is under it, nothing of the appeal, and it leads there
  *   (owner decision 2026-10-25 «링크를 둠», #186); the post page draws the hidden post's
- *   placeholder at once and holds a typed 댓글 with why, no 404 waiting.
+ *   placeholder at once and holds a typed 댓글 with why, no 404 waiting;
+ * - a tab whose account switched to the other seed admin while it showed a member's page takes no
+ *   action for either: a warning names the operator the page was drawn for and is refused, said
+ *   in a toast that outlasts the page drawn again for the other admin; and a warning being written
+ *   when `['me']` turned to the other admin before the session did is dropped (ADR-0091).
  *
  * Every report a test files is processed before it ends, so a persistent database's queue does not
  * grow run after run; the queue is walked page by page all the same (`showInQueue`). A check that
@@ -86,6 +96,25 @@ import {
  * concurrency, the audit rows) is the API's tests' (reports.controller.test.ts,
  * moderation.controller.test.ts); deleting a really hidden item from MY is authored.spec.ts's.
  */
+
+/** Records every moderation action the page sends (`POST /admin/moderation/…`): its path and body. */
+function moderationWrites(page: Page): { path: string; body: unknown }[] {
+  const writes: { path: string; body: unknown }[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'POST' && path.startsWith('/api/v1/admin/moderation/')) {
+      writes.push({ path, body: request.postDataJSON() });
+    }
+  });
+  return writes;
+}
+
+/** Every action on record for `userId`, as an operator reads the member's page. */
+async function actionsOn(admin: APIRequestContext, userId: string): Promise<unknown[]> {
+  const res = await admin.get(`/api/v1/admin/moderation/users/${userId}`);
+  expect(res.status(), await res.text()).toBe(200);
+  return ((await res.json()) as { data: AdminUserModeration }).data.actions;
+}
 
 /** A post straight at the API with the context's cookie. */
 async function postThroughApi(
@@ -1574,5 +1603,261 @@ test.describe('신고와 운영 처리', () => {
     expect(asked).toHaveLength(1);
     expect(saves).toBe(2);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('탭의 계정이 다른 운영자로 바뀐 뒤 앞 운영자의 회원 운영 화면이 남아 있으면 경고는 그 화면의 운영자를 대어 거절되고, 회원은 아무 조치도 받지 않는다', async ({
+    browser,
+    page,
+    admin,
+    secondAdmin,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset the member's page is still A's while the session already says
+    // B, and an action naming the session's account would be taken with B's cookie — the warning
+    // A was giving, given by B. The dialog names the operator of the `Me` the page was drawn from,
+    // so the server refuses it as another account's. That render is held here: B's cookie in this
+    // tab and the session read again, while `GET /me` still answers as A
+    // (`switchAccountUnderScreen`); B, an operator too, reads the page as it is.
+    const memberContext = await browser.newContext();
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const memberPage = await memberContext.newPage();
+      await signUp(memberPage, freshEmail());
+      const member = await meOf(memberPage.request);
+      // B: the second seed admin (onboarded by its fixture), signed in in another browser.
+      const b = await meOf(secondAdmin);
+      const other = await otherContext.newPage();
+      await signIn(other, secondAdminAccount.email, secondAdminAccount.password);
+      await signIn(page, adminAccount.email, adminAccount.password);
+      const a = await meOf(page.request);
+      await page.goto(`/admin/moderation/users/${member.id}`);
+      await expect(page.getByTestId('moderation-warn')).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes = moderationWrites(page);
+      // A's page, drawn again after the guard's reset.
+      await page.getByTestId('moderation-warn').click();
+      const dialog = page.getByTestId('moderation-warn-dialog');
+      await dialog.getByTestId('moderation-reason').selectOption('harassment');
+      const path = `/api/v1/admin/moderation/users/${member.id}/warn`;
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === path,
+      );
+      await dialog.getByTestId('moderation-submit').click();
+      expect((await answered).status()).toBe(403);
+      // Said in a toast, the dialog closed: the page drops it once the session names the operator
+      // really signed in, and an alert in it would go with it (the test below).
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+      await expect(dialog).toBeHidden();
+
+      expect(writes).toEqual([
+        {
+          path,
+          body: expect.objectContaining({
+            reason: 'harassment',
+            expectedAccountId: a.id,
+          }) as unknown,
+        },
+      ]);
+      // No action on the member, B's or A's.
+      expect(await actionsOn(admin, member.id)).toEqual([]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await memberContext.close();
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 운영자를 말하는데 `GET /me`가 다른 운영자로 답하면 앞 운영자가 열어 둔 경고는 닫혀, 그 화면에서 고르고 적은 것으로 아무 조치도 보내지 않는다', async ({
+    browser,
+    page,
+    admin,
+    secondAdmin,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. The warning opened on
+    // A's page, its reason picked and its explanation typed, would then name B — the operator now
+    // drawn — with B's cookie. The page holds it for the operator who opened it, so it is gone
+    // once B is drawn.
+    const memberContext = await browser.newContext();
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const memberPage = await memberContext.newPage();
+      await signUp(memberPage, freshEmail());
+      const member = await meOf(memberPage.request);
+      const b = await meOf(secondAdmin);
+      const other = await otherContext.newPage();
+      await signIn(other, secondAdminAccount.email, secondAdminAccount.password);
+      await signIn(page, adminAccount.email, adminAccount.password);
+      await page.clock.install();
+      const writes = moderationWrites(page);
+      await page.goto(`/admin/moderation/users/${member.id}`);
+      await page.getByTestId('moderation-warn').click();
+      const dialog = page.getByTestId('moderation-warn-dialog');
+      await dialog.getByTestId('moderation-reason').selectOption('harassment');
+      await dialog.getByTestId('moderation-note').fill('앞 운영자가 적던 설명');
+
+      await switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+      // B's page: the warning opened on A's is gone with what was picked and typed in it.
+      await expect(dialog).toHaveCount(0);
+      await expect(page.getByTestId('moderation-warn')).toBeVisible();
+
+      expect(writes).toEqual([]);
+      expect(await actionsOn(admin, member.id)).toEqual([]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await memberContext.close();
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+  test('탭의 세션이 아직 앞 운영자를 말하는 채 경고가 다른 운영자의 쿠키로 가면 거절되고, 화면이 그 운영자의 것으로 다시 그려진 뒤에도 거절의 까닭이 남는다', async ({
+    browser,
+    page,
+    admin,
+    secondAdmin,
+  }) => {
+    // ADR-0091, the order two windows side by side take (SessionCacheGuard's header: no
+    // `visibilitychange`, so nothing in this tab reads the session again): B's cookie is in the tab
+    // while its session and `['me']` still say A. The warning names A and is refused as another
+    // account's, and the refusal's own session read is the first to say B — the guard's reset then
+    // leaves the page with no operator known, and it drops the dialog A opened. Said inside the
+    // dialog, the refusal went with it; it is a toast that outlasts it.
+    const memberContext = await browser.newContext();
+    const otherContext = await browser.newContext();
+    try {
+      const memberPage = await memberContext.newPage();
+      await signUp(memberPage, freshEmail());
+      const member = await meOf(memberPage.request);
+      const b = await meOf(secondAdmin);
+      const other = await otherContext.newPage();
+      await signIn(other, secondAdminAccount.email, secondAdminAccount.password);
+      await signIn(page, adminAccount.email, adminAccount.password);
+      const a = await meOf(page.request);
+      await page.goto(`/admin/moderation/users/${member.id}`);
+      await page.getByTestId('moderation-warn').click();
+      const dialog = page.getByTestId('moderation-warn-dialog');
+      await dialog.getByTestId('moderation-reason').selectOption('harassment');
+
+      const writes = moderationWrites(page);
+      await swapCookieUnderScreen(page, await otherContext.cookies());
+      const path = `/api/v1/admin/moderation/users/${member.id}/warn`;
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === path,
+      );
+      const meRead = nextMeRead(page);
+      await dialog.getByTestId('moderation-submit').click();
+      expect((await answered).status()).toBe(403);
+      // The guard's reset, and `GET /me` read again: B's page, the dialog gone, the toast still up.
+      const drawn = (await (await meRead).json()) as { data: Me };
+      expect(drawn.data.id).toBe(b.id);
+      await expect(page.getByTestId('moderation-warn')).toBeVisible();
+      await expect(dialog).toHaveCount(0);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+
+      expect(writes).toEqual([
+        {
+          path,
+          body: expect.objectContaining({
+            reason: 'harassment',
+            expectedAccountId: a.id,
+          }) as unknown,
+        },
+      ]);
+      expect(await actionsOn(admin, member.id)).toEqual([]);
+    } finally {
+      await memberContext.close();
+      await otherContext.close();
+    }
+  });
+  test('탭의 계정이 다른 운영자로 바뀐 뒤 앞 운영자의 글 운영 화면이 남아 있으면 숨기기는 그 화면의 운영자를 대어 거절되고, 글은 공개 그대로다', async ({
+    browser,
+    page,
+    admin,
+    secondAdmin,
+  }) => {
+    // ADR-0091: the member's page's render above, on a post's page — the 숨기기 A picked, its
+    // reason, would be done as B with B's cookie if it named the session's account. It names the
+    // operator of the `Me` the page was drawn from, so the server refuses it as another account's.
+    const memberContext = await browser.newContext();
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const memberPage = await memberContext.newPage();
+      await signUp(memberPage, freshEmail());
+      const market = await createOpenMarket(admin);
+      const tag = freshTag();
+      const postId = await postThroughApi(
+        memberPage.request,
+        market.id,
+        `탭이 바뀌는 운영의 글 ${tag}`,
+        `본문 ${tag}`,
+      );
+      const b = await meOf(secondAdmin);
+      const other = await otherContext.newPage();
+      await signIn(other, secondAdminAccount.email, secondAdminAccount.password);
+      await signIn(page, adminAccount.email, adminAccount.password);
+      const a = await meOf(page.request);
+      await page.goto(`/admin/moderation/posts/${postId}`);
+      await expect(page.getByTestId('moderation-hide')).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes = moderationWrites(page);
+      // A's page, drawn again after the guard's reset.
+      await page.getByTestId('moderation-hide').click();
+      const dialog = page.getByTestId('moderation-hide-dialog');
+      await dialog.getByTestId('moderation-reason').selectOption('spam');
+      const path = `/api/v1/admin/moderation/posts/${postId}/hide`;
+      const answered = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'POST' && new URL(response.url()).pathname === path,
+      );
+      await dialog.getByTestId('moderation-submit').click();
+      expect((await answered).status()).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+      await expect(dialog).toBeHidden();
+
+      expect(writes).toEqual([
+        {
+          path,
+          body: expect.objectContaining({ reason: 'spam', expectedAccountId: a.id }) as unknown,
+        },
+      ]);
+      // Still public: hidden by neither.
+      await expect(page.getByTestId('moderation-item-state')).toHaveText(
+        copy.adminModerationStatePublished,
+      );
+      const res = await admin.get(`/api/v1/admin/moderation/posts/${postId}`);
+      expect(res.status(), await res.text()).toBe(200);
+      expect(((await res.json()) as { data: { actions: unknown[] } }).data.actions).toEqual([]);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await memberContext.close();
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 });

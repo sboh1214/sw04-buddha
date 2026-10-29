@@ -5,6 +5,7 @@ import {
   ADMIN_ROLE_REASON_MAX_LENGTH,
   MIN_ADMINS,
 } from '@buddha/shared';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import {
@@ -18,9 +19,10 @@ import {
   formatAdminGrant,
   grantSearchRows,
   isAdminRoleChangeRefusal,
+  heldForOperator,
+  operatorHold,
   revokedOwnRole,
   revokesSelf,
-  screenAccountId,
   type GrantCandidatePage,
 } from './admin-accounts';
 import { ApiError, type AdminRoleChange, type AdminUser } from './api';
@@ -264,30 +266,138 @@ describe('the grant search', () => {
 });
 
 describe('a revoke of my own role', () => {
-  const me = { user: { id: 'me' } };
-
-  it('is not known while the session loads, even if the admin list came first', () => {
-    // During hydration `useSession` answers pending with no data; a cached answer stays pending
-    // until it settles too.
-    expect(revokesSelf('me', { isPending: true, data: null })).toBeUndefined();
-    expect(revokesSelf('other', { isPending: true, data: null })).toBeUndefined();
-    expect(revokesSelf('me', { isPending: true, data: me })).toBeUndefined();
+  it('is not known until `GET /me` has said which admin is on screen, even if the list came first', () => {
+    expect(revokesSelf('me', undefined)).toBeUndefined();
+    expect(revokesSelf('other', undefined)).toBeUndefined();
   });
 
-  it('is not known without a signed-in account', () => {
-    expect(revokesSelf('me', { isPending: false, data: null })).toBeUndefined();
-    expect(revokesSelf('me', { isPending: false, data: undefined })).toBeUndefined();
+  it("is mine for the admin on screen and another admin's otherwise", () => {
+    expect(revokesSelf('me', 'me')).toBe(true);
+    expect(revokesSelf('other', 'me')).toBe(false);
+  });
+});
+
+describe('what an admin screen picked, held for the admin on screen (heldForOperator, ADR-0091)', () => {
+  const picked = { kind: 'grant', userId: 'target' };
+
+  it('stays while the admin it was picked by is on screen, and nothing held stays nothing', () => {
+    const held = { value: picked, operatorId: 'a' };
+    expect(heldForOperator(held, 'a')).toBe(held);
+    expect(heldForOperator(null, 'a')).toBeNull();
+    expect(heldForOperator(null, undefined)).toBeNull();
   });
 
-  it("is mine for the signed-in account and another admin's otherwise, once the session is in", () => {
-    expect(revokesSelf('me', { isPending: false, data: me })).toBe(true);
-    expect(revokesSelf('other', { isPending: false, data: me })).toBe(false);
+  it("is dropped once another admin is drawn — `['me']` turned from A to B in place", () => {
+    // The order SessionCacheGuard never sees (ADR-0090 결정 4-2): a dialog opened, and its reason
+    // typed, on A's screen would otherwise be sent naming B, now the admin on screen.
+    expect(heldForOperator({ value: picked, operatorId: 'a' }, 'b')).toBeNull();
   });
 
-  it('names the signed-in account as the one on screen, once the session is in', () => {
-    expect(screenAccountId({ isPending: true, data: me })).toBeUndefined();
-    expect(screenAccountId({ isPending: false, data: null })).toBeUndefined();
-    expect(screenAccountId({ isPending: false, data: me })).toBe('me');
+  it('is dropped once nobody is known to be on screen — the guard’s reset — and stays dropped', () => {
+    expect(heldForOperator({ value: picked, operatorId: 'a' }, undefined)).toBeNull();
+  });
+
+  it('is never handed to the next admin known — not even one picked while nobody was', () => {
+    // A pick can only be held for a known admin (`operatorHold`), so nothing waits to be adopted;
+    // and a hold is the admin's it was made for alone: B after A drops it, as does A after the
+    // reset left nobody known in between.
+    const held = { value: picked, operatorId: 'a' };
+    expect(heldForOperator(heldForOperator(held, undefined), 'a')).toBeNull();
+    expect(heldForOperator(heldForOperator(held, undefined), 'b')).toBeNull();
+  });
+});
+
+describe('what an admin screen may pick (operatorHold, ADR-0091)', () => {
+  const picked = { kind: 'grant', userId: 'target' };
+
+  it('is held for the admin on screen', () => {
+    expect(operatorHold(picked, 'a')).toEqual({ value: picked, operatorId: 'a' });
+    expect(operatorHold(null, 'a')).toBeNull();
+  });
+
+  it('is nothing while no admin is known — `GET /me` pending or failed', () => {
+    // A grant picked then would be handed to whichever admin `GET /me` names first, and the cookie
+    // may have turned to B meanwhile (another window signing in, SessionCacheGuard's reset): A's
+    // pick and reason, sent as B. The screens offer nothing to pick until then.
+    expect(operatorHold(picked, undefined)).toBeNull();
+    expect(operatorHold(null, undefined)).toBeNull();
+  });
+});
+
+describe('the admin the operator writes name (ADR-0091)', () => {
+  const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+  const MODERATION_PAGES = [
+    '../app/admin/moderation/user-moderation.tsx',
+    '../app/admin/moderation/item-moderation.tsx',
+    '../app/admin/moderation/actions/admin-moderation-actions.tsx',
+    '../app/admin/moderation/account-restriction-requests/admin-account-requests.tsx',
+  ];
+
+  it('is the admin of the `Me` the screen is drawn from, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the admin screens
+    // are still A's, and a grant, a revoke or a moderation action naming the session's account
+    // would be done as B with B's cookie — A's pick and A's reason. No component renders under
+    // node (vitest's `environment: 'node'`), so the wiring is pinned in the sources: the admin on
+    // screen is `GET /me`'s, and nothing on these screens reads the session's account. e2e
+    // admin-accounts.spec.ts and reports.spec.ts ('탭의 계정이 …') drive them.
+    const operator = source('../hooks/use-operator.ts');
+    const start = operator.indexOf('export function useOperatorId()');
+    expect(start).toBeGreaterThan(-1);
+    expect(operator.slice(start, operator.indexOf('\n}\n', start))).toContain(
+      'return useMe().data?.id;',
+    );
+    expect(operator).not.toMatch(/useSession|user\.id/);
+    for (const file of [
+      './admin-accounts.ts',
+      '../app/admin/admins/admin-accounts.tsx',
+      '../app/admin/moderation/moderation-parts.tsx',
+      ...MODERATION_PAGES,
+    ]) {
+      expect(source(file), file).not.toMatch(/screenAccountId|SessionIdentity|useSession/);
+    }
+    // The hooks only ask for the session again on the refusal; they offer no account.
+    expect(source('../hooks/use-admin-accounts.ts')).not.toMatch(
+      /screenAccountId|user\.id|\baccountId\b|\bready\b/,
+    );
+    const accounts = source('../app/admin/admins/admin-accounts.tsx');
+    expect(accounts.match(/expectedAccountId: operatorId \}/g)).toHaveLength(2);
+    expect(accounts.match(/revokesSelf\([\w.]+, operatorId\)/g)).toHaveLength(2);
+    const parts = source('../app/admin/moderation/moderation-parts.tsx');
+    expect(parts).toContain("import { useOperatorId } from '@/hooks/use-operator';");
+    expect(parts.match(/expectedAccountId: operatorId\b/g)).toHaveLength(4);
+  });
+
+  it('holds what a screen picked for the admin it was picked by', () => {
+    // `['me']` can turn from A to B in place, before the session does (ADR-0090 결정 4-2 — no
+    // reset then): a grant or a revoke waiting for its reason, or a moderation dialog, opened on
+    // A's screen would stay with what was typed for A and name B. Each is held for the admin on
+    // screen (`useHeldForOperator`, `heldForOperator`) and dropped once another is drawn. e2e
+    // admin-accounts.spec.ts and reports.spec.ts ('탭의 세션이 …') hold that order.
+    const accounts = source('../app/admin/admins/admin-accounts.tsx');
+    expect(accounts.match(/= useHeldForOperator<PendingRoleChange>\(\);/g)).toHaveLength(2);
+    expect(accounts).not.toMatch(/useState<PendingRoleChange/);
+    const held = MODERATION_PAGES.flatMap(
+      (file) => source(file).match(/= useHeldForOperator<DialogSpec>\(\);/g) ?? [],
+    );
+    // The member's page, a post's and a comment's, the action log and the requests.
+    expect(held).toHaveLength(5);
+    for (const file of MODERATION_PAGES) {
+      expect(source(file), file).not.toMatch(/useState<DialogSpec/);
+    }
+    const operator = source('../hooks/use-operator.ts');
+    expect(operator).toContain('const current = heldForOperator(held, operatorId);');
+    expect(operator).toContain('if (current !== held) setHeld(current);');
+    expect(operator).toContain('setHeld(operatorHold(value, operatorId));');
+  });
+
+  it('offers 부여 and 회수 only once `GET /me` has said which admin is on screen', () => {
+    // A grant picked before that would be held for nobody — `operatorHold` holds nothing then —
+    // and, held, would be handed to whichever admin `GET /me` names first (ADR-0091). 회수 waits
+    // through `revokesSelf`; 부여 through the candidate's `disabled`. e2e admin-accounts.spec.ts
+    // ('`GET /me`가 답하기 전에는 …') holds `GET /me` and sees both off.
+    const accounts = source('../app/admin/admins/admin-accounts.tsx');
+    expect(accounts).toContain('disabled={stale || operatorId === undefined}');
+    expect(accounts).toContain('canRevoke={self !== undefined}');
   });
 });
 

@@ -39,6 +39,7 @@ import {
   publicListQuery,
   relatedMarketsKey,
   relatedMarketsQuery,
+  searchHistoryKey,
   searchListQuery,
   ticksKey,
   watchStateKey,
@@ -236,12 +237,12 @@ describe('key prefix isolation', () => {
     expect(partialMatchKey(watchlistPagesKey({ category: 'economy' }), WATCHLIST_PAGES_KEY)).toBe(
       true,
     );
-    expect(partialMatchKey(watchStateKey(ID), WATCHLIST_PAGES_KEY)).toBe(false);
+    expect(partialMatchKey(watchStateKey(ID, 'user-1'), WATCHLIST_PAGES_KEY)).toBe(false);
     expect(partialMatchKey(pages, MARKETS_KEY)).toBe(false);
     expect(partialMatchKey(marketsKey(DEFAULT_MARKET_FILTERS), WATCHLIST_PAGES_KEY)).toBe(false);
     // One root covers both, so a SessionCacheGuard reset and `isPrivateQueryKey` reach both.
-    expect(partialMatchKey(watchStateKey(ID), WATCHLIST_KEY)).toBe(true);
-    expect(watchStateKey(ID.toUpperCase())).toEqual(watchStateKey(ID));
+    expect(partialMatchKey(watchStateKey(ID, 'user-1'), WATCHLIST_KEY)).toBe(true);
+    expect(watchStateKey(ID.toUpperCase(), 'user-1')).toEqual(watchStateKey(ID, 'user-1'));
   });
 
   it('gives the positions join both lists and nothing else', () => {
@@ -274,10 +275,11 @@ describe('isPrivateQueryKey', () => {
       ['POSITIONS_KEY', POSITIONS_KEY],
       ['ORDERS_KEY', ORDERS_KEY],
       ['watchlistPagesKey', watchlistPagesKey({})],
-      ['watchStateKey', watchStateKey(ID)],
+      ['watchStateKey', watchStateKey(ID, 'user-1')],
       ['SEARCH_HISTORY_KEY', SEARCH_HISTORY_KEY],
+      ['searchHistoryKey', searchHistoryKey('user-1')],
       ['LIKES_KEY', LIKES_KEY],
-      ['myPostLikesKey', myPostLikesKey(ID)],
+      ['myPostLikesKey', myPostLikesKey(ID, 'user-1')],
       ['MY_AUTHORED_KEY', MY_AUTHORED_KEY],
       ['myAuthoredKey', myAuthoredKey('posts')],
       ['myAuthoredKey', myAuthoredKey('comments')],
@@ -361,8 +363,10 @@ describe('dehydratePublic', () => {
       queryClient.setQueryData(CHARGE_PACKAGES_QUERY_KEY, []);
       queryClient.setQueryData(ADMIN_MARKETS_KEY, []);
       queryClient.setQueryData(watchlistPagesKey({}), { pages: [], pageParams: [] });
-      queryClient.setQueryData(watchStateKey(ID), { watched: true });
-      queryClient.setQueryData(SEARCH_HISTORY_KEY, [{ id: ID, query: '금리', searchedAt: '' }]);
+      queryClient.setQueryData(watchStateKey(ID, 'user-1'), { watched: true });
+      queryClient.setQueryData(searchHistoryKey('user-1'), [
+        { id: ID, query: '금리', searchedAt: '' },
+      ]);
       queryClient.setQueryData(myAuthoredKey('posts'), { pages: [], pageParams: [] });
       queryClient.setQueryData(marketKey(ID), { id: ID });
 

@@ -27,10 +27,16 @@ export interface WatchButtonInput {
   sessionPending: boolean;
   signedIn: boolean;
   /**
-   * The caller's state (`GET /me/watchlist/:id`) as `useQuery` reports it. `isFetched`: a read
+   * Signed in, and `GET /me` failed without ever answering: the account the screen shows — whose
+   * state the toggle would draw, and whose a press would name — is unknown (ADR-0091).
+   */
+  profileFailed: boolean;
+  /**
+   * The caller's state (`GET /me/watchlist/:id`) as `useQuery` reports it, under the account the
+   * screen shows (`watchStateKey`) — never read before `GET /me` answered. `isFetched`: a read
    * has answered — with the state or with a failure — since the entry was made; a session
-   * change (SessionCacheGuard's `resetQueries`) makes a new entry. `data` is `undefined` before
-   * the state is known and after its read failed.
+   * change (SessionCacheGuard's `resetQueries`), or `['me']` turning to another account, makes a
+   * new entry. `data` is `undefined` before the state is known and after its read failed.
    */
   state: { isFetched: boolean; data: WatchState | undefined };
   /** A press of this button is on the wire. */
@@ -44,6 +50,9 @@ export interface WatchButtonInput {
  *   contradict, on the server or in the first client render.
  * - Signed out, it is the toggle, not pressed, and a press goes to the login page. Nothing is
  *   remembered for after the login (the owner: the visitor presses again).
+ * - Signed in, the state is read for the account the screen shows (ADR-0091), so nothing is drawn
+ *   while `GET /me` failed without answering — whose state it would be is unknown, the rule of a
+ *   failed read below — and a placeholder while it is read.
  * - Signed in, a placeholder until the state's first read answers, then the toggle — and the
  *   toggle from then on: a later read is never a reason to take it away. TanStack puts an entry
  *   with no data back to `pending` whenever it is read again (a refocus, the read after a press),
@@ -62,6 +71,7 @@ export interface WatchButtonInput {
 export function watchButtonView(input: WatchButtonInput): WatchButtonView {
   if (input.sessionPending) return { kind: 'placeholder' };
   if (!input.signedIn) return { kind: 'toggle', pressed: false, press: 'login' };
+  if (input.profileFailed) return { kind: 'hidden' };
   if (!input.state.isFetched) return { kind: 'placeholder' };
   if (input.state.data === undefined) return { kind: 'hidden' };
   const pressed = input.state.data.watched;

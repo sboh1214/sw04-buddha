@@ -1,4 +1,4 @@
-import type { APIRequestContext, APIResponse, Page, Route } from '@playwright/test';
+import type { APIRequestContext, APIResponse, Locator, Page, Route } from '@playwright/test';
 import type { Category, Me, ReleaseSetting, StartGrant } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
@@ -7,6 +7,7 @@ import {
   E2E_REAL_NAME,
   agreeOnScreen,
   agreeThroughApi,
+  completeOnboardingThroughApi,
   createOpenMarket,
   expect,
   expectOnboardingClosureLink,
@@ -15,6 +16,7 @@ import {
   freshTag,
   logOut,
   meOf,
+  nextMeRead,
   openSetPassword,
   setFirstPassword,
   signIn,
@@ -31,6 +33,10 @@ import {
  * 시작 Coin 안내 → 관심 카테고리(건너뛸 수 있음, shown once) → the page the account was on before it
  * signed up (ADR-0069 decision 4 #58, decision 1 #57-4~#57-10), the re-consent after a revision and
  * the reason a step was sent back, and MY 설정's marketing switch (오너 결정 2026-10-19 (2차)).
+ * A first password set on /set-password or on MY 설정's password card still showing the account a
+ * tab was signed in as after the tab switched to another names the account it shows and is
+ * refused, and the card whose `['me']` turned to another account before the session did starts
+ * again empty (ADR-0091).
  *
  * The email sign-up passes through exactly the state the gate exists for: the verification link
  * signs the account in on /set-password before any step is done. Leaving that page for another one
@@ -1276,6 +1282,179 @@ test.describe('가입 직후 온보딩 (#58)', () => {
     await card.getByTestId('verification-real-name-save').click();
     await expect(page.getByText(copy.realNameSaved)).toBeVisible();
     await expect(card.getByTestId('verification-real-name')).toHaveValue('김 철수');
+  });
+
+  /** Whether `me` has a password: a `credential` row among its sign-in methods (better-auth's). */
+  const hasPassword = (me: Me) =>
+    me.linkedAccounts.some((account) => account.providerId === 'credential');
+
+  /** Records every `POST /me/password` body the page sends. */
+  function passwordWrites(page: Page): unknown[] {
+    const writes: unknown[] = [];
+    page.on('request', (request) => {
+      if (new URL(request.url()).pathname === '/api/v1/me/password') {
+        writes.push(request.postDataJSON());
+      }
+    });
+    return writes;
+  }
+
+  /** Fills both password fields in `scope` and submits; resolves to the answer's status. */
+  async function submitFirstPassword(page: Page, scope: Page | Locator): Promise<number> {
+    await scope.getByTestId('new-password').fill(E2E_PASSWORD);
+    await scope.getByTestId('new-password-confirm').fill(E2E_PASSWORD);
+    const answered = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === '/api/v1/me/password',
+    );
+    await scope.getByRole('button', { name: copy.setPasswordSubmit }).click();
+    return (await answered).status();
+  }
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 /set-password가 화면에 남아 있으면 첫 비밀번호는 그 화면의 계정을 대어 거절되고, 어느 계정에도 비밀번호가 생기지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset /set-password still shows A's form while the session already
+    // says B, and a password naming the session's account would be taken with B's cookie — B's
+    // first password, typed on A's screen and known to whoever typed it. The form names the
+    // account of the `Me` it was drawn from, so the server refuses it as another account's. That
+    // render is held here: B's cookie in this tab and the session read again, while `GET /me`
+    // still answers as A (`switchAccountUnderScreen`) — B, signed in with no password yet, would
+    // have taken one.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await openSetPassword(other, freshEmail());
+      const b = await meOf(other.request);
+      await openSetPassword(page, freshEmail());
+      const a = await meOf(page.request);
+      await expect(page.getByTestId('new-password')).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes = passwordWrites(page);
+      // A's form, drawn again from A's `Me` after the guard's reset.
+      expect(await submitFirstPassword(page, page)).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+      await expect(page).toHaveURL('/set-password');
+
+      expect(writes).toEqual([{ newPassword: E2E_PASSWORD, expectedAccountId: a.id }]);
+      // No password, B's or A's.
+      expect(hasPassword(await meOf(other.request))).toBe(false);
+      expect(hasPassword(await meOf(shownContext.request))).toBe(false);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 MY 설정이 남아 있으면 비밀번호 설정 카드의 첫 비밀번호는 그 화면의 계정을 대어 거절되고, 어느 계정에도 비밀번호가 생기지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091: the same render on MY 설정 — the password card (an account that left the
+    // set-password step) still shows A's form while the session already says B, and a password
+    // naming the session's account would be B's first password. The card names the account of
+    // this screen's `Me`, so the server refuses it as another account's.
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await openSetPassword(other, freshEmail());
+      const { me: b } = await completeOnboardingThroughApi(other.request);
+      await openSetPassword(page, freshEmail());
+      const { me: a } = await completeOnboardingThroughApi(page.request);
+      await page.goto('/my/settings');
+      const card = page.getByTestId('settings-password');
+      await expect(card.getByTestId('new-password')).toBeVisible();
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(page, shownContext.request, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      const writes = passwordWrites(page);
+      // A's card, drawn again from A's `Me` after the guard's reset.
+      expect(await submitFirstPassword(page, card)).toBe(403);
+      await expect(
+        page.locator('[data-scope="toast"]').getByText(copy.sessionChanged),
+      ).toBeVisible();
+
+      expect(writes).toEqual([{ newPassword: E2E_PASSWORD, expectedAccountId: a.id }]);
+      expect(hasPassword(await meOf(other.request))).toBe(false);
+      expect(hasPassword(await meOf(shownContext.request))).toBe(false);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 계정을 말하는데 MY 설정의 `GET /me`가 다른 회원으로 답하면 비밀번호 설정 카드는 그 회원의 것으로 비어 다시 그려지고, 앞 계정에 적던 비밀번호는 남지 않는다', async ({
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. Unkeyed, the card kept the
+    // password typed for A with its button on, and the next press named B — the `Me` now drawn —
+    // with B's cookie: B's first password, typed for A. Keyed by account, it starts again empty.
+    // Held as in phone-verification.spec.ts: better-auth's answers come from A's jar, B's cookie is
+    // put in the tab, and the page's clock makes `['me']` older than its `staleTime` (30 s).
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await openSetPassword(other, freshEmail());
+      const { me: b } = await completeOnboardingThroughApi(other.request);
+      await openSetPassword(page, freshEmail());
+      await completeOnboardingThroughApi(page.request);
+      await page.clock.install();
+      await page.goto('/my/settings');
+      const card = page.getByTestId('settings-password');
+      const password = card.getByTestId('new-password');
+      const confirmation = card.getByTestId('new-password-confirm');
+      await password.fill(E2E_PASSWORD);
+      await confirmation.fill(E2E_PASSWORD);
+
+      // The tab's session keeps saying A — its body only: a cookie A's answer set would put A
+      // back in the tab.
+      await shownContext.addCookies(await page.context().cookies());
+      await page.route(
+        (url) => url.pathname === '/api/auth/get-session',
+        async (route) => {
+          const answer = await shownContext.request.get(route.request().url());
+          await route.fulfill({ status: answer.status(), json: (await answer.json()) as unknown });
+        },
+      );
+      const writes = passwordWrites(page);
+      await page.context().clearCookies();
+      await page.context().addCookies(await otherContext.cookies());
+      const meRead = nextMeRead(page);
+      await page.clock.fastForward('00:31');
+      await page.evaluate(() => window.dispatchEvent(new Event('visibilitychange')));
+      const drawn = (await (await meRead).json()) as { data: { id: string } };
+      expect(drawn.data.id).toBe(b.id);
+
+      // B's card, empty: what was typed for A is gone, and nothing was sent.
+      await expect(password).toHaveValue('');
+      await expect(confirmation).toHaveValue('');
+      expect(writes).toEqual([]);
+      expect(hasPassword(await meOf(other.request))).toBe(false);
+      expect(hasPassword(await meOf(shownContext.request))).toBe(false);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 
   test('게이트에 묶인 계정은 /set-password와 /onboarding에서 로그아웃할 수 있다', async ({

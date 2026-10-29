@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import {
   MutationObserver,
   QueryObserver,
@@ -65,7 +66,10 @@ const me = (id: string): Me => ({
   },
 });
 
-const press = (watched: boolean, account = 'user-1'): WatchVariables => ({
+/** The account the screen shows, which every press here names unless it says otherwise. */
+const ACCOUNT = 'user-1';
+
+const press = (watched: boolean, account = ACCOUNT): WatchVariables => ({
   marketId: MARKET,
   watched,
   expectedAccountId: account,
@@ -97,7 +101,7 @@ function deferred<T>() {
 function stateObserver(queryClient: QueryClient, answer: (read: number) => Promise<WatchState>) {
   let reads = 0;
   const observer = new QueryObserver<WatchState>(queryClient, {
-    queryKey: watchStateKey(MARKET),
+    queryKey: watchStateKey(MARKET, ACCOUNT),
     queryFn: () => {
       reads += 1;
       return answer(reads);
@@ -116,14 +120,24 @@ function toggle(
   return new MutationObserver(queryClient, updateWatchOptions(queryClient, onSessionChanged, put));
 }
 
-const watchedState = (queryClient: QueryClient) =>
-  queryClient.getQueryData<WatchState>(watchStateKey(MARKET))?.watched;
+const watchedState = (queryClient: QueryClient, account = ACCOUNT) =>
+  queryClient.getQueryData<WatchState>(watchStateKey(MARKET, account))?.watched;
 
 describe('the watchlist queries', () => {
-  it('key the state on the canonical id and wait for a session', () => {
-    expect(watchStateQueryOptions(MARKET).queryKey).toEqual(['watchlist', 'market', market]);
-    expect(watchStateQueryOptions(MARKET, null).enabled).toBe(false);
-    expect(watchStateQueryOptions(MARKET, { user: {} }).enabled).toBe(true);
+  it('key the state on the canonical id and the account on screen, and wait for that account (ADR-0091)', () => {
+    expect(watchStateQueryOptions(MARKET, ACCOUNT).queryKey).toEqual([
+      'watchlist',
+      'market',
+      market,
+      ACCOUNT,
+    ]);
+    expect(watchStateQueryOptions(MARKET, ACCOUNT).enabled).toBe(true);
+    // Not known yet — `GET /me` has not answered, or nobody is signed in: never asked.
+    expect(watchStateQueryOptions(MARKET, undefined).enabled).toBe(false);
+    // Each account's state is an entry of its own: the one read for A is never B's.
+    expect(hashKey(watchStateKey(MARKET, 'user-2'))).not.toBe(
+      hashKey(watchStateKey(MARKET, ACCOUNT)),
+    );
     expect(watchlistInfiniteQueryOptions({}, undefined).enabled).toBe(false);
     expect(watchlistInfiniteQueryOptions({}, { user: {} }).queryKey).toEqual(watchlistPagesKey({}));
     // The home's 관심 시장 view (ADR-0065) is its own entry per order and category, apart from MY's.
@@ -199,8 +213,8 @@ describe('the watchlist queries', () => {
     const held = queryClient.getQueryData<MarketPages>(key)?.pages[0]?.items[0];
     expect(held).toMatchObject({ status: 'closed', lastPrice: 63, tradeCount: 11 });
     // The state under the same root is no page and is never joined as one.
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: true });
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: false });
+    queryClient.setQueryData(watchStateKey(MARKET, ACCOUNT), { watched: true });
+    queryClient.setQueryData(watchStateKey(MARKET, ACCOUNT), { watched: false });
     expect(watchedState(queryClient)).toBe(false);
   });
 });
@@ -309,7 +323,7 @@ describe('updateWatchOptions', () => {
     const observer = toggle(queryClient, () => Promise.reject(outage()));
     // No state observer has answered: the cache holds nothing for this market.
     const state = new QueryObserver<WatchState>(queryClient, {
-      queryKey: watchStateKey(MARKET),
+      queryKey: watchStateKey(MARKET, ACCOUNT),
       queryFn: () => {
         reads += 1;
         return Promise.resolve({ watched: false });
@@ -328,7 +342,7 @@ describe('updateWatchOptions', () => {
     }
     // With no entry at all before the press, the optimistic one goes too.
     await expect(observer.mutate({ ...press(true), marketId: UNSEEN_MARKET })).rejects.toThrow();
-    expect(queryClient.getQueryState(watchStateKey(UNSEEN_MARKET))).toBeUndefined();
+    expect(queryClient.getQueryState(watchStateKey(UNSEEN_MARKET, ACCOUNT))).toBeUndefined();
   });
 
   it('draws no button after a failed first read, and the toggle once a later read succeeds', async () => {
@@ -343,7 +357,13 @@ describe('updateWatchOptions', () => {
     );
     const views: WatchButtonView[] = [];
     const view = (result: QueryObserverResult<WatchState>) =>
-      watchButtonView({ sessionPending: false, signedIn: true, state: result, saving: false });
+      watchButtonView({
+        sessionPending: false,
+        signedIn: true,
+        profileFailed: false,
+        state: result,
+        saving: false,
+      });
     const stopViews = state.observer.subscribe((result) => views.push(view(result)));
     try {
       await state.observer.refetch();
@@ -379,7 +399,13 @@ describe('updateWatchOptions', () => {
     );
     const views: WatchButtonView[] = [];
     const view = (result: QueryObserverResult<WatchState>) =>
-      watchButtonView({ sessionPending: false, signedIn: true, state: result, saving: false });
+      watchButtonView({
+        sessionPending: false,
+        signedIn: true,
+        profileFailed: false,
+        state: result,
+        saving: false,
+      });
     const stopViews = state.observer.subscribe((result) => views.push(view(result)));
     try {
       await state.observer.refetch();
@@ -401,7 +427,7 @@ describe('updateWatchOptions', () => {
   it('asks for the session again on a refusal as another account, and puts the state back', async () => {
     const queryClient = getQueryClient();
     queryClient.setQueryData(ME_QUERY_KEY, me('user-1'));
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: false });
+    queryClient.setQueryData(watchStateKey(MARKET, ACCOUNT), { watched: false });
     let sessions = 0;
     const observer = toggle(
       queryClient,
@@ -429,32 +455,69 @@ describe('updateWatchOptions', () => {
     expect(watchedState(queryClient)).toBe(false);
   });
 
-  it('writes nothing into another account’s cache when the tab switched while the press was out', async () => {
+  it('writes only the state of the account the press named, never another account’s (ADR-0091)', async () => {
+    // The press names the account whose state the toggle drew, and every write of it — the
+    // optimistic state, the answer, the rollback — goes into that account's entry: B's, read
+    // after `['me']` turned to B (in place, or after SessionCacheGuard's reset), is left alone.
+    // One entry for both — the key before ADR-0091 — would carry A's press into B's toggle.
     const queryClient = getQueryClient();
     queryClient.setQueryData(ME_QUERY_KEY, me('user-1'));
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: false });
+    queryClient.setQueryData(watchStateKey(MARKET, 'user-1'), { watched: false });
+    queryClient.setQueryData(watchStateKey(MARKET, 'user-2'), { watched: false });
     const answer = deferred<WatchState>();
     const observer = toggle(queryClient, () => answer.promise);
     const done = observer.mutate(press(true, 'user-1'));
     await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(watchedState(queryClient, 'user-1')).toBe(true);
+    expect(watchedState(queryClient, 'user-2')).toBe(false);
 
-    // SessionCacheGuard reset the cache and user-2's profile and state landed.
+    // The tab switched to user-2 while the press was out.
     queryClient.setQueryData(ME_QUERY_KEY, me('user-2'));
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: false });
     answer.resolve({ watched: true });
     await done;
-    expect(watchedState(queryClient)).toBe(false);
+    expect(watchedState(queryClient, 'user-1')).toBe(true);
+    expect(watchedState(queryClient, 'user-2')).toBe(false);
 
-    // A failure landing then does not "restore" user-1's state over user-2's either.
-    queryClient.setQueryData(ME_QUERY_KEY, me('user-1'));
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: true });
+    // A failure landing then puts user-1's state back, and leaves user-2's alone.
     const failing = deferred<WatchState>();
     const second = toggle(queryClient, () => failing.promise).mutate(press(false, 'user-1'));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    queryClient.setQueryData(ME_QUERY_KEY, me('user-2'));
-    queryClient.setQueryData(watchStateKey(MARKET), { watched: false });
+    expect(watchedState(queryClient, 'user-1')).toBe(false);
+    queryClient.setQueryData(watchStateKey(MARKET, 'user-2'), { watched: true });
     failing.reject(outage());
     await expect(second).rejects.toThrow();
-    expect(watchedState(queryClient)).toBe(false);
+    expect(watchedState(queryClient, 'user-1')).toBe(true);
+    expect(watchedState(queryClient, 'user-2')).toBe(true);
+  });
+});
+
+describe('the account the toggle draws and names (ADR-0091)', () => {
+  it('is the one of the `Me` the detail was drawn from, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the toggle still
+    // shows A's state, and a press naming the session's account would be taken with B's cookie:
+    // B's watch set to the opposite of A's. No component renders under node, so the wiring is
+    // pinned in the sources: the hook offers no account (no session id), the button hands it the
+    // header's `Me`'s id — which keys the state (above) — and sends that. e2e watchlist.spec.ts
+    // ('탭의 계정이 …', '탭의 세션이 …') drives both orders.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source('./use-watchlist.ts')).not.toMatch(/user\.id|\bmeBelongsTo\b/);
+    const button = source('../components/market/watch-button.tsx');
+    expect(button).toContain('const accountId = me.data?.id;');
+    expect(button).toContain('useWatch(marketId, accountId)');
+    expect(button).toContain('expectedAccountId: accountId');
+    expect(button).not.toMatch(/\bwatch\.accountId\b/);
+  });
+
+  it('hides the toggle when `GET /me` failed without ever answering, rather than a placeholder for good', () => {
+    // The state is read for the `Me`'s account only, so with no answer it is never read: the rung
+    // for a state that could not be read (ADR-0064 — nothing drawn) rather than the placeholder.
+    // e2e watchlist.spec.ts ('`GET /me`를 읽지 못하면 …') drives it.
+    const button = readFileSync(
+      new URL('../components/market/watch-button.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(button).toContain(
+      'profileFailed: me.isLoggedIn && me.isError && accountId === undefined,',
+    );
   });
 });

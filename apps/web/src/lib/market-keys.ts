@@ -45,9 +45,9 @@ export const ORDERS_KEY = ['orders'] as const;
  * member sees it (#37), so it is never SSR'd and the detail's button draws no state in the HTML.
  * One root, two shapes under it: `['watchlist', 'pages', filters]` is MY's infinite list of
  * `MarketSummary` pages (the home grid's page shape, so the card and the realtime reducers serve
- * it), and `['watchlist', 'market', id]` is whether the caller watches one market. The two never
- * match each other's prefix, so the list's `structuralSharing` (query-client.ts) never reaches a
- * state (market-keys.test.ts pins it).
+ * it), and `['watchlist', 'market', id, accountId]` is whether the caller watches one market. The
+ * two never match each other's prefix, so the list's `structuralSharing` (query-client.ts) never
+ * reaches a state (market-keys.test.ts pins it).
  */
 export const WATCHLIST_KEY = ['watchlist'] as const;
 export const WATCHLIST_PAGES_KEY = [...WATCHLIST_KEY, 'pages'] as const;
@@ -67,9 +67,17 @@ export interface WatchlistFilters {
 export const watchlistPagesKey = (filters: WatchlistFilters) =>
   [...WATCHLIST_PAGES_KEY, filters] as const;
 
-/** On the canonical lower-cased uuid, like `marketKey` (A-M3-29). */
-export const watchStateKey = (marketId: string) =>
-  [...WATCHLIST_KEY, 'market', marketId.toLowerCase()] as const;
+/**
+ * One account's state of one market (`GET /me/watchlist/:id`), on the canonical lower-cased uuid
+ * like `marketKey` (A-M3-29), under the account the screen shows — the `Me` it was drawn from
+ * (ADR-0091). The answer names no owner, and a press sends the opposite of the state drawn: the
+ * toggle has to draw the state of the account its press names, and an entry read for another one
+ * — `['me']` turned from A to B in place, before the session did and so with no reset of
+ * SessionCacheGuard's (ADR-0090 결정 4-2) — is not that state. `accountId` is undefined while that
+ * account is not known: the query is disabled then, and nothing is read into the entry.
+ */
+export const watchStateKey = (marketId: string, accountId: string | undefined) =>
+  [...WATCHLIST_KEY, 'market', marketId.toLowerCase(), accountId] as const;
 
 /**
  * The status the home lists, always (ADR-0061 decision 1, item 13): open markets only, with no
@@ -205,10 +213,20 @@ export function relatedMarketsQuery(cursor?: string): { cursor?: string } {
 /**
  * 최근 검색 (#15, ADR-0066): the caller's recent searches, the member's own (ADR-0061 decision 3:
  * shown to the member) and read with the member's cookie, so the root is in `PRIVATE_QUERY_ROOTS`:
- * never fetched on the server, never dehydrated.
- * One entry; no key under it says whose it is (SessionCacheGuard resets it on an account change).
+ * never fetched on the server, never dehydrated. SessionCacheGuard resets it on an account change.
  */
 export const SEARCH_HISTORY_KEY = ['search-history'] as const;
+
+/**
+ * The recent searches of the account the screen shows — the `Me` it was drawn from (ADR-0091).
+ * The answer names no owner, and the deletes act on the list drawn (the entry picked, every entry
+ * for 전체 삭제): the list has to be the one of the account they name, and an entry read for
+ * another one — `['me']` turned from A to B in place, before the session did and so with no reset
+ * of SessionCacheGuard's (ADR-0090 결정 4-2) — is not that list. `accountId` is undefined while
+ * that account is not known: the read is disabled then, and nothing is read into the entry.
+ */
+export const searchHistoryKey = (accountId: string | undefined) =>
+  [...SEARCH_HISTORY_KEY, accountId] as const;
 
 /**
  * The home's 관심 시장 view (#63, ADR-0065): the caller's watched open markets, of the category

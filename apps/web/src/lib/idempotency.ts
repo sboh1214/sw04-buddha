@@ -74,7 +74,10 @@ export class IdempotencyKeys {
   private storage: KeyStorage;
   private readonly prefix: string;
 
-  /** `account` is the signed-in user's id: one account's keys are invisible to another. */
+  /**
+   * `account` is the id of the account the purchase names (`expectedAccountId` — the wallet's
+   * `Me`, `useCharge`): one account's keys are invisible to another.
+   */
   constructor(
     account: string,
     storage: KeyStorage | null = browserSessionStorage(),

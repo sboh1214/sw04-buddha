@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { QueryClient } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ApiError, type Payment, isForAnotherAccount } from '@/lib/api';
@@ -239,5 +240,44 @@ describe('paymentsRefetchInterval', () => {
     } finally {
       queryClient.clear();
     }
+  });
+});
+
+describe('the account a charge and a redemption name (ADR-0091)', () => {
+  it('is the one the wallet was drawn for, never the session’s, and the coupon field is keyed by it', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the wallet still
+    // shows A's balance, and a body naming the session's account would be taken with B's cookie: B
+    // charged for a package bought on A's screen (its Idempotency-Key filed under B), or the code
+    // typed there spent for B. No component renders under node, so the wiring is pinned in the
+    // sources: the hooks offer no account (no session id, no `ready`), the charge's keys are filed
+    // under the account the click names, and both cards read the wallet's `Me` — the balance
+    // card's `['me']` — and send its id. The coupon field is keyed by it as well: `['me']` can turn
+    // to B in place before the session does, and an unkeyed field would keep the code typed for A,
+    // 등록 on, now naming B. Paid Coin is closed (ADR-0049), so no e2e can reach these cards.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const hooks = source('./use-wallet.ts');
+    expect(hooks).not.toMatch(/user\.id/);
+    const hook = (name: string) => {
+      const start = hooks.indexOf(`export function ${name}()`);
+      expect(start).toBeGreaterThan(-1);
+      return hooks.slice(start, hooks.indexOf('\n}\n', start));
+    };
+    const charge = hook('useCharge');
+    expect(charge).not.toMatch(/\baccountId\b|\bready\b/);
+    expect(charge).toContain('mutationFn: async ({ pack, expectedAccountId }: ChargeRequest) =>');
+    expect(charge).toContain('const keys = keysFor(expectedAccountId);');
+    expect(hook('useRedeemCoupon')).not.toMatch(/\baccountId\b|\bready\b/);
+
+    const chargeForm = source('../app/my/wallet/charge-form.tsx');
+    expect(chargeForm).toContain('const accountId = useMe().data?.id;');
+    expect(chargeForm).toContain('if (accountId !== undefined) void buy(pack, accountId);');
+    expect(chargeForm).toContain('charge.mutateAsync({ pack, expectedAccountId })');
+    expect(chargeForm).not.toMatch(/\bcharge\.(accountId|ready)\b/);
+
+    const couponForm = source('../app/my/wallet/coupon-form.tsx');
+    expect(couponForm).toContain('const accountId = useMe().data?.id;');
+    expect(couponForm).toContain("<CouponFields key={accountId ?? ''} accountId={accountId} />");
+    expect(couponForm).toContain('redeem.mutateAsync({ code, expectedAccountId: accountId })');
+    expect(couponForm).not.toMatch(/\bredeem\.(accountId|ready)\b/);
   });
 });

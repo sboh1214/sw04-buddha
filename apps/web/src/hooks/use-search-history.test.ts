@@ -1,7 +1,8 @@
-import { MutationObserver, QueryObserver, type QueryClient } from '@tanstack/react-query';
+import { readFileSync } from 'node:fs';
+import { MutationObserver, QueryObserver, type QueryClient, hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { ApiError, type Me, type RecentSearch } from '@/lib/api';
-import { SEARCH_HISTORY_KEY } from '@/lib/market-keys';
+import { searchHistoryKey } from '@/lib/market-keys';
 import { getQueryClient } from '@/lib/query-client';
 import { type SearchHistoryWrite } from '@/lib/search-history';
 import { ME_QUERY_KEY } from './use-me';
@@ -84,14 +85,14 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 function seeded(account = 'user-a', list: RecentSearch[] = LIST): QueryClient {
   const queryClient = getQueryClient();
   queryClient.setQueryData(ME_QUERY_KEY, me(account));
-  queryClient.setQueryData(SEARCH_HISTORY_KEY, list);
+  queryClient.setQueryData(searchHistoryKey(account), list);
   return queryClient;
 }
 
 /** The recent list's observer, answering `reads` in turn: it stands in for the mounted list. */
 function listObserver(queryClient: QueryClient, reads: () => Promise<RecentSearch[]>) {
   const observer = new QueryObserver<RecentSearch[]>(queryClient, {
-    queryKey: SEARCH_HISTORY_KEY,
+    queryKey: searchHistoryKey('user-a'),
     queryFn: reads,
     staleTime: Infinity,
   });
@@ -99,8 +100,9 @@ function listObserver(queryClient: QueryClient, reads: () => Promise<RecentSearc
   return { observer, unsubscribe };
 }
 
-const held = (queryClient: QueryClient) =>
-  queryClient.getQueryData<RecentSearch[]>(SEARCH_HISTORY_KEY);
+/** The recent list the client holds for `account` (user-a's unless named). */
+const held = (queryClient: QueryClient, account = 'user-a') =>
+  queryClient.getQueryData<RecentSearch[]>(searchHistoryKey(account));
 
 const deleteOf = (id: string, account = 'user-a'): SearchHistoryWrite => ({
   kind: 'delete',
@@ -109,11 +111,13 @@ const deleteOf = (id: string, account = 'user-a'): SearchHistoryWrite => ({
 });
 
 describe('the recent searches query', () => {
-  it('is one private entry that waits for a session', () => {
-    expect(recentSearchesQueryOptions(null).queryKey).toEqual(['search-history']);
-    expect(recentSearchesQueryOptions(null).enabled).toBe(false);
+  it('is one private entry per account on screen, read once that account is known (ADR-0091)', () => {
+    expect(recentSearchesQueryOptions('user-a').queryKey).toEqual(['search-history', 'user-a']);
+    expect(recentSearchesQueryOptions('user-a').enabled).toBe(true);
+    // Signed out, or `GET /me` not answered yet: never asked.
     expect(recentSearchesQueryOptions(undefined).enabled).toBe(false);
-    expect(recentSearchesQueryOptions({ user: {} }).enabled).toBe(true);
+    // Each account's list is an entry of its own: the one read for A is never B's.
+    expect(hashKey(searchHistoryKey('user-b'))).not.toBe(hashKey(searchHistoryKey('user-a')));
   });
 });
 
@@ -131,7 +135,7 @@ describe('recordSearch', () => {
       },
     );
     expect(sent).toEqual([{ query: '금리', expectedAccountId: 'user-a' }]);
-    expect(queryClient.getQueryState(SEARCH_HISTORY_KEY)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(searchHistoryKey('user-a'))?.isInvalidated).toBe(true);
   });
 
   it('never throws: a record that failed is a missing line, not a failed search', async () => {
@@ -275,11 +279,15 @@ describe('searchHistoryWriteOptions', () => {
     expect(held(again)).toEqual([newer, older]);
   });
 
-  it('never puts one account’s terms back into another account’s list', async () => {
-    // The press was for user-a; before its failure landed, the tab became user-b's
-    // (SessionCacheGuard reset the cache, and user-b's list was read). The rollback must not
-    // write user-a's terms over it.
+  it('writes only the list of the account it named, never another account’s (ADR-0091)', async () => {
+    // The press names the account whose list the screen drew, and every write of it — the entry
+    // dropped at the press, the rollback — goes into that account's list: user-b's, read after
+    // `['me']` turned to user-b (in place, or after SessionCacheGuard's reset), is left alone. One
+    // entry for both — the key before ADR-0091 — would hide user-a's entry in user-b's list, and
+    // put user-a's terms back over it.
     const queryClient = seeded('user-a');
+    const theirs = [entry('z', '남의 검색')];
+    queryClient.setQueryData(searchHistoryKey('user-b'), theirs);
     const answer = deferred<RecentSearch[]>();
     const mutation = new MutationObserver(
       queryClient,
@@ -289,14 +297,16 @@ describe('searchHistoryWriteOptions', () => {
         () => answer.promise,
       ),
     );
-    const done = mutation.mutate(deleteOf('a', 'user-a'));
+    const done = mutation.mutate({ kind: 'clear', expectedAccountId: 'user-a' });
     await flush();
+    expect(held(queryClient)).toEqual([]);
+    expect(held(queryClient, 'user-b')).toEqual(theirs);
+    // The tab became user-b's before the failure landed.
     queryClient.setQueryData(ME_QUERY_KEY, me('user-b'));
-    const theirs = [entry('z', '남의 검색')];
-    queryClient.setQueryData(SEARCH_HISTORY_KEY, theirs);
     answer.reject(outage());
     await expect(done).rejects.toThrow();
-    expect(held(queryClient)).toEqual(theirs);
+    expect(held(queryClient)).toEqual(LIST);
+    expect(held(queryClient, 'user-b')).toEqual(theirs);
   });
 
   it('reads the list again only when the last of several writes is done', async () => {
@@ -327,5 +337,111 @@ describe('searchHistoryWriteOptions', () => {
     await two;
     expect(reads).toBe(1);
     unsubscribe();
+  });
+
+  it('reads again only the list of the account it named, after that account’s last write (ADR-0091)', async () => {
+    // Each account's list is an entry of its own: a delete named for user-a makes user-a's list
+    // stale and no other — and user-b's write still on its way does not hold user-a's read back.
+    const queryClient = seeded('user-a');
+    queryClient.setQueryData(searchHistoryKey('user-b'), [entry('z', '남의 검색')]);
+    const forA = deferred<RecentSearch[]>();
+    const forB = deferred<RecentSearch[]>();
+    const answers = [forB, forA];
+    const options = searchHistoryWriteOptions(
+      queryClient,
+      () => undefined,
+      () => answers.shift()!.promise,
+    );
+    const b = new MutationObserver(queryClient, options).mutate(deleteOf('z', 'user-b'));
+    const a = new MutationObserver(queryClient, options).mutate(deleteOf('a', 'user-a'));
+    await flush();
+    forA.resolve([LIST[1]!]);
+    await a;
+    expect(queryClient.getQueryState(searchHistoryKey('user-a'))?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(searchHistoryKey('user-b'))?.isInvalidated).toBe(false);
+    forB.resolve([]);
+    await b;
+    expect(queryClient.getQueryState(searchHistoryKey('user-b'))?.isInvalidated).toBe(true);
+  });
+});
+
+describe('the account the recent searches are written for (ADR-0091)', () => {
+  it('is the one of the `Me` the screen was drawn from, never the session’s', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the screen is still
+    // A's, and a write naming the session's account would be taken with B's cookie: a term searched
+    // on A's screen recorded for B, B's history cleared from A's list. No component renders under
+    // node, so the wiring is pinned in the sources: the hooks offer no account (no session id), the
+    // header's box, the search screen's box and its list hand them the `Me`'s id — which keys the
+    // list (above) — and the deletes send it. e2e search.spec.ts ('탭의 계정이 …', '탭의 세션이 …')
+    // drives both orders.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source('./use-search-history.ts')).not.toMatch(/user\.id|\bmeBelongsTo\b/);
+    const nav = source('../components/layout/nav.tsx');
+    expect(nav).toContain('const accountId = useMe().data?.id;');
+    expect(nav).toContain('const record = useRecordSearch(accountId);');
+    const screen = source('../app/search/market-search.tsx');
+    expect(screen).toContain('const accountId = useMe().data?.id;');
+    expect(screen).toContain('const record = useRecordSearch(accountId);');
+    expect(screen).toContain('const accountId = me.data?.id;');
+    expect(screen).toContain('const recent = useRecentSearches(accountId);');
+    expect(screen.match(/expectedAccountId: accountId\b/g)).toHaveLength(2);
+    expect(screen).not.toMatch(/useSearchHistoryWrite\(\)\.accountId|\{ write, accountId \}/);
+  });
+
+  it('draws both boxes again when the account turns into another, so a term typed for A is never recorded for B', () => {
+    // `['me']` can turn from A to B under a box that stays mounted — the header's never remounts —
+    // in place before the session does (ADR-0090 결정 4-2) or through SessionCacheGuard's reset;
+    // the term typed on A's screen would then be submitted, and recorded, for B with B's cookie.
+    // Each box is keyed on its turn as well as the URL's term (`searchBoxKey`) — the turn of the
+    // account it records for (`useSearchBoxTurn`). e2e search.spec.ts ('… 검색창에 적던 검색어 …')
+    // holds both orders.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const nav = source('../components/layout/nav.tsx');
+    expect(nav).toContain('const turn = useSearchBoxTurn(accountId);');
+    expect(nav).toContain('key={searchBoxKey(turn, initialTerm)}');
+    const screen = source('../app/search/market-search.tsx');
+    expect(screen).toContain('const turn = useSearchBoxTurn(accountId);');
+    expect(screen).toContain('key={searchBoxKey(turn, filters.q)}');
+    expect(screen).toContain(
+      '<SearchBox filters={filters} accountId={accountId} onSubmitted={record} />',
+    );
+  });
+
+  it('keeps what was typed before `GET /me`’s first answer, and turns over the whole tab (owner decision 2026-10-26)', () => {
+    // «첫 답 전에 친 글자는 남김»: the box's turn moves only when the account known turns into
+    // another (`searchBoxOwner`, lib/market-search.test.ts), adjusted during render so B's screen
+    // is drawn with the box already empty. A box drawn while nobody is known starts as the last
+    // account the tab knew — written by an effect, never on the server — so only the tab's first
+    // account is a first answer. The effect is pinned whole: nobody known never erases it, and it
+    // runs on each account, not only on the box's mount (a header box mounts before `GET /me`
+    // answers). e2e search.spec.ts ('`GET /me`의 첫 답 전에 …', '… 새로 연 검색창 …') drives it.
+    const hook = readFileSync(new URL('./use-search-box.ts', import.meta.url), 'utf8');
+    expect(hook).toContain('accountId: lastKnownInTab,');
+    expect(hook).toContain('const current = searchBoxOwner(owner, accountId);');
+    expect(hook).toContain('if (current !== owner) setOwner(current);');
+    expect(hook).toContain(
+      [
+        '  useEffect(() => {',
+        '    if (accountId !== undefined) lastKnownInTab = accountId;',
+        '  }, [accountId]);',
+      ].join('\n'),
+    );
+    expect(hook.match(/lastKnownInTab =/g)).toHaveLength(1);
+    expect(hook).toContain('return current.turn;');
+  });
+
+  it('says the list could not be read when `GET /me` failed, rather than waiting for good', () => {
+    // The list is read for the `Me`'s account only; a `GET /me` that failed without ever answering
+    // leaves it unread — its failure rung, with 다시 시도 reading `GET /me` again. e2e
+    // search.spec.ts ('`GET /me`를 읽지 못하면 …') drives it.
+    const screen = readFileSync(
+      new URL('../app/search/market-search.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(screen).toContain(
+      'const meFailed = me.isLoggedIn && me.isError && accountId === undefined;',
+    );
+    expect(screen).toContain("const body = meFailed ? 'failed' : section.body;");
+    expect(screen).toContain('onClick={() => void (meFailed ? me.refetch() : recent.refetch())}');
   });
 });

@@ -101,32 +101,57 @@ export function grantSearchRows(
   };
 }
 
-/** As much of `useSession` as `screenAccountId` and `revokesSelf` read. */
-export interface SessionIdentity {
-  isPending: boolean;
-  data: { user: { id: string } } | null | undefined;
+/**
+ * Whether revoking `accountId` would revoke the role of the admin on screen — `operatorId`, the
+ * account of the `Me` the screen is drawn from (`useOperatorId`, ADR-0091) — or `undefined` while
+ * that is not known. It badges 나 and puts the warning in the dialog, and 회수 stays off until it
+ * is known — the admin list can arrive before `GET /me`. Whether to sign out after a revoke is NOT
+ * decided by it: that is the answer's (`revokedOwnRole`).
+ */
+export function revokesSelf(
+  accountId: string,
+  operatorId: string | undefined,
+): boolean | undefined {
+  return operatorId === undefined ? undefined : operatorId === accountId;
 }
 
 /**
- * The signed-in admin the screen is showing, or `undefined` while that is not known: the session
- * is still loading, or holds no account. A grant or a revoke names it (`expectedAccountId`, read
- * when the dialog is submitted) and is not sent while it is unknown; the server refuses it when
- * the cookie is another account's.
+ * Something an admin screen picked or opened — a dialog with its target — and the admin on screen
+ * who picked it (`useOperatorId`). Nothing is held for nobody (`operatorHold`).
  */
-export function screenAccountId(session: SessionIdentity): string | undefined {
-  return session.isPending ? undefined : session.data?.user.id;
+export interface OperatorHeld<T> {
+  value: T;
+  operatorId: string;
 }
 
 /**
- * Whether revoking `accountId` would revoke the signed-in admin's own role as the screen sees it,
- * or `undefined` while that is not known (`screenAccountId`). It badges 나 and puts the warning in
- * the dialog, and 회수 stays off until it is known — the admin list can arrive before the session.
- * Whether to sign out after a revoke is NOT decided by it: that is the answer's
- * (`revokedOwnRole`).
+ * What picking `value` holds while `operatorId` is the admin on screen (`useHeldForOperator`,
+ * ADR-0091): nothing while that admin is not known — `GET /me` pending, or failed without ever
+ * answering. A pick made then would belong to whichever admin `GET /me` names first, and the
+ * cookie may have changed meanwhile (another window signing in as B, a SessionCacheGuard reset
+ * that leaves `['me']` unknown): A's pick and reason, sent as B. So the screens offer nothing to
+ * pick until then (부여 and 회수 wait, as every moderation action's button does).
  */
-export function revokesSelf(accountId: string, session: SessionIdentity): boolean | undefined {
-  const selfId = screenAccountId(session);
-  return selfId === undefined ? undefined : selfId === accountId;
+export function operatorHold<T>(
+  value: T | null,
+  operatorId: string | undefined,
+): OperatorHeld<T> | null {
+  return value === null || operatorId === undefined ? null : { value, operatorId };
+}
+
+/**
+ * What `held` is once the admin on screen is `operatorId` (`useHeldForOperator`, ADR-0091): kept
+ * while it is the admin it was picked by, and dropped once another admin, or nobody known
+ * (SessionCacheGuard's reset, a `GET /me` that failed), is on screen — never handed on to the
+ * next admin known. A grant, a revoke or a moderation action picked — and its reason typed — on
+ * A's screen is not B's to send: `['me']` can turn from A to B in place, before the session does
+ * (ADR-0090 결정 4-2).
+ */
+export function heldForOperator<T>(
+  held: OperatorHeld<T> | null,
+  operatorId: string | undefined,
+): OperatorHeld<T> | null {
+  return held !== null && held.operatorId === operatorId ? held : null;
 }
 
 /**
@@ -134,7 +159,7 @@ export function revokesSelf(accountId: string, session: SessionIdentity): boolea
  * and the tab signs out (`useSignOut`). Decided by the server's answer and the account the request
  * named (`expectedAccountId`), which the server refused unless the cookie was that account — so
  * the answer's actor is it, and the revoke was its own exactly when the target is it too. Never by
- * what the screen believed: another tab may have signed in as somebody else since the session was
+ * what the screen believed: another tab may have signed in as somebody else since `GET /me` was
  * read (sign-ins are not broadcast), and a tab trusting that would sign the other account out, or
  * take its own revoke for another's and stay on a stale admin screen.
  */

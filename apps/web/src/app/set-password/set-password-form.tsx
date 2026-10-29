@@ -69,10 +69,17 @@ export function SetPasswordForm({ next }: { next: string }) {
 
   // Keyed on the account, so a session switched under this screen (SessionCacheGuard) mounts a
   // fresh form for the new one instead of keeping the previous account's typed values.
-  return <SetPasswordFields key={me.id} next={next} />;
+  return <SetPasswordFields key={me.id} next={next} accountId={me.id} />;
 }
 
-function SetPasswordFields({ next }: { next: string }) {
+/**
+ * The password names the account the form was drawn for (`accountId`, its `Me`'s id), never the
+ * session's: in the render between the session naming another account and SessionCacheGuard's
+ * reset the session already says B while the form is still A's, and a password sent as B's would
+ * be B's first password, typed on A's screen (ADR-0091). The server refuses it as another
+ * account's.
+ */
+function SetPasswordFields({ next, accountId }: { next: string; accountId: string }) {
   const router = useRouter();
   const setPassword = useSetPassword();
   const {
@@ -86,9 +93,11 @@ function SetPasswordFields({ next }: { next: string }) {
 
   const onSubmit = handleSubmit(async (values) => {
     try {
-      // The body names the account the screen shows (`expectedAccountId`, A-PG-24): read from
-      // the session by the hook, whose `ready` keeps the button off until it is known.
-      await setPassword.mutateAsync(values.newPassword);
+      // The account the form was drawn for rides along (`expectedAccountId`, A-PG-24).
+      await setPassword.mutateAsync({
+        newPassword: values.newPassword,
+        expectedAccountId: accountId,
+      });
       toaster.create({ type: 'success', title: copy.passwordSet });
       router.push(next as Route);
       router.refresh();
@@ -124,7 +133,7 @@ function SetPasswordFields({ next }: { next: string }) {
           />
           <Field.ErrorText>{errors.newPasswordConfirm?.message}</Field.ErrorText>
         </Field.Root>
-        <Button type="submit" size="lg" loading={isSubmitting} disabled={!setPassword.ready}>
+        <Button type="submit" size="lg" loading={isSubmitting}>
           {copy.setPasswordSubmit}
         </Button>
       </Stack>

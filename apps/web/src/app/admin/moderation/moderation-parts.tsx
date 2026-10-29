@@ -32,8 +32,8 @@ import { type ReactNode, useId, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { type ModerationVariables, useModerate } from '@/hooks/use-admin-moderation';
+import { useOperatorId } from '@/hooks/use-operator';
 import { nicknameShown } from '@/lib/account-closure';
-import { screenAccountId } from '@/lib/admin-accounts';
 import {
   type AccountRestrictionRequest,
   type AdminModerationAction,
@@ -93,7 +93,6 @@ import {
   restrictionTermOf,
   shortenEndDraft,
 } from '@/lib/moderation';
-import { useSession } from '@/lib/use-session';
 
 /**
  * The pieces every page of the admin 신고·조치 area shares (#50, ADR-0081; #187's review list of
@@ -149,11 +148,6 @@ export function ModerationNav() {
       })}
     </HStack>
   );
-}
-
-/** The admin on screen: the account every action names (`expectedAccountId`), once known. */
-export function useOperatorId(): string | undefined {
-  return screenAccountId(useSession());
 }
 
 /** An account as the moderation pages name it: its nickname and '운영자', a link to its page. */
@@ -1025,7 +1019,12 @@ export type DialogSpec =
  * One action's dialog, pinned while the request runs. Its rules are said under the fields once a
  * send was tried; a refusal under the field it is about or in the dialog, which stays
  * (`moderationFailure`) — the hook re-reads the area either way, so the page under it shows what
- * is so. Sent, it closes with a toast. Nothing is sent while the admin on screen is unknown.
+ * is so. Sent, it closes with a toast. Every action names the admin on screen (`expectedAccountId`,
+ * `useOperatorId` — the `Me` the page is drawn from, never the session's, ADR-0091), and nothing is
+ * sent while that admin is unknown; each page holds its dialog for the admin it was opened by
+ * (`useHeldForOperator`), so one opened on A's page is gone before it could name B. The refusal as
+ * another account's closes it with a toast (`moderationFailure`'s `toast`): the page would drop
+ * it, and an alert in it, once the session names the operator really signed in.
  */
 export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose: () => void }) {
   const id = useId();
@@ -1141,7 +1140,13 @@ export function ModerationDialog({ spec, onClose }: { spec: DialogSpec; onClose:
       .catch((error: unknown) => {
         const failure = moderationFailure(error);
         if (failure.kind === 'field') setFieldError(failure);
-        else setRefusal(failure.message);
+        else if (failure.kind === 'alert') setRefusal(failure.message);
+        else {
+          // Another account's cookie: the page drops this dialog once the session names the
+          // operator really signed in, so the refusal is a toast that outlives it.
+          toaster.create({ type: 'error', title: failure.message });
+          onClose();
+        }
       });
   };
 

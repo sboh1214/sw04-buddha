@@ -101,12 +101,18 @@ async function postProposal(body: CreateProposalBody): Promise<Proposal> {
   return unwrap(await api.POST('/api/v1/me/proposals', { body })).data;
 }
 
-/** The form's submit, and the account the screen shows (the session's user id). */
+/**
+ * The form's submit. Its body names the account the form was drawn for — the `Me` it was drawn
+ * from (`ProposalFields`' `accountId`) — never the session's: in the render between the session
+ * naming another account and SessionCacheGuard's reset the session already says B while the form
+ * is still A's, and a proposal naming B would be taken with B's cookie — B's 접수 proposal, typed
+ * on A's screen (ADR-0091). So it offers no account of its own, and nothing waits for the session:
+ * the form is drawn only once `GET /me` answered.
+ */
 export function useCreateProposal() {
   const queryClient = useQueryClient();
-  const { data: session, refetch: refetchSession } = useSession();
-  const mutation = useMutation(createProposalOptions(queryClient, () => void refetchSession()));
-  return { ...mutation, accountId: session?.user.id };
+  const { refetch: refetchSession } = useSession();
+  return useMutation(createProposalOptions(queryClient, () => void refetchSession()));
 }
 
 /** What a 철회 press sends: the proposal and the account the screen shows. */
@@ -173,9 +179,14 @@ export function retractProposalOptions(
   };
 }
 
+/**
+ * 내 제안's 철회. Its body names the account whose list the screen shows — MY's `Me`
+ * (`ProposalsBody`' `accountId`) — never the session's: in the render between the session naming
+ * another account and SessionCacheGuard's reset the session already says B while the list is still
+ * A's (ADR-0091). So it offers no account of its own.
+ */
 export function useRetractProposal() {
   const queryClient = useQueryClient();
-  const { data: session, refetch: refetchSession } = useSession();
-  const mutation = useMutation(retractProposalOptions(queryClient, () => void refetchSession()));
-  return { ...mutation, accountId: session?.user.id };
+  const { refetch: refetchSession } = useSession();
+  return useMutation(retractProposalOptions(queryClient, () => void refetchSession()));
 }

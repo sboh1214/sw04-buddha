@@ -8,7 +8,6 @@ import {
   type QueryKey,
 } from '@tanstack/react-query';
 import { useMemo, useSyncExternalStore } from 'react';
-import { meBelongsTo } from '@/hooks/use-me';
 import {
   type LikeState,
   type MyPostLikes,
@@ -45,26 +44,26 @@ import { afterRefusal } from './use-posts';
  * (`['posts', 'post', id]`), its comment pages (`['posts', 'comments', id]`) and the community
  * list's cards, the same for every reader and drawn by the server. Whether the reader liked any of
  * it is theirs alone: one owner-only read per post page (`GET /me/likes/posts/:postId`, under the
- * private `likes` root), which waits for the session like the watch button's (use-watchlist.ts) —
- * the route needs the cookie, and a signed-out request would take a 401 the retry rule refuses to
- * retry.
+ * private `likes` root), kept under the account the page shows and read only once that account is
+ * known, like the watch button's (use-watchlist.ts) — never for a visitor: the route needs the
+ * cookie, and a signed-out request would take a 401 the retry rule refuses to retry.
  *
  * The option factories are exported apart from the hooks so the node test runner reaches them
  * (use-likes.test.ts), as use-watchlist.ts does.
  */
 
-/** Just enough of better-auth's session to say whether anybody is signed in (use-watchlist.ts). */
-type SessionLike = { user: unknown } | null;
-
-/** `GET /me/likes/posts/:postId`: whether the reader likes the post, and which comments under it. */
-export function myPostLikesQueryOptions(postId: string, session?: SessionLike) {
+/**
+ * `GET /me/likes/posts/:postId`: whether the reader likes the post, and which comments under it —
+ * under the account the page shows (`accountId`, `myPostLikesKey`), and read only once it is known.
+ */
+export function myPostLikesQueryOptions(postId: string, accountId: string | undefined) {
   const id = postId.toLowerCase();
   return {
-    queryKey: myPostLikesKey(id),
+    queryKey: myPostLikesKey(id, accountId),
     queryFn: async (): Promise<MyPostLikes> =>
       unwrap(await api.GET('/api/v1/me/likes/posts/{postId}', { params: { path: { postId: id } } }))
         .data,
-    enabled: session != null,
+    enabled: accountId !== undefined,
   };
 }
 
@@ -326,9 +325,10 @@ function showCount(
  *   its comments again, so the page shows the placeholder with no count and no button, or the
  *   post's 404 (post-screen.tsx).
  *
- * The reader's state is written only for the account the press was sent for (`meBelongsTo`, as
- * the watch button does): a press whose answer lands after the tab switched accounts
- * (SessionCacheGuard reset the cache) writes nothing into the other account's likes. The count is
+ * The reader's state is written only into the likes of the account the press was sent for — the
+ * `expectedAccountId` the server compared with the cookie, and the account of the entry the toggle
+ * drew (`myPostLikesKey`, as the watch button does): a press whose answer lands after the tab
+ * switched accounts writes nothing into the likes another account's page draws. The count is
  * public and is written either way.
  *
  * The answer and the rollback are written only by the newest press of the target
@@ -344,15 +344,21 @@ export function updateLikeOptions(
   put: (variables: LikeVariables) => Promise<LikeState> = putLike,
 ) {
   const id = postId.toLowerCase();
-  const likesKey = myPostLikesKey(id);
-  const setLiked = (target: LikeTarget, liked: boolean) =>
+  // The likes of the account a press names: the entry its toggle drew.
+  const likesOf = (account: string) => myPostLikesKey(id, account);
+  const setLiked = (likesKey: QueryKey, target: LikeTarget, liked: boolean) =>
     queryClient.setQueryData<MyPostLikes>(
       likesKey,
       (likes) => likes && withLiked(likes, target, liked),
     );
   return {
     mutationFn: put,
-    onMutate: async ({ target, liked }: LikeVariables): Promise<LikeSnapshot> => {
+    onMutate: async ({
+      target,
+      liked,
+      expectedAccountId,
+    }: LikeVariables): Promise<LikeSnapshot> => {
+      const likesKey = likesOf(expectedAccountId);
       // Numbered before anything is awaited: in the order of the presses.
       const order = pressMade(queryClient, likePressId(id, target));
       const [likes, counted] = await Promise.all([
@@ -368,7 +374,7 @@ export function updateLikeOptions(
         shown: undefined,
         order,
       };
-      setLiked(target, liked);
+      setLiked(likesKey, target, liked);
       if (before !== undefined && count !== undefined) {
         showCount(
           queryClient,
@@ -386,6 +392,7 @@ export function updateLikeOptions(
       { target, expectedAccountId }: LikeVariables,
       snapshot: LikeSnapshot | undefined,
     ) => {
+      const likesKey = likesOf(expectedAccountId);
       const press = snapshot ?? {
         liked: undefined,
         count: undefined,
@@ -400,7 +407,7 @@ export function updateLikeOptions(
         ? await holdReads(queryClient, countKey(id, target))
         : { cancelled: false, more: undefined };
       if (newest) {
-        if (meBelongsTo(queryClient, expectedAccountId)) setLiked(target, state.liked);
+        setLiked(likesKey, target, state.liked);
         showCount(queryClient, id, target, press, state.likeCount, counted.more);
       }
       const readLikes = press.cancelled.likes || isOnItsWay(queryClient, likesKey);
@@ -426,10 +433,9 @@ export function updateLikeOptions(
       // press of the target, putting back what this one held would take that press back too:
       // its answer or its rollback lands after this, and the reads below end on the server's
       // word.
+      const likesKey = likesOf(expectedAccountId);
       if (snapshot !== undefined && isNewestPress(queryClient, id, target, snapshot)) {
-        if (snapshot.liked !== undefined && meBelongsTo(queryClient, expectedAccountId)) {
-          setLiked(target, snapshot.liked);
-        }
+        if (snapshot.liked !== undefined) setLiked(likesKey, target, snapshot.liked);
         if (snapshot.count !== undefined) {
           const more = loadingMore(queryClient, countKey(id, target));
           showCount(queryClient, id, target, snapshot, snapshot.count, more);
@@ -472,11 +478,18 @@ export function likePressOptions(
 }
 
 /**
- * One like button: the reader's state of `target` on the post page of `postId` and its toggle,
- * plus the account the screen shows (the session's user id), which a press sends as
- * `expectedAccountId`. Until better-auth has said whose session this is, `sessionPending` is true
- * and `accountId` undefined; the button draws its count, unpressed, until then
- * (`likeButtonView`). Every button of the page shares the one read of the reader's likes.
+ * One like button: the reader's state of `target` on the post page of `postId` — the likes of the
+ * account the page shows (`accountId`, the `Me` it was drawn from: `usePostWriter`, which a press
+ * sends as `expectedAccountId`) — and its toggle. Never the session's account: in the render
+ * between the session naming another account and SessionCacheGuard's reset the session already
+ * says B while the toggles still show A's likes, and a press naming B would set B's like to the
+ * opposite of A's (ADR-0091). So it offers no account of its own; the likes wait for that account
+ * to be known, the button drawing its count, unpressed, until they answer (`likeButtonView`), and
+ * `sessionPending` and `signedIn` only say whether anybody is signed in. Every button of the page
+ * shares the one read of the reader's likes. `accountFailed` (`usePostWriter`'s `failed`: signed
+ * in, and `GET /me` failed without ever answering) means they cannot be read at all: they count as
+ * a read that failed — the `unavailable` rung, whose line says why (owner decision 2026-10-20,
+ * answer 10) — rather than waiting on the pending one for good.
  *
  * `saving` is whether a press of the target is on the wire — this button's, or one drawn before
  * it (`likePressesOnTheWire`, ADR-0076 7-30). Not this button's `useMutation`: a comment's button
@@ -484,10 +497,15 @@ export function likePressOptions(
  * press of the button before it is still on the wire. False on the server and through hydration,
  * when nothing has been pressed.
  */
-export function useLike(postId: string, target: LikeTarget) {
+export function useLike(
+  postId: string,
+  target: LikeTarget,
+  accountId: string | undefined,
+  accountFailed: boolean,
+) {
   const queryClient = useQueryClient();
   const { data: session, isPending: sessionPending, refetch: refetchSession } = useSession();
-  const mine = useQuery(myPostLikesQueryOptions(postId, session));
+  const mine = useQuery(myPostLikesQueryOptions(postId, accountId));
   const toggle = useMutation(
     likePressOptions(queryClient, postId, target, () => void refetchSession()),
   );
@@ -497,8 +515,7 @@ export function useLike(postId: string, target: LikeTarget) {
   return {
     sessionPending,
     signedIn: session != null,
-    accountId: session?.user.id,
-    mine: { isFetched: mine.isFetched, liked: likedIn(mine.data, target) },
+    mine: { isFetched: mine.isFetched || accountFailed, liked: likedIn(mine.data, target) },
     saving,
     toggle,
   };
@@ -506,16 +523,22 @@ export function useLike(postId: string, target: LikeTarget) {
 
 /**
  * Whether the post page of `postId` says that the reader's likes could not be read
- * (`myLikesUnreadable`): the same one read every like button of the page shares, so the line
- * shows exactly when the buttons are on the `unavailable` rung.
+ * (`myLikesUnreadable`): the same one read every like button of the page shares — the likes of
+ * the account the page shows (`accountId`, `useLike`'s), or none when `GET /me` failed without
+ * ever answering (`accountFailed`, `useLike`'s) — so the line shows exactly when the buttons are
+ * on the `unavailable` rung.
  */
-export function useMyLikesUnreadable(postId: string): boolean {
+export function useMyLikesUnreadable(
+  postId: string,
+  accountId: string | undefined,
+  accountFailed: boolean,
+): boolean {
   const { data: session, isPending: sessionPending } = useSession();
-  const mine = useQuery(myPostLikesQueryOptions(postId, session));
+  const mine = useQuery(myPostLikesQueryOptions(postId, accountId));
   return myLikesUnreadable({
     sessionPending,
     signedIn: session != null,
-    isFetched: mine.isFetched,
+    isFetched: mine.isFetched || accountFailed,
     likes: mine.data,
   });
 }

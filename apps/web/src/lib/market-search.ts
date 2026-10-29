@@ -189,12 +189,13 @@ export function searchScreenBody(
 /**
  * What a submitted search box records (`POST /me/search-history`), or `undefined` for nothing:
  * the term trimmed and bounded as `GET /markets?q=` takes it, by a signed-in member — the account
- * the screen shows is `accountId`, sent as `expectedAccountId` — and nothing for a visitor, a
- * session not yet known, or a blank, over-long or NUL term (ADR-0061 decision 3: a signed-out
- * search is not recorded; a term the list would not search is not a search). A SUBMIT asks this,
- * and so does a recent search picked from the list, with its stored term — a new search of it, so
- * it moves to the top (owner decision 2026-10-16, ADR-0066). A filter, an order, a page of the
- * same search or a search opened by its address records nothing (ADR-0066).
+ * the screen shows is `accountId` (its `Me`'s id, ADR-0091), sent as `expectedAccountId` — and
+ * nothing for a visitor, an account not yet known, or a blank, over-long or NUL term (ADR-0061
+ * decision 3: a signed-out search is not recorded; a term the list would not search is not a
+ * search). A SUBMIT asks this, and so does a recent search picked from the list, with its stored
+ * term — a new search of it, so it moves to the top (owner decision 2026-10-16, ADR-0066). A
+ * filter, an order, a page of the same search or a search opened by its address records nothing
+ * (ADR-0066).
  */
 export function searchToRecord(
   raw: unknown,
@@ -204,6 +205,50 @@ export function searchToRecord(
   const term = marketSearchTermSchema.safeParse(raw);
   if (!term.success || term.data.includes('\u0000')) return undefined;
   return { query: term.data, expectedAccountId: accountId };
+}
+
+/**
+ * Whose draft a search box holds (nav.tsx `SearchForm`, the search screen's `SearchBox`, kept by
+ * `useSearchBoxTurn`): the last account known on screen — the `Me` a submit records the term for
+ * (`searchToRecord`) — and how many times, since the box was drawn, the known account turned into
+ * another one. The turn keys the box's field (`searchBoxKey`).
+ */
+export interface SearchBoxOwner {
+  /** The last account known; `undefined` until the tab has known one. */
+  accountId: string | undefined;
+  /** How many times the known account turned into another since the box was drawn. */
+  turn: number;
+}
+
+/**
+ * The owner once `accountId` — the `Me` on screen, `undefined` for a visitor and while `GET /me`
+ * has not answered — is drawn (ADR-0091, owner decision 2026-10-26 «첫 답 전에 친 글자는 남김»):
+ *
+ * - the same owner, the very object, while it is that account or nobody is known (`GET /me`
+ *   pending or failed, SessionCacheGuard's reset, a sign-out): nothing to clear;
+ * - that account on the same turn when it is the first one known — `GET /me`'s first answer: a term
+ *   typed before it stays in the box, and is that account's;
+ * - that account on the next turn when another one was known before, even with nobody known in
+ *   between (the reset puts `['me']` back to nothing before B's answer comes): a draft typed for A
+ *   is never submitted for B. `['me']` can turn from A to B under a box that stays mounted — in
+ *   place, before the session does (ADR-0090 결정 4-2), or through SessionCacheGuard's reset — and
+ *   B's record would take A's draft with B's cookie.
+ */
+export function searchBoxOwner(
+  owner: SearchBoxOwner,
+  accountId: string | undefined,
+): SearchBoxOwner {
+  if (accountId === undefined || accountId === owner.accountId) return owner;
+  return { accountId, turn: owner.accountId === undefined ? owner.turn : owner.turn + 1 };
+}
+
+/**
+ * The key of a search box's field: the term the URL carries and the box's turn (`searchBoxOwner`),
+ * so the box starts again — on the URL's term — when either changes, and keeps what is typed
+ * otherwise. One key for each pair: a turn holds no '|', so the first one splits them.
+ */
+export function searchBoxKey(turn: number, term: string | undefined): string {
+  return `${String(turn)}|${term ?? ''}`;
 }
 
 /**

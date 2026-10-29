@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { MutationObserver, type QueryClient } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
 import { ApiError, type CreateProposalBody, type Me, type Proposal } from '@/lib/api';
@@ -238,5 +239,62 @@ describe('retractProposalOptions', () => {
     expect(invalidated(queryClient, ME_QUERY_KEY)).toBe(false);
     expect(invalidated(queryClient, MY_PROPOSALS_KEY)).toBe(true);
     queryClient.clear();
+  });
+});
+
+describe('the account a proposal and a 철회 name (ADR-0091)', () => {
+  it('is the one of the `Me` the screen was drawn from, never the session’s, and the screens are keyed by it', () => {
+    // In the render between the session naming B and SessionCacheGuard's reset the form and the
+    // list still show A's, and a body naming the session's account would be taken with B's cookie:
+    // B's 접수 proposal with the text typed on A's screen. No component renders under node, so the
+    // wiring is pinned in the sources: the hooks offer no account (no session id), the form is
+    // drawn from the header's `Me` and keyed by it — `['me']` can turn to B in place before the
+    // session does, and an unkeyed form would keep what was typed for A, now naming B — and 내
+    // 제안's body is handed MY's `Me`'s id, keyed by it (the 철회 picked from A's list goes) and
+    // sends it. e2e proposals.spec.ts ('탭의 계정이 …', '탭의 세션이 …') drives them.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source('./use-proposals.ts')).not.toMatch(/user\.id/);
+    const form = source('../app/proposals/new/proposal-form.tsx');
+    expect(form).toMatch(/<ProposalFields\s+key=\{me\.data\.id\}\s+accountId=\{me\.data\.id\}/);
+    expect(form).toContain('toCreateProposalBody(values, accountId)');
+    expect(form).not.toMatch(/\bcreate\.accountId\b/);
+    const list = source('../app/my/proposals/my-proposals.tsx');
+    expect(
+      list.match(
+        /<ProposalsBody key=\{accountId\} proposals=\{proposals\} accountId=\{accountId\}/g,
+      ),
+    ).toHaveLength(2);
+    expect(list).toContain('expectedAccountId: accountId }');
+    expect(list).not.toMatch(/\bretract\.accountId\b/);
+  });
+
+  it('keeps the refusal as another account’s above the keyed form, so the form drawn again says why', () => {
+    // The refusal asks for the session again; once it names the account really signed in,
+    // SessionCacheGuard's reset takes `['me']` back to waiting and the form is drawn again for it —
+    // a notice kept in the form would go with A's. It is kept in `ProposalForm`, above the key.
+    // e2e proposals.spec.ts ('… 세션이 아직 앞 계정을 말하는 채 …') drives that order.
+    const form = readFileSync(
+      new URL('../app/proposals/new/proposal-form.tsx', import.meta.url),
+      'utf8',
+    );
+    const top = form.slice(form.indexOf('export function ProposalForm()'));
+    expect(top.slice(0, top.indexOf('\n}\n'))).toContain(
+      'const [accountChanged, setAccountChanged] = useState<Refusal | null>(null);',
+    );
+    expect(form).toContain("if (failure.kind === 'session') onAccountChanged(refusal);");
+    expect(form).toContain('const notice = refused ?? accountChanged;');
+  });
+
+  it('offers 철회 only once MY’s account is known', () => {
+    // The list can come before `GET /me`: a 철회 opened then could only send nothing, and would
+    // close as the key turns to the account. e2e proposals.spec.ts ('… 내 정보를 읽기 전에는 …')
+    // holds `GET /me` and sees it off.
+    const list = readFileSync(
+      new URL('../app/my/proposals/my-proposals.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(list).toContain('retractable={accountId !== undefined}');
+    expect(list).toContain('disabled={!retractable}');
+    expect(list).toContain('confirmDisabled={accountId === undefined}');
   });
 });

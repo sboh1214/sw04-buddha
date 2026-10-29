@@ -21,9 +21,11 @@ import { AuthButtons } from '@/components/auth/auth-buttons';
 import { ColorModeButton } from '@/components/ui/color-mode';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
+import { useMe } from '@/hooks/use-me';
+import { useSearchBoxTurn } from '@/hooks/use-search-box';
 import { useRecordSearch } from '@/hooks/use-search-history';
 import { type CategoryNode, groupCategories } from '@/lib/category-tree';
-import { SEARCH_INPUT_MAX_LENGTH, SEARCH_PATH } from '@/lib/market-search';
+import { SEARCH_INPUT_MAX_LENGTH, SEARCH_PATH, searchBoxKey } from '@/lib/market-search';
 import {
   CATEGORY_ITEM_OPACITY,
   type UrlSearchParams,
@@ -213,7 +215,8 @@ function PrimaryLinks() {
  *
  * A submit by a signed-in member records the term (`useRecordSearch`, ADR-0061 decision 3, the #15
  * rows), in the background: the `onSubmit` runs before `next/form` navigates, and nothing waits on
- * the record. Nothing is recorded for a visitor or a blank term.
+ * the record. Nothing is recorded for a visitor or a blank term. The record names the account of
+ * the `Me` the header was drawn from (its balance chip's), never the session's (ADR-0091).
  *
  * `prefetch={false}`: this header is on every route, and the search page is `force-dynamic`, so
  * the default action prefetch would ask the server for it from every page the visitor opens.
@@ -239,6 +242,15 @@ function PrimaryLinks() {
  * effect, and nothing that can fight the typing. Without it, `/search?q=rain` opened cold would
  * show an empty box over the results, and Back from a second search would keep the newer word in
  * the box over the older results.
+ *
+ * It is keyed on the box's turn as well (`searchBoxKey`, `useSearchBoxTurn`, ADR-0091): a draft is
+ * the account's the header was drawn for, and its submit records it for whichever account the
+ * header shows then. The header never remounts, so without it a term typed on A's screen would
+ * stay in the box once `['me']` turned to B — in place, before the session did (ADR-0090 결정
+ * 4-2), or after SessionCacheGuard's reset — and its submit would record it in B's 최근 검색 with
+ * B's cookie. So the box starts again whenever the account known turns into another. `GET /me`'s
+ * first answer is no such turn (owner decision 2026-10-26 «첫 답 전에 친 글자는 남김»): a term
+ * typed before it stays, and is recorded for the account that answer names — the tab's first.
  */
 function SearchForm({
   testId,
@@ -252,7 +264,9 @@ function SearchForm({
   autoFocus?: boolean;
   onSubmitted?: () => void;
 }) {
-  const record = useRecordSearch();
+  const accountId = useMe().data?.id;
+  const record = useRecordSearch(accountId);
+  const turn = useSearchBoxTurn(accountId);
   return (
     // Named, because the search screen has a search landmark of its own ('고른 조건으로 검색',
     // market-search.tsx): two of one role on a page need names a screen reader can tell apart.
@@ -284,7 +298,7 @@ function SearchForm({
         startElementProps={{ pointerEvents: 'auto', ps: '2', pe: '0' }}
       >
         <Input
-          key={initialTerm ?? ''}
+          key={searchBoxKey(turn, initialTerm)}
           name="q"
           type="search"
           size="sm"

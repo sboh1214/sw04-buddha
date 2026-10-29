@@ -18,6 +18,7 @@ import {
   type ChargeResult,
   type LedgerEntry,
   type Payment,
+  type RedeemCouponBody,
 } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { IdempotencyKeys } from '@/lib/idempotency';
@@ -149,8 +150,28 @@ export function isChargeInProgress(error: unknown): boolean {
 }
 
 /**
+ * What a click on a package sends: the whole package as its card shows it, and the account the
+ * wallet was drawn for (`expectedAccountId` — the balance card's `Me`, which `ChargeForm` reads).
+ */
+export interface ChargeRequest {
+  pack: ChargePackage;
+  expectedAccountId: string;
+}
+
+/**
  * `POST /api/v1/payments/charge`. The response carries the new balance, so `['me']` and the
  * two lists are refreshed together — the nav chip and the ledger must never disagree.
+ *
+ * The body names the account the wallet shows (`expectedAccountId`, A-M2-11): the cookie decides
+ * whose balance is charged, and a tab left open beside a window that signed in as somebody else
+ * must not credit THAT account with a purchase made on this screen. That account is the one of the
+ * `Me` the wallet was drawn from (the balance card's), which `ChargeForm` passes in with the
+ * package, never the session's: in the render between the session naming another account and
+ * SessionCacheGuard's reset (an effect) the session already says B while the wallet still shows
+ * A's balance, and a body naming B would be taken with B's cookie — B charged for a package bought
+ * on A's screen, its key filed under B (ADR-0091, as ADR-0090 did for the 본인확인 step). So the
+ * hook offers no account of its own, and nothing waits for the session: the buy buttons wait for
+ * `GET /me` instead.
  */
 export function useCharge() {
   const queryClient = useQueryClient();
@@ -159,19 +180,16 @@ export function useCharge() {
   // purchase back instead of buying again. Per package, so a dead click on one card never
   // blocks another. The keys themselves sit in sessionStorage, so a reload — the natural
   // reaction to a request that never answered — finds the same key, and they are filed under
-  // the account, so another account using this tab meanwhile cannot consume them. Until
-  // better-auth has said whose session this is (the first paint, while BalanceCard shows its
-  // skeleton) there is no account to file under: `ready` is false and ChargeForm keeps the buy
-  // buttons disabled. The wallet page is server-gated, so that answer is a session, not a
-  // sign-out; should the first /get-session fail with something other than a 401 the buttons
-  // stay disabled until better-auth's next refetch succeeds. A switch while the page stays
-  // mounted (SessionCacheGuard) yields the new account's handle on the next click. A click
-  // while the atom still holds the previous account (side-by-side windows never fire
-  // visibilitychange; a refetch keeps the old data for one round trip) sends that account as
-  // `expectedAccountId`, and the server refuses rather than credit the cookie's account and
-  // leave the key filed under the wrong one; the refusal below asks the session to refetch.
-  const { data: session, refetch: refetchSession } = useSession();
-  const accountId = session?.user.id;
+  // the account the purchase names, so another account using this tab meanwhile cannot consume
+  // them. Until `GET /me` has said whose wallet this is (the first paint, while BalanceCard shows
+  // its skeleton) there is no account to file under, and ChargeForm keeps the buy buttons
+  // disabled; should that read fail they stay disabled beside the balance card's 다시 시도. A
+  // switch while the page stays mounted yields the new account's handle on the next click. A
+  // click while the wallet still shows the previous account (side-by-side windows never fire
+  // visibilitychange, so neither the session nor `GET /me` is read again) sends that account as
+  // `expectedAccountId`, and the server refuses rather than credit the cookie's account and leave
+  // the key filed under the wrong one; the refusal below asks the session to refetch.
+  const { refetch: refetchSession } = useSession();
   // A ref, not useMemo: React may drop a memo, and with a throwing storage the handle's
   // in-memory fallback IS the key. Resolved at call time, so no ref is touched during render.
   const handle = useRef<{ account: string; keys: IdempotencyKeys } | null>(null);
@@ -181,21 +199,19 @@ export function useCharge() {
     }
     return handle.current.keys;
   };
-  const mutation = useMutation({
+  return useMutation({
     // The whole package, not just its id: the body echoes the amount and price this card is
     // showing so the server can refuse a purchase of terms the user never read (ADR-0026 lets
     // an admin re-price a live package, and this catalogue has no refetch interval).
-    mutationFn: async (pack: ChargePackage) => {
-      // Unreachable while the buttons honour `ready`; refusing beats sending an unfiled key.
-      if (!accountId) throw new Error('charge attempted before the session was known');
-      const keys = keysFor(accountId);
+    mutationFn: async ({ pack, expectedAccountId }: ChargeRequest) => {
+      const keys = keysFor(expectedAccountId);
       const result = await api.POST('/api/v1/payments/charge', {
         params: { header: { 'Idempotency-Key': keys.take(pack.id) } },
         body: {
           packageId: pack.id,
           expectedAmountCoin: pack.amountCoin,
           expectedPriceKrw: pack.priceKrw,
-          expectedAccountId: accountId,
+          expectedAccountId,
         },
       });
       // Only reached when the server answered; a throw above (no response) keeps the key. So
@@ -246,7 +262,6 @@ export function useCharge() {
       }
     },
   });
-  return { ...mutation, ready: accountId !== undefined };
 }
 
 /**
@@ -261,29 +276,26 @@ export function useCharge() {
  * shows the refusal; what it must not do is keep showing the world from before the
  * redemption. A typo pays one refetch for this; the first lost answer itself (a transport
  * error, shown as errUnknown) refetches nothing, since the same network would likely fail.
+ *
+ * The body names the account the wallet shows (`expectedAccountId`, A-M2-9), as a charge's does:
+ * a one-use or capped coupon redeemed for whoever the cookie now belongs to cannot be given back.
+ * That account is the one of the `Me` the wallet was drawn from, which `CouponForm` passes in,
+ * never the session's — in the render between the session naming another account and
+ * SessionCacheGuard's reset a body naming the session's would be taken with B's cookie, the code
+ * typed on A's screen spent for B (ADR-0091). So the hook offers no account of its own, and
+ * nothing waits for the session: the form waits for `GET /me` instead.
  */
 export function useRedeemCoupon() {
   const queryClient = useQueryClient();
-  // The account the screen shows rides along (`expectedAccountId`), as it does for a charge:
-  // a one-use or capped coupon redeemed for whoever the cookie now belongs to cannot be given
-  // back. `ready` is false until better-auth has said whose session this is.
-  const { data: session, refetch: refetchSession } = useSession();
-  const accountId = session?.user.id;
+  const { refetch: refetchSession } = useSession();
   const refresh = () =>
     Promise.all([
       queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
     ]);
-  const mutation = useMutation({
-    mutationFn: async (code: string) => {
-      // Unreachable while the form honours `ready`.
-      if (!accountId) throw new Error('redeem attempted before the session was known');
-      return unwrap(
-        await api.POST('/api/v1/coupons/redeem', {
-          body: { code, expectedAccountId: accountId },
-        }),
-      ).data;
-    },
+  return useMutation({
+    mutationFn: async (body: RedeemCouponBody) =>
+      unwrap(await api.POST('/api/v1/coupons/redeem', { body })).data,
     onSuccess: async () => {
       await refresh();
     },
@@ -293,5 +305,4 @@ export function useRedeemCoupon() {
       if (isApiError(error, 'DUPLICATE_REQUEST') || isCouponRejection(error)) await refresh();
     },
   });
-  return { ...mutation, ready: accountId !== undefined };
 }

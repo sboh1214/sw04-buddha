@@ -35,6 +35,16 @@ export const MY_CLOSURE_PATH = '/my/settings/closure';
 export const ACCOUNT_CLOSURE_KEY = ['me', 'closure'] as const;
 
 /**
+ * The check of the account the screen was drawn for — its `Me`'s id (ADR-0091). The answer names
+ * no owner, and the screen asks the member to agree to lose the amount it shows: an entry read for
+ * another account — `['me']` turned from A to B in place, before the session did and so with no
+ * reset of SessionCacheGuard's (ADR-0090 결정 4-2), or a read sent with A's cookie that lands after
+ * B's screen was drawn — is not B's Coin and refusals. Under the account, B's screen reads B's own.
+ */
+export const accountClosureKey = (accountId: string) =>
+  [...ACCOUNT_CLOSURE_KEY, accountId] as const;
+
+/**
  * Whether the typed text confirms: exactly '탈퇴', blanks around it aside — the rule the API's body
  * holds it to (`accountClosureBodySchema`), so the button is enabled for what the server takes.
  */

@@ -34,13 +34,22 @@ import { postPath } from './posts';
  * What the reader liked (`GET /me/likes/posts/:postId`), one entry per post page: the reader's
  * own, read with their cookie, so the root is in `PRIVATE_QUERY_ROOTS` (market-keys.ts) — never
  * fetched on the server, never dehydrated, and reset with every other personal entry when the
- * session changes (SessionCacheGuard). No key under it says whose it is. The counts are public
- * and ride on the post, the comments and the cards (`likeCount`), the same for everyone.
+ * session changes (SessionCacheGuard). The counts are public and ride on the post, the comments
+ * and the cards (`likeCount`), the same for everyone.
  */
 export const LIKES_KEY = ['likes'] as const;
 
-export const myPostLikesKey = (postId: string) =>
-  [...LIKES_KEY, 'post', postId.toLowerCase()] as const;
+/**
+ * The reader's likes on the post page of `postId`, under the account the page shows — the `Me` it
+ * was drawn from (`usePostWriter`, ADR-0091). The answer names no owner, and a press sends the
+ * opposite of the state drawn: the toggles have to draw the likes of the account their presses
+ * name, and an entry read for another one — `['me']` turned from A to B in place, before the
+ * session did and so with no reset of SessionCacheGuard's (ADR-0090 결정 4-2) — is not those
+ * likes. `accountId` is undefined while that account is not known: the read is disabled then, and
+ * nothing is read into the entry.
+ */
+export const myPostLikesKey = (postId: string, accountId: string | undefined) =>
+  [...LIKES_KEY, 'post', postId.toLowerCase(), accountId] as const;
 
 /**
  * The presses of one target on the post page of `postId`, named once (ADR-0076 7-30): the
@@ -160,7 +169,9 @@ export type LikePress = 'like' | 'unlike' | 'wait';
  * server's HTML and a comment's in the comments the browser reads — and only the reader's own
  * state waits for the browser:
  * - `pending`: the session, or the reader's likes, not known yet — the count, unpressed, and a
- *   press sends nothing;
+ *   press sends nothing. The likes are read for the account the page shows (`myPostLikesKey`,
+ *   ADR-0091), so this is also the rung while `GET /me` has not answered (one that failed without
+ *   ever answering counts as a failed read: `useLike`'s `accountFailed`);
  * - `unavailable`: signed in, and the read of the reader's likes failed before any succeeded —
  *   the count, and a button that cannot be pressed (`aria-disabled`), since drawing it unpressed
  *   would tell a reader who came to take a like back that there is none; the page says why in a
@@ -350,12 +361,13 @@ export function likeFailureMessage(
  * what it says now, and `pathname` the page shown now.
  *
  * Such a press was sent because `GET /me` had not said yet that a step is left (`likePressAction`
- * takes it to the step once it has): on a hard load the onboarding gate's `GET /me` and the
- * reader's likes are read side by side, and the toggle can stand first — for seconds while
- * `GET /me` is retried. Owner decision 2026-10-20, answer 1: a re-consent account's press goes to
- * its step, coming back to the post; and a refusal for a re-consent moves to the step without a
- * toast, which is said only when the account could not be read again (owner decision 2026-10-21,
- * for #46's refusals). So:
+ * takes it to the step once it has): the toggles stand only once `GET /me` has answered (they draw
+ * the likes of the account it names, ADR-0091), so it is a revision of the terms published while
+ * the page was open — `['me']` still as it was read before. (ADR-0076 7-25 also had the toggle
+ * stand before `GET /me` answered, on a hard load or while it was retried.) Owner decision
+ * 2026-10-20, answer 1: a re-consent account's press goes to its step, coming back to the post;
+ * and a refusal for a re-consent moves to the step without a toast, which is said only when the
+ * account could not be read again (owner decision 2026-10-21, for #46's refusals). So:
  * - `gate`: the onboarding gate takes the account from this page (`needsOnboarding`: a step left
  *   that the page is not exempt for — an account that never finished its onboarding): nothing to
  *   say, the gate goes to the step;

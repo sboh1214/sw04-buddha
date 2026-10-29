@@ -31,6 +31,8 @@ export type ConfirmPhoneVerificationBody = components['schemas']['ConfirmPhoneVe
 export type UpdateRealNameBody = components['schemas']['UpdateRealNameBody'];
 /** `PUT /me/time-zone` (ADR-0063): the zone, or null to follow the browser, and the account. */
 export type UpdateTimeZoneBody = components['schemas']['UpdateTimeZoneBody'];
+/** `POST /me/password`: the first password and the account on screen (A-PG-24). */
+export type SetPasswordBody = components['schemas']['SetPasswordBody'];
 /** `PATCH /me`: the nickname and the account the screen shows (#58). */
 export type UpdateMeBody = components['schemas']['UpdateMeBody'];
 /** `POST /me/consents` (#58): every consent item at its current version, and the account. */
@@ -51,6 +53,8 @@ export type AdminUser = components['schemas']['AdminUser'];
 export type ChargePackage = components['schemas']['ChargePackage'];
 export type ChargeResult = components['schemas']['ChargeResult'];
 export type Coupon = components['schemas']['Coupon'];
+/** `POST /coupons/redeem`: the code and the account the wallet shows (A-M2-9). */
+export type RedeemCouponBody = components['schemas']['RedeemCouponBody'];
 export type Market = components['schemas']['Market'];
 /** A list row — `GET /markets` and `GET /admin/markets` — and what a market card draws. */
 export type MarketSummary = components['schemas']['MarketSummary'];

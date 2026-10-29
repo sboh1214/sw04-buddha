@@ -7,7 +7,7 @@ import * as z from 'zod';
 import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { useLinkedAccounts, useSetPassword } from '@/hooks/use-me';
+import { useLinkedAccounts, useMe, useSetPassword } from '@/hooks/use-me';
 import { isForAnotherAccount } from '@/lib/api';
 import {
   AUTH_ERROR,
@@ -16,6 +16,7 @@ import {
   authErrorMessage,
 } from '@/lib/auth-client';
 import { newPasswordSchema, passwordSchema, type NewPasswordValues } from '@/lib/password';
+import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
 const changeSchema = z
@@ -34,8 +35,19 @@ type ChangeValues = z.infer<typeof changeSchema>;
  * Change the password (`changePassword`, needs the current one) or set the first one for an
  * account that has none: a social-only user, or someone who left the set-password step of
  * the sign-up (ADR-0024) unfinished.
+ *
+ * The account the card is for is the one of this screen's `Me`, as every other MY 설정 card's —
+ * `listAccounts` names no owner — so the card waits for `GET /me` as they do (`ProfileUnavailable`),
+ * and the first password names that `Me`'s id (`SetPasswordFields`' `accountId`, ADR-0091). Both
+ * forms are keyed by it: `['me']` can turn from A to B in place, before the session does and so
+ * with no reset of SessionCacheGuard's to empty the card first (a window-focus refetch of `GET /me`
+ * answered with B's cookie ahead of better-auth's session refetch, a realtime resnapshot, a window
+ * beside one that signed in as B — ADR-0090 결정 4-2). Unkeyed, the passwords typed on A's card
+ * would stay with '비밀번호 저장' on, now naming B — B's `Me` — with B's cookie: B's first password,
+ * typed for A. Keyed, the card starts again empty for B.
  */
 export function PasswordForm() {
+  const { data: me, isPending } = useMe();
   const accounts = useLinkedAccounts();
   const hasCredential = accounts.data?.some((a) => a.providerId === CREDENTIAL_PROVIDER_ID);
 
@@ -52,7 +64,9 @@ export function PasswordForm() {
       }
       testId="settings-password"
     >
-      {accounts.isPending ? (
+      {isPending || !me ? (
+        <ProfileUnavailable />
+      ) : accounts.isPending ? (
         <Skeleton height="10" />
       ) : accounts.isError ? (
         <AccountsUnavailable
@@ -61,9 +75,9 @@ export function PasswordForm() {
           onRetry={() => void accounts.refetch()}
         />
       ) : hasCredential ? (
-        <ChangePasswordFields />
+        <ChangePasswordFields key={me.id} />
       ) : (
-        <SetPasswordFields />
+        <SetPasswordFields key={me.id} accountId={me.id} />
       )}
     </SettingsSection>
   );
@@ -153,7 +167,13 @@ function ChangePasswordFields() {
   );
 }
 
-function SetPasswordFields() {
+/**
+ * The password names the account the card was drawn for (`accountId`, its `Me`'s id), never the
+ * session's: in the render between the session naming another account and SessionCacheGuard's
+ * reset the session already says B while the card is still A's, and a password sent as B's would
+ * be B's first password, typed on A's card (ADR-0091). The server refuses it as another account's.
+ */
+function SetPasswordFields({ accountId }: { accountId: string }) {
   const setPassword = useSetPassword();
   const {
     register,
@@ -164,7 +184,8 @@ function SetPasswordFields() {
 
   const onSubmit = handleSubmit(async ({ newPassword }) => {
     try {
-      await setPassword.mutateAsync(newPassword);
+      // The account the card was drawn for rides along (`expectedAccountId`, A-PG-24).
+      await setPassword.mutateAsync({ newPassword, expectedAccountId: accountId });
       toaster.create({ type: 'success', title: copy.passwordSet });
       reset();
     } catch (error) {
@@ -202,12 +223,7 @@ function SetPasswordFields() {
           />
           <Field.ErrorText>{errors.newPasswordConfirm?.message}</Field.ErrorText>
         </Field.Root>
-        <Button
-          type="submit"
-          alignSelf="flex-start"
-          loading={isSubmitting}
-          disabled={!setPassword.ready}
-        >
+        <Button type="submit" alignSelf="flex-start" loading={isSubmitting}>
           {copy.setPasswordSubmit}
         </Button>
       </Stack>

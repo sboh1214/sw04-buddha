@@ -15,8 +15,9 @@ import { useMe } from '@/hooks/use-me';
  * would flash a failure on a perfectly good logout, and a client that has no session at all
  * would get a retry button that can never load anything (the query is disabled).
  *
- * Deliberately no `role="alert"`: two cards mount this at once (and the password card mounts
- * its own), so an assertive live region would announce the same sentence two or three times.
+ * Deliberately no `role="alert"`: the cards that need the profile — the password card too, since
+ * ADR-0091 — mount this at once, so an assertive live region would announce the same sentence
+ * once for each.
  */
 export function ProfileUnavailable({ height = '10' }: { height?: string }) {
   const { isPending, isFetching, isLoggedIn, refetch } = useMe();

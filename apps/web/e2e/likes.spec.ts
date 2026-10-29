@@ -9,6 +9,8 @@ import {
   freshTag,
   meOf,
   signUp,
+  switchAccountUnderScreen,
+  switchMeBeforeSession,
   test,
 } from './helpers';
 
@@ -25,11 +27,16 @@ import {
  * keeping the keyboard focus as the session answers. For both, the page hydrates without a
  * mismatch. A member facing a re-consent, whom the post page keeps, sees its toggles, and a press
  * of the post's or a comment's goes to the remaining step, coming back to the post, and sends
- * nothing (owner decision 2026-10-20, answer 1); a press made before `GET /me` said so is refused
- * by the server and goes there then, with no toast — the toast only when `GET /me` cannot be read
- * again (2026-10-21). When the member's own likes cannot be read, the counts stay, the buttons
- * cannot be pressed, and one line on the page says why (owner decision 2026-10-20). The
- * once-per-person rule, the refusals, the onboarding and the concurrency are the API's tests
+ * nothing (owner decision 2026-10-20, answer 1); the toggles wait for `GET /me` (ADR-0091), and a
+ * press the server refuses for a re-consent `GET /me` had not said yet goes there then, with no
+ * toast — the toast only when `GET /me` cannot be read again (2026-10-21). When the member's own
+ * likes cannot be read — or `GET /me` could not be, so whose they are is unknown (ADR-0091) — the
+ * counts stay, the buttons cannot be pressed, and one line on the page says why (owner decision
+ * 2026-10-20). A tab whose account switched to another while it showed the post likes nothing for
+ * either: a press names the account the toggles were drawn for and is refused; and toggles whose
+ * `['me']` turned to another account before the session did draw that account's own likes, read
+ * afresh, before they can be pressed (ADR-0091). The once-per-person rule, the refusals, the
+ * onboarding and the concurrency are the API's tests
  * (likes.controller.test.ts), and so is that a like moves no Coin and writes no ledger entry (a
  * balance read here could move under a start Coin the worker pays meanwhile); this walks the
  * screens.
@@ -150,6 +157,29 @@ async function agreeAgain(page: Page): Promise<void> {
   );
   await page.getByTestId('consent-all').click();
   await page.getByTestId('consent-submit').click();
+}
+
+/** What the context's account liked on the post (`GET /me/likes/posts/:postId`). */
+async function likedBy(
+  context: APIRequestContext,
+  postId: string,
+): Promise<{ postLiked: boolean; likedCommentIds: string[] }> {
+  const response = await context.get(`/api/v1/me/likes/posts/${postId}`);
+  expect(response.ok(), await response.text()).toBe(true);
+  return ((await response.json()) as { data: { postLiked: boolean; likedCommentIds: string[] } })
+    .data;
+}
+
+/** Records every like write the page sends (`PUT …/like`): its path and body. */
+function likeWrites(page: Page): { path: string; body: unknown }[] {
+  const writes: { path: string; body: unknown }[] = [];
+  page.on('request', (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === 'PUT' && path.endsWith('/like')) {
+      writes.push({ path, body: request.postDataJSON() });
+    }
+  });
+  return writes;
 }
 
 /** The comment `id`'s like toggle, as the thread draws it. */
@@ -492,14 +522,17 @@ test.describe('좋아요', () => {
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 
-  test('재동의가 남은 회원이 GET /me의 답보다 먼저 누르면 서버가 거절하고 알림 없이 남은 단계로 가며, 내 정보를 다시 읽지 못할 때만 알린다', async ({
+  test('좋아요는 GET /me의 답을 기다려 서고(끝내 읽지 못하면 내 좋아요를 못 읽었다고 말한다), 연 뒤에 재동의가 생겨 서버가 거절하면 알림 없이 남은 단계로 가며, 내 정보를 다시 읽지 못할 때만 알린다', async ({
     admin,
     page,
   }) => {
-    // On a hard load the gate's `GET /me` and the member's likes are read side by side, and the
-    // toggle can stand before `GET /me` says a step is left: that press is sent. The server refuses
-    // it, `['me']` is read again, and the press goes where it would have gone — the step, with no
-    // toast (owner decisions 2026-10-20 answer 1 and 2026-10-21, ADR-0076 7-25).
+    // The toggles draw the likes of the account the page shows and name it (ADR-0091), so they
+    // stand only once `GET /me` has answered — a step left is known at the press from then on
+    // (ADR-0076 7-25 had them stand before it, a press sent and refused). A re-consent `GET /me`
+    // had not said yet — a revision published while the page is open — is still refused by the
+    // server: `['me']` is read again, and the press goes where it would have gone — the step, with
+    // no toast — and the toast says why only when `['me']` cannot be read again (owner decisions
+    // 2026-10-20 answer 1 and 2026-10-21).
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
@@ -509,7 +542,7 @@ test.describe('좋아요', () => {
     const postLike = page.getByTestId('post-like');
     const refused = page.getByText(copy.errPostOnboarding);
     let presses = 0;
-    /** Called as the press is refused: lets a held `GET /me` go on. */
+    /** Called as the press is refused. */
     let refusing: () => void = () => undefined;
     await page.route(`**/api/v1/posts/${postId}/like`, async (route) => {
       presses += 1;
@@ -517,47 +550,212 @@ test.describe('좋아요', () => {
       await route.fulfill(ONBOARDING_REFUSAL);
     });
 
-    // --- `GET /me` failing, before the press and after it: the press is sent, and with no step to
-    // go to the toast says why; the page stays.
-    await page.route('**/api/v1/me', (route) =>
-      route.request().method() === 'GET'
-        ? route.fulfill({
-            status: 503,
-            json: { error: { code: 'INTERNAL', message: 'unavailable' } },
-          })
-        : route.fallback(),
-    );
+    // --- `GET /me` failing, every read and its retries: whose likes they would be is unknown, so
+    // none can be read — the rung of likes that could not be read: the count, a button that cannot
+    // be pressed, and the page's line saying why (owner decision 2026-10-20, answer 10), rather
+    // than the pending rung for good — and a press sends nothing.
+    let meFailures = 0;
+    await page.route('**/api/v1/me', async (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      meFailures += 1;
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+      });
+    });
     await page.goto(postPage);
-    await expectToggle(postLike, 0, false);
-    await postLike.click();
-    await expect(refused).toBeVisible();
+    // The first read and its two retries (1 s, 2 s) have failed.
+    await expect.poll(() => meFailures, { timeout: 10_000 }).toBeGreaterThanOrEqual(3);
+    await expect(postLike).toHaveAttribute('data-view', 'unavailable');
+    await expect(postLike).toHaveAttribute('aria-disabled', 'true');
+    await expect(postLike).toHaveText(likes(0));
+    await expect(page.getByTestId('likes-unreadable')).toHaveText(copy.likeMineUnavailable);
+    // By keyboard: Playwright's click would wait for an aria-disabled button to be enabled.
+    await postLike.focus();
+    await page.keyboard.press('Enter');
+    await expect(postLike).toHaveAttribute('data-view', 'unavailable');
     await expect(page).toHaveURL(postPage);
-    await expectToggle(postLike, 0, false);
-    expect(presses).toBe(1);
+    expect(presses).toBe(0);
+    await expect(refused).toHaveCount(0);
     await page.unroute('**/api/v1/me');
 
-    // --- `GET /me` held until the press is refused, then answering a re-consent: the press goes to
-    // the step with no toast, and agreeing comes back to the post, nothing counted.
+    // --- `GET /me` naming no step at first, a re-consent by the time the press is refused: the
+    // press goes to the step with no toast, and agreeing comes back to the post, nothing counted.
     const reconsent = await asReconsent(page);
-    reconsent.on = true;
-    const held = new Promise<void>((resolve) => {
-      refusing = () => resolve();
-    });
-    await page.route('**/api/v1/me', async (route) => {
-      if (route.request().method() === 'GET') await held;
-      await route.fallback();
-    });
+    refusing = () => {
+      reconsent.on = true;
+    };
     await page.goto(postPage);
     await expectToggle(postLike, 0, false);
     await postLike.click();
     await expect(page).toHaveURL(viaStep);
-    expect(presses).toBe(2);
+    expect(presses).toBe(1);
     await expect(refused).toHaveCount(0);
     await agreeAgain(page);
     await expect(page).toHaveURL(postPage);
     await expectToggle(postLike, 0, false);
     await expect(refused).toHaveCount(0);
+
+    // --- `GET /me` failing once the press is refused: with no step to go to, the toast says why;
+    // the page stays.
+    let meDown = false;
+    refusing = () => {
+      meDown = true;
+    };
+    await page.route('**/api/v1/me', async (route) => {
+      if (!meDown || route.request().method() !== 'GET') return route.fallback();
+      await route.fulfill({
+        status: 503,
+        json: { error: { code: 'INTERNAL', message: 'unavailable' } },
+      });
+    });
+    await postLike.click();
+    await expect(refused).toBeVisible();
+    await expect(page).toHaveURL(postPage);
+    await expectToggle(postLike, 0, false);
+    expect(presses).toBe(2);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
+  });
+
+  test('탭의 계정이 다른 회원으로 바뀐 뒤 앞 계정의 글 화면이 남아 있으면 좋아요는 그 화면의 계정을 대어 거절되고, 어느 계정의 좋아요도 바뀌지 않는다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결과 5's remaining writes): in the render between the session naming B
+    // and SessionCacheGuard's reset the toggles still show A's likes while the session already
+    // says B, and a press naming the session's account would be taken with B's cookie — B's like
+    // set to the opposite of A's. The toggles name the account of the `Me` the page was drawn from
+    // (the one its post and comment writes name), so the server refuses it as another account's.
+    // That render is held here: B's cookie in this tab and the session read again, while `GET /me`
+    // and the member's likes still answer as A (`switchAccountUnderScreen`).
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const postId = await postThroughApi(admin, market.id, `탭이 바뀌는 글 ${tag}`, tag);
+    const comment = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await signUp(page, freshEmail());
+      const a = await meOf(page.request);
+      await page.goto(`/community/posts/${postId}`);
+      const postLike = page.getByTestId('post-like');
+      await expectToggle(postLike, 0, false);
+      await expectToggle(commentLike(page, comment), 0, false);
+      await shownContext.addCookies(await page.context().cookies());
+      await switchAccountUnderScreen(
+        page,
+        shownContext.request,
+        { id: b.id, cookies: await otherContext.cookies() },
+        (request) =>
+          request.method() === 'GET' &&
+          new URL(request.url()).pathname === `/api/v1/me/likes/posts/${postId}`,
+      );
+
+      const writes = likeWrites(page);
+      const toast = page.locator('[data-scope="toast"]').getByText(copy.sessionChanged);
+      const answerOf = (path: string) =>
+        page.waitForResponse(
+          (response) =>
+            response.request().method() === 'PUT' && new URL(response.url()).pathname === path,
+        );
+      // A's toggles, drawn again from A's `Me` and A's likes after the guard's reset.
+      await expectToggle(postLike, 0, false);
+      let answered = answerOf(`/api/v1/posts/${postId}/like`);
+      await postLike.click();
+      expect((await answered).status()).toBe(403);
+      await expect(toast).toBeVisible();
+      await expectToggle(postLike, 0, false);
+      answered = answerOf(`/api/v1/comments/${comment}/like`);
+      await commentLike(page, comment).click();
+      expect((await answered).status()).toBe(403);
+      await expectToggle(commentLike(page, comment), 0, false);
+
+      expect(writes).toEqual([
+        {
+          path: `/api/v1/posts/${postId}/like`,
+          body: { liked: true, expectedAccountId: a.id },
+        },
+        {
+          path: `/api/v1/comments/${comment}/like`,
+          body: { liked: true, expectedAccountId: a.id },
+        },
+      ]);
+      // Nothing liked, by B or by A.
+      const none = { postLiked: false, likedCommentIds: [] };
+      expect(await likedBy(other.request, postId)).toEqual(none);
+      expect(await likedBy(shownContext.request, postId)).toEqual(none);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
+  });
+
+  test('탭의 세션이 아직 앞 계정을 말하는데 글 화면의 `GET /me`가 다른 회원으로 답하면 좋아요는 그 회원의 것을 읽을 때까지 기다리고, 앞 계정의 상태로 누르지 않는다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    // ADR-0091 (ADR-0090 결정 4-2's order): `['me']` turns from A to B in place, before the
+    // session does, so SessionCacheGuard resets nothing — a window-focus refetch of `GET /me`
+    // answered with B's cookie while better-auth's session still says A. The likes' answer names
+    // no owner: kept under one key for every account, the toggles went on showing A's likes under
+    // B's `Me`, and a press named B and sent A's opposite with B's cookie — B, who likes the post,
+    // unliking it. Kept under the account on screen, they are B's own likes, read afresh: the
+    // pending rung until they answer (held here), where a press sends nothing, then B's.
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const postId = await postThroughApi(admin, market.id, `계정이 바뀌는 글 ${tag}`, tag);
+    const otherContext = await browser.newContext();
+    const shownContext = await browser.newContext();
+    try {
+      const other = await otherContext.newPage();
+      await signUp(other, freshEmail());
+      const b = await meOf(other.request);
+      await likeThroughApi(other.request, 'posts', postId);
+      await signUp(page, freshEmail());
+      await page.clock.install();
+      await page.goto(`/community/posts/${postId}`);
+      const postLike = page.getByTestId('post-like');
+      await expectToggle(postLike, 1, false);
+
+      // The member's likes from here on, held until released.
+      let release: () => void = () => undefined;
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      await page.route(
+        (url) => url.pathname === `/api/v1/me/likes/posts/${postId}`,
+        async (route) => {
+          await released;
+          await route.fallback();
+        },
+      );
+      const writes = likeWrites(page);
+      await switchMeBeforeSession(page, shownContext, {
+        id: b.id,
+        cookies: await otherContext.cookies(),
+      });
+
+      // B's likes not read yet: the count, on the pending rung, and a press sends nothing.
+      await expect(postLike).toHaveAttribute('data-view', 'pending');
+      await postLike.click();
+      release();
+      // B's own like.
+      await expectToggle(postLike, 1, true);
+
+      expect(writes).toEqual([]);
+      expect((await likedBy(other.request, postId)).postLiked).toBe(true);
+      expect((await likedBy(shownContext.request, postId)).postLiked).toBe(false);
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' });
+      await otherContext.close();
+      await shownContext.close();
+    }
   });
 
   test('내가 누른 좋아요를 불러오지 못하면 수는 보이고 단추는 눌리지 않으며, 까닭이 화면에 한 번 글로 보인다', async ({

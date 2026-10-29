@@ -28,6 +28,7 @@ import {
   useGrantAdmin,
   useRevokeAdmin,
 } from '@/hooks/use-admin-accounts';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { useSignOut } from '@/hooks/use-sign-out';
 import {
   ADMIN_ROLE_CHANGE_PALETTE,
@@ -40,13 +41,11 @@ import {
   formatAdminGrant,
   grantSearchRows,
   revokesSelf,
-  screenAccountId,
 } from '@/lib/admin-accounts';
 import { nicknameShown } from '@/lib/account-closure';
 import { type AdminAccount, type AdminRoleChange, type AdminUser } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import { readFailed } from '@/lib/query-client';
-import { useSession } from '@/lib/use-session';
 
 /**
  * 운영자 계정 (#171, ADR-0056): who holds the admin role, a grant to an account found by email or
@@ -66,9 +65,10 @@ export function AdminAccounts() {
 }
 
 /**
- * A grant or a revoke waiting for its reason. Who is signed in is not kept here: the dialog reads
- * it from the session when submitted (`screenAccountId`), and whether a revoke was one's own comes
- * from its answer (`revokedOwnRole`).
+ * A grant or a revoke waiting for its reason, held for the admin on screen it was picked by
+ * (`useHeldForOperator` — dropped once another admin is drawn, ADR-0091). The dialog names that
+ * admin when submitted (`useOperatorId`), and whether a revoke was one's own comes from its answer
+ * (`revokedOwnRole`).
  */
 interface PendingRoleChange {
   kind: 'grant' | 'revoke';
@@ -79,8 +79,8 @@ interface PendingRoleChange {
 
 function AdminList() {
   const admins = useAdmins();
-  const session = useSession();
-  const [pending, setPending] = useState<PendingRoleChange | null>(null);
+  const operatorId = useOperatorId();
+  const [pending, setPending] = useHeldForOperator<PendingRoleChange>();
 
   return (
     <Stack gap="4">
@@ -110,8 +110,8 @@ function AdminList() {
       ) : (
         <Stack gap="2" data-testid="admin-accounts-list">
           {admins.data.map((account) => {
-            // Unknown until the session is in, which may come after the list: 회수 waits for it.
-            const self = revokesSelf(account.id, session);
+            // Unknown until `GET /me` has answered, which may be after the list: 회수 waits for it.
+            const self = revokesSelf(account.id, operatorId);
             return (
               <AdminRow
                 key={account.id}
@@ -131,8 +131,8 @@ function AdminList() {
 }
 
 /**
- * One admin: nickname (나 for the signed-in one), email, the grant on record, and 회수 — off
- * until the session says whether the account is the signed-in one.
+ * One admin: nickname (나 for the admin on screen), email, the grant on record, and 회수 — off
+ * until `GET /me` says whether the account is the admin on screen.
  */
 function AdminRow({
   account,
@@ -185,13 +185,17 @@ function AdminRow({
  * badged, everyone else is offered 부여. Whether the account may become one (verified email, real
  * name and phone) is the server's to say, and the dialog shows its answer — an account closed
  * since the search included (ACCOUNT_CLOSED). While a new term loads, the previous term's matches
- * stay dimmed with no 부여 (`grantSearchRows`).
+ * stay dimmed with no 부여 (`grantSearchRows`). 부여 also waits for `GET /me`, as 회수 does: the
+ * grant is held for the admin on screen who picked it (`useHeldForOperator`), and one picked while
+ * that admin is unknown would be handed to whichever admin `GET /me` names first — with the cookie
+ * the tab has by then (ADR-0091).
  */
 function GrantSearch() {
   const [query, setQuery] = useState('');
   const [term, setTerm] = useState('');
   const candidates = useAdminGrantCandidates(term);
-  const [pending, setPending] = useState<PendingRoleChange | null>(null);
+  const operatorId = useOperatorId();
+  const [pending, setPending] = useHeldForOperator<PendingRoleChange>();
   const { rows, stale } = grantSearchRows(
     term,
     candidates.data?.pages,
@@ -248,7 +252,7 @@ function GrantSearch() {
             <CandidateRow
               key={user.id}
               user={user}
-              disabled={stale}
+              disabled={stale || operatorId === undefined}
               onGrant={() => setPending({ kind: 'grant', account: user })}
             />
           ))}
@@ -285,7 +289,10 @@ function CandidateRow({
   onGrant,
 }: {
   user: AdminUser;
-  /** Another search's match, on screen while the submitted term loads. */
+  /**
+   * Another search's match, on screen while the submitted term loads — or the admin on screen not
+   * known yet (`GET /me`).
+   */
   disabled: boolean;
   onGrant: () => void;
 }) {
@@ -334,20 +341,22 @@ function CandidateRow({
  * verified, fewer than two admins left, …) is explained inside the dialog, which stays; any other
  * answer is a toast that closes it (`adminRoleChangeRefusal`).
  *
- * Both name the admin the screen shows (`expectedAccountId`), read from the session of the render
- * the submit runs in (`screenAccountId`) — neither is sent while it is unknown — and the server
- * refuses them when the cookie is another account's (another tab signed in; the hook then
- * refetches the session). A revoke that the answer says took the sender's own role
- * (`revokedOwnRole`) ends as 로그아웃 does (`useSignOut`): the server has deleted every session of
- * the account already, and signing out drops the cookie, tells the other tabs, empties the cache
- * and goes home. The warning about one's own revoke follows the session (`revokesSelf`); the
- * sign-out follows only the answer.
+ * Both name the admin on screen (`expectedAccountId`): the account of the `Me` the screen is drawn
+ * from (`useOperatorId`), never the session's — in the render between the session naming another
+ * account and SessionCacheGuard's reset the session already says B while the screen is still A's,
+ * and a grant or a revoke naming B would be done as B with B's cookie (ADR-0091). Neither is sent
+ * while that admin is unknown, and the server refuses them when the cookie is another account's
+ * (another tab signed in; the hook then refetches the session). A revoke that the answer says took
+ * the sender's own role (`revokedOwnRole`) ends as 로그아웃 does (`useSignOut`): the server has
+ * deleted every session of the account already, and signing out drops the cookie, tells the other
+ * tabs, empties the cache and goes home. The warning about one's own revoke follows the admin on
+ * screen (`revokesSelf`); the sign-out follows only the answer.
  */
 function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onClose: () => void }) {
   const grant = useGrantAdmin();
   const revoke = useRevokeAdmin();
   const signOut = useSignOut();
-  const session = useSession();
+  const operatorId = useOperatorId();
   const [refusal, setRefusal] = useState<string | null>(null);
   const {
     register,
@@ -360,8 +369,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
   });
   const loading = grant.isPending || revoke.isPending;
   const isGrant = change.kind === 'grant';
-  const accountId = screenAccountId(session);
-  const self = isGrant ? false : revokesSelf(change.account.id, session);
+  const self = isGrant ? false : revokesSelf(change.account.id, operatorId);
 
   const onError = (error: unknown) => {
     const outcome = adminRoleChangeRefusal(error);
@@ -378,12 +386,12 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
   };
 
   const submit = handleSubmit(({ reason }) => {
-    if (accountId === undefined) return;
+    if (operatorId === undefined) return;
     setRefusal(null);
     const userId = change.account.id;
     if (isGrant) {
       grant.mutate(
-        { userId, reason, expectedAccountId: accountId },
+        { userId, reason, expectedAccountId: operatorId },
         {
           onSuccess: () => {
             toaster.create({ type: 'success', title: copy.adminAccountsGrantDone });
@@ -395,7 +403,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
       return;
     }
     revoke.mutate(
-      { userId, reason, expectedAccountId: accountId },
+      { userId, reason, expectedAccountId: operatorId },
       {
         onSuccess: ({ self: revokedSelf }) => {
           if (revokedSelf) {
@@ -482,7 +490,7 @@ function RoleChangeDialog({ change, onClose }: { change: PendingRoleChange; onCl
                 size="sm"
                 colorPalette={isGrant ? undefined : 'red'}
                 loading={loading}
-                disabled={accountId === undefined}
+                disabled={operatorId === undefined}
                 onClick={() => void submit()}
                 data-testid="admin-role-submit"
               >

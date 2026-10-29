@@ -22,6 +22,7 @@ import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import { useMyProposals, useRetractProposal } from '@/hooks/use-proposals';
 import { type Proposal } from '@/lib/api';
 import {
@@ -53,6 +54,7 @@ type Proposals = ReturnType<typeof useMyProposals>;
 export function MyProposals() {
   const ended = useSessionEnded();
   const proposals = useMyProposals();
+  const accountId = useMe().data?.id;
   if (ended) return <SessionEnded />;
   return (
     <Section title={copy.myProposals} testId="my-proposals">
@@ -66,7 +68,8 @@ export function MyProposals() {
         <Button asChild size="sm" alignSelf="flex-start" data-testid="my-proposals-new">
           <NextLink href={NEW_PROPOSAL_PATH}>{copy.proposeMarket}</NextLink>
         </Button>
-        <ProposalsBody proposals={proposals} />
+        {/* Keyed by MY's account (`ProposalsBody`). */}
+        <ProposalsBody key={accountId} proposals={proposals} accountId={accountId} />
       </Stack>
     </Section>
   );
@@ -79,9 +82,10 @@ export function MyProposals() {
  */
 export function MyProposalsPreview({ limit }: { limit: number }) {
   const proposals = useMyProposals();
+  const accountId = useMe().data?.id;
   return (
     <Section title={copy.myProposals} testId="my-preview-proposals" href={MY_PROPOSALS_PATH}>
-      <ProposalsBody proposals={proposals} limit={limit} />
+      <ProposalsBody key={accountId} proposals={proposals} accountId={accountId} limit={limit} />
     </Section>
   );
 }
@@ -95,8 +99,26 @@ export function MyProposalsPreview({ limit }: { limit: number }) {
  * that failed keeps the proposals read so far and says so above its button (`LoadMoreFailed`, the
  * first read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기
  * list); the preview has no 더 보기, so it says nothing of one.
+ *
+ * A 철회 names the account of MY's `Me` (`accountId`, the screen's — `GET /me/proposals` names no
+ * owner), never the session's: in the render between the session naming another account and
+ * SessionCacheGuard's reset the session already says B while the list is still A's (ADR-0091).
+ * The server refuses it as another account's. Keyed by that account: `['me']` can also turn from A
+ * to B in place, before the session does (ADR-0090 결정 4-2), and a proposal picked from A's list
+ * for the 철회 dialog is not B's to confirm. The list can come before `GET /me` (both wait for the
+ * session alone), so 철회 and its confirmation are off until that account is known: a dialog opened
+ * then could only send nothing, and would close as the key turns to the account.
  */
-function ProposalsBody({ proposals, limit }: { proposals: Proposals; limit?: number }) {
+function ProposalsBody({
+  proposals,
+  accountId,
+  limit,
+}: {
+  proposals: Proposals;
+  /** MY's account, once `GET /me` has answered. */
+  accountId: string | undefined;
+  limit?: number;
+}) {
   const { rows, more } = watchlistRows(proposals.data?.pages, proposals.hasNextPage, limit);
   const section = listSection(proposals, rows.length);
   const compact = limit !== undefined;
@@ -104,9 +126,10 @@ function ProposalsBody({ proposals, limit }: { proposals: Proposals; limit?: num
   const [retracting, setRetracting] = useState<Proposal | null>(null);
 
   const confirmRetract = () => {
-    if (retracting === null || retract.accountId === undefined) return;
+    if (retracting === null || accountId === undefined) return;
     retract.mutate(
-      { id: retracting.id, expectedAccountId: retract.accountId },
+      // The account the list was drawn for rides along (`expectedAccountId`, A-PG-24).
+      { id: retracting.id, expectedAccountId: accountId },
       {
         onSuccess: () => {
           toaster.create({ type: 'success', title: copy.proposalRetracted });
@@ -156,6 +179,7 @@ function ProposalsBody({ proposals, limit }: { proposals: Proposals; limit?: num
               key={proposal.id}
               proposal={proposal}
               compact={compact}
+              retractable={accountId !== undefined}
               onRetract={() => setRetracting(proposal)}
             />
           ))}
@@ -187,6 +211,7 @@ function ProposalsBody({ proposals, limit }: { proposals: Proposals; limit?: num
         title={copy.proposalRetractTitle}
         confirmLabel={copy.proposalRetract}
         loading={retract.isPending}
+        confirmDisabled={accountId === undefined}
         onConfirm={confirmRetract}
       >
         <Stack gap="2">
@@ -222,10 +247,13 @@ function MarketLink({
 function ProposalItem({
   proposal,
   compact,
+  retractable,
   onRetract,
 }: {
   proposal: Proposal;
   compact: boolean;
+  /** Whether the account a 철회 names is known yet (MY's `GET /me`). */
+  retractable: boolean;
   onRetract: () => void;
 }) {
   const format = useFormatDateTime();
@@ -334,6 +362,7 @@ function ProposalItem({
             size="sm"
             variant="outline"
             alignSelf="flex-start"
+            disabled={!retractable}
             onClick={onRetract}
             // One 철회 per 접수 proposal: named after its question, so a list of buttons says which.
             aria-label={`${proposal.question} ${copy.proposalRetract}`}
