@@ -26,6 +26,7 @@ import {
   adminReportGroupSchema,
   adminReportQuerySchema,
   appealDeadlineOf,
+  appealWindowEndOf,
   cancelModerationBodySchema,
   createReportBodySchema,
   dismissReportsBodySchema,
@@ -94,6 +95,20 @@ describe('the moderation lists (#50)', () => {
     expect(APPEAL_WINDOW_DAYS).toBe(14);
     expect(appealDeadlineOf(AT).toISOString()).toBe('2026-11-03T01:02:03.000Z');
     expect(appealDeadlineOf(new Date(AT)).toISOString()).toBe('2026-11-03T01:02:03.000Z');
+  });
+
+  it('keeps an appeal in time to the end of the minute its deadline shows (owner decision 2026-10-23 답 5)', () => {
+    // 01:02:03 shows as 1:02: in time to 01:02:59.999, late from 01:03.
+    expect(appealWindowEndOf(AT).toISOString()).toBe('2026-11-03T01:03:00.000Z');
+    expect(appealWindowEndOf(new Date(AT)).toISOString()).toBe('2026-11-03T01:03:00.000Z');
+    // A deadline on the minute's first instant still has the whole of that minute.
+    expect(appealWindowEndOf('2026-10-20T01:02:00.000Z').toISOString()).toBe(
+      '2026-11-03T01:03:00.000Z',
+    );
+    // And one on its last millisecond, none of the next.
+    expect(appealWindowEndOf('2026-10-20T01:02:59.999Z').toISOString()).toBe(
+      '2026-11-03T01:03:00.000Z',
+    );
   });
 
   it('ends a reset’s hold of the nickname it took away 30 days after the reset (owner decision 2026-10-22)', () => {

@@ -1,5 +1,13 @@
+import {
+  NO_EMAIL_DOMAIN,
+  appealWindowEndOf,
+  type Me,
+  type MyModerationAction,
+} from '@buddha/shared';
 import { type APIRequestContext, type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
+import { fillBusinessInfo } from '../src/legal/business-info';
+import { deadlineOnCard, expectDeadlineLine } from './appeal';
 import {
   adminAccount,
   createOpenMarket,
@@ -21,13 +29,22 @@ import {
  *   description), told in the dialog that a wrong forecast is not a reason; nothing is hidden by it;
  *   the same post again is refused while the first report waits; the author is offered no 신고 on
  *   their own; a visitor's press goes to the login page;
- * - the reporter reads both as 접수 on 조치·신고 내역, reached from MY 설정;
+ * - the reporter reads both as 접수 on 조치·신고 내역, reached from MY 설정 — with how to appeal once
+ *   above the actions received, there while that list is read, when it could not be read and when
+ *   it holds nothing (#186, owner decision 2026-10-22 답 4), and nothing under it while the account
+ *   has a real email; on a Kakao or Naver placeholder address (`GET /me` swapped in the browser),
+ *   that an appeal needs an email registered in MY 설정 first — beside an empty list, while the
+ *   list is read and when it could not be — its link to the 계정 card there (owner decision
+ *   2026-10-22 (2차) 3);
  * - the operator finds the post in the queue, hides it with a reason and an explanation, and
  *   dismisses the comment's report with a reason of their own, the comment reached from the post's
  *   page;
- * - the author sees the placeholder, '숨김' with the reason on MY 내 글, and the action with its
- *   reason and the appeal on 조치·신고 내역 — never who reported nor who acted; the reporter sees
- *   조치함 and 기각;
+ * - the author sees the placeholder, '숨김' with the reason and the way to 조치·신고 내역 on MY 내 글
+ *   (#186 답 9), and there the action with its reason and its '이의 기한' 14 days on — the guidance
+ *   once above the list, nothing more of the appeal on the card (답 1·4) — and, its browser's clock
+ *   at the last instant of the minute that deadline shows, still '이의 기한', then as that minute
+ *   ends '이의 기한이 지났습니다.' with the same deadline (답 2, owner decision 2026-10-23 답 5);
+ *   never who reported nor who acted; the reporter sees 조치함 and 기각;
  * - a profile reported, its 소개 emptied by the operator from the member's page (kept for operators,
  *   not restored by a cancellation), and an operator's own post offering no action — its report
  *   read without the reporter and the description, and the hiding another operator gives it read
@@ -38,7 +55,8 @@ import {
  *   visitor's press back to the list or the detail; the operator's '운영' links on the post,
  *   its comment and the profile, shown to no one else; a warning given from the profile's link
  *   shows its banner on the member's MY summary — not the write page — until it is cancelled
- *   (owner decisions 2026-10-21);
+ *   (owner decisions 2026-10-21), the owner's sentence and the link alone, nothing of the appeal
+ *   (#186 답 3), its card giving its deadline;
  * - the report dialog names the post or comment it reports on one line — from the post page, a
  *   comment, a 대댓글 whose first line is cut with '…', and the cards (owner decision 2026-10-22 답 4);
  *   the reported operator still reads the count of reporters (답 1);
@@ -53,7 +71,10 @@ import {
  *   남김», ADR-0081 7-29): the refused save — or a focus — keeps the title and the body read-only
  *   under the refusal's sentence, leaving asks, and 닫기 is the hidden post's refusal a reload
  *   draws (at once for a form holding nothing); a hiding cancelled while the form is held keeps it
- *   until 닫기, and then the form is the post's afresh; the post page draws the hidden post's
+ *   until 닫기, and then the form is the post's afresh; wherever the screen says the hiding's
+ *   refusal — in the form's place, atop a held form, under the form for a save whose read after
+ *   it failed — the way to 조치·신고 내역 is under it, nothing of the appeal, and it leads there
+ *   (owner decision 2026-10-25 «링크를 둠», #186); the post page draws the hidden post's
  *   placeholder at once and holds a typed 댓글 with why, no 404 waiting.
  *
  * Every report a test files is processed before it ends, so a persistent database's queue does not
@@ -192,12 +213,164 @@ async function gotoWithBannersRead(
   );
 }
 
+/**
+ * How to appeal (#186, ADR-0084), once on 조치·신고 내역 and above the actions received (owner
+ * decision 2026-10-22 답 4): the whole guidance as the member must read it — the customer centre's
+ * email filled in from the business info, whatever it holds (미정 until the owner supplies it),
+ * which action from the sign-up email (답 6), once per action within the window, the action
+ * standing while it is reviewed, the answer by email. Matched whole, so a screen that drew the
+ * copy's raw '{{email}}' fails here. And at the top (답 4 '맨 위에 한 번'): in the section, before
+ * whatever the list shows — its cards (`my-actions-list`, `my-action-…`), or while it is read, when
+ * it could not be, when it holds nothing (`my-actions-list-pending`, `-error`, `-empty`) — and
+ * nothing of the list before it. Polled, as the pending skeleton turns into another state.
+ */
+async function expectAppealGuidance(page: Page): Promise<void> {
+  const guidance = page.getByTestId('my-moderation-appeal');
+  await expect(guidance).toHaveCount(1);
+  await expect(guidance).toHaveText(fillBusinessInfo(copy.appealGuidance));
+  await expect(guidance).not.toContainText('{{');
+  const section = page.getByTestId('my-moderation-actions');
+  await expect(section.getByTestId('my-moderation-appeal')).toHaveCount(1);
+  await expect
+    .poll(() =>
+      section.evaluate((element) => {
+        const appeal = element.querySelector('[data-testid="my-moderation-appeal"]');
+        const list = [...element.querySelectorAll('[data-testid^="my-action"]')];
+        return (
+          appeal !== null &&
+          list.length > 0 &&
+          list.every(
+            (item) =>
+              (appeal.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0,
+          )
+        );
+      }),
+    )
+    .toBe(true);
+}
+
+/**
+ * Opens `path` and waits until `GET /me` has answered and been drawn: the line under the appeal
+ * guidance is drawn from its email and draws nothing while it is read, so a check that it is absent
+ * proves nothing before it. With `placeholder`, the answer's email is swapped in the browser for a
+ * Kakao placeholder address (`…@noemail.buddha.local`), unverified as such an account's is — no e2e
+ * signs in with Kakao or Naver, whose keys it has not — the rest of the answer the server's, and
+ * every later read the same until `unroute`. Returns the predicate to unroute with.
+ */
+async function gotoWithMeRead(
+  page: Page,
+  path: string,
+  placeholder: boolean,
+): Promise<(url: URL) => boolean> {
+  const isMeRead = (url: URL) => url.pathname === '/api/v1/me';
+  if (placeholder) {
+    const email = `kakao_${freshTag()}@${NO_EMAIL_DOMAIN}`;
+    await page.route(isMeRead, async (route) => {
+      if (route.request().method() !== 'GET') {
+        await route.continue();
+        return;
+      }
+      const response = await route.fetch();
+      const body = (await response.json()) as { data: Me };
+      await route.fulfill({
+        response,
+        json: {
+          ...body,
+          data: { ...body.data, email, emailVerified: false },
+        },
+      });
+    });
+  }
+  const read = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && isMeRead(new URL(response.url())),
+  );
+  await page.goto(path);
+  const response = await read;
+  expect(response.status(), await response.text()).toBe(200);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
+  return isMeRead;
+}
+
+/**
+ * For an account on a Kakao or Naver placeholder address alone (owner decision 2026-10-22 (2차) 3):
+ * under the appeal guidance, the owner's sentence and a link of its own to MY 설정 — after the
+ * guidance and before whatever the list of actions shows, as `expectAppealGuidance` orders them.
+ */
+async function expectAppealEmailRequired(page: Page): Promise<void> {
+  const line = page.getByTestId('my-moderation-appeal-email');
+  await expect(line).toHaveCount(1);
+  await expect(line.getByText(copy.appealEmailRequired, { exact: true })).toBeVisible();
+  const link = line.getByTestId('my-moderation-appeal-email-settings');
+  await expect(link).toHaveText(copy.appealEmailRequiredOpen);
+  await expect(link).toHaveAttribute('href', '/my/settings');
+  await expect
+    .poll(() =>
+      page.getByTestId('my-moderation-actions').evaluate((element) => {
+        const following = (from: Element, to: Element) =>
+          (from.compareDocumentPosition(to) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+        const appeal = element.querySelector('[data-testid="my-moderation-appeal"]');
+        const email = element.querySelector('[data-testid="my-moderation-appeal-email"]');
+        const list = [...element.querySelectorAll('[data-testid^="my-action"]')];
+        return (
+          appeal !== null &&
+          email !== null &&
+          following(appeal, email) &&
+          list.length > 0 &&
+          list.every((item) => following(email, item))
+        );
+      }),
+    )
+    .toBe(true);
+}
+
+/**
+ * Holds `page`'s reads of the actions received on 조치·신고 내역 — the list shows its pending
+ * skeleton — until `release`, then answers them with a server error (each retry too: every 5xx is
+ * retried twice), so the list shows '다시 시도'. `unroute` with `isActionsRead`.
+ */
+async function holdActionsThenFail(
+  page: Page,
+): Promise<{ release: () => void; isActionsRead: (url: URL) => boolean }> {
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const isActionsRead = (url: URL) => url.pathname === '/api/v1/me/moderation/actions';
+  await page.route(isActionsRead, async (route) => {
+    await held;
+    await route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ error: { code: 'INTERNAL', message: 'Internal error' } }),
+    });
+  });
+  return { release, isActionsRead };
+}
+
 /** The areas' links a reader at this width has: the tab bar below md, header row 1 from md up. */
 function shownNav(page: Page): Locator {
   const width = page.viewportSize()?.width ?? 0;
   return width < 768
     ? page.getByTestId('bottom-tabs')
     : page.getByRole('navigation', { name: copy.navPrimary });
+}
+
+/**
+ * The edit screen's refusal for a hidden post where `where` says it — in the form's place, atop a
+ * held form, or under the form — and under it the way to 조치·신고 내역, the link a restriction's
+ * refusal has (오너 결정 2026-10-25 «링크를 둠», #186, ADR-0084): nothing of the appeal.
+ */
+async function expectHiddenRefusal(where: Locator): Promise<void> {
+  await expect(where).toHaveText(`${copy.errPostNotEditable}${copy.myModerationOpen}`);
+  const link = where.getByTestId('post-edit-hidden-moderation');
+  await expect(link).toHaveAttribute('href', '/my/moderation');
+  await expect(link).toHaveText(copy.myModerationOpen);
+  await expect(where).not.toContainText('이의');
 }
 
 /** A nickname nobody has: a prefix and the run's random tail, within the 20 characters. */
@@ -237,7 +410,7 @@ async function sendReport(page: Page, path: string): Promise<string> {
 }
 
 test.describe('신고와 운영 처리', () => {
-  test('회원이 글과 댓글을 신고하면 접수로 보이고, 운영자가 글을 숨기면 작성자는 숨김과 사유·이의 안내를, 신고자는 조치함을 보며, 댓글의 신고를 기각하면 신고자는 기각을 본다', async ({
+  test('회원이 글과 댓글을 신고하면 접수로 보이고, 운영자가 글을 숨기면 작성자는 숨김과 사유·조치·신고 내역 링크를, 내역에서 이의 안내와 이의 기한(지나면 지났다는 줄)을, 신고자는 조치함을 보며, 댓글의 신고를 기각하면 신고자는 기각을 본다', async ({
     admin,
     page,
     browser,
@@ -380,6 +553,52 @@ test.describe('신고와 운영 처리', () => {
       await expect(reporter.getByTestId('my-actions-list-empty')).toHaveText(
         copy.myModerationActionsEmpty,
       );
+      // How to appeal is above the actions received even with none (#186, owner decision
+      // 2026-10-22 답 4) — and while they are read, and when they could not be: the read held,
+      // then answered with a server error (retried twice, as every 5xx is), the guidance stays.
+      await expectAppealGuidance(reporter);
+      const failingActions = await holdActionsThenFail(reporter);
+      await reporter.reload();
+      await expect(reporter.getByTestId('my-actions-list-pending')).toBeVisible();
+      await expectAppealGuidance(reporter);
+      failingActions.release();
+      await expect(reporter.getByTestId('my-actions-list-error')).toBeVisible();
+      await expect(reporter.getByTestId('my-actions-list')).toHaveCount(0);
+      await expectAppealGuidance(reporter);
+      expect(
+        await reporter.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      await reporter.unroute(failingActions.isActionsRead);
+      // The appeal comes from the account's current email alone (owner decision 2026-10-22 답 5):
+      // an account with a real one reads nothing more under the guidance, once `GET /me` has said
+      // so; one on a Kakao or Naver placeholder address reads that an appeal needs an email
+      // registered in MY 설정 first, and its link leads there — to the 계정 card that shows the
+      // address missing ((2차) 3).
+      await gotoWithMeRead(reporter, '/my/moderation', false);
+      await expectAppealGuidance(reporter);
+      await expect(reporter.getByTestId('my-moderation-appeal-email')).toHaveCount(0);
+      const isMeRead = await gotoWithMeRead(reporter, '/my/moderation', true);
+      await expectAppealGuidance(reporter);
+      await expectAppealEmailRequired(reporter);
+      expect(
+        await reporter.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      // The line sits with the guidance, outside the list's states (ADR-0084 decision 2, 6-13): it
+      // is there while the actions received are read and once they could not be, not only beside
+      // an empty list — `GET /me` still swapped, the actions read held, then answered with a 500.
+      const failingAgain = await holdActionsThenFail(reporter);
+      await reporter.reload();
+      await expect(reporter.getByTestId('my-actions-list-pending')).toBeVisible();
+      await expectAppealEmailRequired(reporter);
+      failingAgain.release();
+      await expect(reporter.getByTestId('my-actions-list-error')).toBeVisible();
+      await expectAppealEmailRequired(reporter);
+      await reporter.unroute(failingAgain.isActionsRead);
+      await reporter.getByTestId('my-moderation-appeal-email-settings').click();
+      await expect(reporter).toHaveURL('/my/settings');
+      await expect(reporter.getByTestId('account-email')).toHaveText(copy.noEmail);
+      await expect(reporter.getByText(copy.noEmailNotice)).toBeVisible();
+      await reporter.unroute(isMeRead);
 
       // The operator: the post's entry in the queue, its page, 숨기기 with a reason.
       const adminPage = await adminContext.newPage();
@@ -449,8 +668,9 @@ test.describe('신고와 운영 처리', () => {
         copy.adminModerationStatePublished,
       );
 
-      // The author: the placeholder, '숨김' with the reason on MY 내 글, and the action on
-      // 조치·신고 내역 with its reason and the appeal — nothing of who reported or who acted.
+      // The author: the placeholder, '숨김' with the reason on MY 내 글 and the way from there to
+      // 조치·신고 내역 (#186 답 9), and the action there with its reason and its appeal deadline —
+      // nothing of who reported or who acted.
       await page.goto(`/community/posts/${postId}`);
       await expect(page.getByTestId('post-hidden')).toContainText(copy.postHiddenPlaceholder);
       await page.goto('/my/posts');
@@ -464,18 +684,41 @@ test.describe('신고와 운영 처리', () => {
       await expect(hiddenLine.getByTestId('authored-hidden-note')).toHaveText(
         `${copy.authoredHiddenNote}: ${note}`,
       );
-      await page.goto('/my/moderation');
+      // A link, and no deadline of its own: that is the action's card's.
+      const toModeration = hiddenLine.getByTestId('authored-hidden-moderation');
+      await expect(toModeration).toHaveText(copy.myModerationOpen);
+      await expect(hiddenLine).not.toContainText(copy.moderationAppealDeadline);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
+      // The action as the page reads it, for the exact instant its card's minute ends.
+      const actionsRead = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' &&
+          new URL(response.url()).pathname === '/api/v1/me/moderation/actions',
+      );
+      await toModeration.click();
+      await expect(page).toHaveURL('/my/moderation');
+      const { data: received } = (await (await actionsRead).json()) as {
+        data: MyModerationAction[];
+      };
+      expect(received).toHaveLength(1);
+      const hidingWindowEnd = appealWindowEndOf(received[0]!.createdAt).getTime();
       const actions = page.getByTestId('my-actions-list');
       await expect(actions.locator('article')).toHaveCount(1);
       await expect(actions.getByTestId('my-action-type')).toHaveText(copy.moderationActionHide);
       await expect(actions.getByTestId('my-action-subject')).toHaveText(postTitle);
       await expect(actions.getByTestId('my-action-reason')).toContainText(copy.reportReasonSpam);
       await expect(actions.getByTestId('my-action-note')).toContainText(note);
-      await expect(actions.getByTestId('my-action-appeal')).toContainText(
-        copy.moderationAppealDeadline,
-      );
+      // How to appeal it (#186, ADR-0084): once above the list, and on the card its '이의 기한' alone
+      // — 14 days after it, the exact time in the member's zone (owner decision 2026-10-22 답 1·4).
+      await expectAppealGuidance(page);
+      const hidingDeadline = await deadlineOnCard(actions);
+      await expectDeadlineLine(actions, hidingDeadline, false);
       await expect(actions.getByTestId('my-action-cancelled')).toHaveCount(0);
-      await expect(page.getByTestId('my-moderation-appeal')).toContainText('14일');
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
       await expect(page.getByTestId('my-reports-list-empty')).toHaveText(
         copy.myModerationReportsEmpty,
       );
@@ -498,6 +741,17 @@ test.describe('신고와 운영 처리', () => {
       expect(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
       ).toBe(true);
+      // The author's browser at the last instant of the minute the deadline shows, 14 days on
+      // (APPEAL_WINDOW_DAYS) — past the exact deadline inside that minute: still in time (owner
+      // decision 2026-10-23 답 5). As that minute ends, the card says the deadline has passed, with
+      // that same deadline and nothing else (답 2); the guidance stays.
+      await page.clock.setFixedTime(hidingWindowEnd - 1);
+      await page.goto('/my/moderation');
+      await expectDeadlineLine(actions, hidingDeadline, false);
+      await page.clock.setFixedTime(hidingWindowEnd);
+      await page.goto('/my/moderation');
+      await expectDeadlineLine(actions, hidingDeadline, true);
+      await expectAppealGuidance(page);
 
       // The reporter: 조치함 for the post — now its placeholder — and 기각 for the comment.
       await reporter.goto('/my/moderation');
@@ -697,7 +951,7 @@ test.describe('신고와 운영 처리', () => {
     }
   });
 
-  test('카드의 신고는 글을 열지 않고 신고하며, 운영자에게만 공개 화면의 운영 링크가 보이고, 그 링크로 준 경고는 취소될 때까지 MY 요약에 안내 띠로 보인다', async ({
+  test('카드의 신고는 글을 열지 않고 신고하며, 운영자에게만 공개 화면의 운영 링크가 보이고, 그 링크로 준 경고는 취소될 때까지 MY 요약에 이의 안내 없는 안내 띠로 보이고 그 기한은 조치·신고 내역의 카드에 있다', async ({
     admin,
     page,
     browser,
@@ -867,6 +1121,15 @@ test.describe('신고와 운영 처리', () => {
       await gotoWithBannersRead(page, '/my', BANNER_READS.mySummary);
       const banner = page.getByTestId('my-warning-banner');
       await expect(banner).toContainText(copy.moderationWarningReceived);
+      // The owner's sentence and the link alone — nothing of the appeal, which is 조치·신고 내역's
+      // (#186, owner decision 2026-10-22 답 3).
+      await expect(banner.getByRole('link')).toHaveText(copy.myModerationOpen);
+      await expect(banner).toHaveText(`${copy.moderationWarningReceived}${copy.myModerationOpen}`);
+      await expect(banner).not.toContainText(copy.moderationAppealDeadline);
+      await expect(banner).not.toContainText('고객센터 이메일');
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+      ).toBe(true);
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
       await gotoWithBannersRead(
         page,
@@ -879,9 +1142,13 @@ test.describe('신고와 운영 처리', () => {
       await page.goto('/my');
       await page.getByTestId('my-warning-banner').getByRole('link').click();
       await expect(page).toHaveURL('/my/moderation');
-      await expect(page.getByTestId('my-actions-list').getByTestId('my-action-type')).toHaveText(
+      const warningCard = page.getByTestId('my-actions-list');
+      await expect(warningCard.getByTestId('my-action-type')).toHaveText(
         copy.moderationActionWarning,
       );
+      // There: how to appeal once above the list, and the warning's own deadline on its card.
+      await expectAppealGuidance(page);
+      await expectDeadlineLine(warningCard, await deadlineOnCard(warningCard), false);
 
       // Cancelled, the banner is gone.
       await adminPage
@@ -1050,7 +1317,7 @@ test.describe('신고와 운영 처리', () => {
     }
   });
 
-  test('작성자가 글을 고치는 사이 운영자가 그 글을 숨기면 수정 화면은 쓰던 제목·본문을 숨김의 문장과 함께 고칠 수 없게 남겨 떠날 때 묻고, 닫기 뒤에는 새로 고침과 같은 숨긴 글의 화면이며, 고친 것이 없는 화면은 곧바로 그 화면이고, 글 화면은 숨긴 글의 자리표시를 곧바로 그리며 쓰던 댓글을 까닭과 남긴다', async ({
+  test('작성자가 글을 고치는 사이 운영자가 그 글을 숨기면 수정 화면은 쓰던 제목·본문을 숨김의 문장과 함께 고칠 수 없게 남겨 떠날 때 묻고, 닫기 뒤에는 새로 고침과 같은 숨긴 글의 화면이며, 고친 것이 없는 화면은 곧바로 그 화면이고, 그 문장 아래에는 어디서나 조치·신고 내역 링크가 있으며, 글 화면은 숨긴 글의 자리표시를 곧바로 그리며 쓰던 댓글을 까닭과 남긴다', async ({
     admin,
     page,
     browser,
@@ -1060,7 +1327,10 @@ test.describe('신고와 운영 처리', () => {
     // is refused (POST_NOT_EDITABLE) and the read after it — or a focus — answers the hidden post's
     // placeholder: the form keeps what was written, read-only, under '운영 정책에 따라 숨긴 글은 고칠
     // 수 없습니다.', with 닫기; closed — at once for a form holding nothing of the writer's — the
-    // screen is that sentence in the form's place, as a reload draws it. The post page reads the
+    // screen is that sentence in the form's place, as a reload draws it. Wherever the screen says
+    // that sentence — in the form's place, atop the held form, under the form for a refused save
+    // whose read after it failed — the way to 조치·신고 내역 is under it (오너 결정 2026-10-25
+    // «링크를 둠», #186, ADR-0084), where the hiding is listed. The post page reads the
     // same post the same way: its placeholder at once, a new 댓글's text held with why, no 404.
     // The page's clock makes a read older than `staleTime` (30 s) without waiting (posts.spec.ts).
     const market = await createOpenMarket(admin);
@@ -1118,7 +1388,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(editor).toContainText('덧붙인 근거');
     await hide(saved);
     await page.getByTestId('post-submit').click();
-    await expect(heldForm).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(heldForm);
     expect(saves).toBe(1);
     await expect(title).toHaveValue(`고친 제목 ${tag}`);
     await expect(title).not.toBeEditable();
@@ -1152,7 +1422,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(editor).toContainText('덧붙인 근거');
     // 닫기: asking nothing, the hidden post's refusal a reload draws — not the 404.
     await page.getByTestId('post-form-close').click();
-    await expect(unavailable).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(unavailable);
     await expect(heldForm).toHaveCount(0);
     await expect(title).toHaveCount(0);
     await expect(page.getByTestId('post-edit-gone')).toHaveCount(0);
@@ -1160,7 +1430,17 @@ test.describe('신고와 운영 처리', () => {
     await expect(page).toHaveURL(savedEdit);
     expect(asked).toHaveLength(1);
     expect((await page.reload())?.status()).toBe(200);
-    await expect(unavailable).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(unavailable);
+    // The link: 조치·신고 내역, where the hiding is listed with how to appeal it.
+    await unavailable.getByTestId('post-edit-hidden-moderation').click();
+    await expect(page).toHaveURL('/my/moderation');
+    await expectAppealGuidance(page);
+    const savedHiding = page
+      .getByTestId('my-actions-list')
+      .locator('article')
+      .filter({ hasText: `고칠 글 ${tag}` });
+    await expect(savedHiding.getByTestId('my-action-type')).toHaveText(copy.moderationActionHide);
+    await expect(savedHiding.getByTestId('my-action-subject')).toHaveText(`고칠 글 ${tag}`);
 
     // --- a line added to the body, the post hidden, and a focus reads it again: kept the same way —
     // nothing was sent. The hiding cancelled meanwhile, the form stays as it is until it is closed;
@@ -1182,7 +1462,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(editor).toContainText('쓰던 근거');
     const focusedHiding = await hide(focused);
     await refocus();
-    await expect(heldForm).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(heldForm);
     await expect(title).toHaveValue(`포커스로 읽을 글 ${tag}`);
     await expect(title).not.toBeEditable();
     await expect(editor).toContainText('쓰던 근거');
@@ -1193,7 +1473,7 @@ test.describe('신고와 운영 처리', () => {
     await cancelHiding(focusedHiding);
     await refocus();
     await settle();
-    await expect(heldForm).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(heldForm);
     await expect(editor).toContainText('쓰던 근거');
     await page.getByTestId('post-form-close').click();
     await expect(heldForm).toHaveCount(0);
@@ -1205,6 +1485,34 @@ test.describe('신고와 운영 처리', () => {
     await expect(page.getByTestId('post-submit')).toBeVisible();
     expect(asked).toHaveLength(1);
 
+    // --- the same post hidden again under a changed title, and the read after the refused save
+    // failing: the form stays as it was, the refusal's own line under it — the same sentence, the
+    // same link under it. A focus that reads the hidden post then holds the form as above.
+    // (The same post: a fourth of the member's own within ten minutes is WRITE_LIMITED, #187.)
+    await title.fill(`읽지 못한 제목 ${tag}`);
+    await hide(focused);
+    let failReads = true;
+    await page.route(new RegExp(`/api/v1/posts/${focused}$`, 'i'), (route) =>
+      failReads && route.request().method() === 'GET' ? route.abort() : route.fallback(),
+    );
+    await page.getByTestId('post-submit').click();
+    const refused = page.getByTestId('post-form-error');
+    await expectHiddenRefusal(refused);
+    expect(saves).toBe(2);
+    await expect(heldForm).toHaveCount(0);
+    await expect(unavailable).toHaveCount(0);
+    await expect(title).toHaveValue(`읽지 못한 제목 ${tag}`);
+    await expect(title).toBeEditable();
+    failReads = false;
+    await refocus();
+    await expectHiddenRefusal(heldForm);
+    await expect(refused).toHaveCount(0);
+    await expect(title).toHaveValue(`읽지 못한 제목 ${tag}`);
+    await expect(title).not.toBeEditable();
+    await page.getByTestId('post-form-close').click();
+    await expectHiddenRefusal(unavailable);
+    expect(asked).toHaveLength(1);
+
     // --- nothing changed: nothing of the writer's to keep, the refusal at once.
     const plain = await postThroughApi(page.request, market.id, `그냥 둔 글 ${tag}`, '그냥 근거');
     const plainEdit = `/community/posts/${plain}/edit`;
@@ -1212,7 +1520,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(title).toHaveValue(`그냥 둔 글 ${tag}`);
     await hide(plain);
     await refocus();
-    await expect(unavailable).toHaveText(copy.errPostNotEditable);
+    await expectHiddenRefusal(unavailable);
     await expect(title).toHaveCount(0);
     await expect(heldForm).toHaveCount(0);
     await expect(page).toHaveURL(plainEdit);
@@ -1264,7 +1572,7 @@ test.describe('신고와 운영 처리', () => {
     await expect(page.getByTestId('post-title')).toHaveText(`글 화면의 글 ${tag}`);
     await expect(page.getByTestId('comment-composer')).toBeVisible();
     expect(asked).toHaveLength(1);
-    expect(saves).toBe(1);
+    expect(saves).toBe(2);
     await page.unrouteAll({ behavior: 'ignoreErrors' });
   });
 });

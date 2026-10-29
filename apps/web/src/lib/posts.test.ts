@@ -437,14 +437,14 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(edit).toContain('!isOwnPost(shown.author, writer.publicId)');
     // The form hears the post gone, closes it, and says what it holds.
     expect(edit).toMatch(
-      /<EditForm\s+key=\{closings\}\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+held=\{held\}\s+heldMessage=\{postEditHeldMessage\(state\)\}\s+onClose=\{\(\) => \{\s*setState\(postEditClosed\(state\)\);\s*setClosings\(closings \+ 1\);\s*\}\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
+      /<EditForm\s+key=\{closings\}\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+held=\{held\}\s+heldMessage=\{postEditHeldMessage\(state\)\}\s+heldHidden=\{state\.hidden\}\s+onClose=\{\(\) => \{\s*setState\(postEditClosed\(state\)\);\s*setClosings\(closings \+ 1\);\s*\}\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
     );
     expect(edit).toMatch(
-      /gone=\{held\}\s+goneMessage=\{heldMessage\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,
+      /gone=\{held\}\s+goneMessage=\{heldMessage\}\s+goneAction=\{heldHidden \? <HiddenModerationLink \/> : undefined\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,
     );
     // A post not published in the form's place — once closed too — as a reload draws it.
     expect(edit).toMatch(
-      /<EmptyState\s+message=\{postEditUnavailableMessage\(shown\.state\)\}\s+data-testid="post-edit-unavailable"/,
+      /<EmptyState\s+message=\{postEditUnavailableMessage\(shown\.state\)\}\s+action=\{shown\.state === 'hidden' \? <HiddenModerationLink \/> : undefined\}\s+data-testid="post-edit-unavailable"/,
     );
 
     const form = source('../components/post/post-form.tsx');
@@ -458,7 +458,7 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(form).toContain('useLeaveGuard(gone || (!pending && dirty), copy.postLeaveConfirm);');
     // The sentence on top; the title and the body read-only (selectable, never changed), and
     // nothing to send or discard.
-    expect(form).toContain('{gone && <GoneNotice message={goneMessage} />}');
+    expect(form).toContain('{gone && <GoneNotice message={goneMessage} action={goneAction} />}');
     expect(form).toContain('goneMessage = copy.errPostGone,');
     expect(form).toContain('{restored !== null && !gone && (');
     expect(form).toMatch(/readOnly=\{gone\}\s+disabled=\{pending && !gone\}/);
@@ -670,6 +670,67 @@ describe('an edit screen whose post an operator hides (postEditHidden, 오너 �
   it('says in the form’s place what a reload of the edit screen says: the refusal for a hidden post, the placeholder for a deleted one', () => {
     expect(postEditUnavailableMessage('hidden')).toBe(copy.errPostNotEditable);
     expect(postEditUnavailableMessage('deleted')).toBe(copy.postDeletedPlaceholder);
+  });
+
+  it('puts the way to 조치·신고 내역 under the hiding’s refusal wherever the edit screen says it — in the form’s place, atop a held form, under the form for a refused save — and under no deletion’s (오너 결정 2026-10-25 «링크를 둠», #186, ADR-0084)', () => {
+    // No component renders under node: the wiring is pinned in the source, as above. The link is
+    // the restriction's refusal's own («제한 거절 문구와 같은 꼴»): `RestrictedModerationLink`, to
+    // MY_MODERATION_PATH with '조치·신고 내역 보기', under the edit screen's own test id.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
+    expect(edit).toMatch(
+      /function HiddenModerationLink\(\) \{\s*return <RestrictedModerationLink data-testid="post-edit-hidden-moderation" \/>;\s*\}/,
+    );
+    // Each of the three places draws it for a hiding alone: the placeholder of a post deleted with
+    // comments under it (#48) and a deletion's held form say the deletion's sentence, with nothing
+    // under it.
+    expect(edit.match(/<HiddenModerationLink \/>/g)).toHaveLength(3);
+    expect(edit).toContain(
+      "action={shown.state === 'hidden' ? <HiddenModerationLink /> : undefined}",
+    );
+    expect(edit).toContain('heldHidden={state.hidden}');
+    expect(edit).toContain('goneAction={heldHidden ? <HiddenModerationLink /> : undefined}');
+    // Under the refusal's own line, for the save refused as the hiding's
+    // (`postWriteErrorMessage` → '운영 정책에 따라 숨긴 글은 고칠 수 없습니다.') — and no other.
+    expect(edit).toMatch(
+      /errorAction=\{\s*isApiError\(update\.error, 'POST_NOT_EDITABLE'\) \? <HiddenModerationLink \/> : undefined\s*\}/,
+    );
+    const hiding = new ApiError(409, {
+      code: 'POST_NOT_EDITABLE',
+      message: 'x',
+      details: { reason: 'hidden' },
+    });
+    expect(postWriteErrorMessage(hiding, formatKst)).toBe(copy.errPostNotEditable);
+    for (const code of ['NOT_FOUND', 'FORBIDDEN', 'RESTRICTED', 'WRITE_LIMITED'] as const) {
+      const refused = new ApiError(code === 'NOT_FOUND' ? 404 : 403, {
+        code,
+        message: 'x',
+        details: code === 'RESTRICTED' ? { kind: 'writing', endsAt: null } : {},
+      });
+      expect(isApiError(refused, 'POST_NOT_EDITABLE'), code).toBe(false);
+      expect(postWriteErrorMessage(refused, formatKst), code).not.toBe(copy.errPostNotEditable);
+    }
+    // The three sentences it goes under are that one sentence.
+    expect(postEditUnavailableMessage('hidden')).toBe(copy.errPostNotEditable);
+    expect(postEditHeldMessage({ gone: false, hidden: true, held: true })).toBe(
+      copy.errPostNotEditable,
+    );
+
+    const form = source('../components/post/post-form.tsx');
+    // Atop a held form: under the sentence, outside the description that names the notice.
+    expect(form).toMatch(
+      /<Alert\.Description id=\{textId\}>\{message\}<\/Alert\.Description>\s*\{action\}\s*<\/Alert\.Content>/,
+    );
+    // Under the refusal's line: inside its alert, after the sentence.
+    expect(form).toMatch(
+      /<RefusalText message=\{errorMessage\} restricted=\{errorRestricted\} \/>\s*<\/Alert\.Description>\s*\{errorAction\}/,
+    );
+
+    const link = source('../components/moderation/refusal-text.tsx');
+    expect(link).toContain("'data-testid': testId = 'restricted-moderation-link',");
+    expect(link).toMatch(
+      /<NextLink href=\{MY_MODERATION_PATH\} data-testid=\{testId\}>\s*\{copy\.myModerationOpen\}/,
+    );
   });
 });
 

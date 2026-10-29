@@ -5,6 +5,7 @@ import {
   MODERATION_REASON_MAX_LENGTH,
   NICKNAME_HOLD_DAYS,
   NICKNAME_MAX_LENGTH,
+  NO_EMAIL_DOMAIN,
   OTHER_NEEDS_TEXT_MESSAGE,
   POST_EXCERPT_MAX_LENGTH,
   REPORTS_PER_DAY,
@@ -16,8 +17,14 @@ import {
   readPostDocument,
   type ErrorCode,
 } from '@buddha/shared';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
+import { BUSINESS_INFO } from '@/legal/business-info';
+import { templateKeys } from '@/legal/template';
+import { SRC } from '../test/screen-text';
 import {
   ApiError,
   type AdminModerationAction,
@@ -53,6 +60,10 @@ import {
   adminUserModerationKey,
   adminUserModerationPath,
   appealDeadline,
+  appealDeadlineView,
+  appealEmailRequired,
+  appealGuidanceText,
+  appealWindowOpen,
   authorPublicIdOf,
   cancelDialogBody,
   concernsOperator,
@@ -95,6 +106,7 @@ import {
   warningInWindow,
 } from './moderation';
 import { formatKst } from './datetime';
+import { type RestrictedWrite, restrictedMessage } from './restriction';
 import { formatWait } from './phone-verification';
 
 /**
@@ -414,8 +426,7 @@ describe('the copy’s numbers are the rules’', () => {
     expect(copy.errReportDescriptionTooLong).toContain(
       `${String(REPORT_DESCRIPTION_MAX_LENGTH)}자`,
     );
-    expect(copy.myModerationAppeal).toContain(`${String(APPEAL_WINDOW_DAYS)}일`);
-    expect(copy.myModerationAppeal).toContain('{{email}}');
+    expect(copy.appealGuidance).toContain(`${String(APPEAL_WINDOW_DAYS)}일`);
     expect(copy.adminModerationNoteHint).toContain(`${String(MODERATION_NOTE_MAX_LENGTH)}자`);
     expect(copy.errModerationNoteTooLong).toContain(`${String(MODERATION_NOTE_MAX_LENGTH)}자`);
     expect(copy.errModerationRecordRequired).toContain(`${String(MODERATION_REASON_MAX_LENGTH)}자`);
@@ -827,6 +838,245 @@ describe('a standing restriction (#185)', () => {
   });
 });
 
+describe('the appeal guidance (#186, ADR-0084)', () => {
+  const DAY_MS = 24 * 60 * 60 * 1_000;
+  const TAKEN = '2026-10-21T03:00:00.000Z';
+
+  it('says the four things of #45-14 and the owner’s line, with the window the shared rule counts', () => {
+    // By the customer centre's email, once per action, within APPEAL_WINDOW_DAYS of it; the action
+    // stands while reviewed and the answer comes by email (ADR-0069 decision 2 #45-14) — and which
+    // action, from the sign-up email (owner decision 2026-10-22 답 6), one sentence of its own: the
+    // owner's sentence, its parentheses asking for the post's or comment's title or first line too,
+    // as the ask-back does (owner decision 2026-10-23 답 1).
+    expect(copy.appealGuidance).toContain('고객센터 이메일({{email}})');
+    expect(copy.appealGuidance).toContain(
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 가입한 이메일로 보내 주세요.',
+    );
+    expect(copy.appealGuidance).toContain('조치마다 한 번');
+    expect(copy.appealGuidance).toContain(`조치한 때부터 ${String(APPEAL_WINDOW_DAYS)}일 안`);
+    expect(copy.appealGuidance).toContain('검토하는 동안 조치는 그대로');
+    expect(copy.appealGuidance).toContain('결과는 이메일로');
+    // Once above the list, with no deadline beside it: no '이 기한' to point at (답 4).
+    expect(copy.appealGuidance).not.toContain('이 기한');
+    expect(templateKeys(copy.appealGuidance)).toEqual(['email']);
+    // The card's line, and the owner's sentence for one whose deadline has passed (답 2).
+    expect(copy.moderationAppealDeadline).toBe('이의 기한');
+    expect(copy.moderationAppealDeadlinePassed).toBe('이의 기한이 지났습니다.');
+  });
+
+  it('asks for the action in the words the operator’s ask-backs use (owner decision 2026-10-23 답 1, (2차) 답 1)', () => {
+    // docs/OPERATIONS.md's two ask-backs, the owner's texts — the usual one, and the late one that
+    // ends '3일 안에' (owner decision 2026-10-23 (2차) 답 1): the member reads the same 'which
+    // action' on the page as in either mail that asks them again (ADR-0084 6-2).
+    const operations = readFileSync(path.join(SRC, '../../../docs/OPERATIONS.md'), 'utf8');
+    const askBacks = [
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 그 조치의 이의 기한 안에 다시 보내 주세요.',
+      '어느 조치인지(조치의 종류, 조치한 때, 글이나 댓글이면 그 제목이나 첫 줄)를 적어 3일 안에 다시 보내 주세요.',
+    ];
+    const which = /어느 조치인지\([^)]*\)를 적어/;
+    for (const askBack of askBacks) {
+      expect(operations).toContain(`\n     ${askBack}\n`);
+      expect(which.exec(copy.appealGuidance)?.[0]).toBe(which.exec(askBack)?.[0]);
+    }
+  });
+
+  it('fills in the business info’s email — 미정 until the owner supplies it', () => {
+    const text = appealGuidanceText();
+    expect(text).toContain(`고객센터 이메일(${BUSINESS_INFO.email})`);
+    expect(text).not.toContain('{{');
+  });
+
+  it('asks an account on a Kakao or Naver placeholder address alone to register an email first, by GET /me’s email', () => {
+    // Owner decision 2026-10-22 (2차) 3: the owner's sentence word for word, and a link of its own
+    // to MY 설정 (where the 계정 card registers the address).
+    expect(copy.appealEmailRequired).toBe(
+      '이의를 보내려면 MY 설정에서 이메일을 먼저 등록해 주세요.',
+    );
+    expect(copy.appealEmailRequiredOpen).toContain('MY 설정');
+    expect(templateKeys(copy.appealEmailRequired)).toEqual([]);
+    // The placeholder a Kakao or Naver sign-in without an email stores, whatever its case.
+    expect(appealEmailRequired({ email: `kakao_42@${NO_EMAIL_DOMAIN}` })).toBe(true);
+    expect(appealEmailRequired({ email: `NAVER_abc@${NO_EMAIL_DOMAIN.toUpperCase()}` })).toBe(true);
+    // A real address — one registered over a placeholder too — sends appeals itself.
+    expect(appealEmailRequired({ email: 'member@example.com' })).toBe(false);
+    expect(appealEmailRequired({ email: `member@sub.${NO_EMAIL_DOMAIN}` })).toBe(false);
+    // `GET /me` not answered yet, or not readable: nothing is known, so nothing is added.
+    expect(appealEmailRequired(undefined)).toBe(false);
+  });
+
+  // 12:00:45.600 KST: the deadline shows as 오후 12:00 fourteen days on, 45.6 seconds into the minute.
+  const MID_MINUTE = '2026-10-21T03:00:45.600Z';
+  const MINUTE_MS = 60 * 1_000;
+
+  it('holds the window open to the end of the minute the deadline shows, 14 days on, and never for a cancelled action', () => {
+    const taken = Date.parse(MID_MINUTE);
+    const deadline = taken + APPEAL_WINDOW_DAYS * DAY_MS;
+    const standing = { createdAt: MID_MINUTE, cancelledAt: null };
+    expect(appealDeadline(standing)).toBe(new Date(deadline).toISOString());
+    expect(appealWindowOpen(standing, taken)).toBe(true);
+    // Owner decision 2026-10-23 답 5: in time to the displayed minute's last second (…:59) — past
+    // the exact instant inside it — and late as that minute ends.
+    const minuteEnds = Date.parse('2026-11-04T03:01:00.000Z');
+    expect(appealWindowOpen(standing, deadline)).toBe(true);
+    expect(appealWindowOpen(standing, deadline + 14_000)).toBe(true);
+    expect(appealWindowOpen(standing, minuteEnds - 1)).toBe(true);
+    expect(appealWindowOpen(standing, minuteEnds)).toBe(false);
+    // A deadline on the minute's first instant has that whole minute too.
+    const onTheMinute = { createdAt: TAKEN, cancelledAt: null };
+    const onTheMinuteDeadline = Date.parse(TAKEN) + APPEAL_WINDOW_DAYS * DAY_MS;
+    expect(appealWindowOpen(onTheMinute, onTheMinuteDeadline + MINUTE_MS - 1)).toBe(true);
+    expect(appealWindowOpen(onTheMinute, onTheMinuteDeadline + MINUTE_MS)).toBe(false);
+    const cancelled = { createdAt: MID_MINUTE, cancelledAt: '2026-10-21T04:00:00.000Z' };
+    expect(appealWindowOpen(cancelled, taken)).toBe(false);
+  });
+
+  it('gives a standing action’s card its deadline, then that it has passed with the same deadline, and a cancelled one none', () => {
+    // Owner decision 2026-10-22 답 1: the exact instant, 14×24 hours on; 답 2: once passed,
+    // '이의 기한이 지났습니다.' and that deadline only — the line stays, the same instant. Passed once
+    // the minute it shows has ended (owner decision 2026-10-23 답 5).
+    const taken = Date.parse(MID_MINUTE);
+    const deadline = new Date(taken + APPEAL_WINDOW_DAYS * DAY_MS).toISOString();
+    const minuteEnds = Date.parse('2026-11-04T03:01:00.000Z');
+    const standing = { createdAt: MID_MINUTE, cancelledAt: null };
+    expect(appealDeadlineView(standing, taken)).toEqual({ deadline, passed: false });
+    expect(appealDeadlineView(standing, Date.parse(deadline))).toEqual({
+      deadline,
+      passed: false,
+    });
+    expect(appealDeadlineView(standing, minuteEnds - 1)).toEqual({ deadline, passed: false });
+    expect(appealDeadlineView(standing, minuteEnds)).toEqual({ deadline, passed: true });
+    expect(appealDeadlineView(standing, taken + (APPEAL_WINDOW_DAYS + 30) * DAY_MS)).toEqual({
+      deadline,
+      passed: true,
+    });
+    // Nothing left to appeal once an operator cancelled it (ADR-0081 7-17), the window open or not.
+    const cancelled = { createdAt: TAKEN, cancelledAt: '2026-10-21T04:00:00.000Z' };
+    expect(appealDeadlineView(cancelled, taken)).toBeNull();
+    expect(appealDeadlineView(cancelled, taken + (APPEAL_WINDOW_DAYS + 1) * DAY_MS)).toBeNull();
+  });
+
+  /**
+   * The function declaration `name` of `file`, read with the compiler rather than a pattern so a
+   * comment naming what is looked for does not count.
+   */
+  function declaration(
+    file: string,
+    name: string,
+  ): { tree: ts.SourceFile; fn: ts.FunctionDeclaration } {
+    const source = readFileSync(path.join(SRC, file), 'utf8');
+    const tree = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let fn: ts.FunctionDeclaration | undefined;
+    const find = (node: ts.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === name) fn = node;
+      else ts.forEachChild(node, find);
+    };
+    find(tree);
+    if (fn === undefined) throw new Error(`${file} declares no function ${name}`);
+    return { tree, fn };
+  }
+
+  /** Every node under `root` (itself included) that `pick` accepts. */
+  function nodesIn<N extends ts.Node>(root: ts.Node, pick: (node: ts.Node) => node is N): N[] {
+    const found: N[] = [];
+    const visit = (node: ts.Node): void => {
+      if (pick(node)) found.push(node);
+      ts.forEachChild(node, visit);
+    };
+    visit(root);
+    return found;
+  }
+
+  const copyTexts: Readonly<Record<string, string>> = copy;
+
+  /**
+   * That `name` in `file` says nothing of the appeal: it calls nothing of it, reads no copy key whose
+   * words speak of 이의, fills in no business info (where the email comes from) and writes no 이의
+   * itself. With `readsCopy`, it reads its own words from the copy (a banner); without, its words
+   * come to it (a refusal's sentence, `RefusalText`).
+   */
+  function expectNoAppeal(file: string, name: string, readsCopy: boolean): void {
+    const { tree, fn } = declaration(file, name);
+    const where = `${file} ${name}`;
+    const identifiers = nodesIn(fn, ts.isIdentifier).map((node) => node.text);
+    expect(
+      identifiers.filter((text) => /appeal/i.test(text)),
+      where,
+    ).toEqual([]);
+    expect(identifiers, where).not.toContain('fillBusinessInfo');
+    const copyRead = nodesIn(fn, ts.isPropertyAccessExpression)
+      .filter((access) => access.expression.getText(tree) === 'copy')
+      .map((access) => access.name.text);
+    if (readsCopy)
+      expect(copyRead.length, `${where} reads its words from the copy`).toBeGreaterThan(0);
+    for (const key of copyRead)
+      expect(copyTexts[key] ?? '', `${where} copy.${key}`).not.toContain('이의');
+    const written = [
+      ...nodesIn(fn, ts.isStringLiteralLike).map((node) => node.text),
+      ...nodesIn(fn, ts.isJsxText).map((node) => node.text),
+    ];
+    for (const text of written) expect(text, where).not.toContain('이의');
+  }
+
+  it('is not on the warning and sanction banners, which name their end or the owner’s sentence and the link alone', () => {
+    // Owner decision 2026-10-22 답 3: «경고·제재 띠 → 이의 안내를 빼고 정해진 문장(경고)이나 끝나는
+    // 시각(제한)과 조치·신고 내역 링크만». The sanction banner is #185's writing restriction's — on
+    // the MY summary, the write page and MY 설정 alike (owner decision 2026-10-23 답 6 for MY 설정,
+    // the one component under three test ids) — and #185, built beside this, drew an appeal
+    // sentence on it when last seen before the restack (ADR-0084 결과 5): so neither banner may say
+    // anything of the appeal.
+    for (const name of ['SanctionBanner', 'WarningBanner']) {
+      expectNoAppeal('components/moderation/sanction-banner.tsx', name, true);
+    }
+  });
+
+  it('is not in a writing restriction’s refusal, which names its end and the way to 조치·신고 내역 alone', () => {
+    // Owner decision 2026-10-22 답 8: «제한 중 거절 → 끝나는 시각과 조치·신고 내역 링크(14일 기한은
+    // 적지 않음)». The way there under a refusal is #185's (`RefusalText`, `RestrictedModerationLink`,
+    // components/moderation/refusal-text.tsx) — joined to this list at the restack (ADR-0084 결과 5) —
+    // and the refusal's sentence is lib/restriction.ts's: what is closed, until when, what stays
+    // open. Neither says anything of the appeal, whichever write was refused, with an end or 무기한.
+    expectNoAppeal('components/moderation/refusal-text.tsx', 'RefusalText', false);
+    expectNoAppeal('components/moderation/refusal-text.tsx', 'RestrictedModerationLink', true);
+    const writes: readonly RestrictedWrite[] = [
+      'writing',
+      'profile',
+      'onboardingInterests',
+      'nickname',
+    ];
+    for (const write of writes) {
+      for (const endsAt of ['2026-10-24T06:00:00.000Z', null]) {
+        const refused = new ApiError(403, {
+          code: 'RESTRICTED',
+          message: 'RESTRICTED',
+          details: { kind: 'writing', endsAt },
+        });
+        const message = restrictedMessage(refused, write, formatKst) ?? '';
+        expect(message, `${write} ${String(endsAt)}`).toContain(
+          endsAt === null ? copy.restrictionIndefinite : copy.restrictionUntil,
+        );
+        expect(message, `${write} ${String(endsAt)}`).not.toContain('이의');
+        expect(message, `${write} ${String(endsAt)}`).not.toContain(BUSINESS_INFO.email);
+      }
+    }
+  });
+
+  it('is not on a hidden post’s edit screen, which says the hiding’s refusal and the way to 조치·신고 내역 alone', () => {
+    // 오너 결정 2026-10-25 «링크를 둠» («제한 거절 문구와 같은 꼴»): under '운영 정책에 따라 숨긴 글은
+    // 고칠 수 없습니다.' — wherever the edit screen says it: in the form's place, atop a form held
+    // as the post is hidden under it (#50, ADR-0081 7-29) and under the form for a refused save —
+    // the link of a restriction's refusal (`RestrictedModerationLink`, above), and no more: the
+    // appeal's guidance and its deadline are 조치·신고 내역's, once (답 4). The screen, its form, the
+    // link it draws and the held form's notice say nothing of the appeal, nor does the sentence.
+    const screen = 'app/community/posts/[postId]/edit/edit-screen.tsx';
+    expectNoAppeal(screen, 'HiddenModerationLink', false);
+    expectNoAppeal(screen, 'EditScreen', true);
+    expectNoAppeal(screen, 'EditForm', true);
+    expectNoAppeal('components/post/post-form.tsx', 'GoneNotice', false);
+    expect(copy.errPostNotEditable).not.toContain('이의');
+    expect(copy.errPostNotEditable).not.toContain(BUSINESS_INFO.email);
+  });
+});
+
 describe('the warning banner (owner decision 2026-10-21)', () => {
   const NOW = Date.parse('2026-10-21T12:00:00.000Z');
   const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -842,14 +1092,18 @@ describe('the warning banner (owner decision 2026-10-21)', () => {
     ...overrides,
   });
 
-  it('shows a warning for its appeal window — APPEAL_WINDOW_DAYS from it — and no longer', () => {
+  it('shows a warning for its appeal window — APPEAL_WINDOW_DAYS from it, to its minute’s end — and no longer', () => {
     const warning = action({});
     expect(warningInWindow([warning], NOW)).toBe(warning);
-    const lastInstant = action({
-      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS + 1).toISOString(),
+    // NOW is a minute's first instant. A deadline at it is in its minute's window (owner decision
+    // 2026-10-23 답 5); one a millisecond before it is in the minute that has just ended.
+    const lastMinute = action({
+      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS).toISOString(),
     });
-    expect(warningInWindow([lastInstant], NOW)).toBe(lastInstant);
-    const over = action({ createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS).toISOString() });
+    expect(warningInWindow([lastMinute], NOW)).toBe(lastMinute);
+    const over = action({
+      createdAt: new Date(NOW - APPEAL_WINDOW_DAYS * DAY_MS - 1).toISOString(),
+    });
     expect(warningInWindow([over], NOW)).toBeNull();
   });
 

@@ -5,13 +5,14 @@ import { useQuery } from '@tanstack/react-query';
 import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { RestrictedModerationLink } from '@/components/moderation/refusal-text';
 import { PostForm } from '@/components/post/post-form';
 import { WriteGate } from '@/components/post/write-gate';
 import { EmptyState } from '@/components/ui/empty-state';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { postQueryOptions, useUpdatePost } from '@/hooks/use-posts';
-import { type Post } from '@/lib/api';
+import { type Post, isApiError } from '@/lib/api';
 import {
   POST_EDIT_ON_SCREEN,
   type PostEditGone,
@@ -37,7 +38,13 @@ import { useSession } from '@/lib/use-session';
  * edited). Its author deletes a hidden post on MY '내 글', from 삭제 beside its '숨김' line (owner
  * decision 2026-10-22, ADR-0080); its page has none (the public answer for it names no author). The
  * message here does not point there: every signed-in viewer of a hidden post's address reads the
- * same one, and the owner kept it so (owner decision 2026-10-22 2nd answer 1, ADR-0080 7-17).
+ * same one, and the owner kept it so (owner decision 2026-10-22 2nd answer 1, ADR-0080 7-17). Under
+ * it is the way to 조치·신고 내역 — where its author finds the hiding, its reason and how to appeal
+ * it — the link a restriction's refusal has, wherever the screen says that refusal: in the form's
+ * place, atop a form held as the post is hidden under it, and under the form for a save refused so
+ * (오너 결정 2026-10-25 «링크를 둠», #186, ADR-0084 — `HiddenModerationLink`). It says nothing of
+ * the appeal, and names no one: every viewer of the address reads it the same, and another
+ * member's 조치·신고 내역 lists only their own.
  * Saving the same content changes nothing on the server (no '수정됨'); saving a change marks it
  * edited and keeps the earlier version for operators. Either way the screen goes back to the post.
  *
@@ -122,6 +129,7 @@ export function EditScreen({ postId, fallback }: { postId: string; fallback: Pos
             shown.state !== 'published' ? (
               <EmptyState
                 message={postEditUnavailableMessage(shown.state)}
+                action={shown.state === 'hidden' ? <HiddenModerationLink /> : undefined}
                 data-testid="post-edit-unavailable"
               />
             ) : !isOwnPost(shown.author, writer.publicId) ? (
@@ -133,6 +141,7 @@ export function EditScreen({ postId, fallback }: { postId: string; fallback: Pos
                 accountId={writer.accountId}
                 held={held}
                 heldMessage={postEditHeldMessage(state)}
+                heldHidden={state.hidden}
                 onClose={() => {
                   setState(postEditClosed(state));
                   setClosings(closings + 1);
@@ -152,6 +161,7 @@ function EditForm({
   accountId,
   held,
   heldMessage,
+  heldHidden,
   onClose,
   onHoldingChange,
 }: {
@@ -164,6 +174,11 @@ function EditForm({
   held: boolean;
   /** Why, while held (`postEditHeldMessage`): a hiding's refusal (#50) or a deletion's. */
   heldMessage: string;
+  /**
+   * Whether that is a hiding's (`PostEditGone`'s `hidden`): the way to 조치·신고 내역 goes under it
+   * (`HiddenModerationLink`).
+   */
+  heldHidden: boolean;
   onClose: () => void;
   onHoldingChange: (holding: boolean) => void;
 }) {
@@ -194,9 +209,15 @@ function EditForm({
         saved={update.isSuccess}
         errorMessage={refusal?.message}
         errorRestricted={refusal?.restricted}
+        // A save refused for a hiding (POST_NOT_EDITABLE) is said under the form while no read has
+        // answered the hidden post since — the read after it failed, or found the hiding cancelled.
+        errorAction={
+          isApiError(update.error, 'POST_NOT_EDITABLE') ? <HiddenModerationLink /> : undefined
+        }
         refusedImageIds={refusedImageIds(update.error)}
         gone={held}
         goneMessage={heldMessage}
+        goneAction={heldHidden ? <HiddenModerationLink /> : undefined}
         onClose={onClose}
         onHoldingChange={onHoldingChange}
         onSubmit={({ title, body }) => {
@@ -213,4 +234,16 @@ function EditForm({
       />
     </Stack>
   );
+}
+
+/**
+ * The way to 조치·신고 내역 under the edit screen's refusal for a hidden post — '운영 정책에 따라
+ * 숨긴 글은 고칠 수 없습니다.' (`copy.errPostNotEditable`) — wherever the screen says it: in the
+ * form's place (`postEditUnavailableMessage`), atop a held form (`postEditHeldMessage`) and under
+ * the form for a refused save (`postWriteErrorMessage`). 오너 결정 2026-10-25 «링크를 둠» (#186,
+ * ADR-0084): the restriction's refusal's link, «제한 거절 문구와 같은 꼴» — `RestrictedModerationLink`
+ * under its own test id. The appeal's guidance and its deadline stay 조치·신고 내역's, once.
+ */
+function HiddenModerationLink() {
+  return <RestrictedModerationLink data-testid="post-edit-hidden-moderation" />;
 }

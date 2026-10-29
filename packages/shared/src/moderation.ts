@@ -80,15 +80,42 @@ export const MODERATION_REASON_MAX_LENGTH = 500;
 
 /**
  * The days within which an action may be appealed, by email and once (#45-14 «조치마다 한 번, 조치 뒤
- * 14일 안»). The screens count them from the action's time (`appealDeadlineOf`); #186 words the
- * notice.
+ * 14일 안»). The screens count them from the action's time (`appealDeadlineOf`) and word the notice
+ * (#186, ADR-0084).
+ *
+ * Nothing on the server reads it: an appeal goes to the customer centre's email and the app neither
+ * takes nor records one (ADR-0069 decision 2 #45-14 «앱에는 이의를 받거나 기록하는 화면이 없고»). An
+ * operator who accepts one uses the action's own cancellation — and, once #185 and #139 add the
+ * restrictions, their lifting or shortening (감경) — which keeps its reason like any other. So the
+ * window lives in the member's notice alone — each action's '이의 기한', the exact instant (owner
+ * decision 2026-10-22 답 1), in time to the end of the minute it shows (owner decision 2026-10-23
+ * 답 5, `appealWindowEndOf`) — and the operator's procedure, which judges an appeal by when the
+ * customer centre's mailbox received it (답 10, docs/OPERATIONS.md); no route enforces it.
  */
 export const APPEAL_WINDOW_DAYS = 14;
 
-/** The last instant an action taken at `createdAt` may be appealed (APPEAL_WINDOW_DAYS later). */
+/**
+ * An action taken at `createdAt`'s appeal deadline, the one every screen shows (APPEAL_WINDOW_DAYS ×
+ * 24 hours later, owner decision 2026-10-22 답 1). The screens show it to the minute; the window
+ * runs to the end of that minute (`appealWindowEndOf`).
+ */
 export function appealDeadlineOf(createdAt: string | Date): Date {
   const start = typeof createdAt === 'string' ? new Date(createdAt) : createdAt;
   return new Date(start.getTime() + APPEAL_WINDOW_DAYS * 24 * 60 * 60 * 1_000);
+}
+
+/**
+ * The first instant an appeal of an action taken at `createdAt` is late: the end of the minute its
+ * deadline (`appealDeadlineOf`) shows in. Every screen writes that deadline to the minute, and mail
+ * the customer centre's mailbox receives up to that minute's last second (…:59) is in time (owner
+ * decision 2026-10-23 답 5) — so the member's card turns to '이의 기한이 지났습니다.' here, not at
+ * the exact instant inside the minute. The minute is cut in UTC: every zone a member may pick is a
+ * whole number of minutes from it, so it is the minute the member's own zone shows (and KST's, which
+ * the operator's lookup writes).
+ */
+export function appealWindowEndOf(createdAt: string | Date): Date {
+  const minute = 60 * 1_000;
+  return new Date(Math.floor(appealDeadlineOf(createdAt).getTime() / minute) * minute + minute);
 }
 
 /**
@@ -370,8 +397,9 @@ export type MyRestrictionEndChange = z.infer<typeof myRestrictionEndChangeSchema
  * as it stands now — brought forward when an operator lifted it or shortened it (#185) — and null
  * for 무기한; null for every type #50 takes, which have no end), how it was brought forward
  * (`endChange`, #185) and whether it was cancelled since. The appeal deadline is
- * `appealDeadlineOf(createdAt)`. Never the operator, nor a report or its reporter, nor who changed
- * the end or why (operators' record, ADR-0082).
+ * `appealDeadlineOf(createdAt)`, in time to the end of its minute (`appealWindowEndOf`). Never the
+ * operator, nor a report or its reporter, nor who changed the end or why (operators' record,
+ * ADR-0082).
  */
 export const myModerationActionSchema = z
   .object({

@@ -18,17 +18,19 @@ import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
+import { useMe } from '@/hooks/use-me';
 import { useMyModerationActions, useMyReports } from '@/hooks/use-reports';
 import { type MyModerationAction, type MyReport } from '@/lib/api';
 import { reportReasonLabel } from '@/lib/authored';
-import { fillBusinessInfo } from '@/legal/business-info';
 import {
   type ModerationPage,
   type NamedLink,
   REPORT_STATUS_PALETTE,
   actionReasonText,
   actionSubjectView,
-  appealDeadline,
+  appealDeadlineView,
+  appealEmailRequired,
+  appealGuidanceText,
   isRestriction,
   moderationActionLabel,
   moderationRows,
@@ -39,6 +41,7 @@ import {
   reportTargetView,
   restrictionStanding,
 } from '@/lib/moderation';
+import { MY_SETTINGS_PATH } from '@/lib/my';
 import { postReadErrorMessage } from '@/lib/posts';
 import { listSection } from '@/lib/query-client';
 import { restrictionEndText } from '@/lib/restriction';
@@ -49,18 +52,25 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  * 여기서 본다»). Not a MY tab, so no tab names it: the page names itself (`h3` under MY's `h2`, the
  * sections `h4` under it). Two sections:
  *
- * - 받은 조치: each action an operator took on the member, newest first — its type, what it was
- *   about (their post or comment, or that they deleted it since; their profile), the reason (the
- *   report reason the operator picked and their explanation), when, its end when it has one, and
- *   its cancellation — with how to appeal: by the customer centre's email, once per action within
- *   14 days (#45-14), and each standing action's last day for it. A nickname reset not cancelled
- *   says, for the 30 days of its hold, that the nickname taken away cannot be used again (owner
- *   decision 2026-10-22, `nicknameHoldShown`) — never which it was (#37-3). A writing restriction
- *   (#185, ADR-0082) says its end — '무기한' for none — as it stands now, and '진행 중' while it
- *   stands (`restrictionStanding`); one an operator lifted early or shortened says '조기 해제됨' or
- *   '감경됨' and the end it was given under the changed one (`myEndChangeView`, owner decision
- *   2026-10-23 answer 4 — never the reason); a cancelled one says no end, only '취소됨' and when it
- *   was cancelled (answer 10). Never who reported nor which operator acted (#45-13).
+ * - 받은 조치: above the list, once, how to appeal (#186, ADR-0084; owner decision 2026-10-22 답 4)
+ *   — by the customer centre's email, saying which action (and, for a post or a comment, its title
+ *   or first line — owner decision 2026-10-23 답 1) from the sign-up email, once per action
+ *   within 14 days, the action standing while reviewed and the answer by email (#45-14); under it,
+ *   for an account on a Kakao or Naver placeholder address alone, that an appeal needs an email
+ *   registered in MY 설정 first, with the way there (owner decision 2026-10-22 (2차) 3) — then
+ *   each action an operator took on the member, newest first: its type, what it was about (their
+ *   post or comment, or that they deleted it since; their profile), the reason (the report reason
+ *   the operator picked and their explanation), when, its end when it has one, its cancellation,
+ *   and on each one standing its '이의 기한' — or, once the minute it shows has ended (owner
+ *   decision 2026-10-23 답 5), '이의 기한이 지났습니다.' with it (답 1·2, `appealDeadlineView`).
+ *   A nickname reset not cancelled says, for the 30 days of its hold, that the nickname taken
+ *   away cannot be used again (owner decision 2026-10-22, `nicknameHoldShown`) — never which it
+ *   was (#37-3). A writing restriction (#185, ADR-0082) says its end — '무기한' for none — as it
+ *   stands now, and '진행 중' while it stands (`restrictionStanding`); one an operator lifted early
+ *   or shortened says '조기 해제됨' or '감경됨' and the end it was given under the changed one
+ *   (`myEndChangeView`, owner decision 2026-10-23 answer 4 — never the reason); a cancelled one
+ *   says no end, only '취소됨' and when it was cancelled (answer 10). Never who reported nor which
+ *   operator acted (#45-13).
  * - 내가 한 신고: each of the member's reports, newest first — what it was about as the public sees
  *   it now, the reason and the description sent, when, and 접수 or the result, 조치함 or 기각, with
  *   when (#45-13). Not which action was taken: that is the member acted on's to read.
@@ -193,19 +203,61 @@ function ListBody<Row extends { id: string }>({
   );
 }
 
+/**
+ * The actions received, under how to appeal them: the guidance once, above the list and outside
+ * its ladder, so it is there while the list is read, when it could not be read and when it holds
+ * nothing (owner decision 2026-10-22 답 4, #186) — the way to appeal does not wait on the list.
+ * Under it, for a placeholder address alone, the email to register first (`AppealEmailRequired`,
+ * (2차) 3) — read from `GET /me`, not from the list either. Each standing action's card gives its
+ * own deadline (`ActionItem`). The email is the business info's, filled in (`appealGuidanceText`);
+ * Korean breaks at spaces and the address anywhere, as the footer's same address does, so neither
+ * runs past a phone's edge.
+ */
 function ActionsBody() {
   const list = useMyModerationActions();
   return (
     <Stack gap="4">
-      <Text textStyle="bodySm" data-testid="my-moderation-appeal">
-        {fillBusinessInfo(copy.myModerationAppeal)}
-      </Text>
+      <Stack gap="2">
+        <Text
+          textStyle="bodySm"
+          wordBreak="keep-all"
+          overflowWrap="anywhere"
+          data-testid="my-moderation-appeal"
+        >
+          {appealGuidanceText()}
+        </Text>
+        <AppealEmailRequired />
+      </Stack>
       <ListBody
         list={list}
         empty={copy.myModerationActionsEmpty}
         testId="my-actions-list"
         renderRow={(action) => <ActionItem action={action} />}
       />
+    </Stack>
+  );
+}
+
+/**
+ * Under the guidance, for an account on a Kakao or Naver placeholder address alone: an appeal needs
+ * an email registered in MY 설정 first, and the way there (owner decision 2026-10-22 (2차) 3, #186) —
+ * operators take appeals from the account's current email only (답 5), and none can be sent from
+ * the placeholder. Decided by `GET /me`'s email (`appealEmailRequired`): nothing while it is read or
+ * when it could not be. The link is MY 설정, whose 계정 card registers the address.
+ */
+function AppealEmailRequired() {
+  const { data: me } = useMe();
+  if (!appealEmailRequired(me)) return null;
+  return (
+    <Stack gap="1" align="flex-start" data-testid="my-moderation-appeal-email">
+      <Text textStyle="bodySm" wordBreak="keep-all" overflowWrap="anywhere">
+        {copy.appealEmailRequired}
+      </Text>
+      <ChakraLink asChild color="brand.fg" textStyle="bodySm">
+        <NextLink href={MY_SETTINGS_PATH} data-testid="my-moderation-appeal-email-settings">
+          {copy.appealEmailRequiredOpen}
+        </NextLink>
+      </ChakraLink>
     </Stack>
   );
 }
@@ -222,7 +274,10 @@ function ReportsBody() {
   );
 }
 
-/** A label and its value on one line, wrapping at phone width. */
+/**
+ * A label and its value on one line, wrapping at phone width. `testId` names the line and, with
+ * '-label' and '-value', its two halves.
+ */
 function Line({
   label,
   children,
@@ -234,10 +289,22 @@ function Line({
 }) {
   return (
     <HStack gap="2" align="baseline" flexWrap="wrap" textStyle="bodySm" data-testid={testId}>
-      <Text as="span" color="fg.muted" flexShrink="0">
+      <Text
+        as="span"
+        color="fg.muted"
+        flexShrink="0"
+        data-testid={testId === undefined ? undefined : `${testId}-label`}
+      >
         {label}
       </Text>
-      <Text as="span" color="fg" wordBreak="break-word" minW="0" whiteSpace="pre-wrap">
+      <Text
+        as="span"
+        color="fg"
+        wordBreak="break-word"
+        minW="0"
+        whiteSpace="pre-wrap"
+        data-testid={testId === undefined ? undefined : `${testId}-value`}
+      >
         {children}
       </Text>
     </HStack>
@@ -282,9 +349,9 @@ function ActionItem({ action }: { action: MyModerationAction }) {
   const format = useFormatDateTime();
   const subject = actionSubjectView(action.subject);
   const reason = actionReasonText(action.reason);
-  const deadline = appealDeadline(action);
   const restriction = isRestriction(action.type);
   const endChange = myEndChangeView(action);
+  const appeal = appealDeadlineView(action);
   return (
     <ItemCard testId={`my-action-${action.id}`}>
       <HStack gap="2" flexWrap="wrap">
@@ -321,7 +388,9 @@ function ActionItem({ action }: { action: MyModerationAction }) {
           {copy.moderationNicknameHeld}
         </Text>
       )}
-      <Line label={copy.moderationTakenAt}>{format(action.createdAt)}</Line>
+      <Line label={copy.moderationTakenAt} testId="my-action-taken">
+        {format(action.createdAt)}
+      </Line>
       {/* A cancelled restriction ended at its cancellation, which '취소한 때' says: its end as
           given (kept as given, ADR-0082) would read as an end still to come, or '무기한'. */}
       {(restriction || action.endsAt !== null) && action.cancelledAt === null && (
@@ -339,9 +408,16 @@ function ActionItem({ action }: { action: MyModerationAction }) {
       {action.cancelledAt !== null && (
         <Line label={copy.moderationCancelledAt}>{format(action.cancelledAt)}</Line>
       )}
-      {deadline !== null && (
-        <Line label={copy.moderationAppealDeadline} testId="my-action-appeal">
-          {format(deadline)}
+      {/* Its appeal deadline alone — the guidance is once above the list (owner decision
+          2026-10-22 답 4) — and once that has passed, the owner's sentence with it (답 2). */}
+      {appeal !== null && (
+        <Line
+          label={
+            appeal.passed ? copy.moderationAppealDeadlinePassed : copy.moderationAppealDeadline
+          }
+          testId="my-action-appeal"
+        >
+          {format(appeal.deadline)}
         </Line>
       )}
     </ItemCard>
