@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  ACCOUNT_RESTRICTION_REASONS,
   APPROVAL_STATUSES,
   CONSENT_ITEMS,
   COUNTERPARTY_TYPES,
@@ -8,6 +9,7 @@ import {
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
   MARKET_STATUSES,
+  MODERATION_REASONS,
   PRICE_TICK_TRIGGERS,
   RELEASE_SETTING_STATUSES,
   REPORT_REASONS,
@@ -75,6 +77,7 @@ import { closeDb, createDb } from './client.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import {
   completeOnboarding,
+  createApprovalRequest,
   createCategory,
   createConsents,
   createMarket,
@@ -1750,7 +1753,9 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
                 WHERE t.typname = ${name} ORDER BY e.enumsortorder`,
           )
         ).rows.map((row) => row.label);
-      expect(await labels('report_reason')).toEqual([...REPORT_REASONS]);
+      // #139 (migration 0042): the two reasons only an account restriction takes, at the end.
+      expect(await labels('report_reason')).toEqual([...MODERATION_REASONS]);
+      expect(MODERATION_REASONS.slice(0, REPORT_REASONS.length)).toEqual([...REPORT_REASONS]);
       expect(await labels('report_target_type')).toEqual([...REPORT_TARGET_TYPES]);
       expect(await labels('report_status')).toEqual([...REPORT_STATUSES]);
     });
@@ -2612,6 +2617,325 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await t.db.select().from(adminActions).where(eq(adminActions.id, first))).toHaveLength(
         1,
       );
+    });
+  });
+
+  describe('account restrictions and their approvals (migration 0042, #139)', () => {
+    const DAY = 24 * 60 * 60 * 1_000;
+
+    async function accountFixture() {
+      const { user: member } = await createUser(t.db);
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const { user: second } = await createUser(t.db, { role: 'admin' });
+      const market = await createMarket(t.db);
+      const post = await createPost(t.db, { marketId: market.id, authorId: member.id });
+      return { member, admin, second, post };
+    }
+    /** A request of `kind` about `target`, asked by `by` and, unless `decidedBy` is null, approved. */
+    const approval = (
+      kind: string,
+      targetType: string,
+      targetId: string,
+      by: string,
+      decidedBy: string | null,
+      status: 'approved' | 'rejected' = 'approved',
+    ) =>
+      createApprovalRequest(t.db, {
+        kind,
+        targetType,
+        targetId,
+        requestedBy: by,
+        ...(decidedBy === null ? {} : { decision: { status, by: decidedBy } }),
+      });
+    const base = (member: string, admin: string) => ({
+      type: 'account_restriction' as const,
+      userId: member,
+      createdBy: admin,
+      reason: 'abnormal_trading' as const,
+      note: '이상 거래',
+    });
+    const needsApproval = (e: unknown) =>
+      errorMessage(e).includes('needs another admin') ||
+      errorMessage(e).includes('only by an approved request') ||
+      errorMessage(e).includes('only with an approved change');
+
+    it('takes the owner’s reasons for it with an explanation, and keeps reports and every other action to the report reasons', async () => {
+      const { member, admin, second, post } = await accountFixture();
+      for (const reason of ACCOUNT_RESTRICTION_REASONS) {
+        await createModerationAction(t.db, {
+          ...base(member.id, admin.id),
+          reason,
+          approvedBy: second.id,
+        });
+      }
+      for (const reason of ['off_topic', 'rights_infringement'] as const) {
+        const request = await approval(
+          'account_restriction',
+          'user',
+          member.id,
+          admin.id,
+          second.id,
+        );
+        await expect(
+          t.db
+            .insert(moderationActions)
+            .values({ ...base(member.id, admin.id), reason, approvalId: request.id }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_reason_check',
+        );
+      }
+      const request = await approval('account_restriction', 'user', member.id, admin.id, second.id);
+      await expect(
+        t.db
+          .insert(moderationActions)
+          .values({ ...base(member.id, admin.id), note: null, approvalId: request.id }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_reason_check',
+      );
+      for (const reason of ['abnormal_trading', 'multi_account'] as const) {
+        await expect(
+          createModerationAction(t.db, { userId: member.id, createdBy: admin.id, reason }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_reason_check',
+        );
+        await expect(
+          t.db.insert(reports).values({
+            targetType: 'post',
+            postId: post.id,
+            reportedUserId: member.id,
+            reporterId: admin.id,
+            reporterPhoneHash: randomPhoneHash(),
+            reason: reason as never,
+          }),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'reports_reason_check',
+        );
+      }
+      expect(
+        await t.db
+          .select()
+          .from(moderationActions)
+          .where(eq(moderationActions.type, 'account_restriction')),
+      ).toHaveLength(ACCOUNT_RESTRICTION_REASONS.length);
+    });
+
+    it('comes into force only by another admin’s approval of a request for it, each approval once (ADR-0056 1-7)', async () => {
+      const { member, admin, second } = await accountFixture();
+      const values = base(member.id, admin.id);
+      // No approval at all: the trigger refuses it before the CHECK would.
+      await expect(t.db.insert(moderationActions).values(values)).rejects.toSatisfy(needsApproval);
+      // Pending, rejected, of another kind, asked by another admin, about another member, or
+      // approved by the member: none puts it in force.
+      const { user: other } = await createUser(t.db);
+      const { user: memberAdmin } = await createUser(t.db, { role: 'admin' });
+      const refused = [
+        await approval('account_restriction', 'user', member.id, admin.id, null),
+        await approval('account_restriction', 'user', member.id, admin.id, second.id, 'rejected'),
+        await approval('account_restriction_lift', 'user', member.id, admin.id, second.id),
+        await approval('account_restriction', 'user', member.id, second.id, admin.id),
+        await approval('account_restriction', 'user', other.id, admin.id, second.id),
+      ];
+      for (const request of refused) {
+        await expect(
+          t.db.insert(moderationActions).values({ ...values, approvalId: request.id }),
+        ).rejects.toSatisfy(needsApproval);
+      }
+      const own = await approval(
+        'account_restriction',
+        'user',
+        memberAdmin.id,
+        admin.id,
+        memberAdmin.id,
+      );
+      await expect(
+        t.db
+          .insert(moderationActions)
+          .values({ ...base(memberAdmin.id, admin.id), approvalId: own.id }),
+      ).rejects.toSatisfy(needsApproval);
+      const approved = await approval(
+        'account_restriction',
+        'user',
+        member.id,
+        admin.id,
+        second.id,
+      );
+      await t.db.insert(moderationActions).values({ ...values, approvalId: approved.id });
+      await expect(
+        t.db.insert(moderationActions).values({ ...values, approvalId: approved.id }),
+      ).rejects.toSatisfy(
+        (e) =>
+          sqlState(e) === '23505' && sqlConstraint(e) === 'moderation_actions_approval_id_unique',
+      );
+      // Another type names no approval; the approval never changes once given.
+      await expect(
+        t.db.insert(moderationActions).values({
+          ...values,
+          type: 'writing_restriction',
+          reason: 'spam',
+          approvalId: (
+            await approval('account_restriction', 'user', member.id, admin.id, second.id)
+          ).id,
+        }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'moderation_actions_approval_check',
+      );
+      const [action] = await t.db
+        .select()
+        .from(moderationActions)
+        .where(eq(moderationActions.approvalId, approved.id));
+      const another = await approval('account_restriction', 'user', member.id, admin.id, second.id);
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ approvalId: another.id })
+          .where(eq(moderationActions.id, action!.id)),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('cannot change what was done'));
+    });
+
+    it('brings its end forward only with an approved change, and is cancelled only by an approved request', async () => {
+      const { member, admin, second } = await accountFixture();
+      const createdAt = new Date(Date.now() - DAY);
+      const action = await createModerationAction(t.db, {
+        ...base(member.id, admin.id),
+        createdAt,
+        endsAt: new Date(createdAt.getTime() + 7 * DAY),
+        approvedBy: second.id,
+      });
+      const shortened = new Date(createdAt.getTime() + 3 * DAY);
+      // The end alone: refused at the commit, with no change row.
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ endsAt: shortened })
+          .where(eq(moderationActions.id, action.id)),
+      ).rejects.toSatisfy(needsApproval);
+      const change = {
+        actionId: action.id,
+        kind: 'shorten',
+        previousEndsAt: action.endsAt,
+        endsAt: shortened,
+        reason: '이의 일부 인정',
+        createdBy: admin.id,
+      };
+      // A change row with no approval, a pending one, or another action's: refused.
+      await expect(t.db.insert(restrictionEndChanges).values(change)).rejects.toSatisfy(
+        needsApproval,
+      );
+      const pending = await approval(
+        'account_restriction_shorten',
+        'moderation_action',
+        action.id,
+        admin.id,
+        null,
+      );
+      await expect(
+        t.db.insert(restrictionEndChanges).values({ ...change, approvalId: pending.id }),
+      ).rejects.toSatisfy(needsApproval);
+      const lift = await approval(
+        'account_restriction_lift',
+        'moderation_action',
+        action.id,
+        admin.id,
+        second.id,
+      );
+      await expect(
+        t.db.insert(restrictionEndChanges).values({ ...change, approvalId: lift.id }),
+      ).rejects.toSatisfy(needsApproval);
+      // The end and its approved change together: in force.
+      const shorten = await approval(
+        'account_restriction_shorten',
+        'moderation_action',
+        action.id,
+        admin.id,
+        second.id,
+      );
+      await t.db.transaction(async (tx) => {
+        await tx
+          .update(moderationActions)
+          .set({ endsAt: shortened })
+          .where(eq(moderationActions.id, action.id));
+        await tx.insert(restrictionEndChanges).values({ ...change, approvalId: shorten.id });
+      });
+      // Changed once, the end still moves only with a change that gives it: alone (a time the
+      // record trigger lets through — to come, and before the end now) …
+      const again = new Date(Date.now() + 60_000);
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ endsAt: again })
+          .where(eq(moderationActions.id, action.id)),
+      ).rejects.toSatisfy(needsApproval);
+      // … or with an approved change that gives another end.
+      const another = await approval(
+        'account_restriction_shorten',
+        'moderation_action',
+        action.id,
+        admin.id,
+        second.id,
+      );
+      await expect(
+        t.db.transaction(async (tx) => {
+          await tx
+            .update(moderationActions)
+            .set({ endsAt: again })
+            .where(eq(moderationActions.id, action.id));
+          await tx.insert(restrictionEndChanges).values({
+            ...change,
+            previousEndsAt: shortened,
+            endsAt: new Date(again.getTime() + 60_000),
+            approvalId: another.id,
+          });
+        }),
+      ).rejects.toSatisfy(needsApproval);
+      // A writing restriction's change names none.
+      const writing = await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        type: 'writing_restriction',
+        endsAt: new Date(Date.now() + DAY),
+      });
+      await expect(
+        t.db.insert(restrictionEndChanges).values({
+          ...change,
+          actionId: writing.id,
+          previousEndsAt: writing.endsAt,
+          endsAt: new Date(Date.now() + 60_000),
+          approvalId: lift.id,
+        }),
+      ).rejects.toSatisfy((e) => errorMessage(e).includes('only an account restriction'));
+      // Cancelled: only with an approved request to cancel this restriction.
+      const cancel = { cancelledAt: new Date(), cancelledBy: admin.id, cancelReason: '이의 인정' };
+      await expect(
+        t.db.update(moderationActions).set(cancel).where(eq(moderationActions.id, action.id)),
+      ).rejects.toSatisfy(needsApproval);
+      await expect(
+        t.db
+          .update(moderationActions)
+          .set({ ...cancel, cancelApprovalId: lift.id })
+          .where(eq(moderationActions.id, action.id)),
+      ).rejects.toSatisfy(needsApproval);
+      const cancelRequest = await approval(
+        'account_restriction_cancel',
+        'moderation_action',
+        action.id,
+        admin.id,
+        second.id,
+      );
+      await t.db
+        .update(moderationActions)
+        .set({ ...cancel, cancelApprovalId: cancelRequest.id })
+        .where(eq(moderationActions.id, action.id));
+      const [cancelled] = await t.db
+        .select()
+        .from(moderationActions)
+        .where(eq(moderationActions.id, action.id));
+      expect(cancelled).toMatchObject({ endsAt: shortened, cancelApprovalId: cancelRequest.id });
+      // The factory's way: a cancelled account restriction names its cancellation's approval.
+      await createModerationAction(t.db, {
+        ...base(member.id, admin.id),
+        approvedBy: second.id,
+        cancelled: { at: new Date(), by: admin.id, reason: '취소', approvedBy: second.id },
+      });
     });
   });
 
@@ -3703,6 +4027,70 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await t.db.select().from(approvalRequests)).toMatchObject([
         { status: 'rejected', decidedBy: decider.id, decisionReason: '결정 사유' },
       ]);
+    });
+
+    it('takes a retraction: retracted at its instant with no decision, and never changed after (migration 0042, #139)', async () => {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: decider } = await createUser(t.db, { role: 'admin' });
+      const row = await request(requester.id);
+      const retraction = { status: 'retracted' as const, retractedAt: new Date() };
+      // The retraction's instant comes with it and only with it, and no decision with it.
+      for (const set of [
+        { status: 'retracted' as const },
+        { retractedAt: new Date() },
+        { ...retraction, decidedBy: decider.id },
+        { ...retraction, ...decision(decider.id) },
+        { ...decision(decider.id), retractedAt: new Date() },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+          JSON.stringify(Object.keys(set)),
+        ).rejects.toSatisfy(
+          (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_decision_check',
+        );
+      }
+      // Never inserted retracted, nor pending with a retraction's instant.
+      const base = {
+        kind: 'test_kind',
+        requestedBy: requester.id,
+        requestReason: '요청 사유',
+        requestedAt: new Date(),
+      };
+      await expect(
+        t.db.insert(approvalRequests).values({ ...base, ...retraction }),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      await expect(
+        t.db.insert(approvalRequests).values({ ...base, retractedAt: new Date() }),
+      ).rejects.toSatisfy(
+        (e) => sqlState(e) === '23514' && sqlConstraint(e) === 'approval_requests_decision_check',
+      );
+      await t.db.update(approvalRequests).set(retraction).where(eq(approvalRequests.id, row.id));
+      // Closed: no decision, no second retraction, not back to pending.
+      for (const set of [
+        { ...decision(decider.id), retractedAt: null },
+        decision(decider.id, 'rejected'),
+        { retractedAt: new Date() },
+        { status: 'pending' as const, retractedAt: null },
+      ]) {
+        await expect(
+          t.db.update(approvalRequests).set(set).where(eq(approvalRequests.id, row.id)),
+        ).rejects.toSatisfy((e) => sqlState(e) === '23000');
+      }
+      expect(await t.db.select().from(approvalRequests)).toMatchObject([
+        { status: 'retracted', decidedBy: null, decisionReason: null, decidedAt: null },
+      ]);
+      // A decided request is not retracted either.
+      const decided = await request(requester.id);
+      await t.db
+        .update(approvalRequests)
+        .set(decision(decider.id))
+        .where(eq(approvalRequests.id, decided.id));
+      await expect(
+        t.db
+          .update(approvalRequests)
+          .set({ ...retraction, decidedBy: null, decisionReason: null, decidedAt: null })
+          .where(eq(approvalRequests.id, decided.id)),
+      ).rejects.toSatisfy((e) => sqlState(e) === '23000');
     });
 
     it('refuses a decision by an account that is not an admin as it decides, whoever writes it', async () => {

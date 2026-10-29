@@ -333,6 +333,74 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/moderation/account-restriction-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The account restriction requests: `pending` (default) — those waiting for another admin’s decision, the one waiting longest first, each with what approving it would be refused for now (`moot`) — `decided` — approved or rejected, the latest decision first — or `retracted` — retracted by the admin who asked, the latest first. No asking or deciding admin and no operators’ memo on a request about the admin reading it (`aboutViewer`) */
+        get: operations["adminListAccountRestrictionRequests"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`, a retracted one `retracted`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands */
+        post: operations["adminApproveAccountRestrictionRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Reject an account restriction request, with a reason: nothing is done. Requests do not expire. The admin who asked cannot (`requester`) — they retract it instead — nor the member (`own`); a decided request is `decided`, a retracted one `retracted` */
+        post: operations["adminRejectAccountRestrictionRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retract an account restriction request the acting admin made, before anyone decides it: nothing is done, and it closes as `retracted` with when — decided by no one after. Anyone else is refused (`APPROVAL_NOT_ALLOWED` `not_requester`), and so is one decided (`decided`) or retracted (`retracted`) already. Answers the request */
+        post: operations["adminRetractAccountRestrictionRequest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/moderation/actions": {
         parameters: {
             query?: never;
@@ -350,6 +418,57 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/moderation/actions/{actionId}/account-restriction/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask for an account restriction to be cancelled (취소), with a reason (operators only): once another admin approves, it ends at once and the member reads it cancelled — an ended one too. Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one on the acting admin `own`, and with no admin but the acting one and the member to decide it `no_decider` */
+        post: operations["adminRequestAccountRestrictionCancel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/actions/{actionId}/account-restriction/lift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask for a standing account restriction to be lifted early (조기 해제), with a reason (operators only): once another admin approves, it ends then and stays on the record as given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`, `no_decider`) */
+        post: operations["adminRequestAccountRestrictionLift"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/actions/{actionId}/account-restriction/shorten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask for a standing account restriction’s end to be brought forward (감경) to `endsAt`, with a reason (operators only), done once another admin approves: still to come (`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own` — each asked again on approval — and with no admin but the acting one and the member to decide it, `no_decider` */
+        post: operations["adminRequestAccountRestrictionShorten"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/moderation/actions/{actionId}/cancel": {
         parameters: {
             query?: never;
@@ -359,7 +478,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. A nickname reset’s cancellation restores no nickname but hands the hold of the nickname taken away to the member: other accounts stay held for the rest of the 30 days from the reset, and while that hold stands the member picks that nickname, exactly as it was taken away, with no change interval, even after a pick since the reset, once (taken back and given up again, it keeps the interval, as any other nickname does). One cancelled already is `cancelled`; one on the acting admin is `own` */
+        /** Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. A nickname reset’s cancellation restores no nickname but hands the hold of the nickname taken away to the member: other accounts stay held for the rest of the 30 days from the reset, and while that hold stands the member picks that nickname, exactly as it was taken away, with no change interval, even after a pick since the reset, once (taken back and given up again, it keeps the interval, as any other nickname does). One cancelled already is `cancelled`; one on the acting admin is `own`; an account restriction is cancelled only by an approved request (`approval_required`) */
         post: operations["adminCancelModerationAction"];
         delete?: never;
         options?: never;
@@ -376,7 +495,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators only): it ends now and stays on the record as given. Refused as a shortening is (`not_restriction`, `cancelled`, `ended`, `own`) */
+        /** Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators only): it ends now and stays on the record as given. Refused as a shortening is (`not_restriction`, `approval_required`, `cancelled`, `ended`, `own`) */
         post: operations["adminLiftRestriction"];
         delete?: never;
         options?: never;
@@ -393,7 +512,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason (recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing restriction is `not_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own`. The member reads the new end */
+        /** Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason (recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing restriction is `not_restriction` — an account restriction `approval_required`, its end moving only by an approved request — a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own`. The member reads the new end */
         post: operations["adminShortenRestriction"];
         delete?: never;
         options?: never;
@@ -497,6 +616,23 @@ export type paths = {
         get: operations["adminGetUserModeration"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}/account-restriction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; with no admin but the acting one and the member to decide it, `no_decider`. An optional `memo` is for the operators (not the admin it is about), never the member */
+        post: operations["adminRequestAccountRestriction"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1278,7 +1414,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. Never the operator, a report, a reporter, nor why an end changed */
+        /** The actions operators took on the account, newest first: the type, the reason (a report reason — or an account restriction’s own — and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing or an account restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. An account restriction is here once another admin approved it. Never the operator, the approving admin, a report, a reporter, nor why an end changed */
         get: operations["listMyModerationActions"];
         put?: never;
         post?: never;
@@ -1295,7 +1431,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The writing restriction that governs the account now, as a refused write names it: its kind and its end (null: none, until an operator lifts it) — the latest end of those standing, one with no end over any. Null when none stands. Never the operator, the reason nor a report */
+        /** The restrictions that govern the account now, each as a refusal names it: the writing restriction (`restriction`, what a refused post, comment or edit names) and the account restriction (`accountRestriction`, what a refused order names) — its kind and its end (null: none, until it is lifted), the latest end of those standing, one with no end over any. Null when none of that kind stands; an account restriction not yet approved is none. Never the operator, the reason nor a report */
         get: operations["getMyRestriction"];
         put?: never;
         post?: never;
@@ -1926,6 +2062,76 @@ export type paths = {
 export type webhooks = Record<string, never>;
 export type components = {
     schemas: {
+        AccountRestrictionApply: {
+            days: number | null;
+            memo: string | null;
+            reason: components["schemas"]["ActionReason"];
+            subject: components["schemas"]["ModerationTarget"] | null;
+        };
+        AccountRestrictionBody: {
+            /**
+             * @description The term in days, 24 hours each from the approval that puts it in force; null for 무기한
+             * @enum {number|null}
+             */
+            days: 1 | 3 | 7 | 30 | null;
+            expectedAccountId: string;
+            /** @description The operators’ own memo, read by the admins (not one the request is about), plain text, at most 500 characters after trimming; optional, never shown to the member */
+            memo?: string | null;
+            /** @description The explanation the member reads, plain text, at most 500 characters after trimming; required. Also the reason the approving admin reads */
+            note: string;
+            reason: components["schemas"]["AccountRestrictionReason"];
+            /** @default null */
+            subject: components["schemas"]["WarningSubject"] | null;
+        };
+        /** @enum {string} */
+        AccountRestrictionChange: "apply" | "shorten" | "lift" | "cancel";
+        AccountRestrictionDecision: {
+            action: components["schemas"]["AdminModerationAction"] | null;
+            request: components["schemas"]["AccountRestrictionRequest"];
+        };
+        /** @enum {string} */
+        AccountRestrictionMoot: "cancelled" | "ended" | "not_earlier" | "end_passed";
+        /** @enum {string} */
+        AccountRestrictionReason: "spam" | "harassment" | "personal_info" | "impersonation" | "collusion_manipulation" | "abnormal_trading" | "multi_account" | "other";
+        AccountRestrictionRequest: {
+            /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
+            aboutViewer: boolean;
+            /** Format: uuid */
+            actionId: string | null;
+            apply: components["schemas"]["AccountRestrictionApply"] | null;
+            change: components["schemas"]["AccountRestrictionChange"];
+            /** Format: date-time */
+            decidedAt: string | null;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            decisionReason: string | null;
+            /** Format: date-time */
+            endsAt: string | null;
+            /** Format: uuid */
+            id: string;
+            moot: components["schemas"]["AccountRestrictionMoot"] | null;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"] | null;
+            requestReason: string;
+            /** Format: date-time */
+            retractedAt: string | null;
+            status: components["schemas"]["ApprovalStatus"];
+            target: components["schemas"]["AccountRestrictionTarget"] | null;
+            user: components["schemas"]["ModerationUser"];
+        };
+        AccountRestrictionTarget: {
+            /** Format: date-time */
+            cancelledAt: string | null;
+            /** Format: date-time */
+            createdAt: string;
+            /** Format: date-time */
+            endsAt: string | null;
+            reason: components["schemas"]["ActionReason"];
+        };
+        ActionReason: {
+            code: components["schemas"]["ModerationReason"];
+            note: string | null;
+        };
         AdminAccount: {
             /** Format: email */
             email: string;
@@ -2101,6 +2307,8 @@ export type components = {
         AdminModerationAction: {
             /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
             aboutViewer: boolean;
+            approval: components["schemas"]["ModerationApproval"] | null;
+            cancelApproval: components["schemas"]["ModerationApproval"] | null;
             /** Format: date-time */
             cancelledAt: string | null;
             cancelledBy: components["schemas"]["AdminAccountActor"] | null;
@@ -2113,7 +2321,7 @@ export type components = {
             endsAt: string | null;
             /** Format: uuid */
             id: string;
-            reason: components["schemas"]["HiddenReason"];
+            reason: components["schemas"]["ActionReason"];
             removed: components["schemas"]["RemovedProfileItem"] | null;
             reportCount: number;
             subject: components["schemas"]["ModerationTarget"] | null;
@@ -2366,6 +2574,7 @@ export type components = {
             role: "user" | "admin";
         };
         AdminUserModeration: {
+            accountRestrictionRequests: components["schemas"]["AccountRestrictionRequest"][];
             actions: components["schemas"]["AdminModerationAction"][];
             bio: string | null;
             imageUrl: string | null;
@@ -2383,6 +2592,15 @@ export type components = {
             categoryIds: number[];
             expectedAccountId: string;
         };
+        ApprovalDecisionBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
+        ApprovalRetractionBody: {
+            expectedAccountId: string;
+        };
+        /** @enum {string} */
+        ApprovalStatus: "pending" | "approved" | "rejected" | "retracted";
         AuditFailure: {
             /** Format: date-time */
             createdAt: string;
@@ -2781,7 +2999,15 @@ export type components = {
             reason: components["schemas"]["ReportReason"];
         };
         /** @enum {string} */
-        ModerationActionType: "hide" | "warning" | "nickname_reset" | "bio_clear" | "image_remove" | "writing_restriction";
+        ModerationActionType: "hide" | "warning" | "nickname_reset" | "bio_clear" | "image_remove" | "writing_restriction" | "account_restriction";
+        ModerationApproval: {
+            /** Format: date-time */
+            decidedAt: string;
+            decidedBy: components["schemas"]["AdminAccountActor"] | null;
+            reason: string;
+            /** Format: uuid */
+            requestId: string;
+        };
         ModerationCommentTarget: {
             /** Format: uuid */
             commentId: string;
@@ -2803,6 +3029,8 @@ export type components = {
             type: "profile";
             userId: string;
         };
+        /** @enum {string} */
+        ModerationReason: "spam" | "harassment" | "personal_info" | "impersonation" | "collusion_manipulation" | "off_topic" | "rights_infringement" | "other" | "abnormal_trading" | "multi_account";
         ModerationTarget: components["schemas"]["ModerationPostTarget"] | components["schemas"]["ModerationCommentTarget"] | components["schemas"]["ModerationProfileTarget"];
         ModerationUser: {
             id: string;
@@ -2859,7 +3087,7 @@ export type components = {
             endsAt: string | null;
             /** Format: uuid */
             id: string;
-            reason: components["schemas"]["HiddenReason"];
+            reason: components["schemas"]["ActionReason"];
             subject: components["schemas"]["MyActionSubject"] | null;
             type: components["schemas"]["ModerationActionType"];
         };
@@ -2896,6 +3124,7 @@ export type components = {
             target: components["schemas"]["ReportTarget"];
         };
         MyRestriction: {
+            accountRestriction: components["schemas"]["RestrictedDetails"] | null;
             restriction: components["schemas"]["RestrictedDetails"] | null;
         };
         MyRestrictionEndChange: {
@@ -3431,6 +3660,7 @@ export type components = {
             kind: components["schemas"]["RestrictionKind"];
         };
         RestrictionEndChange: {
+            approval: components["schemas"]["ModerationApproval"] | null;
             /** Format: date-time */
             createdAt: string;
             createdBy: components["schemas"]["AdminAccountActor"] | null;
@@ -3444,7 +3674,7 @@ export type components = {
         /** @enum {string} */
         RestrictionEndChangeKind: "shorten" | "lift";
         /** @enum {string} */
-        RestrictionKind: "writing";
+        RestrictionKind: "writing" | "account";
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };
@@ -5590,6 +5820,320 @@ export interface operations {
             };
         };
     };
+    adminListAccountRestrictionRequests: {
+        parameters: {
+            query?: {
+                cursor?: string;
+                limit?: number;
+                status?: "pending" | "decided" | "retracted";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminApproveAccountRestrictionRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionDecision"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectAccountRestrictionRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalDecisionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionDecision"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRetractAccountRestrictionRequest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                requestId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovalRetractionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListModerationActions: {
         parameters: {
             query?: {
@@ -5642,6 +6186,249 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestAccountRestrictionCancel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CancelModerationBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestAccountRestrictionLift: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiftRestrictionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestAccountRestrictionShorten: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShortenRestrictionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;
@@ -6355,6 +7142,87 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRequestAccountRestriction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AccountRestrictionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AccountRestrictionRequest"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
             409: {
                 headers: {
                     [name: string]: unknown;

@@ -7,7 +7,9 @@ import { SRC, screenSources } from '@/test/screen-text';
  * Every 더 보기 list says when its 더 보기 failed (owner decision 2026-10-20 7, ADR-0075 5-14): the
  * 토론, the community list, the comments, the home's, the search's and 관련 시장's market grid,
  * MY's lists (조치·신고 내역's two too, #50), the admin lists (the report queue and the action log
- * too, #50, and #187's review list of repeated links, its rows and a row's entries) and the market picker (the write screen's and the community list's market filter) —
+ * too, #50, #187's review list of repeated links, its rows and a row's entries, and #139's account
+ * restriction requests) and the market picker (the write screen's and the community list's market
+ * filter) —
  * each draws `LoadMoreFailed` first in its 더 보기 button's own condition
  * (`… && (<>`), so the two come and go together and a list with no 더 보기 says nothing (5-14(c));
  * on the list the button pages; with that list's own first-read failure message (5-14(a)). No
@@ -128,6 +130,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/coupons/admin-coupons.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/admin-markets.tsx',
+        'app/admin/moderation/account-restriction-requests/admin-account-requests.tsx',
         'app/admin/moderation/actions/admin-moderation-actions.tsx',
         'app/admin/moderation/link-flags/admin-link-flags.tsx',
         'app/admin/notices/admin-notices.tsx',
@@ -214,6 +217,7 @@ describe('the notice above a 더 보기 that failed', () => {
     // The walk found the hooks of the lists that page outside a screen's own `useInfiniteQuery`.
     expect(pagedHooks).toEqual(
       [
+        'useAdminAccountRequests',
         'useAdminGrantCandidates',
         'useAdminModerationActions',
         'useAdminNoticeActions',

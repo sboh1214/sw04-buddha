@@ -69,8 +69,12 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  *   stands now, and '진행 중' while it stands (`restrictionStanding`); one an operator lifted early
  *   or shortened says '조기 해제됨' or '감경됨' and the end it was given under the changed one
  *   (`myEndChangeView`, owner decision 2026-10-23 answer 4 — never the reason); a cancelled one
- *   says no end, only '취소됨' and when it was cancelled (answer 10). Never who reported nor which
- *   operator acted (#45-13).
+ *   says no end, only '취소됨' and when it was cancelled (answer 10). An account restriction (#139,
+ *   ADR-0085) reads the same — '계정 제한', its reason (one of the owner's eight, 이상 거래 and 다계정
+ *   among them) and explanation, its end, the appeal's deadline from when it came into force (its
+ *   approval, ADR-0085 7-1) — ADR-0069 decision 4 #139 «제한 사실·사유·종료 시각·이의 경로». Never
+ *   who reported nor which operator acted, asked or approved (#45-13, #139 «건 운영자는 보이지
+ *   않는다»).
  * - 내가 한 신고: each of the member's reports, newest first — what it was about as the public sees
  *   it now, the reason and the description sent, when, and 접수 or the result, 조치함 or 기각, with
  *   when (#45-13). Not which action was taken: that is the member acted on's to read.

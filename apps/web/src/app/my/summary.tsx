@@ -49,10 +49,11 @@ function tab(key: MyTabKey) {
  * them, so the summary card and the previews are drawn from one price and one list.
  *
  * Above them, the way to the member's own public profile (`ViewOwnProfileLink`, owner decision
- * 2026-10-21 answer 7), as from MY 설정's 프로필 card — and above that, while a writing restriction
- * stands, its banner (`SanctionBanner`, ADR-0069 decision 4 #50; #185, ADR-0082), and for
- * the appeal window of a warning received, its banner (`WarningBanner`, owner decision 2026-10-21 —
- * the summary only).
+ * 2026-10-21 answer 7), as from MY 설정's 프로필 card — and above that, while a writing or an
+ * account restriction stands, its banner (`SanctionBanner`, ADR-0069 decision 4 #50; #185,
+ * ADR-0082; #139, ADR-0085 — the account restriction's on MY 요약 and MY 설정 only, owner decision
+ * 2026-10-23), and for the appeal window of a warning received, its banner (`WarningBanner`, owner
+ * decision 2026-10-21 — the summary only).
  */
 export function MySummary() {
   const ended = useSessionEnded();

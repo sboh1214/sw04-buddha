@@ -349,6 +349,53 @@ export const ADMIN_ACTION_TYPES = [
    * entries' `link_flags.review_action_id` to this row, and only when it set at least one.
    */
   'link_flag_review',
+  /**
+   * An operator asked for an account restriction (계정 제한, #139, ADR-0085) — nothing is in force
+   * until another admin approves it (ADR-0056 decision 1-7): target `approval_request` / the
+   * request's id, payload `{requestId, userId, subject, days, reason, note, memo}` — the term asked
+   * for (`days`, null for 무기한), the reason the member will read, the operators' own memo (null
+   * for none; owner decision 2026-10-23) and what it is about (a post, a comment or the profile,
+   * whose pending reports its approval resolves). Written in the transaction that inserts the
+   * `approval_requests` row.
+   */
+  'account_restriction_request',
+  /**
+   * An operator asked for an account restriction's end to be brought forward (감경, #45-14): target
+   * `approval_request` / the request's id, payload `{requestId, actionId, userId, endsAt, reason}`
+   * — the end asked for and the reason (operators only).
+   */
+  'account_restriction_shorten_request',
+  /**
+   * An operator asked for an account restriction to be lifted early (조기 해제, #57-12): the same
+   * target, payload `{requestId, actionId, userId, reason}`.
+   */
+  'account_restriction_lift_request',
+  /**
+   * An operator asked for an account restriction to be cancelled (취소, #50 and #45-14): the same
+   * target and payload as a lift's.
+   */
+  'account_restriction_cancel_request',
+  /**
+   * Another admin approved an account restriction request, and what it asked for was done in the
+   * same transaction: target `approval_request` / the request's id, payload `{requestId, change,
+   * actionId, userId, reason, reportIds}` — `change` (`apply`, `shorten`, `lift`, `cancel`), the
+   * restriction given or changed, the approver's reason, and the pending reports an approved
+   * restriction resolved (none for a change).
+   */
+  'account_restriction_approve',
+  /**
+   * Another admin rejected an account restriction request, nothing done: the same target, payload
+   * `{requestId, change, actionId, userId, reason}` (`actionId` null for a restriction never
+   * given).
+   */
+  'account_restriction_reject',
+  /**
+   * The operator who asked for an account restriction step retracted the request before anyone
+   * decided it (owner decision 2026-10-23, ADR-0085), nothing done: the same target, payload
+   * `{requestId, change, actionId, userId}` (`actionId` null for an `apply`). The actor is the one
+   * who asked — no one else retracts it.
+   */
+  'account_restriction_retract',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -374,9 +421,10 @@ export const releaseSettingStatusSchema = z
 /**
  * approval_requests.status (Postgres enum `approval_status`): a request waits as `pending` until
  * an admin other than its requester decides it, once, as `approved` or `rejected`
- * (approvals.ts).
+ * (approvals.ts) — or until its requester retracts it, `retracted`, where its consumer allows
+ * that (#139, ADR-0085; migration 0042): closed with no decision, decided by no one.
  */
-export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected'] as const;
+export const APPROVAL_STATUSES = ['pending', 'approved', 'rejected', 'retracted'] as const;
 export type ApprovalStatus = (typeof APPROVAL_STATUSES)[number];
 export const approvalStatusSchema = z.enum(APPROVAL_STATUSES).meta({ id: 'ApprovalStatus' });
 
@@ -402,6 +450,40 @@ export const REPORT_REASONS = [
 ] as const;
 export type ReportReason = (typeof REPORT_REASONS)[number];
 export const reportReasonSchema = z.enum(REPORT_REASONS).meta({ id: 'ReportReason' });
+
+/**
+ * 계정 제한의 사유 (#139, ADR-0085; ADR-0069 decision 1 #57-12 «정한 목록에서 하나(스팸·괴롭힘·개인정보
+ * 노출·사칭·공모·조작 유도·이상 거래·다계정·기타)와 필수 설명»), in the owner's order: N05 §5's six — the
+ * report reasons' 공모·조작 유도 kept as the one reason REPORT_REASONS has — with 이상 거래 (abnormal
+ * trading) and 다계정 (one person's several accounts) of N01 §8 and N02 §9, and without 시장과 무관
+ * and 권리 침해, which the owner's list does not have. Every account restriction carries one, with
+ * the operator's explanation the member reads (required, whatever the reason). Labels: copy.ts.
+ */
+export const ACCOUNT_RESTRICTION_REASONS = [
+  'spam',
+  'harassment',
+  'personal_info',
+  'impersonation',
+  'collusion_manipulation',
+  'abnormal_trading',
+  'multi_account',
+  'other',
+] as const;
+export type AccountRestrictionReason = (typeof ACCOUNT_RESTRICTION_REASONS)[number];
+export const accountRestrictionReasonSchema = z
+  .enum(ACCOUNT_RESTRICTION_REASONS)
+  .meta({ id: 'AccountRestrictionReason' });
+
+/**
+ * Every reason an operator's action may carry (Postgres enum `report_reason`, whose values come in
+ * this order — the report reasons of migration 0039, then the two only an account restriction
+ * takes, added by migration 0042): a report's reason is one of REPORT_REASONS (the reports' CHECK),
+ * every action but an account restriction carries one of REPORT_REASONS too, and an account
+ * restriction one of ACCOUNT_RESTRICTION_REASONS (moderation_actions' CHECK).
+ */
+export const MODERATION_REASONS = [...REPORT_REASONS, 'abnormal_trading', 'multi_account'] as const;
+export type ModerationReason = (typeof MODERATION_REASONS)[number];
+export const moderationReasonSchema = z.enum(MODERATION_REASONS).meta({ id: 'ModerationReason' });
 
 /**
  * What a report is about (#50, ADR-0081; Postgres enum `report_target_type`): a 근거 글, a comment
@@ -437,10 +519,16 @@ export const reportStatusSchema = z.enum(REPORT_STATUSES).meta({ id: 'ReportStat
  *   #45-12): no new post, comment or 대댓글 and no edit of one's own, nor a new value of a public
  *   profile item (#37-9), until it ends — 1, 3, 7 or 30 days or 무기한 (`ends_at` null). Deleting
  *   one's own, likes and reports stay open.
- * The account restriction (#139) joins this list. Stored as a varchar with a CHECK rather than a
- * Postgres enum, so the migration that adds a type can use it in the same batch (drizzle runs a
- * batch in one transaction, where a value an `ADD VALUE` added cannot be used — 55P04, migration
- * 0014; migration 0040 added `writing_restriction` so).
+ * - `account_restriction`: 계정 제한 (#139, ADR-0085; ADR-0069 decision 1 #57-12, #57-13, decision 3
+ *   #37-9, decision 4 #139 and #140 rows): no trading — no new order, the check #119 calls
+ *   (`assertCanTrade`) — no market proposal (#77), no new value of a public profile item (#37-9)
+ *   and no 탈퇴 (#140) until it ends, a term or 무기한 (`ends_at` null); community writing, likes,
+ *   reports and the 관심 등록 stay open. Given, lifted early, shortened (감경) and cancelled only
+ *   once another admin approved it (ADR-0056 decision 1-7, `approval_requests`).
+ * Stored as a varchar with a CHECK rather than a Postgres enum, so the migration that adds a type
+ * can use it in the same batch (drizzle runs a batch in one transaction, where a value an `ADD
+ * VALUE` added cannot be used — 55P04, migration 0014; migrations 0040 and 0042 added
+ * `writing_restriction` and `account_restriction` so).
  */
 export const MODERATION_ACTION_TYPES = [
   'hide',
@@ -449,6 +537,7 @@ export const MODERATION_ACTION_TYPES = [
   'bio_clear',
   'image_remove',
   'writing_restriction',
+  'account_restriction',
 ] as const;
 export type ModerationActionType = (typeof MODERATION_ACTION_TYPES)[number];
 export const moderationActionTypeSchema = z

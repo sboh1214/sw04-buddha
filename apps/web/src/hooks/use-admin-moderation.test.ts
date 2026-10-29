@@ -3,6 +3,7 @@ import { ApiError, api } from '@/lib/api';
 import {
   ADMIN_ACTIONS_KEY,
   ADMIN_MODERATION_KEY,
+  adminAccountRequestQueueKey,
   adminCommentModerationKey,
   adminPostModerationKey,
   adminProfileModerationKey,
@@ -11,6 +12,7 @@ import {
 } from '@/lib/moderation';
 import { getQueryClient } from '@/lib/query-client';
 import {
+  adminAccountRequestsInfiniteQueryOptions,
   adminActionsInfiniteQueryOptions,
   adminCommentModerationQueryOptions,
   adminPostModerationQueryOptions,
@@ -30,6 +32,7 @@ const POST = 'b7c9a1d2-6f34-4e58-9b0a-2d1e5f8c7a46';
 const COMMENT = '9b2e3c1d-4f5a-4b6c-8d7e-0f1a2b3c4d5e';
 const ACTION = '33333333-3333-4333-8333-333333333333';
 const USER = 'Qz8kL2mN4pR6sT8vX0yA2bC4dE6fG8hJ';
+const REQUEST = '44444444-4444-4444-8444-444444444444';
 
 const answer = (data: unknown, meta?: unknown) =>
   ({
@@ -59,6 +62,26 @@ describe('the operators’ reads', () => {
     await actions.queryFn({ pageParam: undefined });
     expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/actions', {
       params: { query: {} },
+    });
+  });
+
+  it('ask for each part of the account restriction requests, a page per cursor (#139)', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue(answer([], { nextCursor: null }));
+    const pending = adminAccountRequestsInfiniteQueryOptions('pending');
+    expect(pending.queryKey).toEqual(adminAccountRequestQueueKey('pending'));
+    await pending.queryFn({ pageParam: undefined });
+    expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/account-restriction-requests', {
+      params: { query: { status: 'pending' } },
+    });
+    await adminAccountRequestsInfiniteQueryOptions('decided').queryFn({ pageParam: 'c3' });
+    expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/account-restriction-requests', {
+      params: { query: { status: 'decided', cursor: 'c3' } },
+    });
+    const retracted = adminAccountRequestsInfiniteQueryOptions('retracted');
+    expect(retracted.queryKey).toEqual(adminAccountRequestQueueKey('retracted'));
+    await retracted.queryFn({ pageParam: undefined });
+    expect(get).toHaveBeenLastCalledWith('/api/v1/admin/moderation/account-restriction-requests', {
+      params: { query: { status: 'retracted' } },
     });
   });
 
@@ -164,9 +187,66 @@ describe('the operators’ actions', () => {
     });
   });
 
+  it('ask for an account restriction and each change of one, and decide each request (#139)', async () => {
+    const post = vi.spyOn(api, 'POST').mockResolvedValue(answer({}));
+    const { mutationFn } = moderationOptions(getQueryClient(), () => undefined);
+    for (const days of [1, 3, 7, 30, null] as const) {
+      const body = {
+        reason: 'multi_account' as const,
+        note: '같은 사람의 계정 여럿',
+        days,
+        subject: null,
+        memo: days === null ? '운영자만 읽는 메모' : null,
+        expectedAccountId: 'admin-1',
+      };
+      await mutationFn({ kind: 'account-restrict', userId: USER, body });
+      expect(post).toHaveBeenLastCalledWith(
+        '/api/v1/admin/moderation/users/{userId}/account-restriction',
+        { params: { path: { userId: USER } }, body },
+      );
+    }
+    const shortening = {
+      endsAt: '2026-10-25T06:00:00.000Z',
+      reason: '이의 일부 인정',
+      expectedAccountId: 'admin-1',
+    };
+    await mutationFn({ kind: 'account-shorten', actionId: ACTION.toUpperCase(), body: shortening });
+    expect(post).toHaveBeenLastCalledWith(
+      '/api/v1/admin/moderation/actions/{actionId}/account-restriction/shorten',
+      { params: { path: { actionId: ACTION } }, body: shortening },
+    );
+    const record = { reason: '소명 확인', expectedAccountId: 'admin-1' };
+    for (const kind of ['lift', 'cancel'] as const) {
+      await mutationFn({ kind: `account-${kind}`, actionId: ACTION, body: record });
+      expect(post).toHaveBeenLastCalledWith(
+        `/api/v1/admin/moderation/actions/{actionId}/account-restriction/${kind}`,
+        { params: { path: { actionId: ACTION } }, body: record },
+      );
+    }
+    for (const kind of ['approve', 'reject'] as const) {
+      await mutationFn({ kind, requestId: REQUEST.toUpperCase(), body: record });
+      expect(post).toHaveBeenLastCalledWith(
+        `/api/v1/admin/moderation/account-restriction-requests/{requestId}/${kind}`,
+        { params: { path: { requestId: REQUEST } }, body: record },
+      );
+    }
+    // The one who asked retracts it (owner decision 2026-10-23): the screen's admin, no reason.
+    const retraction = { expectedAccountId: 'admin-1' };
+    await mutationFn({ kind: 'retract', requestId: REQUEST.toUpperCase(), body: retraction });
+    expect(post).toHaveBeenLastCalledWith(
+      '/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract',
+      { params: { path: { requestId: REQUEST } }, body: retraction },
+    );
+  });
+
   it('re-read the whole area on an answer and on a refusal, never on a lost request', async () => {
     const queryClient = getQueryClient();
-    const keys = [adminReportQueueKey('pending'), ADMIN_ACTIONS_KEY, adminPostModerationKey(POST)];
+    const keys = [
+      adminReportQueueKey('pending'),
+      ADMIN_ACTIONS_KEY,
+      adminPostModerationKey(POST),
+      adminAccountRequestQueueKey('pending'),
+    ];
     const seed = () => {
       for (const key of keys) queryClient.setQueryData(key, {});
     };
@@ -175,12 +255,12 @@ describe('the operators’ actions', () => {
 
     seed();
     await options.onSuccess();
-    expect(stale()).toEqual([true, true, true]);
+    expect(stale()).toEqual([true, true, true, true]);
 
     queryClient.clear();
     seed();
     await options.onError(new TypeError('Failed to fetch'));
-    expect(stale()).toEqual([false, false, false]);
+    expect(stale()).toEqual([false, false, false, false]);
 
     await options.onError(
       new ApiError(409, {
@@ -189,8 +269,8 @@ describe('the operators’ actions', () => {
         details: { reason: 'hidden' },
       }),
     );
-    expect(stale()).toEqual([true, true, true]);
-    expect(queryClient.getQueryCache().findAll({ queryKey: ADMIN_MODERATION_KEY })).toHaveLength(3);
+    expect(stale()).toEqual([true, true, true, true]);
+    expect(queryClient.getQueryCache().findAll({ queryKey: ADMIN_MODERATION_KEY })).toHaveLength(4);
     queryClient.clear();
   });
 

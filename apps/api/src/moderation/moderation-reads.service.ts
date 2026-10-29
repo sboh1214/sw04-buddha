@@ -1,11 +1,18 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
+  ACCOUNT_RESTRICTION_APPROVAL_KINDS,
   PUBLIC_ID_PATTERN,
+  accountRestrictionChangeOf,
   adminMediaPath,
   decodeKeyset,
   encodeKeyset,
+  moderationTargetSchema,
   postExcerpt,
+  type AccountRestrictionApply,
+  type AccountRestrictionMoot,
+  type AccountRestrictionRequest,
+  type AccountRestrictionRequestQuery,
   type AdminCommentModeration,
   type AdminModerationAction,
   type AdminPostComment,
@@ -16,13 +23,14 @@ import {
   type AdminUserModeration,
   type CursorQuery,
   type ModerationActionType,
+  type ModerationApproval,
   type ModerationItemState,
   type ModerationTarget,
   type MyActionSubject,
   type MyModerationAction,
+  type MyRestriction,
   type RemovedProfileItem,
   type ReportTargetType,
-  type RestrictedDetails,
   type RestrictionEndChangeKind,
 } from '@buddha/shared';
 import { and, asc, desc, eq, gt, inArray, sql, type SQL } from 'drizzle-orm';
@@ -33,7 +41,8 @@ import { keysetPredicate, tupleKeysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { cardText, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
-import { writingRestrictionOf } from './restrictions.js';
+import { clockTimestamp } from '../infra/db/clock.js';
+import { accountRestrictionOf, writingRestrictionOf } from './restrictions.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 type Executor = Db | Tx;
@@ -45,6 +54,36 @@ const resolverProfile = alias(schema.profiles, 'resolver_profile');
 const creatorProfile = alias(schema.profiles, 'creator_profile');
 const cancellerProfile = alias(schema.profiles, 'canceller_profile');
 const changerProfile = alias(schema.profiles, 'changer_profile');
+const requesterProfile = alias(schema.profiles, 'requester_profile');
+const deciderProfile = alias(schema.profiles, 'decider_profile');
+const approverProfile = alias(schema.profiles, 'approver_profile');
+const cancelApproverProfile = alias(schema.profiles, 'cancel_approver_profile');
+const changeApproverProfile = alias(schema.profiles, 'change_approver_profile');
+
+/** The approvals an account restriction, its cancellation and each change of its end came in by. */
+const applyApproval = alias(schema.approvalRequests, 'apply_approval');
+const cancelApproval = alias(schema.approvalRequests, 'cancel_approval');
+const changeApproval = alias(schema.approvalRequests, 'change_approval');
+
+/** A request's restriction: the one a change is about, the one an approved `apply` put in force. */
+const requestAction = alias(schema.moderationActions, 'request_action');
+const appliedAction = alias(schema.moderationActions, 'applied_action');
+
+/** The two-person rule's kinds #139 reads (`approval_requests.kind`). */
+const ACCOUNT_RESTRICTION_KINDS: string[] = Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS);
+
+/**
+ * The member an account restriction request is about: an `apply`'s target (the account), or the
+ * member of the restriction a change names. The approval's target, never its payload, so the
+ * member read is the one the triggers of migration 0042 hold the restriction to.
+ */
+const REQUEST_MEMBER_ID = sql<string>`CASE WHEN ${schema.approvalRequests.targetType} = 'user' THEN ${schema.approvalRequests.targetId} ELSE ${requestAction.userId} END`;
+
+/** The restriction types whose ends move (`restriction_end_changes`). */
+const RESTRICTION_TYPES: ReadonlySet<string> = new Set([
+  'writing_restriction',
+  'account_restriction',
+]);
 
 /** The actions on a public profile item (#37-10): what the member reads as about '내 프로필'. */
 const PROFILE_ITEM_TYPES: ReadonlySet<ModerationActionType> = new Set<ModerationActionType>([
@@ -135,14 +174,19 @@ export class ModerationReadsService {
   // ---- the member -------------------------------------------------------------------------------
 
   /**
-   * `GET /me/moderation/restriction` (#185, ADR-0082): the writing restriction that governs the
-   * member now, read as every write reads it (`writingRestrictionOf` — 무기한 over any term, else
-   * the latest end, by the database clock), so the banner says the end a refused write names. Its
-   * own read rather than the actions' first page: a restriction followed by twenty other actions
-   * still stands, and the banner must say so (ADR-0069 decision 4 #50).
+   * `GET /me/moderation/restriction` (#185, ADR-0082; #139, ADR-0085): the writing and the account
+   * restriction that govern the member now, each read as the refusals read it
+   * (`writingRestrictionOf`, `accountRestrictionOf` — 무기한 over any term, else the latest end, by
+   * the database clock), so a banner says the end a refused write or order names. Its own read
+   * rather than the actions' first page: a restriction followed by twenty other actions still
+   * stands, and the banner must say so (ADR-0069 decision 4 #50). A request no admin approved yet
+   * is nothing in force: it is never here.
    */
-  async myRestriction(userId: string): Promise<RestrictedDetails | null> {
-    return writingRestrictionOf(this.db, userId);
+  async myRestrictions(userId: string): Promise<MyRestriction> {
+    return {
+      restriction: await writingRestrictionOf(this.db, userId),
+      accountRestriction: await accountRestrictionOf(this.db, userId),
+    };
   }
 
   /**
@@ -213,9 +257,10 @@ export class ModerationReadsService {
             excerpt: row.commentDeletedAt === null ? postExcerpt(row.commentBody ?? '') : null,
           };
         } else if (PROFILE_ITEM_TYPES.has(type)) {
-          // A profile item's action is about the profile. A warning or a writing restriction
-          // without an item is about nothing in particular — its subject 'profile' is not kept
-          // (ADR-0081 7-9), and a restriction is the member's writing, not their profile (#185).
+          // A profile item's action is about the profile. A warning or a restriction without an
+          // item is about nothing in particular — its subject 'profile' is not kept (ADR-0081
+          // 7-9), and a restriction is the member's writing or account, not their profile (#185,
+          // #139).
           subject = { type: 'profile' };
         }
         return {
@@ -659,6 +704,12 @@ export class ModerationReadsService {
       reports: profileReports.reports,
       reporterCount: profileReports.reporterCount,
       actions: await this.actions(this.db, eq(schema.moderationActions.userId, row.id), viewerId),
+      accountRestrictionRequests: await this.requests(
+        this.db,
+        and(eq(schema.approvalRequests.status, 'pending'), sql`${REQUEST_MEMBER_ID} = ${row.id}`),
+        viewerId,
+        [asc(schema.approvalRequests.requestedAt), asc(schema.approvalRequests.id)],
+      ),
     };
   }
 
@@ -772,6 +823,16 @@ export class ModerationReadsService {
         cancelledById: moderationActions.cancelledBy,
         cancelledByNickname: cancellerProfile.nickname,
         cancelReason: moderationActions.cancelReason,
+        approvalId: applyApproval.id,
+        approvalDecidedById: applyApproval.decidedBy,
+        approvalDecidedByNickname: approverProfile.nickname,
+        approvalReason: applyApproval.decisionReason,
+        approvalDecidedAt: applyApproval.decidedAt,
+        cancelApprovalId: cancelApproval.id,
+        cancelApprovalDecidedById: cancelApproval.decidedBy,
+        cancelApprovalDecidedByNickname: cancelApproverProfile.nickname,
+        cancelApprovalReason: cancelApproval.decisionReason,
+        cancelApprovalDecidedAt: cancelApproval.decidedAt,
         removedNickname: profileItemRemovals.nickname,
         removedBio: profileItemRemovals.bio,
         removedImageId: profileItemRemovals.imageId,
@@ -781,6 +842,10 @@ export class ModerationReadsService {
       .innerJoin(member, eq(member.userId, moderationActions.userId))
       .innerJoin(creatorProfile, eq(creatorProfile.userId, moderationActions.createdBy))
       .leftJoin(cancellerProfile, eq(cancellerProfile.userId, moderationActions.cancelledBy))
+      .leftJoin(applyApproval, eq(applyApproval.id, moderationActions.approvalId))
+      .leftJoin(approverProfile, eq(approverProfile.userId, applyApproval.decidedBy))
+      .leftJoin(cancelApproval, eq(cancelApproval.id, moderationActions.cancelApprovalId))
+      .leftJoin(cancelApproverProfile, eq(cancelApproverProfile.userId, cancelApproval.decidedBy))
       .leftJoin(profileItemRemovals, eq(profileItemRemovals.actionId, moderationActions.id))
       .leftJoin(postComments, eq(postComments.id, moderationActions.commentId))
       .where(where)
@@ -788,7 +853,7 @@ export class ModerationReadsService {
     const rows = await (limit === undefined ? query : query.limit(limit));
     const changes = await this.endChanges(
       executor,
-      rows.filter((row) => row.type === 'writing_restriction').map((row) => row.id),
+      rows.filter((row) => RESTRICTION_TYPES.has(row.type)).map((row) => row.id),
     );
     return rows.map((row) => {
       const withheld = withheldFor(viewerId, row.user.id);
@@ -805,6 +870,16 @@ export class ModerationReadsService {
         reason: { code: row.reason, note: row.note },
         createdBy: withheld ? null : { id: row.createdById, nickname: row.createdByNickname },
         createdAt: row.createdAt.toISOString(),
+        approval: approvalOf(
+          {
+            id: row.approvalId,
+            decidedById: row.approvalDecidedById,
+            decidedByNickname: row.approvalDecidedByNickname,
+            reason: row.approvalReason,
+            decidedAt: row.approvalDecidedAt,
+          },
+          withheld,
+        ),
         endsAt: row.endsAt?.toISOString() ?? null,
         cancelledAt: row.cancelledAt?.toISOString() ?? null,
         cancelledBy:
@@ -812,6 +887,16 @@ export class ModerationReadsService {
             ? null
             : { id: row.cancelledById, nickname: row.cancelledByNickname ?? '' },
         cancelReason: row.cancelReason,
+        cancelApproval: approvalOf(
+          {
+            id: row.cancelApprovalId,
+            decidedById: row.cancelApprovalDecidedById,
+            decidedByNickname: row.cancelApprovalDecidedByNickname,
+            reason: row.cancelApprovalReason,
+            decidedAt: row.cancelApprovalDecidedAt,
+          },
+          withheld,
+        ),
         removed: removedOf(row),
         reportCount: row.reportCount,
         endChanges: (changes.get(row.id) ?? []).map((change) => ({
@@ -823,6 +908,16 @@ export class ModerationReadsService {
             ? null
             : { id: change.createdById, nickname: change.createdByNickname ?? '' },
           createdAt: change.createdAt.toISOString(),
+          approval: approvalOf(
+            {
+              id: change.approvalId,
+              decidedById: change.approvalDecidedById,
+              decidedByNickname: change.approvalDecidedByNickname,
+              reason: change.approvalReason,
+              decidedAt: change.approvalDecidedAt,
+            },
+            withheld,
+          ),
         })),
         aboutViewer: withheld,
       };
@@ -830,9 +925,10 @@ export class ModerationReadsService {
   }
 
   /**
-   * The changes of the writing restrictions `actionIds` (#185: shortenings and lifts), oldest first
+   * The changes of the restrictions `actionIds` (#185, #139: shortenings and lifts), oldest first
    * per action — by the end each gave, the latest first, as `memberEndChange` orders them, never by
-   * their time — with the operator who made each.
+   * their time — with the operator who made each and, for an account restriction, the approval it
+   * came in by.
    */
   private async endChanges(executor: Executor, actionIds: string[]) {
     const byAction = new Map<
@@ -845,6 +941,11 @@ export class ModerationReadsService {
         createdById: string;
         createdByNickname: string | null;
         createdAt: Date;
+        approvalId: string | null;
+        approvalDecidedById: string | null;
+        approvalDecidedByNickname: string | null;
+        approvalReason: string | null;
+        approvalDecidedAt: Date | null;
       }[]
     >();
     if (actionIds.length === 0) return byAction;
@@ -859,9 +960,16 @@ export class ModerationReadsService {
         createdById: restrictionEndChanges.createdBy,
         createdByNickname: changerProfile.nickname,
         createdAt: restrictionEndChanges.createdAt,
+        approvalId: changeApproval.id,
+        approvalDecidedById: changeApproval.decidedBy,
+        approvalDecidedByNickname: changeApproverProfile.nickname,
+        approvalReason: changeApproval.decisionReason,
+        approvalDecidedAt: changeApproval.decidedAt,
       })
       .from(restrictionEndChanges)
       .leftJoin(changerProfile, eq(changerProfile.userId, restrictionEndChanges.createdBy))
+      .leftJoin(changeApproval, eq(changeApproval.id, restrictionEndChanges.approvalId))
+      .leftJoin(changeApproverProfile, eq(changeApproverProfile.userId, changeApproval.decidedBy))
       .where(inArray(restrictionEndChanges.actionId, actionIds))
       .orderBy(desc(restrictionEndChanges.endsAt));
     for (const { actionId, ...change } of rows) {
@@ -871,6 +979,265 @@ export class ModerationReadsService {
     }
     return byAction;
   }
+
+  // ---- account restriction requests (#139) -------------------------------------------------------
+
+  /**
+   * `GET /admin/moderation/account-restriction-requests`: `pending` — the requests waiting for a
+   * decision, the one waiting longest first — `decided` — approved or rejected, the latest decision
+   * first — or `retracted` — retracted by the one who asked, the latest first; a page at a time. A
+   * cursor that does not decode serves the first page.
+   */
+  async requestQueue(
+    query: AccountRestrictionRequestQuery,
+    viewerId: string,
+  ): Promise<Page<AccountRestrictionRequest>> {
+    const { approvalRequests } = schema;
+    const pending = query.status === 'pending';
+    const retracted = query.status === 'retracted';
+    const cursor = decodeKeyset(query.cursor, 'uuid');
+    const sortKey = pending
+      ? approvalRequests.requestedAt
+      : retracted
+        ? approvalRequests.retractedAt
+        : approvalRequests.decidedAt;
+    const items = await this.requests(
+      this.db,
+      and(
+        pending
+          ? eq(approvalRequests.status, 'pending')
+          : retracted
+            ? eq(approvalRequests.status, 'retracted')
+            : inArray(approvalRequests.status, ['approved', 'rejected']),
+        cursor === undefined
+          ? undefined
+          : keysetPredicate(
+              sortKey,
+              approvalRequests.id,
+              cursor,
+              'uuid',
+              pending ? 'after' : 'before',
+            ),
+      ),
+      viewerId,
+      pending
+        ? [asc(sortKey), asc(approvalRequests.id)]
+        : [desc(sortKey), desc(approvalRequests.id)],
+      query.limit + 1,
+    );
+    const hasMore = items.length > query.limit;
+    const kept = hasMore ? items.slice(0, query.limit) : items;
+    const last = kept.at(-1);
+    const lastAt = last
+      ? pending
+        ? last.requestedAt
+        : retracted
+          ? last.retractedAt
+          : last.decidedAt
+      : null;
+    return {
+      items: kept,
+      nextCursor:
+        hasMore && last && lastAt
+          ? encodeKeyset({ createdAt: new Date(lastAt), id: last.id })
+          : null,
+    };
+  }
+
+  /** One account restriction request as operators read it, or NOT_FOUND (another kind too). */
+  async request(
+    executor: Executor,
+    requestId: string,
+    viewerId: string,
+  ): Promise<AccountRestrictionRequest> {
+    const [request] = await this.requests(
+      executor,
+      eq(schema.approvalRequests.id, requestId),
+      viewerId,
+      [],
+    );
+    if (!request) throw new AppError('NOT_FOUND', { message: 'Approval request not found' });
+    return request;
+  }
+
+  /**
+   * The account restriction requests matching `where` (#139's kinds only), with the member, what
+   * each asks for — a change with the restriction it changes as it stands (`target`), so the
+   * approving admin knows which of the member's restrictions it is — who asked and decided —
+   * withheld from `viewerId` where it is about them (`withheldFor`) — and, while pending, what an
+   * approval would be refused for now (`moot`, read against the restriction as it stands and the
+   * database clock).
+   */
+  async requests(
+    executor: Executor,
+    where: SQL | undefined,
+    viewerId: string,
+    orderBy: SQL[],
+    limit?: number,
+  ): Promise<AccountRestrictionRequest[]> {
+    const { approvalRequests } = schema;
+    const query = executor
+      .select({
+        id: approvalRequests.id,
+        kind: approvalRequests.kind,
+        payload: approvalRequests.payload,
+        user: memberColumns,
+        changedActionId: requestAction.id,
+        changedType: requestAction.type,
+        changedCreatedAt: requestAction.createdAt,
+        changedEndsAt: requestAction.endsAt,
+        changedCancelledAt: requestAction.cancelledAt,
+        changedReason: requestAction.reason,
+        changedNote: requestAction.note,
+        appliedActionId: appliedAction.id,
+        requestReason: approvalRequests.requestReason,
+        requestedById: approvalRequests.requestedBy,
+        requestedByNickname: requesterProfile.nickname,
+        requestedAt: approvalRequests.requestedAt,
+        status: approvalRequests.status,
+        decidedById: approvalRequests.decidedBy,
+        decidedByNickname: deciderProfile.nickname,
+        decisionReason: approvalRequests.decisionReason,
+        decidedAt: approvalRequests.decidedAt,
+        retractedAt: approvalRequests.retractedAt,
+      })
+      .from(approvalRequests)
+      .leftJoin(
+        requestAction,
+        and(
+          eq(approvalRequests.targetType, 'moderation_action'),
+          eq(sql`${requestAction.id}::text`, approvalRequests.targetId),
+        ),
+      )
+      .innerJoin(member, eq(member.userId, REQUEST_MEMBER_ID))
+      .leftJoin(appliedAction, eq(appliedAction.approvalId, approvalRequests.id))
+      .innerJoin(requesterProfile, eq(requesterProfile.userId, approvalRequests.requestedBy))
+      .leftJoin(deciderProfile, eq(deciderProfile.userId, approvalRequests.decidedBy))
+      .where(and(inArray(approvalRequests.kind, ACCOUNT_RESTRICTION_KINDS), where))
+      .orderBy(...orderBy);
+    const rows = await (limit === undefined ? query : query.limit(limit));
+    if (rows.length === 0) return [];
+    const now = await clockTimestamp(executor);
+    return rows.map((row) => {
+      const change = accountRestrictionChangeOf(row.kind)!;
+      const payload = row.payload ?? {};
+      const withheld = withheldFor(viewerId, row.user.id);
+      const requestedEnd =
+        change === 'shorten' && typeof payload.endsAt === 'string'
+          ? new Date(payload.endsAt)
+          : null;
+      return {
+        id: row.id,
+        change,
+        user: row.user,
+        actionId: change === 'apply' ? row.appliedActionId : row.changedActionId,
+        target:
+          change === 'apply' || row.changedCreatedAt === null || row.changedReason === null
+            ? null
+            : {
+                createdAt: row.changedCreatedAt.toISOString(),
+                endsAt: row.changedEndsAt?.toISOString() ?? null,
+                reason: { code: row.changedReason, note: row.changedNote },
+                cancelledAt: row.changedCancelledAt?.toISOString() ?? null,
+              },
+        apply: change === 'apply' ? applyOf(payload, withheld) : null,
+        endsAt: requestedEnd?.toISOString() ?? null,
+        requestReason: row.requestReason,
+        requestedBy: withheld ? null : { id: row.requestedById, nickname: row.requestedByNickname },
+        requestedAt: row.requestedAt.toISOString(),
+        status: row.status,
+        decidedBy:
+          withheld || row.decidedById === null
+            ? null
+            : { id: row.decidedById, nickname: row.decidedByNickname ?? '' },
+        decisionReason: row.decisionReason,
+        decidedAt: row.decidedAt?.toISOString() ?? null,
+        retractedAt: row.retractedAt?.toISOString() ?? null,
+        moot:
+          row.status !== 'pending' || change === 'apply' || row.changedType === null
+            ? null
+            : accountRestrictionMoot(
+                {
+                  cancelledAt: row.changedCancelledAt,
+                  endsAt: row.changedEndsAt,
+                },
+                change,
+                now,
+                requestedEnd,
+              ),
+        aboutViewer: withheld,
+      };
+    });
+  }
+}
+
+/**
+ * What approving a change of an account restriction would be refused for at `now` — the rules
+ * the approval applies (AccountRestrictionService): a cancelled restriction changes no more
+ * (`cancelled`); one ended has no end to bring forward (`ended`, a cancellation excepted — an ended
+ * restriction may still be cancelled, as #50's may); a 감경's end must be to come (`end_passed`) and
+ * before the end now (`not_earlier`; any is, for 무기한). Null when it can be approved.
+ */
+export function accountRestrictionMoot(
+  action: { cancelledAt: Date | null; endsAt: Date | null },
+  change: 'shorten' | 'lift' | 'cancel',
+  now: Date,
+  requestedEnd: Date | null,
+): AccountRestrictionMoot | null {
+  if (action.cancelledAt !== null) return 'cancelled';
+  if (change === 'cancel') return null;
+  if (action.endsAt !== null && action.endsAt.getTime() <= now.getTime()) return 'ended';
+  if (change === 'shorten') {
+    if (requestedEnd === null || requestedEnd.getTime() <= now.getTime()) return 'end_passed';
+    if (action.endsAt !== null && requestedEnd.getTime() >= action.endsAt.getTime()) {
+      return 'not_earlier';
+    }
+  }
+  return null;
+}
+
+/**
+ * What an `apply` request's payload asks for (AccountRestrictionService writes it), the operators'
+ * memo withheld from the admin the request is about (`withheld`): it is never the member's (owner
+ * decision 2026-10-23).
+ */
+function applyOf(payload: Record<string, unknown>, withheld: boolean): AccountRestrictionApply {
+  const subject = moderationTargetSchema.safeParse(payload.subject);
+  return {
+    reason: {
+      code: payload.reason as AccountRestrictionApply['reason']['code'],
+      note: typeof payload.note === 'string' ? payload.note : null,
+    },
+    days: typeof payload.days === 'number' ? payload.days : null,
+    subject: subject.success ? subject.data : null,
+    memo: !withheld && typeof payload.memo === 'string' ? payload.memo : null,
+  };
+}
+
+/**
+ * An approval as operators read it on an account restriction's record (#139), or null where none
+ * was needed; the approving admin withheld for the admin the restriction is on (`withheld`).
+ */
+function approvalOf(
+  row: {
+    id: string | null;
+    decidedById: string | null;
+    decidedByNickname: string | null;
+    reason: string | null;
+    decidedAt: Date | null;
+  },
+  withheld: boolean,
+): ModerationApproval | null {
+  if (row.id === null || row.decidedAt === null) return null;
+  return {
+    requestId: row.id,
+    decidedBy:
+      withheld || row.decidedById === null
+        ? null
+        : { id: row.decidedById, nickname: row.decidedByNickname ?? '' },
+    reason: row.reason ?? '',
+    decidedAt: row.decidedAt.toISOString(),
+  };
 }
 
 /**

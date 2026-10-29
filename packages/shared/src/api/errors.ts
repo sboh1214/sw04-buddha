@@ -34,8 +34,9 @@ export const ERROR_CODES = [
    */
   'ROLE_CHANGE_NOT_ALLOWED',
   /**
-   * A decision on a two-person request the rule refuses: the decider requested it, or it is
-   * decided already. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
+   * A decision on a two-person request the rule refuses: the decider requested it, it is decided
+   * already, or its requester retracted it; or a retraction by anyone but the requester, or of one
+   * no longer pending. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
    */
   'APPROVAL_NOT_ALLOWED',
   /**
@@ -141,16 +142,20 @@ export const ERROR_CODES = [
    * operator, the item is hidden already or deleted, there is nothing to take away, the action
    * was cancelled already, a report was processed already, a warning or a restriction names a
    * post or a comment of another member, or a shortening or a lift is not of a writing
-   * restriction, of one that ended already, or not to an earlier end still to come. Details carry
-   * the reason, moderationNotAllowedDetailsSchema.
+   * restriction, of one that ended already, or not to an earlier end still to come — or an account
+   * restriction request no admin could decide (none but the one asking and the member). Details
+   * carry the reason, moderationNotAllowedDetailsSchema.
    */
   'MODERATION_NOT_ALLOWED',
   /**
    * An operator restriction on the account refuses the action until it ends: a writing
    * restriction keeps the account from new posts, comments and replies, from editing its own and
    * from new values of its public profile items, while deleting its own, likes and reports stay
-   * open. Details carry the kind and the end, null for one with no end,
-   * restrictedDetailsSchema — the end the account also reads at GET /me/moderation/restriction.
+   * open; an account restriction keeps it from new orders, market proposals, new values of its
+   * public profile items and closing the account, while writing, likes, reports and the watchlist
+   * stay open. Details carry the kind and the end, null for one with no end — the later of the two
+   * when both refuse — restrictedDetailsSchema: the end the account also reads at
+   * GET /me/moderation/restriction.
    */
   'RESTRICTED',
   /**

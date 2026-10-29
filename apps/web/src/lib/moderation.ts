@@ -1,4 +1,8 @@
 import {
+  ACCOUNT_RESTRICTION_DAYS,
+  ACCOUNT_RESTRICTION_REASONS,
+  APPROVAL_REASON_MAX_LENGTH,
+  APPROVAL_REFUSALS,
   DISMISS_REPORTS_MAX,
   MODERATION_NOTE_MAX_LENGTH,
   MODERATION_REASON_MAX_LENGTH,
@@ -18,7 +22,15 @@ import {
   reasonNeedsText,
   reportLimitedDetailsSchema,
   reportNotAllowedDetailsSchema,
+  type AccountRestrictionChange,
+  type AccountRestrictionDays,
+  type AccountRestrictionMoot,
+  type AccountRestrictionReason,
+  type AccountRestrictionRequestQueue,
   type AdminReportQueue,
+  type ApprovalRefusal,
+  type ApprovalStatus,
+  type ModerationReason,
   type ModerationRefusal,
   type ReportReason,
   type ReportRefusal,
@@ -29,6 +41,7 @@ import {
 import { copy } from '@/copy';
 import { fillBusinessInfo } from '@/legal/business-info';
 import {
+  type AccountRestrictionRequest,
   type AdminModerationAction,
   type AdminReport,
   type AdminReportGroup,
@@ -77,6 +90,16 @@ import { profilePath } from './profile';
  * (its pending reports resolved) or the member's, and lifts it early or brings its end forward
  * (감경), each with a reason. The member reads it on the banner and in 조치·신고 내역 with its end,
  * and every refused write says it (lib/restriction.ts).
+ *
+ * 계정 제한 (#139, ADR-0085; ADR-0069 decision 1 #57-12…#57-15, decision 4 #50 and #139 rows;
+ * ADR-0056 decision 1-7) joins them as a request: an operator asks for a member's account to be
+ * restricted — one of the owner's eight reasons with a required explanation, 1, 3, 7 or 30 days or
+ * 무기한, from an item's page or the member's — and for its 감경, early lift or cancellation, and
+ * nothing is done until an admin who neither asked nor is the member approves; another rejects
+ * what is not wanted, or the one who asked retracts it first (owner decision 2026-10-23), with an
+ * optional memo for the operators alone. The member reads it as a writing restriction: on
+ * the banner of MY 요약 and MY 설정, in 조치·신고 내역 and in the refusal of a public profile item's
+ * new value.
  */
 
 // ---- addresses ---------------------------------------------------------------------------------
@@ -101,6 +124,12 @@ export const ADMIN_MODERATION_ACTIONS_PATH = '/admin/moderation/actions';
  */
 export const ADMIN_LINK_FLAGS_PATH = '/admin/moderation/link-flags';
 
+/**
+ * 계정 제한 요청 (#139): the account restriction requests, the ones waiting for a decision first;
+ * `?status=decided` and `?status=retracted` are its other two parts.
+ */
+export const ADMIN_ACCOUNT_REQUESTS_PATH = '/admin/moderation/account-restriction-requests';
+
 /** The query parameter of the queue's half; `pending` is the page without it. */
 export const ADMIN_REPORT_QUEUE_PARAM = 'status';
 
@@ -115,6 +144,19 @@ export function adminReportQueuePath(queue: AdminReportQueue): string {
     : `${ADMIN_REPORTS_PATH}?${ADMIN_REPORT_QUEUE_PARAM}=${queue}`;
 }
 
+/** The requests' part a `?status=` names: `decided`, `retracted`, `pending` for anything else. */
+export function adminAccountRequestQueueOf(
+  param: string | string[] | null | undefined,
+): AccountRestrictionRequestQueue {
+  return param === 'decided' || param === 'retracted' ? param : 'pending';
+}
+
+export function adminAccountRequestQueuePath(queue: AccountRestrictionRequestQueue): string {
+  return queue === 'pending'
+    ? ADMIN_ACCOUNT_REQUESTS_PATH
+    : `${ADMIN_ACCOUNT_REQUESTS_PATH}?${ADMIN_REPORT_QUEUE_PARAM}=${queue}`;
+}
+
 export function adminPostModerationPath(postId: string): string {
   return `/admin/moderation/posts/${postId.toLowerCase()}`;
 }
@@ -125,6 +167,19 @@ export function adminCommentModerationPath(commentId: string): string {
 
 export function adminUserModerationPath(userId: string): string {
   return `/admin/moderation/users/${encodeURIComponent(userId)}`;
+}
+
+/** The element id of an action's row on its member's page (`ActionRows`), a link's fragment. */
+export function adminActionAnchor(actionId: string): string {
+  return `moderation-action-${actionId.toLowerCase()}`;
+}
+
+/**
+ * An action's row on its member's page: where a change request's restriction is read in full
+ * (#139, ADR-0085 7-12), from the request's line on 계정 제한 요청 or on that page itself.
+ */
+export function adminActionPath(userId: string, actionId: string): string {
+  return `${adminUserModerationPath(userId)}#${adminActionAnchor(actionId)}`;
 }
 
 /**
@@ -177,6 +232,8 @@ export const adminUserModerationKey = (userId: string) =>
   [...ADMIN_MODERATION_KEY, 'user', userId] as const;
 export const adminProfileModerationKey = (publicId: string) =>
   [...ADMIN_MODERATION_KEY, 'profile', publicId.toLowerCase()] as const;
+export const adminAccountRequestQueueKey = (queue: AccountRestrictionRequestQueue) =>
+  [...ADMIN_MODERATION_KEY, 'account-restriction-requests', queue] as const;
 
 /** One page of a cursor list as `useInfiniteQuery` holds it. */
 export interface ModerationPage<Row> {
@@ -215,6 +272,7 @@ const ACTION_LABELS: Readonly<Record<ModerationActionType, string>> = {
   bio_clear: copy.moderationActionBioClear,
   image_remove: copy.moderationActionImageRemove,
   writing_restriction: copy.moderationActionWritingRestriction,
+  account_restriction: copy.moderationActionAccountRestriction,
 };
 
 /** An action's name, the same for the member and the operators. */
@@ -246,7 +304,7 @@ export function moderationItemStateLabel(state: ModerationItemState): string {
 }
 
 /** A report reason, and the operator's explanation after it when there is one. */
-export function actionReasonText(reason: { code: ReportReason; note: string | null }): {
+export function actionReasonText(reason: { code: ModerationReason; note: string | null }): {
   reason: string;
   note: string | null;
 } {
@@ -613,17 +671,28 @@ export function appealEmailRequired(me: Pick<Me, 'email'> | undefined): boolean 
 
 /**
  * The types that restrict the member until they end (#45-12: «제재(작성 제한·계정 제한)»): the
- * writing restriction (#185, ADR-0082). #139's account restriction joins this set. #50's actions
- * restrict nothing — a warning is a record and the member's notice only (#45-11), and a hiding or
- * a profile item has no end.
+ * writing restriction (#185, ADR-0082) and the account restriction (#139, ADR-0085). Both read
+ * alike to the member — the end, '진행 중', '조기 해제됨'·'감경됨' and the end it was given, '취소됨'.
+ * #50's actions restrict nothing — a warning is a record and the member's notice only (#45-11),
+ * and a hiding or a profile item has no end.
  */
 const RESTRICTION_TYPES: ReadonlySet<ModerationActionType> = new Set<ModerationActionType>([
   'writing_restriction',
+  'account_restriction',
 ]);
 
 /** Whether an action of `type` restricts the member until it ends. */
 export function isRestriction(type: ModerationActionType): boolean {
   return RESTRICTION_TYPES.has(type);
+}
+
+/**
+ * Whether an action is an account restriction (#139): its 감경, early lift and cancellation are
+ * requests another admin approves (ADR-0056 decision 1-7), never done at once — the server refuses
+ * the writing restriction's routes for it (`approval_required`).
+ */
+export function isAccountRestriction(type: ModerationActionType): boolean {
+  return type === 'account_restriction';
 }
 
 /**
@@ -846,6 +915,13 @@ export function cancelDialogBody(
   // ends it now (#185, ADR-0082 결정 7) — the dialog says which this is. One that has ended
   // already (its term passed, or lifted) can still be cancelled — an appeal accepted within its
   // 14 days (#45-14) — and then there is nothing to end, and no 조기 해제 on its row to point at.
+  // An account restriction's cancellation is a request (#139): the same two cases, once approved
+  // — one ended already needs the approval too (ADR-0085 7-4).
+  if (isAccountRestriction(action.type)) {
+    return restrictionStanding(action, now)
+      ? copy.adminModerationAccountCancelBody
+      : copy.adminModerationAccountCancelEndedBody;
+  }
   if (isRestriction(action.type)) {
     return restrictionStanding(action, now)
       ? copy.adminModerationCancelRestrictionBody
@@ -887,51 +963,148 @@ export function actionReasonDraft(input: { reason: ReportReason | null; note: st
 
 /**
  * The operators' own reason for a cancellation or a dismissal (required, at most
- * MODERATION_REASON_MAX_LENGTH, never shown to the member): the text to send, or the error.
+ * MODERATION_REASON_MAX_LENGTH, never shown to the member): the text to send, or the error. A
+ * reason an approval request keeps (`approval` — an account restriction's requests and decisions,
+ * #139) is also held to APPROVAL_REASON_MAX_LENGTH counted as the request keeps it (`approvals.ts`:
+ * UTF-16 units, so an emoji counts two), which the server checks as well.
  */
-export function recordReasonDraft(text: string): { reason: string; error: string | null } {
+export function recordReasonDraft(
+  text: string,
+  approval = false,
+): { reason: string; error: string | null } {
   const reason = normaliseCommentBody(text);
   const length = codePointLength(reason);
+  const over =
+    length > MODERATION_REASON_MAX_LENGTH ||
+    (approval && reason.length > APPROVAL_REASON_MAX_LENGTH);
+  return { reason, error: length === 0 || over ? copy.errModerationRecordRequired : null };
+}
+
+/**
+ * The draft of an account restriction request's reason (#139, ADR-0069 decision 1 #57-12: «정한
+ * 목록에서 하나 … 와 필수 설명»): one of ACCOUNT_RESTRICTION_REASONS and the explanation the member
+ * reads — required whatever the reason, at most MODERATION_NOTE_MAX_LENGTH code points and, as the
+ * request's reason too (ADR-0085 7-5), APPROVAL_REASON_MAX_LENGTH UTF-16 units — normalised the
+ * server's way.
+ */
+export function accountRestrictionDraft(input: {
+  reason: AccountRestrictionReason | null;
+  note: string;
+}): {
+  reason: AccountRestrictionReason | null;
+  note: string;
+  reasonError: string | null;
+  noteError: string | null;
+} {
+  const note = normaliseCommentBody(input.note);
+  let noteError: string | null = null;
+  if (note === '') noteError = copy.errModerationAccountNoteRequired;
+  else if (
+    codePointLength(note) > MODERATION_NOTE_MAX_LENGTH ||
+    note.length > APPROVAL_REASON_MAX_LENGTH
+  ) {
+    noteError = copy.errModerationNoteTooLong;
+  }
   return {
-    reason,
-    error:
-      length === 0 || length > MODERATION_REASON_MAX_LENGTH
-        ? copy.errModerationRecordRequired
-        : null,
+    reason: input.reason,
+    note,
+    reasonError: input.reason === null ? copy.errModerationReasonRequired : null,
+    noteError,
   };
 }
 
+/**
+ * The operators' memo on an account restriction request (owner decision 2026-10-23, ADR-0085):
+ * optional, for the operators and never the member — the text to send (null for none,
+ * blank included), or the error past MODERATION_REASON_MAX_LENGTH code points, normalised the
+ * server's way.
+ */
+export function accountRequestMemoDraft(text: string): {
+  memo: string | null;
+  error: string | null;
+} {
+  const memo = normaliseCommentBody(text);
+  if (codePointLength(memo) > MODERATION_REASON_MAX_LENGTH) {
+    return { memo, error: copy.errModerationMemoTooLong };
+  }
+  return { memo: memo === '' ? null : memo, error: null };
+}
+
 // ---- operators: the writing restriction (#185, ADR-0082) -------------------------------------
+
+/** One term of a restriction dialog: the radio's value, the days (null: 무기한) and its name. */
+export interface RestrictionTermOption<D extends number> {
+  value: string;
+  days: D | null;
+  label: string;
+}
+
+/** The days, 24 hours each from the restriction's own time, then 무기한 (`days: null`). */
+function termOptions<D extends number>(days: readonly D[]): RestrictionTermOption<D>[] {
+  return [
+    ...days.map((day) => ({
+      value: String(day),
+      days: day,
+      label: `${String(day)}${copy.adminModerationTermDayUnit}`,
+    })),
+    { value: 'none', days: null, label: copy.restrictionIndefinite },
+  ];
+}
 
 /**
  * The terms an operator picks a writing restriction's from (ADR-0069 decision 2 #45-12: «1·3·7·30일과
  * 무기한에서 고른다»), in that order: the days, 24 hours each from the restriction, or 무기한
  * (`days: null`). The radio's value is the days written out, or 'none'.
  */
-export const RESTRICTION_TERM_OPTIONS: readonly {
-  value: string;
-  days: WritingRestrictionDays | null;
-  label: string;
-}[] = [
-  ...WRITING_RESTRICTION_DAYS.map((days) => ({
-    value: String(days),
-    days,
-    label: `${String(days)}${copy.adminModerationTermDayUnit}`,
-  })),
-  { value: 'none', days: null, label: copy.restrictionIndefinite },
-];
+export const RESTRICTION_TERM_OPTIONS: readonly RestrictionTermOption<WritingRestrictionDays>[] =
+  termOptions(WRITING_RESTRICTION_DAYS);
 
-/** The term a radio's value names, or undefined for none picked (the dialog then says so). */
-export function restrictionTermOf(
+/**
+ * The terms of an account restriction (#139, ADR-0069 decision 1 #57-12 «기간제와 무기한» —
+ * ACCOUNT_RESTRICTION_DAYS, the writing restriction's four until the owner names others, ADR-0085
+ * 7-2), counted from the approval that puts it in force (7-1).
+ */
+export const ACCOUNT_RESTRICTION_TERM_OPTIONS: readonly RestrictionTermOption<AccountRestrictionDays>[] =
+  termOptions(ACCOUNT_RESTRICTION_DAYS);
+
+/**
+ * The term a radio's value names among `options`, or undefined for none picked (the dialog then
+ * says so).
+ */
+export function restrictionTermOf<D extends number>(
   value: string,
-): { days: WritingRestrictionDays | null } | undefined {
-  const found = RESTRICTION_TERM_OPTIONS.find((option) => option.value === value);
+  options: readonly RestrictionTermOption<D>[],
+): { days: D | null } | undefined {
+  const found = options.find((option) => option.value === value);
   return found === undefined ? undefined : { days: found.days };
+}
+
+/** The term an account restriction request asks for, as its operators' line says it: '7일', '무기한'. */
+export function restrictionTermLabel(days: number | null): string {
+  return days === null
+    ? copy.restrictionIndefinite
+    : `${String(days)}${copy.adminModerationTermDayUnit}`;
 }
 
 /** A restriction's end on an operator's page: the time in Korean time (ADR-0061), or '무기한'. */
 export function adminRestrictionEndText(endsAt: string | null): string {
   return endsAt === null ? copy.restrictionIndefinite : formatKst(endsAt);
+}
+
+/**
+ * The restriction a 감경, 조기 해제 or 취소 request changes, as its line says it now — when it was given
+ * and its end now, '취소됨' once cancelled: '2026. 10. 23. 오후 3:00 · 끝나는 때 무기한'. A member can
+ * have several (ADR-0085 7-3), so the approving admin reads which one, and how far a 감경 brings
+ * its end forward.
+ */
+export function accountRequestTargetText(
+  target: Pick<
+    NonNullable<AccountRestrictionRequest['target']>,
+    'createdAt' | 'endsAt' | 'cancelledAt'
+  >,
+): string {
+  const text = `${formatKst(target.createdAt)} · ${copy.moderationEndsAt} ${adminRestrictionEndText(target.endsAt)}`;
+  return target.cancelledAt === null ? text : `${text} · ${copy.moderationCancelled}`;
 }
 
 const END_CHANGE_LABELS: Readonly<Record<RestrictionEndChangeKind, string>> = {
@@ -978,6 +1151,114 @@ export function reportReasonOf(value: string): ReportReason | null {
   return REPORT_REASONS.find((code) => code === value) ?? null;
 }
 
+/**
+ * An account restriction's reasons in the owner's order (#139, ADR-0069 decision 1 #57-12: 스팸·
+ * 괴롭힘·개인정보 노출·사칭·공모·조작 유도·이상 거래·다계정·기타 — '공모·조작 유도' one reason, as the
+ * report reasons have it, ADR-0085 7-9), with their names.
+ */
+export const ACCOUNT_RESTRICTION_REASON_OPTIONS: readonly {
+  code: AccountRestrictionReason;
+  label: string;
+}[] = ACCOUNT_RESTRICTION_REASONS.map((code) => ({ code, label: reportReasonLabel(code) }));
+
+/** Parses a `<select>`'s value into an account restriction's reason, or null for none. */
+export function accountRestrictionReasonOf(value: string): AccountRestrictionReason | null {
+  return ACCOUNT_RESTRICTION_REASONS.find((code) => code === value) ?? null;
+}
+
+// ---- operators: account restriction requests (#139, ADR-0085) ---------------------------------
+
+const REQUEST_CHANGE_LABELS: Readonly<Record<AccountRestrictionChange, string>> = {
+  apply: copy.adminAccountRequestChangeApply,
+  shorten: copy.adminAccountRequestChangeShorten,
+  lift: copy.adminAccountRequestChangeLift,
+  cancel: copy.adminAccountRequestChangeCancel,
+};
+
+/** What a request asks for: '계정 제한' · '계정 제한 감경' · '… 조기 해제' · '… 취소'. */
+export function accountRequestChangeLabel(change: AccountRestrictionChange): string {
+  return REQUEST_CHANGE_LABELS[change];
+}
+
+const APPROVAL_STATUS_LABELS: Readonly<Record<ApprovalStatus, string>> = {
+  pending: copy.approvalStatusPending,
+  approved: copy.approvalStatusApproved,
+  rejected: copy.approvalStatusRejected,
+  retracted: copy.approvalStatusRetracted,
+};
+
+/** 승인 대기 · 승인됨 · 거절됨 · 철회됨. */
+export function approvalStatusLabel(status: ApprovalStatus): string {
+  return APPROVAL_STATUS_LABELS[status];
+}
+
+/**
+ * A pending request waits (gray); an approved one acted (orange); a rejected or a retracted one did
+ * nothing.
+ */
+export const APPROVAL_STATUS_PALETTE: Readonly<Record<ApprovalStatus, string>> = {
+  pending: 'gray',
+  approved: 'orange',
+  rejected: 'gray',
+  retracted: 'gray',
+};
+
+const MOOT_TEXTS: Readonly<Record<AccountRestrictionMoot, string>> = {
+  cancelled: copy.adminAccountRequestMootCancelled,
+  ended: copy.adminAccountRequestMootEnded,
+  not_earlier: copy.adminAccountRequestMootNotEarlier,
+  end_passed: copy.adminAccountRequestMootEndPassed,
+};
+
+/**
+ * Why a pending request can no longer be approved (`moot`, ADR-0085 7-3: the restriction was
+ * cancelled, ended or passed the end asked for since the request) and that a rejection closes it;
+ * null when it can be.
+ */
+export function accountRequestMootText(moot: AccountRestrictionMoot | null): string | null {
+  return moot === null ? null : MOOT_TEXTS[moot];
+}
+
+/**
+ * What the reading operator may do with a request (ADR-0056 decision 1-7 and 4; decision 4 #50
+ * «다른 운영자만»): `decide` — approve, unless it is moot, or reject; `requester` — they asked, so
+ * another admin decides (APPROVAL_NOT_ALLOWED `requester` on the server, in every environment) and
+ * they may retract it (owner decision 2026-10-23); `own` — it is about them (`own`), its asking and
+ * deciding admins withheld from them; `closed` — decided or retracted, nothing more. Undefined
+ * while the session is unknown: the screen offers nothing until it knows.
+ */
+export type RequestStanding = 'decide' | 'requester' | 'own' | 'closed';
+
+export function requestStanding(
+  request: Pick<AccountRestrictionRequest, 'status' | 'user' | 'requestedBy' | 'aboutViewer'>,
+  operatorId: string | undefined,
+): RequestStanding | undefined {
+  if (request.status !== 'pending') return 'closed';
+  if (operatorId === undefined) return undefined;
+  if (request.aboutViewer || request.user.id === operatorId) return 'own';
+  if (request.requestedBy?.id === operatorId) return 'requester';
+  return 'decide';
+}
+
+/**
+ * The notice of a moot request (`accountRequestMootText` — why it can no longer be approved, and
+ * that a rejection closes it), for the admin who can reject it (`decide`) alone: the one who asked
+ * and the admin it is about can do neither, and their lines say another admin decides it.
+ */
+export function accountRequestMootNotice(
+  request: Pick<AccountRestrictionRequest, 'moot'>,
+  standing: RequestStanding | undefined,
+): string | null {
+  return standing === 'decide' ? accountRequestMootText(request.moot) : null;
+}
+
+const APPROVAL_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
+  requester: copy.errApprovalRequester,
+  decided: copy.errApprovalDecided,
+  retracted: copy.errApprovalRetracted,
+  not_requester: copy.errApprovalNotRequester,
+};
+
 const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> = {
   own: copy.errModerationOwn,
   hidden: copy.errModerationHidden,
@@ -990,6 +1271,9 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
   ended: copy.errModerationEnded,
   not_earlier: copy.errModerationNotEarlier,
   end_passed: copy.errModerationEndPassed,
+  approval_required: copy.errModerationApprovalRequired,
+  not_account_restriction: copy.errModerationNotAccountRestriction,
+  no_decider: copy.errModerationNoDecider,
 };
 
 /**
@@ -1003,7 +1287,7 @@ const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> =
  * `ended`, `not_earlier`, `end_passed`) is MODERATION_NOT_ALLOWED's with the rest.
  */
 export type ModerationFailure =
-  | { kind: 'field'; field: 'note' | 'reason' | 'endsAt'; message: string }
+  | { kind: 'field'; field: 'note' | 'reason' | 'endsAt' | 'memo'; message: string }
   | { kind: 'alert'; message: string };
 
 export function moderationFailure(error: unknown): ModerationFailure {
@@ -1017,6 +1301,13 @@ export function moderationFailure(error: unknown): ModerationFailure {
     return alert(
       details.success ? MODERATION_REFUSAL_MESSAGES[details.data.reason] : copy.errUnknown,
     );
+  }
+  // The two-person rule's refusal (#139, ADR-0056 decision 4): the admin who asked decides
+  // nothing, a request is decided once, a retracted one by no one, and only the one who asked
+  // retracts it — `details[0].message` says which.
+  if (isApiError(error, 'APPROVAL_NOT_ALLOWED')) {
+    const refusal = APPROVAL_REFUSALS.find((reason) => reason === validationMessage(error));
+    return alert(refusal === undefined ? copy.errUnknown : APPROVAL_REFUSAL_MESSAGES[refusal]);
   }
   if (isApiError(error, 'NOT_FOUND')) return alert(copy.adminModerationNotFound);
   if (isApiError(error, 'VALIDATION_ERROR')) {
@@ -1036,6 +1327,9 @@ export function moderationFailure(error: unknown): ModerationFailure {
     }
     if (field === 'endsAt') {
       return { kind: 'field', field: 'endsAt', message: copy.errModerationEndRequired };
+    }
+    if (field === 'memo') {
+      return { kind: 'field', field: 'memo', message: copy.errModerationMemoTooLong };
     }
     if (field === 'days') return alert(copy.errModerationTermRequired);
     if (field === 'reportIds') return alert(copy.errModerationReportIds);

@@ -50,6 +50,7 @@ import {
   ReportRows,
   type SubjectOption,
   UserName,
+  accountRestrictDialog,
   dismissDialog,
   restrictDialog,
   useOperatorId,
@@ -65,9 +66,13 @@ import {
  * page (`CommentRows`), reported or not. The actions, chosen by the violation's weight (#45-11):
  * 숨기기 (while it is public), 경고 (about this item or about nothing in particular), 작성 제한 of
  * its author (#185, ADR-0082 — a term and a reason, about this item, whose pending reports it
- * resolves, or nothing in particular) and 신고 기각 (the pending reports on screen); 조치 취소, and a
- * standing restriction's 조기 해제 and 감경, in the lists. None is offered on the operator's own
- * item (decision 4 #50 — `OwnNotice`), and none while the operator on screen is unknown.
+ * resolves, or nothing in particular), the request of its author's 계정 제한 (#139, ADR-0085 —
+ * the report queue's way to it, ADR-0069 decision 2 #45-11: about this item, whose pending reports
+ * its approval resolves, or nothing in particular; another admin approves it on the member's page
+ * or the requests' list) and 신고 기각 (the pending reports on screen); 조치 취소, and a standing
+ * restriction's 조기 해제 and 감경 — an account restriction's as requests — in the lists. None is
+ * offered on the operator's own item (decision 4 #50 — `OwnNotice`), and none while the operator
+ * on screen is unknown.
  */
 
 function BackLink() {
@@ -201,6 +206,15 @@ function ActionBar({
         data-testid="moderation-restrict"
       >
         {copy.adminModerationRestrict}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        colorPalette="no"
+        onClick={() => onOpen(accountRestrictDialog(author, itemSubjects(warnSubject)))}
+        data-testid="moderation-account-restrict"
+      >
+        {copy.adminModerationAccountRestrict}
       </Button>
       {pendingReportIds(reports).length > 0 && (
         <Button

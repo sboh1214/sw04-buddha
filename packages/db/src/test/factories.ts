@@ -15,6 +15,7 @@ import {
   type ImageContentType,
   type MarketStatus,
   type ModerationActionType,
+  type ModerationReason,
   type PostDocument,
   type Outcome,
   type ReleaseSettingStatus,
@@ -30,6 +31,7 @@ import { eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import {
   adminActions,
+  approvalRequests,
   balances,
   categories,
   commentLikes,
@@ -1032,18 +1034,31 @@ export interface CreateModerationActionInput {
   postId?: string;
   /** A hiding's comment, or a warning's. */
   commentId?: string;
-  /** Default: `spam`. */
-  reason?: ReportReason;
-  /** The explanation the member reads. Default: none (a `other` needs one). */
+  /** Default: `spam`. An `account_restriction` takes one of ACCOUNT_RESTRICTION_REASONS. */
+  reason?: ModerationReason;
+  /**
+   * The explanation the member reads. Default: none (a `other` needs one), and for an
+   * `account_restriction`, which always has one, '계정 제한 설명'.
+   */
   note?: string | null;
   /** Default: the database clock. */
   createdAt?: Date;
   /**
-   * A `writing_restriction`'s end (#185): null or left out for 무기한. Nothing else has one.
+   * A `writing_restriction`'s or an `account_restriction`'s end (#185, #139): null or left out for
+   * 무기한. Nothing else has one.
    */
   endsAt?: Date | null;
-  /** A cancellation: when, by whom and why. */
-  cancelled?: { at: Date; by: string; reason: string };
+  /**
+   * An `account_restriction`'s approval (#139): the other admin who approves the request `createdBy`
+   * asks for — a request of the kind `account_restriction` for the member, made and approved here
+   * (migration 0042 refuses the row without one). Required for that type, refused for the others.
+   */
+  approvedBy?: string;
+  /**
+   * A cancellation: when, by whom and why — and for an `account_restriction`, the other admin who
+   * approves the request to cancel it (`approvedBy`).
+   */
+  cancelled?: { at: Date; by: string; reason: string; approvedBy?: string };
   /**
    * What a profile action took away (#37-10): kept in `profile_item_removals` for the
    * `nickname_reset`, `bio_clear` and `image_remove` types. Default: a nickname, a 소개 or no image
@@ -1059,25 +1074,64 @@ export interface CreateModerationActionInput {
  */
 export async function createModerationAction(db: Db, input: CreateModerationActionInput) {
   const type = input.type ?? (input.postId || input.commentId ? 'hide' : 'warning');
+  const account = type === 'account_restriction';
+  if (account !== (input.approvedBy !== undefined)) {
+    throw new Error(
+      'createModerationAction: approvedBy is an account_restriction’s, and its alone',
+    );
+  }
   return db.transaction(async (tx) => {
+    const id = randomUUID();
+    const approvalId = account
+      ? (
+          await createApprovalRequest(tx as unknown as Db, {
+            kind: 'account_restriction',
+            targetType: 'user',
+            targetId: input.userId,
+            requestedBy: input.createdBy,
+            ...(input.createdAt === undefined ? {} : { requestedAt: input.createdAt }),
+            decision: { status: 'approved', by: input.approvedBy! },
+          })
+        ).id
+      : null;
+    const cancelled = input.cancelled;
+    if (account && cancelled !== undefined && cancelled.approvedBy === undefined) {
+      throw new Error('createModerationAction: an account restriction is cancelled by an approval');
+    }
+    const cancelApprovalId =
+      account && cancelled !== undefined
+        ? (
+            await createApprovalRequest(tx as unknown as Db, {
+              kind: 'account_restriction_cancel',
+              targetType: 'moderation_action',
+              targetId: id,
+              requestedBy: cancelled.by,
+              requestedAt: cancelled.at,
+              decision: { status: 'approved', by: cancelled.approvedBy! },
+            })
+          ).id
+        : null;
     const [action] = await tx
       .insert(moderationActions)
       .values({
+        id,
         type,
         userId: input.userId,
         postId: input.postId ?? null,
         commentId: input.commentId ?? null,
         reason: input.reason ?? 'spam',
-        note: input.note ?? null,
+        note: input.note ?? (account ? '계정 제한 설명' : null),
         createdBy: input.createdBy,
         ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
         endsAt: input.endsAt ?? null,
-        ...(input.cancelled === undefined
+        approvalId,
+        ...(cancelled === undefined
           ? {}
           : {
-              cancelledAt: input.cancelled.at,
-              cancelledBy: input.cancelled.by,
-              cancelReason: input.cancelled.reason,
+              cancelledAt: cancelled.at,
+              cancelledBy: cancelled.by,
+              cancelReason: cancelled.reason,
+              cancelApprovalId,
             }),
       })
       .returning();
@@ -1092,6 +1146,80 @@ export async function createModerationAction(db: Db, input: CreateModerationActi
     }
     return action!;
   });
+}
+
+export interface CreateApprovalRequestInput {
+  /** The two-person rule's kind (approvals.ts), a consumer's: `account_restriction` and the rest. */
+  kind: string;
+  targetType?: string | null;
+  targetId?: string | null;
+  payload?: Record<string, unknown> | null;
+  /** The admin who asks. */
+  requestedBy: string;
+  /** Default: '요청 사유'. */
+  reason?: string;
+  /** Default: the database clock. */
+  requestedAt?: Date;
+  /**
+   * The decision, by an admin other than the requester (migration 0021 refuses the rest), a
+   * millisecond after the request unless `at` is given. Left out: pending.
+   */
+  decision?: { status: 'approved' | 'rejected'; by: string; reason?: string; at?: Date };
+  /**
+   * Retracted by its requester instead (#139, migration 0042), a millisecond after the request
+   * unless `at` is given. Not with `decision`.
+   */
+  retracted?: { at?: Date };
+}
+
+/**
+ * A two-person rule request (#171), pending, decided or retracted — inserted pending and closed by
+ * the one UPDATE migration 0021 allows, as ApprovalService does. The deciding account must hold
+ * the admin role (the trigger reads it).
+ */
+export async function createApprovalRequest(db: Db, input: CreateApprovalRequestInput) {
+  const requestedAt =
+    input.requestedAt ??
+    (await db.execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`)).rows[0]!.now;
+  const at = new Date(requestedAt);
+  const [request] = await db
+    .insert(approvalRequests)
+    .values({
+      kind: input.kind,
+      targetType: input.targetType ?? null,
+      targetId: input.targetId ?? null,
+      payload: input.payload ?? null,
+      requestedBy: input.requestedBy,
+      requestReason: input.reason ?? '요청 사유',
+      requestedAt: at,
+    })
+    .returning();
+  if (input.retracted !== undefined) {
+    if (input.decision !== undefined) {
+      throw new Error('createApprovalRequest: a request is decided or retracted, not both');
+    }
+    const [retracted] = await db
+      .update(approvalRequests)
+      .set({
+        status: 'retracted',
+        retractedAt: input.retracted.at ?? new Date(at.getTime() + 1),
+      })
+      .where(eq(approvalRequests.id, request!.id))
+      .returning();
+    return retracted!;
+  }
+  if (input.decision === undefined) return request!;
+  const [decided] = await db
+    .update(approvalRequests)
+    .set({
+      status: input.decision.status,
+      decidedBy: input.decision.by,
+      decisionReason: input.decision.reason ?? '결정 사유',
+      decidedAt: input.decision.at ?? new Date(at.getTime() + 1),
+    })
+    .where(eq(approvalRequests.id, request!.id))
+    .returning();
+  return decided!;
 }
 
 export interface CreateReportInput {

@@ -2,15 +2,19 @@ import * as z from 'zod';
 import { cursorQuerySchema } from './api/pagination.js';
 import { uuidSchema } from './api/uuid.js';
 import { adminAccountActorSchema } from './admin-accounts.js';
-import { commentedPostSchema, hiddenReasonSchema } from './authored.js';
+import { APPROVAL_REASON_MAX_LENGTH, approvalReasonSchema } from './approvals.js';
+import { commentedPostSchema } from './authored.js';
 import { normaliseCommentBody } from './comment.js';
 import {
+  accountRestrictionReasonSchema,
+  approvalStatusSchema,
   moderationActionTypeSchema,
+  moderationReasonSchema,
   reportReasonSchema,
   reportStatusSchema,
   restrictionEndChangeKindSchema,
   roleSchema,
-  type ReportReason,
+  type ModerationReason,
 } from './enums.js';
 import { NICKNAME_HOLD_DAYS } from './nickname.js';
 import { postAuthorSchema } from './post.js';
@@ -46,6 +50,16 @@ import { publicIdSchema } from './public-id.js';
  *   brings its end forward (감경, 무기한 to a term included), each with a reason. Restricted again
  *   while one stands, the one that ends later governs (#45-12 «더 늦게 끝나는 쪽»): every
  *   restriction is its own record, and the latest end among those standing is the member's.
+ * - 계정 제한 (#139, ADR-0085; ADR-0069 decision 1 #57-12…#57-15, decision 3 #37-8, #37-9, decision
+ *   4 #139 and #140 rows; ADR-0056 decision 1-7): an operator asks for a member's account to be
+ *   restricted for ACCOUNT_RESTRICTION_DAYS or 무기한, with one of ACCOUNT_RESTRICTION_REASONS and
+ *   an explanation the member reads (required), from the report queue or directly — and nothing is
+ *   in force until another admin approves the request (approval_requests). The same holds for
+ *   lifting it early, bringing its end forward (감경) and cancelling it. Under it the member places
+ *   no new order (the check #119 calls), proposes no market (#77), gives no public profile item a
+ *   new value and does not withdraw (#140); writing, likes, reports, the 관심 등록, the balance and
+ *   every record stay as they were. The member reads the fact, the reason, the end and the way to
+ *   appeal — never which operators asked or approved (#139 «건 운영자는 보이지 않는다»).
  * - Effects are immediate (#45-13). The member acted on sees the action, its reason, its end when
  *   it has one and how to appeal (by email, once per action within APPEAL_WINDOW_DAYS, #45-14 —
  *   #186 words it); never who reported nor which operator acted. The reporter sees the receipt and
@@ -151,10 +165,33 @@ export function writingRestrictionEndOf(
 }
 
 /**
- * The restrictions that refuse a member's action (RESTRICTED): `writing` (작성 제한, #185). The
- * account restriction (계정 제한, #139) joins it.
+ * The terms of an account restriction, in days (#139, ADR-0069 decision 1 #57-12 «기간제와 무기한»);
+ * 무기한 is none (`days: null`). The writing restriction's four (#45-12), as the owner decided
+ * (owner decision 2026-10-23, ADR-0085 decision 1 and 7-2). A day is 24 hours from the
+ * restriction's own time — its approval, when it comes into force.
  */
-export const RESTRICTION_KINDS = ['writing'] as const;
+export const ACCOUNT_RESTRICTION_DAYS = [1, 3, 7, 30] as const;
+export type AccountRestrictionDays = (typeof ACCOUNT_RESTRICTION_DAYS)[number];
+
+/**
+ * When an account restriction in force from `createdAt` (its approval) for `days` ends — null for
+ * 무기한. It holds while the clock is before this instant, and not at it, as a writing restriction.
+ */
+export function accountRestrictionEndOf(
+  createdAt: string | Date,
+  days: AccountRestrictionDays | null,
+): Date | null {
+  if (days === null) return null;
+  const start = typeof createdAt === 'string' ? new Date(createdAt) : createdAt;
+  return new Date(start.getTime() + days * 24 * 60 * 60 * 1_000);
+}
+
+/**
+ * The restrictions that refuse a member's action (RESTRICTED): `writing` (작성 제한, #185) and
+ * `account` (계정 제한, #139). A refusal both refuse — a public profile item's new value, a market
+ * proposal, 탈퇴 — names the one that ends later (ADR-0085 7-6).
+ */
+export const RESTRICTION_KINDS = ['writing', 'account'] as const;
 export type RestrictionKind = (typeof RESTRICTION_KINDS)[number];
 
 /**
@@ -172,14 +209,21 @@ export const restrictedDetailsSchema = z
 export type RestrictedDetails = z.infer<typeof restrictedDetailsSchema>;
 
 /**
- * `GET /me/moderation/restriction` (#185): the restriction that governs the member now — the
- * kind and end a refused write names (RESTRICTED's details) — or null when none stands. What the
- * banner reads (ADR-0069 decision 4 #50 «진행 중인 제재가 있으면 MY 요약·글쓰기 화면의 안내 띠»),
- * apart from the paged list of actions, so no number of later actions keeps it from the banner.
- * The member's own: never the operator, the reason nor a report (#45-13).
+ * `GET /me/moderation/restriction` (#185, #139): the restrictions that govern the member now, each
+ * as a refusal names it (RESTRICTED's details) or null when none of that kind stands —
+ * `restriction`, the writing restriction (#185: what a refused post, comment or edit names), and
+ * `accountRestriction`, the account restriction (#139: what a refused order names). What the
+ * banners read (ADR-0069 decision 4 #50 «진행 중인 제재가 있으면 MY 요약·글쓰기 화면의 안내 띠»),
+ * apart from the paged list of actions, so no number of later actions keeps one from a banner.
+ * The member's own: never the operator, the reason nor a report (#45-13, #139).
  */
 export const myRestrictionSchema = z
-  .object({ restriction: restrictedDetailsSchema.nullable() })
+  .object({
+    /** The writing restriction in force (kind `writing`), or null. */
+    restriction: restrictedDetailsSchema.nullable(),
+    /** The account restriction in force (kind `account`), or null. */
+    accountRestriction: restrictedDetailsSchema.nullable(),
+  })
   .meta({ id: 'MyRestriction' });
 export type MyRestriction = z.infer<typeof myRestrictionSchema>;
 
@@ -230,7 +274,7 @@ function requiredTextSchema(max: number) {
 export const OTHER_NEEDS_TEXT_MESSAGE = 'required with the reason other';
 
 /** Whether `reason` needs a text beside it: '기타' does (#45-10 «'기타'는 설명이 필수다»). */
-export function reasonNeedsText(reason: ReportReason): boolean {
+export function reasonNeedsText(reason: ModerationReason): boolean {
   return reason === 'other';
 }
 
@@ -375,6 +419,21 @@ export const myActionSubjectSchema = z
 export type MyActionSubject = z.infer<typeof myActionSubjectSchema>;
 
 /**
+ * The reason an action carries (owner decision 2026-10-22 on #51, ADR-0080: «사유 목록 중 하나 + 운영자
+ * 설명»): the reason the operator picked — a report reason (#45-10), or for an account restriction
+ * one of ACCOUNT_RESTRICTION_REASONS (#57-12) — and the explanation they wrote, null when none.
+ * `HiddenReason`'s shape: a hiding's is one of these.
+ */
+export const actionReasonSchema = z
+  .object({
+    code: moderationReasonSchema,
+    /** The operator's explanation, as they wrote it; null when they wrote none. */
+    note: z.string().nullable(),
+  })
+  .meta({ id: 'ActionReason' });
+export type ActionReason = z.infer<typeof actionReasonSchema>;
+
+/**
  * How an operator brought a writing restriction's end forward, as the member reads it (#185, owner
  * decision 2026-10-23 answer 4: «조기 해제·감경 → 회원의 조치·신고 내역에 '조기 해제됨'·'감경됨'과 바뀐
  * 끝, 원래 끝을 보임(사유는 운영자만)»): the kind of the latest change — `lift` (조기 해제됨, which
@@ -392,26 +451,28 @@ export type MyRestrictionEndChange = z.infer<typeof myRestrictionEndChangeSchema
 
 /**
  * One action an operator took on the member (`GET /me/moderation/actions`, #45-13: «조치 종류·사유·
- * 기간·이의 방법»): its type, the reason — the report reason the operator picked and the explanation
- * they wrote (`HiddenReason`'s shape, ADR-0080) — when, its end (`endsAt`: a writing restriction's
- * as it stands now — brought forward when an operator lifted it or shortened it (#185) — and null
- * for 무기한; null for every type #50 takes, which have no end), how it was brought forward
- * (`endChange`, #185) and whether it was cancelled since. The appeal deadline is
+ * 기간·이의 방법»; #139: «제한 사실·사유·종료 시각·이의 경로»): its type, the reason — the reason the
+ * operator picked and the explanation they wrote (`ActionReason`, ADR-0080) — when (an account
+ * restriction's: when its approval put it in force), its end (`endsAt`: a writing or an account
+ * restriction's as it stands now — brought forward when an operator lifted it or shortened it
+ * (#185, #139) — and null for 무기한; null for every type #50 takes, which have no end), how it was
+ * brought forward (`endChange`) and whether it was cancelled since. The appeal deadline is
  * `appealDeadlineOf(createdAt)`, in time to the end of its minute (`appealWindowEndOf`). Never the
- * operator, nor a report or its reporter, nor who changed the end or why (operators' record,
- * ADR-0082).
+ * operator, nor a report or its reporter, nor who changed the end or why, nor who asked for or
+ * approved an account restriction (operators' record, ADR-0082, ADR-0085).
  */
 export const myModerationActionSchema = z
   .object({
     id: z.uuid(),
     type: moderationActionTypeSchema,
-    reason: hiddenReasonSchema,
+    reason: actionReasonSchema,
     subject: myActionSubjectSchema.nullable(),
     createdAt: z.iso.datetime(),
     endsAt: z.iso.datetime().nullable(),
     /**
-     * A writing restriction an operator lifted early or shortened: the latest change's kind and the
-     * end it was given. Null when its end never changed, and for every type #50 takes.
+     * A writing or an account restriction an operator lifted early or shortened: the latest
+     * change's kind and the end it was given. Null when its end never changed, and for every type
+     * #50 takes.
      */
     endChange: myRestrictionEndChangeSchema.nullable(),
     /** When an operator cancelled it; null while it stands. */
@@ -510,10 +571,30 @@ export const removedProfileItemSchema = z
 export type RemovedProfileItem = z.infer<typeof removedProfileItemSchema>;
 
 /**
- * One change of a writing restriction's end, for operators (#185, ADR-0082): a shortening (감경) or
- * an early lift (조기 해제), the end before it (null for 무기한) and after it, the operator's reason
- * (operators only, as a cancellation's), who and when — the operator withheld for the admin the
- * restriction is on (`aboutViewer`).
+ * Another admin's approval that put an account restriction's step in force (#139, ADR-0056
+ * decision 1-7): the request it decided (`approval_requests`), the approving admin — withheld for
+ * the admin the restriction is on (`aboutViewer`) — their reason and when. The step itself was
+ * asked for by the operator its record names (`createdBy`, `cancelledBy`), with that operator's
+ * reason.
+ */
+export const moderationApprovalSchema = z
+  .object({
+    requestId: z.uuid(),
+    /** Null for the admin the restriction is on (`aboutViewer`). */
+    decidedBy: adminAccountActorSchema.nullable(),
+    reason: z.string(),
+    decidedAt: z.iso.datetime(),
+  })
+  .meta({ id: 'ModerationApproval' });
+export type ModerationApproval = z.infer<typeof moderationApprovalSchema>;
+
+/**
+ * One change of a writing or an account restriction's end, for operators (#185, ADR-0082; #139,
+ * ADR-0085): a shortening (감경) or an early lift (조기 해제), the end before it (null for 무기한)
+ * and after it, the operator's reason (operators only, as a cancellation's), who and when — the
+ * operator withheld for the admin the restriction is on (`aboutViewer`). An account restriction's
+ * change is the asking operator's and comes into force with another admin's approval
+ * (`approval`); a writing restriction's has none.
  */
 export const restrictionEndChangeSchema = z
   .object({
@@ -524,6 +605,8 @@ export const restrictionEndChangeSchema = z
     /** Null for the admin the restriction is on (`aboutViewer`). */
     createdBy: adminAccountActorSchema.nullable(),
     createdAt: z.iso.datetime(),
+    /** The approval it came into force by (an account restriction's); null for a writing one. */
+    approval: moderationApprovalSchema.nullable(),
   })
   .meta({ id: 'RestrictionEndChange' });
 export type RestrictionEndChange = z.infer<typeof restrictionEndChangeSchema>;
@@ -539,23 +622,39 @@ export const adminModerationActionSchema = z
     user: moderationUserSchema,
     /** The item it was about (a hiding's, a warning's or a restriction's when given), or null. */
     subject: moderationTargetSchema.nullable(),
-    reason: hiddenReasonSchema,
-    /** The operator who took it; null for the admin it was taken on (`aboutViewer`). */
+    reason: actionReasonSchema,
+    /**
+     * The operator who took it — for an account restriction, the one who asked for it; null for
+     * the admin it was taken on (`aboutViewer`).
+     */
     createdBy: adminAccountActorSchema.nullable(),
+    /** When it was taken — an account restriction's: when its approval put it in force. */
     createdAt: z.iso.datetime(),
     /**
-     * A writing restriction's end as it stands now (null: 무기한); null for the other types. The
-     * changes that brought it forward are `endChanges`.
+     * An account restriction's approval by another admin (#139); null for the other types.
+     */
+    approval: moderationApprovalSchema.nullable(),
+    /**
+     * A writing or an account restriction's end as it stands now (null: 무기한); null for the
+     * other types. The changes that brought it forward are `endChanges`.
      */
     endsAt: z.iso.datetime().nullable(),
     cancelledAt: z.iso.datetime().nullable(),
-    /** Who cancelled it; null while it stands, and for the admin it was taken on. */
+    /**
+     * Who cancelled it — an account restriction's: who asked for the cancellation; null while it
+     * stands, and for the admin it was taken on.
+     */
     cancelledBy: adminAccountActorSchema.nullable(),
     cancelReason: z.string().nullable(),
+    /** The approval an account restriction's cancellation came into force by; null otherwise. */
+    cancelApproval: moderationApprovalSchema.nullable(),
     removed: removedProfileItemSchema.nullable(),
     /** How many reports it resolved. */
     reportCount: z.number().int().min(0),
-    /** A writing restriction's shortenings and lift, oldest first; empty for the other types. */
+    /**
+     * A writing or an account restriction's shortenings and lift, oldest first; empty for the
+     * other types.
+     */
     endChanges: z.array(restrictionEndChangeSchema),
     aboutViewer: aboutViewerSchema,
   })
@@ -704,10 +803,177 @@ export const adminCommentModerationSchema = z
   .meta({ id: 'AdminCommentModeration' });
 export type AdminCommentModeration = z.infer<typeof adminCommentModerationSchema>;
 
+// ---- account restriction requests (#139, ADR-0085) ----------------------------------------------
+
+/**
+ * What an account restriction request asks for (#139, ADR-0056 decision 1-7 «계정 제한·해제는 다른
+ * 운영자의 승인»; ADR-0069 decision 1 #57-12 and decision 2 #45-14): `apply` — restrict the member's
+ * account; `shorten` — bring a standing restriction's end forward (감경, 무기한 to a term included);
+ * `lift` — end it now (조기 해제); `cancel` — void it (취소, #50). Each is done only once another
+ * admin approves the request, and then in the approval's transaction.
+ */
+export const ACCOUNT_RESTRICTION_CHANGES = ['apply', 'shorten', 'lift', 'cancel'] as const;
+export type AccountRestrictionChange = (typeof ACCOUNT_RESTRICTION_CHANGES)[number];
+export const accountRestrictionChangeSchema = z
+  .enum(ACCOUNT_RESTRICTION_CHANGES)
+  .meta({ id: 'AccountRestrictionChange' });
+
+/**
+ * The two-person rule's `kind` of each change (approvals.ts: lower-case words joined by `_`) — the
+ * names `approval_requests.kind` holds for #139 (migration 0042's triggers match them).
+ */
+export const ACCOUNT_RESTRICTION_APPROVAL_KINDS = {
+  apply: 'account_restriction',
+  shorten: 'account_restriction_shorten',
+  lift: 'account_restriction_lift',
+  cancel: 'account_restriction_cancel',
+} as const satisfies Record<AccountRestrictionChange, string>;
+export type AccountRestrictionApprovalKind =
+  (typeof ACCOUNT_RESTRICTION_APPROVAL_KINDS)[AccountRestrictionChange];
+
+/** The change an approval request's `kind` names, or null for another consumer's request. */
+export function accountRestrictionChangeOf(kind: string): AccountRestrictionChange | null {
+  const found = ACCOUNT_RESTRICTION_CHANGES.find(
+    (change) => ACCOUNT_RESTRICTION_APPROVAL_KINDS[change] === kind,
+  );
+  return found ?? null;
+}
+
+/**
+ * What an `apply` request asks for: the reason (one of ACCOUNT_RESTRICTION_REASONS and the
+ * explanation the member will read), the term (`days`, null for 무기한), what it is about (the
+ * member's post, comment or profile, whose pending reports its approval resolves; null for none)
+ * and the operators' own memo (owner decision 2026-10-23, ADR-0085: optional, for every operator —
+ * the one who asked included — never the member's: null for none, and for the admin it is about).
+ */
+export const accountRestrictionApplySchema = z
+  .object({
+    reason: actionReasonSchema,
+    days: z.number().int().positive().nullable(),
+    subject: moderationTargetSchema.nullable(),
+    memo: z.string().nullable(),
+  })
+  .meta({ id: 'AccountRestrictionApply' });
+export type AccountRestrictionApply = z.infer<typeof accountRestrictionApplySchema>;
+
+/**
+ * Why a pending request can no longer be approved (MODERATION_NOT_ALLOWED's reasons an approval
+ * re-checks): the restriction was cancelled (`cancelled`) or has ended (`ended`) since — the
+ * change it asks for has nothing left to change — or a 감경's end is not before the end now
+ * (`not_earlier`) or no longer to come (`end_passed`).
+ */
+export const ACCOUNT_RESTRICTION_MOOTS = [
+  'cancelled',
+  'ended',
+  'not_earlier',
+  'end_passed',
+] as const;
+export type AccountRestrictionMoot = (typeof ACCOUNT_RESTRICTION_MOOTS)[number];
+
+/**
+ * The restriction a `shorten`, `lift` or `cancel` request is about, as it stands now: when it was
+ * given (its approval's time), its end now (null: 무기한), its reason and its cancellation. A member
+ * can have several account restrictions (ADR-0085 7-3), so the approving admin reads which one the
+ * request changes and how far a 감경 brings its end forward.
+ */
+export const accountRestrictionTargetSchema = z
+  .object({
+    createdAt: z.iso.datetime(),
+    endsAt: z.iso.datetime().nullable(),
+    reason: actionReasonSchema,
+    cancelledAt: z.iso.datetime().nullable(),
+  })
+  .meta({ id: 'AccountRestrictionTarget' });
+export type AccountRestrictionTarget = z.infer<typeof accountRestrictionTargetSchema>;
+
+/**
+ * One account restriction request, for operators (#139, ADR-0085): what it asks for, the member it
+ * is about, who asked, why and when, and how it closed — `pending` until an admin other than the
+ * one who asked approves or rejects it, once (`approval_requests`), or until the one who asked
+ * retracts it (`retracted`, `retractedAt` — owner decision 2026-10-23: theirs alone, before any
+ * decision, recorded; a retracted request is decided by no one). There is no expiry. One about an
+ * operator is decided by a third admin, neither the one who asked nor that operator (7-15), and is
+ * not taken at all when no such admin exists (MODERATION_NOT_ALLOWED `no_decider`, owner decision
+ * 2026-10-23). `moot` says what an approval would be refused for now — the restriction cancelled,
+ * ended or past the end asked for since the request (MODERATION_NOT_ALLOWED's reason) — so the
+ * screen offers only a rejection; null when it can be approved, and once closed. For the admin the
+ * request is about (`aboutViewer`) the asking and the deciding admins and the operators' memo are
+ * withheld (owner decision 2026-10-21, ADR-0081; 2026-10-23), and they decide nothing about
+ * themselves (`own`).
+ */
+export const accountRestrictionRequestSchema = z
+  .object({
+    id: z.uuid(),
+    change: accountRestrictionChangeSchema,
+    user: moderationUserSchema,
+    /**
+     * The restriction a `shorten`, `lift` or `cancel` is about; for an `apply`, the restriction
+     * its approval put in force (null while pending, and once rejected).
+     */
+    actionId: z.uuid().nullable(),
+    /** The restriction a `shorten`, `lift` or `cancel` changes, as it stands now; null for `apply`. */
+    target: accountRestrictionTargetSchema.nullable(),
+    /** What an `apply` asks for; null for the other changes. */
+    apply: accountRestrictionApplySchema.nullable(),
+    /** The end a `shorten` asks for; null for the other changes. */
+    endsAt: z.iso.datetime().nullable(),
+    /**
+     * Why it was asked for: an `apply`'s explanation (the one the member reads), the reason of a
+     * change (operators only).
+     */
+    requestReason: z.string(),
+    /** Null for the admin the request is about (`aboutViewer`). */
+    requestedBy: adminAccountActorSchema.nullable(),
+    requestedAt: z.iso.datetime(),
+    status: approvalStatusSchema,
+    /** Who decided it; null while pending, once retracted, and for the admin it is about. */
+    decidedBy: adminAccountActorSchema.nullable(),
+    decisionReason: z.string().nullable(),
+    decidedAt: z.iso.datetime().nullable(),
+    /**
+     * When the one who asked retracted it (`retracted`); null otherwise. Who retracted it is who
+     * asked (`requestedBy`) — no one else can.
+     */
+    retractedAt: z.iso.datetime().nullable(),
+    /** What approving it would be refused for now; null when it can be approved, or decided. */
+    moot: z.enum(ACCOUNT_RESTRICTION_MOOTS).meta({ id: 'AccountRestrictionMoot' }).nullable(),
+    aboutViewer: aboutViewerSchema,
+  })
+  .meta({ id: 'AccountRestrictionRequest' });
+export type AccountRestrictionRequest = z.infer<typeof accountRestrictionRequestSchema>;
+
+/**
+ * Which requests (`GET /admin/moderation/account-restriction-requests`): `pending` — those waiting
+ * for a decision, the one waiting longest first — `decided` — approved or rejected, the latest
+ * decision first — or `retracted` — retracted by the one who asked, the latest first.
+ */
+export const ACCOUNT_RESTRICTION_REQUEST_QUEUES = ['pending', 'decided', 'retracted'] as const;
+export type AccountRestrictionRequestQueue = (typeof ACCOUNT_RESTRICTION_REQUEST_QUEUES)[number];
+
+/** `GET /admin/moderation/account-restriction-requests` (no `.meta`: a query, expanded per field). */
+export const accountRestrictionRequestQuerySchema = cursorQuerySchema.extend({
+  status: z.enum(ACCOUNT_RESTRICTION_REQUEST_QUEUES).default('pending'),
+});
+export type AccountRestrictionRequestQuery = z.infer<typeof accountRestrictionRequestQuerySchema>;
+
+/**
+ * The answer of an approval or a rejection: the request as decided, and the restriction as it
+ * stands after — the one given or changed by an approval, the one a rejected change was about —
+ * or null for a rejected `apply`.
+ */
+export const accountRestrictionDecisionSchema = z
+  .object({
+    request: accountRestrictionRequestSchema,
+    action: adminModerationActionSchema.nullable(),
+  })
+  .meta({ id: 'AccountRestrictionDecision' });
+export type AccountRestrictionDecision = z.infer<typeof accountRestrictionDecisionSchema>;
+
 /**
  * `GET /admin/moderation/users/:userId`: a member's public profile as it is now (the image at its
  * operator-only address), the reports on the profile and every action taken on the member — the
- * profile items taken away among them, kept for operators (#37-10).
+ * profile items taken away among them, kept for operators (#37-10) — and the account restriction
+ * requests about the member that wait for a decision (#139), the oldest first.
  */
 export const adminUserModerationSchema = z
   .object({
@@ -717,6 +983,7 @@ export const adminUserModerationSchema = z
     reports: z.array(adminReportSchema),
     reporterCount: z.number().int().min(0),
     actions: z.array(adminModerationActionSchema),
+    accountRestrictionRequests: z.array(accountRestrictionRequestSchema),
   })
   .meta({ id: 'AdminUserModeration' });
 export type AdminUserModeration = z.infer<typeof adminUserModerationSchema>;
@@ -724,7 +991,8 @@ export type AdminUserModeration = z.infer<typeof adminUserModerationSchema>;
 /**
  * The reason every action carries (owner decision 2026-10-22 on #51, ADR-0080: «사유 목록 중 하나 +
  * 운영자 설명»): a report reason and the operator's explanation the member reads — optional, and
- * required with `other` as a report's description is (ADR-0081).
+ * required with `other` as a report's description is (ADR-0081). An account restriction's is its
+ * own (`accountRestrictionBodySchema`).
  */
 const actionReasonShape = {
   reason: reportReasonSchema,
@@ -736,7 +1004,10 @@ const actionReasonShape = {
   expectedAccountId: expectedAccountIdSchema,
 };
 
-function noteForOther(body: { reason: ReportReason; note: string | null }, ctx: z.RefinementCtx) {
+function noteForOther(
+  body: { reason: ModerationReason; note: string | null },
+  ctx: z.RefinementCtx,
+) {
   if (reasonNeedsText(body.reason) && body.note === null) {
     ctx.addIssue({ code: 'custom', path: ['note'], message: OTHER_NEEDS_TEXT_MESSAGE });
   }
@@ -821,6 +1092,72 @@ export const liftRestrictionBodySchema = z
 export type LiftRestrictionBody = z.input<typeof liftRestrictionBodySchema>;
 export type ParsedLiftRestrictionBody = z.output<typeof liftRestrictionBodySchema>;
 
+/**
+ * `POST /admin/moderation/users/:userId/account-restriction` (계정 제한, #139): a request, in force
+ * once another admin approves it — the reason, one of ACCOUNT_RESTRICTION_REASONS, and the
+ * explanation the member reads, required whatever the reason (ADR-0069 decision 1 #57-12 «정한
+ * 목록에서 하나 … 와 필수 설명»), which is also the request's reason the approving admin reads (at
+ * most APPROVAL_REASON_MAX_LENGTH UTF-16 units, as the request keeps it); the term — `days` of
+ * ACCOUNT_RESTRICTION_DAYS, or null for 무기한, always said — what it is about (optional, a
+ * warning's `subject`: the member's post, comment or profile, whose pending reports the approval
+ * resolves — the report queue's way to it) and the operators' own memo (optional, for the operators
+ * and never the member — owner decision 2026-10-23, ADR-0085).
+ */
+export const accountRestrictionBodySchema = z
+  .object({
+    reason: accountRestrictionReasonSchema,
+    note: requiredTextSchema(MODERATION_NOTE_MAX_LENGTH)
+      .superRefine((text, ctx) => {
+        if (text.length > APPROVAL_REASON_MAX_LENGTH) {
+          ctx.addIssue({
+            code: 'custom',
+            message: textTooLongMessage(APPROVAL_REASON_MAX_LENGTH, text.length),
+          });
+        }
+      })
+      .describe(
+        `The explanation the member reads, plain text, at most ${String(MODERATION_NOTE_MAX_LENGTH)} ` +
+          'characters after trimming; required. Also the reason the approving admin reads',
+      ),
+    days: z
+      .literal(ACCOUNT_RESTRICTION_DAYS)
+      .nullable()
+      .describe(
+        'The term in days, 24 hours each from the approval that puts it in force; null for 무기한',
+      ),
+    subject: warningSubjectSchema.nullable().default(null),
+    memo: optionalTextSchema(MODERATION_REASON_MAX_LENGTH).describe(
+      'The operators’ own memo, read by the admins (not one the request is about), plain text, at most ' +
+        `${String(MODERATION_REASON_MAX_LENGTH)} characters after trimming; optional, never ` +
+        'shown to the member',
+    ),
+    expectedAccountId: expectedAccountIdSchema,
+  })
+  .meta({ id: 'AccountRestrictionBody' });
+export type AccountRestrictionBody = z.input<typeof accountRestrictionBodySchema>;
+export type ParsedAccountRestrictionBody = z.output<typeof accountRestrictionBodySchema>;
+
+/**
+ * `POST /admin/moderation/account-restriction-requests/:requestId/approve` and `…/reject`: the
+ * deciding admin's reason, required (approvals.ts), and the account the screen shows.
+ */
+export const approvalDecisionBodySchema = z
+  .object({ reason: approvalReasonSchema, expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'ApprovalDecisionBody' });
+export type ApprovalDecisionBody = z.input<typeof approvalDecisionBodySchema>;
+export type ParsedApprovalDecisionBody = z.output<typeof approvalDecisionBodySchema>;
+
+/**
+ * `POST /admin/moderation/account-restriction-requests/:requestId/retract` (owner decision
+ * 2026-10-23, ADR-0085): the account the screen shows, which must be the one who asked. No reason
+ * is asked: the record is who retracted it and when.
+ */
+export const approvalRetractionBodySchema = z
+  .object({ expectedAccountId: expectedAccountIdSchema })
+  .meta({ id: 'ApprovalRetractionBody' });
+export type ApprovalRetractionBody = z.input<typeof approvalRetractionBodySchema>;
+export type ParsedApprovalRetractionBody = z.output<typeof approvalRetractionBodySchema>;
+
 /** `POST /admin/moderation/actions/:actionId/cancel`: why (required, operators only). */
 export const cancelModerationBodySchema = z
   .object({
@@ -868,9 +1205,15 @@ export type DismissedReports = z.infer<typeof dismissedReportsSchema>;
  * - `resolved`: a report was processed already;
  * - `not_theirs`: a warning's or a restriction's subject is not the member's;
  * - `not_restriction`: a shortening or a lift of an action that is no writing restriction (#185);
- * - `ended`: a shortening or a lift of a writing restriction that has ended already;
+ * - `ended`: a shortening or a lift of a restriction that has ended already;
  * - `not_earlier`: a shortening whose end is not before the restriction's end now;
- * - `end_passed`: a shortening whose end is not to come — a lift ends it now.
+ * - `end_passed`: a shortening whose end is not to come — a lift ends it now;
+ * - `approval_required`: a direct shortening, lift or cancellation of an account restriction, which
+ *   only another admin's approval of a request does (#139, ADR-0056 decision 1-7);
+ * - `not_account_restriction`: a request to shorten, lift or cancel an action that is no account
+ *   restriction (#139);
+ * - `no_decider`: an account restriction request no admin could decide — there is none but the one
+ *   asking and the member it is about (#139, owner decision 2026-10-23: refused when asked).
  */
 export const MODERATION_REFUSALS = [
   'own',
@@ -884,6 +1227,9 @@ export const MODERATION_REFUSALS = [
   'ended',
   'not_earlier',
   'end_passed',
+  'approval_required',
+  'not_account_restriction',
+  'no_decider',
 ] as const;
 export type ModerationRefusal = (typeof MODERATION_REFUSALS)[number];
 export const moderationNotAllowedDetailsSchema = z

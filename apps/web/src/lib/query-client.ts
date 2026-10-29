@@ -27,11 +27,12 @@ import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from './moderation';
 import { type CachedSeries, joinSeries } from './ticks';
 
 /**
- * A write refused with RESTRICTED (#185, ADR-0082) means a writing restriction stands — maybe one
- * an operator gave while the page was open — so the member's restriction is read again and the
- * banner on the page (`SanctionBanner`: MY 요약, 글쓰기, MY 설정) says it with its end, and their
- * actions too, for 조치·신고 내역. Nothing for any other answer. `active` only, as every
- * invalidation here: an unmounted list just goes stale.
+ * A write refused with RESTRICTED (#185, ADR-0082; #139, ADR-0085) means a writing or an account
+ * restriction stands — maybe one an operator gave, or another admin approved, while the page was
+ * open — so the member's restrictions are read again and the banner on the page (`SanctionBanner`:
+ * MY 요약, 글쓰기, MY 설정) says them with their ends, and their actions too, for 조치·신고 내역.
+ * Nothing for any other answer. `active` only, as every invalidation here: an unmounted list just
+ * goes stale.
  *
  * One rule for every write that can meet it — posts, comments, edits, the public profile items,
  * every mutation through the MutationCache below, and a post's image, a plain call, through its

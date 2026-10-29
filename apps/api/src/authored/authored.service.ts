@@ -16,7 +16,7 @@ import {
   type ReportReason,
   type Role,
 } from '@buddha/shared';
-import { and, desc, eq, isNull, type SQL } from 'drizzle-orm';
+import { and, desc, eq, isNull, sql, type SQL } from 'drizzle-orm';
 import { alias, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { visibleCommentCountSql } from '../comments/comment-queries.js';
 import { keysetPredicate } from '../common/keyset.js';
@@ -181,6 +181,13 @@ function hiddenNoticeOf(row: {
 const standingHide = alias(schema.moderationActions, 'standing_hide');
 
 /**
+ * A standing hiding's reason, typed as the report reason it is: the `report_reason` enum also
+ * holds the two only an account restriction takes (#139), and migration 0042's CHECK keeps every
+ * other action — a hiding among them — to REPORT_REASONS.
+ */
+const STANDING_HIDE_REASON = sql<ReportReason | null>`${standingHide.reason}`;
+
+/**
  * 작성자별 글·댓글 목록 (#51, ADR-0080): a member's posts and comments, newest first, a page at a
  * time — on the public profile (ADR-0069 decision 3 #37-14) and on the member's own MY '내 글'
  * (decision 4 #51, decision 2 #45-5). One rule for what a list holds, which the profile's counts
@@ -255,7 +262,7 @@ export class AuthoredService {
         createdAt: posts.createdAt,
         editedAt: posts.editedAt,
         hiddenAt: posts.hiddenAt,
-        hideReason: standingHide.reason,
+        hideReason: STANDING_HIDE_REASON,
         hideNote: standingHide.note,
         author: authorColumns,
         market: marketColumns,
@@ -301,7 +308,7 @@ export class AuthoredService {
         createdAt: postComments.createdAt,
         editedAt: postComments.editedAt,
         hiddenAt: postComments.hiddenAt,
-        hideReason: standingHide.reason,
+        hideReason: STANDING_HIDE_REASON,
         hideNote: standingHide.note,
         author: authorColumns,
         likeCount: commentLikeCountSql(postComments.id),

@@ -1,9 +1,10 @@
 /**
- * The two-person rule (#171) against the docker `test` profile, with a test kind — no consumer
- * uses it yet. The requester's own decision is refused, another admin's is taken, a decider who
- * is not an admin now is refused, a request is decided once, and the requester, the decider, both
- * instants and both reasons are kept — the decision strictly after the request, even when the
- * clock steps back in between. Skips when TEST_* are unset.
+ * The two-person rule (#171) against the docker `test` profile, with a test kind. The requester's
+ * own decision is refused, another admin's is taken, a decider who is not an admin now is refused,
+ * a request is decided once, and the requester, the decider, both instants and both reasons are
+ * kept — the decision strictly after the request, even when the clock steps back in between. A
+ * retraction (a consumer's choice, #139) is the requester's alone, of a pending request, and
+ * closes it to every decision. Skips when TEST_* are unset.
  */
 import { randomUUID } from 'node:crypto';
 import { type Db, schema } from '@buddha/db';
@@ -95,6 +96,7 @@ describe.skipIf(!hasTestInfra)('ApprovalService (integration)', () => {
       decidedBy: null,
       decisionReason: null,
       decidedAt: null,
+      retractedAt: null,
     });
     expect(request.requestedAt).toBeInstanceOf(Date);
     expect(await rows()).toEqual([request]);
@@ -212,6 +214,73 @@ describe.skipIf(!hasTestInfra)('ApprovalService (integration)', () => {
       approvals.request({ kind: 'Market Open', requestedBy: requester, reason: '시험' }),
     ).rejects.toThrow(/approval kind/);
     expect(await rows()).toEqual([request]);
+  });
+
+  it('takes a retraction by the requester alone, of a pending request, closing it to every decision (#139)', async () => {
+    const request = await open();
+    // Anyone else, admin or not, is refused; nothing is written.
+    expect(await refusal(approvals.retract(other, request.id))).toEqual({
+      code: 'APPROVAL_NOT_ALLOWED',
+      detail: 'not_requester',
+    });
+    expect(await refusal(approvals.retract(member, request.id))).toEqual({
+      code: 'FORBIDDEN',
+      detail: undefined,
+    });
+    expect(await rows()).toEqual([request]);
+    // The requester, strictly after the request even when the clock steps back.
+    clock.shiftMs = -60_000;
+    const retracted = await approvals.retract(requester, request.id);
+    expect(retracted).toMatchObject({
+      status: 'retracted',
+      requestedBy: requester,
+      decidedBy: null,
+      decisionReason: null,
+      decidedAt: null,
+    });
+    expect(retracted.retractedAt!.getTime()).toBe(request.requestedAt.getTime() + 1);
+    // Closed: no decision, no second retraction.
+    for (const decide of ['approve', 'reject'] as const) {
+      expect(await refusal(approvals[decide](other, request.id, '늦은 결정'))).toEqual({
+        code: 'APPROVAL_NOT_ALLOWED',
+        detail: 'retracted',
+      });
+    }
+    expect(await refusal(approvals.retract(requester, request.id))).toEqual({
+      code: 'APPROVAL_NOT_ALLOWED',
+      detail: 'retracted',
+    });
+    expect(await rows()).toEqual([retracted]);
+    // A decided request is not retracted; a requester revoked since retracts nothing.
+    clock.shiftMs = 0;
+    const decided = await approvals.approve(other, (await open()).id, '승인');
+    expect(await refusal(approvals.retract(requester, decided.id))).toEqual({
+      code: 'APPROVAL_NOT_ALLOWED',
+      detail: 'decided',
+    });
+    const pending = await open();
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'user' })
+      .where(eq(schema.profiles.userId, requester));
+    expect(await refusal(approvals.retract(requester, pending.id))).toEqual({
+      code: 'FORBIDDEN',
+      detail: undefined,
+    });
+    expect(await approvals.get(pending.id)).toEqual(pending);
+  });
+
+  it('takes exactly one of a retraction and a decision made at once', async () => {
+    const request = await open();
+    const outcomes = await Promise.allSettled([
+      approvals.retract(requester, request.id),
+      approvals.approve(other, request.id, '동시 결정'),
+    ]);
+    expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+    const failed = outcomes.find((outcome) => outcome.status === 'rejected');
+    expect(failed && (failed.reason as AppError).code).toBe('APPROVAL_NOT_ALLOWED');
+    const [row] = await rows();
+    expect(['retracted', 'approved']).toContain(row!.status);
   });
 
   it("decides inside the consumer's transaction: rolled back with it", async () => {

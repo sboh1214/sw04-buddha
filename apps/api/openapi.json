@@ -10845,7 +10845,7 @@
             "session": []
           }
         ],
-        "summary": "The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. Never the operator, a report, a reporter, nor why an end changed",
+        "summary": "The actions operators took on the account, newest first: the type, the reason (a report reason — or an account restriction’s own — and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing or an account restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. An account restriction is here once another admin approved it. Never the operator, the approving admin, a report, a reporter, nor why an end changed",
         "tags": [
           "me"
         ]
@@ -10901,7 +10901,7 @@
             "session": []
           }
         ],
-        "summary": "The writing restriction that governs the account now, as a refused write names it: its kind and its end (null: none, until an operator lifts it) — the latest end of those standing, one with no end over any. Null when none stands. Never the operator, the reason nor a report",
+        "summary": "The restrictions that govern the account now, each as a refusal names it: the writing restriction (`restriction`, what a refused post, comment or edit names) and the account restriction (`accountRestriction`, what a refused order names) — its kind and its end (null: none, until it is lifted), the latest end of those standing, one with no end over any. Null when none of that kind stands; an account restriction not yet approved is none. Never the operator, the reason nor a report",
         "tags": [
           "me"
         ]
@@ -11368,7 +11368,7 @@
             "session": []
           }
         ],
-        "summary": "Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. A nickname reset’s cancellation restores no nickname but hands the hold of the nickname taken away to the member: other accounts stay held for the rest of the 30 days from the reset, and while that hold stands the member picks that nickname, exactly as it was taken away, with no change interval, even after a pick since the reset, once (taken back and given up again, it keeps the interval, as any other nickname does). One cancelled already is `cancelled`; one on the acting admin is `own`",
+        "summary": "Cancel an action with a reason (recorded): a hidden item shows again; a profile item is not restored. A nickname reset’s cancellation restores no nickname but hands the hold of the nickname taken away to the member: other accounts stay held for the rest of the 30 days from the reset, and while that hold stands the member picks that nickname, exactly as it was taken away, with no change interval, even after a pick since the reset, once (taken back and given up again, it keeps the interval, as any other nickname does). One cancelled already is `cancelled`; one on the acting admin is `own`; an account restriction is cancelled only by an approved request (`approval_required`)",
         "tags": [
           "admin"
         ]
@@ -11485,7 +11485,7 @@
             "session": []
           }
         ],
-        "summary": "Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason (recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing restriction is `not_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own`. The member reads the new end",
+        "summary": "Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason (recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing restriction is `not_restriction` — an account restriction `approval_required`, its end moving only by an approved request — a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own`. The member reads the new end",
         "tags": [
           "admin"
         ]
@@ -11602,7 +11602,7 @@
             "session": []
           }
         ],
-        "summary": "Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators only): it ends now and stays on the record as given. Refused as a shortening is (`not_restriction`, `cancelled`, `ended`, `own`)",
+        "summary": "Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators only): it ends now and stays on the record as given. Refused as a shortening is (`not_restriction`, `approval_required`, `cancelled`, `ended`, `own`)",
         "tags": [
           "admin"
         ]
@@ -12849,6 +12849,954 @@
           }
         ],
         "summary": "Remove a member’s profile image with a reason: served to nobody from then on and kept for operators. None is `nothing_to_remove`. Resolves the pending reports on the profile (조치함)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/account-restriction-requests": {
+      "get": {
+        "operationId": "adminListAccountRestrictionRequests",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": "pending",
+              "type": "string",
+              "enum": [
+                "pending",
+                "decided",
+                "retracted"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/AccountRestrictionRequest"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "The account restriction requests: `pending` (default) — those waiting for another admin’s decision, the one waiting longest first, each with what approving it would be refused for now (`moot`) — `decided` — approved or rejected, the latest decision first — or `retracted` — retracted by the admin who asked, the latest first. No asking or deciding admin and no operators’ memo on a request about the admin reading it (`aboutViewer`)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/users/{userId}/account-restriction": {
+      "post": {
+        "operationId": "adminRequestAccountRestriction",
+        "parameters": [
+          {
+            "name": "userId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AccountRestrictionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionRequest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Ask for a member’s account to be restricted (계정 제한) for `days` (1, 3, 7 or 30) or with no end (`null`), with a reason and the explanation the member will read (required). Nothing is in force until another admin approves the request: then no new order, market proposal, public profile item’s new value or account closing (RESTRICTED, with the end) — writing, likes, reports and the watchlist stay open, and the term counts from the approval. With a subject (the member’s post, comment or profile) its pending reports are resolved on approval (조치함); one not the member’s is `not_theirs`; the acting admin is `own`; with no admin but the acting one and the member to decide it, `no_decider`. An optional `memo` is for the operators (not the admin it is about), never the member",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/actions/{actionId}/account-restriction/shorten": {
+      "post": {
+        "operationId": "adminRequestAccountRestrictionShorten",
+        "parameters": [
+          {
+            "name": "actionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ShortenRestrictionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionRequest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Ask for a standing account restriction’s end to be brought forward (감경) to `endsAt`, with a reason (operators only), done once another admin approves: still to come (`end_passed`) and earlier than its end now (`not_earlier`; any is, for one with no end). Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own` — each asked again on approval — and with no admin but the acting one and the member to decide it, `no_decider`",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/actions/{actionId}/account-restriction/lift": {
+      "post": {
+        "operationId": "adminRequestAccountRestrictionLift",
+        "parameters": [
+          {
+            "name": "actionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiftRestrictionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionRequest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Ask for a standing account restriction to be lifted early (조기 해제), with a reason (operators only): once another admin approves, it ends then and stays on the record as given. Refused as a shortening is (`not_account_restriction`, `cancelled`, `ended`, `own`, `no_decider`)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/actions/{actionId}/account-restriction/cancel": {
+      "post": {
+        "operationId": "adminRequestAccountRestrictionCancel",
+        "parameters": [
+          {
+            "name": "actionId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CancelModerationBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionRequest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Ask for an account restriction to be cancelled (취소), with a reason (operators only): once another admin approves, it ends at once and the member reads it cancelled — an ended one too. Not an account restriction is `not_account_restriction`, a cancelled one `cancelled`, one on the acting admin `own`, and with no admin but the acting one and the member to decide it `no_decider`",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/approve": {
+      "post": {
+        "operationId": "adminApproveAccountRestrictionRequest",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionDecision"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Approve an account restriction request, with a reason, and do what it asks in the same transaction: restrict the account from now (its term counted from now), bring its end forward, lift it or cancel it. The admin who asked cannot (`APPROVAL_NOT_ALLOWED` `requester`), nor the member (`own`); a decided request is `decided`, a retracted one `retracted`; what the restriction outgrew since the request is refused (`cancelled`, `ended`, `not_earlier`, `end_passed`) — reject it instead. Answers the request and the restriction as it stands",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/reject": {
+      "post": {
+        "operationId": "adminRejectAccountRestrictionRequest",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalDecisionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionDecision"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Reject an account restriction request, with a reason: nothing is done. Requests do not expire. The admin who asked cannot (`requester`) — they retract it instead — nor the member (`own`); a decided request is `decided`, a retracted one `retracted`",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/moderation/account-restriction-requests/{requestId}/retract": {
+      "post": {
+        "operationId": "adminRetractAccountRestrictionRequest",
+        "parameters": [
+          {
+            "name": "requestId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApprovalRetractionBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AccountRestrictionRequest"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Retract an account restriction request the acting admin made, before anyone decides it: nothing is done, and it closes as `retracted` with when — decided by no one after. Anyone else is refused (`APPROVAL_NOT_ALLOWED` `not_requester`), and so is one decided (`decided`) or retracted (`retracted`) already. Answers the request",
         "tags": [
           "admin"
         ]
@@ -18915,7 +19863,7 @@
             "$ref": "#/components/schemas/ModerationActionType"
           },
           "reason": {
-            "$ref": "#/components/schemas/HiddenReason"
+            "$ref": "#/components/schemas/ActionReason"
           },
           "subject": {
             "nullable": true,
@@ -18971,7 +19919,40 @@
           "nickname_reset",
           "bio_clear",
           "image_remove",
-          "writing_restriction"
+          "writing_restriction",
+          "account_restriction"
+        ]
+      },
+      "ActionReason": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ModerationReason"
+          },
+          "note": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "ModerationReason": {
+        "type": "string",
+        "enum": [
+          "spam",
+          "harassment",
+          "personal_info",
+          "impersonation",
+          "collusion_manipulation",
+          "off_topic",
+          "rights_infringement",
+          "other",
+          "abnormal_trading",
+          "multi_account"
         ]
       },
       "MyActionSubject": {
@@ -19101,10 +20082,19 @@
                 "$ref": "#/components/schemas/RestrictedDetails"
               }
             ]
+          },
+          "accountRestriction": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RestrictedDetails"
+              }
+            ]
           }
         },
         "required": [
-          "restriction"
+          "restriction",
+          "accountRestriction"
         ],
         "additionalProperties": false
       },
@@ -19130,7 +20120,8 @@
       "RestrictionKind": {
         "type": "string",
         "enum": [
-          "writing"
+          "writing",
+          "account"
         ]
       },
       "AdminReportGroup": {
@@ -19488,7 +20479,7 @@
             ]
           },
           "reason": {
-            "$ref": "#/components/schemas/HiddenReason"
+            "$ref": "#/components/schemas/ActionReason"
           },
           "createdBy": {
             "nullable": true,
@@ -19502,6 +20493,14 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "approval": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ModerationApproval"
+              }
+            ]
           },
           "endsAt": {
             "nullable": true,
@@ -19526,6 +20525,14 @@
           "cancelReason": {
             "nullable": true,
             "type": "string"
+          },
+          "cancelApproval": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ModerationApproval"
+              }
+            ]
           },
           "removed": {
             "nullable": true,
@@ -19559,14 +20566,49 @@
           "reason",
           "createdBy",
           "createdAt",
+          "approval",
           "endsAt",
           "cancelledAt",
           "cancelledBy",
           "cancelReason",
+          "cancelApproval",
           "removed",
           "reportCount",
           "endChanges",
           "aboutViewer"
+        ],
+        "additionalProperties": false
+      },
+      "ModerationApproval": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "decidedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "decidedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "requestId",
+          "decidedBy",
+          "reason",
+          "decidedAt"
         ],
         "additionalProperties": false
       },
@@ -19663,6 +20705,14 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "approval": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ModerationApproval"
+              }
+            ]
           }
         },
         "required": [
@@ -19671,7 +20721,8 @@
           "endsAt",
           "reason",
           "createdBy",
-          "createdAt"
+          "createdAt",
+          "approval"
         ],
         "additionalProperties": false
       },
@@ -20128,6 +21179,12 @@
             "items": {
               "$ref": "#/components/schemas/AdminModerationAction"
             }
+          },
+          "accountRestrictionRequests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountRestrictionRequest"
+            }
           }
         },
         "required": [
@@ -20136,9 +21193,222 @@
           "imageUrl",
           "reports",
           "reporterCount",
-          "actions"
+          "actions",
+          "accountRestrictionRequests"
         ],
         "additionalProperties": false
+      },
+      "AccountRestrictionRequest": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "change": {
+            "$ref": "#/components/schemas/AccountRestrictionChange"
+          },
+          "user": {
+            "$ref": "#/components/schemas/ModerationUser"
+          },
+          "actionId": {
+            "nullable": true,
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "target": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AccountRestrictionTarget"
+              }
+            ]
+          },
+          "apply": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AccountRestrictionApply"
+              }
+            ]
+          },
+          "endsAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "requestReason": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
+          },
+          "requestedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ApprovalStatus"
+          },
+          "decidedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminAccountActor"
+              }
+            ]
+          },
+          "decisionReason": {
+            "nullable": true,
+            "type": "string"
+          },
+          "decidedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "retractedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "moot": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AccountRestrictionMoot"
+              }
+            ]
+          },
+          "aboutViewer": {
+            "type": "boolean",
+            "description": "True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null)"
+          }
+        },
+        "required": [
+          "id",
+          "change",
+          "user",
+          "actionId",
+          "target",
+          "apply",
+          "endsAt",
+          "requestReason",
+          "requestedBy",
+          "requestedAt",
+          "status",
+          "decidedBy",
+          "decisionReason",
+          "decidedAt",
+          "retractedAt",
+          "moot",
+          "aboutViewer"
+        ],
+        "additionalProperties": false
+      },
+      "AccountRestrictionChange": {
+        "type": "string",
+        "enum": [
+          "apply",
+          "shorten",
+          "lift",
+          "cancel"
+        ]
+      },
+      "AccountRestrictionTarget": {
+        "type": "object",
+        "properties": {
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "endsAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/ActionReason"
+          },
+          "cancelledAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "createdAt",
+          "endsAt",
+          "reason",
+          "cancelledAt"
+        ],
+        "additionalProperties": false
+      },
+      "AccountRestrictionApply": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/ActionReason"
+          },
+          "days": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "exclusiveMinimum": true,
+            "maximum": 9007199254740991
+          },
+          "subject": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ModerationTarget"
+              }
+            ]
+          },
+          "memo": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "days",
+          "subject",
+          "memo"
+        ],
+        "additionalProperties": false
+      },
+      "ApprovalStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "approved",
+          "rejected",
+          "retracted"
+        ]
+      },
+      "AccountRestrictionMoot": {
+        "type": "string",
+        "enum": [
+          "cancelled",
+          "ended",
+          "not_earlier",
+          "end_passed"
+        ]
       },
       "WarningBody": {
         "type": "object",
@@ -20270,6 +21540,120 @@
           "reason",
           "expectedAccountId",
           "days"
+        ]
+      },
+      "AccountRestrictionBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "$ref": "#/components/schemas/AccountRestrictionReason"
+          },
+          "note": {
+            "type": "string",
+            "description": "The explanation the member reads, plain text, at most 500 characters after trimming; required. Also the reason the approving admin reads"
+          },
+          "days": {
+            "nullable": true,
+            "description": "The term in days, 24 hours each from the approval that puts it in force; null for 무기한",
+            "type": "number",
+            "enum": [
+              1,
+              3,
+              7,
+              30
+            ]
+          },
+          "subject": {
+            "default": null,
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/WarningSubject"
+              }
+            ]
+          },
+          "memo": {
+            "description": "The operators’ own memo, read by the admins (not one the request is about), plain text, at most 500 characters after trimming; optional, never shown to the member",
+            "nullable": true,
+            "type": "string"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "reason",
+          "note",
+          "days",
+          "expectedAccountId"
+        ]
+      },
+      "AccountRestrictionReason": {
+        "type": "string",
+        "enum": [
+          "spam",
+          "harassment",
+          "personal_info",
+          "impersonation",
+          "collusion_manipulation",
+          "abnormal_trading",
+          "multi_account",
+          "other"
+        ]
+      },
+      "ApprovalDecisionBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "reason",
+          "expectedAccountId"
+        ]
+      },
+      "AccountRestrictionDecision": {
+        "type": "object",
+        "properties": {
+          "request": {
+            "$ref": "#/components/schemas/AccountRestrictionRequest"
+          },
+          "action": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AdminModerationAction"
+              }
+            ]
+          }
+        },
+        "required": [
+          "request",
+          "action"
+        ],
+        "additionalProperties": false
+      },
+      "ApprovalRetractionBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "expectedAccountId"
         ]
       },
       "AdminLinkFlagGroup": {

@@ -563,10 +563,14 @@ describe('the public API document (static)', () => {
     expect(missing).toEqual([]);
   });
 
-  it('documents RESTRICTED (403) on exactly the writes a writing restriction refuses, and sorts every owner write into refused or open (#185)', () => {
+  it('documents RESTRICTED (403) on exactly the writes a writing or an account restriction refuses, and sorts every owner write into refused or open (#185, #139)', () => {
     // ADR-0082 decision 4 (#45-12, #37-9): the writes whose service calls `assertWriter`,
     // `assertPublicItemEdit` or `assertNotWritingRestricted` in its transaction (docs/GUARDS.md, a
-    // new route's step 4). The document says so, as for every other code a client can get.
+    // new route's step 4). The document says so, as for every other code a client can get. An
+    // account restriction (#139, ADR-0085) refuses the public profile items among them (the same
+    // check point, `restrictionInForce`) and none of the community writes (#57-12); its own
+    // refusals — #119's orders (`assertCanTrade`), #77's proposal and #140's 탈퇴
+    // (`assertNotRestricted`) — join REFUSED with their routes.
     const REFUSED = [
       'POST /posts',
       'PUT /posts/:postId',
