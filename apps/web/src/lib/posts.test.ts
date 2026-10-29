@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type Post, type PostAuthor, type PublishedPost } from './api';
 import { goneBoxReason } from './comments';
+import { formatKst } from './datetime';
 import { isPrivateQueryKey } from './market-keys';
 import {
   COMMUNITY_PATH,
@@ -54,6 +55,7 @@ import {
   type WriteMarketLookup,
   type WriteScreenEvent,
 } from './posts';
+import { refusalOf } from './restriction';
 
 /**
  * The community's URL, keys and refusals (#46, ADR-0073): pure functions, so they run here under
@@ -497,9 +499,10 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(editor).toContain('if (!sendsMore()) return;');
     expect(editor).toMatch(/uploadImageBatch\(batch\.sending, slots, sends, \{\s*alive,\s*held,/);
     // A wait to send again: the file on its way is sent again in a held form too (오너 결정
-    // 2026-10-25 (2차) «남긴 양식에 넣음»), given up only by an editor gone.
+    // 2026-10-25 (2차) «남긴 양식에 넣음»), given up only by an editor gone — as the image of what
+    // the editor writes (`imagePurpose`, #185: a post's or a notice's).
     expect(editor).toMatch(
-      /sendRetrying\(\(\) => upload\(picked, accountId\), \{\s*sleep: pause,\s*alive,\s*\}\)/,
+      /sendRetrying\(\(\) => upload\(picked, accountId, imagePurpose\), \{\s*sleep: pause,\s*alive,\s*\}\)/,
     );
     expect(editor).not.toContain('alive: sendsMore');
     expect(editor.match(/sendsMore\(\)/g)).toHaveLength(1);
@@ -780,6 +783,49 @@ describe('a post taken from under an open screen: one rule for its page and its 
     ).toBe(POST_EDIT_ON_SCREEN);
   });
 
+  it('a writing restriction’s refusal of the save (RESTRICTED, #185) takes nothing from under the form: the edit screen stays on screen, and its form editable under the refusal with its end and the way to 조치·신고 내역 (ADR-0082 결과 5 «다시 쌓기(2026-10-25)»)', () => {
+    const endsAt = '2026-10-31T00:00:00.000Z';
+    const zone = (iso: string) => `<${iso}>`;
+    const restricted = refusal(403, 'RESTRICTED', { kind: 'writing', endsAt });
+    // The server asks the writer before the post (ADR-0082 7-5): the refusal says nothing about the
+    // post — published, hidden or deleted meanwhile — so the post is not read again for it
+    // (`updatePostOptions`: POST_NOT_EDITABLE and NOT_FOUND only), and the query keeps the post
+    // the form was drawn from. Nor would a read so refused be the post gone.
+    expect(postGoneAfter(false, { isError: true, error: restricted })).toBe(false);
+    const state = postEditGoneAfter(POST_EDIT_ON_SCREEN, {
+      gone: postGoneAfter(false, ok) || postEditDeleted(published, published),
+      hidden: postEditHidden(published, published),
+      formHolding: true,
+    });
+    expect(state).toBe(POST_EDIT_ON_SCREEN);
+    expect(state.held).toBe(false);
+    // The form's refusal line (not a held form's notice): the restriction with its end, and the
+    // way to 조치·신고 내역 under it (`errorRestricted`) — neither a deletion's nor a hiding's.
+    const message = postWriteErrorMessage(restricted, zone);
+    expect(message).toBe(`${copy.errRestrictedWriting}(<${endsAt}>까지).`);
+    expect(message).not.toBe(copy.errPostGone);
+    expect(message).not.toBe(copy.errPostNotEditable);
+    expect(refusalOf(restricted, message)).toEqual({ message, restricted: true });
+    // The wiring, pinned in the source as above: the held form (`gone`) follows the post's reads
+    // alone, and a refused save goes to the form's refusal line; the post is read again after a
+    // refused save for a hiding or a deletion alone.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
+    expect(edit).toContain('gone={held}');
+    expect(edit).toMatch(
+      /errorMessage=\{refusal\?\.message\}\s*errorRestricted=\{refusal\?\.restricted\}/,
+    );
+    expect(edit).toContain('setRefusal(refusalOf(error, postWriteErrorMessage(error, format)))');
+    const hooks = source('../hooks/use-posts.ts');
+    expect(hooks).toMatch(
+      /\/\/ Hidden or deleted meanwhile: the page is read again so it shows what the post is now\.\s*if \(isApiError\(error, 'POST_NOT_EDITABLE'\) \|\| isApiError\(error, 'NOT_FOUND'\)\) \{\s*await queryClient\.invalidateQueries\(\{ queryKey: postKey\(postId\), exact: true \}\);/,
+    );
+    // The form draws its refusal line only while it is not held (post-form.tsx): editable under it.
+    const form = source('../components/post/post-form.tsx');
+    expect(form).toContain('{errorMessage !== undefined && !gone && (');
+    expect(form).toContain('readOnly={gone}');
+  });
+
   it('is written once for the post page: its comment section hears the post as the page holds it', () => {
     const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
     const section = source('../components/post/comments-section.tsx');
@@ -871,19 +917,23 @@ describe('a refused write', () => {
     expect(
       postWriteErrorMessage(
         refusal(403, 'FORBIDDEN', [{ path: ['expectedAccountId'], message: 'other account' }]),
+        formatKst,
       ),
     ).toBe(copy.sessionChanged);
-    expect(postWriteErrorMessage(refusal(403, 'FORBIDDEN'))).toBe(copy.errPostNotYours);
-    expect(postWriteErrorMessage(refusal(409, 'POST_NOT_EDITABLE', { reason: 'hidden' }))).toBe(
-      copy.errPostNotEditable,
-    );
+    expect(postWriteErrorMessage(refusal(403, 'FORBIDDEN'), formatKst)).toBe(copy.errPostNotYours);
+    expect(
+      postWriteErrorMessage(refusal(409, 'POST_NOT_EDITABLE', { reason: 'hidden' }), formatKst),
+    ).toBe(copy.errPostNotEditable);
     expect(
       postWriteErrorMessage(
         refusal(404, 'NOT_FOUND', [{ path: ['marketId'], message: 'no such market' }]),
+        formatKst,
       ),
     ).toBe(copy.errPostMarketUnavailable);
-    expect(postWriteErrorMessage(refusal(404, 'NOT_FOUND'))).toBe(copy.errPostGone);
-    expect(postWriteErrorMessage(refusal(409, 'ONBOARDING_REQUIRED'))).toBe(copy.errPostOnboarding);
+    expect(postWriteErrorMessage(refusal(404, 'NOT_FOUND'), formatKst)).toBe(copy.errPostGone);
+    expect(postWriteErrorMessage(refusal(409, 'ONBOARDING_REQUIRED'), formatKst)).toBe(
+      copy.errPostOnboarding,
+    );
   });
 
   it('tells the body’s refusals apart by the messages the server writes', () => {
@@ -900,6 +950,7 @@ describe('a refused write', () => {
     const body = (message: string) =>
       postWriteErrorMessage(
         refusal(400, 'VALIDATION_ERROR', [{ path: ['body', 'content', 0], message }]),
+        formatKst,
       );
     expect(body(sanitised(doc()))).toBe(copy.errPostBodyEmpty);
     expect(body(sanitised(doc(p('가'.repeat(POST_BODY_MAX_LENGTH + 1)))))).toBe(
@@ -913,6 +964,7 @@ describe('a refused write', () => {
     expect(
       postWriteErrorMessage(
         refusal(400, 'VALIDATION_ERROR', [{ path: ['title'], message: 'at most 100 characters' }]),
+        formatKst,
       ),
     ).toBe(copy.errPostTitle);
   });
@@ -936,10 +988,23 @@ describe('a refused write', () => {
     expect(refusedImageIds(new TypeError('Failed to fetch'))).toEqual([]);
   });
 
+  it('says a writing restriction with its end in the writer’s zone, or 무기한 — no appeal sentence (#185)', () => {
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    const zone = (iso: string) => `<${iso}>`;
+    expect(
+      postWriteErrorMessage(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt }), zone),
+    ).toBe(`${copy.errRestrictedWriting}(<${endsAt}>까지).`);
+    expect(
+      postWriteErrorMessage(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }), zone),
+    ).toBe(`${copy.errRestrictedWriting}(무기한).`);
+  });
+
   it('says an unreachable server apart from anything else', () => {
-    expect(postWriteErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
-    expect(postWriteErrorMessage(new ApiError(502, undefined))).toBe(copy.errNetwork);
-    expect(postWriteErrorMessage(refusal(500, 'INTERNAL'))).toBe(copy.errUnknown);
+    expect(postWriteErrorMessage(new TypeError('Failed to fetch'), formatKst)).toBe(
+      copy.errNetwork,
+    );
+    expect(postWriteErrorMessage(new ApiError(502, undefined), formatKst)).toBe(copy.errNetwork);
+    expect(postWriteErrorMessage(refusal(500, 'INTERNAL'), formatKst)).toBe(copy.errUnknown);
     expect(postReadErrorMessage(new TypeError('Failed to fetch'))).toBe(copy.errNetwork);
     expect(postReadErrorMessage(refusal(500, 'INTERNAL'))).toBe(copy.errUnknown);
   });

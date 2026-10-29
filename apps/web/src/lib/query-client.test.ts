@@ -1,9 +1,11 @@
 import { InfiniteQueryObserver, QueryObserver, type InfiniteData } from '@tanstack/react-query';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { positionsKey } from '@/hooks/use-portfolio';
-import { type Position } from './api';
+import { postImageUploader } from '@/hooks/use-posts';
+import { ApiError, type Position, api } from './api';
 import { POSITIONS_KEY } from './market-keys';
+import { MY_ACTIONS_KEY, MY_REPORTS_KEY, MY_RESTRICTION_KEY } from './moderation';
 import {
   ME_KEY,
   cancelFirstFetch,
@@ -113,6 +115,74 @@ describe('cancelFirstFetch', () => {
       unsubscribe();
       queryClient.clear();
     }
+  });
+});
+
+describe('a write refused with RESTRICTED (#185)', () => {
+  it('reads the member’s restriction and actions again, so the banner says the restriction that refused it', async () => {
+    const client = getQueryClient();
+    client.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    client.setQueryData(MY_ACTIONS_KEY, { pages: [], pageParams: [] });
+    client.setQueryData(MY_REPORTS_KEY, { pages: [], pageParams: [] });
+    const refuse = (error: Error) =>
+      client
+        .getMutationCache()
+        .build(client, { mutationFn: () => Promise.reject(error), retry: false })
+        .execute(undefined)
+        .catch(() => undefined);
+
+    await refuse(new ApiError(403, { code: 'FORBIDDEN', message: 'not yours' }));
+    expect(client.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(false);
+    expect(client.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(false);
+
+    await refuse(
+      new ApiError(403, {
+        code: 'RESTRICTED',
+        message: 'restricted',
+        details: { kind: 'writing', endsAt: null },
+      }),
+    );
+    expect(client.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
+    // Nothing else of the member's is touched.
+    expect(client.getQueryState(MY_REPORTS_KEY)?.isInvalidated).toBe(false);
+    client.clear();
+  });
+
+  it('does so for a post’s image too, a plain call through its uploader', async () => {
+    const client = getQueryClient();
+    client.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    client.setQueryData(MY_ACTIONS_KEY, { pages: [], pageParams: [] });
+    const send = vi.spyOn(api, 'POST').mockResolvedValue({
+      error: {
+        error: {
+          code: 'RESTRICTED',
+          message: 'restricted',
+          details: { kind: 'writing', endsAt: null },
+        },
+      },
+      response: new Response(null, { status: 403 }),
+    });
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    // The refusal goes on to the editor's toast.
+    await expect(postImageUploader(client, () => undefined)(file, 'user-1')).rejects.toMatchObject({
+      code: 'RESTRICTED',
+    });
+    expect(send).toHaveBeenCalledOnce();
+    expect(client.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(true);
+    expect(client.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
+    // Another refusal of the upload leaves them be.
+    client.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    send.mockResolvedValue({
+      error: { error: { code: 'IMAGE_NOT_ALLOWED', message: 'x', details: { reason: 'type' } } },
+      response: new Response(null, { status: 422 }),
+    });
+    await expect(postImageUploader(client, () => undefined)(file, 'user-1')).rejects.toMatchObject({
+      code: 'IMAGE_NOT_ALLOWED',
+    });
+    expect(client.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(false);
+    send.mockRestore();
+    client.clear();
   });
 });
 

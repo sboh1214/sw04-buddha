@@ -12,6 +12,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLeaveGuard } from '@/hooks/use-leave-guard';
@@ -32,12 +33,12 @@ import {
   withoutCommentDrafts,
 } from '@/lib/comment-drafts';
 import {
+  type CommentBoxRefusal,
   type HeldText,
   type HeldTextPlace,
+  commentBoxRefusal,
   commentDraftKeyOfPlace,
   commentTextChanged,
-  commentWriteErrorMessage,
-  isStaleThreadRefusal,
 } from '@/lib/comments';
 import { type GoingBoxWrite } from '@/lib/held-comment-texts';
 
@@ -52,10 +53,12 @@ import { type GoingBoxWrite } from '@/lib/held-comment-texts';
  */
 export interface CommentBoxGoing {
   /**
-   * The box's write was refused, in these words; `stale`: they say the thread on screen is out of
-   * date (`isStaleThreadRefusal`).
+   * The box's write was refused (`commentBoxRefusal`): in these words; `stale`, they say the thread
+   * on screen is out of date (`isStaleThreadRefusal`); `restricted`, a writing restriction refused
+   * it (`isRestricted`, #185 — the way to 조치·신고 내역 goes under its words wherever they are
+   * shown).
    */
-  refused(boxId: string, accountId: string, refusal: { reason: string; stale: boolean }): void;
+  refused(boxId: string, accountId: string, refusal: CommentBoxRefusal): void;
   /**
    * The box went holding `text` other than it started with, its write as `write` says (in flight,
    * refused, or none); `focus`: the focus was in it as it went.
@@ -259,6 +262,8 @@ export function useCommentBoxDraft(box: CommentBoxDraft): {
 } {
   const queryClient = useQueryClient();
   const going = useContext(CommentBoxGoingContext);
+  // A writing restriction's refusal (#185) says its end in the member's zone.
+  const format = useFormatDateTime();
   // Unique among the boxes mounted in the page's life: a box mounted later gets a new one.
   const boxId = useId();
   useLeaveGuard(!box.pending && commentTextChanged(box.text, box.initial), copy.postLeaveConfirm);
@@ -357,10 +362,7 @@ export function useCommentBoxDraft(box: CommentBoxDraft): {
   return {
     landed: () => going?.landed(boxId),
     refused: (error) =>
-      going?.refused(boxId, box.accountId, {
-        reason: commentWriteErrorMessage(error, write),
-        stale: isStaleThreadRefusal(error),
-      }),
+      going?.refused(boxId, box.accountId, commentBoxRefusal(error, write, format)),
     close: () => {
       const last = held.get(boxId);
       if (last !== undefined) held.set(boxId, { ...last, closed: true });

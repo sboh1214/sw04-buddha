@@ -6,19 +6,14 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { useAdminModerationActions } from '@/hooks/use-admin-moderation';
 import { moderationRows } from '@/lib/moderation';
-import {
-  ActionRows,
-  type DialogSpec,
-  ModerationDialog,
-  ModerationNav,
-  cancelDialog,
-} from '../moderation-parts';
+import { ActionRows, type DialogSpec, ModerationDialog, ModerationNav } from '../moderation-parts';
 
 /**
  * 조치 기록 (#50, ADR-0081): every moderation action, newest first — taken from the queue or
  * without a report (decision 4 #50) — with its reason, operator, time and cancellation, and 조치
  * 취소 on one that stands (with the operators' reason; a hidden item shows again, a profile item is
- * not restored). Every admin reads it (ADR-0056 1-2).
+ * not restored) — and a standing writing restriction's 조기 해제 and 감경 with the changes of its
+ * end (#185, ADR-0082). Every admin reads it (ADR-0056 1-2).
  */
 export function AdminModerationActions() {
   const list = useAdminModerationActions();
@@ -46,11 +41,7 @@ export function AdminModerationActions() {
         </Stack>
       ) : (
         <Stack gap="2">
-          <ActionRows
-            actions={rows}
-            showUser
-            onCancel={(action) => setDialog(cancelDialog(action))}
-          />
+          <ActionRows actions={rows} showUser onOpen={setDialog} />
           {list.hasNextPage && (
             <>
               {/* A 더 보기 that failed: the rows stay, and this says so above the button that asks

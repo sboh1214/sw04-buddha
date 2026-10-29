@@ -1,12 +1,17 @@
 /**
  * The one check point of public profile item writes (#41, ADR-0069 decision 3 #37-9 and decision
- * 7), with the sanction lookup stubbed: no writing restriction (#185) or account restriction
- * (#139) exists yet, so the stub stands for them. And the onboarding those writes need (owner
- * decision 2026-10-21 answer 2), with its check stubbed. Pure: no database.
+ * 7), with the sanction lookup stubbed: the writing restriction (#185) answers it from its records
+ * (`writingRestrictionOf`, proven against the database in restrictions.controller.test.ts and
+ * public-items-sanctioned.test.ts) and #139's account restriction will; the stub stands for them.
+ * The refusal is RESTRICTED carrying the sanction's kind and end (owner decision 2026-10-21 answer
+ * 8 on #41, ADR-0082). And the onboarding those writes need (owner decision 2026-10-21 answer 2),
+ * with its check stubbed. Pure: no database.
  */
 import { type Db } from '@buddha/db';
+import { type RestrictedDetails } from '@buddha/shared';
 import { describe, expect, it, vi } from 'vitest';
 import { AppError } from '../common/errors/app-error.js';
+import { writingRestrictionOf } from '../moderation/restrictions.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
 import {
   assertPublicItemEdit,
@@ -22,20 +27,27 @@ vi.mock('../onboarding/onboarded.guard.js', () => ({
 /** Never touched: the stubs below answer without it. */
 const executor = {} as Db;
 
+const UNTIL: RestrictedDetails = { kind: 'writing', endsAt: '2026-10-25T03:00:00.000Z' };
+const NO_END: RestrictedDetails = { kind: 'writing', endsAt: null };
+
 describe('assertPublicItemEdit', () => {
-  it('refuses a new value under a sanction, with a 403 that names no field', async () => {
-    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(true));
-    const refusal = await assertPublicItemEdit(executor, 'u1', 'replace', sanctioned).catch(
-      (error: unknown) => error,
-    );
-    expect(refusal).toBeInstanceOf(AppError);
-    expect(refusal).toMatchObject({ code: 'FORBIDDEN', status: 403, details: undefined });
-    // Asked about the account the write is for, inside the caller's executor.
-    expect(sanctioned).toHaveBeenCalledWith(executor, 'u1');
+  it('refuses a new value under a sanction with RESTRICTED (403) and its end', async () => {
+    for (const sanction of [UNTIL, NO_END]) {
+      const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(sanction));
+      const refusal = await assertPublicItemEdit(executor, 'u1', 'replace', sanctioned).catch(
+        (error: unknown) => error,
+      );
+      expect(refusal).toBeInstanceOf(AppError);
+      // A code of its own, not the 403 FORBIDDEN of another account's cookie, with the end the
+      // screen says «…까지» by (null: 무기한).
+      expect(refusal).toMatchObject({ code: 'RESTRICTED', status: 403, details: sanction });
+      // Asked about the account the write is for, inside the caller's executor.
+      expect(sanctioned).toHaveBeenCalledWith(executor, 'u1');
+    }
   });
 
   it('lets a clearing through whatever the sanction, without asking (decision 7)', async () => {
-    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(true));
+    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(UNTIL));
     await expect(assertPublicItemEdit(executor, 'u1', 'clear', sanctioned)).resolves.toBe(
       undefined,
     );
@@ -43,7 +55,7 @@ describe('assertPublicItemEdit', () => {
   });
 
   it('lets the onboarding’s first choice through whatever the sanction, without asking (answer 4)', async () => {
-    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(true));
+    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(NO_END));
     await expect(assertPublicItemEdit(executor, 'u1', 'first', sanctioned)).resolves.toBe(
       undefined,
     );
@@ -51,16 +63,15 @@ describe('assertPublicItemEdit', () => {
   });
 
   it('lets a new value through when no sanction is in force', async () => {
-    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(false));
+    const sanctioned = vi.fn<SanctionCheck>(() => Promise.resolve(null));
     await expect(assertPublicItemEdit(executor, 'u1', 'replace', sanctioned)).resolves.toBe(
       undefined,
     );
     expect(sanctioned).toHaveBeenCalledOnce();
   });
 
-  it('finds no sanction today: neither #185 nor #139 exists yet', async () => {
-    await expect(sanctionInForce(executor, 'u1')).resolves.toBe(false);
-    await expect(assertPublicItemEdit(executor, 'u1', 'replace')).resolves.toBe(undefined);
+  it('asks the writing restriction by default (#185)', () => {
+    expect(sanctionInForce).toBe(writingRestrictionOf);
   });
 });
 

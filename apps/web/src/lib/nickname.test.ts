@@ -114,6 +114,22 @@ describe('nicknameFailure', () => {
     });
   });
 
+  it('says a writing restriction under the input, with its end in that zone — no appeal sentence (#185)', () => {
+    const endsAt = '2026-11-17T06:00:00.000Z';
+    expect(
+      nicknameFailure(refused(403, 'RESTRICTED', { kind: 'writing', endsAt }), formatDate),
+    ).toEqual({
+      kind: 'field',
+      message: `${copy.errRestrictedNickname}(<${endsAt}>까지).`,
+    });
+    expect(
+      nicknameFailure(refused(403, 'RESTRICTED', { kind: 'writing', endsAt: null }), formatDate),
+    ).toEqual({
+      kind: 'field',
+      message: `${copy.errRestrictedNickname}(무기한).`,
+    });
+  });
+
   it('asks the stepper to follow the server when the screen is out of date', () => {
     for (const error of [
       notAllowed({ reason: 'already_set' }),

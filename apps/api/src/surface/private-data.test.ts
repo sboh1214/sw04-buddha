@@ -10,8 +10,8 @@
  * whose operator — its writer, editor and pinner, and its image's uploader — is A, with an earlier
  * version kept for operators, and a notice A wrote and never pinned, which is not public (#138),
  * a 소개 and an interest category on A's public profile (#41), an operator's hiding of A's post
- * with its reason (#50), a report A filed and a report another member filed on A's post (#50).
- * Then:
+ * with its reason (#50), a report A filed and a report another member filed on A's post (#50), a
+ * writing restriction A was given and an operator lifted, with the lift's reason (#185). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -370,6 +370,10 @@ const NEVER_SHOWN: readonly string[] = [
   // on A (#45-13), whose account id is in no answer.
   'report on A',
   'moderator id',
+  // #185: why an operator lifted or shortened A's writing restriction — the operators' record;
+  // A reads the end as it stands, that it was lifted early or shortened and the end it was given
+  // (owner decision 2026-10-23 answer 4), nothing of who changed it or why (ADR-0082).
+  'lift reason',
 ];
 
 interface OwnerCase {
@@ -673,13 +677,19 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   'GET /me/moderation/actions': {
     query: { cursor: (fixture) => fixture.cursors.actions, limit: LIMIT },
     status: 200,
-    own: ['moderation note'],
+    // #185: a writing restriction's explanation too — never the reason an operator lifted it for.
+    own: ['moderation note', 'restriction note'],
+  },
+  // B's restriction now (#185): B has none — A's restriction (lifted) never answers for B.
+  'GET /me/moderation/restriction': {
+    status: 200,
   },
   // The file is the body, so the account rides in the query: B naming A is refused before the
   // file is looked at, and nothing is stored (below). Sent as an image: the route takes no JSON
-  // (415 before any check of the account — image-body.ts).
+  // (415 before any check of the account — image-body.ts). Said to be a notice's (#185 owner
+  // decision 2026-10-23 answer 13: an admin's alone), it is refused the same, before that.
   'POST /media/images': {
-    query: { expectedAccountId: (fixture) => fixture.a.id },
+    query: { expectedAccountId: (fixture) => fixture.a.id, purpose: () => 'notice' },
     body: () => Buffer.from([0xff, 0xd8, 0xff, 0xe0]),
     contentType: 'image/jpeg',
     status: 403,
@@ -1212,6 +1222,32 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       reason: 'harassment',
       note: moderationNote,
     });
+    // A writing restriction A was given before that (#185, ADR-0082) — 30 days, lifted early the
+    // next day — with the explanation A reads on MY's record of actions: A's alone, never anywhere
+    // public (#45-12, #37-8: an internal risk flag). The operator's reason for the lift is the
+    // operators' record only, A's own answers included (`NEVER_SHOWN`).
+    const restrictionNote = `leak-restriction-note-${tag}`;
+    const restrictedAt = new Date(hiding.createdAt.getTime() - 10 * 24 * 60 * 60 * 1_000);
+    const liftedAt = new Date(restrictedAt.getTime() + 24 * 60 * 60 * 1_000);
+    const restriction = await createModerationAction(t.db, {
+      userId: a.id,
+      createdBy: admin.id,
+      type: 'writing_restriction',
+      reason: 'spam',
+      note: restrictionNote,
+      createdAt: restrictedAt,
+      endsAt: liftedAt,
+    });
+    const liftReason = `leak-lift-reason-${tag}`;
+    await t.db.insert(schema.restrictionEndChanges).values({
+      actionId: restriction.id,
+      kind: 'lift',
+      previousEndsAt: new Date(restrictedAt.getTime() + 30 * 24 * 60 * 60 * 1_000),
+      endsAt: liftedAt,
+      reason: liftReason,
+      createdBy: admin.id,
+      createdAt: liftedAt,
+    });
     // A report A filed on another member's profile (#50), with A's description: A's own record,
     // nobody else's. And a report the admin filed on A's post, pending: nobody but operators reads
     // it, A included (`NEVER_SHOWN`, #45-13).
@@ -1360,6 +1396,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('hidden post', hiddenPostText),
         text('hidden comment', hiddenCommentText),
         text('moderation note', moderationNote),
+        text('restriction note', restrictionNote),
+        text('lift reason', liftReason),
         text('report description', reportText),
         text('report on A', reportOnA),
         text('moderator id', admin.id),

@@ -323,6 +323,25 @@ export const ADMIN_ACTION_TYPES = [
    * `{reportIds, reason}` — the reports, each pending until then, and the operator's reason.
    */
   'report_dismiss',
+  /**
+   * An operator put a member under a writing restriction (작성 제한, #185, ADR-0082): target
+   * `moderation_action` / its id, payload `{actionId, userId, subject, days, endsAt, reason, note,
+   * reportIds}` — the term picked (`days`, null for 무기한), the end it gave (null for 무기한), and
+   * the pending reports on the subject it resolved, as a warning's.
+   */
+  'moderation_writing_restriction',
+  /**
+   * An operator brought a writing restriction's end forward (감경, #185 and #45-14): target
+   * `moderation_action` / its id, payload `{actionId, userId, previousEndsAt, endsAt, reason}` —
+   * the end before (null for 무기한) and after, and the operator's reason (operators only). Written
+   * with the `restriction_end_changes` row.
+   */
+  'moderation_restriction_shorten',
+  /**
+   * An operator lifted a writing restriction early (조기 해제, #185 and #45-12): the same target and
+   * payload as a shortening, `endsAt` being the lift's own time.
+   */
+  'moderation_restriction_lift',
 ] as const;
 export type AdminActionType = (typeof ADMIN_ACTION_TYPES)[number];
 export const adminActionTypeSchema = z.enum(ADMIN_ACTION_TYPES);
@@ -407,10 +426,14 @@ export const reportStatusSchema = z.enum(REPORT_STATUSES).meta({ id: 'ReportStat
  * - `nickname_reset`, `bio_clear`, `image_remove`: a public profile item taken away (#37-10: the
  *   nickname back to an auto nickname, the 소개 emptied, the image removed — kept for operators,
  *   never restored).
- * The writing restriction (#185) and the account restriction (#139) join this list. Stored as a
- * varchar with a CHECK rather than a Postgres enum, so the migration that adds a type can use it in
- * the same batch (drizzle runs a batch in one transaction, where a value an `ADD VALUE` added cannot
- * be used — 55P04, migration 0014).
+ * - `writing_restriction`: 작성 제한 (#185, ADR-0082; N05 §5 '댓글 제한', ADR-0069 decision 2
+ *   #45-12): no new post, comment or 대댓글 and no edit of one's own, nor a new value of a public
+ *   profile item (#37-9), until it ends — 1, 3, 7 or 30 days or 무기한 (`ends_at` null). Deleting
+ *   one's own, likes and reports stay open.
+ * The account restriction (#139) joins this list. Stored as a varchar with a CHECK rather than a
+ * Postgres enum, so the migration that adds a type can use it in the same batch (drizzle runs a
+ * batch in one transaction, where a value an `ADD VALUE` added cannot be used — 55P04, migration
+ * 0014; migration 0040 added `writing_restriction` so).
  */
 export const MODERATION_ACTION_TYPES = [
   'hide',
@@ -418,11 +441,24 @@ export const MODERATION_ACTION_TYPES = [
   'nickname_reset',
   'bio_clear',
   'image_remove',
+  'writing_restriction',
 ] as const;
 export type ModerationActionType = (typeof MODERATION_ACTION_TYPES)[number];
 export const moderationActionTypeSchema = z
   .enum(MODERATION_ACTION_TYPES)
   .meta({ id: 'ModerationActionType' });
+
+/**
+ * restriction_end_changes.kind (#185, ADR-0082): how an operator brought a writing restriction's
+ * end forward — `shorten` (감경, #45-14: «종료 시각을 앞당기는 기능», 무기한 to a term included) to a
+ * later instant, or `lift` (조기 해제, #45-12: «운영자가 일찍 풀 수 있다») at once. Either keeps the
+ * action as it was given (its reason, its time); a cancellation (취소) voids it instead.
+ */
+export const RESTRICTION_END_CHANGE_KINDS = ['shorten', 'lift'] as const;
+export type RestrictionEndChangeKind = (typeof RESTRICTION_END_CHANGE_KINDS)[number];
+export const restrictionEndChangeKindSchema = z
+  .enum(RESTRICTION_END_CHANGE_KINDS)
+  .meta({ id: 'RestrictionEndChangeKind' });
 
 /**
  * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections

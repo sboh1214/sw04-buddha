@@ -18,6 +18,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { ApiError } from './api';
+import { formatKst } from './datetime';
 import { postWriteErrorMessage } from './posts';
 import {
   IMAGE_UPLOAD_RETRIES,
@@ -36,6 +37,7 @@ import {
   imagePrecheck,
   imageRefusalMessage,
   imageUploadErrorMessage,
+  imageUploadToast,
   insertHeldImage,
   isPostTextColor,
   landedDraftStart,
@@ -172,21 +174,24 @@ describe('a picked image', () => {
   it('says the server’s reason when it refuses one', () => {
     const refused = (reason: string) =>
       new ApiError(422, { code: 'IMAGE_NOT_ALLOWED', message: 'x', details: { reason } } as never);
-    expect(imageUploadErrorMessage(refused('type'), true)).toBe(copy.errImageType);
-    expect(imageUploadErrorMessage(refused('size'), true)).toBe(copy.errImageSize);
+    expect(imageUploadErrorMessage(refused('type'), true, formatKst)).toBe(copy.errImageType);
+    expect(imageUploadErrorMessage(refused('size'), true, formatKst)).toBe(copy.errImageSize);
     // One sentence for a frame too large and for too many frames (owner decision 2026-10-19).
     expect(copy.errImageTooLarge).toBe('이미지가 너무 크거나 프레임이 너무 많습니다.');
-    expect(imageUploadErrorMessage(refused('pixels'), true)).toBe(copy.errImageTooLarge);
-    expect(imageUploadErrorMessage(refused('frames'), true)).toBe(copy.errImageTooLarge);
-    expect(imageUploadErrorMessage(refused('unreadable'), true)).toBe(copy.errImageUnreadable);
-    expect(imageUploadErrorMessage(refused('empty'), true)).toBe(copy.errImageEmpty);
-    expect(imageUploadErrorMessage(refused('later'), true)).toBe(copy.errImageUpload);
+    expect(imageUploadErrorMessage(refused('pixels'), true, formatKst)).toBe(copy.errImageTooLarge);
+    expect(imageUploadErrorMessage(refused('frames'), true, formatKst)).toBe(copy.errImageTooLarge);
+    expect(imageUploadErrorMessage(refused('unreadable'), true, formatKst)).toBe(
+      copy.errImageUnreadable,
+    );
+    expect(imageUploadErrorMessage(refused('empty'), true, formatKst)).toBe(copy.errImageEmpty);
+    expect(imageUploadErrorMessage(refused('later'), true, formatKst)).toBe(copy.errImageUpload);
     expect(imageRefusalMessage('size')).toBe(copy.errImageSize);
     // Refused by its length before the route, past twice the limit.
     expect(
       imageUploadErrorMessage(
         new ApiError(413, { code: 'VALIDATION_ERROR', message: 'too large' } as never),
         true,
+        formatKst,
       ),
     ).toBe(copy.errImageSize);
     expect(
@@ -197,9 +202,25 @@ describe('a picked image', () => {
           details: [{ path: ['expectedAccountId'], message: 'other account' }],
         }),
         true,
+        formatKst,
       ),
     ).toBe(copy.sessionChanged);
-    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), true)).toBe(copy.errNetwork);
+    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), true, formatKst)).toBe(
+      copy.errNetwork,
+    );
+    // A writing restriction (#185): refused before the image is looked at, with its end.
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    expect(
+      imageUploadErrorMessage(
+        new ApiError(403, {
+          code: 'RESTRICTED',
+          message: 'x',
+          details: { kind: 'writing', endsAt },
+        }),
+        true,
+        formatKst,
+      ),
+    ).toBe(`${copy.errRestrictedWriting}(${formatKst(endsAt)}까지).`);
   });
 
   it('says nothing for a refusal for the onboarding while the gate takes the account to its step, and what a refused send says when it stays (owner decisions 2026-10-21)', () => {
@@ -209,12 +230,14 @@ describe('a picked image', () => {
       details: { steps: ['consent'] },
     } as never);
     // `['me']` read again names the step: the gate moves, and a toast would follow it there.
-    expect(imageUploadErrorMessage(onboarding, true)).toBeUndefined();
+    expect(imageUploadErrorMessage(onboarding, true, formatKst)).toBeUndefined();
     // That read failed (the address limit's 429, the network): the gate stays, so it is said.
-    expect(imageUploadErrorMessage(onboarding, false)).toBe(copy.errPostOnboarding);
-    expect(copy.errPostOnboarding).toBe(postWriteErrorMessage(onboarding));
+    expect(imageUploadErrorMessage(onboarding, false, formatKst)).toBe(copy.errPostOnboarding);
+    expect(copy.errPostOnboarding).toBe(postWriteErrorMessage(onboarding, formatKst));
     // Whether the gate moves says nothing about any other refusal.
-    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), false)).toBe(copy.errNetwork);
+    expect(imageUploadErrorMessage(new TypeError('Failed to fetch'), false, formatKst)).toBe(
+      copy.errNetwork,
+    );
   });
 
   it('says that the file failed when the API is still busy after it was sent again, or cut the body for idling or for its deadline (owner decisions 2026-10-21, 2026-10-22 (2차))', () => {
@@ -229,6 +252,7 @@ describe('a picked image', () => {
           details: { retryAfterSeconds: 2 },
         } as never),
         true,
+        formatKst,
       ),
     ).toBe(copy.errImageUpload);
     // 408: no byte of the body came for 30 seconds, or the whole body not within 2 minutes.
@@ -236,6 +260,7 @@ describe('a picked image', () => {
       imageUploadErrorMessage(
         new ApiError(408, { code: 'VALIDATION_ERROR', message: 'idle' } as never),
         true,
+        formatKst,
       ),
     ).toBe(copy.errImageUpload);
   });
@@ -246,9 +271,52 @@ describe('a picked image', () => {
       message: 'busy',
       details: { retryAfterSeconds: 2 },
     } as never);
-    expect(imageUploadErrorMessage(new UploadAbandoned(busy), false)).toBeUndefined();
-    expect(imageUploadErrorMessage(new UploadAbandoned(busy), true)).toBeUndefined();
+    expect(imageUploadErrorMessage(new UploadAbandoned(busy), false, formatKst)).toBeUndefined();
+    expect(imageUploadErrorMessage(new UploadAbandoned(busy), true, formatKst)).toBeUndefined();
     expect(refusesImageBatch(new UploadAbandoned(busy))).toBe(false);
+  });
+
+  it('shows the refusal in a toast with no button, a writing restriction’s with its end alone (owner decision 2026-10-23 answer 12)', () => {
+    const endsAt = '2026-10-23T06:00:00.000Z';
+    const restricted = (end: string | null) =>
+      new ApiError(403, {
+        code: 'RESTRICTED',
+        message: 'x',
+        details: { kind: 'writing', endsAt: end },
+      });
+    expect(imageUploadToast(restricted(endsAt), true, formatKst)).toStrictEqual({
+      type: 'error',
+      title: `${copy.errRestrictedWriting}(${formatKst(endsAt)}까지).`,
+    });
+    expect(imageUploadToast(restricted(null), true, formatKst)).toStrictEqual({
+      type: 'error',
+      title: `${copy.errRestrictedWriting}(무기한).`,
+    });
+    // No action, nor the way to 조치·신고 내역 in its words: the write page's banner has that way.
+    expect(imageUploadToast(restricted(endsAt), true, formatKst)).not.toHaveProperty('action');
+    expect(imageUploadToast(restricted(endsAt), true, formatKst)?.title).not.toContain(
+      copy.myModerationOpen,
+    );
+    const other = new ApiError(422, {
+      code: 'IMAGE_NOT_ALLOWED',
+      message: 'x',
+      details: { reason: 'size' },
+    } as never);
+    expect(imageUploadToast(other, true, formatKst)).toStrictEqual({
+      type: 'error',
+      title: copy.errImageSize,
+    });
+    // Nothing to say, nothing shown: the onboarding gate taking the account to its step.
+    const onboarding = new ApiError(409, {
+      code: 'ONBOARDING_REQUIRED',
+      message: 'x',
+      details: { steps: ['consent'] },
+    } as never);
+    expect(imageUploadToast(onboarding, true, formatKst)).toBeUndefined();
+    expect(imageUploadToast(onboarding, false, formatKst)).toStrictEqual({
+      type: 'error',
+      title: copy.errPostOnboarding,
+    });
   });
 });
 
@@ -552,6 +620,11 @@ const ANOTHER_ACCOUNT = refusal(403, 'FORBIDDEN', [
   { path: ['expectedAccountId'], message: 'not the signed-in account' },
 ]);
 const SIGNED_OUT = refusal(401, 'UNAUTHENTICATED');
+/** A writing restriction (#185): refused before the image is looked at, whatever the file. */
+const RESTRICTED = refusal(403, 'RESTRICTED', {
+  kind: 'writing',
+  endsAt: '2026-10-24T06:00:00.000Z',
+});
 const NOT_AN_IMAGE = refusal(422, 'IMAGE_NOT_ALLOWED', { reason: 'type' });
 
 describe('refusesImageBatch', () => {
@@ -559,6 +632,7 @@ describe('refusesImageBatch', () => {
     expect(refusesImageBatch(ONBOARDING)).toBe(true);
     expect(refusesImageBatch(ANOTHER_ACCOUNT)).toBe(true);
     expect(refusesImageBatch(SIGNED_OUT)).toBe(true);
+    expect(refusesImageBatch(RESTRICTED)).toBe(true);
     expect(refusesImageBatch(NOT_AN_IMAGE)).toBe(false);
     expect(refusesImageBatch(refusal(413, 'VALIDATION_ERROR'))).toBe(false);
     expect(refusesImageBatch(refusal(429, 'RATE_LIMITED'))).toBe(false);
@@ -697,6 +771,9 @@ describe('uploadImageBatch', () => {
     ['for the onboarding', ONBOARDING],
     ['as another account', ANOTHER_ACCOUNT],
     ['for no session', SIGNED_OUT],
+    // Every later file would go up whole to be refused alike, the restriction read again and its
+    // toast shown for each (#185 — one toast with its end, owner decision 2026-10-23 answer 12).
+    ['for a writing restriction', RESTRICTED],
   ])(
     'ends the batch at an upload refused %s: said once, nothing more sent, every slot back',
     async (_name, error) => {

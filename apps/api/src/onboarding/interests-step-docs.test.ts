@@ -62,9 +62,16 @@ describe('the interests step’s first answer in the docs (ADR-0078, 3rd answer 
         '작성 제한·계정 제한 중에도 받는 첫 선택은 닉네임 단계 뒤 24시간 안의 답뿐',
       );
       expect(line).toContain('그 뒤의 고르기는 MY 설정의 바꾸기');
-      // Today no restriction exists, so a late pick is saved and answers the step.
-      expect(line).toContain('#185·#139 전에는');
+      // Under a writing restriction (#185, ADR-0082) a late pick is refused with its end, that
+      // 건너뛰기 stays open (owner decision 2026-10-23 answer 9) and the way to 조치·신고 내역 (owner
+      // decision 2026-10-22 evening); with none it is saved and answers the step.
+      expect(line).toContain(
+        "작성 제한 #185는 끝나는 때와 '건너뛰기는 할 수 있습니다.'(오너 결정 2026-10-23 답 9), 조치·신고 내역 링크로",
+      );
+      expect(line).not.toContain('이의 안내로');
+      expect(line).toContain('제한이 없으면');
       expect(line).toContain('저장되고 단계를 답');
+      expect(line).not.toContain('#185·#139 전에는');
       expect(line).toContain('건너뛰기는 그대로 단계를 답');
       expect(line).toContain('3차 답 1');
     }

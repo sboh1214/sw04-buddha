@@ -17,6 +17,7 @@ import {
   mediaPath,
   type PostDocument,
   type PostHeadingLevel,
+  type PostImagePurpose,
   type PostTextColor,
 } from '@buddha/shared';
 import { Table, TableCell, TableHeader, TableRow } from '@tiptap/extension-table';
@@ -38,6 +39,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { usePathname } from 'next/navigation';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { useUploadPostImage } from '@/hooks/use-posts';
@@ -49,7 +51,7 @@ import {
   countEditorDocument,
   createUploadQueue,
   imageRefusalMessage,
-  imageUploadErrorMessage,
+  imageUploadToast,
   insertHeldImage,
   isPostTextColor,
   linkInputHref,
@@ -288,6 +290,12 @@ export interface PostEditorProps {
    * public one serves a pinned notice's current images only. Read when the editor is made.
    */
   imageSrc?: (mediaId: string) => string;
+  /**
+   * What an upload says its image is for (`POST /media/images?purpose=`): a post's by default; a
+   * notice's editor (#138) says `notice`, which a writing restriction does not refuse — owner
+   * decision 2026-10-23 answer 13 (ADR-0082).
+   */
+  imagePurpose?: PostImagePurpose;
 }
 
 export function PostEditor({
@@ -306,6 +314,7 @@ export function PostEditor({
   refusedImageIds = [],
   placeholder = copy.postWriteBodyPlaceholder,
   imageSrc = mediaPath,
+  imagePurpose = 'post',
 }: PostEditorProps) {
   /**
    * Previews of this session's uploads, by media id; read by the image node's `srcOf` whenever
@@ -316,6 +325,7 @@ export function PostEditor({
   const [previews] = useState(() => new Map<string, string>(Object.entries(initialPreviews ?? {})));
   // The editors whose baseline was told (`onMount`): once each, as its view is made.
   const [settled] = useState(() => new WeakSet<Editor>());
+  const format = useFormatDateTime();
   const editor = useEditor({
     // Next renders this component on the server too; the editor exists in the browser only.
     immediatelyRender: false,
@@ -483,7 +493,7 @@ export function PostEditor({
           const { uploaded, preview } = await uploadWithPreview(
             file,
             (picked) =>
-              sendRetrying(() => upload(picked, accountId), {
+              sendRetrying(() => upload(picked, accountId, imagePurpose), {
                 sleep: pause,
                 alive,
               }),
@@ -539,11 +549,13 @@ export function PostEditor({
       // while the gate takes the account to its step, the draft kept in the tab — a toast would
       // follow it there (owner decision 2026-10-21); should `['me']` fail to be read again, the
       // gate stays, and it says what a refused send says (owner decision 2026-10-21
-      // answer 6). An upload given up for the editor gone while it waited says nothing. Any
-      // other is said: that file's failure alone.
+      // answer 6). An upload given up for the editor gone while it waited says nothing. Any other
+      // is said: that file's failure alone — but a writing restriction's (#185), the account's
+      // like the first two, ends the batch and is said once, its end and no button: owner
+      // decision 2026-10-23 answer 12 (the write page's banner has the way to 조치·신고 내역).
       failed: (error) => {
-        const message = imageUploadErrorMessage(error, gateMoves());
-        if (message !== undefined) toaster.create({ type: 'error', title: message });
+        const toast = imageUploadToast(error, gateMoves(), format);
+        if (toast !== undefined) toaster.create(toast);
       },
     });
   };

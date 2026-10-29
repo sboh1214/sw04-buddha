@@ -7,7 +7,7 @@ import {
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import { isApiError, isApiUnreachable, validationField } from './api';
-import { postWriteErrorMessage } from './posts';
+import { postBodyErrorMessage } from './posts';
 
 /**
  * 운영 공지 (#138, ADR-0077) as the screens read them: the addresses of a notice and of the admin
@@ -277,7 +277,7 @@ export function noticeEditConflict(error: unknown): boolean {
  *   고쳐졌습니다. 최신 내용을 불러와 주세요.', whoever saved it (owner decision 2026-10-21, second
  *   answers);
  * - VALIDATION_ERROR on `title`: blank, more than one line or too long (the form counts the same);
- * - VALIDATION_ERROR on `body`: told apart as a post's body is (`postWriteErrorMessage` — no text,
+ * - VALIDATION_ERROR on `body`: told apart as a post's body is (`postBodyErrorMessage` — no text,
  *   too long, too many images, an image the admin cannot use);
  * - NOT_FOUND: no such notice (there is no deletion; a hand-made address);
  * - FORBIDDEN: the account is no admin any more (a revoke while the screen was open);
@@ -290,7 +290,7 @@ export function noticeWriteErrorMessage(error: unknown): string {
   if (isApiError(error, 'VALIDATION_ERROR')) {
     const field = validationField(error);
     if (field === 'title') return copy.errNoticeTitle;
-    if (field === 'body') return postWriteErrorMessage(error);
+    if (field === 'body') return postBodyErrorMessage(error);
     return copy.errPostInvalid;
   }
   if (isApiError(error, 'NOT_FOUND')) return copy.adminNoticeNotFound;

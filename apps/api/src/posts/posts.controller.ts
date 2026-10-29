@@ -109,12 +109,21 @@ export class PostsController {
     summary:
       'A post on a market in any public status: an optional title and a formatted body (at most ' +
       `${String(POST_BODY_MAX_LENGTH)} characters of text and ${String(POST_IMAGES_MAX)} images, ` +
-      'each an upload of the author’s own); formatting outside the allow-list is removed',
+      'each an upload of the author’s own); formatting outside the allow-list is removed. ' +
+      'Refused under a writing restriction (RESTRICTED, with its end)',
   })
   @ApiData(postSchema, 201)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
   // `expectedAccountId` is not the cookie's account (details name the field; nothing written).
-  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'NOT_FOUND', 'VALIDATION_ERROR', 'ONBOARDING_REQUIRED')
+  // RESTRICTED: the author's writing restriction (#185), before anything else is read.
+  @ApiErrors(
+    'UNAUTHENTICATED',
+    'FORBIDDEN',
+    'NOT_FOUND',
+    'VALIDATION_ERROR',
+    'ONBOARDING_REQUIRED',
+    'RESTRICTED',
+  )
   create(
     @CurrentUser() user: SessionUser,
     @Body({ schema: createPostBodySchema }) body: ParsedContent & { marketId: string },
@@ -131,7 +140,8 @@ export class PostsController {
     summary:
       'The author replaces the title and the body (never the market); the post shows as edited ' +
       'and the earlier version is kept for operators. The same content changes nothing. A ' +
-      'hidden post cannot be edited (POST_NOT_EDITABLE)',
+      'hidden post cannot be edited (POST_NOT_EDITABLE), nor any under a writing restriction ' +
+      '(RESTRICTED, with its end — asked first). Deleting stays open',
   })
   @ApiData(postSchema)
   @ApiErrors(
@@ -141,6 +151,7 @@ export class PostsController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'POST_NOT_EDITABLE',
+    'RESTRICTED',
   )
   update(
     @CurrentUser() user: SessionUser,

@@ -167,10 +167,14 @@ async function noticeWithImageThroughApi(
   title: string,
 ): Promise<{ id: string; mediaId: string }> {
   const { id: accountId } = await meOf(admin);
-  const uploaded = await admin.post(`/api/v1/media/images?expectedAccountId=${accountId}`, {
-    data: PNG,
-    headers: { 'content-type': 'image/png' },
-  });
+  // As the notice editor uploads it: a notice's image (owner decision 2026-10-23 answer 13, #185).
+  const uploaded = await admin.post(
+    `/api/v1/media/images?expectedAccountId=${accountId}&purpose=notice`,
+    {
+      data: PNG,
+      headers: { 'content-type': 'image/png' },
+    },
+  );
   const mediaId = (await dataOf<{ id: string }>(uploaded)).id;
   const res = await admin.post(NOTICES, {
     data: {

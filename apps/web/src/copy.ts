@@ -1272,6 +1272,7 @@ export const copy = {
   moderationActionNicknameReset: '닉네임 강제 변경',
   moderationActionBioClear: '소개 비우기',
   moderationActionImageRemove: '프로필 이미지 삭제',
+  moderationActionWritingRestriction: '작성 제한',
   moderationReason: '사유',
   moderationTakenAt: '조치한 때',
   moderationEndsAt: '끝나는 때',
@@ -1294,9 +1295,41 @@ export const copy = {
   reportStatusDismissed: '기각',
   reportFiledAt: '신고한 때',
   reportResolvedAt: '처리한 때',
-  // 진행 중인 제재의 안내 띠(결정 4 #50): MY 요약과 글쓰기 화면. 제재(작성 제한 #185·계정 제한 #139)가
-  // 생기면 보인다 — #50의 조치(숨김·경고·프로필 항목)는 제재가 아니다(#45-11 경고는 기록과 본인 안내만).
-  sanctionInForce: '진행 중인 제재가 있습니다.',
+  // 작성 제한(#185, ADR-0082; ADR-0069 결정 2 #45-12, 결정 3 #37-9). 진행 중인 제재의 안내 띠(결정 4 #50 —
+  // MY 요약과 글쓰기 화면, 그리고 MY 설정)와 막힌 쓰기의 거절이 쓴다. 막는 것은 글·댓글·대댓글 쓰기와 자기
+  // 글·댓글 고치기, 공개 프로필 항목(닉네임·소개·이미지·관심 카테고리)의 새 값이다. 내 글·댓글 지우기·좋아요·
+  // 신고·관심 등록·읽기와 비공개 설정(시간대)은 그대로다. #50의 조치(숨김·경고·프로필 항목)는 제재가 아니다
+  // (#45-11). 띠는 이 제목과 끝나는 때, 조치·신고 내역 링크뿐이다(오너 결정 2026-10-22 저녁, #186 경유: «경고·
+  // 제재 띠 → 이의 안내를 빼고 … 끝나는 시각(제한)과 조치·신고 내역 링크만»). 계정 제한(#139)은 다시 쌓을 때
+  // 제 문장을 더한다.
+  restrictionWritingTitle: '작성 제한 중입니다.',
+  // 끝나는 때: 회원의 시간대로 쓴 시각 뒤에 붙어 '2026. 10. 23. 오후 3:00까지', 운영자가 풀 때까지면
+  // '무기한'(#45-12의 기간).
+  restrictionUntil: '까지',
+  restrictionIndefinite: '무기한',
+  // 조치·신고 내역과 관리자 화면의 배지: 취소되지 않았고 끝나는 때가 오지 않은(무기한 포함) 제한.
+  restrictionStanding: '진행 중',
+  // 조치·신고 내역에서 운영자가 일찍 풀거나 앞당긴(감경) 작성 제한(오너 결정 2026-10-23 답 4: «'조기
+  // 해제됨'·'감경됨'과 바뀐 끝, 원래 끝을 보임(사유는 운영자만)»): 배지(마지막 변경의 종류 — 조기 해제는
+  // 제한을 끝내므로 그 뒤의 변경은 없다), '끝나는 때'에 바뀐 끝, 그 아래 처음 건 끝(무기한이면 '무기한').
+  // 취소된 제한에는 없다('취소됨'과 취소한 때만, 답 10).
+  moderationEndLifted: '조기 해제됨',
+  moderationEndShortened: '감경됨',
+  moderationOriginalEndsAt: '원래 끝나는 때',
+  // 거절의 앞 문장(ADR-0078 오너 결정 2026-10-21 답 8 «끝나는 시각과 이의 안내», 그 이의 안내는 오너 결정
+  // 2026-10-22 저녁 «끝나는 시각과 조치·신고 내역 링크(기한은 내역에)»): 뒤에 '(…까지).'나 '(무기한).'이 붙고
+  // 화면이 그 아래에 조치·신고 내역 링크(myModerationOpen)를 둔다(lib/restriction.ts). 글 이미지 올리기의
+  // 거절 토스트(imageUploadToast)만은 이 문장뿐이고 링크가 없다(오너 결정 2026-10-23 답 12 «단추 없이 끝나는
+  // 때만»). 이의의 문장과 기한은 거절에 없다 — 조치·신고 내역에 있다.
+  errRestrictedWriting: '작성 제한 중에는 글·댓글을 쓰거나 고칠 수 없습니다',
+  errRestrictedProfile: '작성 제한 중에는 공개 프로필을 새 값으로 바꿀 수 없습니다',
+  errRestrictedNickname: '작성 제한 중에는 닉네임을 바꿀 수 없습니다',
+  // 소개·이미지·관심 카테고리는 제한 중에도 비우거나 지울 수 있다(ADR-0069 결정 7). MY 설정의 거절만 —
+  // 온보딩의 관심 카테고리 단계에는 비우거나 지울 것이 없다.
+  errRestrictedClearAllowed: '비우거나 지우는 것은 할 수 있습니다.',
+  // 온보딩의 관심 카테고리 단계에서 24시간이 지난 고르기가 작성 제한으로 거절될 때만(오너 결정 2026-10-23
+  // 답 9 — 그 화면에서 열려 있는 것은 건너뛰기다).
+  errRestrictedSkipAllowed: '건너뛰기는 할 수 있습니다.',
   // 경고의 안내 띠(오너 결정 2026-10-21): 경고한 때부터 이의 기한 14일 동안 MY 요약에만 보이고(글쓰기
   // 화면은 제한만), 조치·신고 내역으로 잇는다. 취소된 경고에는 없다.
   moderationWarningReceived: '경고를 받았습니다.',
@@ -1427,6 +1460,44 @@ export const copy = {
   // 넘길 것이 없다. 오너가 정한 문장 그대로다.
   adminModerationCancelNicknameResetEndedBody:
     '닉네임은 되살리지 않습니다. 이전 닉네임의 30일 보류는 끝났습니다.',
+  // 작성 제한의 취소: 조치가 없던 것이 되고 곧바로 끝난다(회원에게는 '취소됨'). 조기 해제는 기록을 그대로 두고
+  // 지금 끝낸다 — 둘은 따로다(#185, ADR-0082 결정 7). 이미 끝난(기간이 지났거나 조기 해제된) 제한도 취소할 수
+  // 있다 — 이의를 받아들인 때(#45-14) — 그 창은 끝내는 말도 조기 해제도 말하지 않는다(그 줄에 조기 해제가 없다).
+  adminModerationCancelRestrictionBody:
+    '작성 제한을 취소하면 곧바로 끝나고 회원의 조치 내역에 취소됨으로 보입니다. 조치는 그대로 두고 지금 끝내려면 조기 해제를 씁니다.',
+  adminModerationCancelRestrictionEndedBody:
+    '이미 끝난 작성 제한입니다. 취소하면 회원의 조치 내역에 취소됨으로 보입니다.',
+  // 작성 제한(#185, ADR-0082; ADR-0069 결정 2 #45-12·#45-14, 결정 4 #185 행): 신고 목록의 대상 화면(그 대상에
+  // 처리를 기다리는 신고를 닫는다)이나 회원 화면에서 사유와 기간(1·3·7·30일·무기한)을 골라 건다. 이미 제한
+  // 중이어도 걸 수 있고 더 늦게 끝나는 쪽이 회원의 것이다. 서 있는 제한은 조기 해제(지금 끝남)와 감경(끝나는
+  // 때를 앞당김 — 무기한을 기간제로 바꾸는 것 포함, 승인 없음)을 운영 기록의 사유와 함께 한다. 회원에게는 바뀐
+  // 끝나는 때만 보인다.
+  adminModerationRestrict: '작성 제한',
+  adminModerationRestrictTitle: '회원의 작성을 제한합니다',
+  adminModerationRestrictBody:
+    '고른 기간 동안 글·댓글을 쓰거나 고칠 수 없고 공개 프로필을 새 값으로 바꿀 수 없습니다. 지우기·좋아요·신고는 막지 않습니다. 이미 제한 중이면 더 늦게 끝나는 쪽이 적용됩니다. 대상을 고르면 그 대상에 처리를 기다리는 신고가 모두 조치함으로 닫힙니다.',
+  adminModerationRestrictSubject: '제한의 대상',
+  adminModerationTerm: '기간',
+  adminModerationTermDayUnit: '일',
+  adminModerationRestricted: '작성을 제한했습니다.',
+  adminModerationLift: '조기 해제',
+  adminModerationLiftTitle: '작성 제한을 지금 풉니다',
+  adminModerationLiftBody:
+    '끝나는 때가 지금이 되고 조치는 기록에 그대로 남습니다. 회원에게는 바뀐 끝나는 때만 보입니다. 같은 회원의 다른 작성 제한은 그대로입니다.',
+  adminModerationLifted: '작성 제한을 풀었습니다.',
+  adminModerationShorten: '감경',
+  adminModerationShortenTitle: '작성 제한의 끝나는 때를 앞당깁니다',
+  adminModerationShortenBody:
+    '지금 끝나는 때보다 앞이고 아직 오지 않은 때를 한국 시간으로 넣습니다. 무기한이면 오지 않은 어느 때든 됩니다. 회원에게는 바뀐 끝나는 때만 보입니다.',
+  adminModerationShortenEndLabel: '새로 끝나는 때(한국 시간)',
+  adminModerationShortened: '끝나는 때를 앞당겼습니다.',
+  adminModerationEndChangeShorten: '감경',
+  adminModerationEndChangeLift: '조기 해제',
+  adminModerationEndChangeReason: '변경 사유',
+  adminModerationChangedBy: '바꾼 운영자',
+  adminModerationChangedAt: '바꾼 때',
+  errModerationTermRequired: '기간을 골라 주세요.',
+  errModerationEndRequired: '새로 끝나는 때를 입력해 주세요.',
   adminModerationReasonLabel: '사유',
   adminModerationReasonPlaceholder: '사유 고르기',
   adminModerationNoteLabel: '회원에게 보일 설명',
@@ -1452,6 +1523,10 @@ export const copy = {
   errModerationCancelled: '이미 취소한 조치입니다. 화면을 새로 고쳐 주세요.',
   errModerationResolved: '이미 처리한 신고가 있습니다. 화면을 새로 고쳐 주세요.',
   errModerationNotTheirs: '이 회원의 글·댓글이 아닙니다. 화면을 새로 고쳐 주세요.',
+  errModerationNotRestriction: '작성 제한이 아닌 조치입니다. 화면을 새로 고쳐 주세요.',
+  errModerationEnded: '이미 끝난 제한입니다. 화면을 새로 고쳐 주세요.',
+  errModerationNotEarlier: '새로 끝나는 때는 지금 끝나는 때보다 앞이어야 합니다.',
+  errModerationEndPassed: '이미 지난 시각입니다. 지금 끝내려면 해제해 주세요.',
   errModerationReportIds: '한 번에 기각할 수 있는 신고는 100건까지입니다. 화면을 새로 고쳐 주세요.',
 
   // 관리자 시장 폼의 미리보기 (Q-M3-6): 실제 카드·규칙 컴포넌트를 그대로 그린다.

@@ -2,13 +2,16 @@
 
 import { Alert, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/react';
 import { type ReactNode, useMemo, useState } from 'react';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { InterestChecklist } from '@/components/profile/interest-checklist';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useCategories } from '@/hooks/use-markets';
 import { useAnswerInterestsStep } from '@/hooks/use-onboarding';
-import { isApiError, isForAnotherAccount } from '@/lib/api';
 import { groupCategories } from '@/lib/category-tree';
 import { interestIds, withInterest } from '@/lib/onboarding';
+import { interestsStepFailure } from '@/lib/profile';
+import { type Refusal } from '@/lib/restriction';
 
 /**
  * 관심 카테고리, the onboarding's last screen (#58, ADR-0069 decision 1 #57-7): after the start Coin
@@ -21,9 +24,10 @@ import { interestIds, withInterest } from '@/lib/onboarding';
  * (2nd) answer 2, ADR-0078). This screen's first answer is the account's first choice, which a
  * writing or an account restriction lets through (owner decision 2026-10-21 answer 4) — within 24
  * hours of the nickname step only (3rd answer 1): a screen left open past them sends a change, which
- * a restriction refuses (the general sentence below, until #185 and #139), while 건너뛰기 still
- * answers the step. MY 설정's card (#41) changes them later, a first pick there included, under the
- * restriction's rule.
+ * a writing restriction refuses (RESTRICTED, #185 — said with its end, that 건너뛰기 stays open
+ * (owner decision 2026-10-23 answer 9) and the way to 조치·신고 내역, `interestsStepFailure`; #139's
+ * account restriction joins it), while 건너뛰기 still answers the step. MY 설정's card (#41)
+ * changes them later, a first pick there included, under the restriction's rule.
  *
  * The categories are grouped as the header groups them (`groupCategories`): each top-level category
  * with its sub-categories under it, each a checkbox of its own (`InterestChecklist`, the list MY
@@ -40,8 +44,9 @@ import { interestIds, withInterest } from '@/lib/onboarding';
 export function InterestsStep({ accountId }: { accountId: string }) {
   const categories = useCategories();
   const save = useAnswerInterestsStep();
+  const format = useFormatDateTime();
   const [picked, setPicked] = useState<ReadonlySet<number>>(new Set());
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<Refusal | null>(null);
   const tree = useMemo(() => groupCategories(categories.data ?? []), [categories.data]);
   const chosen = interestIds(picked, categories.data ?? []);
   // Which of the two buttons is waiting: the one pressed spins, the other only waits disabled.
@@ -52,18 +57,11 @@ export function InterestsStep({ accountId }: { accountId: string }) {
     try {
       await save.mutateAsync({ categoryIds, expectedAccountId: accountId });
     } catch (error) {
-      if (isApiError(error, 'VALIDATION_ERROR')) {
-        setNotice(copy.errInterestsUnavailable);
-        void categories.refetch();
-        return;
-      }
       // ONBOARDING_REQUIRED: the hook asked `['me']` again and the stepper follows it, this step
       // and its line with it; the line stays only when `['me']` did not move (its read failed).
-      if (isApiError(error, 'ONBOARDING_REQUIRED')) {
-        setNotice(copy.errOnboardingStepsFirst);
-        return;
-      }
-      setNotice(isForAnotherAccount(error) ? copy.sessionChanged : copy.errUnknown);
+      const failure = interestsStepFailure(error, format);
+      if (failure.refetchCategories) void categories.refetch();
+      setNotice(failure);
     }
   };
 
@@ -101,7 +99,9 @@ export function InterestsStep({ accountId }: { accountId: string }) {
         <Alert.Root status="error" role="alert" data-testid="interests-notice">
           <Alert.Indicator />
           <Alert.Content>
-            <Alert.Description>{notice}</Alert.Description>
+            <Alert.Description>
+              <RefusalText message={notice.message} restricted={notice.restricted} />
+            </Alert.Description>
           </Alert.Content>
         </Alert.Root>
       )}

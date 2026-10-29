@@ -59,7 +59,7 @@ import {
  * Every report a test files is processed before it ends, so a persistent database's queue does not
  * grow run after run; the queue is walked page by page all the same (`showInQueue`). A check that
  * something is absent is made once what decides it has been read: GET /me for 신고, the member's
- * actions for the banners (`gotoWithActionsRead`).
+ * actions and restriction for the banners (`gotoWithBannersRead`).
  *
  * The rules' every branch (the daily limit, the same person by number, the onboarding, the
  * concurrency, the audit rows) is the API's tests' (reports.controller.test.ts,
@@ -148,21 +148,42 @@ async function showInQueue(page: Page, entry: Locator): Promise<void> {
 }
 
 /**
- * Opens `path` and waits until the member's own actions (`GET /me/moderation/actions`, read in the
- * browser once the session is known) have answered and been drawn: the banners — the warning's on
- * the MY summary, the sanction's there and on the write page — are drawn from it and draw nothing
- * while it is read, so a check that one is absent proves nothing before it. Two frames after the
- * answer: React Query hands it over and React draws it.
+ * What each page's banners are drawn from, each read in the browser once the session is known: the
+ * MY summary's warning banner from the first page of the member's actions (`GET
+ * /me/moderation/actions`), and the sanction banner — on the MY summary and the write page — from
+ * the member's writing restriction (`GET /me/moderation/restriction`, #185, ADR-0082: no longer
+ * from the actions).
  */
-async function gotoWithActionsRead(page: Page, path: string): Promise<void> {
-  const read = page.waitForResponse(
-    (response) =>
-      response.request().method() === 'GET' &&
-      new URL(response.url()).pathname === '/api/v1/me/moderation/actions',
+const BANNER_READS = {
+  mySummary: ['/api/v1/me/moderation/actions', '/api/v1/me/moderation/restriction'],
+  writePage: ['/api/v1/me/moderation/restriction'],
+} as const;
+
+/**
+ * Opens `path` and waits until every read its banners are drawn from (`BANNER_READS`) has answered
+ * and been drawn: a banner draws nothing while its read is on its way, so a check that one is
+ * absent proves nothing before it. The page before is left for a blank one first: it may be making
+ * the same read still, and that answer is not the new page's. Two frames after the answers: React
+ * Query hands them over and React draws them.
+ */
+async function gotoWithBannersRead(
+  page: Page,
+  path: string,
+  reads: readonly string[],
+): Promise<void> {
+  await page.goto('about:blank');
+  const answers = Promise.all(
+    reads.map((pathname) =>
+      page.waitForResponse(
+        (response) =>
+          response.request().method() === 'GET' && new URL(response.url()).pathname === pathname,
+      ),
+    ),
   );
   await page.goto(path);
-  const response = await read;
-  expect(response.status(), await response.text()).toBe(200);
+  for (const response of await answers) {
+    expect(response.status(), await response.text()).toBe(200);
+  }
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
@@ -462,12 +483,16 @@ test.describe('신고와 운영 처리', () => {
       expect(authorView).not.toContain(reporterMe.profile.nickname);
       expect(authorView).not.toContain(operator.profile.nickname);
       expect(authorView).not.toContain(description);
-      // A hiding is no sanction (#45-12): no banner on MY or the write page, once the actions they
-      // are drawn from have been read.
-      await gotoWithActionsRead(page, '/my');
+      // A hiding is no sanction (#45-12): no banner on MY or the write page, once the reads they
+      // are drawn from have answered.
+      await gotoWithBannersRead(page, '/my', BANNER_READS.mySummary);
       await expect(page.getByTestId('my-preview-wallet')).toBeVisible();
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
-      await gotoWithActionsRead(page, `/community/write?market=${market.id}`);
+      await gotoWithBannersRead(
+        page,
+        `/community/write?market=${market.id}`,
+        BANNER_READS.writePage,
+      );
       await expect(page.getByTestId('post-write-market')).toBeVisible();
       await expect(page.getByTestId('post-write-sanction-banner')).toHaveCount(0);
       expect(
@@ -837,13 +862,17 @@ test.describe('신고와 운영 처리', () => {
       await expect(warning).toHaveCount(1);
 
       // The member: its banner on the MY summary, leading to 조치·신고 내역 — not on the write page,
-      // which keeps its banner for restrictions: once the actions are read there, nothing on it
+      // which keeps its banner for restrictions: once its restriction is read there, nothing on it
       // says a warning was received.
-      await page.goto('/my');
+      await gotoWithBannersRead(page, '/my', BANNER_READS.mySummary);
       const banner = page.getByTestId('my-warning-banner');
       await expect(banner).toContainText(copy.moderationWarningReceived);
       await expect(page.getByTestId('my-sanction-banner')).toHaveCount(0);
-      await gotoWithActionsRead(page, `/community/write?market=${market.id}`);
+      await gotoWithBannersRead(
+        page,
+        `/community/write?market=${market.id}`,
+        BANNER_READS.writePage,
+      );
       await expect(page.getByTestId('post-write-market')).toBeVisible();
       await expect(page.getByText(copy.moderationWarningReceived)).toHaveCount(0);
       await expect(page.getByTestId('post-write-sanction-banner')).toHaveCount(0);

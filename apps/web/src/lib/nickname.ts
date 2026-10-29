@@ -8,6 +8,7 @@ import {
 import * as z from 'zod';
 import { copy } from '@/copy';
 import { isApiError, isForAnotherAccount, validationField } from './api';
+import { restrictedMessage } from './restriction';
 
 /**
  * 닉네임 규칙 (#58, ADR-0069 decision 1 #57-6) as the two forms that set a nickname read them: the
@@ -62,7 +63,10 @@ export type NicknameFormValues = z.input<ReturnType<typeof nicknameFormSchema>>;
 
 /** What a form does with a refused nickname write (`POST /me/onboarding/nickname`, `PATCH /me`). */
 export type NicknameFailure =
-  /** Under the input: a rule, a nickname taken (or held), the interval with when it opens again. */
+  /**
+   * Under the input: a rule, a nickname taken (or held), the interval with when it opens again, a
+   * writing restriction with its end.
+   */
   | { kind: 'field'; message: string }
   /**
    * The screen is out of date — the step was done in another tab (`already_set`), a step before
@@ -79,12 +83,18 @@ export type NicknameFailure =
 
 /**
  * `formatDate` renders `nextChangeAt` in the member's time zone (the forms pass
- * `useFormatDateTime()`), so the line reads '… 2026. 11. 17. 오후 3:00부터 다시 바꿀 수 있습니다.'
+ * `useFormatDateTime()`), so the line reads '… 2026. 11. 17. 오후 3:00부터 다시 바꿀 수 있습니다.' A
+ * change under a writing restriction (RESTRICTED, #185, ADR-0082; #37-9 — MY 설정 only: the
+ * onboarding's first nickname is let through, owner decision 2026-10-21 answer 4) is said under
+ * the input too, with the restriction's end in that zone or 무기한 (the form adds the way to
+ * 조치·신고 내역, `isRestricted`).
  */
 export function nicknameFailure(
   error: unknown,
   formatDate: (iso: string) => string,
 ): NicknameFailure {
+  const restricted = restrictedMessage(error, 'nickname', formatDate);
+  if (restricted !== undefined) return { kind: 'field', message: restricted };
   if (isApiError(error, 'NICKNAME_NOT_ALLOWED')) {
     const details = nicknameNotAllowedDetailsSchema.safeParse(error.details);
     if (!details.success) return { kind: 'field', message: copy.errNicknameTaken };

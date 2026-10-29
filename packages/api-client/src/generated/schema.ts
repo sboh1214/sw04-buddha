@@ -316,6 +316,40 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/moderation/actions/{actionId}/lift": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators only): it ends now and stays on the record as given. Refused as a shortening is (`not_restriction`, `cancelled`, `ended`, `own`) */
+        post: operations["adminLiftRestriction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/actions/{actionId}/shorten": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason (recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing restriction is `not_restriction`, a cancelled one `cancelled`, one ended `ended`, one on the acting admin `own`. The member reads the new end */
+        post: operations["adminShortenRestriction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/moderation/comments/{commentId}": {
         parameters: {
             query?: never;
@@ -480,6 +514,23 @@ export type paths = {
         put?: never;
         /** Warn a member with a reason: a record and the member’s notice only. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs` */
         post: operations["adminWarnUser"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/moderation/users/{userId}/writing-restriction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Restrict a member’s writing (작성 제한) with a reason, for `days` (1, 3, 7 or 30) or with no end (`null`, until lifted): no new post, comment or reply, no edit of their own and no new value of a public profile item (RESTRICTED, with the end) — deleting their own, likes and reports stay open. Restricted already, the one that ends later governs. With a subject (the member’s post, comment or profile) its pending reports are resolved (조치함); one not the member’s is `not_theirs`; the acting admin is `own` */
+        post: operations["adminRestrictWriting"];
         delete?: never;
         options?: never;
         head?: never;
@@ -853,7 +904,7 @@ export type paths = {
             cookie?: never;
         };
         get?: never;
-        /** The author replaces the body; the comment shows as edited and the earlier version is kept for operators. The same text changes nothing. A hidden comment cannot be edited (COMMENT_NOT_EDITABLE) */
+        /** The author replaces the body; the comment shows as edited and the earlier version is kept for operators. The same text changes nothing. A hidden comment cannot be edited (COMMENT_NOT_EDITABLE), nor any under a writing restriction (RESTRICTED, with its end — asked first). Deleting stays open */
         put: operations["updateComment"];
         post?: never;
         delete?: never;
@@ -1176,8 +1227,25 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one and its cancellation. Never the operator, a report or a reporter */
+        /** The actions operators took on the account, newest first: the type, the reason (a report reason and the operator’s explanation), what it was about (the account’s own item, nothing of it once deleted), its end when it has one — for a writing restriction an operator lifted early or shortened, that kind and the end it was given — and its cancellation. Never the operator, a report, a reporter, nor why an end changed */
         get: operations["listMyModerationActions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/moderation/restriction": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The writing restriction that governs the account now, as a refused write names it: its kind and its end (null: none, until an operator lifts it) — the latest end of those standing, one with no end over any. Null when none stands. Never the operator, the reason nor a report */
+        get: operations["getMyRestriction"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1554,7 +1622,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours */
+        /** An image for a post (or an admin’s notice): JPEG, PNG, WebP or GIF by its content, at most 5242880 bytes, its long side at most 32 times its short side. Stored without its metadata, the long side at most 2048px (a still WebP with alpha at most 3400000 pixels), a GIF still moving. Its id goes into the post’s image node; it is served once a post shows it, and removed if nothing takes it within 24 hours. Refused under a writing restriction (RESTRICTED, with its end), which no post of the account gets past — but for an admin’s notice (`purpose=notice`, an admin’s alone): a writing restriction refuses no notice, its images included */
         post: operations["uploadImage"];
         delete?: never;
         options?: never;
@@ -1640,7 +1708,7 @@ export type paths = {
         /** The community list: every market’s posts, newest first (the only order), never a deleted or hidden one; narrowed by market, by category (either level, like GET /markets) and by q, a case-insensitive partial match in the title or the text */
         get: operations["listPosts"];
         put?: never;
-        /** A post on a market in any public status: an optional title and a formatted body (at most 5000 characters of text and 10 images, each an upload of the author’s own); formatting outside the allow-list is removed */
+        /** A post on a market in any public status: an optional title and a formatted body (at most 5000 characters of text and 10 images, each an upload of the author’s own); formatting outside the allow-list is removed. Refused under a writing restriction (RESTRICTED, with its end) */
         post: operations["createPost"];
         delete?: never;
         options?: never;
@@ -1657,7 +1725,7 @@ export type paths = {
         };
         /** A post page: the whole post, or a placeholder for a hidden post and for a deleted one that comments not deleted (hidden ones too) still hang under; a deleted post with none is NOT_FOUND */
         get: operations["getPost"];
-        /** The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE) */
+        /** The author replaces the title and the body (never the market); the post shows as edited and the earlier version is kept for operators. The same content changes nothing. A hidden post cannot be edited (POST_NOT_EDITABLE), nor any under a writing restriction (RESTRICTED, with its end — asked first). Deleting stays open */
         put: operations["updatePost"];
         post?: never;
         delete?: never;
@@ -1676,7 +1744,7 @@ export type paths = {
         /** A post’s comments: its 댓글 oldest first, at most 20 a page, each with its first 50 대댓글 oldest first and the cursor of the rest (repliesNextCursor, for GET /comments/:commentId/replies); a deleted 댓글 that 대댓글 hang under and a hidden comment are placeholders, other deleted ones are left out. The cursors are opaque, sealed for their list: one that does not open is VALIDATION_ERROR. A post that is gone is NOT_FOUND */
         get: operations["listComments"];
         put?: never;
-        /** A comment of plain text (at most 1000 characters, line breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED) */
+        /** A comment of plain text (at most 1000 characters, line breaks kept): a 댓글, or with parentId a 대댓글 — under the 댓글 named, or under the 댓글 of the 대댓글 named. A hidden or deleted post or 댓글 takes none (COMMENT_NOT_ALLOWED); an author under a writing restriction writes none (RESTRICTED, with its end — asked first) */
         post: operations["createComment"];
         delete?: never;
         options?: never;
@@ -1920,6 +1988,7 @@ export type components = {
             /** Format: date-time */
             createdAt: string;
             createdBy: components["schemas"]["AdminAccountActor"] | null;
+            endChanges: components["schemas"]["RestrictionEndChange"][];
             /** Format: date-time */
             endsAt: string | null;
             /** Format: uuid */
@@ -2414,7 +2483,7 @@ export type components = {
             reportIds: string[];
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -2467,6 +2536,10 @@ export type components = {
             refType: "payment" | "fill" | "market" | "admin_action" | "coupon" | "start_grant" | null;
             /** @enum {string} */
             type: "DEPOSIT" | "TRADE_BUY" | "TRADE_SELL" | "FEE" | "SETTLEMENT_PAYOUT" | "ADMIN_ADJUST" | "BONUS" | "PAYMENT_CANCEL" | "PAYMENT_CANCEL_REVERSAL" | "START_GRANT";
+        };
+        LiftRestrictionBody: {
+            expectedAccountId: string;
+            reason: string;
         };
         LikeState: {
             likeCount: number;
@@ -2588,7 +2661,7 @@ export type components = {
             reason: components["schemas"]["ReportReason"];
         };
         /** @enum {string} */
-        ModerationActionType: "hide" | "warning" | "nickname_reset" | "bio_clear" | "image_remove";
+        ModerationActionType: "hide" | "warning" | "nickname_reset" | "bio_clear" | "image_remove" | "writing_restriction";
         ModerationCommentTarget: {
             /** Format: uuid */
             commentId: string;
@@ -2661,6 +2734,7 @@ export type components = {
             cancelledAt: string | null;
             /** Format: date-time */
             createdAt: string;
+            endChange: components["schemas"]["MyRestrictionEndChange"] | null;
             /** Format: date-time */
             endsAt: string | null;
             /** Format: uuid */
@@ -2700,6 +2774,14 @@ export type components = {
             resolvedAt: string | null;
             status: components["schemas"]["ReportStatus"];
             target: components["schemas"]["ReportTarget"];
+        };
+        MyRestriction: {
+            restriction: components["schemas"]["RestrictedDetails"] | null;
+        };
+        MyRestrictionEndChange: {
+            kind: components["schemas"]["RestrictionEndChangeKind"];
+            /** Format: date-time */
+            originalEndsAt: string | null;
         };
         NextPath: string;
         Nickname: string;
@@ -3223,6 +3305,26 @@ export type components = {
             /** @enum {string} */
             result: "YES" | "NO";
         };
+        RestrictedDetails: {
+            /** Format: date-time */
+            endsAt: string | null;
+            kind: components["schemas"]["RestrictionKind"];
+        };
+        RestrictionEndChange: {
+            /** Format: date-time */
+            createdAt: string;
+            createdBy: components["schemas"]["AdminAccountActor"] | null;
+            /** Format: date-time */
+            endsAt: string;
+            kind: components["schemas"]["RestrictionEndChangeKind"];
+            /** Format: date-time */
+            previousEndsAt: string | null;
+            reason: string;
+        };
+        /** @enum {string} */
+        RestrictionEndChangeKind: "shorten" | "lift";
+        /** @enum {string} */
+        RestrictionKind: "writing";
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };
@@ -3242,6 +3344,12 @@ export type components = {
         SettlementStep: "coin";
         /** @enum {string} */
         SettlementStepStatus: "pending" | "done" | "failed";
+        ShortenRestrictionBody: {
+            /** Format: date-time */
+            endsAt: string;
+            expectedAccountId: string;
+            reason: string;
+        };
         SmsSendDay: {
             /** Format: date */
             date: string;
@@ -3361,6 +3469,19 @@ export type components = {
         };
         WatchState: {
             watched: boolean;
+        };
+        WritingRestrictionBody: {
+            /**
+             * @description The term in days, 24 hours each from the restriction; null for 무기한 (no end)
+             * @enum {number|null}
+             */
+            days: 1 | 3 | 7 | 30 | null;
+            expectedAccountId: string;
+            /** @description The explanation the member reads, plain text, at most 500 characters after trimming; required with the reason other */
+            note?: string | null;
+            reason: components["schemas"]["ReportReason"];
+            /** @default null */
+            subject: components["schemas"]["WarningSubject"] | null;
         };
     };
     responses: never;
@@ -5278,6 +5399,168 @@ export interface operations {
             };
         };
     };
+    adminLiftRestriction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LiftRestrictionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminShortenRestriction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                actionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ShortenRestrictionBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminGetCommentModeration: {
         parameters: {
             query?: never;
@@ -6003,6 +6286,87 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["WarningBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminModerationAction"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | MODERATION_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRestrictWriting: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                userId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WritingRestrictionBody"];
             };
         };
         responses: {
@@ -7747,7 +8111,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8552,7 +8916,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8631,7 +8995,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -8833,7 +9197,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9027,6 +9391,45 @@ export interface operations {
             };
         };
     };
+    getMyRestriction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["MyRestriction"];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     answerMyInterestsStep: {
         parameters: {
             query?: never;
@@ -9068,7 +9471,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -9710,7 +10113,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10499,6 +10902,7 @@ export interface operations {
         parameters: {
             query: {
                 expectedAccountId: string;
+                purpose?: "post" | "notice";
             };
             header?: never;
             path?: never;
@@ -10542,7 +10946,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10868,7 +11272,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -10999,7 +11403,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;
@@ -11134,7 +11538,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description FORBIDDEN */
+            /** @description FORBIDDEN | RESTRICTED */
             403: {
                 headers: {
                     [name: string]: unknown;

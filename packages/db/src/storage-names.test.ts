@@ -12,6 +12,7 @@ import {
   PAYMENT_PROVIDERS,
   PHONE_VERIFICATION_SEND_OUTCOMES,
   RELEASE_SETTINGS,
+  RESTRICTION_END_CHANGE_KINDS,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
   START_GRANT_NUMBER_SOURCES,
@@ -83,8 +84,11 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'media_objects.content_type': IMAGE_CONTENT_TYPES,
   // Generated (#141): the profile image's kind its foreign key requires, NULL without an image.
   'profiles.image_kind': MEDIA_KINDS.filter((kind) => kind === 'profile_image'),
-  // #50: what an operator did to a member, held by a CHECK so #185 and #139 can add theirs.
+  // #50: what an operator did to a member, held by a CHECK that a type's migration replaces —
+  // #185's writing restriction did (0040), #139's account restriction will.
   'moderation_actions.type': MODERATION_ACTION_TYPES,
+  // #185: how an operator brought a writing restriction's end forward (감경, 조기 해제).
+  'restriction_end_changes.kind': RESTRICTION_END_CHANGE_KINDS,
 };
 
 /**

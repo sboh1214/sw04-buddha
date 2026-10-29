@@ -48,9 +48,10 @@ import {
   ModerationDialog,
   OwnNotice,
   ReportRows,
+  type SubjectOption,
   UserName,
-  cancelDialog,
   dismissDialog,
+  restrictDialog,
   useOperatorId,
 } from './moderation-parts';
 
@@ -62,8 +63,10 @@ import {
  * versions (#45-4), the reports on it with their reporters, the actions about it and every action
  * its author received — and, on a post's page, every comment under it with the way to its own
  * page (`CommentRows`), reported or not. The actions, chosen by the violation's weight (#45-11):
- * 숨기기 (while it is public), 경고 (about this item or about nothing in particular) and 신고 기각
- * (the pending reports on screen); 조치 취소 in the lists. None is offered on the operator's own
+ * 숨기기 (while it is public), 경고 (about this item or about nothing in particular), 작성 제한 of
+ * its author (#185, ADR-0082 — a term and a reason, about this item, whose pending reports it
+ * resolves, or nothing in particular) and 신고 기각 (the pending reports on screen); 조치 취소, and a
+ * standing restriction's 조기 해제 and 감경, in the lists. None is offered on the operator's own
  * item (decision 4 #50 — `OwnNotice`), and none while the operator on screen is unknown.
  */
 
@@ -121,7 +124,18 @@ function Times({
   );
 }
 
-/** The warning's two choices on an item's page: about this item (the default), or nothing. */
+/**
+ * A warning's or a restriction's two choices on an item's page: about this item (the default — its
+ * pending reports are resolved), or nothing in particular.
+ */
+function itemSubjects(thisItem: WarningSubject): SubjectOption[] {
+  return [
+    { value: 'this', label: copy.adminModerationWarnSubjectThis, subject: thisItem },
+    { value: 'none', label: copy.adminModerationWarnSubjectNone, subject: null },
+  ];
+}
+
+/** The warning on an item's page: about this item (the default), or nothing. */
 function warnDialog(author: ModerationUser, thisItem: WarningSubject): DialogSpec {
   return {
     kind: 'action',
@@ -129,10 +143,7 @@ function warnDialog(author: ModerationUser, thisItem: WarningSubject): DialogSpe
     body: copy.adminModerationWarnBody,
     success: copy.adminModerationWarned,
     testId: 'moderation-warn-dialog',
-    subjects: [
-      { value: 'this', label: copy.adminModerationWarnSubjectThis, subject: thisItem },
-      { value: 'none', label: copy.adminModerationWarnSubjectNone, subject: null },
-    ],
+    subjects: itemSubjects(thisItem),
     build: ({ reason, note, subject, expectedAccountId }) => ({
       kind: 'warn',
       userId: author.id,
@@ -181,6 +192,15 @@ function ActionBar({
         data-testid="moderation-warn"
       >
         {copy.adminModerationWarn}
+      </Button>
+      <Button
+        size="sm"
+        variant="outline"
+        colorPalette="no"
+        onClick={() => onOpen(restrictDialog(author, itemSubjects(warnSubject)))}
+        data-testid="moderation-restrict"
+      >
+        {copy.adminModerationRestrict}
       </Button>
       {pendingReportIds(reports).length > 0 && (
         <Button
@@ -273,16 +293,13 @@ function RecordBlocks({
         <ReportRows reports={item.reports} />
       </Block>
       <Block title={copy.adminModerationItemActions} testId="moderation-item-actions">
-        <ActionRows actions={item.actions} onCancel={(action) => onOpen(cancelDialog(action))} />
+        <ActionRows actions={item.actions} onOpen={onOpen} />
       </Block>
       <Block title={copy.adminModerationRevisions} testId="moderation-revisions">
         {revisions}
       </Block>
       <Block title={copy.adminModerationMemberActions} testId="moderation-author-actions">
-        <ActionRows
-          actions={item.authorActions}
-          onCancel={(action) => onOpen(cancelDialog(action))}
-        />
+        <ActionRows actions={item.authorActions} onOpen={onOpen} />
       </Block>
     </>
   );

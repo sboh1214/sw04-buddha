@@ -8,6 +8,7 @@ import { SanctionBanner } from '@/components/moderation/sanction-banner';
 import { MarketPicker } from '@/components/post/market-picker';
 import { PostForm } from '@/components/post/post-form';
 import { WriteGate } from '@/components/post/write-gate';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useCreatePost } from '@/hooks/use-posts';
 import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
@@ -22,6 +23,7 @@ import {
   writeScreenStart,
   writeScreenView,
 } from '@/lib/posts';
+import { type Refusal, refusalOf } from '@/lib/restriction';
 import { useSession } from '@/lib/use-session';
 
 /**
@@ -29,8 +31,10 @@ import { useSession } from '@/lib/use-session';
  * never changed once sent — before that, '다른 시장 고르기' opens the picker in place and keeps
  * the title, the body and its images); without one, the picker, which puts the market picked into
  * the address (`?market=`), so a reload or a sign-in comes back to it. A post is sent once, then
- * the screen goes to its page. Above either, for a member under a sanction in force, its banner
- * (`SanctionBanner`, ADR-0069 decision 4 #50 — none with #50 alone, ADR-0081 7-8).
+ * the screen goes to its page. Above either, for a member under a writing restriction in force
+ * (#185, ADR-0082), its banner (`SanctionBanner`, ADR-0069 decision 4 #50) — the form stays, and
+ * sending it is refused with the restriction's end and the way to 조치·신고 내역
+ * (`postWriteErrorMessage`, `isRestricted`).
  *
  * The market the form shows is the screen's own (`writeScreenMarket`, lib/posts.ts, where every
  * step of it is tested): the page's read (`lookup`) settles it as it comes, and a market picked
@@ -114,7 +118,8 @@ function WriteForm({
   const router = useRouter();
   const { refetch: refetchSession } = useSession();
   const create = useCreatePost(() => void refetchSession());
-  const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const format = useFormatDateTime();
+  const [refusal, setRefusal] = useState<Refusal | undefined>(undefined);
   const [changing, setChanging] = useState(false);
   // Sent, or on its way to the post's page: the market is the post's now.
   const sent = create.isPending || create.isSuccess;
@@ -190,7 +195,8 @@ function WriteForm({
         submitLabel={copy.postWriteSubmit}
         pending={sent}
         saved={create.isSuccess}
-        errorMessage={refusal}
+        errorMessage={refusal?.message}
+        errorRestricted={refusal?.restricted}
         refusedImageIds={refusedImageIds(create.error)}
         onSubmit={({ title, body }) => {
           setRefusal(undefined);
@@ -198,7 +204,8 @@ function WriteForm({
             { marketId: market.id, title, body, expectedAccountId: accountId },
             {
               onSuccess: (post) => router.push(postPath(post.id) as Route),
-              onError: (error) => setRefusal(postWriteErrorMessage(error)),
+              onError: (error) =>
+                setRefusal(refusalOf(error, postWriteErrorMessage(error, format))),
             },
           );
         }}

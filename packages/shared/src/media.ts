@@ -139,6 +139,25 @@ export const uploadImageQuerySchema = z.object({
 export type UploadImageQuery = z.infer<typeof uploadImageQuerySchema>;
 
 /**
+ * What a post image upload (`POST /media/images`) is for, in its query (`purpose`): `post` — the
+ * default — an image of a post the account writes or edits, which a writing restriction refuses
+ * (#185, ADR-0082: RESTRICTED before the image is looked at), or `notice` — an image of an admin's
+ * notice (#138, written in the same editor), which a writing restriction does not refuse (owner
+ * decision 2026-10-23 answer 13: «운영 공지(#138)는 작성 제한이 막지 않음(공지 편집기의 이미지 업로드
+ * 포함)»). Only an admin's upload may say `notice` (FORBIDDEN naming `purpose` otherwise). Either
+ * way the image is the same kind of upload (`post_image`): a post takes it as a notice does, and a
+ * post written under a writing restriction is refused all the same.
+ */
+export const POST_IMAGE_PURPOSES = ['post', 'notice'] as const;
+export type PostImagePurpose = (typeof POST_IMAGE_PURPOSES)[number];
+
+/** `POST /media/images?expectedAccountId=…&purpose=…`: the account, and what the image is for. */
+export const uploadPostImageQuerySchema = uploadImageQuerySchema.extend({
+  purpose: z.enum(POST_IMAGE_PURPOSES).default('post'),
+});
+export type UploadPostImageQuery = z.infer<typeof uploadPostImageQuerySchema>;
+
+/**
  * Why an upload was refused (IMAGE_NOT_ALLOWED): `type` — its content is not a JPEG, PNG, WebP or
  * GIF (a profile image: not a JPEG, PNG or WebP), whatever its name or declared type says; `size` —
  * larger than IMAGE_MAX_BYTES; `pixels` — an image (one frame of an animation) too large to

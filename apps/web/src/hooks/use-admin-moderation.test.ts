@@ -135,6 +135,35 @@ describe('the operators’ actions', () => {
     expect(post).toHaveBeenLastCalledWith('/api/v1/admin/reports/dismiss', { body: dismissal });
   });
 
+  it('give a writing restriction on the member, and lift or shorten it on the action (#185)', async () => {
+    const post = vi.spyOn(api, 'POST').mockResolvedValue(answer({}));
+    const { mutationFn } = moderationOptions(getQueryClient(), () => undefined);
+    for (const days of [1, 3, 7, 30, null] as const) {
+      const restriction = { ...reason, days, subject: { type: 'post' as const, postId: POST } };
+      await mutationFn({ kind: 'restrict', userId: USER, body: restriction });
+      expect(post).toHaveBeenLastCalledWith(
+        '/api/v1/admin/moderation/users/{userId}/writing-restriction',
+        { params: { path: { userId: USER } }, body: restriction },
+      );
+    }
+    const shortening = {
+      endsAt: '2026-10-25T06:00:00.000Z',
+      reason: '이의 일부 인정',
+      expectedAccountId: 'admin-1',
+    };
+    await mutationFn({ kind: 'shorten', actionId: ACTION.toUpperCase(), body: shortening });
+    expect(post).toHaveBeenLastCalledWith('/api/v1/admin/moderation/actions/{actionId}/shorten', {
+      params: { path: { actionId: ACTION } },
+      body: shortening,
+    });
+    const lift = { reason: '소명 확인', expectedAccountId: 'admin-1' };
+    await mutationFn({ kind: 'lift', actionId: ACTION, body: lift });
+    expect(post).toHaveBeenLastCalledWith('/api/v1/admin/moderation/actions/{actionId}/lift', {
+      params: { path: { actionId: ACTION } },
+      body: lift,
+    });
+  });
+
   it('re-read the whole area on an answer and on a refusal, never on a lost request', async () => {
     const queryClient = getQueryClient();
     const keys = [adminReportQueueKey('pending'), ADMIN_ACTIONS_KEY, adminPostModerationKey(POST)];

@@ -29,15 +29,19 @@ import {
   actionReasonText,
   actionSubjectView,
   appealDeadline,
+  isRestriction,
   moderationActionLabel,
   moderationRows,
+  myEndChangeView,
   nicknameHoldShown,
   reportStatusLabel,
   reportTargetTypeLabel,
   reportTargetView,
+  restrictionStanding,
 } from '@/lib/moderation';
 import { postReadErrorMessage } from '@/lib/posts';
 import { listSection } from '@/lib/query-client';
+import { restrictionEndText } from '@/lib/restriction';
 import { Section, SessionEnded, useSessionEnded } from '../portfolio';
 
 /**
@@ -51,8 +55,12 @@ import { Section, SessionEnded, useSessionEnded } from '../portfolio';
  *   its cancellation — with how to appeal: by the customer centre's email, once per action within
  *   14 days (#45-14), and each standing action's last day for it. A nickname reset not cancelled
  *   says, for the 30 days of its hold, that the nickname taken away cannot be used again (owner
- *   decision 2026-10-22, `nicknameHoldShown`) — never which it was (#37-3). Never who reported nor
- *   which operator acted (#45-13).
+ *   decision 2026-10-22, `nicknameHoldShown`) — never which it was (#37-3). A writing restriction
+ *   (#185, ADR-0082) says its end — '무기한' for none — as it stands now, and '진행 중' while it
+ *   stands (`restrictionStanding`); one an operator lifted early or shortened says '조기 해제됨' or
+ *   '감경됨' and the end it was given under the changed one (`myEndChangeView`, owner decision
+ *   2026-10-23 answer 4 — never the reason); a cancelled one says no end, only '취소됨' and when it
+ *   was cancelled (answer 10). Never who reported nor which operator acted (#45-13).
  * - 내가 한 신고: each of the member's reports, newest first — what it was about as the public sees
  *   it now, the reason and the description sent, when, and 접수 or the result, 조치함 or 기각, with
  *   when (#45-13). Not which action was taken: that is the member acted on's to read.
@@ -275,6 +283,8 @@ function ActionItem({ action }: { action: MyModerationAction }) {
   const subject = actionSubjectView(action.subject);
   const reason = actionReasonText(action.reason);
   const deadline = appealDeadline(action);
+  const restriction = isRestriction(action.type);
+  const endChange = myEndChangeView(action);
   return (
     <ItemCard testId={`my-action-${action.id}`}>
       <HStack gap="2" flexWrap="wrap">
@@ -284,6 +294,16 @@ function ActionItem({ action }: { action: MyModerationAction }) {
         {action.cancelledAt !== null && (
           <Badge size="sm" variant="subtle" colorPalette="gray" data-testid="my-action-cancelled">
             {copy.moderationCancelled}
+          </Badge>
+        )}
+        {restrictionStanding(action) && (
+          <Badge size="sm" variant="subtle" colorPalette="orange" data-testid="my-action-standing">
+            {copy.restrictionStanding}
+          </Badge>
+        )}
+        {endChange !== null && (
+          <Badge size="sm" variant="subtle" colorPalette="gray" data-testid="my-action-end-change">
+            {endChange.label}
           </Badge>
         )}
         {subject !== null && <Named named={subject} testId="my-action-subject" />}
@@ -302,9 +322,18 @@ function ActionItem({ action }: { action: MyModerationAction }) {
         </Text>
       )}
       <Line label={copy.moderationTakenAt}>{format(action.createdAt)}</Line>
-      {action.endsAt !== null && (
+      {/* A cancelled restriction ended at its cancellation, which '취소한 때' says: its end as
+          given (kept as given, ADR-0082) would read as an end still to come, or '무기한'. */}
+      {(restriction || action.endsAt !== null) && action.cancelledAt === null && (
         <Line label={copy.moderationEndsAt} testId="my-action-ends">
-          {format(action.endsAt)}
+          {restrictionEndText(action.endsAt, format)}
+        </Line>
+      )}
+      {/* Lifted early or shortened: the end it was given, under the changed one (owner decision
+          2026-10-23 answer 4) — never the reason, which is the operators'. */}
+      {endChange !== null && (
+        <Line label={copy.moderationOriginalEndsAt} testId="my-action-original-ends">
+          {restrictionEndText(endChange.originalEndsAt, format)}
         </Line>
       )}
       {action.cancelledAt !== null && (

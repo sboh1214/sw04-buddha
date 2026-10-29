@@ -14,10 +14,10 @@ import {
   IMAGE_MAX_BYTES,
   IMAGE_MAX_DIMENSION,
   ORPHAN_MEDIA_HOURS,
-  uploadImageQuerySchema,
+  uploadPostImageQuerySchema,
   uploadedImageSchema,
   uuidParamSchema,
-  type UploadImageQuery,
+  type UploadPostImageQuery,
   type UploadedImage,
 } from '@buddha/shared';
 import { type FastifyReply, type FastifyRequest } from 'fastify';
@@ -69,14 +69,20 @@ export class MediaController {
       `without its metadata, the long side at most ${String(IMAGE_MAX_DIMENSION)}px (a still WebP ` +
       `with alpha at most ${String(WEBP_ALPHA_MAX_OUTPUT_PIXELS)} pixels), a GIF still moving. Its ` +
       'id goes into the post’s image node; it is served once a post shows it, and ' +
-      `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours`,
+      `removed if nothing takes it within ${String(ORPHAN_MEDIA_HOURS)} hours. Refused under a ` +
+      'writing restriction (RESTRICTED, with its end), which no post of the account gets past — ' +
+      'but for an admin’s notice (`purpose=notice`, an admin’s alone): a writing restriction ' +
+      'refuses no notice, its images included',
   })
   @ApiConsumes(...IMAGE_UPLOAD_CONTENT_TYPES)
   @ApiBody(IMAGE_BINARY)
   @ApiData(uploadedImageSchema, 201)
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check, or the body
-  // parser's hook before the body is read — image-body.ts), or a query whose `expectedAccountId`
-  // is not the cookie's account (details name the field; nothing stored). UNAUTHENTICATED and
+  // parser's hook before the body is read — image-body.ts), a query whose `expectedAccountId`
+  // is not the cookie's account, or `purpose=notice` from an account that is no admin (details
+  // name the field; nothing stored). RESTRICTED: a post's image under a writing restriction, with
+  // its end — refused before the conversion; never a notice's (owner decision 2026-10-23 answer
+  // 13, ADR-0082). UNAUTHENTICATED and
   // ONBOARDING_REQUIRED are answered by that hook too, before the body is read — whatever its
   // Content-Type — and so are a body of a type the route does not take (415, VALIDATION_ERROR)
   // and one declared over the parser's limit (413, VALIDATION_ERROR); a body that sends no byte
@@ -92,17 +98,18 @@ export class MediaController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'IMAGE_NOT_ALLOWED',
+    'RESTRICTED',
   )
   async upload(
     @CurrentUser() user: SessionUser,
-    @Query({ schema: uploadImageQuerySchema }) query: UploadImageQuery,
+    @Query({ schema: uploadPostImageQuerySchema }) query: UploadPostImageQuery,
     @Body() body: unknown,
     @Req() request: FastifyRequest,
     @Res({ passthrough: true }) reply: FastifyReply,
   ): Promise<UploadedImage | undefined> {
     assertExpectedAccount(user.id, query.expectedAccountId);
     return handleUpload(request, reply, body, (bytes) =>
-      this.media.uploadPostImage(user.id, bytes),
+      this.media.uploadPostImage(user.id, bytes, query.purpose),
     );
   }
 

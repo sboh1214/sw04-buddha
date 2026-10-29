@@ -4,6 +4,7 @@ import {
   type QueryClient,
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
 import {
@@ -16,7 +17,12 @@ import {
 } from '@/lib/api';
 import { AUTHORED_KEY } from '@/lib/authored';
 import { postCommentsKey } from '@/lib/comments';
-import { MY_ACTIONS_KEY, MY_REPORTS_KEY, type ModerationPage } from '@/lib/moderation';
+import {
+  MY_ACTIONS_KEY,
+  MY_REPORTS_KEY,
+  MY_RESTRICTION_KEY,
+  type ModerationPage,
+} from '@/lib/moderation';
 import { POST_LIST_KEY, postKey } from '@/lib/posts';
 import { useSession } from '@/lib/use-session';
 import { afterRefusal } from './use-posts';
@@ -30,7 +36,8 @@ import { afterRefusal } from './use-posts';
  * cookie under the private `my-moderation` root, once the session is known (a signed-out request
  * would take a 401 the retry rule refuses to retry), and read again whenever the page mounts —
  * what changes them happens elsewhere: a report on a post page, an operator's processing on
- * another machine.
+ * another machine. So is the restriction the banner speaks of (`GET /me/moderation/restriction`,
+ * #185).
  *
  * The option factories are exported apart from the hooks so the node test runner reaches them
  * (use-reports.test.ts), as use-watchlist.ts does.
@@ -84,6 +91,26 @@ export function myModerationActionsInfiniteQueryOptions(session?: SessionLike) {
     },
     session,
   );
+}
+
+/**
+ * `GET /me/moderation/restriction`: the writing restriction that governs the member now, or none
+ * (#185) — what the banner says (`SanctionBanner`), read apart from the paged actions so that no
+ * number of later actions keeps it off. Once the session is known, and again on every mount and
+ * after any write a restriction refused (query-client.ts).
+ */
+export function myRestrictionQueryOptions(session?: SessionLike) {
+  return {
+    queryKey: MY_RESTRICTION_KEY,
+    queryFn: async () => unwrap(await api.GET('/api/v1/me/moderation/restriction')).data,
+    refetchOnMount: 'always' as const,
+    enabled: session != null,
+  };
+}
+
+export function useMyRestriction() {
+  const { data: session } = useSession();
+  return useQuery(myRestrictionQueryOptions(session));
 }
 
 export function useMyReports() {

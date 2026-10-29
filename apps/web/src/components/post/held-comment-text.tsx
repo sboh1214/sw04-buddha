@@ -2,6 +2,7 @@
 
 import { Alert, Button, Stack, Textarea } from '@chakra-ui/react';
 import { useEffect, useId, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
+import { RestrictedModerationLink } from '@/components/moderation/refusal-text';
 import { copy } from '@/copy';
 import { type CommentBoxGoing } from '@/hooks/use-comment-draft';
 import { type CommentThread } from '@/lib/api';
@@ -17,6 +18,7 @@ import {
   heldTextsOf,
   initialHeldTexts,
   pageMayGo,
+  refusedEvent,
 } from '@/lib/held-comment-texts';
 
 /**
@@ -65,8 +67,7 @@ export function useHeldCommentTexts(
 
   const actions = useMemo(() => {
     const going: CommentBoxGoing = {
-      refused: (boxId, writer, { reason, stale }) =>
-        dispatch({ type: 'refused', boxId, accountId: writer, reason, stale }),
+      refused: (boxId, writer, refusal) => dispatch(refusedEvent(boxId, writer, refusal)),
       left: (boxId, writer, text, place: HeldTextPlace, focus, write: GoingBoxWrite) =>
         dispatch({
           type: 'left',
@@ -177,6 +178,8 @@ export function HeldCommentText({ held, onClose }: { held: HeldText; onClose: ()
           <Alert.Description id={reasonId} data-testid="comment-held-reason">
             {held.reason}
           </Alert.Description>
+          {/* Beside the reason, not in it: the reason names the group. */}
+          {held.restricted === true && <RestrictedModerationLink />}
         </Alert.Content>
       </Alert.Root>
       <Textarea

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { type HeldTextPlace } from './comments';
+import { ApiError } from './api';
+import { type HeldTextPlace, commentBoxRefusal } from './comments';
+import { formatKst } from './datetime';
 import {
   type GoingBoxWrite,
   type HeldTextsEvent,
@@ -10,6 +12,7 @@ import {
   heldTextsOf,
   initialHeldTexts,
   pageMayGo,
+  refusedEvent,
 } from './held-comment-texts';
 
 /**
@@ -134,6 +137,67 @@ describe('text a refused box leaves', () => {
 
   it('takes the focus only from a box that held it', () => {
     expect(heldTextsOf(run([refused('box'), left('box', { focus: false })]))[0]?.focus).toBe(false);
+  });
+
+  it('says a writing restriction’s refusal is one, when its words are the reason (#185, ADR-0082 7-6)', () => {
+    const restriction = `${copy.errRestrictedWriting}(무기한).`;
+    const restricted: HeldTextsEvent = {
+      type: 'refused',
+      boxId: 'box',
+      accountId: A,
+      reason: restriction,
+      stale: false,
+      restricted: true,
+    };
+    // Nothing there says why the box went: the restriction's words, and the way to 조치·신고 내역.
+    expect(heldTextsOf(run([restricted, left('box')]))).toEqual([
+      expect.objectContaining({ reason: restriction, restricted: true }),
+    ]);
+    // Its place took it no more: that is the reason, and no way to 조치·신고 내역 goes with it.
+    const gone = heldTextsOf(
+      run([restricted, left('box', { goneReason: copy.errCommentParentDeleted })]),
+    );
+    expect(gone).toEqual([expect.objectContaining({ reason: copy.errCommentParentDeleted })]);
+    expect(gone[0]).not.toHaveProperty('restricted');
+    // Any other refusal says nothing of it.
+    expect(
+      heldTextsOf(run([refused('box', copy.errNetwork, false), left('box')]))[0],
+    ).not.toHaveProperty('restricted');
+  });
+
+  it('hears a box’s refusal as the box tells it, the writing restriction’s mark and all (#185, ADR-0082 7-6)', () => {
+    // The way a refused write reaches the rules: `useCommentBoxDraft` tells the section
+    // `commentBoxRefusal(error)`, and the section dispatches `refusedEvent` of it.
+    const endsAt = '2026-10-24T06:00:00.000Z';
+    const restricted = new ApiError(403, {
+      code: 'RESTRICTED',
+      message: 'x',
+      details: { kind: 'writing', endsAt },
+    } as never);
+    const heard = refusedEvent('box', A, commentBoxRefusal(restricted, 'create', formatKst));
+    expect(heard).toStrictEqual({
+      type: 'refused',
+      boxId: 'box',
+      accountId: A,
+      reason: `${copy.errRestrictedWriting}(${formatKst(endsAt)}까지).`,
+      stale: false,
+      restricted: true,
+    });
+    // Held apart with nothing there saying why the box went: its words and the way to 내역.
+    expect(heldTextsOf(run([heard, left('box')]))).toEqual([
+      expect.objectContaining({ reason: heard.reason, restricted: true }),
+    ]);
+    expect(heldTextsOf(run([left('box'), heard]))).toEqual([
+      expect.objectContaining({ reason: heard.reason, restricted: true }),
+    ]);
+    // Any other refusal, told the same way, carries no mark.
+    const network = refusedEvent(
+      'box',
+      A,
+      commentBoxRefusal(new TypeError('Failed to fetch'), 'edit', formatKst),
+    );
+    expect(network.restricted).toBe(false);
+    expect(heldTextsOf(run([network, left('box')]))[0]).not.toHaveProperty('restricted');
   });
 });
 

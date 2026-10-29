@@ -3,6 +3,7 @@
 import { Button, Dialog, Portal, Text } from '@chakra-ui/react';
 import { useId, useState } from 'react';
 import { toaster } from '@/components/ui/toaster';
+import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useDeleteMyItem } from '@/hooks/use-authored';
 import { usePostWriter } from '@/hooks/use-posts';
@@ -81,6 +82,7 @@ export function DeleteHiddenItem({
   const writer = usePostWriter();
   const { refetch: refetchSession } = useSession();
   const remove = useDeleteMyItem(() => void refetchSession());
+  const format = useFormatDateTime();
   const [confirming, setConfirming] = useState(false);
   const accountId = writer.accountId;
   const titleId = useId();
@@ -164,8 +166,8 @@ export function DeleteHiddenItem({
                           type: 'error',
                           title:
                             tab === 'posts'
-                              ? postWriteErrorMessage(error)
-                              : commentWriteErrorMessage(error, 'delete'),
+                              ? postWriteErrorMessage(error, format)
+                              : commentWriteErrorMessage(error, 'delete', format),
                         });
                       },
                     );

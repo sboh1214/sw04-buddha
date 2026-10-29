@@ -32,10 +32,13 @@ import {
   cursorQuerySchema,
   dismissReportsBodySchema,
   dismissedReportsSchema,
+  liftRestrictionBodySchema,
   moderationActionBodySchema,
   publicIdParamSchema,
+  shortenRestrictionBodySchema,
   uuidParamSchema,
   warningBodySchema,
+  writingRestrictionBodySchema,
   type AdminCommentModeration,
   type AdminModerationAction,
   type AdminPostModeration,
@@ -46,8 +49,11 @@ import {
   type DismissedReports,
   type ParsedCancelModerationBody,
   type ParsedDismissReportsBody,
+  type ParsedLiftRestrictionBody,
   type ParsedModerationActionBody,
+  type ParsedShortenRestrictionBody,
   type ParsedWarningBody,
+  type ParsedWritingRestrictionBody,
 } from '@buddha/shared';
 import { type FastifyReply, type FastifyRequest } from 'fastify';
 import { AdminGuard } from '../auth/admin.guard.js';
@@ -138,7 +144,9 @@ export class AdminReportsController {
  * without a report (decision 4 #50). An operator never acts on themselves (`own`), and reads the
  * records about themselves without the reporters, the report descriptions and the operators' names
  * (owner decision 2026-10-21, `aboutViewer`). A member's page is found by the account id or, from a
- * public profile's '운영' link, by the public id.
+ * public profile's '운영' link, by the public id. The writing restriction (#185, ADR-0082) is given
+ * on a member — with a subject from the report queue, as a warning — and its end brought forward
+ * (감경) or lifted on the action, each with a reason.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -192,6 +200,53 @@ export class AdminModerationController {
   ): Promise<AdminModerationAction> {
     assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.moderation.cancel(admin.id, actionId, body.reason);
+  }
+
+  @Post('actions/:actionId/shorten')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminShortenRestriction',
+    summary:
+      'Bring a standing writing restriction’s end forward (감경) to `endsAt`, with a reason ' +
+      '(recorded, operators only): still to come (`end_passed` otherwise — a lift ends it now) ' +
+      'and earlier than its end now (`not_earlier`; any is, for one with no end). Not a writing ' +
+      'restriction is `not_restriction`, a cancelled one `cancelled`, one ended `ended`, one on ' +
+      'the acting admin `own`. The member reads the new end',
+  })
+  @ApiData(adminModerationActionSchema)
+  @ApiErrors(...ACTION_ERRORS)
+  shortenRestriction(
+    @CurrentUser() admin: SessionUser,
+    @Param('actionId', { schema: uuidParamSchema }) actionId: string,
+    @Body({ schema: shortenRestrictionBodySchema }) body: ParsedShortenRestrictionBody,
+  ): Promise<AdminModerationAction> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
+    return this.moderation.shortenRestriction(
+      admin.id,
+      actionId,
+      new Date(body.endsAt),
+      body.reason,
+    );
+  }
+
+  @Post('actions/:actionId/lift')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminLiftRestriction',
+    summary:
+      'Lift a standing writing restriction early (조기 해제), with a reason (recorded, operators ' +
+      'only): it ends now and stays on the record as given. Refused as a shortening is ' +
+      '(`not_restriction`, `cancelled`, `ended`, `own`)',
+  })
+  @ApiData(adminModerationActionSchema)
+  @ApiErrors(...ACTION_ERRORS)
+  liftRestriction(
+    @CurrentUser() admin: SessionUser,
+    @Param('actionId', { schema: uuidParamSchema }) actionId: string,
+    @Body({ schema: liftRestrictionBodySchema }) body: ParsedLiftRestrictionBody,
+  ): Promise<AdminModerationAction> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
+    return this.moderation.liftRestriction(admin.id, actionId, body.reason);
   }
 
   @Get('posts/:postId')
@@ -315,6 +370,29 @@ export class AdminModerationController {
   ): Promise<AdminModerationAction> {
     assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.moderation.warn(admin.id, userId, body);
+  }
+
+  @Post('users/:userId/writing-restriction')
+  @HttpCode(200)
+  @ApiOperation({
+    operationId: 'adminRestrictWriting',
+    summary:
+      'Restrict a member’s writing (작성 제한) with a reason, for `days` (1, 3, 7 or 30) or with ' +
+      'no end (`null`, until lifted): no new post, comment or reply, no edit of their own and no ' +
+      'new value of a public profile item (RESTRICTED, with the end) — deleting their own, likes ' +
+      'and reports stay open. Restricted already, the one that ends later governs. With a subject ' +
+      '(the member’s post, comment or profile) its pending reports are resolved (조치함); one not ' +
+      'the member’s is `not_theirs`; the acting admin is `own`',
+  })
+  @ApiData(adminModerationActionSchema)
+  @ApiErrors(...ACTION_ERRORS)
+  restrictWriting(
+    @CurrentUser() admin: SessionUser,
+    @Param('userId', { schema: adminAccountIdSchema }) userId: string,
+    @Body({ schema: writingRestrictionBodySchema }) body: ParsedWritingRestrictionBody,
+  ): Promise<AdminModerationAction> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
+    return this.moderation.restrictWriting(admin.id, userId, body);
   }
 
   @Post('users/:userId/nickname-reset')

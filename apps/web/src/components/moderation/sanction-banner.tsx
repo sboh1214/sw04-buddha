@@ -1,44 +1,50 @@
 'use client';
 
-import { Alert, Link as ChakraLink } from '@chakra-ui/react';
+import { Alert, Link as ChakraLink, Stack, Text } from '@chakra-ui/react';
 import NextLink from 'next/link';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
-import { useMyModerationActions } from '@/hooks/use-reports';
-import {
-  MY_MODERATION_PATH,
-  moderationRows,
-  sanctionInForce,
-  warningInWindow,
-} from '@/lib/moderation';
+import { useMyModerationActions, useMyRestriction } from '@/hooks/use-reports';
+import { MY_MODERATION_PATH, moderationRows, warningInWindow } from '@/lib/moderation';
+import { restrictionEndText, restrictionShown } from '@/lib/restriction';
 
 /**
  * The banner of a sanction in force (ADR-0069 decision 4 #50: «진행 중인 제재가 있으면 MY 요약·
- * 글쓰기 화면의 안내 띠»): that there is one, when it ends, and the way to 조치·신고 내역, where its
- * type, reason and the appeal are (#45-13). An information banner (blue), not the app's caution
- * yellow (ADR-0070): it reports a state, it asks nothing.
+ * 글쓰기 화면의 안내 띠»): the writing restriction (#185, ADR-0082) that governs — 무기한 over any
+ * term, else the latest end, the end a refused write names — said by its title, its end in the
+ * member's zone or '무기한', and the way to 조치·신고 내역, and nothing more (owner decision
+ * 2026-10-22 evening, via #186: «경고·제재 띠 → 이의 안내를 빼고 … 끝나는 시각(제한)과 조치·신고 내역
+ * 링크만»): the reason, the appeal's guidance and its deadline are 조치·신고 내역's. An information
+ * banner (blue), not the app's caution yellow (ADR-0070): it reports a state, it asks nothing.
+ * #139's account restriction adds its own words here.
  *
- * A sanction is a restriction — #185's writing restriction, #139's account restriction (#45-12) —
- * which those issues add with their end (`sanctionInForce`); none of #50's actions is one, so with
- * #50 alone the banner never shows (ADR-0081 7-8). It reads the member's first page of actions
- * (`GET /me/moderation/actions`, newest first), and draws nothing while that is read, failed or
- * holds no sanction in force.
+ * It reads the member's restriction on its own (`GET /me/moderation/restriction`), not the first
+ * page of their actions, so no number of later actions keeps a standing one off it; and draws
+ * nothing while that is read, failed or holds none, nor once its end has passed by the browser's
+ * clock. A write the server refuses with RESTRICTED reads it again (query-client.ts), so a
+ * restriction given while the page was open shows here as soon as it refuses something.
  */
 export function SanctionBanner({ testId }: { testId: string }) {
-  const actions = useMyModerationActions();
+  const restriction = useMyRestriction();
   const format = useFormatDateTime();
-  const sanction = sanctionInForce(moderationRows(actions.data?.pages.slice(0, 1)));
-  if (sanction === null || sanction.endsAt === null) return null;
+  const shown = restrictionShown(restriction.data);
+  if (shown === null) return null;
   return (
     <Alert.Root status="info" data-testid={testId}>
       <Alert.Indicator />
       <Alert.Content>
-        <Alert.Title>{copy.sanctionInForce}</Alert.Title>
+        <Alert.Title>{copy.restrictionWritingTitle}</Alert.Title>
         <Alert.Description>
-          {copy.moderationEndsAt} {format(sanction.endsAt)} ·{' '}
-          <ChakraLink asChild color="brand.fg">
-            <NextLink href={MY_MODERATION_PATH}>{copy.myModerationOpen}</NextLink>
-          </ChakraLink>
+          <Stack gap="1" mt="1">
+            <Text as="span" display="block" data-testid={`${testId}-ends`}>
+              {copy.moderationEndsAt} {restrictionEndText(shown.endsAt, format)}
+            </Text>
+            <ChakraLink asChild color="brand.fg" alignSelf="flex-start">
+              <NextLink href={MY_MODERATION_PATH} data-testid={`${testId}-link`}>
+                {copy.myModerationOpen}
+              </NextLink>
+            </ChakraLink>
+          </Stack>
         </Alert.Description>
       </Alert.Content>
     </Alert.Root>
@@ -51,8 +57,8 @@ export function SanctionBanner({ testId }: { testId: string }) {
  * its reason and the appeal are. Shown from the warning for its appeal window (`warningInWindow`,
  * APPEAL_WINDOW_DAYS), and no more once an operator cancelled it. On the MY summary only — a
  * warning restricts nothing (#45-11), so the write page keeps its banner for restrictions
- * (`SanctionBanner`). The same first page of actions as that banner, drawn in the browser alone;
- * nothing while it is read, failed or holds no such warning.
+ * (`SanctionBanner`). It reads the first page of the member's actions (ADR-0081 7-8), drawn in the
+ * browser alone; nothing while it is read, failed or holds no such warning.
  */
 export function WarningBanner({ testId }: { testId: string }) {
   const actions = useMyModerationActions();

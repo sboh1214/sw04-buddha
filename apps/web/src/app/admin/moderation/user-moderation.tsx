@@ -36,8 +36,8 @@ import {
   ReportRows,
   type SubjectOption,
   UserName,
-  cancelDialog,
   dismissDialog,
+  restrictDialog,
   useOperatorId,
 } from './moderation-parts';
 
@@ -49,7 +49,9 @@ import {
  * with a report or without one: 경고 (about the profile or about nothing in particular), the
  * nickname back to an auto nickname, the 소개 emptied, the image removed (each offered only while
  * there is something to take away), and 신고 기각 of the profile's pending reports. None on the
- * operator's own account (decision 4 #50).
+ * operator's own account (decision 4 #50). And 작성 제한 (#185, ADR-0082 — decision 4 #185
+ * «운영자가 사용자를 골라 직접 걸 수 있다»): a term and a reason, about the profile (its pending
+ * reports resolved) or nothing in particular, as a warning; its 조기 해제 and 감경 in the list.
  */
 export function UserModeration({ userId }: { userId: string }) {
   return <MemberModeration query={useAdminUserModeration(userId)} />;
@@ -136,13 +138,16 @@ function UserView({
     label: copy.adminModerationWarnSubjectNone,
     subject: null,
   };
+  const subjects = pendingProfileReports
+    ? [profileSubject, noSubject]
+    : [noSubject, profileSubject];
   const warn: DialogSpec = {
     kind: 'action',
     title: copy.adminModerationWarnTitle,
     body: copy.adminModerationWarnBody,
     success: copy.adminModerationWarned,
     testId: 'moderation-warn-dialog',
-    subjects: pendingProfileReports ? [profileSubject, noSubject] : [noSubject, profileSubject],
+    subjects,
     build: ({ reason, note, subject, expectedAccountId }) => ({
       kind: 'warn',
       userId: member.user.id,
@@ -173,6 +178,15 @@ function UserView({
             data-testid="moderation-warn"
           >
             {copy.adminModerationWarn}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            colorPalette="no"
+            onClick={() => onOpen(restrictDialog(member.user, subjects))}
+            data-testid="moderation-restrict"
+          >
+            {copy.adminModerationRestrict}
           </Button>
           {!isAutoNickname(member.user.nickname) && (
             <Button
@@ -248,7 +262,7 @@ function UserView({
         <ReportRows reports={member.reports} />
       </Block>
       <Block title={copy.adminModerationMemberActions} testId="moderation-author-actions">
-        <ActionRows actions={member.actions} onCancel={(action) => onOpen(cancelDialog(action))} />
+        <ActionRows actions={member.actions} onOpen={onOpen} />
       </Block>
     </Stack>
   );

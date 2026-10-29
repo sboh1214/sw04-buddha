@@ -47,7 +47,7 @@ import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { postLikeCountSql } from '../likes/like-queries.js';
 import { inCategory, likePattern } from '../markets/market.service.js';
-import { assertOnboarded } from '../onboarding/onboarded.guard.js';
+import { assertWriter } from '../moderation/restrictions.js';
 import { type Page } from '../wallet/wallet.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
@@ -354,8 +354,9 @@ export class PostsService {
   /**
    * `POST /posts`: a post on a market in any public status (#45-6). The market must exist and not
    * be a draft (NOT_FOUND naming `marketId`, as the public never sees a draft); every image must be
-   * the author's own upload, taken by no other post (`claimImages`). Nothing about the author's
-   * trading is read or attached (N05 §2).
+   * the author's own upload, taken by no other post (`claimImages`). An author under a writing
+   * restriction is refused before anything is read (RESTRICTED, `checkWriter`, #185). Nothing
+   * about the author's trading is read or attached (N05 §2).
    */
   async create(authorId: string, marketId: string, content: PostContent): Promise<PublishedPost> {
     const id = randomUUID();
@@ -392,17 +393,21 @@ export class PostsService {
    * market). The version replaced goes to the operators' history (`post_revisions`) and the post
    * is marked edited; sending what the post already says changes nothing. Refused for anyone but
    * the author (FORBIDDEN), a deleted or unknown post (NOT_FOUND) and a hidden one
-   * (POST_NOT_EDITABLE, #45-5). An image the edit takes out stays attached for the history and is
-   * no longer served (`GET /media/:mediaId` serves the current body's).
+   * (POST_NOT_EDITABLE, #45-5) — and, asked first, any under the author's writing restriction
+   * (RESTRICTED, #185: «자기 글·댓글 수정», deleting stays open). An image the edit takes out stays
+   * attached for the history and is no longer served (`GET /media/:mediaId` serves the current
+   * body's).
    */
   async update(authorId: string, postId: string, content: PostContent): Promise<PublishedPost> {
     await this.db.transaction(async (tx) => {
+      // The writer before the post's row (`checkWriter`): the profile's lock comes first, as in an
+      // operator's restriction that names the post — and the writer's refusal before the post's.
+      await this.checkWriter(tx, authorId);
       const current = await this.lockOwnPost(tx, authorId, postId);
       if (current.hiddenAt !== null) {
         const details: PostNotEditableDetails = { reason: 'hidden' };
         throw new AppError('POST_NOT_EDITABLE', { message: 'The post is hidden', details });
       }
-      await this.checkWriter(tx, authorId);
       if (
         current.title === content.title &&
         canonicalJson(current.body) === canonicalJson(content.body.document)
@@ -456,15 +461,15 @@ export class PostsService {
   }
 
   /**
-   * The checks every new post and every edit passes, in the write's transaction — the one place
-   * the later rules plug in: #185's 작성 제한 (which blocks writing and editing, never deleting,
-   * ADR-0069 decision 2 #45-12) and #187's frequency limits (posts 3 in 10 minutes and 20 a day,
-   * edits 10 in 10 minutes and 50 a day, counted per verified number's keyed hash, admins exempt,
-   * #45-15 and decision 7). Today: the onboarding, which OnboardedGuard checked before the body
-   * was read, held to the commit here (#57-8).
+   * The checks every new post and every edit passes, in the write's transaction and before any row
+   * of the write is locked — the one place the rules on the writer plug in: `assertWriter` — the
+   * writer's profile held until the commit, the onboarding (#57-8) and #185's 작성 제한 (RESTRICTED
+   * with its end; it blocks writing and editing, never deleting, ADR-0069 decision 2 #45-12) — and
+   * #187's frequency limits next (posts 3 in 10 minutes and 20 a day, edits 10 in 10 minutes and
+   * 50 a day, counted per verified number's keyed hash, admins exempt, #45-15 and decision 7).
    */
   private async checkWriter(tx: Tx, authorId: string): Promise<void> {
-    await assertOnboarded(tx, authorId);
+    await assertWriter(tx, authorId);
   }
 
   /**

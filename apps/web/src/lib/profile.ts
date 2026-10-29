@@ -27,6 +27,7 @@ import {
   imageUploadErrorMessage,
   uploadContentType,
 } from './post-editor';
+import { type Refusal, refusalOf, restrictedMessage } from './restriction';
 
 /**
  * 공개 프로필 (#41, ADR-0078) as the screens read it: its address, what the page says of the
@@ -189,12 +190,20 @@ export type ProfileItemFailure =
  *   takes the member on (`profileItemRefusalMove`) — this is said when neither can;
  * - VALIDATION_ERROR on `bio` (`bioRefusalOf`): more than 160 characters; on `categoryIds`: a
  *   category retired while the screen was open — the list is loaded again;
- * - a request that never reached the API, and anything else — the FORBIDDEN a writing or an
- *   account restriction will answer for a new value (#185, #139; ADR-0078) included: what the
- *   member sees of a restriction is those issues' to say.
+ * - RESTRICTED: a writing restriction (#185, ADR-0082; #37-9) keeps the public items from new
+ *   values — until when in the member's zone (`formatDate`) or 무기한 and that clearing stays open
+ *   (decision 7, `restrictedMessage`); the card shows the way to 조치·신고 내역 under it
+ *   (`isRestricted` — owner decision 2026-10-21 answer 8 on #41, said as the owner's 2026-10-22
+ *   evening answer has it). #139's account restriction answers the same code with its own kind;
+ * - a request that never reached the API, and anything else.
  */
-export function profileItemFailure(error: unknown): ProfileItemFailure {
+export function profileItemFailure(
+  error: unknown,
+  formatDate: (iso: string) => string,
+): ProfileItemFailure {
   if (isForAnotherAccount(error)) return { kind: 'notice', message: copy.sessionChanged };
+  const restricted = restrictedMessage(error, 'profile', formatDate);
+  if (restricted !== undefined) return { kind: 'notice', message: restricted };
   if (isApiError(error, 'ONBOARDING_REQUIRED')) {
     return { kind: 'refresh', message: copy.errPostOnboarding };
   }
@@ -357,17 +366,50 @@ export function profileImageRefusalMessage(reason: ImageRefusal): string {
 }
 
 /**
+ * What the onboarding's interests step (#58, ADR-0072) says of a refused answer, and whether the
+ * category list is read again:
+ * - VALIDATION_ERROR: a category retired while the screen was open — the list is read again;
+ * - ONBOARDING_REQUIRED: a step before this one is unanswered (another tab's state) — the hook
+ *   asked `['me']` again and the stepper follows it; the line stays only when `['me']` did not move;
+ * - RESTRICTED: a late pick — past the 24 hours after the nickname step, a change as MY 설정's is
+ *   (ADR-0078 3rd answer 1) — under a writing restriction (#185, ADR-0082): until when in the
+ *   member's zone (`formatDate`) or 무기한, that 건너뛰기 stays open (owner decision 2026-10-23
+ *   answer 9), and the way to 조치·신고 내역 under it (`restricted`). Not MY 설정's sentence that
+ *   clearing stays open: this screen has nothing to clear (`onboardingInterests`);
+ * - the cookie of another account, and anything else.
+ */
+export function interestsStepFailure(
+  error: unknown,
+  formatDate: (iso: string) => string,
+): Refusal & { refetchCategories: boolean } {
+  if (isApiError(error, 'VALIDATION_ERROR')) {
+    return { message: copy.errInterestsUnavailable, restricted: false, refetchCategories: true };
+  }
+  const message = isApiError(error, 'ONBOARDING_REQUIRED')
+    ? copy.errOnboardingStepsFirst
+    : (restrictedMessage(error, 'onboardingInterests', formatDate) ??
+      (isForAnotherAccount(error) ? copy.sessionChanged : copy.errUnknown));
+  return { ...refusalOf(error, message), refetchCategories: false };
+}
+
+/**
  * What a refused upload says: as a post image's (`imageUploadErrorMessage` — the server's reason,
  * the cookie as another account, ONBOARDING_REQUIRED, an unreachable server, a failed upload) with
- * the profile image's reasons. The FORBIDDEN a writing or an account restriction answers for a new
- * image names no field and is a failed upload for now: what the member sees of a restriction is
- * #185's and #139's to say (owner decision 2026-10-21 answer 8 on #41, ADR-0078 7-9).
+ * the profile image's reasons, and a writing restriction (RESTRICTED, #185, ADR-0082) as a public
+ * profile item's refusal — until when in the member's zone (`formatDate`) or 무기한 and that
+ * deleting the image stays open, the card adding the way to 조치·신고 내역 (`isRestricted`).
  */
-export function profileImageUploadFailure(error: unknown): string {
+export function profileImageUploadFailure(
+  error: unknown,
+  formatDate: (iso: string) => string,
+): string {
   // Never an upload given up while it waited to be sent again (`UploadAbandoned`, the one thing
   // said as nothing with `gateMoves` false): the card's sends are never given up (hooks/use-me.ts).
   // A 429 here is one still refused after the card sent the file again: a failed upload.
-  return imageUploadErrorMessage(error, false, profileImageRefusalMessage) ?? copy.errImageUpload;
+  return (
+    imageUploadErrorMessage(error, false, formatDate, profileImageRefusalMessage, 'profile') ??
+    copy.errImageUpload
+  );
 }
 
 /** What a refused deletion says: the session switched, the connection, or that it failed. */

@@ -8,6 +8,7 @@ import NextLink from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
+import { RefusalText } from '@/components/moderation/refusal-text';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -26,8 +27,12 @@ import {
   nicknameDraftToKeep,
   nicknameToRestore,
 } from '@/lib/profile-drafts';
+import { isRestricted } from '@/lib/restriction';
 import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
+
+/** The field error's type for a writing restriction's refusal (#185): its link goes with it. */
+const RESTRICTED_ERROR = 'restricted';
 
 /**
  * 프로필: the nickname, and the way to the member's own public profile (#41, ADR-0078) — where the
@@ -141,7 +146,13 @@ function NicknameFields({ nickname, accountId }: { nickname: string; accountId: 
     } catch (error) {
       const failure = settingsNicknameFailure(error, formatDate);
       if (failure.kind === 'field') {
-        setError('nickname', { message: failure.message }, { shouldFocus: true });
+        // A writing restriction's refusal (#185) is told by its type: the way to 조치·신고 내역
+        // goes under it, and goes with it when the field's error clears.
+        setError(
+          'nickname',
+          { type: isRestricted(error) ? RESTRICTED_ERROR : 'server', message: failure.message },
+          { shouldFocus: true },
+        );
         return;
       }
       // `refresh`: the hook has asked `['me']` again, and the gate or the step follows it.
@@ -177,7 +188,12 @@ function NicknameFields({ nickname, accountId }: { nickname: string; accountId: 
           <Field.HelperText>
             {copy.nicknameHint}. {copy.nicknameRulesHint} {copy.nicknameChangeRule}
           </Field.HelperText>
-          <Field.ErrorText data-testid="nickname-error">{errors.nickname?.message}</Field.ErrorText>
+          <Field.ErrorText data-testid="nickname-error">
+            <RefusalText
+              message={errors.nickname?.message ?? ''}
+              restricted={errors.nickname?.type === RESTRICTED_ERROR}
+            />
+          </Field.ErrorText>
         </Field.Root>
       </Stack>
     </form>

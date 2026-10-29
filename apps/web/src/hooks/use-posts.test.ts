@@ -7,11 +7,13 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { ApiError, type Me, type Post, type PostSummary, api } from '@/lib/api';
+import { MY_ACTIONS_KEY, MY_RESTRICTION_KEY } from '@/lib/moderation';
 import {
   type DraftStorage,
   type PostDraftKey,
   clearPostDraft,
   keepPostDraft,
+  postDraftLandedSince,
   postDraftMoment,
   readPostDraft,
 } from '@/lib/post-drafts';
@@ -753,6 +755,63 @@ describe('the writes', () => {
     }
   });
 
+  it('a writing restriction’s refusal (RESTRICTED, #185) keeps the draft the gate kept for the account that sent it, new and edit, lands nothing, and leaves the post held; the member’s restriction is read again (ADR-0082)', async () => {
+    const queryClient = getQueryClient();
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const draft = { title: '쓰던 제목', body: { type: 'doc', content: [] }, previews: {} };
+    const now = Date.now();
+    const newKey = { kind: 'new', marketId: MARKET } as const;
+    const editKey = { kind: 'edit', postId: post } as const;
+    keepPostDraft(storage, newKey, 'user-1', draft, now);
+    keepPostDraft(storage, editKey, 'user-1', draft, now);
+    queryClient.setQueryData(postKey(post), published);
+    queryClient.setQueryData(MY_RESTRICTION_KEY, { restriction: null });
+    queryClient.setQueryData(MY_ACTIONS_KEY, { pages: [], pageParams: [] });
+    const since = postDraftMoment();
+    const restricted = new ApiError(403, {
+      code: 'RESTRICTED',
+      message: 'x',
+      details: { kind: 'writing', endsAt: '2026-10-31T00:00:00.000Z' },
+    });
+    vi.spyOn(api, 'POST').mockRejectedValueOnce(restricted);
+    vi.spyOn(api, 'PUT').mockRejectedValueOnce(restricted);
+
+    await expect(
+      new MutationObserver(
+        queryClient,
+        createPostOptions(queryClient, () => undefined),
+      ).mutate({
+        marketId: MARKET,
+        title: null,
+        body: {},
+        expectedAccountId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'RESTRICTED' });
+    await expect(
+      new MutationObserver(
+        queryClient,
+        updatePostOptions(queryClient, () => undefined),
+      ).mutate({
+        postId: POST,
+        title: null,
+        body: {},
+        expectedAccountId: 'user-1',
+      }),
+    ).rejects.toMatchObject({ code: 'RESTRICTED' });
+
+    for (const key of [newKey, editKey]) {
+      // Kept for the screen to take back, and the form still counts as unsaved when it goes.
+      expect(readPostDraft(storage, key, 'user-1', now)).toEqual(draft);
+      expect(postDraftLandedSince(key, 'user-1', since)).toBe(false);
+    }
+    expect(queryClient.getQueryData(postKey(post))).toBe(published);
+    expect(queryClient.getQueryState(postKey(post))?.isInvalidated).toBe(false);
+    // The banner's read again (`afterRestricted`, the query client's MutationCache).
+    expect(queryClient.getQueryState(MY_RESTRICTION_KEY)?.isInvalidated).toBe(true);
+    expect(queryClient.getQueryState(MY_ACTIONS_KEY)?.isInvalidated).toBe(true);
+  });
+
   it('a form going away keeps nothing for another account, nor with no step left', () => {
     const storage = tabStorage();
     vi.stubGlobal('window', { sessionStorage: storage });
@@ -852,6 +911,27 @@ describe('an image upload', () => {
     // Not JSON: the serializer hands the file on untouched.
     expect(init.bodySerializer(file)).toBe(file);
     expect(init.headers).toEqual({ 'Content-Type': 'image/png' });
+  });
+
+  it('says a notice’s image is a notice’s, and a post’s nothing (owner decision 2026-10-23 answer 13)', async () => {
+    const send = vi
+      .spyOn(api, 'POST')
+      .mockResolvedValue(
+        answer({ id: MARKET, contentType: 'image/png', width: 1, height: 1, byteSize: 68 }),
+      );
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    const queryOf = (call: number) =>
+      (send.mock.calls[call] as unknown as [string, { params: unknown }])[1].params;
+    await uploadPostImage(file, 'user-1', 'notice');
+    expect(queryOf(0)).toEqual({ query: { expectedAccountId: 'user-1', purpose: 'notice' } });
+    await uploadPostImage(file, 'user-1', 'post');
+    expect(queryOf(1)).toEqual({ query: { expectedAccountId: 'user-1' } });
+    // The editor's uploader passes it on.
+    const upload = postImageUploader(getQueryClient(), () => undefined);
+    await upload(file, 'user-1', 'notice');
+    expect(queryOf(2)).toEqual({ query: { expectedAccountId: 'user-1', purpose: 'notice' } });
+    await upload(file, 'user-1');
+    expect(queryOf(3)).toEqual({ query: { expectedAccountId: 'user-1' } });
   });
 
   it('refused as another account or for the onboarding, does what a refused write does', async () => {
