@@ -6,7 +6,7 @@ import { uuidSchema } from './api/uuid.js';
  * close and finalize jobs after a transition commits) and the consumer (apps/worker). One
  * module, so a renamed job cannot leave the API adding work that no worker handles.
  */
-export const QUEUE_NAMES = ['markets', 'audit', 'stats', 'wallet', 'media'] as const;
+export const QUEUE_NAMES = ['markets', 'audit', 'stats', 'wallet', 'media', 'community'] as const;
 export type QueueName = (typeof QUEUE_NAMES)[number];
 
 export const JOB_NAMES = {
@@ -27,6 +27,13 @@ export const JOB_NAMES = {
    * worker's hourly scan.
    */
   mediaOrphanCleanup: 'media.orphan_cleanup',
+  /**
+   * Deletes the working records of #187 (ADR-0083) that left the last 24 hours — the counted
+   * writes of the write limits (`write_limit_events`) and the links the repetition rules count
+   * (`link_uses`) — which nothing reads past their windows. The review list (`link_flags`) stays.
+   * The worker's hourly scan.
+   */
+  communityRecordsPurge: 'community.records_purge',
 } as const;
 export type JobName = (typeof JOB_NAMES)[keyof typeof JOB_NAMES];
 

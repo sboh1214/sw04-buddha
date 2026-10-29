@@ -7,7 +7,8 @@ import { vi } from 'vitest';
 /**
  * From now on until `restore`, an upload's row cannot be written (`media_objects`) — nor, with
  * `queueFails`, a key queued for removal (`media_deletions`), whether in a transaction or not: a
- * post's image writes its row on the database, a profile image in the profile's transaction, and
+ * post's image writes its row in the write limits' transaction with its counted upload (#187,
+ * `WriteLimitsService.take`), a profile image in the profile's transaction, and
  * `removeUnrecordedUpload` queues the key in a transaction of its own. Every other insert goes
  * through.
  */

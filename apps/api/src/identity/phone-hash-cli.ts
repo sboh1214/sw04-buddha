@@ -7,7 +7,8 @@
 // and locally `corepack pnpm --filter api run phone-hash [--psql | --psql-old | --code]` after a
 // build (the .env's key, or the development key outside production). `--psql-old` is the same for
 // the account's old number, which the change needs too (the likes it inherited, owner decision
-// 2026-10-21, ADR-0076). Numbers come on stdin, one per line —
+// 2026-10-21, ADR-0076; the last day's write-limit and link records under it move to the new
+// number, owner decision 2026-10-22, ADR-0083). Numbers come on stdin, one per line —
 // typed, so they stay out of the shell history and the process list — and only the hashes go to
 // stdout (phone-hash-operator.ts). The key itself is never printed. The environment is checked as
 // the API checks it (`loadEnv`): production refuses to run without a valid PHONE_HASH_KEY.

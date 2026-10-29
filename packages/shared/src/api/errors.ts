@@ -153,6 +153,13 @@ export const ERROR_CODES = [
    * restrictedDetailsSchema — the end the account also reads at GET /me/moderation/restriction.
    */
   'RESTRICTED',
+  /**
+   * Nothing was written: the posts, comments, edits or image uploads of the person reached one of
+   * the fixed limits of the owner, counted by the keyed hash of the verified number and not by
+   * account; an operator account has none. Details carry the reason, the limit and
+   * retryAfterSeconds, writeLimitedDetailsSchema.
+   */
+  'WRITE_LIMITED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

@@ -100,9 +100,10 @@ describe('phoneHashCliLine', () => {
     });
   });
 
-  it('prints the old number’s two psql lines the same way (owner decision 2026-10-21)', () => {
+  it('prints the old number’s two psql lines the same way (owner decisions 2026-10-21 and 2026-10-22)', () => {
     // The change checks the account still holds `old_phone` and moves the likes it inherited
-    // under `old_hash` (ADR-0076): both from the one number typed, so they cannot differ.
+    // (ADR-0076) and the last day's write-limit and link records (ADR-0083) under `old_hash`: both
+    // from the one number typed, so they cannot differ.
     const hash = phoneHash(KEY, '01012345678');
     expect(phoneHashCliLine(KEY, '010 1234 5678', 'psql-old')).toEqual({
       ok: true,

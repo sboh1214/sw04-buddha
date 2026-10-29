@@ -454,6 +454,21 @@ describe('MY 설정: the image (#141, #37-6)', () => {
     expect(profileImageUploadFailure(new TypeError('Failed to fetch'), formatKst)).toBe(
       copy.errNetwork,
     );
+    // The day's uploads at their limit (#187): a profile image counts with a post's images.
+    expect(
+      profileImageUploadFailure(
+        new ApiError(
+          429,
+          {
+            code: 'WRITE_LIMITED',
+            message: 'x',
+            details: { reason: 'uploads_24h', limit: 50, retryAfterSeconds: 60 },
+          },
+          Date.parse('2026-10-21T06:41:30.000Z'),
+        ),
+        formatKst,
+      ),
+    ).toBe(`${copy.errWriteLimitUploads24h} 2026. 10. 21. 오후 3:43${copy.writeLimitRetryUpload}`);
   });
 
   it('says what a refused deletion means', () => {

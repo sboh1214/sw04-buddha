@@ -10,6 +10,7 @@ import { type Env, webOrigins } from '../config/env.js';
 import { DbModule } from '../infra/db/db.module.js';
 import { DB } from '../infra/db/db.provider.js';
 import { assertOnboarded } from '../onboarding/onboarded.guard.js';
+import { WriteLimitsModule } from '../write-limits/write-limits.module.js';
 import { installImageBodyParser } from './image-body.js';
 import { MediaController } from './media.controller.js';
 import { MediaService } from './media.service.js';
@@ -28,7 +29,8 @@ import { OBJECT_STORAGE, objectStorageProvider } from './object-storage.provider
  * store for the posts, which attach uploads, and for #141's profile images.
  */
 @Module({
-  imports: [DbModule, AuthModule],
+  // WriteLimitsModule: the daily upload limit (#187) every stored image counts against.
+  imports: [DbModule, AuthModule, WriteLimitsModule],
   controllers: [MediaController],
   // DbModule and AuthModule also serve the guards (SessionGuard, OnboardedGuard).
   providers: [MediaService, objectStorageProvider],

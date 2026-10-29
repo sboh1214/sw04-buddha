@@ -71,7 +71,8 @@ const HOUR_MS = 60 * 60 * 1_000;
  * 2. The target, held shared (`FOR SHARE`): the author's deletion and an operator's hiding update
  *    its row and so wait for the report, or it for them — a report never lands on an item whose
  *    hiding committed without seeing it, and an operator's action resolves every report committed
- *    before it (ModerationService locks the row FOR UPDATE).
+ *    before it (ModerationService locks the row FOR NO KEY UPDATE, which a share lock waits for
+ *    and holds off as FOR UPDATE does).
  * 3. The rules, in this order: a target gone from every view (NOT_FOUND, as to the public), one's
  *    own (`own`), a placeholder (`deleted`, `hidden`), the same person's pending report on it
  *    (`duplicate`, decision 7), and the person's count of the last REPORT_WINDOW_HOURS

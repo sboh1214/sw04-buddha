@@ -116,6 +116,7 @@ export class PostsController {
   // FORBIDDEN: a mutation whose Origin is not ours (SessionGuard's CSRF check), or a body whose
   // `expectedAccountId` is not the cookie's account (details name the field; nothing written).
   // RESTRICTED: the author's writing restriction (#185), before anything else is read.
+  // WRITE_LIMITED: the person's posts reached 3 in 10 minutes or 20 a day (#187).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -123,6 +124,9 @@ export class PostsController {
     'VALIDATION_ERROR',
     'ONBOARDING_REQUIRED',
     'RESTRICTED',
+    'WRITE_LIMITED',
+    // Written out beside WRITE_LIMITED: an explicit 429 replaces the global one (document.ts).
+    'RATE_LIMITED',
   )
   create(
     @CurrentUser() user: SessionUser,
@@ -152,6 +156,10 @@ export class PostsController {
     'ONBOARDING_REQUIRED',
     'POST_NOT_EDITABLE',
     'RESTRICTED',
+    // The person's edits of posts and comments reached 10 in 10 minutes or 50 a day (#187).
+    'WRITE_LIMITED',
+    // Written out beside WRITE_LIMITED: an explicit 429 replaces the global one (document.ts).
+    'RATE_LIMITED',
   )
   update(
     @CurrentUser() user: SessionUser,

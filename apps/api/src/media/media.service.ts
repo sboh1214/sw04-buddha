@@ -7,6 +7,7 @@ import { and, eq, isNotNull, isNull, sql } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
 import { DB } from '../infra/db/db.provider.js';
 import { assertNotWritingRestricted } from '../moderation/restrictions.js';
+import { WriteLimitsService } from '../write-limits/write-limits.service.js';
 import { IMAGE_EXTENSION, processImage } from './image.js';
 import { OBJECT_STORAGE } from './object-storage.provider.js';
 import { removeUnrecordedUpload } from './unrecorded-upload.js';
@@ -36,6 +37,7 @@ export class MediaService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    private readonly limits: WriteLimitsService,
   ) {}
 
   /**
@@ -57,6 +59,17 @@ export class MediaService {
    * «운영 공지(#138)는 작성 제한이 막지 않음(공지 편집기의 이미지 업로드 포함)», an operator being one
    * another operator may restrict (ADR-0082 7-9). Both are the same upload (`post_image`), and a
    * post that takes a notice's image is refused under a restriction all the same.
+   *
+   * The daily upload limit (#187: 50 a day per person, a profile image counted with a post's —
+   * ADR-0069 decision 7, owner decision 2026-10-22) is asked before anything is decoded, so a
+   * refused upload costs no conversion, and counted with the row, under the writer's number lock
+   * (WriteLimitsService), which is what holds: WRITE_LIMITED, nothing kept. Only a stored image
+   * counts — a file the image rules refuse is no upload. After the restriction's refusal, which
+   * comes first (RESTRICTED before WRITE_LIMITED, as a post's write asks `assertWriter` before its
+   * number). A notice's image is an upload as well: an admin's, recorded and never refused
+   * (decision 4 #187 «운영 계정 … 적용하지 않는다»). The row's transaction takes the number's lock and no
+   * profile row (`lockWriter`): it waits on another write of the person for the number alone, and
+   * holds nothing that write waits for.
    */
   async uploadPostImage(
     ownerId: string,
@@ -65,22 +78,25 @@ export class MediaService {
   ): Promise<UploadedImage> {
     if (purpose === 'notice') await this.assertNoticeUploader(ownerId);
     else await assertNotWritingRestricted(this.db, ownerId);
-    // #187 plugs in here: the daily upload limit (50 a day, counted per verified number's keyed
-    // hash, ADR-0069 decision 7) is checked before anything is decoded or stored.
+    await this.limits.precheck(ownerId, 'upload');
     const image = await processImage(bytes);
     const id = randomUUID();
     const storageKey = `post-images/${id}.${IMAGE_EXTENSION[image.contentType]}`;
     await this.storage.put(storageKey, image.body, image.contentType);
     try {
-      await this.db.insert(schema.mediaObjects).values({
-        id,
-        ownerId,
-        kind: 'post_image',
-        storageKey,
-        contentType: image.contentType,
-        byteSize: image.body.length,
-        width: image.width,
-        height: image.height,
+      await this.db.transaction(async (tx) => {
+        const writer = await this.limits.lockWriter(tx, ownerId);
+        await this.limits.take(tx, writer, 'upload');
+        await tx.insert(schema.mediaObjects).values({
+          id,
+          ownerId,
+          kind: 'post_image',
+          storageKey,
+          contentType: image.contentType,
+          byteSize: image.body.length,
+          width: image.width,
+          height: image.height,
+        });
       });
     } catch (error) {
       const { db, storage, logger } = this;

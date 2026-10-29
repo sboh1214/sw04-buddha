@@ -9,7 +9,7 @@ import {
 import { hashKey } from '@tanstack/react-query';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { ApiError, type Post, type PostAuthor, type PublishedPost } from './api';
+import { ApiError, isApiError, type Post, type PostAuthor, type PublishedPost } from './api';
 import { goneBoxReason } from './comments';
 import { formatKst } from './datetime';
 import { isPrivateQueryKey } from './market-keys';
@@ -77,6 +77,14 @@ const member = (over: Partial<Extract<PostAuthor, { kind: 'member' }>> = {}): Po
 
 const refusal = (status: number, code: string, details?: unknown) =>
   new ApiError(status, { code, message: 'x', details } as never);
+
+/** A WRITE_LIMITED answer (#187) that arrived at 2026-10-21 15:41:30 in Seoul. */
+const limited = (reason: string, limit: number, retryAfterSeconds: number) =>
+  new ApiError(
+    429,
+    { code: 'WRITE_LIMITED', message: 'x', details: { reason, limit, retryAfterSeconds } } as never,
+    Date.parse('2026-10-21T06:41:30.000Z'),
+  );
 
 describe('the community URL', () => {
   it('keeps a uuid market (lower-cased), a category and a trimmed term', () => {
@@ -826,6 +834,40 @@ describe('a post taken from under an open screen: one rule for its page and its 
     expect(form).toContain('readOnly={gone}');
   });
 
+  it('a write limit’s refusal of the save (WRITE_LIMITED, #187 — edits, 10 in 10 minutes) takes nothing from under the form either: the edit screen stays on screen, and its form editable under the limit and the time it can be edited again, with no way to 조치·신고 내역 (ADR-0083 결과 5 «다시 쌓기(2026-10-25)»)', () => {
+    const edits = limited('edits_10m', 10, 540);
+    // The server counts an edit only once it found the post the writer's own and not hidden, and
+    // only an edit that changes it (ADR-0083 7-4): the refusal says the post was there to edit. It
+    // is not one the post is read again for (the hook's test, pinned above: POST_NOT_EDITABLE and
+    // NOT_FOUND only), so the query keeps the post the form was drawn from; nor would a read so
+    // refused be the post gone.
+    expect(isApiError(edits, 'POST_NOT_EDITABLE') || isApiError(edits, 'NOT_FOUND')).toBe(false);
+    expect(postGoneAfter(false, { isError: true, error: edits })).toBe(false);
+    const state = postEditGoneAfter(POST_EDIT_ON_SCREEN, {
+      gone: postGoneAfter(false, ok) || postEditDeleted(published, published),
+      hidden: postEditHidden(published, published),
+      formHolding: true,
+    });
+    expect(state).toBe(POST_EDIT_ON_SCREEN);
+    expect(state.held).toBe(false);
+    // The form's refusal line (not a held form's notice): the limit, and the time it can be edited
+    // again in the screen's zone — neither a deletion's nor a hiding's — and, not a restriction, no
+    // way to 조치·신고 내역 under it.
+    const message = postWriteErrorMessage(edits, formatKst);
+    expect(message).toBe(
+      `${copy.errWriteLimitEdits10m} 2026. 10. 21. 오후 3:51${copy.writeLimitRetryEdit}`,
+    );
+    expect(message).not.toBe(copy.errPostGone);
+    expect(message).not.toBe(copy.errPostNotEditable);
+    expect(refusalOf(edits, message)).toEqual({ message, restricted: false });
+    // The edit screen has no way of its own for it: the same wiring as the restriction's above.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source('../app/community/posts/[postId]/edit/edit-screen.tsx')).not.toContain(
+      'WRITE_LIMITED',
+    );
+    expect(source('../hooks/use-posts.ts')).not.toContain('WRITE_LIMITED');
+  });
+
   it('is written once for the post page: its comment section hears the post as the page holds it', () => {
     const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
     const section = source('../components/post/comments-section.tsx');
@@ -997,6 +1039,22 @@ describe('a refused write', () => {
     expect(
       postWriteErrorMessage(refusal(403, 'RESTRICTED', { kind: 'writing', endsAt: null }), zone),
     ).toBe(`${copy.errRestrictedWriting}(무기한).`);
+  });
+
+  it('says which limit refused a post or an edit, and when it can be written again (#187)', () => {
+    expect(postWriteErrorMessage(limited('posts_10m', 3, 600), formatKst)).toBe(
+      `${copy.errWriteLimitPosts10m} 2026. 10. 21. 오후 3:52${copy.writeLimitRetryWrite}`,
+    );
+    expect(postWriteErrorMessage(limited('posts_24h', 20, 7_200), formatKst)).toBe(
+      `${copy.errWriteLimitPosts24h} 2026. 10. 21. 오후 5:42${copy.writeLimitRetryWrite}`,
+    );
+    expect(postWriteErrorMessage(limited('edits_24h', 50, 60), formatKst)).toBe(
+      `${copy.errWriteLimitEdits24h} 2026. 10. 21. 오후 3:43${copy.writeLimitRetryEdit}`,
+    );
+    // The zone is the screen's: the time is formatted by what the page passes.
+    expect(postWriteErrorMessage(limited('posts_10m', 3, 600), () => '그때')).toBe(
+      `${copy.errWriteLimitPosts10m} 그때${copy.writeLimitRetryWrite}`,
+    );
   });
 
   it('says an unreachable server apart from anything else', () => {

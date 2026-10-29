@@ -102,6 +102,10 @@ export class PostCommentsController {
     'ONBOARDING_REQUIRED',
     'COMMENT_NOT_ALLOWED',
     'RESTRICTED',
+    // The person's 댓글·대댓글 reached 5 a minute or 200 a day (#187).
+    'WRITE_LIMITED',
+    // Written out beside WRITE_LIMITED: an explicit 429 replaces the global one (document.ts).
+    'RATE_LIMITED',
   )
   create(
     @CurrentUser() user: SessionUser,
@@ -169,6 +173,10 @@ export class CommentsController {
     'ONBOARDING_REQUIRED',
     'COMMENT_NOT_EDITABLE',
     'RESTRICTED',
+    // The person's edits of posts and comments reached 10 in 10 minutes or 50 a day (#187).
+    'WRITE_LIMITED',
+    // Written out beside WRITE_LIMITED: an explicit 429 replaces the global one (document.ts).
+    'RATE_LIMITED',
   )
   update(
     @CurrentUser() user: SessionUser,

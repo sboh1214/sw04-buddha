@@ -15,6 +15,7 @@ import {
   reasonOf,
   removeUnrecordedUpload,
 } from '../media/unrecorded-upload.js';
+import { WriteLimitsService } from '../write-limits/write-limits.service.js';
 
 type Tx = Parameters<Parameters<Db['transaction']>[0]>[0];
 
@@ -54,6 +55,7 @@ export class ProfileImageService {
   constructor(
     @Inject(DB) private readonly db: Db,
     @Inject(OBJECT_STORAGE) private readonly storage: ObjectStorage,
+    private readonly limits: WriteLimitsService,
   ) {}
 
   /**
@@ -73,13 +75,17 @@ export class ProfileImageService {
    * cannot take back, and only a queueing that fails too leaves the key to the error log, with both
    * reasons. The request fails with the transaction's error either way.
    *
-   * #187's daily upload limit (50 a day per verified number's keyed hash, ADR-0069 decision 7)
-   * plugs in before the conversion, beside MediaService.uploadPostImage's, and counts a profile
-   * image with a post's — one count for both (owner decision 2026-10-22: «#187 하루 업로드 50장 →
-   * 프로필 이미지도 함께 셈», ADR-0079).
+   * #187's daily upload limit (50 a day per verified number's keyed hash, ADR-0069 decision 7) is
+   * asked before the conversion, as MediaService.uploadPostImage asks it, and counted with the row
+   * under the writer's number lock (WriteLimitsService): a profile image counts with a post's — one
+   * count for both (owner decision 2026-10-22: «#187 하루 업로드 50장 → 프로필 이미지도 함께 셈»,
+   * ADR-0079). WRITE_LIMITED keeps the image the profile has. The number's lock is taken after the
+   * profile's, the order every counted write takes them in (a post, a comment or an edit holds the
+   * profile FOR KEY SHARE first, #185's `assertWriter`), so no two wait on each other in turn.
    */
   async replace(userId: string, bytes: Uint8Array): Promise<void> {
     await assertPublicItemEdit(this.db, userId, 'replace');
+    await this.limits.precheck(userId, 'upload');
     const image = await processProfileImage(bytes);
     const id = randomUUID();
     const storageKey = `${PROFILE_IMAGE_KEY_PREFIX}/${id}.${IMAGE_EXTENSION[image.contentType]}`;
@@ -90,6 +96,8 @@ export class ProfileImageService {
         const earlier = await this.lockProfile(tx, userId);
         await assertPublicItemOnboarding(tx, userId, 'replace');
         await assertPublicItemEdit(tx, userId, 'replace');
+        const writer = await this.limits.lockWriter(tx, userId);
+        await this.limits.take(tx, writer, 'upload');
         await tx.insert(schema.mediaObjects).values({
           id,
           ownerId: userId,

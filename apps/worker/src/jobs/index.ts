@@ -7,6 +7,7 @@ import * as z from 'zod';
 import { JOB_NAMES } from '../queues.js';
 import { type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
+import { purgeCommunityRecords } from './community-records-purge.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
 import { removeOrphanMedia } from './media-orphan-cleanup.js';
@@ -127,6 +128,15 @@ const HANDLERS: Partial<Record<string, Handler>> = {
       'orphan upload clean-up',
     );
     return result;
+  },
+  [JOB_NAMES.communityRecordsPurge]: async (_job, { db, logger }) => {
+    const result = await purgeCommunityRecords(db);
+    // Hourly: quiet unless it deleted something.
+    logger[result.writeLimitEvents > 0 || result.linkUses > 0 ? 'info' : 'debug'](
+      { ...result },
+      'community records purge',
+    );
+    return { ...result };
   },
 };
 

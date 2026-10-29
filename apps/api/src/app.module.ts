@@ -13,6 +13,7 @@ import { DbModule } from './infra/db/db.module.js';
 import { RedisModule } from './infra/redis/redis.module.js';
 import { JobsModule } from './jobs/jobs.module.js';
 import { LikesModule } from './likes/likes.module.js';
+import { AdminLinkFlagsModule } from './link-review/admin-link-flags.module.js';
 import { MarketsModule } from './markets/markets.module.js';
 import { MediaModule } from './media/media.module.js';
 import { MeModule } from './me/me.module.js';
@@ -95,6 +96,9 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 신고와 운영 처리 (#50): the reports, the operators' queue and actions, and MY's records of
     // both. Last, so the document keeps the routes before it where they were.
     ModerationModule,
+    // 반복 링크 검토 목록 (#187): the operators' review list of repeated links. Last, so the
+    // document keeps every route before it where it was. Its screen is a page of #50's area.
+    AdminLinkFlagsModule,
   ],
   controllers: [HealthController],
 })

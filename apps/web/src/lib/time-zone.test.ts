@@ -530,6 +530,12 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
       'the admin moderation pages (#50, ADR-0081): who processed, acted or cancelled, and when; ' +
       'a writing restriction’s end and each change of it (#185, ADR-0082)',
   },
+  'lib/admin-link-flags.ts': {
+    names: ['labelledTime'],
+    reason:
+      'the admin repeated-link review list (ADR-0083): when an item was caught, written, ' +
+      'edited, deleted and hidden, a group’s latest entry, and when an operator marked it',
+  },
 };
 
 /**

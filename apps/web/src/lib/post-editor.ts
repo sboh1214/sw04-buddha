@@ -16,6 +16,7 @@ import { NodeSelection, Selection, TextSelection, type Transaction } from '@tipt
 import { copy } from '@/copy';
 import { isApiError, isApiUnreachable, isForAnotherAccount } from './api';
 import { type RestrictedWrite, restrictedMessage } from './restriction';
+import { writeLimitedMessage } from './write-limits';
 
 /**
  * The post editor's decisions (#46, ADR-0073), as pure functions the node test runner reaches: what
@@ -189,7 +190,10 @@ function refusalOf(details: unknown): ImageRefusal | undefined {
  * a refusal for the onboarding says nothing while the onboarding gate takes the account to its
  * step (`gateMoves` — `['me']`, read again after the refusal, names a step left) and the form keeps
  * its draft in the tab, as for a refused send (owner decision 2026-10-21), and when the gate stays
- * — that read failed — says what a refused send says (owner decision 2026-10-21 answer 6); an
+ * — that read failed — says what a refused send says (owner decision 2026-10-21 answer 6); the
+ * day's uploads at their limit (WRITE_LIMITED, #187: 50 in 24 hours, a post's images and the
+ * profile image together) say so with the time it can upload again in the member's zone
+ * (`formatDate`, lib/write-limits.ts) — once: it ends the batch too (`refusesImageBatch`); an
  * upload given up while it waited to be sent again, the editor gone meanwhile (`UploadAbandoned`),
  * says nothing, as the files a batch never sends once the editor sends no more; anything else is
  * a failed upload, said apart from an unreachable server — the API busy (a 429: the uploads it
@@ -210,6 +214,8 @@ export function imageUploadErrorMessage(
   if (isForAnotherAccount(error)) return copy.sessionChanged;
   const restriction = restrictedMessage(error, restricted, formatDate);
   if (restriction !== undefined) return restriction;
+  const limited = writeLimitedMessage(error, formatDate);
+  if (limited !== undefined) return limited;
   if (isApiError(error, 'IMAGE_NOT_ALLOWED')) {
     const reason = refusalOf(error.details);
     return reason === undefined ? copy.errImageUpload : refusalMessage(reason);
@@ -501,15 +507,17 @@ export async function sendRetrying<T>(send: () => Promise<T>, steps: UploadRetry
 /**
  * Whether an upload's refusal is about the account rather than the file: no session
  * (UNAUTHENTICATED), the cookie as another account (`isForAnotherAccount`), a step of the
- * onboarding left (ONBOARDING_REQUIRED), or a writing restriction (RESTRICTED, #185, ADR-0082 —
- * refused before the image is looked at, whatever the file). Every file after it would be refused
- * the same way.
+ * onboarding left (ONBOARDING_REQUIRED), a writing restriction (RESTRICTED, #185, ADR-0082 —
+ * refused before the image is looked at, whatever the file), or the person's uploads of the day at
+ * their limit (WRITE_LIMITED, #187, ADR-0083 7-17 — refused before the conversion too). Every file
+ * after it would be refused the same way.
  */
 export function refusesImageBatch(error: unknown): boolean {
   return (
     isApiError(error, 'ONBOARDING_REQUIRED') ||
     isApiError(error, 'UNAUTHENTICATED') ||
     isApiError(error, 'RESTRICTED') ||
+    isApiError(error, 'WRITE_LIMITED') ||
     isForAnotherAccount(error)
   );
 }

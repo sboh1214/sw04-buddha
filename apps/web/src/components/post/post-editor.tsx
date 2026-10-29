@@ -552,7 +552,9 @@ export function PostEditor({
       // answer 6). An upload given up for the editor gone while it waited says nothing. Any other
       // is said: that file's failure alone — but a writing restriction's (#185), the account's
       // like the first two, ends the batch and is said once, its end and no button: owner
-      // decision 2026-10-23 answer 12 (the write page's banner has the way to 조치·신고 내역).
+      // decision 2026-10-23 answer 12 (the write page's banner has the way to 조치·신고 내역). So
+      // does the day's uploads at their limit (#187, WRITE_LIMITED): every file left would be
+      // refused alike, so the one refusal, with the time it can upload again, is said once.
       failed: (error) => {
         const toast = imageUploadToast(error, gateMoves(), format);
         if (toast !== undefined) toaster.create(toast);

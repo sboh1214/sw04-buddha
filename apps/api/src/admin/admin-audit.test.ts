@@ -10,8 +10,9 @@
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
  * (#185),
  * `release-settings.controller.test` for the release settings,
- * `admin-accounts.controller.test` for the admin grants and revokes and
- * `notices.controller.test` for the notices' writes, pins and unpins. What none of them can
+ * `admin-accounts.controller.test` for the admin grants and revokes,
+ * `notices.controller.test` for the notices' writes, pins and unpins and
+ * `link-review.test` for the marks on the repeated-link review list. What none of them can
  * prove is COMPLETENESS: they assert about routes that exist, so an admin write added tomorrow
  * with no audit row would break nothing.
  *
@@ -69,6 +70,7 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/moderation/users/:userId/writing-restriction': 'moderation_writing_restriction',
   'POST /admin/moderation/actions/:actionId/shorten': 'moderation_restriction_shorten',
   'POST /admin/moderation/actions/:actionId/lift': 'moderation_restriction_lift',
+  'POST /admin/link-flags/reviews': 'link_flag_review',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

@@ -66,6 +66,8 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   // away for a while, as the 403 the public-item check answered before it had a code of its own
   // (ADR-0078) — the code and its details (the end) tell it from every other 403.
   RESTRICTED: HttpStatus.FORBIDDEN,
+  // A write limit of #187 (ADR-0083), refused like a rate limit: the same write passes later.
+  WRITE_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

@@ -121,6 +121,14 @@ const shape = (pages: CommentPages | undefined) =>
     replies.map((reply) => (reply.state === 'published' ? reply.id : `${reply.state}:${reply.id}`)),
   ]);
 
+/** A WRITE_LIMITED answer (#187) that arrived at 2026-10-21 15:41:30 in Seoul. */
+const limited = (reason: string, limit: number, retryAfterSeconds: number) =>
+  new ApiError(
+    429,
+    { code: 'WRITE_LIMITED', message: 'x', details: { reason, limit, retryAfterSeconds } } as never,
+    Date.parse('2026-10-21T06:41:30.000Z'),
+  );
+
 const refusal = (status: number, code: string, details?: unknown) =>
   new ApiError(status, { code, message: 'x', details } as never);
 
@@ -798,6 +806,20 @@ describe('a refused write', () => {
       stale: false,
       restricted: false,
     });
+  });
+
+  it('says which limit refused a comment or an edit, and when it can be sent again (#187)', () => {
+    expect(commentWriteErrorMessage(limited('comments_1m', 5, 60), 'create', formatKst)).toBe(
+      `${copy.errWriteLimitComments1m} 2026. 10. 21. 오후 3:43${copy.writeLimitRetryWrite}`,
+    );
+    expect(commentWriteErrorMessage(limited('comments_24h', 200, 600), 'create', formatKst)).toBe(
+      `${copy.errWriteLimitComments24h} 2026. 10. 21. 오후 3:52${copy.writeLimitRetryWrite}`,
+    );
+    expect(commentWriteErrorMessage(limited('edits_10m', 10, 540), 'edit', formatKst)).toBe(
+      `${copy.errWriteLimitEdits10m} 2026. 10. 21. 오후 3:51${copy.writeLimitRetryEdit}`,
+    );
+    // Said under the button, where the box and its text still are: the thread is not stale.
+    expect(isStaleThreadRefusal(limited('comments_1m', 5, 60))).toBe(false);
   });
 
   it('reads the thread again only when it says the thread on screen is stale', () => {

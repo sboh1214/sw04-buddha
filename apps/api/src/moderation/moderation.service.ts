@@ -71,6 +71,12 @@ const STANDING_HIDE_INDEXES = [
 const NICKNAME_DRAWS = 10;
 
 /**
+ * The lock an action takes on its post or comment (the class doc): the one its UPDATE of
+ * `hidden_at` takes, as the author's own edit and deletion lock their row (ADR-0083 7-13).
+ */
+const ITEM_LOCK = 'no key update';
+
+/**
  * 운영 처리 (#50, ADR-0081; ADR-0069 decision 2 #45-5, #45-11…#45-14, decision 3 #37-10, decision
  * 4 #50 rows): what an operator does on the admin screen — hide a 근거 글 or a comment, warn a
  * member, give a nickname back to an auto nickname, empty a 소개, remove a profile image, restrict a
@@ -87,9 +93,14 @@ const NICKNAME_DRAWS = 10;
  *
  * An operator never acts on themselves — their post, comment or profile, or a report on one
  * (decision 4 #50 «다른 운영자만 처리한다»): MODERATION_NOT_ALLOWED `own`, and the CHECKs of migration
- * 0039 hold it whoever writes. The item's row is locked FOR UPDATE first: a report on it holds it
- * shared (ReportsService), so every report committed before the action is resolved by it and none
- * lands on a hidden item after; a new comment or like waits likewise (ADR-0074, ADR-0076).
+ * 0039 hold it whoever writes. The item's row is locked FOR NO KEY UPDATE first (`ITEM_LOCK`): a
+ * report on it holds it shared (ReportsService), so every report committed before the action is
+ * resolved by it and none lands on a hidden item after; a new comment or like waits likewise
+ * (ADR-0074, ADR-0076). Not FOR UPDATE — no action changes the item's key, and the foreign-key
+ * check (FOR KEY SHARE) of a write that names the item in the repeated-link records (`link_uses`,
+ * `link_flags`, #187) waits for no action: that write holds the post's comment count from its own
+ * comment's insert (#48's trigger) when it names the item, and a hiding's `hidden_at` moves that
+ * count, so with FOR UPDATE the two waited for each other (ADR-0083 7-13).
  */
 @Injectable()
 export class ModerationService {
@@ -115,7 +126,7 @@ export class ModerationService {
         .select({ authorId: posts.authorId, deletedAt: posts.deletedAt, hiddenAt: posts.hiddenAt })
         .from(posts)
         .where(eq(posts.id, postId))
-        .for('update');
+        .for(ITEM_LOCK);
       if (!post) throw notFound('Post');
       if (post.authorId === adminId) throw refused('own');
       if (post.deletedAt !== null) throw refused('deleted');
@@ -151,7 +162,7 @@ export class ModerationService {
         })
         .from(postComments)
         .where(eq(postComments.id, commentId))
-        .for('update');
+        .for(ITEM_LOCK);
       if (!comment) throw notFound('Comment');
       if (comment.authorId === adminId) throw refused('own');
       if (comment.deletedAt !== null) throw refused('deleted');
@@ -607,7 +618,7 @@ export class ModerationService {
         .select({ authorId: schema.posts.authorId })
         .from(schema.posts)
         .where(eq(schema.posts.id, subject.postId))
-        .for('update');
+        .for(ITEM_LOCK);
       if (!post) throw notFound('Post');
       if (post.authorId !== userId) throw refused('not_theirs');
       return {
@@ -621,7 +632,7 @@ export class ModerationService {
         .select({ authorId: schema.postComments.authorId })
         .from(schema.postComments)
         .where(eq(schema.postComments.id, subject.commentId))
-        .for('update');
+        .for(ITEM_LOCK);
       if (!comment) throw notFound('Comment');
       if (comment.authorId !== userId) throw refused('not_theirs');
       return {

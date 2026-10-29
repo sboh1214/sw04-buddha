@@ -3,6 +3,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
   COMMENT_REPLIES_PAGE_SIZE,
+  commentLinks,
   type CommentDeletion,
   type CommentNotAllowedDetails,
   type CommentNotAllowedReason,
@@ -20,9 +21,11 @@ import { AppError } from '../common/errors/app-error.js';
 import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { commentLikeCountSql } from '../likes/like-queries.js';
+import { LinkReviewService } from '../link-review/link-review.service.js';
 import { assertWriter } from '../moderation/restrictions.js';
 import { authorColumns, postAuthorOf, publicStateOf } from '../posts/posts.service.js';
 import { type Page } from '../wallet/wallet.service.js';
+import { WriteLimitsService, type Writer } from '../write-limits/write-limits.service.js';
 import { CommentCursors } from './comment-cursor.js';
 import {
   commentHasReplies,
@@ -120,6 +123,8 @@ export class CommentsService {
   constructor(
     @Inject(DB) private readonly db: Db,
     private readonly cursors: CommentCursors,
+    private readonly limits: WriteLimitsService,
+    private readonly links: LinkReviewService,
   ) {}
 
   /**
@@ -312,7 +317,11 @@ export class CommentsService {
    * and a hidden or deleted 댓글 to hang under (no new 대댓글) — COMMENT_NOT_ALLOWED with the
    * reason. Comments are taken on posts of markets in every public status (#45-6, the post's own
    * rule). An author under a writing restriction is refused before anything is read (RESTRICTED,
-   * `checkWriter`, #185). Nothing about the author's trading is read or attached (N05 §2).
+   * `checkWriter`, #185). Then the comment counts against the person's limits (#187: 댓글·대댓글
+   * together, 5 a minute and 200 a day — WRITE_LIMITED, nothing written) and its links — the first
+   * 20 in its text (owner decision 2026-10-22) — go to the repetition rules (#187: a flag on the
+   * operators' review list at most). Nothing about the author's trading is read or attached (N05
+   * §2).
    */
   async create(
     authorId: string,
@@ -321,11 +330,12 @@ export class CommentsService {
     body: string,
   ): Promise<PublishedComment> {
     const id = randomUUID();
+    const links = commentLinks(body);
     await this.db.transaction(async (tx) => {
-      await this.checkWriter(tx, authorId);
+      const writer = await this.checkWriter(tx, authorId);
       const { posts, postComments } = schema;
       const [post] = await tx
-        .select({ deletedAt: posts.deletedAt, hiddenAt: posts.hiddenAt })
+        .select({ marketId: posts.marketId, deletedAt: posts.deletedAt, hiddenAt: posts.hiddenAt })
         .from(posts)
         .where(eq(posts.id, postId))
         .for('share');
@@ -341,6 +351,7 @@ export class CommentsService {
           break;
       }
       const parent = parentId === null ? null : await this.lockParent(tx, postId, parentId);
+      await this.limits.take(tx, writer, 'comment');
       await tx.insert(postComments).values({
         id,
         postId,
@@ -349,6 +360,7 @@ export class CommentsService {
         authorId,
         body,
       });
+      await this.links.record(tx, writer, { commentId: id }, post.marketId, links);
     });
     return this.published(id);
   }
@@ -361,20 +373,27 @@ export class CommentsService {
    * #45-5) — and, asked first, any under the author's writing restriction (RESTRICTED, #185;
    * deleting stays open). A comment under a hidden or deleted post, and a 대댓글 under a hidden
    * 댓글 or under a deleted 댓글's placeholder, stays its author's to edit: only new comments are
-   * refused there (오너 결정 2026-10-20, ADR-0074 7-6).
+   * refused there (오너 결정 2026-10-20, ADR-0074 7-6). An edit that changes something counts
+   * against the person's edit limits (#187: posts' and comments' edits together, 10 in 10 minutes
+   * and 50 a day — WRITE_LIMITED, nothing written), and the links it puts in that the comment did
+   * not have go to the repetition rules (#187 «수정으로 넣거나 바꾼 링크도 본다») — of the text's
+   * first 20, those not among the previous text's first 20 (owner decision 2026-10-22).
    */
   async update(authorId: string, commentId: string, body: string): Promise<PublishedComment> {
+    const links = commentLinks(body);
     await this.db.transaction(async (tx) => {
       // The writer before the comment's row (`checkWriter`): the profile's lock comes first, as in
       // an operator's restriction that names the comment — and the writer's refusal before the
-      // comment's.
-      await this.checkWriter(tx, authorId);
+      // comment's — and the writer's number lock next, as in every counted write: a reply under
+      // this comment by the same person waits on the number, not on the row.
+      const writer = await this.checkWriter(tx, authorId);
       const current = await this.lockOwnComment(tx, authorId, commentId);
       if (current.hiddenAt !== null) {
         const details: CommentNotEditableDetails = { reason: 'hidden' };
         throw new AppError('COMMENT_NOT_EDITABLE', { message: 'The comment is hidden', details });
       }
       if (current.body === body) return;
+      await this.limits.take(tx, writer, 'edit');
       await tx.insert(schema.postCommentRevisions).values({
         commentId,
         body: current.body,
@@ -384,6 +403,15 @@ export class CommentsService {
         .update(schema.postComments)
         .set({ body, editedAt: sql`now()` })
         .where(eq(schema.postComments.id, commentId));
+      const had = new Set(commentLinks(current.body));
+      const added = links.filter((link) => !had.has(link));
+      if (added.length > 0) {
+        const [post] = await tx
+          .select({ marketId: schema.posts.marketId })
+          .from(schema.posts)
+          .where(eq(schema.posts.id, current.postId));
+        if (post) await this.links.record(tx, writer, { commentId }, post.marketId, added);
+      }
     });
     return this.published(commentId);
   }
@@ -413,12 +441,14 @@ export class CommentsService {
    * row of the write is locked — the one place the rules on the writer plug in: `assertWriter` —
    * the writer's profile held until the commit, the onboarding (#57-8) and #185's 작성 제한
    * (RESTRICTED with its end; it blocks writing and editing, never deleting, ADR-0069 decision 2
-   * #45-12) — and #187's frequency limits next (comments 5 a minute and 200 a day, edits 10 in 10
-   * minutes and 50 a day, counted per verified number's keyed hash, admins exempt, #45-15 and
-   * decision 7) and its repeated-link review list.
+   * #45-12) — and then #187's: the writer's number held (WriteLimitsService.lockWriter — the limits
+   * count the person, decision 7). Answers the writer, whose write the caller counts
+   * (`WriteLimitsService.take`: comments 5 a minute and 200 a day, edits 10 in 10 minutes and 50 a
+   * day, admins exempt, #45-15 and decision 7) once it is certain, and whose links it records.
    */
-  private async checkWriter(tx: Tx, authorId: string): Promise<void> {
+  private async checkWriter(tx: Tx, authorId: string): Promise<Writer> {
     await assertWriter(tx, authorId);
+    return this.limits.lockWriter(tx, authorId);
   }
 
   /**
@@ -478,13 +508,18 @@ export class CommentsService {
   /**
    * The author's own comment, locked for the write: NOT_FOUND when it is unknown or deleted (gone
    * for its author too, even as a placeholder), FORBIDDEN when another account wrote it.
+   *
+   * FOR NO KEY UPDATE, as the post's (PostsService.lockOwnPost): a 대댓글 or a like being written
+   * under it (FOR SHARE) and it wait for each other, a foreign-key check of #187's review list
+   * naming it (FOR KEY SHARE) does not wait — the write holding a link's lock never waits for an
+   * edit that waits for that lock (ADR-0083 7-13).
    */
   private async lockOwnComment(tx: Tx, authorId: string, commentId: string) {
     const [current] = await tx
       .select()
       .from(schema.postComments)
       .where(eq(schema.postComments.id, commentId))
-      .for('update');
+      .for('no key update');
     if (!current || current.deletedAt !== null) throw commentNotFound();
     if (current.authorId !== authorId) {
       throw new AppError('FORBIDDEN', { message: 'Only its author changes a comment' });

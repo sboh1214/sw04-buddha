@@ -17,6 +17,7 @@ import { fills } from './fills.js';
 import { profileInterestCategories } from './interest-categories.js';
 import { ledgerEntries } from './ledger.js';
 import { commentLikes, postLikes } from './likes.js';
+import { linkFlags } from './link-review.js';
 import { marketEvents } from './market-events.js';
 import { marketLinks } from './market-links.js';
 import { marketSearches } from './market-searches.js';
@@ -163,6 +164,7 @@ export const postsRelations = relations(posts, ({ one, many }) => ({
   images: many(postImages),
   comments: many(postComments),
   likes: many(postLikes),
+  linkFlags: many(linkFlags),
 }));
 
 export const postCommentsRelations = relations(postComments, ({ one, many }) => ({
@@ -177,6 +179,16 @@ export const postCommentsRelations = relations(postComments, ({ one, many }) => 
   replies: many(postComments, { relationName: 'post_comment_parent' }),
   revisions: many(postCommentRevisions),
   likes: many(commentLikes),
+  linkFlags: many(linkFlags),
+}));
+
+// 반복 링크 (#187): the post or the comment an entry of the review list names (exactly one of them),
+// and the operator's mark '확인함' that covered it, if one did (an admin_actions row).
+// `link_uses` has no relations: a day's working record, read by link and time only.
+export const linkFlagsRelations = relations(linkFlags, ({ one }) => ({
+  post: one(posts, { fields: [linkFlags.postId], references: [posts.id] }),
+  comment: one(postComments, { fields: [linkFlags.commentId], references: [postComments.id] }),
+  review: one(adminActions, { fields: [linkFlags.reviewActionId], references: [adminActions.id] }),
 }));
 
 // 좋아요 (#49): the target and the account that liked. No relation reads a target's likers in
@@ -297,8 +309,10 @@ export const marketLinksRelations = relations(marketLinks, ({ one }) => ({
   creator: one(user, { fields: [marketLinks.createdBy], references: [user.id] }),
 }));
 
-export const adminActionsRelations = relations(adminActions, ({ one }) => ({
+export const adminActionsRelations = relations(adminActions, ({ one, many }) => ({
   admin: one(user, { fields: [adminActions.adminId], references: [user.id] }),
+  /** The review-list entries a `link_flag_review` mark covered (#187). */
+  linkFlags: many(linkFlags),
 }));
 
 export const releaseSettingsRelations = relations(releaseSettings, ({ one }) => ({

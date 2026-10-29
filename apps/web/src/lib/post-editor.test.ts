@@ -318,6 +318,21 @@ describe('a picked image', () => {
       title: copy.errPostOnboarding,
     });
   });
+
+  it('says the day’s uploads are at their limit, and when it can upload again (#187)', () => {
+    const limited = new ApiError(
+      429,
+      {
+        code: 'WRITE_LIMITED',
+        message: 'x',
+        details: { reason: 'uploads_24h', limit: 50, retryAfterSeconds: 3_600 },
+      },
+      Date.parse('2026-10-21T06:41:30.000Z'),
+    );
+    expect(imageUploadErrorMessage(limited, true, formatKst)).toBe(
+      `${copy.errWriteLimitUploads24h} 2026. 10. 21. 오후 4:42${copy.writeLimitRetryUpload}`,
+    );
+  });
 });
 
 describe('a typed link', () => {
@@ -625,6 +640,12 @@ const RESTRICTED = refusal(403, 'RESTRICTED', {
   kind: 'writing',
   endsAt: '2026-10-24T06:00:00.000Z',
 });
+/** The day's uploads at their limit (#187): refused before the conversion, whatever the file. */
+const WRITE_LIMITED = refusal(429, 'WRITE_LIMITED', {
+  reason: 'uploads_24h',
+  limit: 50,
+  retryAfterSeconds: 3_600,
+});
 const NOT_AN_IMAGE = refusal(422, 'IMAGE_NOT_ALLOWED', { reason: 'type' });
 
 describe('refusesImageBatch', () => {
@@ -633,6 +654,7 @@ describe('refusesImageBatch', () => {
     expect(refusesImageBatch(ANOTHER_ACCOUNT)).toBe(true);
     expect(refusesImageBatch(SIGNED_OUT)).toBe(true);
     expect(refusesImageBatch(RESTRICTED)).toBe(true);
+    expect(refusesImageBatch(WRITE_LIMITED)).toBe(true);
     expect(refusesImageBatch(NOT_AN_IMAGE)).toBe(false);
     expect(refusesImageBatch(refusal(413, 'VALIDATION_ERROR'))).toBe(false);
     expect(refusesImageBatch(refusal(429, 'RATE_LIMITED'))).toBe(false);
