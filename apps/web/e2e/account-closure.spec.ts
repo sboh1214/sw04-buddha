@@ -193,7 +193,7 @@ test.describe('탈퇴', () => {
     // Coin to forfeit: the start Coin waits in this database (start-grant.spec.ts), so an
     // operator's adjustment gives the member some.
     const adjusted = await admin.post(`/api/v1/admin/users/${member.id}/balance-adjust`, {
-      data: { amountCoin: '1234', memo: `탈퇴 시험 ${tag}` },
+      data: { amountCoin: '1234', memo: `탈퇴 시험 ${tag}`, expectedAccountId: adminMe.id },
     });
     expect(adjusted.status(), await adjusted.text()).toBe(200);
     const postId = await postThroughApi(page.request, market.id, `탈퇴할 글 ${tag}`, `본문 ${tag}`);
@@ -455,6 +455,7 @@ test.describe('탈퇴', () => {
     const market = await createOpenMarket(admin);
     const tag = freshTag();
     await signUp(page, freshEmail());
+    const accountId = (await meOf(page.request)).id;
     const postId = await postThroughApi(page.request, market.id, `탈퇴 전의 글 ${tag}`, tag);
     const reconsent = await asReconsent(page);
     const write = `/community/write?market=${market.id}`;
@@ -501,8 +502,8 @@ test.describe('탈퇴', () => {
     await bioCard.getByTestId('bio-save').click();
     await expect(page).toHaveURL(viaStep(settings));
     const kept = [
-      `buddha.commentDraft:${postId}:comment`,
-      `buddha.postDraft:new:${market.id}`,
+      `buddha.commentDraft:${postId}:comment@${accountId}`,
+      `buddha.postDraft:new:${market.id}@${accountId}`,
       'buddha.profileDraft:bio',
     ];
     expect(await draftsInTab(page)).toEqual(kept);

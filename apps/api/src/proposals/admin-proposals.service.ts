@@ -14,6 +14,7 @@ import {
   type ProposalAdoptionMarket,
   type ProposalStatus,
   type RejectProposalBody,
+  type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { and, desc, eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
@@ -124,7 +125,11 @@ export class AdminProposalsService {
    * a draft never lands on such a parent without the operator choosing it. A category the
    * operator gives is taken at any level, as the market API takes it (ADR-0041).
    */
-  async adopt(adminId: string, id: string, body: AdoptProposalBody): Promise<AdminProposal> {
+  async adopt(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<AdoptProposalBody>,
+  ): Promise<AdminProposal> {
     return this.db.transaction(async (tx) => {
       const current = await this.lockedMove(tx, id, 'adopted');
       const market = body.market ?? null;
@@ -169,7 +174,7 @@ export class AdminProposalsService {
   async linkMarket(
     adminId: string,
     id: string,
-    body: LinkProposalMarketBody,
+    body: WithoutExpectedAccount<LinkProposalMarketBody>,
   ): Promise<AdminProposal> {
     return this.db.transaction(async (tx) => {
       const current = await this.lockedRow(tx, id);
@@ -200,7 +205,11 @@ export class AdminProposalsService {
    * proposer reads and, for a 중복, the existing market (any status; the proposer sees its link
    * only while it is public). An unknown market is NOT_FOUND naming `duplicateMarketId`.
    */
-  async reject(adminId: string, id: string, body: RejectProposalBody): Promise<AdminProposal> {
+  async reject(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<RejectProposalBody>,
+  ): Promise<AdminProposal> {
     return this.db.transaction(async (tx) => {
       const current = await this.lockedMove(tx, id, 'rejected');
       const duplicateMarketId =

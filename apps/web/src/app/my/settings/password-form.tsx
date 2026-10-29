@@ -8,6 +8,7 @@ import { PasswordInput } from '@/components/ui/password-input';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useLinkedAccounts, useMe, useSetPassword } from '@/hooks/use-me';
+import { useAuthSessionChanged } from '@/hooks/use-session-changed';
 import { isForAnotherAccount } from '@/lib/api';
 import {
   AUTH_ERROR,
@@ -38,13 +39,14 @@ type ChangeValues = z.infer<typeof changeSchema>;
  *
  * The account the card is for is the one of this screen's `Me`, as every other MY 설정 card's —
  * `listAccounts` names no owner — so the card waits for `GET /me` as they do (`ProfileUnavailable`),
- * and the first password names that `Me`'s id (`SetPasswordFields`' `accountId`, ADR-0091). Both
- * forms are keyed by it: `['me']` can turn from A to B in place, before the session does and so
- * with no reset of SessionCacheGuard's to empty the card first (a window-focus refetch of `GET /me`
- * answered with B's cookie ahead of better-auth's session refetch, a realtime resnapshot, a window
- * beside one that signed in as B — ADR-0090 결정 4-2). Unkeyed, the passwords typed on A's card
- * would stay with '비밀번호 저장' on, now naming B — B's `Me` — with B's cookie: B's first password,
- * typed for A. Keyed, the card starts again empty for B.
+ * and the first password names that `Me`'s id (`SetPasswordFields`' `accountId`, ADR-0091), as a
+ * change of the password does (`ChangePasswordFields`' `accountId`, ADR-0092). Both forms are keyed
+ * by it: `['me']` can turn from A to B in place, before the session does and so with no reset of
+ * SessionCacheGuard's to empty the card first (a window-focus refetch of `GET /me` answered with
+ * B's cookie ahead of better-auth's session refetch, a realtime resnapshot, a window beside one
+ * that signed in as B — ADR-0090 결정 4-2). Unkeyed, the passwords typed on A's card would stay
+ * with '비밀번호 저장' on, now naming B — B's `Me` — with B's cookie: B's first password, typed for
+ * A. Keyed, the card starts again empty for B.
  */
 export function PasswordForm() {
   const { data: me, isPending } = useMe();
@@ -75,7 +77,7 @@ export function PasswordForm() {
           onRetry={() => void accounts.refetch()}
         />
       ) : hasCredential ? (
-        <ChangePasswordFields key={me.id} />
+        <ChangePasswordFields key={me.id} accountId={me.id} />
       ) : (
         <SetPasswordFields key={me.id} accountId={me.id} />
       )}
@@ -113,7 +115,16 @@ function AccountsUnavailable({
   );
 }
 
-function ChangePasswordFields() {
+/**
+ * The change names the account the card was drawn for (`accountId`, its `Me`'s id) beside
+ * better-auth's own body, and the API's hook compares it with the cookie's (ADR-0092): in the render
+ * between the session naming B and SessionCacheGuard's reset the card is still A's while the cookie
+ * is B's, and a change taken with B's cookie would be B's — B's password, when the current password
+ * typed for A is B's too, and every other session of B's ended (`revokeOtherSessions`). Refused, it
+ * changes nothing and the session is asked for again.
+ */
+function ChangePasswordFields({ accountId }: { accountId: string }) {
+  const sessionChanged = useAuthSessionChanged();
   const {
     register,
     handleSubmit,
@@ -123,13 +134,19 @@ function ChangePasswordFields() {
   } = useForm<ChangeValues>({ resolver: zodResolver(changeSchema) });
 
   const onSubmit = handleSubmit(async (values) => {
-    const { error } = await authClient.changePassword({
-      currentPassword: values.currentPassword,
-      newPassword: values.newPassword,
-      revokeOtherSessions: true,
-    });
+    const { error } = await authClient.changePassword(
+      {
+        currentPassword: values.currentPassword,
+        newPassword: values.newPassword,
+        revokeOtherSessions: true,
+      },
+      // better-auth's body has no account; the client merges this one into it.
+      { body: { expectedAccountId: accountId } },
+    );
     if (error) {
-      if (error.code === AUTH_ERROR.INVALID_PASSWORD) {
+      if (sessionChanged(error)) {
+        toaster.create({ type: 'error', title: copy.sessionChanged });
+      } else if (error.code === AUTH_ERROR.INVALID_PASSWORD) {
         setError('currentPassword', { message: copy.passwordWrong });
       } else {
         toaster.create({ type: 'error', title: authErrorMessage(error) });

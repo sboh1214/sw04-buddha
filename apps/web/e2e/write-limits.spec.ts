@@ -3,6 +3,7 @@ import type { AdminLinkFlag, AdminLinkFlagGroup, WriteLimitedDetails } from '@bu
 import { copy } from '../src/copy';
 import { formatKst } from '../src/lib/datetime';
 import {
+  accountIdOf,
   adminAccount,
   createOpenMarket,
   expect,
@@ -626,7 +627,13 @@ test.describe('반복 링크 검토 목록 (#187)', () => {
     // Another operator marks the row while this screen shows it.
     const [group] = await groupsFor(admin, url, 'open');
     const marked = await secondAdmin.post('/api/v1/admin/link-flags/reviews', {
-      data: { url, reason: 'same_account', outcome: 'no_issue', through: group!.latestFlaggedAt },
+      data: {
+        url,
+        reason: 'same_account',
+        outcome: 'no_issue',
+        through: group!.latestFlaggedAt,
+        expectedAccountId: await accountIdOf(secondAdmin),
+      },
     });
     expect(marked.status(), await marked.text()).toBe(201);
 

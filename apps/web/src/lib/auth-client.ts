@@ -92,6 +92,11 @@ export const AUTH_ERROR = {
   FAILED_TO_UNLINK_LAST_ACCOUNT: 'FAILED_TO_UNLINK_LAST_ACCOUNT',
   CREDENTIAL_ACCOUNT_NOT_FOUND: 'CREDENTIAL_ACCOUNT_NOT_FOUND',
   PROVIDER_NOT_FOUND: 'PROVIDER_NOT_FOUND',
+  /**
+   * `/send-verification-email` with a session: the address asked for is not the session's
+   * account's (better-auth mails a signed-in request only to its own account's address).
+   */
+  EMAIL_MISMATCH: 'EMAIL_MISMATCH',
 } as const;
 
 /** `account.providerId` of the email+password login method. */
@@ -102,6 +107,25 @@ export interface AuthClientError {
   code?: string | undefined;
   status?: number | undefined;
   message?: string | undefined;
+  /** The API's issues (`{ path, message }[]`) on the refusals the API's hook adds (ADR-0092). */
+  details?: unknown;
+}
+
+/**
+ * Whether a better-auth write was refused because the cookie is another account's than the one its
+ * MY 설정 card was drawn for (ADR-0092): the 403 FORBIDDEN whose `details` name `expectedAccountId`,
+ * the API's own refusal (`isForAnotherAccount` in lib/api.ts) as the auth instance's `hooks.before`
+ * answers it — unwrapped, better-auth's `{ code, message, details }`. Not the CSRF 403 better-auth
+ * answers an untrusted Origin with, which names no field. Nothing was written; the card asks for the
+ * session again, so SessionCacheGuard puts the account that is really signed in on screen.
+ */
+export function isAuthForAnotherAccount(error: AuthClientError | null | undefined): boolean {
+  if (error?.status !== 403 || error.code !== 'FORBIDDEN') return false;
+  if (!Array.isArray(error.details)) return false;
+  const first: unknown = error.details[0];
+  if (typeof first !== 'object' || first === null || !('path' in first)) return false;
+  const path: unknown = (first as { path?: unknown }).path;
+  return Array.isArray(path) && path[0] === 'expectedAccountId';
 }
 
 /**

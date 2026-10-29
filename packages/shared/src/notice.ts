@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { adminAccountActorSchema } from './admin-accounts.js';
 import { cursorQuerySchema } from './api/pagination.js';
+import { expectedAccountIdSchema, type WithoutExpectedAccount } from './expected-account.js';
 import { codePointLength, postDocumentInputSchema, postDocumentSchema } from './post-document.js';
 import { POST_TITLE_MAX_LENGTH } from './post.js';
 
@@ -120,10 +121,15 @@ export type AdminNoticeListQuery = z.infer<typeof adminNoticeListQuerySchema>;
  * `POST /admin/notices`: a new notice, not pinned — pinning is its own action and record. The body
  * is a post's (`postDocumentInputSchema`: the allow-list, POST_BODY_MAX_LENGTH characters,
  * POST_IMAGES_MAX images); each new image an upload of the writing admin's that no post or other
- * notice has taken.
+ * notice has taken. And the admin on screen (`expectedAccountId`, ADR-0092 — the edit names it too,
+ * and the pin and the unpin with `expectedAccountBodySchema`).
  */
 export const createNoticeBodySchema = z
-  .object({ title: noticeTitleInputSchema, body: postDocumentInputSchema })
+  .object({
+    title: noticeTitleInputSchema,
+    body: postDocumentInputSchema,
+    expectedAccountId: expectedAccountIdSchema,
+  })
   .meta({ id: 'CreateNoticeBody' });
 export type CreateNoticeBody = z.input<typeof createNoticeBodySchema>;
 
@@ -145,6 +151,7 @@ export const updateNoticeBodySchema = z
      * save that does not say which version it read could replace one its writer never saw.
      */
     expectedEditedAt: z.iso.datetime().nullable(),
+    expectedAccountId: expectedAccountIdSchema,
   })
   .meta({ id: 'UpdateNoticeBody' });
 export type UpdateNoticeBody = z.input<typeof updateNoticeBodySchema>;
@@ -160,11 +167,17 @@ export const adminNoticeUpdateResultSchema = z
   .meta({ id: 'AdminNoticeUpdateResult' });
 export type AdminNoticeUpdateResult = z.infer<typeof adminNoticeUpdateResultSchema>;
 
-/** A write's body as the API reads it: the title trimmed, the body normalised. */
-export type NoticeContent = z.output<typeof createNoticeBodySchema>;
+/** A write's body as the API reads it: the title trimmed, the body normalised, the account. */
+export type ParsedCreateNoticeBody = z.output<typeof createNoticeBodySchema>;
 
-/** An edit's body as the API reads it: the content and the version it was opened from. */
-export type NoticeEdit = z.output<typeof updateNoticeBodySchema>;
+/** An edit's body as the API reads it: the content, the version it was opened from, the account. */
+export type ParsedUpdateNoticeBody = z.output<typeof updateNoticeBodySchema>;
+
+/** What a write hands the service: its content, the account checked and dropped. */
+export type NoticeContent = WithoutExpectedAccount<ParsedCreateNoticeBody>;
+
+/** What an edit hands the service: the content and the version it was opened from. */
+export type NoticeEdit = WithoutExpectedAccount<ParsedUpdateNoticeBody>;
 
 /**
  * NOTICE_PIN_LIMIT_REACHED: NOTICE_PIN_LIMIT notices are pinned already, so another cannot be

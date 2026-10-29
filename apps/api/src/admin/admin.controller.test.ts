@@ -50,12 +50,14 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  const adjust = (payload: Record<string, unknown>, cookie = admin.cookie, target = member.id) =>
+  // An adjustment names the admin on screen (ADR-0092, Q-PG-8 ①): `who`'s own account unless the
+  // payload names another.
+  const adjust = (payload: Record<string, unknown>, who: TestUser = admin, target = member.id) =>
     t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/users/${target}/balance-adjust`,
-      headers: { ...jsonHeaders, cookie },
-      payload,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
     });
 
   /** Buys a package worth `amountCoin` (ADR-0026: users can only buy what an admin listed). */
@@ -189,17 +191,13 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
   });
 
   it('404s for an unknown user without writing an audit row', async () => {
-    const res = await adjust(
-      { amountCoin: '1000', memo: '없는 사용자' },
-      admin.cookie,
-      'no-such-user',
-    );
+    const res = await adjust({ amountCoin: '1000', memo: '없는 사용자' }, admin, 'no-such-user');
     expect(res.statusCode).toBe(404);
     expect(await t.db.select().from(schema.adminActions)).toHaveLength(0);
   });
 
   it('is closed to members and to anonymous callers', async () => {
-    const asMember = await adjust({ amountCoin: '1000', memo: '권한 없음' }, member.cookie);
+    const asMember = await adjust({ amountCoin: '1000', memo: '권한 없음' }, member);
     expect(asMember.statusCode).toBe(403);
     expect(asMember.json()).toMatchObject({ error: { code: 'FORBIDDEN' } });
 
@@ -208,6 +206,61 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       url: '/api/v1/admin/users',
     });
     expect(anonymous.statusCode).toBe(401);
+  });
+
+  it('refuses an adjustment that names another admin than the cookie’s, or none, before anything is read (Q-PG-8 ①, ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    await chargeMember(10_000n);
+    const snapshot = async () => ({
+      balances: await t.db.select().from(schema.balances).orderBy(schema.balances.userId),
+      ledger: await t.db.select().from(schema.ledgerEntries).orderBy(schema.ledgerEntries.id),
+      actions: await t.db.select().from(schema.adminActions),
+    });
+    const before = await snapshot();
+    type Refusal = { error: { code: string; details?: { path: (string | number)[] }[] } };
+
+    // The screen still shows `admin` while the tab's cookie is `other`'s: refused before the
+    // account is looked up — an unknown one is the same 403, not the 404 the lookup answers.
+    for (const target of [member.id, 'no-such-user']) {
+      const res = await adjust(
+        { amountCoin: '-3000', memo: '중복 충전 회수', expectedAccountId: admin.id },
+        other,
+        target,
+      );
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json<Refusal>().error.code).toBe('FORBIDDEN');
+      expect(res.json<Refusal>().error.details?.[0]?.path).toEqual(['expectedAccountId']);
+    }
+    // No account at all: a validation error naming the field.
+    const unnamed = await adjust({
+      amountCoin: '-3000',
+      memo: '중복 충전 회수',
+      expectedAccountId: undefined,
+    });
+    expect(unnamed.statusCode, unnamed.body).toBe(400);
+    expect(unnamed.json<Refusal>().error.details?.map((detail) => detail.path)).toEqual([
+      ['expectedAccountId'],
+    ]);
+    // Nothing moved, nothing audited.
+    expect(await snapshot()).toEqual(before);
+
+    // The cookie's own account is taken, and audited as that admin.
+    const own = await adjust({ amountCoin: '-3000', memo: '중복 충전 회수' }, other);
+    expect(own.statusCode, own.body).toBe(200);
+    expect(await balanceOf(member.id)).toMatchObject({ availableCoin: 7_000n });
+    const [action] = await t.db
+      .select()
+      .from(schema.adminActions)
+      .where(eq(schema.adminActions.targetId, member.id));
+    expect(action).toMatchObject({ adminId: other.id, type: 'balance_adjust' });
+    // The account is not kept with what the adjustment records.
+    expect(JSON.stringify(action?.payload)).not.toContain('expectedAccountId');
   });
 
   it('searches users by email and nickname', async () => {
@@ -275,11 +328,14 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
       ['PATCH', '/api/v1/admin/coupons/not-a-uuid'],
     ];
     for (const [method, url] of routes) {
+      // The admin on screen named (ADR-0092), so the refusal is the path's alone.
       const res = await t.app.inject({
         method: method as 'PATCH' | 'DELETE',
-        url,
+        url: method === 'PATCH' ? url : `${url}?expectedAccountId=${admin.id}`,
         headers: { ...jsonHeaders, cookie: admin.cookie },
-        ...(method === 'PATCH' ? { payload: { isActive: false } } : {}),
+        ...(method === 'PATCH'
+          ? { payload: { isActive: false, expectedAccountId: admin.id } }
+          : {}),
       });
       expect({ url, status: res.statusCode }).toEqual({ url, status: 400 });
       expect(res.json()).toMatchObject({ error: { code: 'VALIDATION_ERROR' } });
@@ -372,8 +428,8 @@ describe.skipIf(!hasTestInfra)('admin (integration)', () => {
         },
         payload:
           body.type === 'form'
-            ? 'amountCoin=-3000&memo=csrf'
-            : { amountCoin: '-3000', memo: 'csrf' },
+            ? `amountCoin=-3000&memo=csrf&expectedAccountId=${admin.id}`
+            : { amountCoin: '-3000', memo: 'csrf', expectedAccountId: admin.id },
       });
 
     for (const origin of ['https://evil.example', 'null']) {

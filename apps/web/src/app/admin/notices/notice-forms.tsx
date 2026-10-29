@@ -27,6 +27,7 @@ import {
   useUnpinNotice,
   useUpdateNotice,
 } from '@/hooks/use-notices';
+import { useOperatorId } from '@/hooks/use-operator';
 import { usePostWriter } from '@/hooks/use-posts';
 import { type AdminNotice } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -80,6 +81,18 @@ function BackLink() {
  * hour to take back unasked (ADR-0077 decision 8-20). A placeholder till then; `GET /me` failing
  * before it ever answered, the post screens' sentence. A session gone while the page is open is the
  * API's 401s (app/admin/layout.tsx), not this.
+ *
+ * Each form under it is drawn for that admin alone — keyed by `accountId`, with what it sends and
+ * what it was refused (ADR-0092, 오너 결정 2026-10-26 17:21 답 2 «A의 것으로 1시간 보관»). `['me']`
+ * can turn from A to B in place, before the session does (ADR-0090 결정 4-2 — a window-focus
+ * refetch of `GET /me`, a realtime resnapshot: SessionCacheGuard resets nothing then), and a form
+ * that stayed would hand B what A typed, its button on, sent as B with B's cookie. B gets a form of
+ * B's own instead — empty, or B's own draft — and A's form, going, keeps what A typed in this tab as
+ * A's draft for the hour, as the onboarding gate's move keeps it (`keepOnAccountTurn`,
+ * lib/post-drafts.ts — one item per screen and account, which B's form neither reads nor
+ * replaces): the screen opened again by A takes it back, says so and offers to discard it. A
+ * write A sent that lands after all clears it (`postDraftLanded`, A's only), and says nothing on
+ * B's screen.
  */
 function NoticeWriterGate({ children }: { children: (accountId: string) => ReactNode }) {
   const writer = usePostWriter();
@@ -104,13 +117,11 @@ function NoticeWriterGate({ children }: { children: (accountId: string) => React
  * from the send through the move to the list (`pending`), so that move asks nothing. The
  * onboarding gate taking the admin to a step left (a re-consent) asks nothing, and keeps what was
  * typed in this tab for an hour, as a post's draft: this screen opened again after the step takes
- * it back (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20 — the key `notice-new`).
+ * it back (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20 — the key `notice-new`). So does
+ * `['me']` turning to another admin in place, for the admin who typed it: the form is drawn again
+ * for the admin now on screen (`NoticeWriterGate`, ADR-0092 답 2).
  */
 export function AdminNoticeNew() {
-  const router = useRouter();
-  const create = useCreateNotice();
-  const [refusal, setRefusal] = useState<string | undefined>(undefined);
-  const sent = create.isPending || create.isSuccess;
   return (
     <Stack gap="4" data-testid="admin-notice-new">
       <BackLink />
@@ -121,36 +132,53 @@ export function AdminNoticeNew() {
         {copy.adminNoticesIntro}
       </Text>
       <NoticeWriterGate>
-        {(accountId) => (
-          <PostForm
-            notice={NOTICE_FORM}
-            // Kept across the onboarding gate's move only (ADR-0077 decision 8-20).
-            draftKey={{ kind: 'notice-new' }}
-            accountId={accountId}
-            submitLabel={copy.adminNoticeSubmit}
-            pending={sent}
-            saved={create.isSuccess}
-            errorMessage={refusal}
-            refusedImageIds={refusedImageIds(create.error)}
-            onSubmit={({ title, body }) => {
-              if (title === null) return; // the form sends nothing without a title
-              setRefusal(undefined);
-              create.mutate(
-                // The admin the form is drawn for, whose landing the write's is (not sent).
-                { title, body, accountId },
-                {
-                  onSuccess: () => {
-                    toaster.create({ type: 'success', title: copy.adminNoticeCreated });
-                    router.push(ADMIN_NOTICES_PATH);
-                  },
-                  onError: (error) => setRefusal(noticeWriteErrorMessage(error)),
-                },
-              );
-            }}
-          />
-        )}
+        {/* Drawn for each admin: A's typing goes into A's kept draft, never to B (ADR-0092 답 2). */}
+        {(accountId) => <NewNoticeForm key={accountId} accountId={accountId} />}
       </NoticeWriterGate>
     </Stack>
+  );
+}
+
+/**
+ * 공지 쓰기's form for one admin (`NoticeWriterGate`): its write, its refusal and the move to the
+ * list are that admin's. A write still on its way when another admin is drawn lands without a word
+ * here — its toast and its move were the form's, which is gone.
+ */
+function NewNoticeForm({ accountId }: { accountId: string }) {
+  const router = useRouter();
+  const create = useCreateNotice();
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const sent = create.isPending || create.isSuccess;
+  return (
+    <PostForm
+      notice={NOTICE_FORM}
+      // Kept across the onboarding gate's move (ADR-0077 decision 8-20) and the admin on screen
+      // turning to another in place (ADR-0092 답 2).
+      draftKey={{ kind: 'notice-new' }}
+      accountId={accountId}
+      keepOnAccountTurn
+      submitLabel={copy.adminNoticeSubmit}
+      pending={sent}
+      saved={create.isSuccess}
+      errorMessage={refusal}
+      refusedImageIds={refusedImageIds(create.error)}
+      onSubmit={({ title, body }) => {
+        if (title === null) return; // the form sends nothing without a title
+        setRefusal(undefined);
+        create.mutate(
+          // The admin the form is drawn for: the write names it (`expectedAccountId`,
+          // ADR-0092) and its landing is that admin's.
+          { title, body, accountId },
+          {
+            onSuccess: () => {
+              toaster.create({ type: 'success', title: copy.adminNoticeCreated });
+              router.push(ADMIN_NOTICES_PATH);
+            },
+            onError: (error) => setRefusal(noticeWriteErrorMessage(error)),
+          },
+        );
+      }}
+    />
   );
 }
 
@@ -225,11 +253,12 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
       <PinCard notice={notice.data} />
       <NoticeWriterGate>
         {(accountId) => (
-          // Keyed by the notice and the opening: the form holds its draft, and the version it was
-          // opened from, from the notice it was opened with. Opened again, it takes the focus the
-          // press of 최신 내용 불러오기 left behind.
+          // Keyed by the notice, the opening and the admin on screen: the form holds its draft, and
+          // the version it was opened from, from the notice it was opened with, for that admin —
+          // A's typing goes into A's kept draft once another admin is drawn (ADR-0092 답 2).
+          // Opened again, it takes the focus the press of 최신 내용 불러오기 left behind.
           <EditForm
-            key={`${notice.data.id}:${String(generation)}`}
+            key={`${notice.data.id}:${String(generation)}:${accountId}`}
             notice={notice.data}
             accountId={accountId}
             autoFocusTitle={generation > 0}
@@ -253,12 +282,15 @@ export function AdminNoticeEdit({ noticeId }: { noticeId: string }) {
 
 /**
  * Whether the notice is pinned and since when, with 고정 or 고정 해제 and — while it is pinned —
- * 공지 보기.
+ * 공지 보기. Both name the admin on screen (`useOperatorId`, ADR-0092), so they wait for
+ * `GET /me`; the cookie of another account is refused (`copy.sessionChanged`) and the session
+ * asked again.
  */
 function PinCard({ notice }: { notice: AdminNotice }) {
   const pin = usePinNotice();
   const unpin = useUnpinNotice();
-  const busy = pin.isPending || unpin.isPending;
+  const operatorId = useOperatorId();
+  const busy = pin.isPending || unpin.isPending || operatorId === undefined;
   const onError = (error: Error) =>
     toaster.create({ type: 'error', title: noticeWriteErrorMessage(error) });
   const pinned = notice.pinnedAt !== null;
@@ -301,13 +333,17 @@ function PinCard({ notice }: { notice: AdminNotice }) {
                 variant="outline"
                 loading={unpin.isPending}
                 disabled={busy}
-                onClick={() =>
-                  unpin.mutate(notice.id, {
-                    onSuccess: () =>
-                      toaster.create({ type: 'success', title: copy.adminNoticeUnpinnedToast }),
-                    onError,
-                  })
-                }
+                onClick={() => {
+                  if (operatorId === undefined) return;
+                  unpin.mutate(
+                    { noticeId: notice.id, expectedAccountId: operatorId },
+                    {
+                      onSuccess: () =>
+                        toaster.create({ type: 'success', title: copy.adminNoticeUnpinnedToast }),
+                      onError,
+                    },
+                  );
+                }}
                 data-testid="admin-notice-unpin"
               >
                 {copy.adminNoticeUnpin}
@@ -317,13 +353,17 @@ function PinCard({ notice }: { notice: AdminNotice }) {
                 size="sm"
                 loading={pin.isPending}
                 disabled={busy}
-                onClick={() =>
-                  pin.mutate(notice.id, {
-                    onSuccess: () =>
-                      toaster.create({ type: 'success', title: copy.adminNoticePinnedToast }),
-                    onError,
-                  })
-                }
+                onClick={() => {
+                  if (operatorId === undefined) return;
+                  pin.mutate(
+                    { noticeId: notice.id, expectedAccountId: operatorId },
+                    {
+                      onSuccess: () =>
+                        toaster.create({ type: 'success', title: copy.adminNoticePinnedToast }),
+                      onError,
+                    },
+                  );
+                }}
                 data-testid="admin-notice-pin"
               >
                 {copy.adminNoticePin}
@@ -349,8 +389,10 @@ function PinCard({ notice }: { notice: AdminNotice }) {
  * what a save sent is the form's start from then on (`saved`, `PostForm`): leaving after it asks
  * nothing until something changes again. A refused save keeps it changed. The onboarding gate's
  * move asks nothing and keeps what was typed in this tab for an hour, with the version it was
- * typed on (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20 — the key `notice-edit` per notice): the
- * screen opened again after the step takes it back, and its save sends that version
+ * typed on (오너 결정 2026-10-21 (3차), ADR-0077 decision 8-20 — the key `notice-edit` per notice), and
+ * so does `['me']` turning to another admin in place, for the admin who typed it (ADR-0092 답 2,
+ * `NoticeWriterGate`): the screen opened again after the step — or by that admin — takes it back,
+ * and its save sends that version
  * (`PostFormValues['version']`) — not the one the screen opened on after the step — so a save made
  * meanwhile still refuses it. A discard puts back the notice as this form opened on it (`base`),
  * whose version `opened` still is: nothing taken back is left once a save lands.
@@ -362,7 +404,7 @@ function EditForm({
   onReload,
 }: {
   notice: AdminNotice;
-  /** The admin on screen (`NoticeWriterGate`). */
+  /** The admin on screen (`NoticeWriterGate`), whom the form is drawn for (its `key`). */
   accountId: string;
   autoFocusTitle: boolean;
   onReload: () => Promise<void>;
@@ -384,10 +426,12 @@ function EditForm({
       notice={NOTICE_FORM}
       initialTitle={base.title}
       initialDocument={base.body}
-      // As the new notice's form: kept across the onboarding gate's move only.
+      // As the new notice's form: kept across the onboarding gate's move and the admin on screen
+      // turning to another in place, with the version it was typed on.
       draftKey={{ kind: 'notice-edit', noticeId: base.id }}
       draftVersion={opened}
       accountId={accountId}
+      keepOnAccountTurn
       submitLabel={copy.adminNoticeSave}
       pending={update.isPending || reloading}
       saved={update.isSuccess}
@@ -426,7 +470,8 @@ function EditForm({
             title,
             body,
             expectedEditedAt: version === undefined ? opened : version,
-            // The admin the form is drawn for, whose landing the save's is (not sent).
+            // The admin the form is drawn for: the save names it (`expectedAccountId`,
+            // ADR-0092) and its landing is that admin's.
             accountId,
           },
           {

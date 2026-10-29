@@ -9,6 +9,7 @@ import {
   DEFAULT_RATE_LIMITS,
   NO_EMAIL_DOMAIN,
   SET_PASSWORD_PATH,
+  expectedAccountIdSchema,
   isNoEmailAddress,
   type RateLimits,
 } from '@buddha/shared';
@@ -17,6 +18,7 @@ import { type Mailer } from '../mail/mailer.js';
 import { authRateLimitFor, type AuthRateLimiter } from '../rate-limit/auth-rate-limit.js';
 import { emailTracker } from '../rate-limit/email-tracker.js';
 import { type EmailContent, MAIL_TEMPLATES } from '../mail/templates.js';
+import { otherAccountRefusal } from './expected-account.js';
 
 /** Injection token for the better-auth instance (see auth.module.ts). */
 export const AUTH = Symbol('AUTH');
@@ -80,6 +82,74 @@ export const OAUTH_SCOPES = {
   kakao: ['account_email'],
 } as const;
 const CHANGE_EMAIL_PATH = '/change-email';
+/** better-auth's change of password (MY 설정's password card, which also ends the other sessions). */
+const CHANGE_PASSWORD_PATH = '/change-password';
+/** better-auth's link of a social login to the session's account (MY 설정's 로그인 수단 card). */
+const LINK_SOCIAL_PATH = '/link-social';
+
+/**
+ * The better-auth routes a MY 설정 card writes through for the session's account, whose own body
+ * names no account: a change of password (and, with `revokeOtherSessions`, every other session of
+ * the account ended), the start of a change of address (a confirmation mailed to the account's
+ * address), a social login linked to the account. Each takes the account the card was drawn for
+ * (`expectedAccountId`), as every owner write of the API does (A-PG-24, ADR-0090·ADR-0091), and
+ * `hooks.before` refuses it when the cookie is another account's (`assertScreenAccount`,
+ * ADR-0092): in the render between the tab's session naming B and SessionCacheGuard's reset, A's
+ * card still stands while the cookie is already B's, and what was typed on A's card would be done
+ * to B — B's password changed and B's other sessions ended (when the current password typed is
+ * B's too, as one person's two accounts often share one), a confirmation mailed to B's address
+ * naming the address typed for A, the provider A picked linked to B.
+ *
+ * Not `/unlink-account`: it names the login method by its row id, which better-auth looks up among
+ * the cookie's account's rows only — a row A's card drew names none of B's, and the answer is a 400
+ * that unlinks nothing: FAILED_TO_UNLINK_LAST_ACCOUNT when B has a single login method (checked
+ * before the lookup, `allowUnlinkingAll` is off), ACCOUNT_NOT_FOUND when B has more. (A session of
+ * B's older than better-auth's `freshAge` is refused before both, SESSION_NOT_FRESH, as any unlink.)
+ * Not `/send-verification-email`: with a session it mails the session's account's own address and
+ * refuses any other (EMAIL_MISMATCH) — the address on A's card is A's (screen-account.test.ts
+ * pins both).
+ */
+const SCREEN_ACCOUNT_PATHS = new Set([CHANGE_PASSWORD_PATH, CHANGE_EMAIL_PATH, LINK_SOCIAL_PATH]);
+
+/**
+ * A request to one of SCREEN_ACCOUNT_PATHS goes on only for the account it names: the cookie's
+ * (`sessionUserId`). The field is read from the raw body — a hook runs before the endpoint's schema,
+ * which strips a key it does not know — and missing or malformed is the 400 the API's own routes
+ * give (`VALIDATION_ERROR` naming the field); another account is the 403 they give
+ * (`otherAccountRefusal`). better-auth answers either unwrapped, `{ code, message, details }`.
+ */
+export function assertScreenAccount(sessionUserId: string, body: unknown): void {
+  const named =
+    typeof body === 'object' && body !== null
+      ? (body as { expectedAccountId?: unknown }).expectedAccountId
+      : undefined;
+  const parsed = expectedAccountIdSchema.safeParse(named);
+  if (!parsed.success) {
+    throw new APIError('BAD_REQUEST', {
+      code: 'VALIDATION_ERROR',
+      message: 'Request validation failed',
+      details: parsed.error.issues.map((issue) => ({
+        path: ['expectedAccountId', ...issue.path],
+        message: issue.message,
+      })),
+    });
+  }
+  if (parsed.data === sessionUserId) return;
+  throw new APIError('FORBIDDEN', { code: 'FORBIDDEN', ...otherAccountRefusal() });
+}
+
+/**
+ * The session token of the request's cookie when its signature is valid — the same read
+ * better-auth's `getSession` starts with — or a falsy value when there is no cookie (null) or a
+ * forged one (false). Lets the screen-account check tell a request with no session from a signed
+ * cookie whose session could not be read (`hooks.before`).
+ */
+function signedSessionToken(ctx: {
+  getSignedCookie: (key: string, secret: string) => Promise<string | null | false>;
+  context: { authCookies: { sessionToken: { name: string } }; secret: string };
+}): Promise<string | null | false> {
+  return ctx.getSignedCookie(ctx.context.authCookies.sessionToken.name, ctx.context.secret);
+}
 
 const EMAIL_INPUT_PATHS = new Set([
   '/sign-up/email',
@@ -514,6 +584,10 @@ export function createAuth({
      * The synthetic no-email domain belongs to the server, not to users: nobody may sign up
      * with one, change their address to one, or trigger mail for one. Otherwise a stranger
      * could claim `kakao_<id>@noemail.buddha.local` before that Kakao user ever signs in.
+     *
+     * The `before` hook is also where the MY 설정 writes that name the account on screen
+     * (SCREEN_ACCOUNT_PATHS) are refused when the cookie is another account's (ADR-0092), and
+     * where the routes Nest never sees are rate limited (PLAN 7.5).
      */
     hooks: {
       before: createAuthMiddleware(async (ctx) => {
@@ -524,6 +598,38 @@ export function createAuth({
         // `auth.api.sendVerificationEmail` for a third. A call with no `request` did not come
         // from the network; whatever did is already limited at its own door.
         const overHttp = ctx.request !== undefined;
+        // The session the cookie names, read at most once per request: the screen-account check
+        // below and `/change-email`'s account bucket both ask for it. The session is not on
+        // `ctx.context` yet in a before-hook (dispatch sets it to null); this reads the cookie
+        // itself. A missing or forged cookie fails the HMAC check before any DB access, so an
+        // unauthenticated flood costs a hash; a validly signed one costs a `findSession`, as the
+        // endpoint's own session middleware does (the two sensitive routes read it again,
+        // authoritatively). `disableRefresh`: a check must not renew a session, and a `Set-Cookie`
+        // minted here would not reach the response anyway.
+        let sessionRead: ReturnType<typeof getSessionFromCtx> | undefined;
+        const cookieSession = () =>
+          (sessionRead ??= getSessionFromCtx(ctx, { disableRefresh: true }));
+        if (overHttp && SCREEN_ACCOUNT_PATHS.has(ctx.path)) {
+          // First, before anything else the hook or the endpoint does (ADR-0092): a refused
+          // change of address spends no budget and mails nobody, a refused change of password
+          // reads no credential, hashes nothing and ends no session, a refused link mints no OAuth
+          // state. No cookie, or a forged one: the endpoint's own middleware answers 401 — as the
+          // API's SessionGuard answers before a body is validated — and `/change-email` counts
+          // nothing.
+          const session = await cookieSession();
+          if (session) {
+            assertScreenAccount(session.user.id, ctx.body);
+          } else if (await signedSessionToken(ctx)) {
+            // A validly signed cookie that named no session: either the session is gone (signed
+            // out, expired), where the endpoint answers this same 401, or the read FAILED —
+            // `getSessionFromCtx` turns every error of `getSession` (a dropped connection, a
+            // timeout in `findSession`) into null. Falling through would let the endpoint read the
+            // session again a moment later and, if that read succeeds, act on it unchecked: B's
+            // password changed for A's card. So the hook answers the endpoint's 401 itself
+            // (`UNAUTHORIZED`, better-auth's session middleware's), nothing done (ADR-0092 결정 3).
+            throw new APIError('UNAUTHORIZED', { code: 'UNAUTHORIZED', message: 'Unauthorized' });
+          }
+        }
         if (ctx.path === VERIFY_EMAIL_PATH) {
           // No body to reject a synthetic address in and nothing else to check: the link is
           // the whole request. Counted on the address it mails (mailedByVerifyEmail).
@@ -573,14 +679,9 @@ export function createAuth({
           // the endpoint is about to refuse 401 mails nobody, and counting it would let anyone
           // — no account, no cookie — spend five requests naming X and refuse every genuine
           // change to X for a minute (PR #8 review; the same free lockout Q-M6-8 closed for
-          // forged tokens). The session is not on `ctx.context` yet in a before-hook (dispatch
-          // sets it to null); this reads the cookie itself. A missing or forged cookie fails
-          // the HMAC check before any DB access, so an unauthenticated flood costs a hash; a
-          // validly signed one costs the `findSession` the endpoint's own
-          // `sensitiveSessionMiddleware` repeats authoritatively a moment later (this read is
-          // never reused for that). `disableRefresh`: a rate-limit check must not renew a
-          // session, and a `Set-Cookie` minted here would not reach the response anyway.
-          const session = await getSessionFromCtx(ctx, { disableRefresh: true });
+          // forged tokens). The session is the one the screen-account check above read
+          // (`cookieSession`): by here the request named that account, the one counted.
+          const session = await cookieSession();
           if (!session) return;
           // The ACCOUNT first (CHANGE_EMAIL_ACCOUNT_BUCKET), then `newEmail`: a caller whose
           // own five are spent is refused before touching anyone else's recipient key, so one

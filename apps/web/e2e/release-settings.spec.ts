@@ -1,7 +1,7 @@
 import type { APIResponse } from '@playwright/test';
 import type { ReleaseSetting, ReleaseSettingStatus } from '@buddha/shared';
 import { copy } from '../src/copy';
-import { adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
+import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
  * 출시 설정 (#170, ADR-0055) as the shipped build has it: seven registered items — 시작 지급액
@@ -98,7 +98,7 @@ test.describe('출시 설정 (#170)', () => {
       ),
     ).toEqual(undecidedKeys);
     const unknown = await admin.patch(`${LIST}/e2e.unregistered`, {
-      data: { status: 'undecided', reason: 'e2e' },
+      data: { status: 'undecided', reason: 'e2e', expectedAccountId: await accountIdOf(admin) },
     });
     expect(unknown.status()).toBe(404);
 

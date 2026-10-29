@@ -856,10 +856,16 @@ const AUTH_CASES: Readonly<Record<string, AuthCase>> = {
     status: { anonymous: 401, B: 401 },
   },
   'POST /change-password': {
-    request: () => ({
-      body: { currentPassword: WRONG_PASSWORD, newPassword: 'another-password-1' },
+    // A's account, as the card on A's screen names it (ADR-0092): B's cookie is refused before
+    // B's password is looked at.
+    request: (fixture) => ({
+      body: {
+        currentPassword: WRONG_PASSWORD,
+        newPassword: 'another-password-1',
+        expectedAccountId: fixture.a.id,
+      },
     }),
-    status: { anonymous: 401, B: 400 },
+    status: { anonymous: 401, B: 403 },
   },
   'POST /update-session': {
     request: (fixture) => ({ body: { userId: fixture.a.id } }),
@@ -2356,7 +2362,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       method: 'POST',
       url: `/api/v1/admin/markets/${f.market.id}/close`,
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
-      payload: '{}',
+      payload: { expectedAccountId: f.admin.id },
     });
     expect(closed.statusCode).toBe(200);
     const started = Date.now();

@@ -77,10 +77,22 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     ...overrides,
   });
 
-  const post = (url: string, payload?: Record<string, unknown>, cookie = admin.cookie) =>
-    t.app.inject({ method: 'POST', url, headers: { ...jsonHeaders, cookie }, payload });
-  const patch = (url: string, payload: Record<string, unknown>, cookie = admin.cookie) =>
-    t.app.inject({ method: 'PATCH', url, headers: { ...jsonHeaders, cookie }, payload });
+  // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
+  // names another.
+  const post = (url: string, payload: Record<string, unknown> = {}, who: TestUser = admin) =>
+    t.app.inject({
+      method: 'POST',
+      url,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
+    });
+  const patch = (url: string, payload: Record<string, unknown>, who: TestUser = admin) =>
+    t.app.inject({
+      method: 'PATCH',
+      url,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
+    });
   const get = (url: string, cookie = admin.cookie) =>
     t.app.inject({ method: 'GET', url, headers: { cookie } });
 
@@ -805,6 +817,92 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect((await get('/api/v1/admin/markets/nope')).statusCode).toBe(400);
   });
 
+  // --- the admin on screen (ADR-0092) --------------------------------------------------
+  /** A second admin, whose cookie a tab that switched accounts would carry. */
+  async function anotherAdmin(): Promise<TestUser> {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    return other;
+  }
+
+  it('refuses every write that names another admin than the cookie’s, before anything is written', async () => {
+    const other = await anotherAdmin();
+    const draft = await market({ status: 'draft', rules: '규칙' });
+    const open = await market({ status: 'open', closeAt: new Date(Date.now() + DAY_MS) });
+    // The screen still shows `admin` while the tab's cookie is `other`'s.
+    const asShown = { expectedAccountId: admin.id };
+    for (const [what, res] of [
+      ['create', await post('/api/v1/admin/markets', { ...createBody(), ...asShown }, other)],
+      [
+        'update',
+        await patch(`/api/v1/admin/markets/${draft.id}`, { title: '바뀜', ...asShown }, other),
+      ],
+      ['open', await post(`/api/v1/admin/markets/${draft.id}/open`, asShown, other)],
+      ['close', await post(`/api/v1/admin/markets/${open.id}/close`, asShown, other)],
+    ] as const) {
+      expect({ what, status: res.statusCode }).toEqual({ what, status: 403 });
+      expect(errorOf(res).code).toBe('FORBIDDEN');
+      expect(detailPath(res)).toEqual(['expectedAccountId']);
+    }
+    // Nothing was written: no new market, the two as they were, no event, no record.
+    expect(await t.db.select().from(schema.markets)).toHaveLength(2);
+    expect(await marketRow(draft.id)).toMatchObject({ status: 'draft', title: draft.title });
+    expect((await marketRow(open.id)).status).toBe('open');
+    expect(await t.db.select().from(schema.marketEvents)).toEqual([]);
+    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+  });
+
+  it('asks every write for the admin on screen, and takes the cookie’s own', async () => {
+    const draft = await market({ status: 'draft', rules: '규칙' });
+    const unnamed = (method: 'POST' | 'PATCH', url: string, payload: Record<string, unknown>) =>
+      t.app.inject({ method, url, headers: { ...jsonHeaders, cookie: admin.cookie }, payload });
+    for (const [what, res] of [
+      ['create', await unnamed('POST', '/api/v1/admin/markets', createBody())],
+      ['update', await unnamed('PATCH', `/api/v1/admin/markets/${draft.id}`, { title: 'x' })],
+      ['open', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/open`, {})],
+      ['close', await unnamed('POST', `/api/v1/admin/markets/${draft.id}/close`, {})],
+    ] as const) {
+      expect({ what, status: res.statusCode }).toEqual({ what, status: 400 });
+      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
+      expect(detailPath(res)).toEqual(['expectedAccountId']);
+    }
+    // A tab from before the deploy sends the formerly bodyless transitions with no body at all: the
+    // same 400, but the schema's own issue (no object) names no field — `details[0].path` is [].
+    for (const action of ['open', 'close'] as const) {
+      const res = await t.app.inject({
+        method: 'POST',
+        url: `/api/v1/admin/markets/${draft.id}/${action}`,
+        headers: { origin: jsonHeaders.origin, cookie: admin.cookie },
+      });
+      expect({ action, status: res.statusCode }).toEqual({ action, status: 400 });
+      expect(errorOf(res).code).toBe('VALIDATION_ERROR');
+      expect(detailPath(res)).toEqual([]);
+    }
+    expect((await marketRow(draft.id)).status).toBe('draft');
+    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+    // The account checked is never stored: the `created` event keeps the fields as sent.
+    const created = detail(await create({ slug: 'named-admin' }));
+    expect(created.events[0]!.payload).not.toHaveProperty('expectedAccountId');
+    const [event] = await eventsFor(created.id);
+    expect(event!.payload).not.toHaveProperty('expectedAccountId');
+    expect((await patch(`/api/v1/admin/markets/${created.id}`, { rules: '규칙' })).statusCode).toBe(
+      200,
+    );
+    expect((await open(created.id)).statusCode).toBe(200);
+    expect((await close(created.id)).statusCode).toBe(200);
+    expect((await actionsFor(created.id)).map((row) => [row.type, row.adminId])).toEqual([
+      ['market_create', admin.id],
+      ['market_update', admin.id],
+      ['market_open', admin.id],
+      ['market_close', admin.id],
+    ]);
+  });
+
   // --- guards ---------------------------------------------------------------------------
   it('is closed to members and anonymous callers, on reads and writes alike', async () => {
     const row = await market({ status: 'draft' });
@@ -860,7 +958,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     const curl = await t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/markets/${row.id}/open`,
-      headers: { cookie: admin.cookie },
+      headers: { cookie: admin.cookie, 'content-type': 'application/json' },
+      payload: { expectedAccountId: admin.id },
     });
     expect(curl.statusCode).toBe(200);
     const read = await t.app.inject({

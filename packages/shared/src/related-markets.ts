@@ -1,6 +1,7 @@
 import * as z from 'zod';
 import { adminAccountActorSchema } from './admin-accounts.js';
 import { uuidSchema } from './api/uuid.js';
+import { expectedAccountIdSchema } from './expected-account.js';
 import { type PublicMarketStatus, marketSummarySchema } from './market.js';
 
 /**
@@ -49,10 +50,12 @@ export function relatedMarketPair(
 /**
  * `POST /admin/markets/:id/related`: the market to link with the one in the path, lower-cased on
  * the way in like every request-supplied uuid. The same market is refused (400 naming `marketId`)
- * and an unknown one is NOT_FOUND naming it; a link that exists already changes nothing.
+ * and an unknown one is NOT_FOUND naming it; a link that exists already changes nothing. And the
+ * admin on screen (`expectedAccountId`, ADR-0092); the unlink names it in its query
+ * (`expectedAccountQuerySchema`).
  */
 export const linkRelatedMarketBodySchema = z
-  .object({ marketId: uuidSchema })
+  .object({ marketId: uuidSchema, expectedAccountId: expectedAccountIdSchema })
   .meta({ id: 'LinkRelatedMarketBody' });
 export type LinkRelatedMarketBody = z.infer<typeof linkRelatedMarketBodySchema>;
 

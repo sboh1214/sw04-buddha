@@ -13,6 +13,8 @@ import {
   freshTag,
   logOut,
   meOf,
+  membersSwitchingSessions,
+  membersTurningInPlace,
   setFirstPassword,
   signIn,
   signUp,
@@ -845,6 +847,7 @@ test.describe('근거 글', () => {
   }) => {
     const market = await createOpenMarket(admin);
     await signUp(page, freshEmail());
+    const accountId = (await meOf(page.request)).id;
     const tag = freshTag();
     const asked: string[] = [];
     const answers: boolean[] = [];
@@ -885,10 +888,10 @@ test.describe('근거 글', () => {
     await expect(page.getByTestId('consent-step')).toBeVisible();
     expect(asked).toEqual([]);
     const kept = await draftsInTab(page);
-    expect(Object.keys(kept)).toEqual([`buddha.postDraft:new:${market.id}`]);
-    expect(kept[`buddha.postDraft:new:${market.id}`]?.previews[mediaId ?? '']).toMatch(
-      /^data:image\/(webp|jpeg);base64,/,
-    );
+    // The screen's item for the account that wrote it (ADR-0092 답 2).
+    const keptKey = `buddha.postDraft:new:${market.id}@${accountId}`;
+    expect(Object.keys(kept)).toEqual([keptKey]);
+    expect(kept[keptKey]?.previews[mediaId ?? '']).toMatch(/^data:image\/(webp|jpeg);base64,/);
 
     // --- the step done: back on the write screen, the draft taken back and said so.
     await agreeAgain(page);
@@ -936,6 +939,7 @@ test.describe('근거 글', () => {
   }) => {
     const market = await createOpenMarket(admin);
     await signUp(page, freshEmail());
+    const accountId = (await meOf(page.request)).id;
     const postId = await postThroughApi(page.request, market.id, '저장된 제목', '저장된 근거');
     const edit = `/community/posts/${postId}/edit`;
     const asked: string[] = [];
@@ -963,7 +967,9 @@ test.describe('근거 글', () => {
     await page.getByTestId('post-submit').click();
     await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(edit)}`);
     expect(asked).toEqual([]);
-    expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:edit:${postId}`]);
+    expect(Object.keys(await draftsInTab(page))).toEqual([
+      `buddha.postDraft:edit:${postId}@${accountId}`,
+    ]);
 
     // --- back on the edit screen once agreed: the edit taken back.
     await agreeAgain(page);
@@ -1132,6 +1138,7 @@ test.describe('근거 글', () => {
     const market = await createOpenMarket(admin);
     const email = freshEmail();
     await signUp(page, email);
+    const accountId = (await meOf(page.request)).id;
     const reconsent = await asReconsent(page);
     const write = `/community/write?market=${market.id}`;
 
@@ -1147,7 +1154,9 @@ test.describe('근거 글', () => {
     });
     await page.getByTestId('post-submit').click();
     await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
-    expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:new:${market.id}`]);
+    expect(Object.keys(await draftsInTab(page))).toEqual([
+      `buddha.postDraft:new:${market.id}@${accountId}`,
+    ]);
 
     // --- 로그아웃 on the step: the tab's kept drafts go with the session (useSignOut).
     await page.getByTestId('onboarding-logout').click();
@@ -1170,6 +1179,7 @@ test.describe('근거 글', () => {
   }) => {
     const market = await createOpenMarket(admin);
     await signUp(page, freshEmail());
+    const accountId = (await meOf(page.request)).id;
     const reconsent = await asReconsent(page);
     const write = `/community/write?market=${market.id}`;
     await page.goto(write);
@@ -1184,7 +1194,9 @@ test.describe('근거 글', () => {
     await page.getByTestId('post-editor-file').setInputFiles(pngFiles(3));
     // `/me` read again, the gate takes the account to its step — and the draft stays in the tab.
     await expect(page).toHaveURL(`/onboarding?next=${encodeURIComponent(write)}`);
-    expect(Object.keys(await draftsInTab(page))).toEqual([`buddha.postDraft:new:${market.id}`]);
+    expect(Object.keys(await draftsInTab(page))).toEqual([
+      `buddha.postDraft:new:${market.id}@${accountId}`,
+    ]);
     // The refusal is about the account: the other two would be refused alike, so they never leave
     // (ADR-0073 decision 9-41). It says nothing, as a refused send does (owner decision
     // 2026-10-21): no toast followed the account to its step.
@@ -2124,5 +2136,314 @@ test.describe('근거 글', () => {
     await expect(headings).toHaveText(newestFirst);
     await expect(failed).toHaveCount(0);
     await expect(more).toHaveCount(0);
+  });
+});
+
+/** The post writes `page` sends from now on — a post, an edit, an image — as `METHOD path`. */
+function postWritesOf(page: Page): string[] {
+  const writes: string[] = [];
+  page.on('request', (request) => {
+    const { pathname } = new URL(request.url());
+    if (request.method() === 'GET') return;
+    if (pathname.startsWith('/api/v1/posts') || pathname.startsWith('/api/v1/media')) {
+      writes.push(`${request.method()} ${pathname}`);
+    }
+  });
+  return writes;
+}
+
+test.describe('탭의 세션이 아직 앞 계정을 말하는데 `GET /me`가 다른 회원으로 답하는 글쓰기·수정 (ADR-0092 오너 결정 2026-10-26 17:21 답 3)', () => {
+  // `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2 — a
+  // window-focus refetch of `GET /me` answered with B's cookie while better-auth's session still
+  // says A), so SessionCacheGuard resets nothing. The write and edit forms are drawn for the account
+  // on screen (`key`), so B never gets A's form — what A typed, its button on, sent as B with B's
+  // cookie. The owner's «이 PR에서 함께, 적던 것은 A의 초안으로»: A's form, going, keeps what A typed
+  // in this tab as A's draft for the hour, as the onboarding gate's move keeps it (ADR-0073 9-38) —
+  // one item per screen and account, which B's form neither reads nor replaces — and A, on screen
+  // again, takes it back with the restore notice. Nothing asks: no leave of the page.
+
+  test('글쓰기에서 앞 계정이 쓰던 글은 다른 회원에게 빈 양식으로 다시 그려지고 아무것도 보내지 않으며, 이 탭에 앞 계정의 것으로 두었다가 그 계정이 돌아오면 되살린다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const draftKeys = async () => Object.keys(await draftsInTab(page)).sort();
+    const { a, b, open, toB, toA, close } = await membersTurningInPlace(browser, page);
+    try {
+      await open(`/community/write?market=${market.id}`);
+      await expect(page.getByTestId('post-write-market-title')).toHaveText(market.title);
+      await expect(titleInput).toBeEditable();
+      await editorReady(editor);
+      const tag = freshTag();
+      const title = `앞 계정이 쓰던 제목 ${tag}`;
+      await titleInput.fill(title);
+      await editor.click();
+      await page.keyboard.type(`앞 계정이 쓰던 근거 ${tag}`);
+      const writes = postWritesOf(page);
+
+      // --- B on screen: B's own form, empty and on, under the same market; A's kept as A's.
+      await toB();
+      await expect(titleInput).toHaveValue('');
+      await expect(editor).not.toContainText(tag);
+      await expect(restored).toHaveCount(0);
+      await expect(titleInput).toBeEditable();
+      await expect(page.getByTestId('post-write-market-title')).toHaveText(market.title);
+      await expect.poll(draftKeys).toEqual([`buddha.postDraft:new:${market.id}@${a.id}`]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+      // B types too: B's own, beside A's.
+      await titleInput.fill(`다른 회원이 쓰던 제목 ${tag}`);
+
+      // --- A on screen again: A's text taken back, said so; B's kept as B's.
+      await toA();
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(title);
+      await expect(editor).toContainText(`앞 계정이 쓰던 근거 ${tag}`);
+      await expect.poll(draftKeys).toEqual([`buddha.postDraft:new:${market.id}@${b.id}`]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('수정 화면에서 앞 계정이 고치던 것은 다른 회원에게는 남의 글이라는 문장뿐이고 아무것도 보내지 않으며, 앞 계정이 돌아오면 되살린다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const { a, open, toB, toA, close } = await membersTurningInPlace(browser, page);
+    try {
+      const tag = freshTag();
+      const postId = await postThroughApi(page.request, market.id, `저장된 제목 ${tag}`, tag);
+      await open(`/community/posts/${postId}/edit`);
+      await expect(titleInput).toHaveValue(`저장된 제목 ${tag}`);
+      await editorReady(editor);
+      const typed = `앞 계정이 고치던 제목 ${tag}`;
+      await titleInput.fill(typed);
+      const writes = postWritesOf(page);
+
+      // --- B on screen: not B's post — the sentence in the form's place, nothing of A's.
+      await toB();
+      await expect(page.getByTestId('post-edit-not-yours')).toBeVisible();
+      await expect(titleInput).toHaveCount(0);
+      await expect(page.getByText(typed)).toHaveCount(0);
+      await expect
+        .poll(async () => Object.keys(await draftsInTab(page)))
+        .toEqual([`buddha.postDraft:edit:${postId}@${a.id}`]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- A again: taken back.
+      await toA();
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(typed);
+      await expect(editor).toContainText(tag);
+      await expect.poll(async () => Object.keys(await draftsInTab(page))).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+test.describe('탭의 세션이 먼저 다른 회원을 말하는 글쓰기·수정 — 정순서 (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+  // The forward order: another window signs in as B and this tab reads its session again, so the
+  // session names B first and SessionCacheGuard's reset empties `['me']` — `WriteGate` puts its
+  // placeholder in place of A's form in that very render, then `GET /me` answers as B and B's own
+  // form is drawn. Before this, A's text went with the reset. Now A's form, going, hears from the
+  // guard that the session names B, and keeps what A typed in this tab as A's draft for the hour, as
+  // when `['me']` turns first (17:21 답 3): B's form reads none of it, nothing is sent as B, and A,
+  // with the session back, takes it back with the restore notice — also when `GET /me` names A
+  // again before the session does, and the session's reset then takes away the form just drawn for
+  // A with that text in it (8-36). A link's leave keeps nothing, as ever (ADR-0073).
+
+  test('글쓰기에서 앞 계정이 쓰던 글은 세션이 다른 회원으로 바뀌면 빈 양식으로 다시 그려지고 아무것도 보내지 않으며, 앞 계정의 것으로 두었다가 세션이 돌아오면 되살리고, 링크로 떠나는 것은 그대로 묻고 아무것도 두지 않는다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const asked: string[] = [];
+    const answers: boolean[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void (answers.shift() === true ? dialog.accept() : dialog.dismiss());
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const draftKeys = async () => Object.keys(await draftsInTab(page)).sort();
+    const write = `/community/write?market=${market.id}`;
+    const { a, open, toB, toA, close } = await membersSwitchingSessions(browser, page);
+    try {
+      await open(write);
+      await expect(page.getByTestId('post-write-market-title')).toHaveText(market.title);
+      await expect(titleInput).toBeEditable();
+      await editorReady(editor);
+      const tag = freshTag();
+      const title = `앞 계정이 쓰던 제목 ${tag}`;
+      await titleInput.fill(title);
+      await editor.click();
+      await page.keyboard.type(`앞 계정이 쓰던 근거 ${tag}`);
+      const writes = postWritesOf(page);
+
+      // --- the session says B first: B's own form, empty and on, under the same market; A's kept
+      // as A's.
+      await toB();
+      await expect(page.getByTestId('post-write-market-title')).toHaveText(market.title);
+      await expect(titleInput).toBeEditable();
+      await expect(titleInput).toHaveValue('');
+      await expect(editor).not.toContainText(tag);
+      await expect(restored).toHaveCount(0);
+      await expect.poll(draftKeys).toEqual([`buddha.postDraft:new:${market.id}@${a.id}`]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- the session says A again: A's text taken back, said so; nothing of B's kept (B typed
+      // nothing).
+      await toA();
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(title);
+      await expect(editor).toContainText(`앞 계정이 쓰던 근거 ${tag}`);
+      await expect.poll(draftKeys).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- a link's leave, as ever: asked first, and once left nothing is kept — the screen opened
+      // again is empty.
+      const home = page.getByRole('heading', { level: 1, name: copy.appName }).getByRole('link');
+      answers.push(true);
+      await home.click();
+      await expect(page).toHaveURL('/');
+      expect(asked).toEqual([`confirm: ${copy.postLeaveConfirm}`]);
+      expect(await draftKeys()).toEqual([]);
+      await page.goto(write);
+      await expect(titleInput).toBeEditable();
+      await expect(titleInput).toHaveValue('');
+      await expect(restored).toHaveCount(0);
+      expect(writes).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('수정 화면에서 앞 계정이 고치던 것은 세션이 다른 회원으로 바뀌면 남의 글이라는 문장뿐이고 아무것도 보내지 않으며, 세션이 돌아오면 되살린다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const { a, open, toB, toA, close } = await membersSwitchingSessions(browser, page);
+    try {
+      const tag = freshTag();
+      const postId = await postThroughApi(page.request, market.id, `저장된 제목 ${tag}`, tag);
+      await open(`/community/posts/${postId}/edit`);
+      await expect(titleInput).toHaveValue(`저장된 제목 ${tag}`);
+      await editorReady(editor);
+      const typed = `앞 계정이 고치던 제목 ${tag}`;
+      await titleInput.fill(typed);
+      const writes = postWritesOf(page);
+
+      // --- the session says B first: not B's post — the sentence in the form's place.
+      await toB();
+      await expect(page.getByTestId('post-edit-not-yours')).toBeVisible();
+      await expect(titleInput).toHaveCount(0);
+      await expect(page.getByText(typed)).toHaveCount(0);
+      await expect
+        .poll(async () => Object.keys(await draftsInTab(page)))
+        .toEqual([`buddha.postDraft:edit:${postId}@${a.id}`]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+
+      // --- A again: taken back; the post as it was saved.
+      await toA();
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(typed);
+      await expect(editor).toContainText(tag);
+      await expect.poll(async () => Object.keys(await draftsInTab(page))).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('글쓰기에서 세션이 다른 회원으로 바뀐 뒤 앞 계정이 돌아올 때 `GET /me`가 세션보다 먼저 앞 계정을 말해도, 되살린 글은 세션의 되돌리기 뒤에도 양식에 남는다 (ADR-0092 8-36)', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const asked: string[] = [];
+    page.on('dialog', (dialog) => {
+      asked.push(`${dialog.type()}: ${dialog.message()}`);
+      void dialog.dismiss();
+    });
+    const titleInput = page.getByTestId('post-title-input');
+    const editor = page.getByTestId('post-editor-content');
+    const restored = page.getByTestId('post-draft-restored');
+    const draftKeys = async () => Object.keys(await draftsInTab(page)).sort();
+    const { a, open, toB, toAMeFirst, close } = await membersSwitchingSessions(browser, page);
+    try {
+      await open(`/community/write?market=${market.id}`);
+      await expect(titleInput).toBeEditable();
+      await editorReady(editor);
+      const tag = freshTag();
+      const title = `앞 계정이 쓰던 제목 ${tag}`;
+      await titleInput.fill(title);
+      await editor.click();
+      await page.keyboard.type(`앞 계정이 쓰던 근거 ${tag}`);
+      const writes = postWritesOf(page);
+
+      // --- the session says B first: A's text kept as A's.
+      await toB();
+      await expect(titleInput).toBeEditable();
+      await expect(titleInput).toHaveValue('');
+      await expect.poll(draftKeys).toEqual([`buddha.postDraft:new:${market.id}@${a.id}`]);
+
+      // --- A back, `GET /me` answering before the session: A's form, A's text taken back out of
+      // the tab — then the session says A, and its reset takes that form away and draws it again.
+      await toAMeFirst(async () => {
+        await expect(restored).toContainText(copy.postDraftRestored);
+        await expect(titleInput).toHaveValue(title);
+        await expect.poll(draftKeys).toEqual([]);
+      });
+      await expect(restored).toContainText(copy.postDraftRestored);
+      await expect(titleInput).toHaveValue(title);
+      await expect(editor).toContainText(`앞 계정이 쓰던 근거 ${tag}`);
+      await expect.poll(draftKeys).toEqual([]);
+      expect(writes).toEqual([]);
+      expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
   });
 });

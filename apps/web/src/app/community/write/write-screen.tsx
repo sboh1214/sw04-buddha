@@ -71,7 +71,14 @@ export function WriteScreen({ lookup }: { lookup: WriteMarketLookup }) {
               kinds={WRITE_PAGE_RESTRICTION_KINDS}
             />
             {view.kind === 'form' ? (
-              <WriteForm market={view.market} accountId={writer.accountId} onRepick={pick} />
+              // Drawn for the account on screen (ADR-0092, 오너 결정 2026-10-26 17:21 답 3): A's
+              // typing goes into A's kept draft once another account is drawn, never to B.
+              <WriteForm
+                key={writer.accountId}
+                market={view.market}
+                accountId={writer.accountId}
+                onRepick={pick}
+              />
             ) : view.kind === 'failed' ? (
               <Stack gap="3" align="flex-start" data-testid="post-write-market-failed">
                 <Alert.Root status="error" role="alert">
@@ -110,6 +117,19 @@ export function WriteScreen({ lookup }: { lookup: WriteMarketLookup }) {
  * `router.replace`), which re-renders the page with the new market while this component — and the
  * form and the editor under it, which hold the draft — stays mounted (nothing here is keyed by the
  * market). A link to the bare picker would have unmounted the form and lost the draft.
+ *
+ * Drawn for one account — keyed by `accountId`, with what it sends, what it was refused and the
+ * move to the post (ADR-0092, 오너 결정 2026-10-26 17:21 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»).
+ * `['me']` can turn from A to B in place, before the session does (ADR-0090 결정 4-2 — a
+ * window-focus refetch of `GET /me`, a realtime resnapshot: SessionCacheGuard resets nothing then),
+ * and a form that stayed would hand B what A typed, its button on, sent as B with B's cookie. B
+ * gets a form of B's own instead — empty, or B's own draft of the market — and A's form, going,
+ * keeps what A typed in this tab as A's draft of the market on screen for the hour, as the
+ * onboarding gate's move keeps it (`keepOnAccountTurn`, lib/post-drafts.ts — one item per screen
+ * and account, which B's form neither reads nor replaces): the screen opened again by A takes it
+ * back, says so and offers to discard it. A write A sent that lands after all clears it
+ * (`postDraftLanded`, A's only) and goes to no post on B's screen: its move was the form's, which
+ * is gone.
  */
 function WriteForm({
   market,
@@ -194,9 +214,11 @@ function WriteForm({
       </Box>
       <PostForm
         // The market on screen: a draft the onboarding gate keeps comes back on this market's
-        // write screen, the address the onboarding returns to.
+        // write screen, the address the onboarding returns to — and so does one kept as the
+        // account on screen turns to another in place (ADR-0092 답 3).
         draftKey={{ kind: 'new', marketId: market.id }}
         accountId={accountId}
+        keepOnAccountTurn
         submitLabel={copy.postWriteSubmit}
         pending={sent}
         saved={create.isSuccess}

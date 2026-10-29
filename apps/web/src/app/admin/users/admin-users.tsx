@@ -27,9 +27,12 @@ import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import { LEDGER_QUERY_KEY } from '@/hooks/use-wallet';
 import { nicknameShown } from '@/lib/account-closure';
 import { api, isApiError, unwrap, type AdminUser } from '@/lib/api';
@@ -154,48 +157,17 @@ function adjustFailureMessage(error: unknown): string {
  * decision 2026-10-23 (2차) 5: the closed account stays in the list, marked apart) — role, address,
  * the way to its moderation page, its balance and the adjustment, which a closed account never
  * takes, so its card says so instead of offering the form.
+ *
+ * The adjustment names the admin on screen (`useOperatorId`, ADR-0092 — Q-PG-8 ①, owner decision
+ * 2026-10-26 17:21 answer 4 «이 PR에서 더함»), so it waits for `GET /me`; the cookie of another
+ * account is refused (`copy.sessionChanged`) and the session asked again. The form is drawn for
+ * that admin (`AdjustForm`, keyed by it, its fields off until it is known): `['me']` turning from
+ * A to B in place drops what A typed (answer 1's way, as the coupon and package forms).
  */
 function UserCard({ user }: { user: AdminUser }) {
   // A closed account is the only one with no nickname (profiles_closed_check, migration 0043).
   const closed = user.nickname === null;
-  const queryClient = useQueryClient();
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors, isSubmitting },
-  } = useForm<AdjustValues>({
-    resolver: zodResolver(adjustSchema),
-    defaultValues: { amountCoin: '', memo: '' },
-  });
-
-  const adjust = useMutation({
-    mutationFn: async (values: AdjustValues) =>
-      unwrap(
-        await api.POST('/api/v1/admin/users/{id}/balance-adjust', {
-          params: { path: { id: user.id } },
-          body: { amountCoin: values.amountCoin, memo: values.memo },
-        }),
-      ).data,
-    onSuccess: async () => {
-      toaster.create({ type: 'success', title: copy.adminAdjustDone });
-      reset({ amountCoin: '', memo: '' });
-      // An admin may adjust their own balance, so the nav chip and the wallet ledger are
-      // refreshed alongside the list they are looking at.
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY }),
-        queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
-        queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
-      ]);
-    },
-    onError: (error) => {
-      toaster.create({ type: 'error', title: adjustFailureMessage(error) });
-    },
-  });
-
-  const submit = handleSubmit(async (values) => {
-    await adjust.mutateAsync(values).catch(() => undefined); // reported by onError
-  });
+  const operatorId = useOperatorId();
 
   return (
     <Card.Root data-testid={`admin-user-${user.id}`}>
@@ -236,42 +208,102 @@ function UserCard({ user }: { user: AdminUser }) {
               {copy.adminAdjustClosed}
             </Text>
           ) : (
-            <form onSubmit={(e) => void submit(e)} noValidate>
-              <Stack gap="3">
-                <Text fontSize="sm" fontWeight="medium">
-                  {copy.adminAdjust}
-                </Text>
-                <HStack gap="2" align="start" flexWrap="wrap">
-                  <Field.Root invalid={!!errors.amountCoin} required maxW="40">
-                    <Field.Label>{copy.adminAdjustAmount}</Field.Label>
-                    <Input
-                      inputMode="numeric"
-                      autoComplete="off"
-                      data-testid="adjust-amount"
-                      {...register('amountCoin')}
-                    />
-                    <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
-                  </Field.Root>
-                  <Field.Root invalid={!!errors.memo} required flex="1" minW="48">
-                    <Field.Label>{copy.adminAdjustMemo}</Field.Label>
-                    <Input autoComplete="off" data-testid="adjust-memo" {...register('memo')} />
-                    <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
-                  </Field.Root>
-                </HStack>
-                <Button
-                  type="submit"
-                  size="sm"
-                  alignSelf="flex-start"
-                  loading={isSubmitting}
-                  data-testid="adjust-submit"
-                >
-                  {copy.adminAdjustSubmit}
-                </Button>
-              </Stack>
-            </form>
+            <AdjustForm key={operatorId ?? ''} userId={user.id} />
           )}
         </Stack>
       </Card.Body>
     </Card.Root>
+  );
+}
+
+/**
+ * 잔고 조정 of one account, for the admin on screen: drawn again for each (keyed by it in UserCard),
+ * its two fields and 조정 off until that admin is known (`OperatorFieldset`).
+ */
+function AdjustForm({ userId }: { userId: string }) {
+  const queryClient = useQueryClient();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors, isSubmitting },
+  } = useForm<AdjustValues>({
+    resolver: zodResolver(adjustSchema),
+    defaultValues: { amountCoin: '', memo: '' },
+  });
+
+  const adjust = useMutation({
+    mutationFn: async ({ values, by }: { values: AdjustValues; by: string }) =>
+      unwrap(
+        await api.POST('/api/v1/admin/users/{id}/balance-adjust', {
+          params: { path: { id: userId } },
+          body: { amountCoin: values.amountCoin, memo: values.memo, expectedAccountId: by },
+        }),
+      ).data,
+    onSuccess: async () => {
+      toaster.create({ type: 'success', title: copy.adminAdjustDone });
+      reset({ amountCoin: '', memo: '' });
+      // An admin may adjust their own balance, so the nav chip and the wallet ledger are
+      // refreshed alongside the list they are looking at.
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ADMIN_USERS_KEY }),
+        queryClient.invalidateQueries({ queryKey: ME_QUERY_KEY }),
+        queryClient.invalidateQueries({ queryKey: LEDGER_QUERY_KEY }),
+      ]);
+    },
+    onError: (error) => {
+      // Another account's cookie: nothing was adjusted, and the session is asked again — its reset
+      // reads everything again, so nothing else is refreshed here.
+      toaster.create({
+        type: 'error',
+        title: sessionChanged(error) ? copy.sessionChanged : adjustFailureMessage(error),
+      });
+    },
+  });
+
+  const submit = handleSubmit(async (values) => {
+    if (operatorId === undefined) return;
+    await adjust.mutateAsync({ values, by: operatorId }).catch(() => undefined); // reported by onError
+  });
+
+  return (
+    <form onSubmit={(e) => void submit(e)} noValidate>
+      <OperatorFieldset disabled={operatorId === undefined}>
+        <Stack gap="3">
+          <Text fontSize="sm" fontWeight="medium">
+            {copy.adminAdjust}
+          </Text>
+          <HStack gap="2" align="start" flexWrap="wrap">
+            <Field.Root invalid={!!errors.amountCoin} required maxW="40">
+              <Field.Label>{copy.adminAdjustAmount}</Field.Label>
+              <Input
+                inputMode="numeric"
+                autoComplete="off"
+                data-testid="adjust-amount"
+                {...register('amountCoin')}
+              />
+              <Field.ErrorText>{errors.amountCoin?.message}</Field.ErrorText>
+            </Field.Root>
+            <Field.Root invalid={!!errors.memo} required flex="1" minW="48">
+              <Field.Label>{copy.adminAdjustMemo}</Field.Label>
+              <Input autoComplete="off" data-testid="adjust-memo" {...register('memo')} />
+              <Field.ErrorText>{errors.memo?.message}</Field.ErrorText>
+            </Field.Root>
+          </HStack>
+          <Button
+            type="submit"
+            size="sm"
+            alignSelf="flex-start"
+            loading={isSubmitting}
+            disabled={operatorId === undefined}
+            data-testid="adjust-submit"
+          >
+            {copy.adminAdjustSubmit}
+          </Button>
+        </Stack>
+      </OperatorFieldset>
+    </form>
   );
 }

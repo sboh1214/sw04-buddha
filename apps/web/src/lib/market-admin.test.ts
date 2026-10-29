@@ -489,6 +489,27 @@ describe('marketIdParam', () => {
 });
 
 describe('transitionErrorMessage', () => {
+  it('says the session changed when the cookie is another account’s (ADR-0092)', () => {
+    // Every market write names the admin on screen; nothing was done, and the screen's caller
+    // asks for the session again.
+    expect(
+      transitionErrorMessage(
+        apiError(403, 'FORBIDDEN', 'x', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBe(copy.sessionChanged);
+    // Not a field the form has: the toast, not a field error.
+    expect(
+      marketFormError(
+        apiError(403, 'FORBIDDEN', 'x', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toBeUndefined();
+    expect(transitionErrorMessage(apiError(403, 'FORBIDDEN'))).toBe(copy.errUnknown);
+  });
+
   it('names the specific refusals of open / close / void', () => {
     expect(transitionErrorMessage(apiError(422, 'RULES_REQUIRED'))).toBe(
       copy.errMarketRulesRequired,

@@ -34,6 +34,7 @@ import {
   useReleaseSettingChanges,
   useReleaseSettings,
 } from '@/hooks/use-admin-release-settings';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
 import { nicknameShown } from '@/lib/account-closure';
 import { type ReleaseSetting, type ReleaseSettingChange } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
@@ -101,7 +102,11 @@ function StatusLegend() {
 function SettingsList() {
   const settings = useReleaseSettings();
   const [undecidedOnly, setUndecidedOnly] = useState(false);
-  const [editing, setEditing] = useState<ReleaseSetting | null>(null);
+  // The item whose change dialog is open, held for the admin who opened it (`useHeldForOperator`,
+  // ADR-0091 결정 3): once `['me']` turns from A to B in place, before the session does (ADR-0090
+  // 결정 4-2), the dialog closes with the status picked and the reason typed for A, which would
+  // otherwise be saved as B (ADR-0092, owner decision 2026-10-26 17:21 answer 1).
+  const [editing, setEditing] = useHeldForOperator<ReleaseSetting>();
   const view =
     settings.data === undefined ? null : releaseSettingsView(settings.data, undecidedOnly);
 
@@ -160,9 +165,12 @@ function SettingsList() {
 
 /**
  * One item: its name and key, the status badge beside the name, what it controls, the value and
- * the unit as two labelled cells (never joined into one figure), and the last change.
+ * the unit as two labelled cells (never joined into one figure), and the last change. 변경 waits for
+ * the admin on screen (`GET /me`): its dialog is held for that admin, and nothing is held for
+ * nobody (`operatorHold`).
  */
 function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void }) {
+  const operatorId = useOperatorId();
   return (
     <Stack
       borderWidth="1px"
@@ -184,6 +192,7 @@ function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void
         <Button
           size="xs"
           variant="outline"
+          disabled={operatorId === undefined}
           onClick={onEdit}
           data-testid={`release-setting-edit-${item.key}`}
         >
@@ -220,10 +229,13 @@ function SettingRow({ item, onEdit }: { item: ReleaseSetting; onEdit: () => void
  * change is refused), with 바뀐 내용이 없습니다 beside it. Pinned while the request runs, as the
  * admin confirmation dialogs are: the admin must see how the change ended. A refused reason or
  * value is shown under its field and the dialog stays; any other answer closes it over a
- * refreshed list (`releaseSettingChangeRefusal`).
+ * refreshed list (`releaseSettingChangeRefusal`). The change names the admin on screen
+ * (`useOperatorId`, ADR-0092), so 저장 waits for `GET /me`; the cookie of another account is
+ * refused and closes the dialog with `copy.sessionChanged`.
  */
 function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => void }) {
   const change = useChangeReleaseSetting();
+  const operatorId = useOperatorId();
   const schema = useMemo(() => releaseSettingFormSchema(item.valueSchema), [item.valueSchema]);
   const input = releaseSettingValueInput(item.valueSchema);
   const {
@@ -243,8 +255,9 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
   const loading = change.isPending;
 
   const submit = handleSubmit((values) => {
+    if (operatorId === undefined) return;
     change.mutate(
-      { key: item.key, body: toReleaseSettingChangeBody(values, item.valueSchema) },
+      { key: item.key, body: toReleaseSettingChangeBody(values, item.valueSchema, operatorId) },
       {
         onSuccess: () => {
           toaster.create({ type: 'success', title: copy.adminReleaseSettingSaved });
@@ -417,7 +430,7 @@ function ChangeDialog({ item, onClose }: { item: ReleaseSetting; onClose: () => 
               <Button
                 size="sm"
                 loading={loading}
-                disabled={unchanged}
+                disabled={unchanged || operatorId === undefined}
                 aria-describedby={unchanged ? unchangedId : undefined}
                 onClick={() => void submit()}
                 data-testid="release-setting-submit"

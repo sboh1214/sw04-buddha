@@ -17,7 +17,13 @@ import {
 } from '@buddha/shared';
 import * as z from 'zod';
 import { copy } from '@/copy';
-import { type ApiError, isApiError, validationField, validationMessage } from './api';
+import {
+  type ApiError,
+  isApiError,
+  isForAnotherAccount,
+  validationField,
+  validationMessage,
+} from './api';
 import { formatKst } from './datetime';
 
 /**
@@ -474,9 +480,12 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
  * stale (a second 판정 of a market another admin has already judged lands here).
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
  * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
- * `marketFormError` first.
+ * `marketFormError` first. The cookie of another account (`isForAnotherAccount` — every market
+ * write names the admin on screen, ADR-0092) is `copy.sessionChanged`: nothing was done, and the
+ * caller asks for the session again (`useSessionChanged`).
  */
 export function transitionErrorMessage(error: unknown): string {
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (isApiError(error, 'RULES_REQUIRED')) return copy.errMarketRulesRequired;
   if (isApiError(error, 'MARKET_NOT_OPEN')) return copy.errMarketNotOpen;
   if (isApiError(error, 'NOT_FOUND')) return copy.adminMarketNotFound;

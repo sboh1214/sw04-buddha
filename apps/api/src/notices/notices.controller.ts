@@ -34,6 +34,7 @@ import {
   adminNoticeUpdateResultSchema,
   createNoticeBodySchema,
   cursorQuerySchema,
+  expectedAccountBodySchema,
   noticeRevisionIdParamSchema,
   noticeSchema,
   noticeSummarySchema,
@@ -47,15 +48,17 @@ import {
   type AdminNoticeSummary,
   type AdminNoticeUpdateResult,
   type CursorQuery,
+  type ExpectedAccountBody,
   type Notice,
-  type NoticeContent,
-  type NoticeEdit,
   type NoticeSummary,
+  type ParsedCreateNoticeBody,
+  type ParsedUpdateNoticeBody,
 } from '@buddha/shared';
 import { type FastifyReply, type FastifyRequest } from 'fastify';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { RawResponse } from '../common/decorators/raw-response.decorator.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
@@ -112,6 +115,11 @@ export class NoticesController {
  * Guards run in order, as on every admin route: SessionGuard (401, and 403 for a foreign Origin on
  * a mutation), AdminGuard (403 for a member), OnboardedGuard (409 for an admin that has not
  * finished the onboarding, ADR-0072).
+ *
+ * Every write — 쓰기, 수정, 고정, 고정 해제 — names the admin the screen shows (`expectedAccountId`,
+ * assertExpectedAccount, ADR-0092): a mismatch with the cookie is refused (403 FORBIDDEN naming the
+ * field) before an image is claimed, a notice locked or the pin limit counted, so a notice is never
+ * written, edited, pinned or unpinned as an admin the user is not looking at.
  *
  * `adminNoticeListQuerySchema` carries no `.meta({ id })`, so swagger expands it into one
  * parameter per field by itself (markets.controller.ts says why no `@ApiQuery` sits beside it).
@@ -253,12 +261,14 @@ export class AdminNoticesController {
   })
   @ApiData(adminNoticeSchema, 201)
   // VALIDATION_ERROR names `title` or `body` (the body schema's issues, and an image the admin
-  // cannot use — one issue per image, as a post's).
+  // cannot use — one issue per image, as a post's). FORBIDDEN names `expectedAccountId` for
+  // another account's (as on every write here).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'VALIDATION_ERROR')
   create(
     @CurrentUser() admin: SessionUser,
-    @Body({ schema: createNoticeBodySchema }) body: NoticeContent,
+    @Body({ schema: createNoticeBodySchema }) body: ParsedCreateNoticeBody,
   ): Promise<AdminNotice> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.notices.create(admin.id, { title: body.title, body: body.body });
   }
 
@@ -283,8 +293,9 @@ export class AdminNoticesController {
   update(
     @CurrentUser() admin: SessionUser,
     @Param('noticeId', { schema: uuidParamSchema }) noticeId: string,
-    @Body({ schema: updateNoticeBodySchema }) body: NoticeEdit,
+    @Body({ schema: updateNoticeBodySchema }) body: ParsedUpdateNoticeBody,
   ): Promise<AdminNoticeUpdateResult> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.notices.update(admin.id, noticeId, {
       title: body.title,
       body: body.body,
@@ -313,7 +324,9 @@ export class AdminNoticesController {
   pin(
     @CurrentUser() admin: SessionUser,
     @Param('noticeId', { schema: uuidParamSchema }) noticeId: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminNotice> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.notices.pin(admin.id, noticeId);
   }
 
@@ -331,7 +344,9 @@ export class AdminNoticesController {
   unpin(
     @CurrentUser() admin: SessionUser,
     @Param('noticeId', { schema: uuidParamSchema }) noticeId: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminNotice> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.notices.unpin(admin.id, noticeId);
   }
 }

@@ -447,13 +447,20 @@ export const rejectProposalFormSchema = z
     }
   });
 
-/** Only for values `rejectProposalFormSchema` accepted. */
-export function toRejectProposalBody(values: RejectProposalFormValues): RejectProposalBody {
+/**
+ * Only for values `rejectProposalFormSchema` accepted — and the admin on screen, who rejects
+ * (`useOperatorId`, ADR-0092: every operator write on a proposal names it).
+ */
+export function toRejectProposalBody(
+  values: RejectProposalFormValues,
+  operatorId: string,
+): RejectProposalBody {
   const reason = values.reason as ProposalRejectionReason;
   return {
     reason,
     explanation: values.explanation.trim(),
     ...(reason === 'duplicate' ? { duplicateMarketId: values.duplicateMarketId } : {}),
+    expectedAccountId: operatorId,
   };
 }
 
@@ -683,20 +690,28 @@ function toProposalAdoptionMarket(
   };
 }
 
-/** Only for values `adoptProposalFormSchema` accepted. A blank memo is none. */
-export function toAdoptProposalBody(values: AdoptProposalFormValues): AdoptProposalBody {
+/**
+ * Only for values `adoptProposalFormSchema` accepted. A blank memo is none. And the admin on
+ * screen, who adopts (ADR-0092).
+ */
+export function toAdoptProposalBody(
+  values: AdoptProposalFormValues,
+  operatorId: string,
+): AdoptProposalBody {
   const { market } = values;
   return {
     memo: orNull(values.memo),
     market: market === 'none' ? null : toProposalAdoptionMarket({ ...values, market }),
+    expectedAccountId: operatorId,
   };
 }
 
-/** Only for values `linkProposalMarketFormSchema` accepted. */
+/** Only for values `linkProposalMarketFormSchema` accepted, and the admin on screen (ADR-0092). */
 export function toLinkProposalMarketBody(
   values: LinkProposalMarketFormValues,
+  operatorId: string,
 ): LinkProposalMarketBody {
-  return { market: toProposalAdoptionMarket(values) };
+  return { market: toProposalAdoptionMarket(values), expectedAccountId: operatorId };
 }
 
 /** The internal memo's form (never shown to the proposer). */
@@ -725,9 +740,13 @@ export interface AdminProposalFailure {
  * a market linked meanwhile (naming `market`: another operator linked one first — the link is once,
  * owner decision 2026-10-19), the draft's category (none to stand in — `required` — or retired,
  * `inactive` — or unknown, a 404) or close time (past), a market that is not there (a 404 naming
- * the field that carried it), and the proposal itself gone (404).
+ * the field that carried it), and the proposal itself gone (404). The cookie of another account
+ * (`isForAnotherAccount` — every operator write names the admin on screen, ADR-0092) is
+ * `copy.sessionChanged` with nothing read again: the caller asks for the session, whose reset
+ * reads everything.
  */
 export function adminProposalFailure(error: unknown): AdminProposalFailure {
+  if (isForAnotherAccount(error)) return { message: copy.sessionChanged, refresh: false };
   const path = issuePath(error);
   if (isApiError(error, 'VALIDATION_ERROR')) {
     if (path === 'status') return { message: copy.errProposalStatus, refresh: true };

@@ -215,6 +215,13 @@ describe('the refusals in words', () => {
     );
     expect(themeWriteErrorMessage(new Error('x'))).toBe(copy.errUnknown);
   });
+
+  it('says the session changed when the cookie is another account’s (ADR-0092)', () => {
+    const another = refused('expectedAccountId', 'session belongs to another account', 'FORBIDDEN');
+    expect(themeWriteErrorMessage(another)).toBe(copy.sessionChanged);
+    // Not a field the form has: the toast, not a field error.
+    expect(themeFormError(another)).toBeUndefined();
+  });
 });
 
 describe('notices and the picker', () => {

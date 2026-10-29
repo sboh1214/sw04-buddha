@@ -26,6 +26,7 @@ import { type ReactNode, useMemo, useState } from 'react';
 import { Controller, useForm } from 'react-hook-form';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { nicknameShown } from '@/lib/account-closure';
@@ -40,12 +41,15 @@ import {
   useApplyMarket,
   useMarketFills,
 } from '@/hooks/use-admin-markets';
+import { useHeldForOperator, useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
 import {
   type AdminMarket,
   type AdminRelatedMarket,
   type Category,
   type MarketSummary,
   type UpdateMarketBody,
+  type UpdateMarketFields,
   api,
   isApiError,
   unwrap,
@@ -268,21 +272,36 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
  * cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives in its own
  * component, mounted only while its dialog is open, so every opening starts from an empty form.
  * A judged market offers none of these: the 판정 is final (#26 decides what may undo one).
+ *
+ * Each names the admin on screen (`useOperatorId`, ADR-0092), so 열기, the buttons that open the
+ * two dialogs and their confirmations wait for `GET /me`; the cookie of another account is refused
+ * (`copy.sessionChanged`), the dialog closes and the session is asked again (`useSessionChanged`).
+ * The open dialog is held for the admin who opened it (`useHeldForOperator`, ADR-0091 결정 3): once
+ * `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2), it closes with
+ * the result picked and the note typed for A, which would otherwise be judged as B (ADR-0092,
+ * owner decision 2026-10-26 17:21 answer 1).
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
-  const [confirm, setConfirm] = useState<'close' | 'resolve' | null>(null);
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
+  const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();
   const closeDialog = () => {
     setConfirm(null);
   };
 
-  const onError = (error: unknown) =>
+  const onError = (error: unknown) => {
+    if (sessionChanged(error)) setConfirm(null);
     toaster.create({ type: 'error', title: transitionErrorMessage(error) });
+  };
 
   const open = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (expectedAccountId: string) =>
       unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/open', { params: { path: { id: market.id } } }),
+        await api.POST('/api/v1/admin/markets/{id}/open', {
+          params: { path: { id: market.id } },
+          body: { expectedAccountId },
+        }),
       ).data,
     // The answer is the market as the transition committed it (the same shape GET returns):
     // it goes on the screen now, so a refetch that fails cannot leave the old status under a
@@ -295,9 +314,12 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
   });
 
   const close = useMutation({
-    mutationFn: async () =>
+    mutationFn: async (expectedAccountId: string) =>
       unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/close', { params: { path: { id: market.id } } }),
+        await api.POST('/api/v1/admin/markets/{id}/close', {
+          params: { path: { id: market.id } },
+          body: { expectedAccountId },
+        }),
       ).data,
     onSuccess: async (closed) => {
       toaster.create({ type: 'success', title: copy.adminMarketClosed });
@@ -313,7 +335,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         <Button
           size="sm"
           loading={open.isPending}
-          onClick={() => open.mutate()}
+          disabled={operatorId === undefined}
+          onClick={() => {
+            if (operatorId !== undefined) open.mutate(operatorId);
+          }}
           data-testid="market-open"
         >
           {copy.adminMarketOpen}
@@ -323,6 +348,7 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         <Button
           size="sm"
           variant="outline"
+          disabled={operatorId === undefined}
           onClick={() => setConfirm('close')}
           data-testid="market-close"
         >
@@ -330,7 +356,12 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         </Button>
       )}
       {canResolve(market.status) && (
-        <Button size="sm" onClick={() => setConfirm('resolve')} data-testid="market-resolve">
+        <Button
+          size="sm"
+          disabled={operatorId === undefined}
+          onClick={() => setConfirm('resolve')}
+          data-testid="market-resolve"
+        >
           {copy.adminMarketResolve}
         </Button>
       )}
@@ -344,7 +375,10 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
         title={copy.adminMarketCloseTitle}
         confirmLabel={copy.adminMarketClose}
         loading={close.isPending}
-        onConfirm={() => close.mutate()}
+        confirmDisabled={operatorId === undefined}
+        onConfirm={() => {
+          if (operatorId !== undefined) close.mutate(operatorId);
+        }}
       >
         <Text>{copy.adminMarketCloseBody}</Text>
       </ConfirmDialog>
@@ -362,6 +396,8 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
  */
 function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
   const apply = useApplyMarket(market.id);
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const {
     control,
     register,
@@ -373,11 +409,11 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
   });
 
   const resolve = useMutation({
-    mutationFn: async (values: ResolveMarketFormOutput) =>
+    mutationFn: async ({ values, by }: { values: ResolveMarketFormOutput; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/resolve', {
           params: { path: { id: market.id } },
-          body: toResolveMarketBody(values),
+          body: toResolveMarketBody(values, by),
         }),
       ).data,
     onSuccess: async (resolved) => {
@@ -385,10 +421,16 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
       onClose();
       await apply(resolved);
     },
-    onError: (error) => toaster.create({ type: 'error', title: transitionErrorMessage(error) }),
+    onError: (error) => {
+      // Another account's cookie judged nothing: the dialog closes with the toast (ADR-0092).
+      if (sessionChanged(error)) onClose();
+      toaster.create({ type: 'error', title: transitionErrorMessage(error) });
+    },
   });
 
-  const submit = handleSubmit((values) => resolve.mutate(values));
+  const submit = handleSubmit((values) => {
+    if (operatorId !== undefined) resolve.mutate({ values, by: operatorId });
+  });
 
   return (
     <ConfirmDialog
@@ -398,6 +440,7 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
       title={copy.adminMarketResolveTitle}
       confirmLabel={copy.adminMarketResolve}
       loading={resolve.isPending}
+      confirmDisabled={operatorId === undefined}
       onConfirm={() => void submit()}
     >
       <Stack gap="3">
@@ -476,6 +519,9 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
  */
 function EditMarketCard({ market }: { market: AdminMarket }) {
   const categories = useCategories();
+  // The form is drawn for the admin on screen (ADR-0092 answer 1, `OperatorFieldset`): `['me']`
+  // turning from A to B in place drops what A typed, and the open market's confirmation with it.
+  const operatorId = useOperatorId();
   const editable = isEditable(market.status);
 
   return (
@@ -503,7 +549,7 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
             </Alert.Content>
           </Alert.Root>
         ) : (
-          <EditMarketForm market={market} categories={categories.data} />
+          <EditMarketForm key={operatorId ?? ''} market={market} categories={categories.data} />
         )}
       </Card.Body>
     </Card.Root>
@@ -512,6 +558,9 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
 
 function EditMarketForm({ market, categories }: { market: AdminMarket; categories: Category[] }) {
   const apply = useApplyMarket(market.id);
+  // The admin on screen, whom a save names (ADR-0092): 저장 waits for `GET /me`.
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
   const rulesRequired = market.status === 'open';
@@ -519,7 +568,9 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     () => marketFormSchema({ original, rulesRequired }),
     [original, rulesRequired],
   );
-  const [pending, setPending] = useState<UpdateMarketBody | null>(null);
+  // The open market's confirmation goes with the form, which EditMarketCard draws again for each
+  // admin on screen (`key`): a confirmation A opened never names B (ADR-0092 answer 1).
+  const [pending, setPending] = useState<UpdateMarketFields | null>(null);
 
   // `values` follows the server: react-hook-form deep-compares it with what it last applied,
   // so a refetch that moved only trade stats or updatedAt changes nothing, and
@@ -558,6 +609,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     },
     onError: (error) => {
       setPending(null);
+      sessionChanged(error);
       const fieldError = marketFormError(error);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
@@ -577,32 +629,35 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       setPending(body);
       return;
     }
-    await update.mutateAsync(body).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await update.mutateAsync({ ...body, expectedAccountId: operatorId }).catch(() => undefined); // reported by onError
   });
 
   return (
     <>
       <form onSubmit={(e) => void submit(e)} noValidate>
-        <Stack gap="3">
-          <MarketFormFields
-            form={form}
-            categories={categories}
-            disabled={!editable}
-            // The row itself, so the 미리보기 of a market past draft shows the price and volume it
-            // TRADES at rather than an untraded card.
-            base={market}
-          />
-          <Button
-            type="submit"
-            size="sm"
-            alignSelf="flex-start"
-            loading={isSubmitting || update.isPending}
-            disabled={!editable || !isDirty}
-            data-testid="market-save"
-          >
-            {copy.save}
-          </Button>
-        </Stack>
+        <OperatorFieldset disabled={operatorId === undefined}>
+          <Stack gap="3">
+            <MarketFormFields
+              form={form}
+              categories={categories}
+              disabled={!editable}
+              // The row itself, so the 미리보기 of a market past draft shows the price and volume it
+              // TRADES at rather than an untraded card.
+              base={market}
+            />
+            <Button
+              type="submit"
+              size="sm"
+              alignSelf="flex-start"
+              loading={isSubmitting || update.isPending}
+              disabled={!editable || !isDirty || operatorId === undefined}
+              data-testid="market-save"
+            >
+              {copy.save}
+            </Button>
+          </Stack>
+        </OperatorFieldset>
       </form>
 
       <ConfirmDialog
@@ -612,8 +667,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
         title={copy.adminMarketEditOpenTitle}
         confirmLabel={copy.save}
         loading={update.isPending}
+        confirmDisabled={operatorId === undefined}
         onConfirm={() => {
-          if (pending) update.mutate(pending);
+          if (pending && operatorId !== undefined) {
+            update.mutate({ ...pending, expectedAccountId: operatorId });
+          }
         }}
       >
         <Text>{copy.adminMarketEditOpenBody}</Text>
@@ -721,12 +779,19 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
  * keeps them under a notice with 다시 시도, instead of passing for current — an empty list that
  * could not be re-read after a link made from the other market's page would otherwise go on
  * saying 연결된 관련 시장이 없습니다 (review on #65).
+ *
+ * The unlink's confirmation is held for the admin who opened it (`useHeldForOperator`): it closes
+ * once `['me']` turns from A to B in place (ADR-0092 answer 1). The search is not: it reads the
+ * same markets for every admin and sends nothing as one — a 연결 is its own press, on B's screen.
  */
 function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const queryClient = useQueryClient();
+  // The admin on screen, whom a link and an unlink name (ADR-0092): both wait for `GET /me`.
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
   const links = useAdminRelatedMarkets(market.id);
   const linkedIds = useMemo(() => new Set((links.data ?? []).map((row) => row.id)), [links.data]);
-  const [unlinking, setUnlinking] = useState<AdminRelatedMarket | null>(null);
+  const [unlinking, setUnlinking] = useHeldForOperator<AdminRelatedMarket>();
   const [input, setInput] = useState('');
   const [term, setTerm] = useState<string | undefined>(undefined);
   const search = useAdminRelatedSearch(term);
@@ -735,18 +800,20 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   const linksSection = listSection(links, linkRows.length);
   const searchSection = relatedSearchSection(search, results.length);
 
-  const onError = (error: unknown) =>
+  const onError = (error: unknown) => {
+    if (sessionChanged(error)) setUnlinking(null);
     toaster.create({ type: 'error', title: relatedLinkErrorMessage(error) });
+  };
 
   const link = useMutation({
-    mutationFn: async (relatedId: string) =>
+    mutationFn: async ({ relatedId, by }: { relatedId: string; by: string }) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/related', {
           params: { path: { id: market.id } },
-          body: { marketId: relatedId },
+          body: { marketId: relatedId, expectedAccountId: by },
         }),
       ).data,
-    onSuccess: async (fresh, relatedId) => {
+    onSuccess: async (fresh, { relatedId }) => {
       toaster.create({ type: 'success', title: copy.adminRelatedLinked });
       await applyRelatedMarkets(queryClient, market.id, relatedId, fresh);
     },
@@ -754,13 +821,17 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
   });
 
   const unlink = useMutation({
-    mutationFn: async (relatedId: string) =>
+    mutationFn: async ({ relatedId, by }: { relatedId: string; by: string }) =>
       unwrap(
         await api.DELETE('/api/v1/admin/markets/{id}/related/{relatedMarketId}', {
-          params: { path: { id: market.id, relatedMarketId: relatedId } },
+          params: {
+            path: { id: market.id, relatedMarketId: relatedId },
+            // A DELETE has no body: the admin on screen rides in the query.
+            query: { expectedAccountId: by },
+          },
         }),
       ).data,
-    onSuccess: async (fresh, relatedId) => {
+    onSuccess: async (fresh, { relatedId }) => {
       toaster.create({ type: 'success', title: copy.adminRelatedUnlinked });
       setUnlinking(null);
       await applyRelatedMarkets(queryClient, market.id, relatedId, fresh);
@@ -825,6 +896,7 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                     <Button
                       size="sm"
                       variant="outline"
+                      disabled={operatorId === undefined}
                       onClick={() => setUnlinking(row)}
                       data-testid={`admin-related-unlink-${row.id}`}
                     >
@@ -909,9 +981,13 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
                         {state === 'linkable' ? (
                           <Button
                             size="sm"
-                            loading={link.isPending && link.variables === row.id}
-                            disabled={link.isPending}
-                            onClick={() => link.mutate(row.id)}
+                            loading={link.isPending && link.variables?.relatedId === row.id}
+                            disabled={link.isPending || operatorId === undefined}
+                            onClick={() => {
+                              if (operatorId !== undefined) {
+                                link.mutate({ relatedId: row.id, by: operatorId });
+                              }
+                            }}
                             data-testid={`admin-related-link-${row.id}`}
                           >
                             {copy.adminRelatedLink}
@@ -958,8 +1034,11 @@ function RelatedMarketsPanel({ market }: { market: AdminMarket }) {
           title={copy.adminRelatedUnlinkTitle}
           confirmLabel={copy.adminRelatedUnlink}
           loading={unlink.isPending}
+          confirmDisabled={operatorId === undefined}
           onConfirm={() => {
-            if (unlinking) unlink.mutate(unlinking.id);
+            if (unlinking && operatorId !== undefined) {
+              unlink.mutate({ relatedId: unlinking.id, by: operatorId });
+            }
           }}
         >
           <Stack gap="2">

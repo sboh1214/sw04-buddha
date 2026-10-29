@@ -13,8 +13,10 @@ import {
   goneBoxReason,
 } from '@/lib/comments';
 import {
+  type AwaitingText,
   type GoingBoxWrite,
   heldTextsAfter,
+  heldTextsAwaitingOf,
   heldTextsOf,
   initialHeldTexts,
   pageMayGo,
@@ -41,6 +43,12 @@ export function useHeldCommentTexts(
   view: { postState: CommentsPostState; threads: readonly CommentThread[] },
 ): {
   held: readonly HeldText[];
+  /**
+   * The texts on their way to be held (`heldTextsAwaitingOf`): a box gone with its write in flight,
+   * its refusal not heard yet — for the section to keep as the writer's drafts should the account on
+   * screen turn to another before it is (ADR-0092 8-26).
+   */
+  awaiting: readonly AwaitingText[];
   pageMayGo: boolean;
   going: CommentBoxGoing;
   hold: (accountId: string, texts: readonly Omit<HeldText, 'focus' | 'shown'>[]) => void;
@@ -95,6 +103,7 @@ export function useHeldCommentTexts(
   }, []);
 
   const held = useMemo(() => heldTextsOf(state), [state]);
+  const awaiting = useMemo(() => heldTextsAwaitingOf(state), [state]);
   // Every text this commit drew for the first time is drawn now: a later mount of it — its place
   // moved, under its comment or at its thread's end — is not new (`HeldCommentText`). From an
   // effect of the section, which React runs after the commit that mounted them all: each held text
@@ -107,7 +116,7 @@ export function useHeldCommentTexts(
     const fresh = held.filter((text) => !text.shown).map((text) => text.id);
     if (fresh.length > 0) dispatch({ type: 'shown', ids: fresh });
   }, [held]);
-  return { held, pageMayGo: pageMayGo(state), ...actions };
+  return { held, awaiting, pageMayGo: pageMayGo(state), ...actions };
 }
 
 /**

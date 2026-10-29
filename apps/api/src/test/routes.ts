@@ -186,6 +186,22 @@ export function queryKeysOf(route: DiscoveredRoute): string[] {
   return [...new Set(keys)].sort();
 }
 
+/**
+ * The body keys a route reads: the keys of its `@Body({ schema })` object (a refined object's
+ * too — zod 4 keeps its shape), `*` when a `@Body()` takes the body with no object schema; none
+ * when it takes no body.
+ */
+export function bodyKeysOf(route: DiscoveredRoute): string[] {
+  const args = (Reflect.getMetadata(ROUTE_ARGS_METADATA, route.controller, route.name) ??
+    {}) as Record<string, QueryArg>;
+  const keys = Object.entries(args)
+    .filter(([key]) => key.split(':')[0] === String(RouteParamtypes.BODY))
+    .flatMap(([, arg]) =>
+      typeof arg.data === 'string' ? [arg.data] : (schemaKeys(arg.schema) ?? ['*']),
+    );
+  return [...new Set(keys)].sort();
+}
+
 export interface DiscoveredGateway {
   /** The Socket.IO namespace it serves, as written: `/ws`, or `/` when none is named. */
   namespace: string;

@@ -2219,7 +2219,7 @@ describe('the first password’s account (ADR-0091)', () => {
     expect(page).not.toMatch(/setPassword\.ready/);
     const card = source('../app/my/settings/password-form.tsx');
     expect(card).toContain('<SetPasswordFields key={me.id} accountId={me.id} />');
-    expect(card).toContain('<ChangePasswordFields key={me.id} />');
+    expect(card).toContain('<ChangePasswordFields key={me.id} accountId={me.id} />');
     expect(card).toContain('expectedAccountId: accountId }');
     expect(card).not.toMatch(/setPassword\.ready/);
   });

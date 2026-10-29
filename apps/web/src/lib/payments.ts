@@ -2,7 +2,14 @@ import { PAYMENT_REFUND_WINDOW_DAYS, REFUND_REASON_MAX_LENGTH } from '@buddha/sh
 import type { InfiniteData } from '@tanstack/react-query';
 import * as z from 'zod';
 import { copy } from '@/copy';
-import { type AdminPayment, type ApiError, type Payment, isApiError, validationField } from './api';
+import {
+  type AdminPayment,
+  type ApiError,
+  type Payment,
+  isApiError,
+  isForAnotherAccount,
+  validationField,
+} from './api';
 import { PAYMENT_STATUS_LABEL, PAYMENT_STATUS_PALETTE } from './market-admin';
 
 /**
@@ -280,8 +287,12 @@ export interface RefundErrorView {
  * - PAYMENT_GATEWAY_ERROR: no answer; the payment stays 환불 처리 중 for a retry.
  * - DUPLICATE_REQUEST: an earlier attempt on this payment is still waiting for the PG.
  * - NOT_FOUND: the route is closed (isUnavailable).
+ * - FORBIDDEN naming `expectedAccountId` (`isForAnotherAccount`): the refund named the admin on
+ *   screen and the cookie is another account's (ADR-0092, Q-PG-8 ①) — nothing was taken back or
+ *   cancelled, and the session is asked again (`useRefundPayment`): `copy.sessionChanged`.
  */
 export function refundErrorView(error: unknown): RefundErrorView {
+  if (isForAnotherAccount(error)) return { title: copy.sessionChanged };
   if (isApiError(error, 'INSUFFICIENT_BALANCE')) return { title: copy.errRefundCoinUsed };
   if (isApiError(error, 'REFUND_NOT_ALLOWED')) {
     const reason = detailMessage(error);
@@ -312,7 +323,9 @@ export function refundErrorView(error: unknown): RefundErrorView {
  * about the payment as it now is — the list is refreshed and shows the row's new state and
  * button — except the reason being refused, which the admin fixes in the dialog. A request
  * that never came back decided nothing, so the dialog stays for a retry; the API's lease and
- * status checks make that retry safe.
+ * status checks make that retry safe. The cookie of another account closes it too, as every
+ * admin confirmation that refusal reaches (ADR-0092): the session asked again puts the admin
+ * really signed in on screen.
  */
 export function refundKeepsDialog(error: unknown): boolean {
   if (!isApiError(error)) return true;

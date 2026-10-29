@@ -43,12 +43,14 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  const issue = (payload: Record<string, unknown>, cookie = admin.cookie) =>
+  // An issue names the admin on screen (ADR-0092): `who`'s own account unless the payload names
+  // another.
+  const issue = (payload: Record<string, unknown>, who: TestUser = admin) =>
     t.app.inject({
       method: 'POST',
       url: '/api/v1/admin/coupons',
-      headers: { ...jsonHeaders, cookie },
-      payload,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
     });
 
   /** Redeems `code` as `as` — the cookie and the account the wallet screen shows. */
@@ -175,7 +177,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/coupons/${disabled.json<{ data: Coupon }>().data.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { isActive: false },
+      payload: { expectedAccountId: admin.id, isActive: false },
     });
     expect((await redeem('DISABLED', other)).statusCode).toBe(400);
 
@@ -196,7 +198,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
         method: 'PATCH',
         url: `/api/v1/admin/coupons/${coupon.id}`,
         headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload,
+        payload: { expectedAccountId: admin.id, ...payload },
       });
     // Two redeemed: a cap of 1 would read "2 / 1". Down to the count, or unlimited, is fine.
     const below = await patch({ maxRedemptions: 1 });
@@ -258,7 +260,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
   });
 
   it('is issued by admins only, and redemption needs a session', async () => {
-    const asMember = await issue({ amountCoin: '1000' }, member.cookie);
+    const asMember = await issue({ amountCoin: '1000' }, member);
     expect(asMember.statusCode).toBe(403);
 
     const anonymous = await t.app.inject({
@@ -275,7 +277,12 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       method: 'POST',
       url: '/api/v1/admin/coupons',
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { code: 'AUDIT1', amountCoin: '5000', maxRedemptions: 3 },
+      payload: {
+        expectedAccountId: admin.id,
+        code: 'AUDIT1',
+        amountCoin: '5000',
+        maxRedemptions: 3,
+      },
     });
     expect(created.statusCode).toBe(201);
     const coupon = created.json<{ data: Coupon }>().data;
@@ -284,7 +291,7 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       method: 'PATCH',
       url: `/api/v1/admin/coupons/${coupon.id}`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { isActive: false },
+      payload: { expectedAccountId: admin.id, isActive: false },
     });
     expect(patched.statusCode).toBe(200);
 
@@ -300,6 +307,59 @@ describe.skipIf(!hasTestInfra)('coupons (integration)', () => {
       before: { isActive: true },
       after: { isActive: false },
     });
+  });
+
+  it('refuses an issue or an edit that names another admin than the cookie’s, or none, before anything is read (ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    const coupon = (await issue({ code: 'SHOWN', amountCoin: '1000' })).json<{ data: Coupon }>()
+      .data;
+    const before = {
+      coupons: await t.db.select().from(schema.coupons),
+      actions: await t.db.select().from(schema.adminActions),
+    };
+    const edit = (payload: Record<string, unknown>, who: TestUser) =>
+      t.app.inject({
+        method: 'PATCH',
+        url: `/api/v1/admin/coupons/${coupon.id}`,
+        headers: { ...jsonHeaders, cookie: who.cookie },
+        payload,
+      });
+    type Refusal = { error: { code: string; details?: { path: (string | number)[] }[] } };
+    // The screen still shows `admin` while the tab's cookie is `other`'s.
+    for (const res of [
+      await issue({ code: 'OTHER', amountCoin: '1000', expectedAccountId: admin.id }, other),
+      await edit({ isActive: false, expectedAccountId: admin.id }, other),
+    ]) {
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json<Refusal>().error.code).toBe('FORBIDDEN');
+      expect(res.json<Refusal>().error.details?.[0]?.path).toEqual(['expectedAccountId']);
+    }
+    // No account at all: a validation error naming the field.
+    for (const res of [
+      await issue({ code: 'UNNAMED', amountCoin: '1000', expectedAccountId: undefined }),
+      await edit({ isActive: false }, admin),
+    ]) {
+      expect(res.statusCode, res.body).toBe(400);
+      expect(res.json<Refusal>().error.details?.map((detail) => detail.path)).toEqual([
+        ['expectedAccountId'],
+      ]);
+    }
+    // An edit of the account alone names no field.
+    expect((await edit({ expectedAccountId: admin.id }, admin)).statusCode).toBe(400);
+    expect({
+      coupons: await t.db.select().from(schema.coupons),
+      actions: await t.db.select().from(schema.adminActions),
+    }).toEqual(before);
+    // The cookie's own account is taken.
+    expect((await edit({ isActive: false, expectedAccountId: other.id }, other)).statusCode).toBe(
+      200,
+    );
   });
 
   it('lists coupons for the admin, newest first', async () => {

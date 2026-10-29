@@ -26,6 +26,7 @@ import {
   auditFailureSchema,
   balanceAdjustBodySchema,
   cursorQuerySchema,
+  expectedAccountQuerySchema,
   refundPaymentBodySchema,
   uuidParamSchema,
   type AdminBalanceAdjustResult,
@@ -39,6 +40,7 @@ import {
   type CreateChargePackageBody,
   type CreateCouponBody,
   type CursorQuery,
+  type ExpectedAccountQuery,
   type RefundPaymentBody,
   type UpdateChargePackageBody,
   type UpdateCouponBody,
@@ -46,6 +48,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -63,6 +66,13 @@ import { PaymentRefundService } from './payment-refund.service.js';
  * reads the role (401 without a session, 403 for a non-admin), and OnboardedGuard then refuses an
  * admin that has not finished the onboarding (409 ONBOARDING_REQUIRED, 오너 결정 2026-10-19,
  * ADR-0072) — after the role, so a member hears 403 whatever its onboarding.
+ *
+ * Every write here names the admin the screen shows (`expectedAccountId` — in the body, or the
+ * query of a package's removal, whose DELETE has no body; assertExpectedAccount, ADR-0092): a
+ * mismatch with the cookie is refused (403 FORBIDDEN naming the field) before anything is read or
+ * written. The balance adjustment and the refund too, since the owner closed Q-PG-8 ① («이 PR에서
+ * 더함», ADR-0092) — a write from a tab whose cookie turned to another admin would otherwise be
+ * audited as that admin.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -96,7 +106,9 @@ export class AdminController {
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createChargePackageBodySchema }) body: CreateChargePackageBody,
   ): Promise<ChargePackage> {
-    return this.packages.create(admin.id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.packages.create(admin.id, fields);
   }
 
   @Patch('charge-packages/:id')
@@ -111,7 +123,9 @@ export class AdminController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: updateChargePackageBodySchema }) body: UpdateChargePackageBody,
   ): Promise<ChargePackage> {
-    return this.packages.update(admin.id, id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.packages.update(admin.id, id, fields);
   }
 
   @Delete('charge-packages/:id')
@@ -124,7 +138,9 @@ export class AdminController {
   async deleteChargePackage(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
+    @Query({ schema: expectedAccountQuerySchema }) query: ExpectedAccountQuery,
   ): Promise<void> {
+    assertExpectedAccount(admin.id, query.expectedAccountId);
     await this.packages.remove(admin.id, id);
   }
 
@@ -153,7 +169,9 @@ export class AdminController {
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createCouponBodySchema }) body: CreateCouponBody,
   ): Promise<Coupon> {
-    return this.coupons.create(admin.id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.coupons.create(admin.id, fields);
   }
 
   @Patch('coupons/:id')
@@ -168,7 +186,9 @@ export class AdminController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: updateCouponBodySchema }) body: UpdateCouponBody,
   ): Promise<Coupon> {
-    return this.coupons.update(admin.id, id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.coupons.update(admin.id, id, fields);
   }
 
   @Get('users')
@@ -222,7 +242,9 @@ export class AdminController {
     @Param('id') userId: string,
     @Body({ schema: balanceAdjustBodySchema }) body: BalanceAdjustBody,
   ): Promise<AdminBalanceAdjustResult> {
-    return this.admin.adjustBalance(admin.id, userId, body.amountCoin, body.memo);
+    const { expectedAccountId, amountCoin, memo } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.admin.adjustBalance(admin.id, userId, amountCoin, memo);
   }
 
   @Get('payments')
@@ -274,7 +296,9 @@ export class AdminController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: refundPaymentBodySchema }) body: RefundPaymentBody,
   ): Promise<AdminPayment> {
-    return this.refunds.refund(admin.id, id, body.reason);
+    const { expectedAccountId, reason } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.refunds.refund(admin.id, id, reason);
   }
 
   @Get('audit-failures')

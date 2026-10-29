@@ -26,9 +26,15 @@ describe('couponCodeSchema', () => {
   });
 });
 
+/** The admin on screen, which an admin's coupon write names (ADR-0092). */
+const account = { expectedAccountId: 'admin-1' } as const;
+
 describe('createCouponBodySchema', () => {
   it('takes an amount and optional limits; the code may be omitted', () => {
-    expect(createCouponBodySchema.parse({ amountCoin: '5000' })).toEqual({ amountCoin: 5_000n });
+    expect(createCouponBodySchema.parse({ amountCoin: '5000', ...account })).toEqual({
+      amountCoin: 5_000n,
+      ...account,
+    });
     expect(
       createCouponBodySchema.parse({
         code: 'welcome',
@@ -36,17 +42,20 @@ describe('createCouponBodySchema', () => {
         maxRedemptions: 100,
         expiresAt: '2026-12-31T14:59:59.000Z',
         memo: '  런칭 이벤트  ',
+        ...account,
       }),
     ).toMatchObject({ code: 'WELCOME', maxRedemptions: 100, memo: '런칭 이벤트' });
   });
 
   it('refuses a non-positive amount, an amount above the cap and a zero cap', () => {
     for (const body of [
-      { amountCoin: '0' },
-      { amountCoin: '-100' },
-      { amountCoin: (COUPON_MAX_COIN + 1n).toString() },
-      { amountCoin: '1000', maxRedemptions: 0 },
-      { amountCoin: '1000', expiresAt: 'tomorrow' },
+      { amountCoin: '0', ...account },
+      { amountCoin: '-100', ...account },
+      { amountCoin: (COUPON_MAX_COIN + 1n).toString(), ...account },
+      { amountCoin: '1000', maxRedemptions: 0, ...account },
+      { amountCoin: '1000', expiresAt: 'tomorrow', ...account },
+      // ADR-0092: the admin on screen.
+      { amountCoin: '1000' },
     ]) {
       expect(createCouponBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }
@@ -55,9 +64,17 @@ describe('createCouponBodySchema', () => {
 
 describe('updateCouponBodySchema', () => {
   it('accepts a single field and allows clearing the optional limits', () => {
-    expect(updateCouponBodySchema.parse({ isActive: false })).toEqual({ isActive: false });
-    expect(updateCouponBodySchema.parse({ expiresAt: null })).toEqual({ expiresAt: null });
-    expect(updateCouponBodySchema.safeParse({}).success).toBe(false);
+    expect(updateCouponBodySchema.parse({ isActive: false, ...account })).toEqual({
+      isActive: false,
+      ...account,
+    });
+    expect(updateCouponBodySchema.parse({ expiresAt: null, ...account })).toEqual({
+      expiresAt: null,
+      ...account,
+    });
+    // The account is always there, so it is no field: a patch of it alone is empty.
+    expect(updateCouponBodySchema.safeParse({ ...account }).success).toBe(false);
+    expect(updateCouponBodySchema.safeParse({ isActive: false }).success).toBe(false);
   });
 });
 

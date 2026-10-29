@@ -19,20 +19,35 @@ describe('paymentProviderInfoSchema', () => {
   });
 });
 
+/** The admin on screen, which the refund names (ADR-0092, Q-PG-8 ①). */
+const account = { expectedAccountId: 'admin-1' } as const;
+
 describe('refundPaymentBodySchema', () => {
   it('requires a trimmed, non-empty reason within the limit', () => {
-    expect(refundPaymentBodySchema.parse({ reason: '  단순 변심  ' })).toEqual({
+    expect(refundPaymentBodySchema.parse({ reason: '  단순 변심  ', ...account })).toEqual({
       reason: '단순 변심',
+      ...account,
     });
     expect(
-      refundPaymentBodySchema.safeParse({ reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH) }).success,
+      refundPaymentBodySchema.safeParse({
+        reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH),
+        ...account,
+      }).success,
     ).toBe(true);
     for (const body of [
-      {},
-      { reason: '' },
-      { reason: '   ' },
-      { reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH + 1) },
+      { ...account },
+      { reason: '', ...account },
+      { reason: '   ', ...account },
+      { reason: 'x'.repeat(REFUND_REASON_MAX_LENGTH + 1), ...account },
     ]) {
+      expect(refundPaymentBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
+    }
+  });
+
+  it('requires the admin on screen (Q-PG-8 ①, ADR-0092)', () => {
+    // A tab whose cookie turned to another admin must not refund as that admin.
+    for (const expectedAccountId of [undefined, '', 'x'.repeat(256), 7]) {
+      const body = { reason: '단순 변심', expectedAccountId };
       expect(refundPaymentBodySchema.safeParse(body).success, JSON.stringify(body)).toBe(false);
     }
   });

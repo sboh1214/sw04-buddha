@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { keepSessionCommentDraft } from '@/lib/comment-drafts';
 import { type DraftStorage, keepSessionPostDraft } from '@/lib/post-drafts';
 import { keepSessionProfileDraft } from '@/lib/profile-drafts';
+import { accountNowOf, goesWithAccountTurn, sessionAccountTurned } from '@/lib/session-account';
 import { forgetAccountInTab, signOutInOrder } from './use-sign-out';
 
 /**
@@ -159,6 +160,17 @@ describe('forgetAccountInTab', () => {
 
     expect(queryClient.getQueryCache().getAll()).toEqual([]);
     expect([...storage.items.keys()]).toEqual([elsewhere]);
+  });
+
+  it('leaves the tab nobody’s for what goes before SessionCacheGuard hears the session name nobody — even with a reset for the account under way (ADR-0092 8-32·8-36)', () => {
+    // The guard reset the cache as the session turned to A, its reads not settled yet; A signs out
+    // in this tab. A form or a comment box drawn for A going after this — the cache emptied, the
+    // session still A's for a moment — keeps nothing: the tab's drafts are all gone.
+    sessionAccountTurned('account-a');
+    expect(goesWithAccountTurn('account-a', undefined)).toBe(true);
+    forgetAccountInTab(new QueryClient());
+    expect(accountNowOf(undefined)).toBeUndefined();
+    expect(goesWithAccountTurn('account-a', undefined)).toBe(false);
   });
 
   it('empties what every account kept in the tab, as 로그아웃 does — not the one account a save clears', () => {

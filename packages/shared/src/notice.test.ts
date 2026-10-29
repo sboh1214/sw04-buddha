@@ -33,6 +33,8 @@ const BODY = {
   content: [{ type: 'paragraph', content: [{ type: 'text', text: '점검 안내' }] }],
 };
 const AT = '2026-10-20T00:00:00.000Z';
+/** The admin on screen, which every admin write on a notice names (ADR-0092). */
+const account = { expectedAccountId: 'admin-1' } as const;
 
 describe('the owner’s notice rules (#45-8, #138)', () => {
   it('pins at most three, titles like a post’s, and writes the body in the posts’ editor', () => {
@@ -92,23 +94,37 @@ describe('a notice’s title', () => {
 });
 
 describe('the bodies of the admin writes', () => {
-  it('takes a required title and a normalised body, nothing else', () => {
+  it('takes a required title, a normalised body and the admin on screen, nothing else', () => {
     const parsed = createNoticeBodySchema.parse({
       title: ' 점검 ',
       body: { ...BODY, extra: 1 },
       pinned: true,
+      ...account,
     });
     expect(parsed).toEqual({
       title: '점검',
       body: { document: BODY, text: '점검 안내', length: 5, imageIds: [] },
+      ...account,
     });
-    expect(createNoticeBodySchema.safeParse({ body: BODY }).success).toBe(false);
+    expect(createNoticeBodySchema.safeParse({ body: BODY, ...account }).success).toBe(false);
     const empty = updateNoticeBodySchema.safeParse({
       title: '점검',
       body: { type: 'doc', content: [] },
       expectedEditedAt: null,
+      ...account,
     });
     expect(empty.error?.issues.map((issue) => issue.path)).toEqual([['body']]);
+    // ADR-0092: both name the admin on screen.
+    expect(
+      createNoticeBodySchema
+        .safeParse({ title: '점검', body: BODY })
+        .error?.issues.map((issue) => issue.path),
+    ).toEqual([['expectedAccountId']]);
+    expect(
+      updateNoticeBodySchema
+        .safeParse({ title: '점검', body: BODY, expectedEditedAt: null })
+        .error?.issues.map((issue) => issue.path),
+    ).toEqual([['expectedAccountId']]);
   });
 
   it('takes an edit with the version it was opened from, null for a notice never edited', () => {
@@ -116,7 +132,7 @@ describe('the bodies of the admin writes', () => {
     // says which version it read.
     for (const expectedEditedAt of [null, AT]) {
       expect(
-        updateNoticeBodySchema.parse({ title: '점검', body: BODY, expectedEditedAt })
+        updateNoticeBodySchema.parse({ title: '점검', body: BODY, expectedEditedAt, ...account })
           .expectedEditedAt,
       ).toBe(expectedEditedAt);
     }
@@ -125,6 +141,7 @@ describe('the bodies of the admin writes', () => {
         title: '점검',
         body: BODY,
         expectedEditedAt,
+        ...account,
       });
       expect(
         parsed.error?.issues.map((issue) => issue.path),

@@ -16,9 +16,10 @@ import {
   type AdminTheme,
   type AdminThemeMarket,
   type AdminThemeNotice,
-  type CreateThemeBody,
-  type UpdateThemeBody,
+  type CreateThemeFields,
+  type UpdateThemeFields,
   isApiError,
+  isForAnotherAccount,
   validationField,
   validationMessage,
 } from './api';
@@ -100,8 +101,11 @@ export const themeFormSchema = z
     { message: copy.errThemeEndDate, path: ['endDate'] },
   );
 
-/** `POST /admin/themes`: every field, trimmed. */
-export function toCreateThemeBody(values: ThemeFormValues): CreateThemeBody {
+/**
+ * `POST /admin/themes`: every field, trimmed — the fields alone; the press adds the admin on
+ * screen (`useOperatorId`, ADR-0092), as on every theme write.
+ */
+export function toCreateThemeBody(values: ThemeFormValues): CreateThemeFields {
   return {
     slug: values.slug.trim(),
     name: values.name.trim(),
@@ -138,9 +142,9 @@ export function themeSlugEditable(theme: Pick<AdminTheme, 'firstPublishedAt'>): 
 export function toUpdateThemeBody(
   values: ThemeFormValues,
   theme: AdminTheme,
-): UpdateThemeBody | undefined {
+): UpdateThemeFields | undefined {
   const next = toCreateThemeBody(values);
-  const body: UpdateThemeBody = {};
+  const body: UpdateThemeFields = {};
   if (themeSlugEditable(theme) && next.slug !== theme.slug) body.slug = next.slug;
   if (next.name !== theme.name) body.name = next.name;
   if (next.intro !== theme.intro) body.intro = next.intro;
@@ -213,9 +217,12 @@ export function themeFormError(
 
 /**
  * A refused publish or another theme write, in words: a publish of a theme with no market in it
- * that is not a draft (owner decisions 2026-10-19), a theme that is not there, or anything else.
+ * that is not a draft (owner decisions 2026-10-19), a theme that is not there, the cookie of
+ * another account (`copy.sessionChanged` — every theme write names the admin on screen, and the
+ * caller asks for the session again, ADR-0092), or anything else.
  */
 export function themeWriteErrorMessage(error: unknown): string {
+  if (isForAnotherAccount(error)) return copy.sessionChanged;
   if (
     isApiError(error, 'VALIDATION_ERROR') &&
     validationField(error) === THEME_REFUSALS.noPublicMarket.field

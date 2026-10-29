@@ -11,6 +11,7 @@ import {
   type ReleaseSetting,
   type ReleaseSettingChange,
   type ReleaseSettingChangeBody,
+  type WithoutExpectedAccount,
   type ReleaseSettingChangePayload,
   type ReleaseSettingDefinition,
   type ReleaseSettingReading,
@@ -131,7 +132,7 @@ export class ReleaseSettingsService {
   async change(
     adminId: string,
     key: string,
-    body: ReleaseSettingChangeBody,
+    body: WithoutExpectedAccount<ReleaseSettingChangeBody>,
   ): Promise<ReleaseSetting> {
     const definition = this.registry.get(key);
     if (!definition) throw new AppError('NOT_FOUND', { message: 'Release setting not found' });

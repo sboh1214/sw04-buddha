@@ -203,14 +203,16 @@ describe('the review list’s groups and marks (owner decision 2026-10-22)', () 
     expect(copy.postAuthorFormer).toBe('탈퇴한 사용자');
   });
 
-  it('sends the row’s link, rule and latest time with the outcome, and the note only when written', () => {
-    expect(toLinkFlagReviewBody(group(), 'no_issue', '   ')).toEqual({
+  it('sends the row’s link, rule and latest time with the outcome, the note only when written, and the admin on screen', () => {
+    expect(toLinkFlagReviewBody(group(), 'no_issue', '   ', 'admin-1')).toEqual({
       url: 'https://example.com/a',
       reason: 'many_accounts',
       outcome: 'no_issue',
       through: '2026-10-21T06:00:00.000Z',
+      // ADR-0092: the server refuses a mark made under another account's cookie.
+      expectedAccountId: 'admin-1',
     });
-    expect(toLinkFlagReviewBody(group(), 'actioned', '  숨김 처리 \n')).toMatchObject({
+    expect(toLinkFlagReviewBody(group(), 'actioned', '  숨김 처리 \n', 'admin-1')).toMatchObject({
       outcome: 'actioned',
       note: '숨김 처리',
     });
@@ -224,6 +226,20 @@ describe('the review list’s groups and marks (owner decision 2026-10-22)', () 
       linkFlagReviewErrorMessage(new ApiError(400, { code: 'VALIDATION_ERROR', message: 'x' })),
     ).toBe(copy.errUnknown);
     expect(linkFlagReviewErrorMessage(new Error('network'))).toBe(copy.errUnknown);
+  });
+
+  it('says the session changed when the cookie is another account’s, and closes the dialog (ADR-0092)', () => {
+    const another = new ApiError(403, {
+      code: 'FORBIDDEN',
+      message: 'This session belongs to a different account than the one on screen',
+      details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+    });
+    expect(linkFlagReviewErrorMessage(another)).toBe(copy.sessionChanged);
+    expect(linkFlagReviewKeepsDialog(another)).toBe(false);
+    // A plain FORBIDDEN (no longer an admin) stays the common error.
+    expect(linkFlagReviewErrorMessage(new ApiError(403, { code: 'FORBIDDEN', message: 'x' }))).toBe(
+      copy.errUnknown,
+    );
   });
 
   it('keeps the dialog, outcome and note, only when the request never came back', () => {

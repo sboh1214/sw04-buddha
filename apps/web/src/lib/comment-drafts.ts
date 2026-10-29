@@ -17,10 +17,17 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  * server.
  *
  * - Where: `sessionStorage`, this tab's — as a post's draft, and for the same reasons.
- * - Keyed by the box: the post's new 댓글, a 대댓글 of one 댓글 (the box at the end of its thread,
- *   which every 답글 of the thread opens), and the edit of one comment (`commentDraftStorageKey`),
- *   each under its post — and held for the account that wrote it: another account signed in on
- *   the tab never reads it.
+ * - Keyed by the box — the post's new 댓글, a 대댓글 of one 댓글 (the box at the end of its thread,
+ *   which every 답글 of the thread opens), and the edit of one comment (`commentDraftBoxKey`),
+ *   each under its post — and the account that wrote it (`commentDraftStorageKey`): another account
+ *   signed in on the tab never reads it, and neither reads, keeps over nor clears another account's
+ *   draft of the same box (ADR-0092, 오너 결정 2026-10-26 17:21 답 3 — A's draft waits for A while B
+ *   uses the tab, as a post's does, lib/post-drafts.ts).
+ * - Kept too when the account on screen turns from its writer to another in place (`accountTurned`:
+ *   `['me']` naming another account before the session does, ADR-0090 결정 4-2): the post page draws
+ *   its boxes for the account on screen, and what the writer had in them is kept as the writer's
+ *   draft, for the hour, to come back into its box once the writer is on screen again (답 3
+ *   «이 PR에서 함께, 적던 것은 A의 초안으로», hooks/use-comment-draft.ts).
  * - Gone: once taken back (the box holds it again and guards it like any text — leaving asks, and
  *   going to a step keeps it again), once a write or an edit of that box by the same account
  *   succeeds (`commentDraftLanded`, one in flight when the page went included — another account's
@@ -78,7 +85,12 @@ function postPrefix(postId: string): string {
   return `${COMMENT_DRAFT_PREFIX}${postId.toLowerCase()}:`;
 }
 
-export function commentDraftStorageKey(key: CommentDraftKey): string {
+/**
+ * Which box a draft is of, whoever wrote it: the key this tab's landings are recorded under
+ * (`commentDraftLanded`), the id of a text held apart for it, and the start of each account's item
+ * for it (`commentDraftStorageKey`).
+ */
+export function commentDraftBoxKey(key: CommentDraftKey): string {
   switch (key.kind) {
     case 'comment':
       return `${postPrefix(key.postId)}comment`;
@@ -89,37 +101,81 @@ export function commentDraftStorageKey(key: CommentDraftKey): string {
   }
 }
 
+/**
+ * The storage item of `accountId`'s draft of `key`'s box: one per box and account (ADR-0092, 오너
+ * 결정 2026-10-26 17:21 답 3). Two accounts' drafts of one box are two items, so B's page reading the
+ * post's drafts neither shows nor removes A's, and B's text kept as B's box goes never replaces A's
+ * — which waits, for the hour, for A to be on the post page again. The account id as the API spells
+ * it (it is no uuid, and its case is its own), as a post draft's (`postDraftStorageKey`).
+ */
+export function commentDraftStorageKey(key: CommentDraftKey, accountId: string): string {
+  return `${commentDraftBoxKey(key)}@${encodeURIComponent(accountId)}`;
+}
+
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
-/** The box a storage key under `postId` names, or null for anything else. */
-function boxOf(postId: string, storageKey: string): CommentDraftKey | null {
+/** The box and the account a storage key under `postId` names, or null for anything else. */
+function boxOf(
+  postId: string,
+  storageKey: string,
+): { box: CommentDraftKey; accountId: string } | null {
   const prefix = postPrefix(postId);
   if (!storageKey.startsWith(prefix)) return null;
   const rest = storageKey.slice(prefix.length);
-  if (rest === 'comment') return { kind: 'comment', postId };
-  const [kind, id, ...extra] = rest.split(':');
+  const at = rest.lastIndexOf('@');
+  if (at < 0) return null;
+  let accountId: string;
+  try {
+    accountId = decodeURIComponent(rest.slice(at + 1));
+  } catch {
+    return null;
+  }
+  if (accountId === '') return null;
+  const boxPart = rest.slice(0, at);
+  if (boxPart === 'comment') return { box: { kind: 'comment', postId }, accountId };
+  const [kind, id, ...extra] = boxPart.split(':');
   if (id === undefined || extra.length > 0 || !ID.test(id)) return null;
-  if (kind === 'reply') return { kind: 'reply', postId, parentId: id };
-  if (kind === 'edit') return { kind: 'edit', postId, commentId: id };
+  if (kind === 'reply') return { box: { kind: 'reply', postId, parentId: id }, accountId };
+  if (kind === 'edit') return { box: { kind: 'edit', postId, commentId: id }, accountId };
   return null;
 }
 
 /**
  * Whether a box going away keeps its text: it holds some to keep (`hasDraft` — text other than what
- * the box started with), the write it sent did not succeed (`saved`), and the account has an
- * onboarding step left. Any leave of such an account keeps it, however it leaves: the gate or a
- * write's entry going to the step, and on the post page — exempt from the gate for a re-consent
- * alone — a link or Back too, which still asked «쓰던 내용이 사라집니다» first: the text comes back
- * only on that post's page, once the step is done, within the hour (ADR-0074 7-23·7-24). An
- * account with nothing left keeps nothing: a link or Back asked first, and that sentence is true.
- * As a post's (`shouldKeepPostDraft`).
+ * the box started with), the write it sent did not succeed (`saved`), and either the account has an
+ * onboarding step left or the account on screen turned from the box's writer to another in place
+ * (`accountTurned`: `['me']` naming another account before the session does, ADR-0090 결정 4-2 —
+ * the post page draws its boxes for the account on screen, and the writer's go: ADR-0092, 오너 결정
+ * 2026-10-26 17:21 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로», kept for the writer as a step keeps
+ * it, and taken back once the writer is on the post page again). Any leave of an account with a step
+ * left keeps it, however it leaves: the gate or a write's entry going to the step, and on the post
+ * page — exempt from the gate for a re-consent alone — a link or Back too, which still asked «쓰던
+ * 내용이 사라집니다» first: the text comes back only on that post's page, once the step is done,
+ * within the hour (ADR-0074 7-23·7-24). An account with nothing left keeps nothing: a link or Back
+ * asked first, and that sentence is true. As a post's (`shouldKeepPostDraft`).
  */
 export function shouldKeepCommentDraft(state: {
   hasDraft: boolean;
   saved: boolean;
+  /**
+   * The writer's onboarding, as `['me']` says it now; undefined when `['me']` names another or is
+   * empty.
+   */
   onboarding: Onboarding | undefined;
+  /**
+   * The box went with a turn of the tab's account (`goesWithAccountTurn`, lib/session-account.ts):
+   * `['me']` turned from its writer to another in place, or the session did first and
+   * SessionCacheGuard's reset took the box away — or the session turned to its writer after
+   * `['me']` did, and that reset took away the box just drawn for the writer (ADR-0092 결정 10,
+   * 8-36).
+   */
+  accountTurned?: boolean;
 }): boolean {
-  return state.hasDraft && !state.saved && hasOnboardingStepLeft(state.onboarding);
+  return (
+    state.hasDraft &&
+    !state.saved &&
+    (state.accountTurned === true || hasOnboardingStepLeft(state.onboarding))
+  );
 }
 
 /** A kept draft as it is stored; an edit's with the thread of its comment, when known. */
@@ -183,7 +239,10 @@ function readItem(storage: DraftStorage, key: string): StoredCommentDraft | null
   return raw === null ? null : parseStored(raw);
 }
 
-/** Removes every kept comment draft past COMMENT_DRAFT_TTL_MS, and every item that is none. */
+/**
+ * Removes every kept comment draft past COMMENT_DRAFT_TTL_MS, whoever wrote it, and every item that
+ * is none.
+ */
 export function sweepCommentDrafts(storage: DraftStorage, now: number): void {
   for (const key of keysUnder(storage, COMMENT_DRAFT_PREFIX)) {
     const stored = readItem(storage, key);
@@ -191,7 +250,10 @@ export function sweepCommentDrafts(storage: DraftStorage, now: number): void {
   }
 }
 
-/** Keeps `text` for `key`, written by `accountId`, replacing what was kept there. Whether it was. */
+/**
+ * Keeps `text` for `key`, written by `accountId`, replacing what that account kept there — never
+ * another account's draft of the box. Whether it was.
+ */
 export function keepCommentDraft(
   storage: DraftStorage,
   key: CommentDraftKey,
@@ -203,7 +265,7 @@ export function keepCommentDraft(
   const threadId = key.kind === 'edit' ? key.threadId?.toLowerCase() : undefined;
   try {
     storage.setItem(
-      commentDraftStorageKey(key),
+      commentDraftStorageKey(key, accountId),
       JSON.stringify({
         version: 1,
         accountId,
@@ -219,10 +281,10 @@ export function keepCommentDraft(
 }
 
 /**
- * The drafts kept for the post `postId` by `accountId`: none past COMMENT_DRAFT_TTL_MS and none of
- * another account's (both removed — another account's is never shown to this one), nor anything
- * that is not a draft. Reads only; the page that takes them back removes them once it holds them
- * (`clearCommentDrafts`).
+ * The drafts kept for the post `postId` by `accountId`: none past COMMENT_DRAFT_TTL_MS, nor anything
+ * that is not a draft (both removed). Another account's drafts of the post are other items, never
+ * read here and left as they are (`commentDraftStorageKey`). Reads only; the page that takes them
+ * back removes them once it holds them (`clearCommentDrafts`).
  */
 export function readCommentDrafts(
   storage: DraftStorage,
@@ -236,17 +298,21 @@ export function readCommentDrafts(
   const editThreads = new Map<string, string>();
   const id = postId.toLowerCase();
   for (const storageKey of keysUnder(storage, postPrefix(id))) {
-    const box = boxOf(id, storageKey);
+    const named = boxOf(id, storageKey);
+    // Another account's item, whatever it holds: its writer's to read.
+    if (named !== null && named.accountId !== accountId) continue;
     const stored = readItem(storage, storageKey);
     if (
-      box === null ||
+      named === null ||
       stored === null ||
       isExpired(stored, now) ||
+      // An item under this account written by another (by hand): no draft.
       stored.accountId !== accountId
     ) {
       tryRemove(storage, storageKey);
       continue;
     }
+    const { box } = named;
     if (box.kind === 'comment') comment = stored.text;
     else if (box.kind === 'reply') replies.set(box.parentId, stored.text);
     else {
@@ -310,28 +376,27 @@ export function mergeCommentDrafts(drafts: CommentDrafts, extra: CommentDrafts):
   };
 }
 
-/** Removes what was kept for the post `postId`. */
-export function clearCommentDrafts(storage: DraftStorage, postId: string): void {
-  for (const key of keysUnder(storage, postPrefix(postId))) tryRemove(storage, key);
-}
-
-/** Removes what was kept for `key`. */
-export function clearCommentDraft(storage: DraftStorage, key: CommentDraftKey): void {
-  tryRemove(storage, commentDraftStorageKey(key));
+/**
+ * Removes what `accountId` kept for the post `postId`, and only that: another account's drafts of
+ * the post stay.
+ */
+export function clearCommentDrafts(storage: DraftStorage, postId: string, accountId: string): void {
+  const id = postId.toLowerCase();
+  for (const key of keysUnder(storage, postPrefix(id))) {
+    if (boxOf(id, key)?.accountId === accountId) tryRemove(storage, key);
+  }
 }
 
 /**
  * Removes what `accountId` kept for `key`, and only that: another account's draft of the same box
- * stays (anything that is no draft goes, as a read would remove it).
+ * stays.
  */
-export function clearCommentDraftOf(
+export function clearCommentDraft(
   storage: DraftStorage,
   key: CommentDraftKey,
   accountId: string,
 ): void {
-  const storageKey = commentDraftStorageKey(key);
-  const stored = readItem(storage, storageKey);
-  if (stored === null || stored.accountId === accountId) tryRemove(storage, storageKey);
+  tryRemove(storage, commentDraftStorageKey(key, accountId));
 }
 
 /** Removes every kept comment draft (signing out). */
@@ -367,9 +432,9 @@ export function readSessionCommentDrafts(postId: string, accountId: string): Com
     : readCommentDrafts(storage, postId, accountId, Date.now());
 }
 
-export function clearSessionCommentDrafts(postId: string): void {
+export function clearSessionCommentDrafts(postId: string, accountId: string): void {
   const storage = sessionDrafts();
-  if (storage !== null) clearCommentDrafts(storage, postId);
+  if (storage !== null) clearCommentDrafts(storage, postId, accountId);
 }
 
 export function clearAllSessionCommentDrafts(): void {
@@ -380,8 +445,8 @@ export function clearAllSessionCommentDrafts(): void {
 // ---- the writes that landed in this tab ------------------------------------------------------
 
 /**
- * When a write of each box last landed in this tab, by the account that sent it and the box's
- * storage key — the post drafts' record (lib/draft-landings.ts), one of the comments' own, and for
+ * When a write of each box last landed in this tab, by the account that sent it and the box's key
+ * (`commentDraftBoxKey`) — the post drafts' record (lib/draft-landings.ts), one of the comments' own, and for
  * the same reason: a write's `onSuccess` runs before the box hears of it, and a box the page takes
  * away in between holds its sent text from its last render; counting a write landed after that
  * render as saved (`commentDraftLandedSince`) keeps it from keeping a comment already written.
@@ -404,9 +469,9 @@ export function commentDraftMoment(): number {
  * account's draft and box of the same key are left as they are.
  */
 export function commentDraftLanded(key: CommentDraftKey, accountId: string): void {
-  landings.landed(commentDraftStorageKey(key), accountId);
+  landings.landed(commentDraftBoxKey(key), accountId);
   const storage = sessionDrafts();
-  if (storage !== null) clearCommentDraftOf(storage, key, accountId);
+  if (storage !== null) clearCommentDraft(storage, key, accountId);
 }
 
 /**
@@ -418,5 +483,5 @@ export function commentDraftLandedSince(
   accountId: string,
   moment: number,
 ): boolean {
-  return landings.landedSince(commentDraftStorageKey(key), accountId, moment);
+  return landings.landedSince(commentDraftBoxKey(key), accountId, moment);
 }

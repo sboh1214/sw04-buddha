@@ -228,7 +228,18 @@ Nest 라우팅·전역 prefix·버저닝·본문 파싱보다 **먼저** 실행�
   \`Retry-After\` 헤더도 함께 보낸다). better-auth 내장 리미터는
   꺼져 있다(프로세스 메모리에 상태를 두고 IP 로 세는데, Next rewrite 뒤에서는 모든 방문자가 소켓
   하나다).
-- CSRF 는 better-auth 자신의 \`Origin\` 검사가 담당한다(\`disableOriginCheck: false\`).`;
+- CSRF 는 better-auth 자신의 \`Origin\` 검사가 담당한다(\`disableOriginCheck: false\`).
+- MY 설정이 세션 계정에 쓰는 세 경로 — \`/change-password\`, \`/change-email\`, \`/link-social\` — 는
+  better-auth 의 본문에 더해 화면이 보는 계정 \`expectedAccountId\` 를 받는다(\`/api/v1\` 의 본인 쓰기와
+  같은 확인, ADR-0092). 로그인한 요청에서 그것이 없거나 1~255자 문자열이 아니면 \`400 VALIDATION_ERROR\`,
+  쿠키의 계정이 아니면 아무것도 하지 않고(비밀번호를 보거나 메일을 보내거나 횟수를 세거나 연결 상태를
+  만들기 전에) \`403 FORBIDDEN\` 이다. 둘 다 \`details\` 가 그 필드를 지목한다:
+  \`{ "code": "FORBIDDEN", "message": ..., "details": [{ "path": ["expectedAccountId"], "message": ... }] }\`.
+  세션이 없으면 확인하지 않고 그 경로가 401 로 답한다. 서명이 맞는 세션 쿠키인데 세션을 읽지 못하면(끝난
+  세션, 읽기의 실패) 확인하는 자리에서 같은 \`401 UNAUTHORIZED\` 이고 아무것도 하지 않는다.
+  \`/unlink-account\`(행 id 를 세션 계정의 행에서만 찾는다 — 다른 계정의 행은 아무것도 해제하지 않는
+  400)와 \`/send-verification-email\`(로그인한 요청은 그 계정의 주소에만 보내고 다른 주소는
+  \`EMAIL_MISMATCH\`)은 받지 않는다.`;
 
 /** 레이트 리밋 산문. Read from apps/api/src/rate-limit/* and packages/shared/src/rate-limit.ts. */
 const RATE_LIMIT_NOTES = `- **버킷을 지목한 라우트는 두 번 세어진다.** \`@RateLimit('<bucket>')\` 이 붙어도 기본 100/분 의

@@ -85,10 +85,22 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     category = await createCategory(t.db, { slug: 'economy', nameKo: '경제' });
   });
 
-  const post = (url: string, payload?: Record<string, unknown>, cookie = admin.cookie) =>
-    t.app.inject({ method: 'POST', url, headers: { ...jsonHeaders, cookie }, payload });
-  const patch = (url: string, payload: Record<string, unknown>, cookie = admin.cookie) =>
-    t.app.inject({ method: 'PATCH', url, headers: { ...jsonHeaders, cookie }, payload });
+  // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
+  // names another.
+  const post = (url: string, payload: Record<string, unknown> = {}, who: TestUser = admin) =>
+    t.app.inject({
+      method: 'POST',
+      url,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
+    });
+  const patch = (url: string, payload: Record<string, unknown>, who: TestUser = admin) =>
+    t.app.inject({
+      method: 'PATCH',
+      url,
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { expectedAccountId: who.id, ...payload },
+    });
   const get = (url: string, cookie = admin.cookie) =>
     t.app.inject({ method: 'GET', url, headers: { cookie } });
 
@@ -102,8 +114,8 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     });
   const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
-  const resolve = (id: string, body: Record<string, unknown>, cookie?: string) =>
-    post(`/api/v1/admin/markets/${id}/resolve`, body, cookie);
+  const resolve = (id: string, body: Record<string, unknown>, who?: TestUser) =>
+    post(`/api/v1/admin/markets/${id}/resolve`, body, who);
 
   /** A market row written by the factory (no events, so `statusEventId` null). */
   const market = (input: Parameters<typeof createMarket>[1] = {}) =>
@@ -588,7 +600,7 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   // --- guards -----------------------------------------------------------------------------
   it('is closed to members and anonymous callers', async () => {
     const row = await market({ status: 'closed' });
-    const asMember = await resolve(row.id, { result: 'YES' }, member.cookie);
+    const asMember = await resolve(row.id, { result: 'YES' }, member);
     expect(asMember.statusCode).toBe(403);
     expect(errorOf(asMember).code).toBe('FORBIDDEN');
     const anonymous = await t.app.inject({
@@ -602,5 +614,43 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect((await marketRow(row.id)).status).toBe('closed');
     expect(await eventsFor(row.id)).toHaveLength(0);
     expect(await jobIds()).toEqual([]);
+  });
+
+  it('refuses a 판정 that names another admin than the cookie’s before anything is read (ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    const row = await market({ status: 'closed' });
+    // The screen still shows `admin` while the tab's cookie is `other`'s.
+    const refused = await resolve(row.id, { result: 'YES', expectedAccountId: admin.id }, other);
+    expect(refused.statusCode).toBe(403);
+    expect(errorOf(refused).code).toBe('FORBIDDEN');
+    expect(errorOf(refused).details?.[0]?.path).toEqual(['expectedAccountId']);
+    // No account named at all: a validation error naming the field.
+    const unnamed = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${row.id}/resolve`,
+      headers: { ...jsonHeaders, cookie: admin.cookie },
+      payload: { result: 'YES' },
+    });
+    expect(unnamed.statusCode).toBe(400);
+    expect(errorOf(unnamed).details?.map((detail) => detail.path)).toEqual([['expectedAccountId']]);
+    // Nothing judged, recorded, settled or scheduled.
+    expect(await marketRow(row.id)).toMatchObject({ status: 'closed', resolvedResult: null });
+    expect(await eventsFor(row.id)).toHaveLength(0);
+    expect(await t.db.select().from(schema.adminActions)).toEqual([]);
+    expect(await jobIds()).toEqual([]);
+    // The cookie's own account is taken, and the account is never kept with the judgement.
+    const judged = await resolve(row.id, { result: 'NO' }, other);
+    expect(judged.statusCode, judged.body).toBe(200);
+    const [event] = await eventsFor(row.id);
+    expect(event!.payload).not.toHaveProperty('expectedAccountId');
+    expect((await t.db.select().from(schema.adminActions)).map((action) => action.adminId)).toEqual(
+      [other.id],
+    );
   });
 });

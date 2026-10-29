@@ -17,12 +17,17 @@ import { hasOnboardingStepLeft, type Onboarding } from './onboarding';
  * - Where: `sessionStorage`, this tab's — the gate and the onboarding's return happen in the tab
  *   the draft was written in; another tab, another window and a later visit never see it, and it
  *   goes with the tab. (`localStorage` would outlive the tab and reach every tab of the browser.)
- * - Keyed by the screen: a new post per market, an edit per post (`postDraftStorageKey`), and held
- *   for the account that wrote it — another account signed in on the tab never reads it. An
+ * - Keyed by the screen — a new post per market, an edit per post (`postDraftScreenKey`) — and the
+ *   account that wrote it (`postDraftStorageKey`): another account signed in on the tab never
+ *   reads it, and neither reads, keeps over nor clears another account's draft of the same screen
+ *   (ADR-0092, 오너 결정 2026-10-26 17:21 답 2 — A's draft waits for A while B uses the tab). An
  *   operator notice's write and edit screens (#138) use the same form and keep their drafts the
  *   same way (오너 결정 2026-10-21 (3차), ADR-0077: the gate moves an admin as it moves anyone): one key
  *   for the new notice, one per notice edited — and an edit's draft keeps the version it was typed
- *   on (`PostDraft['version']`).
+ *   on (`PostDraft['version']`). A notice's forms are drawn for the admin on screen, and keep their
+ *   draft for that admin too when `['me']` turns to another admin in place (`shouldKeepPostDraft`'s
+ *   `accountTurned`, 답 2 «A의 것으로 1시간 보관») — and so do a post's write and edit forms, drawn
+ *   for the account on screen (답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»).
  * - Gone: once taken back (the form holds it again and guards it like any draft — leaving asks,
  *   and the gate keeps it again should it send the account on once more), once a write or an edit
  *   of that screen by the same account succeeds (one in flight when the gate took the account
@@ -102,7 +107,11 @@ export const DRAFT_PREVIEW_MAX_SIDE = 640;
 /** Every kept draft's storage key starts with this. */
 export const POST_DRAFT_PREFIX = 'buddha.postDraft:';
 
-export function postDraftStorageKey(key: PostDraftKey): string {
+/**
+ * Which screen a draft is of, whoever wrote it: the key this tab's landings are recorded under
+ * (`postDraftLanded`), and the start of each account's item for it (`postDraftStorageKey`).
+ */
+export function postDraftScreenKey(key: PostDraftKey): string {
   switch (key.kind) {
     case 'new':
       return `${POST_DRAFT_PREFIX}new:${key.marketId.toLowerCase()}`;
@@ -113,6 +122,17 @@ export function postDraftStorageKey(key: PostDraftKey): string {
     case 'notice-edit':
       return `${POST_DRAFT_PREFIX}notice-edit:${key.noticeId.toLowerCase()}`;
   }
+}
+
+/**
+ * The storage item of `accountId`'s draft of `key`'s screen: one per screen and account (ADR-0092,
+ * 오너 결정 2026-10-26 17:21 답 2). Two accounts' drafts of one screen are two items, so B's form
+ * reading the screen neither shows nor removes A's, and B's draft kept as B's form goes never
+ * replaces A's — which waits, for the hour, for A to open the screen again. The account id as the
+ * API spells it (it is no uuid, and its case is its own).
+ */
+export function postDraftStorageKey(key: PostDraftKey, accountId: string): string {
+  return `${postDraftScreenKey(key)}@${encodeURIComponent(accountId)}`;
 }
 
 /**
@@ -139,19 +159,41 @@ export function hasDraftToKeep(state: {
  * Whether a screen going away keeps its draft: it holds one to keep (`hasDraft` —
  * `hasDraftToKeep`, measured from what the last write that landed sent: a notice's edit screen
  * stays on the form after a save, and what is typed after it is a draft again), a write that
- * landed since did not send it (`saved`), and the account has an onboarding step left — what the
- * gate is taking it to. Any other leave keeps nothing: a link or Back asked first, and «쓰던 내용이
- * 사라집니다» stays true. A write still in flight is kept: the gate may take the account away while
- * the refusal that sent it (409) is being handled, and a write that lands after all clears the
- * draft (`postDraftLanded`) — a success being handled before the form renders it counts as saved
- * (`postDraftLandedSince`, hooks/use-post-draft.ts).
+ * landed since did not send it (`saved`), and either the account has an onboarding step left —
+ * what the gate is taking it to — or, for a form drawn for one account (a notice's, keyed by the
+ * admin on screen; a post's write and edit forms, keyed by the account on screen), the account on
+ * screen turned from its writer to another in place (`accountTurned`: `['me']` naming another
+ * account before the session does, ADR-0090 결정 4-2 — ADR-0092, 오너 결정 2026-10-26 17:21 답 2
+ * «A의 것으로 1시간 보관», 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»: kept for the writer, as the
+ * gate's move keeps it, and taken back when the writer opens the screen again). Any other leave
+ * keeps nothing: a link or Back asked first, and «쓰던 내용이 사라집니다» stays true. A write still
+ * in flight is kept: the gate may take the account away while the refusal that sent it (409) is
+ * being handled, and a write that lands after all clears the draft (`postDraftLanded`) — a success
+ * being handled before the form renders it counts as saved (`postDraftLandedSince`,
+ * hooks/use-post-draft.ts).
  */
 export function shouldKeepPostDraft(state: {
   hasDraft: boolean;
   saved: boolean;
+  /**
+   * The writer's onboarding, as `['me']` says it now; undefined when `['me']` names another or is
+   * empty.
+   */
   onboarding: Onboarding | undefined;
+  /**
+   * A form drawn for its writer went with a turn of the tab's account (`goesWithAccountTurn`,
+   * lib/session-account.ts): `['me']` turned to another in place, or the session did first and
+   * SessionCacheGuard's reset took the form away — or the session turned to the writer after
+   * `['me']` did, and that reset took away the form just drawn for the writer (ADR-0092 결정 10,
+   * 8-36).
+   */
+  accountTurned?: boolean;
 }): boolean {
-  return state.hasDraft && !state.saved && hasOnboardingStepLeft(state.onboarding);
+  return (
+    state.hasDraft &&
+    !state.saved &&
+    (state.accountTurned === true || hasOnboardingStepLeft(state.onboarding))
+  );
 }
 
 /** A kept draft as it is stored. */
@@ -211,17 +253,6 @@ function parseStored(raw: string): StoredDraft | null {
     previews: previewsOf(previews),
     ...(opened === undefined ? {} : { opened }),
   };
-}
-
-/** The draft stored under `key`, if it is one this module wrote (null: none, or refused). */
-function readItem(storage: DraftStorage, key: string): StoredDraft | null {
-  let raw: string | null;
-  try {
-    raw = storage.getItem(key);
-  } catch {
-    return null;
-  }
-  return raw === null ? null : parseStored(raw);
 }
 
 function isExpired(stored: StoredDraft, now: number): boolean {
@@ -289,7 +320,7 @@ export function keepPostDraft(
     } satisfies StoredDraft);
   for (const previews of [previewsOf(draft.previews), {}]) {
     try {
-      storage.setItem(postDraftStorageKey(key), item(previews));
+      storage.setItem(postDraftStorageKey(key, accountId), item(previews));
       return true;
     } catch {
       // Over the quota (or refused): try with less, then give up.
@@ -299,9 +330,10 @@ export function keepPostDraft(
 }
 
 /**
- * The draft kept for `key` by `accountId`, or null: none, past POST_DRAFT_TTL_MS, another
- * account's (removed — it is never shown to this one), or not a draft at all. Reads only; the
- * screen that takes it back removes it once it holds it (`clearPostDraft`).
+ * The draft kept for `key` by `accountId`, or null: none, past POST_DRAFT_TTL_MS, or not a draft
+ * at all (removed). Another account's draft of the screen is another item, never read here and
+ * left as it is (`postDraftStorageKey`). Reads only; the screen that takes it back removes it once
+ * it holds it (`clearPostDraft`).
  */
 export function readPostDraft(
   storage: DraftStorage,
@@ -309,7 +341,7 @@ export function readPostDraft(
   accountId: string,
   now: number,
 ): PostDraft | null {
-  const storageKey = postDraftStorageKey(key);
+  const storageKey = postDraftStorageKey(key, accountId);
   let raw: string | null;
   try {
     raw = storage.getItem(storageKey);
@@ -330,23 +362,12 @@ export function readPostDraft(
   };
 }
 
-/** Removes what was kept for `key`. */
-export function clearPostDraft(storage: DraftStorage, key: PostDraftKey): void {
-  tryRemove(storage, postDraftStorageKey(key));
-}
-
 /**
  * Removes what `accountId` kept for `key`, and only that: another account's draft of the same
- * screen stays (anything that is no draft goes, as a read would remove it).
+ * screen stays.
  */
-export function clearPostDraftOf(
-  storage: DraftStorage,
-  key: PostDraftKey,
-  accountId: string,
-): void {
-  const storageKey = postDraftStorageKey(key);
-  const stored = readItem(storage, storageKey);
-  if (stored === null || stored.accountId === accountId) tryRemove(storage, storageKey);
+export function clearPostDraft(storage: DraftStorage, key: PostDraftKey, accountId: string): void {
+  tryRemove(storage, postDraftStorageKey(key, accountId));
 }
 
 /** Removes every kept draft (signing out). */
@@ -470,9 +491,9 @@ export function readSessionPostDraft(key: PostDraftKey, accountId: string): Post
   return storage === null ? null : readPostDraft(storage, key, accountId, Date.now());
 }
 
-export function clearSessionPostDraft(key: PostDraftKey): void {
+export function clearSessionPostDraft(key: PostDraftKey, accountId: string): void {
   const storage = sessionDrafts();
-  if (storage !== null) clearPostDraft(storage, key);
+  if (storage !== null) clearPostDraft(storage, key, accountId);
 }
 
 export function clearSessionPostDrafts(): void {
@@ -484,7 +505,8 @@ export function clearSessionPostDrafts(): void {
 
 /**
  * When a write or an edit of each screen last landed in this tab, by the account that sent it and
- * the screen's storage key (lib/draft-landings.ts — the comment drafts keep theirs the same way).
+ * the screen's key (`postDraftScreenKey`; lib/draft-landings.ts — the comment drafts keep theirs
+ * the same way).
  * TanStack Query runs a mutation's `onSuccess` before it marks the mutation succeeded, and the
  * form renders `saved` later still; a form the gate takes away in between holds a draft from its
  * last render, and would keep — after the success cleared it — what the post already holds, which
@@ -515,9 +537,9 @@ export function postDraftMoment(): number {
  * screen are left as they are.
  */
 export function postDraftLanded(key: PostDraftKey, accountId: string): void {
-  landings.landed(postDraftStorageKey(key), accountId);
+  landings.landed(postDraftScreenKey(key), accountId);
   const storage = sessionDrafts();
-  if (storage !== null) clearPostDraftOf(storage, key, accountId);
+  if (storage !== null) clearPostDraft(storage, key, accountId);
 }
 
 /**
@@ -529,5 +551,5 @@ export function postDraftLandedSince(
   accountId: string,
   moment: number,
 ): boolean {
-  return landings.landedSince(postDraftStorageKey(key), accountId, moment);
+  return landings.landedSince(postDraftScreenKey(key), accountId, moment);
 }

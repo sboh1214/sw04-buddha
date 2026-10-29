@@ -4,7 +4,8 @@ import { Alert, Badge, Button, HStack, Skeleton, Stack, Text } from '@chakra-ui/
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
-import { ACCOUNTS_QUERY_KEY, ME_QUERY_KEY, useLinkedAccounts } from '@/hooks/use-me';
+import { ACCOUNTS_QUERY_KEY, ME_QUERY_KEY, useLinkedAccounts, useMe } from '@/hooks/use-me';
+import { useAuthSessionChanged } from '@/hooks/use-session-changed';
 import {
   CREDENTIAL_PROVIDER_ID,
   SOCIAL_PROVIDERS,
@@ -13,6 +14,7 @@ import {
   type SocialProvider,
 } from '@/lib/auth-client';
 import { MY_SETTINGS_PATH } from '@/lib/my';
+import { ProfileUnavailable } from './profile-unavailable';
 import { SettingsSection } from './section';
 
 const PROVIDER_LABEL: Record<string, string> = {
@@ -29,10 +31,24 @@ const PROVIDER_LABEL: Record<string, string> = {
  * The 해제 button is disabled when only one method remains; the server enforces the same
  * rule (better-auth refuses to unlink the last account unless `allowUnlinkingAll`).
  * A failed provider round-trip comes back as `/my/settings?error=<code>` (settings-notice.tsx).
+ *
+ * 연결 names the account of this screen's `Me` beside better-auth's own body, and the API's hook
+ * compares it with the cookie's (ADR-0092): in the render between the session naming B and
+ * SessionCacheGuard's reset the card is still A's while the cookie is B's, and a link taken with
+ * B's cookie would put the provider A picked on B. Refused, nothing is linked and the session is
+ * asked for again. So the card waits for `GET /me`, as every other MY 설정 card does, and shows
+ * what they show while it is read and when it fails (`ProfileUnavailable` — the skeleton, then
+ * `copy.errProfileLoad` with 다시 시도; owner decision 2026-10-26 17:21 answer 6 «다른 카드처럼
+ * 보임», as the password card since ADR-0091): before, the rows and 해제 stood while 연결 stayed off
+ * with no reason and no retry. 해제 needs no account: it names a login method by its row id, which
+ * better-auth looks up among the cookie's account's rows only.
  */
 export function LinkedAccounts() {
   const queryClient = useQueryClient();
   const accounts = useLinkedAccounts();
+  // The account this screen's `Me` is: the card is drawn once `GET /me` has answered.
+  const { data: me, isPending: mePending } = useMe();
+  const sessionChanged = useAuthSessionChanged();
 
   const invalidate = () =>
     Promise.all([
@@ -41,13 +57,23 @@ export function LinkedAccounts() {
     ]);
 
   const link = useMutation({
-    mutationFn: async (provider: SocialProvider) => {
-      const { error } = await authClient.linkSocial({
-        provider,
-        callbackURL: MY_SETTINGS_PATH,
-        errorCallbackURL: `${MY_SETTINGS_PATH}?error=link`,
-      });
-      if (error) throw new Error(authErrorMessage(error, copy.socialUnavailable));
+    mutationFn: async ({ provider, account }: { provider: SocialProvider; account: string }) => {
+      const { error } = await authClient.linkSocial(
+        {
+          provider,
+          callbackURL: MY_SETTINGS_PATH,
+          errorCallbackURL: `${MY_SETTINGS_PATH}?error=link`,
+        },
+        // better-auth's body has no account; the client merges this one into it.
+        { body: { expectedAccountId: account } },
+      );
+      if (error) {
+        throw new Error(
+          sessionChanged(error)
+            ? copy.sessionChanged
+            : authErrorMessage(error, copy.socialUnavailable),
+        );
+      }
       // Success = the browser is navigating to the provider; nothing else to do here.
     },
     onError: (error) => toaster.create({ type: 'error', title: error.message }),
@@ -80,7 +106,11 @@ export function LinkedAccounts() {
       hint={copy.settingsLinkedHint}
       testId="settings-accounts"
     >
-      {accounts.isPending ? (
+      {/* `!me` covers a failed /me AND the session-gone case, where the query never runs — as the
+          address and password cards do. */}
+      {mePending || !me ? (
+        <ProfileUnavailable />
+      ) : accounts.isPending ? (
         <Skeleton height="32" />
       ) : accounts.isError ? (
         // `data ?? []` would draw every method as 미연결, which is the same false claim the
@@ -127,8 +157,10 @@ export function LinkedAccounts() {
                 <Button
                   size="sm"
                   variant="outline"
-                  loading={link.isPending && link.variables === providerId}
-                  onClick={() => link.mutate(providerId as SocialProvider)}
+                  loading={link.isPending && link.variables?.provider === providerId}
+                  onClick={() =>
+                    link.mutate({ provider: providerId as SocialProvider, account: me.id })
+                  }
                   data-testid={`link-${providerId}`}
                 >
                   {copy.link}

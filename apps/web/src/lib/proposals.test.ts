@@ -475,23 +475,31 @@ describe('the 반려 form', () => {
 
   it('sends a market for a 중복 only, in the API’s shape', () => {
     const market = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
-    const duplicate = toRejectProposalBody({
-      reason: 'duplicate',
-      explanation: ' 같은 시장 ',
-      duplicateMarketId: market,
-    });
+    const duplicate = toRejectProposalBody(
+      { reason: 'duplicate', explanation: ' 같은 시장 ', duplicateMarketId: market },
+      'admin-1',
+    );
     expect(duplicate).toEqual({
       reason: 'duplicate',
       explanation: '같은 시장',
       duplicateMarketId: market,
+      // The admin on screen (ADR-0092).
+      expectedAccountId: 'admin-1',
     });
     // A market left picked under another reason is not sent: the API refuses one there.
-    const other = toRejectProposalBody({
+    const other = toRejectProposalBody(
+      {
+        reason: 'ambiguous_criteria',
+        explanation: '기준이 모호합니다.',
+        duplicateMarketId: market,
+      },
+      'admin-1',
+    );
+    expect(other).toEqual({
       reason: 'ambiguous_criteria',
       explanation: '기준이 모호합니다.',
-      duplicateMarketId: market,
+      expectedAccountId: 'admin-1',
     });
-    expect(other).toEqual({ reason: 'ambiguous_criteria', explanation: '기준이 모호합니다.' });
     expect(rejectProposalBodySchema.safeParse(duplicate).success).toBe(true);
     expect(rejectProposalBodySchema.safeParse(other).success).toBe(true);
   });
@@ -660,24 +668,25 @@ describe('the 채택 form', () => {
   it('sends the API’s shapes: none, a draft with what was given, an existing market', () => {
     const market = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
     const bodies = [
-      toAdoptProposalBody({ ...EMPTY_ADOPT_FORM, memo: '  ' }),
-      toAdoptProposalBody({ ...EMPTY_ADOPT_FORM, market: 'draft', memo: ' 좋은 제안 ' }),
-      toAdoptProposalBody({
-        ...EMPTY_ADOPT_FORM,
-        market: 'draft',
-        categoryId: '4',
-        closeAt: '2026-11-01T09:30',
-      }),
-      toAdoptProposalBody({ ...EMPTY_ADOPT_FORM, market: 'existing', marketId: market }),
+      toAdoptProposalBody({ ...EMPTY_ADOPT_FORM, memo: '  ' }, 'admin-1'),
+      toAdoptProposalBody({ ...EMPTY_ADOPT_FORM, market: 'draft', memo: ' 좋은 제안 ' }, 'admin-1'),
+      toAdoptProposalBody(
+        { ...EMPTY_ADOPT_FORM, market: 'draft', categoryId: '4', closeAt: '2026-11-01T09:30' },
+        'admin-1',
+      ),
+      toAdoptProposalBody({ ...EMPTY_ADOPT_FORM, market: 'existing', marketId: market }, 'admin-1'),
     ];
+    // Each names the admin on screen (ADR-0092).
+    const account = { expectedAccountId: 'admin-1' };
     expect(bodies).toEqual([
-      { memo: null, market: null },
-      { memo: '좋은 제안', market: { type: 'draft' } },
+      { memo: null, market: null, ...account },
+      { memo: '좋은 제안', market: { type: 'draft' }, ...account },
       {
         memo: null,
         market: { type: 'draft', categoryId: 4, closeAt: '2026-11-01T00:30:00.000Z' },
+        ...account,
       },
-      { memo: null, market: { type: 'existing', marketId: market } },
+      { memo: null, market: { type: 'existing', marketId: market }, ...account },
     ]);
     for (const body of bodies) expect(adoptProposalBodySchema.safeParse(body).success).toBe(true);
   });
@@ -710,14 +719,16 @@ describe('the later market link’s form (owner decision 2026-10-19)', () => {
   it('sends the API’s shape: a draft with what was given, or an existing market', () => {
     const market = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
     const bodies = [
-      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, market: 'draft' }),
-      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, market: 'draft', categoryId: '4' }),
-      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, marketId: market }),
+      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, market: 'draft' }, 'admin-1'),
+      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, market: 'draft', categoryId: '4' }, 'admin-1'),
+      toLinkProposalMarketBody({ ...EMPTY_LINK_FORM, marketId: market }, 'admin-1'),
     ];
+    // Each names the admin on screen (ADR-0092).
+    const account = { expectedAccountId: 'admin-1' };
     expect(bodies).toEqual([
-      { market: { type: 'draft' } },
-      { market: { type: 'draft', categoryId: 4 } },
-      { market: { type: 'existing', marketId: market } },
+      { market: { type: 'draft' }, ...account },
+      { market: { type: 'draft', categoryId: 4 }, ...account },
+      { market: { type: 'existing', marketId: market }, ...account },
     ]);
     for (const body of bodies) {
       expect(linkProposalMarketBodySchema.safeParse(body).success).toBe(true);
@@ -786,6 +797,16 @@ describe('adminProposalFailure', () => {
       message: copy.errUnknown,
       refresh: false,
     });
+  });
+
+  it('reads the cookie of another account as the session changed, reading nothing again (ADR-0092)', () => {
+    expect(
+      adminProposalFailure(
+        refused(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toEqual({ message: copy.sessionChanged, refresh: false });
   });
 
   it('reads the path the first issue names, joined, and its own word', () => {

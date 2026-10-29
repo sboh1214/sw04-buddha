@@ -1728,6 +1728,16 @@
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
+          },
+          {
+            "name": "expectedAccountId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
           }
         ],
         "responses": {
@@ -3778,6 +3788,16 @@
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
             }
+          },
+          {
+            "name": "expectedAccountId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
+            }
           }
         ],
         "responses": {
@@ -4122,6 +4142,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -4239,6 +4269,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -6183,6 +6223,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -6290,6 +6340,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -6632,6 +6692,16 @@
               "type": "string",
               "format": "uuid",
               "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          },
+          {
+            "name": "expectedAccountId",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255
             }
           }
         ],
@@ -6999,6 +7069,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -7116,6 +7196,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -11336,6 +11426,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -11443,6 +11543,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -17224,6 +17334,16 @@
             }
           }
         ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExpectedAccountBody"
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "",
@@ -18783,11 +18903,17 @@
           "isActive": {
             "default": true,
             "type": "boolean"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "amountCoin",
-          "priceKrw"
+          "priceKrw",
+          "expectedAccountId"
         ]
       },
       "UpdateChargePackageBody": {
@@ -18814,8 +18940,16 @@
           },
           "isActive": {
             "type": "boolean"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
-        }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "Coupon": {
         "type": "object",
@@ -18910,10 +19044,16 @@
             "nullable": true,
             "type": "string",
             "maxLength": 200
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "amountCoin"
+          "amountCoin",
+          "expectedAccountId"
         ]
       },
       "UpdateCouponBody": {
@@ -18939,8 +19079,16 @@
             "nullable": true,
             "type": "string",
             "maxLength": 200
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
-        }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "AdminUserQuery": {
         "type": "object",
@@ -19026,11 +19174,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 200
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "amountCoin",
-          "memo"
+          "memo",
+          "expectedAccountId"
         ]
       },
       "AdminBalanceAdjustResult": {
@@ -19152,10 +19306,16 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "reason"
+          "reason",
+          "expectedAccountId"
         ]
       },
       "AuditFailure": {
@@ -19755,10 +19915,16 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "marketId"
+          "marketId",
+          "expectedAccountId"
         ]
       },
       "AdminMarket": {
@@ -20095,13 +20261,19 @@
           "slug": {
             "type": "string",
             "pattern": "^[a-z0-9가-힣-]{3,80}$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "title",
           "rules",
           "categoryId",
-          "closeAt"
+          "closeAt",
+          "expectedAccountId"
         ]
       },
       "UpdateMarketBody": {
@@ -20146,8 +20318,29 @@
           "slug": {
             "type": "string",
             "pattern": "^[a-z0-9가-힣-]{3,80}$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
-        }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
+      },
+      "ExpectedAccountBody": {
+        "type": "object",
+        "properties": {
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "ResolveMarketBody": {
         "type": "object",
@@ -20169,10 +20362,16 @@
             "type": "string",
             "maxLength": 500,
             "format": "uri"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "result"
+          "result",
+          "expectedAccountId"
         ]
       },
       "Position": {
@@ -20718,6 +20917,11 @@
             "type": "string",
             "format": "date",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
@@ -20725,7 +20929,8 @@
           "name",
           "intro",
           "startDate",
-          "endDate"
+          "endDate",
+          "expectedAccountId"
         ]
       },
       "AdminTheme": {
@@ -20884,8 +21089,16 @@
             "type": "string",
             "format": "date",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
-        }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "AdminThemeMarket": {
         "type": "object",
@@ -21016,10 +21229,16 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "marketId"
+          "marketId",
+          "expectedAccountId"
         ]
       },
       "CreateThemeNoticeBody": {
@@ -21034,11 +21253,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 5000
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "title",
-          "body"
+          "body",
+          "expectedAccountId"
         ]
       },
       "UpdateThemeNoticeBody": {
@@ -21053,8 +21278,16 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 5000
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
-        }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "ReleaseSettingStatus": {
         "type": "string",
@@ -21208,11 +21441,17 @@
             "type": "string",
             "minLength": 1,
             "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "status",
-          "reason"
+          "reason",
+          "expectedAccountId"
         ]
       },
       "AdminAccount": {
@@ -23155,11 +23394,17 @@
           },
           "body": {
             "description": "A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own."
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "title",
-          "body"
+          "body",
+          "expectedAccountId"
         ]
       },
       "UpdateNoticeBody": {
@@ -23179,12 +23424,18 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "title",
           "body",
-          "expectedEditedAt"
+          "expectedEditedAt",
+          "expectedAccountId"
         ]
       },
       "AdminNoticeUpdateResult": {
@@ -25970,13 +26221,19 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "url",
           "reason",
           "outcome",
-          "through"
+          "through",
+          "expectedAccountId"
         ]
       },
       "AccountClosureCheck": {
@@ -26594,8 +26851,16 @@
                 "$ref": "#/components/schemas/ProposalAdoptionMarket"
               }
             ]
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
-        }
+        },
+        "required": [
+          "expectedAccountId"
+        ]
       },
       "ProposalAdoptionMarket": {
         "oneOf": [
@@ -26651,10 +26916,16 @@
         "properties": {
           "market": {
             "$ref": "#/components/schemas/ProposalAdoptionMarket"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "market"
+          "market",
+          "expectedAccountId"
         ]
       },
       "RejectProposalBody": {
@@ -26673,11 +26944,17 @@
             "type": "string",
             "format": "uuid",
             "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
           "reason",
-          "explanation"
+          "explanation",
+          "expectedAccountId"
         ]
       },
       "ProposalInternalMemoBody": {
@@ -26687,10 +26964,16 @@
             "nullable": true,
             "type": "string",
             "maxLength": 1000
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
           }
         },
         "required": [
-          "memo"
+          "memo",
+          "expectedAccountId"
         ]
       }
     }

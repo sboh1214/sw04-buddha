@@ -26,10 +26,13 @@ import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
+import { OperatorFieldset } from '@/components/ui/operator-fieldset';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { ADMIN_MARKETS_KEY, useCategories } from '@/hooks/use-admin-markets';
-import { api, unwrap } from '@/lib/api';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
+import { type CreateMarketBody, api, unwrap } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
   MARKET_STATUS_LABEL,
@@ -55,6 +58,8 @@ const createSchema = marketFormSchema();
 /** PLAN 12 시장 목록 + 생성 폼. The status filter includes drafts, which the public list hides. */
 export function AdminMarkets() {
   const [status, setStatus] = useState<MarketStatus | ''>('');
+  // The admin on screen: 시장 만들기 is drawn again for each (ADR-0092 answer 1, `OperatorFieldset`).
+  const operatorId = useOperatorId();
 
   // Cursor-paginated, 20 per page (PLAN 7), newest first; the same 더 보기 idiom as the coupon
   // screen. Keyed by filter under the shared prefix so a write invalidates every filter; the
@@ -83,7 +88,7 @@ export function AdminMarkets() {
 
   return (
     <Stack gap="4">
-      <CreateMarketCard />
+      <CreateMarketCard key={operatorId ?? ''} />
 
       {/* A Field, not a Text beside the select: only the label's `htmlFor` gives the select an
           accessible name. Horizontal and shrink-wrapped, so it reads as the one-line filter it
@@ -193,12 +198,19 @@ export function AdminMarkets() {
 
 /**
  * 시장 만들기 → a draft (design 3.4). On success the admin lands on the detail page, where
- * 열기 is: a draft cannot be opened from here, and the rules it may still lack live there.
+ * 열기 is: a draft cannot be opened from here, and the rules it may still lack live there. The
+ * draft is made as the admin on screen (`useOperatorId`, ADR-0092): 만들기 waits for `GET /me`,
+ * and the cookie of another account is refused (`copy.sessionChanged`, the session asked again).
+ * The card is drawn for that admin (keyed by it above) and its fields wait for it too
+ * (`OperatorFieldset`): `['me']` turning from A to B in place drops what A typed (ADR-0092,
+ * owner decision 2026-10-26 17:21 answer 1).
  */
 function CreateMarketCard() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const categories = useCategories();
+  const operatorId = useOperatorId();
+  const sessionChanged = useSessionChanged();
 
   const form = useForm<MarketFormValues>({
     resolver: zodResolver(createSchema),
@@ -211,8 +223,8 @@ function CreateMarketCard() {
   } = form;
 
   const create = useMutation({
-    mutationFn: async (values: MarketFormValues) =>
-      unwrap(await api.POST('/api/v1/admin/markets', { body: toCreateMarketBody(values) })).data,
+    mutationFn: async (body: CreateMarketBody) =>
+      unwrap(await api.POST('/api/v1/admin/markets', { body })).data,
     onSuccess: async (market) => {
       toaster.create({
         type: 'success',
@@ -223,6 +235,7 @@ function CreateMarketCard() {
       router.push(`/admin/markets/${market.id}`);
     },
     onError: (error) => {
+      sessionChanged(error);
       // A taken slug or a retired category lands on its field (design §4); the rest — and a
       // VALIDATION_ERROR naming nothing the form has — is the toast.
       const fieldError = marketFormError(error);
@@ -237,7 +250,10 @@ function CreateMarketCard() {
   // Reset only on success (the coupon screen's rule): a refused form keeps what was typed.
   // Nothing to reset here either — the page navigates away.
   const submit = handleSubmit(async (values) => {
-    await create.mutateAsync(values).catch(() => undefined); // reported by onError
+    if (operatorId === undefined) return;
+    await create
+      .mutateAsync({ ...toCreateMarketBody(values), expectedAccountId: operatorId })
+      .catch(() => undefined); // reported by onError
   });
 
   return (
@@ -259,18 +275,21 @@ function CreateMarketCard() {
           </Alert.Root>
         ) : (
           <form onSubmit={(e) => void submit(e)} noValidate>
-            <Stack gap="3">
-              <MarketFormFields form={form} categories={categories.data} showSlug />
-              <Button
-                type="submit"
-                size="sm"
-                alignSelf="flex-start"
-                loading={isSubmitting}
-                data-testid="market-create"
-              >
-                {copy.adminMarketCreate}
-              </Button>
-            </Stack>
+            <OperatorFieldset disabled={operatorId === undefined}>
+              <Stack gap="3">
+                <MarketFormFields form={form} categories={categories.data} showSlug />
+                <Button
+                  type="submit"
+                  size="sm"
+                  alignSelf="flex-start"
+                  loading={isSubmitting}
+                  disabled={operatorId === undefined}
+                  data-testid="market-create"
+                >
+                  {copy.adminMarketCreate}
+                </Button>
+              </Stack>
+            </OperatorFieldset>
           </form>
         )}
       </Card.Body>

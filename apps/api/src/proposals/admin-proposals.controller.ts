@@ -14,6 +14,7 @@ import {
   adminProposalListQuerySchema,
   adminProposalSchema,
   adoptProposalBodySchema,
+  expectedAccountBodySchema,
   linkProposalMarketBodySchema,
   proposalInternalMemoBodySchema,
   rejectProposalBodySchema,
@@ -21,6 +22,7 @@ import {
   type AdminProposal,
   type AdminProposalListQuery,
   type AdoptProposalBody,
+  type ExpectedAccountBody,
   type LinkProposalMarketBody,
   type ProposalInternalMemoBody,
   type RejectProposalBody,
@@ -28,6 +30,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -41,6 +44,11 @@ import { AdminProposalsService } from './admin-proposals.service.js';
  * /admin route runs them (admin-access.test.ts): SessionGuard, AdminGuard, then OnboardedGuard
  * (ADR-0072). Each move writes its `admin_actions` row in its transaction (admin-audit.test.ts).
  * A move the status does not allow is VALIDATION_ERROR naming `status`.
+ *
+ * Every write names the admin the screen shows (`expectedAccountId`, assertExpectedAccount,
+ * ADR-0092): a mismatch with the cookie is refused (403 FORBIDDEN naming the field) before the
+ * proposal is locked or a draft market made, so a proposal is never moved, linked or annotated as
+ * an admin the user is not looking at.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -84,7 +92,9 @@ export class AdminProposalsController {
   adminStartProposalReview(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminProposal> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.proposals.startReview(admin.id, id);
   }
 
@@ -106,7 +116,9 @@ export class AdminProposalsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: adoptProposalBodySchema }) body: AdoptProposalBody,
   ): Promise<AdminProposal> {
-    return this.proposals.adopt(admin.id, id, body);
+    const { expectedAccountId, ...adoption } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.proposals.adopt(admin.id, id, adoption);
   }
 
   /**
@@ -132,7 +144,9 @@ export class AdminProposalsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: linkProposalMarketBodySchema }) body: LinkProposalMarketBody,
   ): Promise<AdminProposal> {
-    return this.proposals.linkMarket(admin.id, id, body);
+    const { expectedAccountId, ...link } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.proposals.linkMarket(admin.id, id, link);
   }
 
   @Post(':id/reject')
@@ -151,7 +165,9 @@ export class AdminProposalsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: rejectProposalBodySchema }) body: RejectProposalBody,
   ): Promise<AdminProposal> {
-    return this.proposals.reject(admin.id, id, body);
+    const { expectedAccountId, ...rejection } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.proposals.reject(admin.id, id, rejection);
   }
 
   @Put(':id/internal-memo')
@@ -166,6 +182,7 @@ export class AdminProposalsController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: proposalInternalMemoBodySchema }) body: ProposalInternalMemoBody,
   ): Promise<AdminProposal> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.proposals.setInternalMemo(admin.id, id, body.memo);
   }
 }

@@ -77,22 +77,41 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
   const market = (input: Parameters<typeof createMarket>[1] = {}) =>
     createMarket(t.db, { createdBy: admin.id, categoryId: category.id, ...input });
 
+  /** The account a cookie of this suite signs in as; none for a visitor. */
+  const accountOf = (cookie: string | null) =>
+    [admin, other, member].find((user) => user.cookie === cookie)?.id;
+  /**
+   * A request as the screen sends it. A write names the admin on screen (ADR-0092) — the cookie's
+   * own account unless `shown` says another, `null` for none: in the body of a POST or a PATCH
+   * (the bodiless transitions too), in the query of a DELETE.
+   */
   const send = (
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     url: string,
     payload?: object,
     /** `null` for a visitor with no session; the admin's by default. */
     cookie: string | null = admin.cookie,
-  ) =>
-    t.app.inject({
+    shown: string | null | undefined = accountOf(cookie),
+  ) => {
+    const named = method === 'GET' || shown == null ? undefined : shown;
+    const body =
+      (method === 'POST' || method === 'PATCH') && named !== undefined
+        ? { ...payload, expectedAccountId: named }
+        : payload;
+    const query =
+      method === 'DELETE' && named !== undefined
+        ? `?expectedAccountId=${encodeURIComponent(named)}`
+        : '';
+    return t.app.inject({
       method,
-      url: `/api/v1${url}`,
+      url: `/api/v1${url}${query}`,
       headers: {
-        ...(payload === undefined ? { origin: ORIGIN } : jsonHeaders),
+        ...(body === undefined ? { origin: ORIGIN } : jsonHeaders),
         ...(cookie ? { cookie } : {}),
       },
-      ...(payload === undefined ? {} : { payload }),
+      ...(body === undefined ? {} : { payload: body }),
     });
+  };
 
   const data = <T>(res: { json: <U>() => U }) => res.json<{ data: T }>().data;
   const errorOf = (res: { json: <U>() => U }) => res.json<ErrorBody>().error;
@@ -891,5 +910,75 @@ describe.skipIf(!hasTestInfra)('themes for admins (integration)', () => {
     }
     expect(await types()).toEqual(recorded);
     expect(await t.db.select().from(schema.themeMarkets)).toEqual([]);
+  });
+
+  it('refuses every write that names another admin than the cookie’s, and one that names none, before anything is read (ADR-0092)', async () => {
+    const theme = await create();
+    const linked = await withMarket(theme.id);
+    const spare = await market();
+    const notice = data<AdminTheme>(
+      await send('POST', `/admin/themes/${theme.id}/notices`, { title: '안내', body: '내용' }),
+    ).notices[0]!;
+    const writes = [
+      [
+        'POST',
+        '/admin/themes',
+        { slug: 'refused', name: '테마', intro: '소개', ...(await period()) },
+      ],
+      ['PATCH', `/admin/themes/${theme.id}`, { name: '바꿈' }],
+      ['POST', `/admin/themes/${theme.id}/publish`, undefined],
+      ['POST', `/admin/themes/${theme.id}/unpublish`, undefined],
+      ['POST', `/admin/themes/${theme.id}/markets`, { marketId: spare.id }],
+      ['DELETE', `/admin/themes/${theme.id}/markets/${linked.id}`, undefined],
+      ['POST', `/admin/themes/${theme.id}/notices`, { title: '둘째', body: '내용' }],
+      ['PATCH', `/admin/themes/${theme.id}/notices/${notice.id}`, { title: '바꿈' }],
+      ['POST', `/admin/themes/${theme.id}/notices/${notice.id}/hide`, undefined],
+      ['POST', `/admin/themes/${theme.id}/notices/${notice.id}/show`, undefined],
+    ] as const;
+    const recorded = await actions();
+    const before = {
+      themes: await t.db.select().from(schema.themes),
+      markets: await t.db.select().from(schema.themeMarkets),
+      notices: await t.db.select().from(schema.themeNotices),
+    };
+    for (const [method, url, payload] of writes) {
+      // The screen still shows `admin` while the tab's cookie is `other`'s.
+      const refused = await send(method, url, payload, other.cookie, admin.id);
+      expect({ method, url, status: refused.statusCode }).toEqual({ method, url, status: 403 });
+      expect(errorOf(refused).code).toBe('FORBIDDEN');
+      expect(errorOf(refused).details?.[0]?.path).toEqual(['expectedAccountId']);
+      // No account at all: a validation error naming the field (a bodiless POST sends `{}`).
+      const unnamed = await send(
+        method,
+        url,
+        method === 'POST' && payload === undefined ? {} : payload,
+        admin.cookie,
+        null,
+      );
+      expect({ method, url, status: unnamed.statusCode }).toEqual({ method, url, status: 400 });
+      expect(errorOf(unnamed).details?.map((detail) => detail.path)).toEqual([
+        ['expectedAccountId'],
+      ]);
+    }
+    expect(await actions()).toEqual(recorded);
+    expect({
+      themes: await t.db.select().from(schema.themes),
+      markets: await t.db.select().from(schema.themeMarkets),
+      notices: await t.db.select().from(schema.themeNotices),
+    }).toEqual(before);
+    // An edit that names only the account names no field.
+    const empty = await send('PATCH', `/admin/themes/${theme.id}`, {});
+    expect(empty.statusCode).toBe(400);
+    const emptyNotice = await send('PATCH', `/admin/themes/${theme.id}/notices/${notice.id}`, {});
+    expect(emptyNotice.statusCode).toBe(400);
+    // The cookie's own account is taken, and recorded as the one who acted.
+    const published = await send(
+      'POST',
+      `/admin/themes/${theme.id}/publish`,
+      undefined,
+      other.cookie,
+    );
+    expect(published.statusCode, published.body).toBe(200);
+    expect((await actions()).at(-1)).toMatchObject({ type: 'theme_publish', adminId: other.id });
   });
 });

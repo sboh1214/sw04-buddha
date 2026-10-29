@@ -88,12 +88,19 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
     pack = await createTestPackage(t.db);
   });
 
-  const refund = (paymentId: string, reason: string = REASON, cookie = admin.cookie) =>
+  // A refund names the admin on screen (ADR-0092, Q-PG-8 ①): `who`'s own account unless `named`
+  // says another, or none (`null`).
+  const refund = (
+    paymentId: string,
+    reason: string = REASON,
+    who: TestUser = admin,
+    named: string | null = who.id,
+  ) =>
     t.app.inject({
       method: 'POST',
       url: `/api/v1/admin/payments/${paymentId}/refund`,
-      headers: { ...jsonHeaders, cookie },
-      payload: { reason },
+      headers: { ...jsonHeaders, cookie: who.cookie },
+      payload: { reason, ...(named === null ? {} : { expectedAccountId: named }) },
     });
 
   /** A charge of `member` through the immediate flow: 10,000 Coin credited. */
@@ -284,7 +291,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
       method: 'POST',
       url: `/api/v1/admin/users/${member.id}/balance-adjust`,
       headers: { ...jsonHeaders, cookie: admin.cookie },
-      payload: { amountCoin: '-1', memo: 'spent' },
+      payload: { amountCoin: '-1', memo: 'spent', expectedAccountId: admin.id },
     });
     expect(spent.statusCode).toBe(200);
 
@@ -335,11 +342,59 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
 
   it('validates the request: admin only, a reason, a known payment', async () => {
     const { id } = await charge();
-    expect((await refund(id, REASON, member.cookie)).statusCode).toBe(403);
+    expect((await refund(id, REASON, member)).statusCode).toBe(403);
     expect((await refund(id, '   ')).statusCode).toBe(400);
     expect((await refund('3f1a5b6c-1111-4222-8333-444455556666')).statusCode).toBe(404);
     expect((await refund('not-a-uuid')).statusCode).toBe(400);
     expect(await paymentRow(id)).toMatchObject({ status: 'succeeded' });
+  });
+
+  it('refuses a refund that names another admin than the cookie’s, or none, before the payment is read (Q-PG-8 ①, ADR-0092)', async () => {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    const { id } = await charge();
+    const snapshot = async () => ({
+      payment: await paymentRow(id),
+      balance: await balanceOf(member.id),
+      ledger: await ledgerOf(member.id),
+      events: await eventsOf(id),
+      actions: await t.db.select().from(schema.adminActions),
+    });
+    const before = await snapshot();
+    type Refusal = { error: { code: string; details?: { path: (string | number)[] }[] } };
+
+    // The screen still shows `admin` while the tab's cookie is `other`'s: refused before the
+    // payment is read — an unknown one is the same 403, not the 404 the lookup answers.
+    for (const paymentId of [id, '3f1a5b6c-1111-4222-8333-444455556666']) {
+      const res = await refund(paymentId, REASON, other, admin.id);
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json<Refusal>().error.code).toBe('FORBIDDEN');
+      expect(res.json<Refusal>().error.details?.[0]?.path).toEqual(['expectedAccountId']);
+    }
+    // No account at all: a validation error naming the field.
+    const unnamed = await refund(id, REASON, admin, null);
+    expect(unnamed.statusCode, unnamed.body).toBe(400);
+    expect(unnamed.json<Refusal>().error.details?.map((detail) => detail.path)).toEqual([
+      ['expectedAccountId'],
+    ]);
+    // No Coin clawed back, no cancel asked of the PG, nothing audited.
+    expect(await snapshot()).toEqual(before);
+    expect(cancels).toHaveLength(0);
+
+    // The cookie's own account is taken, and audited as that admin.
+    const own = await refund(id, REASON, other);
+    expect(own.statusCode, own.body).toBe(200);
+    expect(await paymentRow(id)).toMatchObject({ status: 'refunded' });
+    const actions = await refundActions();
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ adminId: other.id, targetId: id });
+    // The account is not kept with what the refund records.
+    expect(JSON.stringify(actions[0]!.payload)).not.toContain('expectedAccountId');
   });
 
   it('puts the Coin back when the PG refuses the cancel (PAYMENT_CANCEL_REVERSAL)', async () => {
@@ -791,7 +846,7 @@ describe.skipIf(!hasTestInfra)('admin payment refund (integration)', () => {
         method: 'POST',
         url: `/api/v1/admin/users/${member.id}/balance-adjust`,
         headers: { ...jsonHeaders, cookie: admin.cookie },
-        payload: { amountCoin, memo },
+        payload: { amountCoin, memo, expectedAccountId: admin.id },
       });
     expect((await adjustBy('2500', 'other coin')).statusCode).toBe(200);
     const { id } = await charge();

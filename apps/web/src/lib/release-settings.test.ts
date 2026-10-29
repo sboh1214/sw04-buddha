@@ -176,11 +176,9 @@ describe('value input', () => {
     expect(
       releaseSettingFormSchema(STRING).safeParse({ ...values, status: 'approved' }).success,
     ).toBe(true);
-    expect(toReleaseSettingChangeBody({ ...values, status: 'approved' }, STRING)).toEqual({
-      status: 'approved',
-      value: '',
-      reason: '승인',
-    });
+    expect(
+      toReleaseSettingChangeBody({ ...values, status: 'approved' }, STRING, 'admin-1'),
+    ).toEqual({ status: 'approved', value: '', reason: '승인', expectedAccountId: 'admin-1' });
     expect(releaseSettingFormUnchanged(values, empty)).toBe(true);
     expect(releaseSettingFormUnchanged({ status: 'test', value: ' ' }, empty)).toBe(false);
   });
@@ -223,16 +221,30 @@ describe('releaseSettingFormSchema', () => {
 });
 
 describe('toReleaseSettingChangeBody', () => {
-  it('sends no value while 미정, and the parsed value otherwise', () => {
+  it('sends no value while 미정, and the parsed value otherwise — as the admin on screen', () => {
+    // ADR-0092: every change names the admin on screen, which the server checks.
+    const account = { expectedAccountId: 'admin-1' };
     expect(
-      toReleaseSettingChangeBody({ status: 'undecided', value: '24', reason: '보류' }, INTEGER),
-    ).toEqual({ status: 'undecided', reason: '보류' });
+      toReleaseSettingChangeBody(
+        { status: 'undecided', value: '24', reason: '보류' },
+        INTEGER,
+        'admin-1',
+      ),
+    ).toEqual({ status: 'undecided', reason: '보류', ...account });
     expect(
-      toReleaseSettingChangeBody({ status: 'test', value: '24', reason: '시험' }, INTEGER),
-    ).toEqual({ status: 'test', value: 24, reason: '시험' });
+      toReleaseSettingChangeBody(
+        { status: 'test', value: '24', reason: '시험' },
+        INTEGER,
+        'admin-1',
+      ),
+    ).toEqual({ status: 'test', value: 24, reason: '시험', ...account });
     expect(
-      toReleaseSettingChangeBody({ status: 'approved', value: '24', reason: '승인' }, STRING),
-    ).toEqual({ status: 'approved', value: '24', reason: '승인' });
+      toReleaseSettingChangeBody(
+        { status: 'approved', value: '24', reason: '승인' },
+        STRING,
+        'admin-1',
+      ),
+    ).toEqual({ status: 'approved', value: '24', reason: '승인', ...account });
   });
 
   it('starts the dialog from the item as it stands, with no reason', () => {
@@ -314,6 +326,14 @@ describe('releaseSettingChangeRefusal', () => {
       tone: 'error',
       keepDialog: false,
     });
+    // The cookie of another account (ADR-0092): nothing changed, the session changed.
+    expect(
+      releaseSettingChangeRefusal(
+        apiError(403, 'FORBIDDEN', [
+          { path: ['expectedAccountId'], message: 'session belongs to another account' },
+        ]),
+      ),
+    ).toEqual({ toast: copy.sessionChanged, tone: 'error', keepDialog: false });
     expect(releaseSettingChangeRefusal(apiError(401, 'UNAUTHENTICATED'))).toEqual({
       toast: copy.errUnauthenticated,
       tone: 'error',

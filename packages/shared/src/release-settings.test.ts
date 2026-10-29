@@ -403,7 +403,7 @@ describe('readReleaseSetting', () => {
 
 describe('DTO schemas', () => {
   it('requires a trimmed, non-empty reason of at most 500 characters', () => {
-    const body = { status: 'test', value: 24 };
+    const body = { status: 'test', value: 24, expectedAccountId: 'admin-1' };
     expect(
       releaseSettingChangeBodySchema.parse({ ...body, reason: '  시뮬레이션 반영  ' }),
     ).toEqual({
@@ -413,13 +413,26 @@ describe('DTO schemas', () => {
     for (const reason of [undefined, '', '   ', 'x'.repeat(501)]) {
       expect(releaseSettingChangeBodySchema.safeParse({ ...body, reason }).success).toBe(false);
     }
-    expect(releaseSettingChangeBodySchema.safeParse({ status: 'final', reason: 'x' }).success).toBe(
-      false,
-    );
+    expect(
+      releaseSettingChangeBodySchema.safeParse({
+        status: 'final',
+        reason: 'x',
+        expectedAccountId: 'admin-1',
+      }).success,
+    ).toBe(false);
+  });
+
+  it('names the admin on screen (ADR-0092)', () => {
+    const parsed = releaseSettingChangeBodySchema.safeParse({
+      status: 'test',
+      value: 24,
+      reason: '시뮬레이션 반영',
+    });
+    expect(parsed.error?.issues.map(({ path }) => path)).toEqual([['expectedAccountId']]);
   });
 
   it('refuses a reason jsonb cannot hold, naming the reason (Codex #201)', () => {
-    const body = { status: 'test', value: 24 };
+    const body = { status: 'test', value: 24, expectedAccountId: 'admin-1' };
     for (const [reason, message] of [
       [NUL, JSONB_NUL_MESSAGE],
       [`  ${NUL}  `, JSONB_NUL_MESSAGE],

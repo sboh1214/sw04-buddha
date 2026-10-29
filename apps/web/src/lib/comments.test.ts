@@ -4,6 +4,7 @@ import {
   COMMENT_REPLIES_PAGE_SIZE,
   commentBodyTooLongMessage,
 } from '@buddha/shared';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { PostByline } from '@/components/post/post-author';
 import { copy } from '@/copy';
@@ -25,6 +26,7 @@ import {
   type RepliesOnScreen,
   type ReplyPage,
   commentBoxRefusal,
+  commentBoxesOwner,
   commentCountText,
   commentDraft,
   commentLengthText,
@@ -1668,5 +1670,77 @@ describe('a byline through a read of the pages (PR #224, ADR-0078 7-31)', () => 
     expect(a!.comment.state === 'published' && a!.comment.author).toBe(author);
     expect(a!.replies[0]!.state === 'published' && a!.replies[0]!.author).toBe(author);
     expect(b!.comment).toMatchObject({ author: { nickname: '새이름' } });
+  });
+});
+
+describe('the comment boxes drawn for the account on screen (ADR-0092, 오너 결정 2026-10-26 17:21 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»)', () => {
+  // `['me']` can turn from A to B in place, before the session does (ADR-0090 결정 4-2): a box that
+  // stayed would hold what A typed under B's name, its 올리기 sent as B with B's cookie — and a 답글
+  // or 수정 box A opened would stay open for B. The section draws its boxes for the account on
+  // screen: the threads (every 답글 and 수정 box is under one) by the boxes' turn, the new 댓글's
+  // box by the account; A's boxes, going, keep A's text as A's draft (hooks/use-comment-draft.ts).
+
+  it('moves the turn on whenever the account known turns into another, in place or after nobody', () => {
+    const first = { accountId: undefined, turn: 0 };
+    // `GET /me` not answered yet, then its first answer: the same turn — no box was drawn before.
+    expect(commentBoxesOwner(first, undefined)).toBe(first);
+    const a = commentBoxesOwner(first, 'account-a');
+    expect(a).toEqual({ accountId: 'account-a', turn: 0 });
+    expect(commentBoxesOwner(a, 'account-a')).toBe(a);
+    // A to B in place: a new turn.
+    const b = commentBoxesOwner(a, 'account-b');
+    expect(b).toEqual({ accountId: 'account-b', turn: 1 });
+    // Nobody (SessionCacheGuard's reset, a sign-out) moves nothing; the same account back neither;
+    // another after it does (A, nobody, B).
+    expect(commentBoxesOwner(b, undefined)).toBe(b);
+    expect(commentBoxesOwner(commentBoxesOwner(b, undefined), 'account-b')).toBe(b);
+    expect(commentBoxesOwner(commentBoxesOwner(b, undefined), 'account-a')).toEqual({
+      accountId: 'account-a',
+      turn: 2,
+    });
+  });
+
+  it('keys the threads by the turn and the new 댓글’s box by the account, and keeps the writer’s texts as the account turns', () => {
+    // No component renders under node: the section's wiring is pinned in its source.
+    const section = readFileSync(
+      new URL('../components/post/comments-section.tsx', import.meta.url),
+      'utf8',
+    );
+    expect(section).toContain(
+      'const boxesNow = commentBoxesOwner(boxesOwner, viewerAccountId);\n  if (boxesNow !== boxesOwner) setBoxesOwner(boxesNow);',
+    );
+    expect(section).toMatch(
+      /<Thread\n\s+\/\/ [^\n]*\n\s+key=\{`\$\{thread\.comment\.id\}:\$\{String\(boxesNow\.turn\)\}`\}/,
+    );
+    expect(section).toMatch(
+      /<CommentComposer\n\s+\/\/ [^\n]*\n\s+key=\{viewer\.accountId\}\n\s+postId=\{post\.id\}\n\s+parentId=\{null\}/,
+    );
+    // The texts the section drew for the writer — shown apart, on their way, taken back — are kept
+    // as the writer's, in a layout effect — before the boxes the turn takes away keep their own
+    // (theirs win) — and before it moves on. With nobody on screen — SessionCacheGuard's reset —
+    // the account given is none, and whether they go with a turn is the session's to say
+    // (`goesWithAccountTurn` in `keepSectionTextsForTurn`, ADR-0092 결정 10, 8-36, 오너 결정
+    // 2026-10-26 21:00 답 1).
+    expect(section).toMatch(
+      /useLayoutEffect\(\(\) => \{\s+keepSectionTextsForTurn\(drawnFor\.current, viewerAccountId\);\s+drawnFor\.current = \{\s+postId: post\.id,\s+accountId: viewerAccountId,\s+held: heldTexts\.held,\s+awaiting,\s+drafts,\s+moment: commentDraftMoment\(\),\s+\};\s+\}\);/,
+    );
+    expect(section).toContain('const { awaiting } = heldTexts;');
+  });
+
+  it('keeps the writer’s texts as the section goes in the very render `GET /me` names another account — the gate’s placeholder for an account with a first onboarding step left (ADR-0092 8-26)', () => {
+    const section = readFileSync(
+      new URL('../components/post/comments-section.tsx', import.meta.url),
+      'utf8',
+    );
+    // What the last commit drew, the texts on their way with it, and the moment it drew them …
+    expect(section).toMatch(
+      /useEffect\(\(\) => \{\s+onScreen\.current = \{\s+accountId: viewerAccountId,\s+held: heldTexts\.held,\s+awaiting,\s+drafts,\s+moment: commentDraftMoment\(\),\s+\};\s+\}\);/,
+    );
+    // … kept by the cleanup for a step left of the writer or for the writer as `['me']` names
+    // another account — not for a step alone, which keeps nothing then.
+    expect(section).toMatch(
+      /useEffect\(\s+\(\) => \(\) => \{\s+keepSectionTextsAsItGoes\(\s+\{ postId: post\.id, \.\.\.onScreen\.current \},\s+queryClient\.getQueryData<Me>\(ME_QUERY_KEY\),\s+\);\s+\},\s+\[post\.id, queryClient\],\s+\);/,
+    );
+    expect(section).not.toContain('keepSectionTextsForStep(');
   });
 });

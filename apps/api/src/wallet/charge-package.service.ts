@@ -5,6 +5,7 @@ import {
   type ChargePackage,
   type CreateChargePackageBody,
   type UpdateChargePackageBody,
+  type WithoutExpectedAccount,
 } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { AppError } from '../common/errors/app-error.js';
@@ -60,7 +61,10 @@ export class ChargePackageService {
     return rows.map(toChargePackage);
   }
 
-  async create(adminId: string, input: CreateChargePackageBody): Promise<ChargePackage> {
+  async create(
+    adminId: string,
+    input: WithoutExpectedAccount<CreateChargePackageBody>,
+  ): Promise<ChargePackage> {
     return this.db.transaction(async (tx) => {
       const [row] = await tx
         .insert(schema.chargePackages)
@@ -86,7 +90,7 @@ export class ChargePackageService {
   async update(
     adminId: string,
     id: string,
-    input: UpdateChargePackageBody,
+    input: WithoutExpectedAccount<UpdateChargePackageBody>,
   ): Promise<ChargePackage> {
     return this.db.transaction(async (tx) => {
       // Both halves of the price/amount pair matter to the CHECK, so the missing half is read

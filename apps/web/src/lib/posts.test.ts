@@ -437,7 +437,7 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
     expect(edit).toContain('!isOwnPost(shown.author, writer.publicId)');
     // The form hears the post gone, closes it, and says what it holds.
     expect(edit).toMatch(
-      /<EditForm\s+key=\{closings\}\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+held=\{held\}\s+heldMessage=\{postEditHeldMessage\(state\)\}\s+heldHidden=\{state\.hidden\}\s+onClose=\{\(\) => \{\s*setState\(postEditClosed\(state\)\);\s*setClosings\(closings \+ 1\);\s*\}\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
+      /<EditForm\s+(?:\/\/[^\n]*\n\s+)*key=\{`\$\{String\(closings\)\}:\$\{writer\.accountId\}`\}\s+post=\{shown\}\s+accountId=\{writer\.accountId\}\s+held=\{held\}\s+heldMessage=\{postEditHeldMessage\(state\)\}\s+heldHidden=\{state\.hidden\}\s+onClose=\{\(\) => \{\s*setState\(postEditClosed\(state\)\);\s*setClosings\(closings \+ 1\);\s*\}\}\s+onHoldingChange=\{setFormHolding\}\s+\/>/,
     );
     expect(edit).toMatch(
       /gone=\{held\}\s+goneMessage=\{heldMessage\}\s+goneAction=\{heldHidden \? <HiddenModerationLink \/> : undefined\}\s+onClose=\{onClose\}\s+onHoldingChange=\{onHoldingChange\}\s+onSubmit=/,
@@ -1231,12 +1231,42 @@ describe('the write screen’s market (writeScreenMarket, writeScreenView)', () 
       /setHeld\(\(current\) => writeScreenMarket\(current, \{ kind: 'picked', market: picked \}\)\);\s*router\.replace\(writePath\(picked\.id\)/,
     );
     expect(screen).toContain('<WriteGate back={view.back}>');
-    expect(screen).toMatch(/view\.kind === 'form' \?\s*\(\s*<WriteForm market=\{view\.market\}/);
+    expect(screen).toMatch(
+      /view\.kind === 'form' \?\s*\(\s*(?:\/\/[^\n]*\n\s+)*<WriteForm\s+key=\{writer\.accountId\}\s+market=\{view\.market\}/,
+    );
     expect(screen).toContain("view.kind === 'failed' ?");
     // What the screen shows comes from those steps alone.
     expect(screen).not.toMatch(/writeMarketAfter|lookup\.kind|setShown/);
     const page = source('../app/community/write/page.tsx');
     expect(page).toContain('const lookup = await lookUpWriteMarketServer(marketId);');
     expect(page).toContain('<WriteScreen lookup={lookup} />');
+  });
+});
+
+describe('the write and edit forms drawn for the account on screen (ADR-0092, 오너 결정 2026-10-26 17:21 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»)', () => {
+  // `['me']` can turn from A to B in place, before the session does (ADR-0090 결정 4-2): a form
+  // that stayed would hand B what A typed, its button on, sent as B with B's cookie. Each form is
+  // drawn for the account on screen (`key`), and A's, going, keeps what A typed as A's draft of the
+  // screen for the hour (`keepOnAccountTurn`, hooks/use-post-draft.ts — use-notices.test.ts walks
+  // the keeping and the taking back): A, on the screen again, takes it back. No component renders
+  // under node, so the wiring is pinned in the sources; e2e posts.spec.ts drives the screens.
+  const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+
+  it('keys the write screen’s form by the account and keeps its draft for its writer', () => {
+    const write = source('../app/community/write/write-screen.tsx');
+    expect(write).toMatch(
+      /<WriteForm\n\s+key=\{writer\.accountId\}\n\s+market=\{view\.market\}\n\s+accountId=\{writer\.accountId\}/,
+    );
+    expect(write).toMatch(
+      /draftKey=\{\{ kind: 'new', marketId: market\.id \}\}\n\s+accountId=\{accountId\}\n\s+keepOnAccountTurn\n/,
+    );
+  });
+
+  it('keys the edit screen’s form by its 닫기 and the account and keeps its draft for its writer', () => {
+    const edit = source('../app/community/posts/[postId]/edit/edit-screen.tsx');
+    expect(edit).toContain('key={`${String(closings)}:${writer.accountId}`}');
+    expect(edit).toMatch(
+      /draftKey=\{\{ kind: 'edit', postId: post\.id \}\}\n\s+accountId=\{accountId\}\n(\s+\/\/ [^\n]*\n)*\s+keepOnAccountTurn\n/,
+    );
   });
 });

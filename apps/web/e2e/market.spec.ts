@@ -1,13 +1,14 @@
 import { type Locator, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
-  REALTIME_BUDGET_MS,
+  accountIdOf,
   adminAccount,
   closeMarket,
   createOpenMarket,
   detailCopyTestId,
   expect,
   expectYellowWarning,
+  REALTIME_BUDGET_MS,
   signIn,
   subscribed,
   test,
@@ -363,7 +364,10 @@ test.describe('시장 상세', () => {
     await joined;
     await expect(page.getByTestId('watch-button')).toBeVisible();
     const edited = await admin.patch(`/api/v1/admin/markets/${market.id}`, {
-      data: { description: '가격을 다시 읽게 하는 편집' },
+      data: {
+        description: '가격을 다시 읽게 하는 편집',
+        expectedAccountId: await accountIdOf(admin),
+      },
     });
     expect(edited.ok(), await edited.text()).toBe(true);
 
@@ -474,7 +478,7 @@ test.describe('시장 상세', () => {
     await markDocument(page);
     const rewritten = '고친 배경\n새 둘째 줄';
     const edited = await admin.patch(`/api/v1/admin/markets/${market.id}`, {
-      data: { description: rewritten },
+      data: { description: rewritten, expectedAccountId: await accountIdOf(admin) },
     });
     expect(edited.ok(), await edited.text()).toBe(true);
     await expect.poll(drawn).toBe(rewritten);

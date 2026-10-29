@@ -17,6 +17,7 @@ export * from './api/idempotency.js';
 export * from './api/coin-amount.js';
 export * from './constants.js';
 export * from './enums.js';
+export * from './expected-account.js';
 export { COIN_UNIT, MINUS_SIGN, formatCoin, formatKrw } from './format.js';
 export * from './guards/excluded.js';
 export * from './guards/notifications.js';

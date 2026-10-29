@@ -1,7 +1,17 @@
 import type { APIRequestContext, APIResponse, Locator, Page, Route } from '@playwright/test';
 import { type Me, NOTICE_PIN_LIMIT } from '@buddha/shared';
 import { copy } from '../src/copy';
-import { adminAccount, expect, freshEmail, freshTag, meOf, signIn, signUp, test } from './helpers';
+import {
+  accountIdOf,
+  adminAccount,
+  expect,
+  freshEmail,
+  freshTag,
+  meOf,
+  signIn,
+  signUp,
+  test,
+} from './helpers';
 
 /**
  * 운영 공지 (#138, ADR-0077; owner decisions in ADR-0069 decision 2 #45-8 and decision 4 #138): an
@@ -143,13 +153,19 @@ const isPinnedRead = (url: URL) => url.pathname === '/api/v1/notices';
 /** Every pinned notice unpinned through the admin API: the area starts empty, whatever ran before. */
 async function unpinAll(admin: APIRequestContext): Promise<void> {
   const pinned = await dataOf<{ id: string }[]>(await admin.get(`${NOTICES}?state=pinned`));
-  for (const { id } of pinned) await dataOf(await admin.post(`${NOTICES}/${id}/unpin`));
+  for (const { id } of pinned)
+    await dataOf(
+      await admin.post(`${NOTICES}/${id}/unpin`, {
+        data: { expectedAccountId: await accountIdOf(admin) },
+      }),
+    );
 }
 
 /** A notice straight at the admin API, unpinned, for a step whose subject is not its writing. */
 async function noticeThroughApi(admin: APIRequestContext, title: string): Promise<string> {
   const res = await admin.post(NOTICES, {
     data: {
+      expectedAccountId: await accountIdOf(admin),
       title,
       body: {
         type: 'doc',
@@ -178,6 +194,7 @@ async function noticeWithImageThroughApi(
   const mediaId = (await dataOf<{ id: string }>(uploaded)).id;
   const res = await admin.post(NOTICES, {
     data: {
+      expectedAccountId: await accountIdOf(admin),
       title,
       body: {
         type: 'doc',
@@ -480,8 +497,16 @@ test.describe('운영 공지 (#138)', () => {
         const second = await noticeThroughApi(admin, `둘째 공지 ${tag}`);
         const third = await noticeThroughApi(admin, `셋째 공지 ${tag}`);
         const fourth = await noticeThroughApi(admin, `넷째 공지 ${tag}`);
-        await dataOf(await admin.post(`${NOTICES}/${second}/pin`));
-        await dataOf(await admin.post(`${NOTICES}/${third}/pin`));
+        await dataOf(
+          await admin.post(`${NOTICES}/${second}/pin`, {
+            data: { expectedAccountId: await accountIdOf(admin) },
+          }),
+        );
+        await dataOf(
+          await admin.post(`${NOTICES}/${third}/pin`, {
+            data: { expectedAccountId: await accountIdOf(admin) },
+          }),
+        );
         await page.goto('/admin/notices');
         await expect(page.getByTestId('admin-notices-pinned-count')).toHaveText(
           `${String(NOTICE_PIN_LIMIT)} / ${String(NOTICE_PIN_LIMIT)}`,
@@ -494,7 +519,9 @@ test.describe('운영 공지 (#138)', () => {
         );
         await expect(pinnedList(page).getByTestId(`admin-notice-${first}`)).toBeVisible();
         await expectError(
-          await admin.post(`${NOTICES}/${fourth}/pin`),
+          await admin.post(`${NOTICES}/${fourth}/pin`, {
+            data: { expectedAccountId: await accountIdOf(admin) },
+          }),
           409,
           'NOTICE_PIN_LIMIT_REACHED',
         );
@@ -532,7 +559,11 @@ test.describe('운영 공지 (#138)', () => {
         );
         await page.getByTestId('admin-notice-pin').click();
         await expect(page.getByText(copy.errNoticePinLimit)).toBeVisible();
-        await dataOf(await admin.post(`${NOTICES}/${second}/unpin`));
+        await dataOf(
+          await admin.post(`${NOTICES}/${second}/unpin`, {
+            data: { expectedAccountId: await accountIdOf(admin) },
+          }),
+        );
         await page.getByTestId('admin-notice-pin').click();
         await expect(page.getByTestId('admin-notice-state')).toHaveText(
           copy.adminNoticeStatePinned,
@@ -699,6 +730,7 @@ test.describe('운영 공지 (#138)', () => {
     await dataOf(
       await secondAdmin.put(`${NOTICES}/${id}`, {
         data: {
+          expectedAccountId: await accountIdOf(secondAdmin),
           title: theirTitle,
           body: {
             type: 'doc',
@@ -753,6 +785,7 @@ test.describe('운영 공지 (#138)', () => {
     await expectError(
       await admin.put(`${NOTICES}/${id}`, {
         data: {
+          expectedAccountId: await accountIdOf(admin),
           title: typed,
           body: {
             type: 'doc',
@@ -864,6 +897,7 @@ test.describe('운영 공지 (#138)', () => {
     await dataOf(
       await secondAdmin.put(`${NOTICES}/${id}`, {
         data: {
+          expectedAccountId: await accountIdOf(secondAdmin),
           title: theirTitle,
           body: {
             type: 'doc',
@@ -986,6 +1020,7 @@ test.describe('운영 공지 (#138)', () => {
     await dataOf(
       await admin.put(`${NOTICES}/${id}`, {
         data: {
+          expectedAccountId: await accountIdOf(admin),
           title: `${edited} 다른 탭`,
           body: {
             type: 'doc',
@@ -1032,6 +1067,8 @@ test.describe('운영 공지 (#138)', () => {
     const editor = page.getByTestId('post-editor-content');
     const restored = page.getByTestId('post-draft-restored');
     await signIn(page, adminAccount.email, adminAccount.password);
+    // The draft is kept under the screen's item for the admin who typed it (ADR-0092 답 2).
+    const kept = `buddha.postDraft:notice-new@${(await meOf(page.request)).id}`;
     const reconsent = await asReconsent(page);
     const write = '/admin/notices/new';
     const step = `/onboarding?next=${encodeURIComponent(write)}`;
@@ -1057,7 +1094,7 @@ test.describe('운영 공지 (#138)', () => {
     await expect(page).toHaveURL(step);
     await expect(page.getByTestId('consent-step')).toBeVisible();
     expect(asked).toEqual([]);
-    expect(await draftsInTab(page)).toEqual(['buddha.postDraft:notice-new']);
+    expect(await draftsInTab(page)).toEqual([kept]);
 
     // --- the step done: back on the write screen, the draft taken back and said so.
     await agreeAgain(page);
@@ -1095,7 +1132,7 @@ test.describe('운영 공지 (#138)', () => {
     await page.keyboard.type('버릴 안내');
     await page.getByTestId('post-submit').click();
     await expect(page).toHaveURL(step);
-    expect(await draftsInTab(page)).toEqual(['buddha.postDraft:notice-new']);
+    expect(await draftsInTab(page)).toEqual([kept]);
     // This time the step is done where it brings nobody back (the re-consent answered elsewhere),
     // and the write screen is loaded afresh in this tab: `GET /me` is not in the page, and the form
     // waits for it — made before it, it would skip the draft and leave it in the tab.
@@ -1158,7 +1195,7 @@ test.describe('운영 공지 (#138)', () => {
     const id = await noticeThroughApi(admin, original);
     const edit = `/admin/notices/${id}`;
     const step = `/onboarding?next=${encodeURIComponent(edit)}`;
-    const key = `buddha.postDraft:notice-edit:${id}`;
+    const key = `buddha.postDraft:notice-edit:${id}@${(await meOf(page.request)).id}`;
     const isUpdate = (url: URL) => url.pathname === `${NOTICES}/${id}`;
     const refuseUpdate = async (route: Route) => {
       if (route.request().method() !== 'PUT') return route.fallback();
@@ -1231,6 +1268,7 @@ test.describe('운영 공지 (#138)', () => {
     const theirSave = await dataOf<{ notice: { editedAt: string | null } }>(
       await secondAdmin.put(`${NOTICES}/${id}`, {
         data: {
+          expectedAccountId: await accountIdOf(secondAdmin),
           title: theirs,
           body: {
             type: 'doc',
@@ -1316,6 +1354,7 @@ test.describe('운영 공지 (#138)', () => {
     await dataOf(
       await secondAdmin.put(`${NOTICES}/${id}`, {
         data: {
+          expectedAccountId: await accountIdOf(secondAdmin),
           title: `다른 운영자가 고친 제목 ${tag}`,
           body: {
             type: 'doc',

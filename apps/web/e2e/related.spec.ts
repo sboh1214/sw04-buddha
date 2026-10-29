@@ -1,13 +1,14 @@
 import { type APIRequestContext, type Page } from '@playwright/test';
 import { copy } from '../src/copy';
 import {
-  REALTIME_BUDGET_MS,
+  accountIdOf,
   adminAccount,
   closeMarket,
   createOpenMarket,
   expect,
   expectYellowWarning,
   freshTag,
+  REALTIME_BUDGET_MS,
   signIn,
   subscribed,
   test,
@@ -33,7 +34,7 @@ const card = (page: Page, id: string) => related(page).getByTestId(`market-card-
 /** `POST /admin/markets/:id/related` straight at the API, for a spec whose subject is not the UI. */
 async function linkThroughApi(admin: APIRequestContext, id: string, relatedId: string) {
   const res = await admin.post(`/api/v1/admin/markets/${id}/related`, {
-    data: { marketId: relatedId },
+    data: { marketId: relatedId, expectedAccountId: await accountIdOf(admin) },
   });
   expect(res.status(), await res.text()).toBe(200);
 }

@@ -18,6 +18,8 @@ import {
   createThemeBodySchema,
   createThemeNoticeBodySchema,
   cursorQuerySchema,
+  expectedAccountBodySchema,
+  expectedAccountQuerySchema,
   linkThemeMarketBodySchema,
   updateThemeBodySchema,
   updateThemeNoticeBodySchema,
@@ -28,6 +30,8 @@ import {
   type CreateThemeBody,
   type CreateThemeNoticeBody,
   type CursorQuery,
+  type ExpectedAccountBody,
+  type ExpectedAccountQuery,
   type LinkThemeMarketBody,
   type UpdateThemeBody,
   type UpdateThemeNoticeBody,
@@ -35,6 +39,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -50,6 +55,12 @@ import { ThemeAdminService } from './theme-admin.service.js';
  * write records the admin and the time in `admin_actions` when it changes something
  * (admin-audit.test.ts's AUDITED); none asks a reason or a second admin (ADR-0069 decision 4).
  * There is no DELETE of a theme or a notice: a theme is unpublished, a notice hidden.
+ *
+ * Every write names the admin the screen shows (`expectedAccountId` — in the body, or the query
+ * of a market's removal, whose DELETE has no body; assertExpectedAccount, ADR-0092): a mismatch
+ * with the cookie is refused (403 FORBIDDEN naming the field) before anything is read, locked or
+ * written, so a theme is never changed as an admin the user is not looking at. The services are
+ * handed the rest of the body.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -87,7 +98,9 @@ export class AdminThemesController {
     @CurrentUser() admin: SessionUser,
     @Body({ schema: createThemeBodySchema }) body: CreateThemeBody,
   ): Promise<AdminTheme> {
-    return this.themes.create(admin.id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.themes.create(admin.id, fields);
   }
 
   @Get(':id')
@@ -117,7 +130,9 @@ export class AdminThemesController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: updateThemeBodySchema }) body: UpdateThemeBody,
   ): Promise<AdminTheme> {
-    return this.themes.update(admin.id, id, body);
+    const { expectedAccountId, ...fields } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.themes.update(admin.id, id, fields);
   }
 
   @Post(':id/publish')
@@ -133,7 +148,9 @@ export class AdminThemesController {
   adminPublishTheme(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminTheme> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.themes.publish(admin.id, id);
   }
 
@@ -148,7 +165,9 @@ export class AdminThemesController {
   adminUnpublishTheme(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminTheme> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.themes.unpublish(admin.id, id);
   }
 
@@ -185,6 +204,7 @@ export class AdminThemesController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: linkThemeMarketBodySchema }) body: LinkThemeMarketBody,
   ): Promise<AdminThemeMarket[]> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.themes.link(admin.id, id, body.marketId);
   }
 
@@ -202,7 +222,9 @@ export class AdminThemesController {
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Param('marketId', { schema: uuidParamSchema }) marketId: string,
+    @Query({ schema: expectedAccountQuerySchema }) query: ExpectedAccountQuery,
   ): Promise<AdminThemeMarket[]> {
+    assertExpectedAccount(admin.id, query.expectedAccountId);
     return this.themes.unlink(admin.id, id, marketId);
   }
 
@@ -218,7 +240,9 @@ export class AdminThemesController {
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Body({ schema: createThemeNoticeBodySchema }) body: CreateThemeNoticeBody,
   ): Promise<AdminTheme> {
-    return this.themes.createNotice(admin.id, id, body);
+    const { expectedAccountId, ...notice } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.themes.createNotice(admin.id, id, notice);
   }
 
   @Patch(':id/notices/:noticeId')
@@ -236,7 +260,9 @@ export class AdminThemesController {
     @Param('noticeId', { schema: uuidParamSchema }) noticeId: string,
     @Body({ schema: updateThemeNoticeBodySchema }) body: UpdateThemeNoticeBody,
   ): Promise<AdminTheme> {
-    return this.themes.updateNotice(admin.id, id, noticeId, body);
+    const { expectedAccountId, ...edit } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.themes.updateNotice(admin.id, id, noticeId, edit);
   }
 
   @Post(':id/notices/:noticeId/hide')
@@ -251,7 +277,9 @@ export class AdminThemesController {
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Param('noticeId', { schema: uuidParamSchema }) noticeId: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminTheme> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.themes.hideNotice(admin.id, id, noticeId);
   }
 
@@ -267,7 +295,9 @@ export class AdminThemesController {
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,
     @Param('noticeId', { schema: uuidParamSchema }) noticeId: string,
+    @Body({ schema: expectedAccountBodySchema }) body: ExpectedAccountBody,
   ): Promise<AdminTheme> {
+    assertExpectedAccount(admin.id, body.expectedAccountId);
     return this.themes.showNotice(admin.id, id, noticeId);
   }
 }

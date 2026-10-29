@@ -14,14 +14,22 @@ import {
   pinnedNoticesView,
 } from '@/lib/notices';
 import {
+  POST_DRAFT_TTL_MS,
   type DraftStorage,
   type PostDraftKey,
   clearPostDraft,
   keepPostDraft,
+  postDraftLanded,
   postDraftMoment,
+  postDraftStorageKey,
   readPostDraft,
 } from '@/lib/post-drafts';
 import { getQueryClient } from '@/lib/query-client';
+import {
+  accountForgottenInTab,
+  sessionAccountHeard,
+  sessionAccountTurned,
+} from '@/lib/session-account';
 import { ME_QUERY_KEY } from './use-me';
 import {
   adminNoticeActionsInfiniteQueryOptions,
@@ -95,6 +103,9 @@ function tabStorage(): DraftStorage {
     },
   };
 }
+
+/** A write's `onSessionChanged` where the cookie stays the screen's (ADR-0092). */
+const sessionUnchanged = () => undefined;
 
 describe('the fixed area', () => {
   it('asks for the pinned notices under its public key, which the community page dehydrates', async () => {
@@ -405,18 +416,26 @@ describe('the writes', () => {
     return () => keys.map((key) => queryClient.getQueryState(key)?.isInvalidated);
   }
 
-  it('a new notice is sent with its title and body only, held under its key, and every list is stale', async () => {
+  it('a new notice is sent with its title and body and the admin whose form sent it, held under its key, and every list is stale', async () => {
     const queryClient = getQueryClient();
     const stale = held(queryClient);
     const send = vi.spyOn(api, 'POST').mockResolvedValue(answer(adminNotice));
-    await new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+    await new MutationObserver(
+      queryClient,
+      createNoticeOptions(queryClient, sessionUnchanged),
+    ).mutate({
       title: '점검 안내',
       body: { type: 'doc', content: [] },
       accountId: 'admin-1',
     });
-    // The admin whose form sent it is the client's, for its landing (ADR-0073 9-48): not sent.
+    // The admin whose form sent it is the admin on screen the write names (ADR-0092), and its
+    // landing's (ADR-0073 9-48).
     expect(send).toHaveBeenCalledWith('/api/v1/admin/notices', {
-      body: { title: '점검 안내', body: { type: 'doc', content: [] } },
+      body: {
+        title: '점검 안내',
+        body: { type: 'doc', content: [] },
+        expectedAccountId: 'admin-1',
+      },
     });
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
     expect(stale()).toEqual([true, true, true, true, true]);
@@ -427,19 +446,20 @@ describe('the writes', () => {
     const stale = held(queryClient);
     const edited = { ...adminNotice, title: '고친 안내', editedAt: '2026-10-20T01:00:00.000Z' };
     const put = vi.spyOn(api, 'PUT').mockResolvedValue(answer({ notice: edited, changed: true }));
-    const result = await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate(
-      {
-        noticeId: NOTICE,
-        title: '고친 안내',
-        body: {},
-        expectedEditedAt: null,
-        accountId: 'admin-1',
-      },
-    );
-    // Nor is it in an edit's body.
+    const result = await new MutationObserver(
+      queryClient,
+      updateNoticeOptions(queryClient, sessionUnchanged),
+    ).mutate({
+      noticeId: NOTICE,
+      title: '고친 안내',
+      body: {},
+      expectedEditedAt: null,
+      accountId: 'admin-1',
+    });
+    // An edit names it too.
     expect(put).toHaveBeenCalledWith('/api/v1/admin/notices/{noticeId}', {
       params: { path: { noticeId: notice } },
-      body: { title: '고친 안내', body: {}, expectedEditedAt: null },
+      body: { title: '고친 안내', body: {}, expectedEditedAt: null, expectedAccountId: 'admin-1' },
     });
     // The answer, whether this save changed it, is the screen's; the cache holds the notice alone,
     // and the notice's records and versions are read again (the edit added one of each).
@@ -467,7 +487,10 @@ describe('the writes', () => {
 
       const edited = { ...adminNotice, title: '고친 안내', editedAt: '2026-10-20T01:00:00.000Z' };
       vi.spyOn(api, 'PUT').mockResolvedValueOnce(answer({ notice: edited, changed: true }));
-      await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+      await new MutationObserver(
+        queryClient,
+        updateNoticeOptions(queryClient, sessionUnchanged),
+      ).mutate({
         noticeId: NOTICE,
         title: '고친 안내',
         body: {},
@@ -491,15 +514,16 @@ describe('the writes', () => {
     const queryClient = getQueryClient();
     queryClient.setQueryData(adminNoticeKey(notice), adminNotice);
     vi.spyOn(api, 'PUT').mockResolvedValue(answer({ notice: adminNotice, changed: false }));
-    const result = await new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate(
-      {
-        noticeId: NOTICE,
-        title: adminNotice.title,
-        body: {},
-        expectedEditedAt: null,
-        accountId: 'admin-1',
-      },
-    );
+    const result = await new MutationObserver(
+      queryClient,
+      updateNoticeOptions(queryClient, sessionUnchanged),
+    ).mutate({
+      noticeId: NOTICE,
+      title: adminNotice.title,
+      body: {},
+      expectedEditedAt: null,
+      accountId: 'admin-1',
+    });
     expect(result.changed).toBe(false);
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
   });
@@ -519,7 +543,7 @@ describe('the writes', () => {
       }),
     );
     await expect(
-      new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+      new MutationObserver(queryClient, updateNoticeOptions(queryClient, sessionUnchanged)).mutate({
         noticeId: NOTICE,
         title: '내 수정',
         body: {},
@@ -541,17 +565,28 @@ describe('the writes', () => {
       .mockResolvedValueOnce(answer(adminNotice));
 
     let stale = held(queryClient);
-    await new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'pin')).mutate(NOTICE);
+    await new MutationObserver(
+      queryClient,
+      pinNoticeOptions(queryClient, 'pin', sessionUnchanged),
+    ).mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' });
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(pinned);
     expect(stale()).toEqual([true, true, true, true, true]);
 
     stale = held(queryClient);
-    await new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'unpin')).mutate(NOTICE);
+    await new MutationObserver(
+      queryClient,
+      pinNoticeOptions(queryClient, 'unpin', sessionUnchanged),
+    ).mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' });
     expect(queryClient.getQueryData(adminNoticeKey(notice))).toEqual(adminNotice);
     expect(stale()).toEqual([true, true, true, true, true]);
+    // Each names the admin on screen (ADR-0092).
+    const request = {
+      params: { path: { noticeId: notice } },
+      body: { expectedAccountId: 'admin-1' },
+    };
     expect(send.mock.calls).toEqual([
-      ['/api/v1/admin/notices/{noticeId}/pin', { params: { path: { noticeId: notice } } }],
-      ['/api/v1/admin/notices/{noticeId}/unpin', { params: { path: { noticeId: notice } } }],
+      ['/api/v1/admin/notices/{noticeId}/pin', request],
+      ['/api/v1/admin/notices/{noticeId}/unpin', request],
     ]);
   });
 
@@ -565,7 +600,10 @@ describe('the writes', () => {
     queryClient.setQueryData(ME_QUERY_KEY, {});
     const unsubscribe = me.subscribe(() => undefined);
     const send = vi.spyOn(api, 'POST');
-    const pin = new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'pin'));
+    const pin = new MutationObserver(
+      queryClient,
+      pinNoticeOptions(queryClient, 'pin', sessionUnchanged),
+    );
     try {
       const stale = held(queryClient);
       send.mockRejectedValueOnce(
@@ -575,7 +613,9 @@ describe('the writes', () => {
           details: { limit: 3 },
         }),
       );
-      await expect(pin.mutate(NOTICE)).rejects.toBeInstanceOf(ApiError);
+      await expect(
+        pin.mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' }),
+      ).rejects.toBeInstanceOf(ApiError);
       expect(stale().slice(0, 3)).toEqual([true, true, true]);
       // Nothing was answered, so nothing is held under the notice's key.
       expect(queryClient.getQueryData(adminNoticeKey(notice))).toBeUndefined();
@@ -584,10 +624,58 @@ describe('the writes', () => {
       send.mockRejectedValueOnce(
         new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' } as never),
       );
-      await expect(pin.mutate(NOTICE)).rejects.toBeInstanceOf(ApiError);
+      await expect(
+        pin.mutate({ noticeId: NOTICE, expectedAccountId: 'admin-1' }),
+      ).rejects.toBeInstanceOf(ApiError);
       expect(queryClient.getQueryState(ME_QUERY_KEY)?.isInvalidated).toBe(true);
     } finally {
       unsubscribe();
+    }
+  });
+
+  it('the cookie of another account asks for the session again and reads nothing else (ADR-0092)', async () => {
+    const queryClient = getQueryClient();
+    const refused = () =>
+      new ApiError(403, {
+        code: 'FORBIDDEN',
+        message: 'This session belongs to a different account than the one on screen',
+        details: [{ path: ['expectedAccountId'], message: 'session belongs to another account' }],
+      });
+    vi.spyOn(api, 'POST').mockRejectedValue(refused());
+    vi.spyOn(api, 'PUT').mockRejectedValue(refused());
+    const writes = [
+      (changed: () => void) =>
+        new MutationObserver(queryClient, createNoticeOptions(queryClient, changed)).mutate({
+          title: '점검 안내',
+          body: {},
+          accountId: 'admin-1',
+        }),
+      (changed: () => void) =>
+        new MutationObserver(queryClient, updateNoticeOptions(queryClient, changed)).mutate({
+          noticeId: NOTICE,
+          title: '고친 안내',
+          body: {},
+          expectedEditedAt: null,
+          accountId: 'admin-1',
+        }),
+      (changed: () => void) =>
+        new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'pin', changed)).mutate({
+          noticeId: NOTICE,
+          expectedAccountId: 'admin-1',
+        }),
+      (changed: () => void) =>
+        new MutationObserver(queryClient, pinNoticeOptions(queryClient, 'unpin', changed)).mutate({
+          noticeId: NOTICE,
+          expectedAccountId: 'admin-1',
+        }),
+    ];
+    for (const write of writes) {
+      const stale = held(queryClient);
+      const changed = vi.fn();
+      await expect(write(changed)).rejects.toBeInstanceOf(ApiError);
+      expect(changed).toHaveBeenCalledTimes(1);
+      // The session's reset reads everything: nothing is invalidated here.
+      expect(stale()).toEqual([false, false, false, false, false]);
     }
   });
 });
@@ -610,7 +698,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
     const send = vi
       .spyOn(api, 'POST')
       .mockRejectedValueOnce(new ApiError(409, { code: 'ONBOARDING_REQUIRED', message: 'x' }));
-    const write = new MutationObserver(queryClient, createNoticeOptions(queryClient));
+    const write = new MutationObserver(
+      queryClient,
+      createNoticeOptions(queryClient, sessionUnchanged),
+    );
     const body = { title: '쓰던 공지', body: {}, accountId: 'admin-1' };
     await expect(write.mutate(body)).rejects.toBeInstanceOf(ApiError);
     expect(readPostDraft(storage, newKey, 'admin-1', now)).toEqual(draft);
@@ -630,7 +721,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         details: { editedAt: EDITED_AT },
       }),
     );
-    const edit = new MutationObserver(queryClient, updateNoticeOptions(queryClient));
+    const edit = new MutationObserver(
+      queryClient,
+      updateNoticeOptions(queryClient, sessionUnchanged),
+    );
     const variables = {
       noticeId: NOTICE,
       title: '쓰던 공지',
@@ -667,7 +761,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         stays: false,
         send: (queryClient) => {
           vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(adminNotice));
-          return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            createNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             title: '쓰던 공지',
             body: {},
             accountId: 'admin-1',
@@ -683,7 +780,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           vi.spyOn(api, 'PUT').mockResolvedValueOnce(
             answer({ notice: { ...adminNotice, editedAt: SAVED_AT }, changed: true }),
           );
-          return new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            updateNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             noticeId: NOTICE,
             title: '쓰던 공지',
             body: {},
@@ -713,7 +813,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           ? { title: '쓰던 공지', body: typed.body, previews: {} }
           : { title: '쓰던 공지', body: typed.body, previews: {}, version },
       );
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'admin-1');
       last = heldPostDraftAt(last, typed, true);
 
       // The write lands; its success is held in `onSuccess` (the lists being read again — each
@@ -746,7 +846,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
       // A moment of its own would have come after the landing, and kept — with the version before
       // the save — what was just saved.
       expect(keepHeldPostDraft({ ...last, moment: postDraftMoment() }, me)).toBe(true);
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'admin-1');
       for (const release of releases) release();
       await sent;
       expect(queryClient.getMutationCache().getAll()[0]?.state.status).toBe('success');
@@ -773,7 +873,7 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         // The write screen leaves for the list; a form of it made afterwards keeps its own draft.
         expect(keepHeldPostDraft(heldPostDraftAt(undefined, typed, false), me)).toBe(true);
       }
-      clearPostDraft(storage, key);
+      clearPostDraft(storage, key, 'admin-1');
     }
   });
 
@@ -791,7 +891,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
         key: newKey,
         send: (queryClient, accountId) => {
           vi.spyOn(api, 'POST').mockResolvedValueOnce(answer(adminNotice));
-          return new MutationObserver(queryClient, createNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            createNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             title: '쓰던 공지',
             body: {},
             accountId,
@@ -805,7 +908,10 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
           vi.spyOn(api, 'PUT').mockResolvedValueOnce(
             answer({ notice: { ...adminNotice, editedAt: EDITED_AT }, changed: true }),
           );
-          return new MutationObserver(queryClient, updateNoticeOptions(queryClient)).mutate({
+          return new MutationObserver(
+            queryClient,
+            updateNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({
             noticeId: NOTICE,
             title: '쓰던 공지',
             body: {},
@@ -851,6 +957,273 @@ describe('a notice’s draft across the onboarding (#138, 오너 결정 2026-10-
       expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
       expect(keepHeldPostDraft(theirs, b)).toBe(false);
       expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+    }
+  });
+});
+
+describe('a notice’s draft as the admin on screen turns to another (ADR-0092, 오너 결정 2026-10-26 17:21 답 2 «A의 것으로 1시간 보관»)', () => {
+  // `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2): the notice
+  // screens draw their form for the admin on screen (`key`, app/admin/notices/notice-forms.tsx),
+  // so A's form goes — and, drawn for A alone (`keepOnAccountTurn`), keeps what A typed in this
+  // tab as A's draft for the hour, as the onboarding gate's move does. B's form reads none of it;
+  // A's form, drawn again once A is back, takes it back.
+  const newKey = { kind: 'notice-new' } as const;
+  const editKey = { kind: 'notice-edit', noticeId: notice } as const;
+  const EDITED_AT = '2026-10-20T01:00:00.000Z';
+  const a = { id: 'admin-1', onboarding: { nextStep: null } } as unknown as Me;
+  const b = { id: 'admin-2', onboarding: { nextStep: null } } as unknown as Me;
+  const screens: { key: PostDraftKey; version?: string | null }[] = [
+    { key: newKey },
+    { key: editKey, version: EDITED_AT },
+    { key: editKey, version: null },
+  ];
+  /** The storage's item keys. */
+  const keysOf = (storage: DraftStorage) =>
+    Array.from({ length: storage.length }, (_, index) => storage.key(index));
+  /** A form as of its last render, something typed, drawn for `accountId` alone. */
+  const typedBy = (
+    key: PostDraftKey,
+    accountId: string,
+    title: string,
+    version?: string | null,
+  ): HeldPostDraftAt =>
+    heldPostDraftAt(
+      undefined,
+      {
+        key,
+        accountId,
+        keepOnAccountTurn: true,
+        hasDraft: true,
+        title,
+        body: {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: `${title} 본문` }] }],
+        },
+        previews: new Map(),
+        ...(version === undefined ? {} : { version }),
+      },
+      false,
+    );
+
+  it('keeps what A typed as A’s — an edit’s with the version it was typed on — which B never reads, and A takes back within the hour', () => {
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      const before = Date.now();
+      const theirs = typedBy(key, 'admin-1', 'A가 쓰던 공지', version);
+      // A's form goes with B in `['me']`: kept, for A, under A's item.
+      expect(keepHeldPostDraft(theirs, b)).toBe(true);
+      expect(keysOf(storage)).toEqual([postDraftStorageKey(key, 'admin-1')]);
+      // B's form, made now, reads nothing — and leaves A's.
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      // B typed nothing; `['me']` turns back to A, and B's form goes keeping nothing.
+      const blank = heldPostDraftAt(
+        undefined,
+        { ...theirs, accountId: 'admin-2', hasDraft: false, title: '' },
+        false,
+      );
+      expect(keepHeldPostDraft(blank, a)).toBe(false);
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      // A's form, made again, takes back what A typed.
+      const kept = readPostDraft(storage, key, 'admin-1', Date.now());
+      expect(kept).toEqual({
+        title: 'A가 쓰던 공지',
+        body: theirs.body,
+        previews: {},
+        ...(version === undefined ? {} : { version }),
+      });
+      // For the hour, as the gate's move (POST_DRAFT_TTL_MS).
+      expect(readPostDraft(storage, key, 'admin-1', before + POST_DRAFT_TTL_MS + 1_000)).toBeNull();
+    }
+  });
+
+  it('keeps B’s own draft beside A’s: each admin’s form going keeps its own, and neither replaces the other', () => {
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', 'A가 쓰던 공지', version), b)).toBe(true);
+      // B typed too before `['me']` turned back to A.
+      expect(keepHeldPostDraft(typedBy(key, 'admin-2', 'B가 쓰던 공지', version), a)).toBe(true);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())?.title).toBe('A가 쓰던 공지');
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())?.title).toBe('B가 쓰던 공지');
+    }
+  });
+
+  it('keeps nothing for a form not drawn per admin, with nothing typed, whose write landed, or with no `Me` in the cache and no other admin in the session — nor on the same admin’s own leave', () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const theirs = typedBy(newKey, 'admin-1', 'A가 쓰던 공지');
+    // A form not drawn per account keeps only on the gate's move (`keepOnAccountTurn` absent).
+    expect(
+      keepHeldPostDraft(
+        { ...theirs, key: { kind: 'new', marketId: notice }, keepOnAccountTurn: undefined },
+        b,
+      ),
+    ).toBe(false);
+    expect(keepHeldPostDraft({ ...theirs, keepOnAccountTurn: false }, b)).toBe(false);
+    // Nothing to lose.
+    expect(keepHeldPostDraft({ ...theirs, hasDraft: false }, b)).toBe(false);
+    // `['me']` empty as the form goes, and no other account heard from the session (a sign-out;
+    // SessionCacheGuard's reset for another account keeps it — the forward order, below).
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    // The same admin, nothing left: a link or Back asked first.
+    expect(keepHeldPostDraft(theirs, a)).toBe(false);
+    expect(storage.length).toBe(0);
+    // A's write landed after the form's last render (its success being handled): saved.
+    postDraftLanded(newKey, 'admin-1');
+    expect(keepHeldPostDraft(theirs, b)).toBe(false);
+    expect(storage.length).toBe(0);
+  });
+
+  it('a write A sent that lands after the turn clears A’s kept draft, and only A’s; one refused as another account’s keeps it', async () => {
+    for (const { key, version } of screens) {
+      const queryClient = getQueryClient();
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      queryClient.setQueryData(ME_QUERY_KEY, b);
+      const send = (refused: boolean) => {
+        const fail = new ApiError(403, {
+          code: 'FORBIDDEN',
+          message: 'x',
+          details: [{ path: ['expectedAccountId'], message: 'x' }],
+        });
+        if (key.kind === 'notice-new') {
+          const post = vi.spyOn(api, 'POST');
+          if (refused) post.mockRejectedValueOnce(fail);
+          else post.mockResolvedValueOnce(answer(adminNotice));
+          return new MutationObserver(
+            queryClient,
+            createNoticeOptions(queryClient, sessionUnchanged),
+          ).mutate({ title: 'A가 쓰던 공지', body: {}, accountId: 'admin-1' });
+        }
+        const put = vi.spyOn(api, 'PUT');
+        if (refused) put.mockRejectedValueOnce(fail);
+        else put.mockResolvedValueOnce(answer({ notice: adminNotice, changed: true }));
+        return new MutationObserver(
+          queryClient,
+          updateNoticeOptions(queryClient, sessionUnchanged),
+        ).mutate({
+          noticeId: NOTICE,
+          title: 'A가 쓰던 공지',
+          body: {},
+          expectedEditedAt: version ?? null,
+          accountId: 'admin-1',
+        });
+      };
+      // A's form, locked on its send, goes as `['me']` turns to B: kept, the send in flight.
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', 'A가 쓰던 공지', version), b)).toBe(true);
+      expect(keepHeldPostDraft(typedBy(key, 'admin-2', 'B가 쓰던 공지', version), a)).toBe(true);
+      // Refused as another account's (the tab's cookie was B's by then): A's draft stays.
+      await expect(send(true)).rejects.toBeInstanceOf(ApiError);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())?.title).toBe('A가 쓰던 공지');
+      // Landed: the notice holds it — A's draft goes; B's stays.
+      await send(false);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toBeNull();
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())?.title).toBe('B가 쓰던 공지');
+      clearPostDraft(storage, key, 'admin-2');
+    }
+  });
+});
+
+describe('a notice’s draft as the session turns to another admin first (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도 A의 초안으로»)', () => {
+  // The forward order: the session names B first, and SessionCacheGuard's reset empties `['me']` —
+  // the notice screens put their placeholder in place of A's form in that very render
+  // (`NoticeWriterGate`), so A's form goes with no `Me` in the cache. It hears from the guard whom
+  // the session now names (`sessionAccountTurned`, recorded before the reset —
+  // lib/session-account.ts) and keeps what A typed as A's draft for the hour, as when `['me']`
+  // turns first; B's form reads none of it, and A's, drawn again once A is back, takes it back.
+  const newKey = { kind: 'notice-new' } as const;
+  const editKey = { kind: 'notice-edit', noticeId: notice } as const;
+  const screens: { key: PostDraftKey; version?: string | null }[] = [
+    { key: newKey },
+    { key: editKey, version: '2026-10-20T01:00:00.000Z' },
+    { key: editKey, version: null },
+  ];
+  const typedBy = (key: PostDraftKey, accountId: string, version?: string | null) =>
+    heldPostDraftAt(
+      undefined,
+      {
+        key,
+        accountId,
+        keepOnAccountTurn: true,
+        hasDraft: true,
+        title: `${accountId}가 쓰던 공지`,
+        body: { type: 'doc', content: [] },
+        previews: new Map(),
+        ...(version === undefined ? {} : { version }),
+      },
+      false,
+    );
+  afterEach(() => {
+    accountForgottenInTab();
+  });
+
+  it('keeps what A typed as A’s — an edit’s with the version it was typed on — when the reset empties the profile for B, which B never reads, and A takes back', () => {
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      sessionAccountTurned('admin-2');
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', version), undefined)).toBe(true);
+      expect(storage.length).toBe(1);
+      expect(storage.key(0)).toBe(postDraftStorageKey(key, 'admin-1'));
+      expect(readPostDraft(storage, key, 'admin-2', Date.now())).toBeNull();
+      // B's form, empty, goes as the session turns back to A: nothing of B's to keep.
+      sessionAccountTurned('admin-1');
+      expect(
+        keepHeldPostDraft({ ...typedBy(key, 'admin-2', version), hasDraft: false }, undefined),
+      ).toBe(false);
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toEqual({
+        title: 'admin-1가 쓰던 공지',
+        body: { type: 'doc', content: [] },
+        previews: {},
+        ...(version === undefined ? {} : { version }),
+      });
+    }
+  });
+
+  it('keeps nothing as the session names nobody (a sign-out) or the writer still, nor for a form not drawn per admin, with nothing typed, or whose write landed', () => {
+    const storage = tabStorage();
+    vi.stubGlobal('window', { sessionStorage: storage });
+    const theirs = typedBy(newKey, 'admin-1');
+    // Nothing heard yet, nobody signed in: no account to keep it for but the writer's own leave.
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    sessionAccountHeard(null);
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    // The session names the writer: `['me']` emptied without a turn (the sign-out's own clearing
+    // before the session says nobody) — a link or Back asked first.
+    sessionAccountHeard('admin-1');
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    sessionAccountHeard('admin-2');
+    expect(keepHeldPostDraft({ ...theirs, keepOnAccountTurn: undefined }, undefined)).toBe(false);
+    expect(keepHeldPostDraft({ ...theirs, hasDraft: false }, undefined)).toBe(false);
+    expect(storage.length).toBe(0);
+    postDraftLanded(newKey, 'admin-1');
+    expect(keepHeldPostDraft(theirs, undefined)).toBe(false);
+    expect(storage.length).toBe(0);
+  });
+
+  it('keeps what A’s form holds — the draft it took back among it — as A’s while the session catches up with A, `GET /me` having named A first, and A’s form drawn again takes it back; nothing once that reset is over (ADR-0092 8-36)', () => {
+    // A back in the tab: `GET /me` answers A before the session, A's form is drawn and takes A's
+    // draft out of the tab; the session then says A, and the reset empties `['me']` —
+    // `NoticeWriterGate` puts its placeholder in place of A's form, which goes holding that draft.
+    for (const { key, version } of screens) {
+      const storage = tabStorage();
+      vi.stubGlobal('window', { sessionStorage: storage });
+      sessionAccountTurned('admin-2')();
+      const settled = sessionAccountTurned('admin-1');
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', version), undefined)).toBe(true);
+      expect(storage.length).toBe(1);
+      expect(storage.key(0)).toBe(postDraftStorageKey(key, 'admin-1'));
+      expect(readPostDraft(storage, key, 'admin-1', Date.now())).toEqual({
+        title: 'admin-1가 쓰던 공지',
+        body: { type: 'doc', content: [] },
+        previews: {},
+        ...(version === undefined ? {} : { version }),
+      });
+      settled();
+      storage.removeItem(postDraftStorageKey(key, 'admin-1'));
+      expect(keepHeldPostDraft(typedBy(key, 'admin-1', version), undefined)).toBe(false);
+      expect(storage.length).toBe(0);
     }
   });
 });

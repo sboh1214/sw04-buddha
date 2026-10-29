@@ -9,6 +9,7 @@ import {
   type HeldTextsState,
   heldTextsAfter,
   heldTextsAwaiting,
+  heldTextsAwaitingOf,
   heldTextsOf,
   initialHeldTexts,
   pageMayGo,
@@ -273,6 +274,30 @@ describe('a text on its way (the post page holds off its 404 for it, 오너 결�
     expect(
       heldTextsAwaiting(heldTextsAfter(run([left('box')]), { type: 'account', accountId: B })),
     ).toBe(false);
+  });
+
+  it('is listed with its place and text, in the order heard, for the section to keep as its writer’s draft as the account on screen turns (ADR-0092 8-26)', () => {
+    const post: HeldTextPlace = { kind: 'post' };
+    const inFlight = run([
+      left('first'),
+      left('shown', { write: 'none', goneReason: copy.errCommentParentGone }),
+      { ...left('second'), place: post } as HeldTextsEvent,
+      left('theirs', { accountId: B }),
+      refused('refused-first'),
+      left('refused-first'),
+    ]);
+    expect(heldTextsAwaitingOf(inFlight)).toEqual([
+      { id: 'first', place: THREAD, text: 'first의 글자' },
+      { id: 'second', place: post, text: 'second의 글자' },
+    ]);
+    // Shown, landed, or refused now: no longer on its way.
+    expect(
+      heldTextsAwaitingOf(run([refused('first'), { type: 'landed', boxId: 'second' }], inFlight)),
+    ).toEqual([]);
+    // Another account on screen starts afresh: the writer's are the section's to keep before it.
+    expect(
+      heldTextsAwaitingOf(heldTextsAfter(inFlight, { type: 'account', accountId: B })),
+    ).toEqual([]);
   });
 });
 

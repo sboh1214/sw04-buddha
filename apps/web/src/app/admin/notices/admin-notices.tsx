@@ -18,6 +18,7 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
 import { useAdminNotices, usePinNotice, useUnpinNotice } from '@/hooks/use-notices';
+import { useOperatorId } from '@/hooks/use-operator';
 import { type AdminNoticeSummary } from '@/lib/api';
 import { formatKst } from '@/lib/datetime';
 import {
@@ -41,27 +42,44 @@ import { listSection } from '@/lib/query-client';
  * The limit is the server's, race-safe (a pin while NOTICE_PIN_LIMIT are pinned is refused with
  * NOTICE_PIN_LIMIT_REACHED, and nothing is unpinned to make room): 고정 stays on every unpinned row
  * and a refusal says to unpin one first — a count this screen read a moment ago is no rule.
+ * Both name the admin on screen (`useOperatorId`, ADR-0092), so they wait for `GET /me`.
  */
 export function AdminNotices() {
   const pin = usePinNotice();
   const unpin = useUnpinNotice();
-  const busy = pin.isPending || unpin.isPending;
+  const operatorId = useOperatorId();
+  const busy = pin.isPending || unpin.isPending || operatorId === undefined;
   const onError = (error: Error) =>
     toaster.create({ type: 'error', title: noticeWriteErrorMessage(error) });
   const actions: RowActions = {
     // A finished mutation keeps its variables, so only the one on its way names the row.
-    busyId: pin.isPending ? pin.variables : unpin.isPending ? unpin.variables : undefined,
+    busyId: pin.isPending
+      ? pin.variables.noticeId
+      : unpin.isPending
+        ? unpin.variables.noticeId
+        : undefined,
     disabled: busy,
-    pin: (id) =>
-      pin.mutate(id, {
-        onSuccess: () => toaster.create({ type: 'success', title: copy.adminNoticePinnedToast }),
-        onError,
-      }),
-    unpin: (id) =>
-      unpin.mutate(id, {
-        onSuccess: () => toaster.create({ type: 'success', title: copy.adminNoticeUnpinnedToast }),
-        onError,
-      }),
+    pin: (id) => {
+      if (operatorId === undefined) return;
+      pin.mutate(
+        { noticeId: id, expectedAccountId: operatorId },
+        {
+          onSuccess: () => toaster.create({ type: 'success', title: copy.adminNoticePinnedToast }),
+          onError,
+        },
+      );
+    },
+    unpin: (id) => {
+      if (operatorId === undefined) return;
+      unpin.mutate(
+        { noticeId: id, expectedAccountId: operatorId },
+        {
+          onSuccess: () =>
+            toaster.create({ type: 'success', title: copy.adminNoticeUnpinnedToast }),
+          onError,
+        },
+      );
+    },
   };
 
   return (

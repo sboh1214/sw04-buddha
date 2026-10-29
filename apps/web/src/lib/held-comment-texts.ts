@@ -295,19 +295,38 @@ function reasonOf(heard: Heard): string | undefined {
       : (goneReason ?? refusal.reason);
 }
 
+/** A text on its way to be shown (`heldTextsAwaitingOf`): the box's id, its place and its text. */
+export interface AwaitingText {
+  id: string;
+  place: HeldTextPlace;
+  text: string;
+}
+
 /**
- * Whether a text of the account on screen is still on its way: a box went with its write in flight,
- * and neither its refusal nor its landing is heard yet. The post page holds off its 404 for it as
- * for a text shown (오너 결정 2026-10-21 답 1): the refusal is a moment away, and the text with it.
+ * The texts of the account on screen still on their way, in the order they were first heard: a box
+ * went with its write in flight, and neither its refusal nor its landing is heard yet. Not shown
+ * (`heldTextsOf`) — but the section's all the same: the account on screen turning to another in
+ * place starts the rules afresh (`account`), and the refusal heard after it, the writer's, is not
+ * heard, so the section keeps these as the writer's drafts as it turns (`keepSectionTextsForTurn`,
+ * ADR-0092 8-26).
+ */
+export function heldTextsAwaitingOf(state: HeldTextsState): AwaitingText[] {
+  return [...state.heard].flatMap(([id, heard]): AwaitingText[] => {
+    const { text, place } = heard;
+    if (text === undefined || place === undefined) return [];
+    if (heard.accountId !== state.accountId) return [];
+    if (heard.refusal !== undefined || heard.write !== 'pending') return [];
+    return [{ id, place, text }];
+  });
+}
+
+/**
+ * Whether a text of the account on screen is still on its way (`heldTextsAwaitingOf`). The post
+ * page holds off its 404 for it as for a text shown (오너 결정 2026-10-21 답 1): the refusal is a
+ * moment away, and the text with it.
  */
 export function heldTextsAwaiting(state: HeldTextsState): boolean {
-  for (const heard of state.heard.values()) {
-    if (heard.accountId !== state.accountId) continue;
-    if (heard.text !== undefined && heard.refusal === undefined && heard.write === 'pending') {
-      return true;
-    }
-  }
-  return false;
+  return heldTextsAwaitingOf(state).length > 0;
 }
 
 /**

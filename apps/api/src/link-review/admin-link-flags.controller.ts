@@ -15,6 +15,7 @@ import {
 import { AdminGuard } from '../auth/admin.guard.js';
 import { type SessionUser } from '../auth/auth.js';
 import { CurrentUser } from '../auth/current-user.decorator.js';
+import { assertExpectedAccount } from '../auth/expected-account.js';
 import { SessionGuard } from '../auth/session.guard.js';
 import { ApiPage } from '../common/interceptors/response-envelope.interceptor.js';
 import { ApiData, ApiErrors, ApiPageOf } from '../common/openapi/api-response.decorators.js';
@@ -33,7 +34,9 @@ import { LinkReviewService } from './link-review.service.js';
  * Guards run in order: SessionGuard (401 without a session, 403 for a foreign Origin on a
  * mutation), AdminGuard (403 for a member), then OnboardedGuard (409 for an admin that has not
  * finished the onboarding, ADR-0072). The reads write no admin_actions row; the mark writes one
- * (admin-audit.test).
+ * (admin-audit.test). The mark names the admin the screen shows (`expectedAccountId`,
+ * assertExpectedAccount, ADR-0092): a mismatch with the cookie is refused before anything is read
+ * or locked, so a mark is never recorded under an admin the user is not looking at.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -85,12 +88,15 @@ export class AdminLinkFlagsController {
   })
   @ApiData(adminLinkFlagGroupSchema, 201)
   // NOT_FOUND: no unmarked entry of the link and rule at or before `through` (another operator
-  // marked them meanwhile, or no such group); nothing is written.
+  // marked them meanwhile, or no such group); nothing is written. FORBIDDEN: also a body whose
+  // `expectedAccountId` is not the cookie's account (details name the field).
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   review(
     @CurrentUser() admin: SessionUser,
     @Body({ schema: adminLinkFlagReviewBodySchema }) body: AdminLinkFlagReviewBody,
   ): Promise<AdminLinkFlagGroup> {
-    return this.links.review(admin.id, body);
+    const { expectedAccountId, ...mark } = body;
+    assertExpectedAccount(admin.id, expectedAccountId);
+    return this.links.review(admin.id, mark);
   }
 }

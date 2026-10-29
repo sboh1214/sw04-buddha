@@ -40,7 +40,9 @@ import {
   type CommentBoxDialogRef,
   type CommentBoxRootRef,
   CommentBoxGoingContext,
-  keepSectionTextsForStep,
+  type SectionTexts,
+  keepSectionTextsAsItGoes,
+  keepSectionTextsForTurn,
   useCommentBoxDraft,
   useCommentDraftsTakenBack,
 } from '@/hooks/use-comment-draft';
@@ -66,15 +68,18 @@ import {
 } from '@/lib/api';
 import {
   type CommentDraftKey,
-  commentDraftStorageKey,
+  commentDraftBoxKey,
+  commentDraftMoment,
   hasCommentDrafts,
 } from '@/lib/comment-drafts';
 import {
+  type CommentBoxesOwner,
   type CommentsPostState,
   type HeldText,
   type HeldTextPlace,
   type RepliesOnScreen,
   type ResolvedCommentDrafts,
+  commentBoxesOwner,
   commentCountText,
   commentDraft,
   commentLengthText,
@@ -302,7 +307,7 @@ export function CommentsSection({
     hold(
       viewerAccountId,
       unplaced.map(({ key, text, reason, place }) => ({
-        id: `taken-back:${commentDraftStorageKey(key)}`,
+        id: `taken-back:${commentDraftBoxKey(key)}`,
         text,
         reason,
         place,
@@ -457,7 +462,7 @@ export function CommentsSection({
       hold(
         viewerAccountId,
         past.map(({ key, text, reason, place }) => ({
-          id: `taken-back:${commentDraftStorageKey(key)}`,
+          id: `taken-back:${commentDraftBoxKey(key)}`,
           text,
           reason,
           place,
@@ -480,7 +485,7 @@ export function CommentsSection({
         hold(
           accountId,
           failed.map(({ key, text, place }) => ({
-            id: `taken-back:${commentDraftStorageKey(key)}`,
+            id: `taken-back:${commentDraftBoxKey(key)}`,
             text,
             reason,
             place,
@@ -509,20 +514,81 @@ export function CommentsSection({
   useLeaveGuard(heldTexts.held.length > 0 || hasCommentDrafts(drafts), copy.postLeaveConfirm);
   // The same texts, as this render has them, go to a step left as the boxes' texts do (오너 결정
   // 2026-10-20 답 2·4): kept in this tab when the page goes and `['me']` names a step left of this
-  // account — a write's entry here going to it, or the gate — and shown again after it.
-  const onScreen = useRef({ accountId: viewerAccountId, held: heldTexts.held, drafts });
+  // account — a write's entry here going to it, or the gate — and shown again after it. And with
+  // their writer when the render that takes the page away has `['me']` naming another account
+  // (`keepSectionTextsAsItGoes`, ADR-0092 8-26): the gate replaces the post page for an account with
+  // a first onboarding step left in the very render `['me']` turns to it, so the section is never
+  // drawn for that account and the layout effect below never sees the turn.
+  const { awaiting } = heldTexts;
+  // Set after every commit (the effect below); `moment` is taken there, not in a render.
+  const onScreen = useRef<Omit<SectionTexts, 'postId'>>({
+    accountId: viewerAccountId,
+    held: heldTexts.held,
+    awaiting,
+    drafts,
+    moment: 0,
+  });
   useEffect(() => {
-    onScreen.current = { accountId: viewerAccountId, held: heldTexts.held, drafts };
+    onScreen.current = {
+      accountId: viewerAccountId,
+      held: heldTexts.held,
+      awaiting,
+      drafts,
+      moment: commentDraftMoment(),
+    };
   });
   useEffect(
     () => () => {
-      keepSectionTextsForStep(
+      keepSectionTextsAsItGoes(
         { postId: post.id, ...onScreen.current },
         queryClient.getQueryData<Me>(ME_QUERY_KEY),
       );
     },
     [post.id, queryClient],
   );
+  // And they go with their writer when `['me']` turns to another account in place (ADR-0092, 오너
+  // 결정 2026-10-26 17:21 답 3 «이 PR에서 함께, 적던 것은 A의 초안으로»): this render holds the new
+  // account's texts alone — the held texts start afresh for it, and its drafts are read for it — so
+  // what the last commit drew for the writer is kept as the writer's drafts
+  // (`keepSectionTextsForTurn`), to come back when the writer is on screen again: the texts shown
+  // apart, the drafts no box took yet, and the texts on their way (a box gone with its write in
+  // flight — its refusal, heard after the turn, is not heard). In a layout effect: it runs before the
+  // boxes the turn takes away keep their own texts (their passive cleanups), so a box's text wins
+  // over a held text of the same box, as when the page goes to a step. So do they when the session
+  // turns to another account first (ADR-0092 결정 10, 오너 결정 2026-10-26 21:00 답 1 «정순서에서도
+  // A의 초안으로»): SessionCacheGuard's reset empties `['me']`, nobody is on screen in this render,
+  // and the account the tab is for now is the one the session names — and when it turns to the
+  // writer after `['me']` did, the reset taking away what was just drawn for the writer, to draw it
+  // again (8-36; `goesWithAccountTurn`, lib/session-account.ts).
+  const drawnFor = useRef<SectionTexts>({
+    postId: post.id,
+    accountId: viewerAccountId,
+    held: heldTexts.held,
+    awaiting,
+    drafts,
+    moment: 0,
+  });
+  useLayoutEffect(() => {
+    keepSectionTextsForTurn(drawnFor.current, viewerAccountId);
+    drawnFor.current = {
+      postId: post.id,
+      accountId: viewerAccountId,
+      held: heldTexts.held,
+      awaiting,
+      drafts,
+      moment: commentDraftMoment(),
+    };
+  });
+  // The boxes are drawn for the account on screen (답 3): its turn keys the threads — every 답글 and
+  // 수정 box is under one — so B never gets a box A opened, nor A's text in it; and the new 댓글's
+  // box is keyed by the account itself (it is drawn only while one is known). A's texts were kept
+  // as A's drafts as A's boxes went (`commentBoxLeaves`), and nothing sent names B.
+  const [boxesOwner, setBoxesOwner] = useState<CommentBoxesOwner>({
+    accountId: viewerAccountId,
+    turn: 0,
+  });
+  const boxesNow = commentBoxesOwner(boxesOwner, viewerAccountId);
+  if (boxesNow !== boxesOwner) setBoxesOwner(boxesNow);
 
   // A post gone from every view (오너 결정 2026-10-21 답 1): its 404 waits while a text is held
   // apart, or on its way to be — a box that went with its write in flight hears its refusal a
@@ -644,7 +710,8 @@ export function CommentsSection({
           <Stack as="ul" gap="5" listStyleType="none" data-testid="comments-list">
             {threads.map((thread) => (
               <Thread
-                key={thread.comment.id}
+                // Drawn afresh for each account on screen (`commentBoxesOwner`, ADR-0092 답 3).
+                key={`${thread.comment.id}:${String(boxesNow.turn)}`}
                 context={context}
                 thread={thread}
                 heldAtEnd={placed.byThread.get(thread.comment.id) ?? []}
@@ -706,6 +773,8 @@ export function CommentsSection({
           />
         ) : (
           <CommentComposer
+            // Drawn for the account on screen: A's text never under B's name (ADR-0092 답 3).
+            key={viewer.accountId}
             postId={post.id}
             parentId={null}
             accountId={viewer.accountId}
