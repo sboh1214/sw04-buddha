@@ -42,6 +42,7 @@ export * from './post.js';
 export * from './post-document.js';
 export * from './profile.js';
 export * from './public-id.js';
+export * from './proposals.js';
 export * from './rate-limit.js';
 export * from './realtime.js';
 export * from './related-markets.js';

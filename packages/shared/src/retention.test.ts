@@ -12,13 +12,15 @@ import {
 } from './retention.js';
 
 describe('retention (#184)', () => {
-  it('has a release setting for each period the owner listed, and the 본인확인 기록', () => {
+  it('has a release setting for each period the owner listed, the 본인확인 기록 and the 시장 제안 기록 (#77)', () => {
     expect(RETENTION_PERIODS).toEqual([
       'consent_records',
       'phone_verification_records',
       'deleted_posts',
       'moderation_records',
       'removed_profile_items',
+      // A setting of its own (owner decision 2026-10-24 13, ADR-0087 결과 5; ADR-0089).
+      'market_proposals',
     ]);
     expect(Object.keys(RETENTION_PERIOD_SETTINGS)).toEqual([...RETENTION_PERIODS]);
   });
@@ -36,6 +38,9 @@ describe('retention (#184)', () => {
     expect(RETENTION_PURGE_KIND_PERIODS.hidden_comments).toBe('moderation_records');
     // #187's repeated-link review list follows the 신고·제재 period (owner decision 2026-10-24 13).
     expect(RETENTION_PURGE_KIND_PERIODS.link_flags).toBe('moderation_records');
+    // A withdrawn account's market proposals (#77): their own period, the last kind of a run.
+    expect(RETENTION_PURGE_KIND_PERIODS.market_proposals).toBe('market_proposals');
+    expect(RETENTION_PURGE_KINDS.at(-1)).toBe('market_proposals');
     // Every period is applied to some kind.
     expect(new Set(Object.values(RETENTION_PURGE_KIND_PERIODS).filter(Boolean))).toEqual(
       new Set(RETENTION_PERIODS),

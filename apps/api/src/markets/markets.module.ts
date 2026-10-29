@@ -21,6 +21,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
   imports: [DbModule, RedisModule, AuthModule, RealtimeModule, JobsModule],
   controllers: [MarketsController, CategoriesController, AdminMarketsController],
   providers: [MarketService, MarketAdminService, RelatedMarketsService],
-  exports: [MarketService],
+  // MarketAdminService for the proposals (#77): a 채택 makes its draft through `createIn`.
+  exports: [MarketService, MarketAdminService],
 })
 export class MarketsModule {}

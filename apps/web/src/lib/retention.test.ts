@@ -44,6 +44,9 @@ describe('보존기간 처리 기록 (#184, ADR-0087)', () => {
     expect(retentionPurgeKindLabel('hidden_comments')).toBe('숨긴 댓글 원문');
     // #187's repeated-link review list, under the 신고·제재 period (owner decision 2026-10-24 13).
     expect(retentionPurgeKindLabel('link_flags')).toBe('반복 링크 검토 목록');
+    // A withdrawn account's market proposals, their own period (#77, ADR-0087's owner decision
+    // 2026-10-24 13).
+    expect(retentionPurgeKindLabel('market_proposals')).toBe('시장 제안 기록');
   });
 
   it('says counts in 건 and the period in 일, with thousands grouped — 0 too', () => {

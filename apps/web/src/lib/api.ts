@@ -302,6 +302,26 @@ export type CreateThemeBody = components['schemas']['CreateThemeBody'];
 export type UpdateThemeBody = components['schemas']['UpdateThemeBody'];
 export type CreateThemeNoticeBody = components['schemas']['CreateThemeNoticeBody'];
 export type UpdateThemeNoticeBody = components['schemas']['UpdateThemeNoticeBody'];
+/**
+ * 시장 제안 (#77, ADR-0089): one of the caller's proposals as 내 제안 shows it — no operator, no
+ * internal memo, a market only once it is public.
+ */
+export type Proposal = components['schemas']['Proposal'];
+/** `POST /me/proposals`: the form and the account on screen. */
+export type CreateProposalBody = components['schemas']['CreateProposalBody'];
+/** `POST /me/proposals/{id}/retract`: the account on screen. */
+export type ProposalWriteBody = components['schemas']['ProposalWriteBody'];
+/** A proposal on the admin screen: the proposer, who reviewed and decided it and when, the memo. */
+export type AdminProposal = components['schemas']['AdminProposal'];
+/** `POST /admin/proposals/{id}/adopt`: the memo and the market (a draft, an existing one, none). */
+export type AdoptProposalBody = components['schemas']['AdoptProposalBody'];
+/**
+ * `POST /admin/proposals/{id}/market`: the market of a proposal adopted with none, linked later and
+ * once (a draft or an existing one, owner decision 2026-10-19).
+ */
+export type LinkProposalMarketBody = components['schemas']['LinkProposalMarketBody'];
+/** `POST /admin/proposals/{id}/reject`: the reason, the explanation and a duplicate's market. */
+export type RejectProposalBody = components['schemas']['RejectProposalBody'];
 export type ErrorEnvelope = components['schemas']['ErrorEnvelope'];
 
 /** A non-2xx API response, carrying the `{ error: { code, message, details? } }` envelope. */

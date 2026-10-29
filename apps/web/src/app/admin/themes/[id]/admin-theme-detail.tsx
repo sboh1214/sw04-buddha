@@ -24,6 +24,7 @@ import NextLink from 'next/link';
 import { useEffect, useId, useMemo, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { ThemeStatusBadge } from '@/components/theme/theme-card';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { toaster } from '@/components/ui/toaster';
 import { copy } from '@/copy';
@@ -65,11 +66,7 @@ import { SEARCH_INPUT_MAX_LENGTH } from '@/lib/market-search';
 import { listSection } from '@/lib/query-client';
 import { relatedSearchSection, relatedSearchSubmit } from '@/lib/related-markets';
 import { formatThemePeriod, themePath } from '@/lib/themes';
-import {
-  ConfirmDialog,
-  RefreshFailedNotice,
-  RelatedMarketLine,
-} from '../../markets/[id]/admin-market-detail';
+import { RefreshFailedNotice, RelatedMarketLine } from '../../markets/[id]/admin-market-detail';
 import { ThemeFormFields } from '../theme-form-fields';
 
 /**

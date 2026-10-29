@@ -32,6 +32,7 @@ import {
   withInterest,
   type Onboarding,
 } from './onboarding';
+import { MY_PROPOSALS_PATH } from './proposals';
 
 /** A consent answer as `GET /me` lists it. */
 const agreed = (item: 'terms' | 'privacy' | 'age' | 'marketing', value = true) => ({
@@ -74,7 +75,7 @@ const DONE: Onboarding = { ...COMPLETED, interests: true };
 const RECONSENT: Onboarding = { ...DONE, consent: false, completed: false, nextStep: 'consent' };
 
 describe('isOnboardingExempt', () => {
-  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, plus /api', () => {
+  it('lists exactly the routes ADR-0043 names, the 탈퇴 screen, 내 제안, plus /api', () => {
     expect([...ONBOARDING_EXEMPT_PATHS].sort()).toEqual(
       [
         '/api',
@@ -82,6 +83,8 @@ describe('isOnboardingExempt', () => {
         ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
         // 탈퇴 (#140, owner decision 2026-10-23 (2차) 3): an account not onboarded closes itself.
         '/my/settings/closure',
+        // 내 제안 (#77, owner decision 2026-10-20): such an account takes its 접수 proposal back.
+        '/my/proposals',
         '/login',
         '/onboarding',
         '/privacy',
@@ -106,6 +109,7 @@ describe('isOnboardingExempt', () => {
       '/refund',
       '/terms/',
       '/my/settings/closure',
+      '/my/proposals',
       '/reset-password/confirm',
       '/api/auth/callback/kakao',
       '/api/auth/sign-out',
@@ -127,6 +131,9 @@ describe('isOnboardingExempt', () => {
       '/my/wallet',
       '/my/settings',
       '/my/settings/closurex',
+      '/my/proposalsx',
+      // The form '시장 제안하기' leads to stays gated: a new proposal waits for the onboarding.
+      '/proposals/new',
       '/my/moderation',
       '/community',
       '/markets/btc-100k',
@@ -369,6 +376,20 @@ describe('needsOnboarding', () => {
     // The screen is every such account's, never a page only a re-consent opens (ADR-0086 결과 5 (9)).
     expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_CLOSURE_PATH);
     expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_CLOSURE_PATH);
+  });
+
+  it('leaves 내 제안 to an account with any step left, a re-consent included, and not the form (owner decision 2026-10-20)', () => {
+    for (const onboarding of [FRESH, CONSENTED, VERIFIED, RECONSENT]) {
+      // Its 접수 proposals are taken back with sign-in only (owner decision 2026-10-19, ADR-0089).
+      expect(needsOnboarding('/my/proposals', onboarding), String(onboarding.nextStep)).toBe(false);
+      // '시장 제안하기' there still meets the gate: a new proposal waits for the onboarding (#57-8).
+      expect(needsOnboarding('/proposals/new', onboarding)).toBe(true);
+      // MY 요약, whose last card links to it, stays gated.
+      expect(needsOnboarding('/my', onboarding)).toBe(true);
+    }
+    // Every such account's, as the 탈퇴 screen — never a page only a re-consent opens (ADR-0089).
+    expect(ONBOARDING_EXEMPT_PATHS).toContain(MY_PROPOSALS_PATH);
+    expect(ONBOARDING_EXEMPT_PAGES.map((page) => page.route)).not.toContain(MY_PROPOSALS_PATH);
   });
 
   it('never redirects while the answer is unknown, or once nothing is left', () => {

@@ -30,6 +30,8 @@ import { NICKNAME_HOLD_DAYS } from './nickname.js';
  * period the same way: the period the owner decides for it — a new setting in
  * RETENTION_PERIOD_SETTINGS or an existing one's, whose description then names the kind too — a
  * purge kind here, and its step in the worker's job (docs/SETTINGS.md '보존기간 항목 등록하기').
+ * #77's market proposals came so, with a setting of their own (ADR-0087's owner decision
+ * 2026-10-24 13).
  */
 
 /**
@@ -59,6 +61,9 @@ export const RETENTION_PERIOD_MAX_DAYS = 7_300;
  *   decision 2026-10-24 13); later the judgement objections (#175) join it.
  * - `removed_profile_items`: 운영자가 지운 프로필 항목 — the nickname, 소개 or image an operator took
  *   away (#37-10, `profile_item_removals`).
+ * - `market_proposals`: 시장 제안 기록 — a withdrawn account's market proposals (#77,
+ *   `market_proposals`: the form, the status and the operators' reasons, memos and internal memo),
+ *   once their processing has ended (owner decision 2026-10-24 13, ADR-0087 결과 5; ADR-0089).
  */
 export const RETENTION_PERIODS = [
   'consent_records',
@@ -66,6 +71,7 @@ export const RETENTION_PERIODS = [
   'deleted_posts',
   'moderation_records',
   'removed_profile_items',
+  'market_proposals',
 ] as const;
 export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
 
@@ -93,6 +99,8 @@ export type RetentionPeriod = (typeof RETENTION_PERIODS)[number];
  *   (owner decision 2026-10-24 13) — an entry nothing names; the mark, with the link, stays in
  *   `admin_actions` (owner decision 2026-10-22 (2차) 3).
  * - `consent_records`, `phone_verification_records`: as their periods.
+ * - `market_proposals`: a withdrawn account's proposals whose processing has ended (#77) — nothing
+ *   names a proposal, so last.
  */
 export const RETENTION_PURGE_KINDS = [
   'nickname_holds',
@@ -109,6 +117,7 @@ export const RETENTION_PURGE_KINDS = [
   'link_flags',
   'consent_records',
   'phone_verification_records',
+  'market_proposals',
 ] as const;
 export type RetentionPurgeKind = (typeof RETENTION_PURGE_KINDS)[number];
 export const retentionPurgeKindSchema = z
@@ -139,6 +148,7 @@ export const RETENTION_PURGE_KIND_PERIODS: Readonly<
   link_flags: 'moderation_records',
   consent_records: 'consent_records',
   phone_verification_records: 'phone_verification_records',
+  market_proposals: 'market_proposals',
 };
 
 /** The days a nickname hold is kept: the hold itself (#57-6), recorded as its purge's period. */

@@ -8,6 +8,7 @@ import {
 import { MY_CLOSURE_PATH } from './account-closure';
 import type { Me } from './api';
 import { safeNextPath } from './next-path';
+import { MY_PROPOSALS_PATH } from './proposals';
 
 /**
  * The onboarding (#58, ADR-0072) as the screens read it: the gate that sends a signed-in account
@@ -57,12 +58,19 @@ export const ONBOARDING_PATH = '/onboarding';
  * - The 탈퇴 screen, /my/settings/closure (#140, owner decision 2026-10-23 (2차) 3, ADR-0086): an
  *   account that has not finished its onboarding — a re-consent left included — may still close
  *   itself, as it may delete its own items with sign-in only (#46, #77); the API's closure is
- *   sign-in only too (`SessionGuard`, no `OnboardedGuard`). Only that screen, for every account
- *   with a step left: the rest of MY stays gated — its 설정 tab too, but for an account facing a
- *   re-consent alone, which ONBOARDING_EXEMPT_PAGES opens it to (#41), so that one also reaches the
- *   screen from MY 설정's card (and the re-consent step's link to MY 설정, `settingsLinkOnStep`). It
- *   stays here, not there: moved to the pages a re-consent alone opens, a first onboarding would
- *   lose it. Every onboarding screen links to it (`ONBOARDING_CLOSURE_LINK`).
+ *   sign-in only too (`SessionGuard`, no `OnboardedGuard`). It stays here, not among the pages a
+ *   re-consent alone opens (ONBOARDING_EXEMPT_PAGES): moved there, a first onboarding would lose
+ *   it. Every onboarding screen links to it (`ONBOARDING_CLOSURE_LINK`).
+ * - 내 제안, /my/proposals (#77, owner decision 2026-10-20, ADR-0089): an account with steps left —
+ *   a re-consent included — may still open its proposals and take a 접수 one back (철회), which the
+ *   API takes with sign-in only (owner decision 2026-10-19, as deleting one's own post). Like the
+ *   탈퇴 screen it is here, for every step left, not among the pages a re-consent alone opens. Its
+ *   '시장 제안하기' still leads to the form, /proposals/new, which stays gated (a new proposal is an
+ *   action #57-8 keeps for after the onboarding).
+ *   These two screens only, for every account with a step left: the rest of MY stays gated — its
+ *   설정 tab too, but for an account facing a re-consent alone, which ONBOARDING_EXEMPT_PAGES opens
+ *   it to (#41), so that one also reaches the 탈퇴 screen from MY 설정's card (and the re-consent
+ *   step's link to MY 설정, `settingsLinkOnStep`) and 내 제안 from its card there.
  * - /api: never a page — the layout the gate lives in does not render for it — but the list is
  *   total so the decision could move into `proxy.ts` without ever answering an API call (the
  *   auth routes included) with a redirect to an HTML form.
@@ -81,6 +89,7 @@ export const ONBOARDING_EXEMPT_PATHS: readonly string[] = [
   '/refund',
   ...(PAID_COIN_SALES_ENABLED ? ['/charge'] : []),
   MY_CLOSURE_PATH,
+  MY_PROPOSALS_PATH,
   '/api',
 ];
 
@@ -114,9 +123,10 @@ export interface OnboardingExemptPage {
 }
 
 /**
- * The pages exempt for a login-only action. Later issues add theirs here: #77 the proposal list
- * (`/my/proposals`, withdrawing a proposal); #48's comment deletion lives on the post page, whose
- * comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
+ * The pages exempt for a login-only action. #77's 내 제안 (`/my/proposals`, the 철회 of a 접수
+ * proposal) is not one: the owner opened it to every account with a step left, not to a re-consent
+ * alone (owner decision 2026-10-20, ADR-0089), so it is in ONBOARDING_EXEMPT_PATHS beside the 탈퇴
+ * screen. #48's comment deletion lives on the post page, whose comment writes — 답글, 수정, 올리기 — go to the step (components/post/comments-section.tsx), and so
  * do its 좋아요 (#49, components/post/like-button.tsx). #41's MY 설정 clears the public profile's
  * 소개 and drops its interest categories, and deletes its image (#141, ADR-0079); a new 소개, a
  * category added, a new image, a nickname change (owner decision 2026-10-22 answer 1) and the

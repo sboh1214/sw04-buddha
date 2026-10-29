@@ -292,6 +292,9 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // (`MY_MODERATION_KEY`, lib/moderation.ts) — theirs and operators' alone (PRIVATE_DATA `reports`,
   // `moderation`). The operators' reads are under `admin`.
   'my-moderation',
+  // 내 제안 (#77, ADR-0089): only the proposer and the operators see a proposal (ADR-0069
+  // decision 4), read with the member's cookie (lib/proposals.ts `PROPOSALS_KEY`).
+  'proposals',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

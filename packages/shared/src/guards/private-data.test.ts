@@ -136,6 +136,12 @@ describe('findPrivateField', () => {
     ['nicknameChangeAvailableAt', 'former-nickname'],
     ['releasedNickname', 'former-nickname'],
     ['nickname_holds', 'former-nickname'],
+    ['proposal', 'proposal'],
+    ['proposalId', 'proposal'],
+    ['market_proposals', 'proposal'],
+    ['proposer', 'proposal'],
+    ['proposerNickname', 'proposal'],
+    ['proposedBy', 'proposal'],
     ['passwordHash', 'auth-secret'],
     ['sessionToken', 'auth-secret'],
     ['riskFlags', 'risk-flag'],
@@ -255,6 +261,12 @@ describe('findPrivateField', () => {
     'reason',
     'commentCount',
     'excerpt',
+    // The form's words are a market's too (#77): a YES condition, sources, a background, a date.
+    'yesCondition',
+    'expectedSources',
+    'resolutionSource',
+    'background',
+    'deadline',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

@@ -594,10 +594,14 @@ describe('the public API document (static)', () => {
       'PUT /me/profile-image',
       // 탈퇴 (#140, ADR-0069 decision 4 #140): until either restriction ends or is lifted.
       'POST /me/closure',
+      // 시장 제안 (#77, ADR-0069 decision 4 #77 자격 «계정 제한과 작성 제한 중에는 낼 수 없다»): a new
+      // proposal, until either restriction ends or is lifted.
+      'POST /me/proposals',
     ];
     // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
     // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is
-    // not writing at all — the account's own steps, the 관심 등록, payments.
+    // not writing at all — the account's own steps, the 관심 등록, payments — and the 철회 of one's own
+    // 접수 proposal (#77: it takes one's own back, as deleting one's own post does, #45-12).
     const OPEN = [
       'POST /me/consents',
       'POST /me/onboarding/nickname',
@@ -618,11 +622,12 @@ describe('the public API document (static)', () => {
       'POST /me/search-history',
       'POST /me/search-history/:id/delete',
       'POST /me/search-history/clear',
+      'POST /me/proposals/:id/retract',
       'POST /payments/charge',
       'POST /coupons/redeem',
     ];
-    // A new owner write — #77's market proposal — fails here until it is put in one list or the
-    // other: whether a writing restriction refuses it is decided, not missed.
+    // A new owner write fails here until it is put in one list or the other: whether a writing or
+    // an account restriction refuses it is decided, not missed (#77's two writes came so).
     const writes = Object.keys(OWNER_ROUTES).filter((key) => !key.startsWith('GET '));
     expect([...REFUSED, ...OPEN].sort()).toEqual([...writes].sort());
     const documented = operations

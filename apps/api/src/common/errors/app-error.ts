@@ -74,6 +74,9 @@ export const HTTP_STATUS_BY_CODE: Readonly<Record<ErrorCode, number>> = {
   CLOSURE_NOT_ALLOWED: HttpStatus.CONFLICT,
   // The account's state — closed by its member (#140) — refuses the operator's write for good.
   ACCOUNT_CLOSED: HttpStatus.CONFLICT,
+  // A limit of the proposals (#77), refused like PHONE_VERIFICATION_LIMITED: the same request
+  // passes later — once a waiting proposal is decided, or once the day's oldest leaves the window.
+  PROPOSAL_LIMITED: HttpStatus.TOO_MANY_REQUESTS,
   INTERNAL: HttpStatus.INTERNAL_SERVER_ERROR,
 };
 

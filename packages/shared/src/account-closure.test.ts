@@ -65,14 +65,25 @@ describe('탈퇴 (#140)', () => {
         refusals: ['unsettled_contracts'],
         restriction: { kind: 'account', endsAt: null },
         startGrantReceived: true,
+        pendingProposals: true,
       }),
-    ).toMatchObject({ availableCoin: '10000', startGrantReceived: true });
-    // Whether the start Coin was paid is always said (owner decision 2026-10-23 (3차) 9).
+    ).toMatchObject({ availableCoin: '10000', startGrantReceived: true, pendingProposals: true });
+    // Whether the start Coin was paid is always said (owner decision 2026-10-23 (3차) 9), and so
+    // is whether a proposal is being processed (#77, owner decision 2026-10-24, ADR-0089).
     expect(
       accountClosureCheckSchema.safeParse({
         availableCoin: '0',
         refusals: [],
         restriction: null,
+        pendingProposals: false,
+      }).success,
+    ).toBe(false);
+    expect(
+      accountClosureCheckSchema.safeParse({
+        availableCoin: '0',
+        refusals: [],
+        restriction: null,
+        startGrantReceived: false,
       }).success,
     ).toBe(false);
     expect(

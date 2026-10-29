@@ -23,6 +23,8 @@ import {
   type ModerationReason,
   type PostDocument,
   type Outcome,
+  type ProposalRejectionReason,
+  type ProposalStatus,
   type ReleaseSettingStatus,
   type ReportReason,
   type ReportStatus,
@@ -47,6 +49,7 @@ import {
   linkFlags,
   linkUses,
   marketLinks,
+  marketProposals,
   marketSearches,
   marketSettlementSteps,
   marketWatchEvents,
@@ -1607,4 +1610,113 @@ export async function createThemeNotice(db: Db, input: CreateThemeNoticeInput) {
     })
     .returning();
   return row!;
+}
+
+export interface CreateProposalInput {
+  /** The proposer. */
+  userId: string;
+  /**
+   * The keyed hash of the proposer's number (64 lower-case hex). Default: a random one; a test of
+   * the limits passes the API's hash of the account's verified number (PhoneHasher).
+   */
+  phoneHash?: string;
+  question?: string;
+  /** `YYYY-MM-DD`. Default: 30 days from now (UTC date). */
+  deadline?: string;
+  yesCondition?: string;
+  expectedSources?: string;
+  background?: string | null;
+  categoryId?: number | null;
+  /** Default: the database clock. A limit or order test sets it. */
+  createdAt?: Date;
+  /** Where to move it, as the API's steps would (default `submitted`). */
+  status?: ProposalStatus;
+  /** The operator of the review and the decision. A fresh admin is created when one is needed. */
+  adminId?: string;
+  /**
+   * When each move happened (default: the time of the step's UPDATE). A test that tells the
+   * moves' times apart sets them; only the ones the moves to `status` write are used.
+   */
+  reviewStartedAt?: Date;
+  decidedAt?: Date;
+  retractedAt?: Date;
+  /** A 반려 straight from 접수 (no review start) instead of after a review. Default: false. */
+  rejectUnreviewed?: boolean;
+  rejectionReason?: ProposalRejectionReason;
+  rejectionExplanation?: string;
+  /** Required with `rejectionReason: 'duplicate'`. */
+  duplicateMarketId?: string;
+  adoptionMemo?: string | null;
+  /** The market a 채택 led to. */
+  marketId?: string | null;
+  internalMemo?: string | null;
+}
+
+/**
+ * A market proposal (#77) as the API's steps leave it: inserted 접수, then moved along the owner's
+ * steps to `status` — 검토 for 채택 (and for 반려 unless `rejectUnreviewed`), then the decision, or
+ * 철회 — one UPDATE per step, which the table's trigger holds to those steps (migration 0046). Only
+ * the row: no `admin_actions` rows, which the API writes beside each move.
+ */
+export async function createProposal(db: Db, input: CreateProposalInput) {
+  const status = input.status ?? 'submitted';
+  const deadline =
+    input.deadline ?? new Date(Date.now() + 30 * 86_400_000).toISOString().slice(0, 10);
+  const [inserted] = await db
+    .insert(marketProposals)
+    .values({
+      userId: input.userId,
+      phoneHash: input.phoneHash ?? randomPhoneHash(),
+      question: input.question ?? `제안 ${tag()}`,
+      deadline,
+      yesCondition: input.yesCondition ?? '공식 발표에서 그렇다고 하면 YES',
+      expectedSources: input.expectedSources ?? '공식 발표',
+      background: input.background ?? null,
+      categoryId: input.categoryId ?? null,
+      internalMemo: input.internalMemo ?? null,
+      ...(input.createdAt === undefined ? {} : { createdAt: input.createdAt }),
+    })
+    .returning();
+  let row = inserted!;
+  if (status === 'submitted') return row;
+  const move = async (values: Partial<typeof marketProposals.$inferInsert>) => {
+    const [moved] = await db
+      .update(marketProposals)
+      .set(values)
+      .where(eq(marketProposals.id, row.id))
+      .returning();
+    row = moved!;
+  };
+  if (status === 'retracted') {
+    await move({ status, retractedAt: input.retractedAt ?? new Date() });
+    return row;
+  }
+  const adminId = input.adminId ?? (await createUser(db, { role: 'admin' })).user.id;
+  if (status !== 'rejected' || !input.rejectUnreviewed) {
+    await move({
+      status: 'reviewing',
+      reviewStartedAt: input.reviewStartedAt ?? new Date(),
+      reviewStartedBy: adminId,
+    });
+  }
+  if (status === 'adopted') {
+    await move({
+      status,
+      decidedAt: input.decidedAt ?? new Date(),
+      decidedBy: adminId,
+      adoptionMemo: input.adoptionMemo ?? null,
+      marketId: input.marketId ?? null,
+    });
+  } else if (status === 'rejected') {
+    const reason = input.rejectionReason ?? 'other';
+    await move({
+      status,
+      decidedAt: input.decidedAt ?? new Date(),
+      decidedBy: adminId,
+      rejectionReason: reason,
+      rejectionExplanation: input.rejectionExplanation ?? '사유 설명',
+      duplicateMarketId: reason === 'duplicate' ? (input.duplicateMarketId ?? null) : null,
+    });
+  }
+  return row;
 }

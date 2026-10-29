@@ -189,65 +189,46 @@ export class MarketAdminService {
    * VALIDATION_ERROR naming `slug` (the unique index decides).
    */
   async create(adminId: string, body: CreateMarketBody): Promise<AdminMarket> {
+    return this.db.transaction((tx) => this.createIn(tx, adminId, body));
+  }
+
+  /**
+   * `create`'s work inside the caller's transaction, for a caller whose own write must commit
+   * together with the draft: a proposal's 채택 (#77) makes a draft from the proposal and records
+   * the 채택 in one transaction, so neither exists without the other. The same rows as `create` —
+   * the market, its `created` event and its `market_create` record — and the same refusals; a draft
+   * is not public, so nothing is published or scheduled.
+   */
+  async createIn(tx: Tx, adminId: string, body: CreateMarketBody): Promise<AdminMarket> {
     const closeAt = new Date(body.closeAt);
     const slug = body.slug ?? generateSlug(body.title);
-
+    // Every instant this service writes or compares comes from the database clock, read
+    // inside the transaction (and after the locks, where there are any) — see clock.ts.
+    // The close time is checked before the category so the error precedence is unchanged.
+    const now = await clockTimestamp(tx);
+    assertFutureCloseAt(closeAt, now);
+    await this.requireActiveCategory(tx, body.categoryId);
+    let inserted: MarketRow | undefined;
     try {
-      return await this.db.transaction(async (tx) => {
-        // Every instant this service writes or compares comes from the database clock, read
-        // inside the transaction (and after the locks, where there are any) — see clock.ts.
-        // The close time is checked before the category so the error precedence is unchanged.
-        const now = await clockTimestamp(tx);
-        assertFutureCloseAt(closeAt, now);
-        await this.requireActiveCategory(tx, body.categoryId);
-        const [inserted] = await tx
-          .insert(schema.markets)
-          .values({
-            slug,
-            title: body.title,
-            description: body.description ?? null,
-            rules: body.rules,
-            resolutionSource: body.resolutionSource ?? null,
-            categoryId: body.categoryId,
-            imageUrl: body.imageUrl ?? null,
-            status: 'draft',
-            openAt: null,
-            closeAt,
-            createdBy: adminId,
-          })
-          .returning();
-        if (!inserted) throw new AppError('INTERNAL', { message: 'Market insert failed' });
-        // The event references the market and the market keys on the event, so the row is
-        // inserted, then the event, then the key written back: two statements, one transaction,
-        // and the row that leaves it has the key every other transition writes in its UPDATE.
-        const eventId = await this.recordEvent(tx, {
-          marketId: inserted.id,
-          type: 'created',
-          actorId: adminId,
-          // The body is JSON-safe as parsed: strings, numbers and nulls only.
-          payload: { ...body, slug },
-          createdAt: now,
-        });
-        const [row] = await tx
-          .update(schema.markets)
-          .set({ statusEventId: eventId })
-          .where(eq(schema.markets.id, inserted.id))
-          .returning();
-        if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
-        await tx.insert(schema.adminActions).values({
-          adminId,
-          type: 'market_create',
-          targetType: 'market',
-          targetId: row.id,
-          payload: { after: snapshot(row) },
-          createdAt: now,
-        });
-        // Read the detail inside the transaction, as every other write path does: after the
-        // commit it would be a fresh snapshot on the pool and could already show somebody
-        // else's write in the answer to "here is what you created".
-        return await this.toAdminMarket(tx, row);
-      });
+      [inserted] = await tx
+        .insert(schema.markets)
+        .values({
+          slug,
+          title: body.title,
+          description: body.description ?? null,
+          rules: body.rules,
+          resolutionSource: body.resolutionSource ?? null,
+          categoryId: body.categoryId,
+          imageUrl: body.imageUrl ?? null,
+          status: 'draft',
+          openAt: null,
+          closeAt,
+          createdBy: adminId,
+        })
+        .returning();
     } catch (error) {
+      // The insert is the one statement the slug's unique index can refuse; the transaction is
+      // rolled back by the throw either way.
       if (isPgError(error, PG_UNIQUE_VIOLATION, MARKET_SLUG_UNIQUE)) {
         throw new AppError('VALIDATION_ERROR', {
           message: 'This slug is already taken',
@@ -257,6 +238,36 @@ export class MarketAdminService {
       }
       throw error;
     }
+    if (!inserted) throw new AppError('INTERNAL', { message: 'Market insert failed' });
+    // The event references the market and the market keys on the event, so the row is
+    // inserted, then the event, then the key written back: two statements, one transaction,
+    // and the row that leaves it has the key every other transition writes in its UPDATE.
+    const eventId = await this.recordEvent(tx, {
+      marketId: inserted.id,
+      type: 'created',
+      actorId: adminId,
+      // The body is JSON-safe as parsed: strings, numbers and nulls only.
+      payload: { ...body, slug },
+      createdAt: now,
+    });
+    const [row] = await tx
+      .update(schema.markets)
+      .set({ statusEventId: eventId })
+      .where(eq(schema.markets.id, inserted.id))
+      .returning();
+    if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
+    await tx.insert(schema.adminActions).values({
+      adminId,
+      type: 'market_create',
+      targetType: 'market',
+      targetId: row.id,
+      payload: { after: snapshot(row) },
+      createdAt: now,
+    });
+    // Read the detail inside the transaction, as every other write path does: after the
+    // commit it would be a fresh snapshot on the pool and could already show somebody
+    // else's write in the answer to "here is what you created".
+    return await this.toAdminMarket(tx, row);
   }
 
   /**

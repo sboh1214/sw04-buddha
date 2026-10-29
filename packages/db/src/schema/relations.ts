@@ -20,6 +20,7 @@ import { commentLikes, postLikes } from './likes.js';
 import { linkFlags } from './link-review.js';
 import { marketEvents } from './market-events.js';
 import { marketLinks } from './market-links.js';
+import { marketProposals } from './market-proposals.js';
 import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
 import { markets } from './markets.js';
@@ -158,6 +159,10 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   // 테마 (#81): the themes this market is in.
   themeMarkets: many(themeMarkets),
   posts: many(posts),
+  // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
+  // duplicates. Admin reads only: a market never shows who proposed it.
+  adoptedProposals: many(marketProposals, { relationName: 'market_proposal_market' }),
+  duplicateProposals: many(marketProposals, { relationName: 'market_proposal_duplicate' }),
 }));
 
 export const postsRelations = relations(posts, ({ one, many }) => ({
@@ -327,6 +332,25 @@ export const themeMarketsRelations = relations(themeMarkets, ({ one }) => ({
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({
   theme: one(themes, { fields: [themeNotices.themeId], references: [themes.id] }),
   creator: one(user, { fields: [themeNotices.createdBy], references: [user.id] }),
+}));
+
+// Two references to `markets` (the adopted market and a 중복's), so both ends name theirs.
+export const marketProposalsRelations = relations(marketProposals, ({ one }) => ({
+  user: one(user, { fields: [marketProposals.userId], references: [user.id] }),
+  category: one(categories, {
+    fields: [marketProposals.categoryId],
+    references: [categories.id],
+  }),
+  market: one(markets, {
+    fields: [marketProposals.marketId],
+    references: [markets.id],
+    relationName: 'market_proposal_market',
+  }),
+  duplicateMarket: one(markets, {
+    fields: [marketProposals.duplicateMarketId],
+    references: [markets.id],
+    relationName: 'market_proposal_duplicate',
+  }),
 }));
 
 export const adminActionsRelations = relations(adminActions, ({ one, many }) => ({

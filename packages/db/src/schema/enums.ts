@@ -16,6 +16,8 @@ import {
   PAYMENT_STATUSES,
   PRICE_TICK_TRIGGERS,
   MODERATION_REASONS,
+  PROPOSAL_REJECTION_REASONS,
+  PROPOSAL_STATUSES,
   RELEASE_SETTING_STATUSES,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
@@ -47,3 +49,9 @@ export const approvalStatusEnum = pgEnum('approval_status', APPROVAL_STATUSES);
 export const reportReasonEnum = pgEnum('report_reason', MODERATION_REASONS);
 export const reportTargetTypeEnum = pgEnum('report_target_type', REPORT_TARGET_TYPES);
 export const reportStatusEnum = pgEnum('report_status', REPORT_STATUSES);
+/** 시장 제안 (#77): a proposal's status and a 반려's reason (PROPOSAL_STATUSES, enums.ts). */
+export const marketProposalStatusEnum = pgEnum('market_proposal_status', PROPOSAL_STATUSES);
+export const marketProposalRejectionReasonEnum = pgEnum(
+  'market_proposal_rejection_reason',
+  PROPOSAL_REJECTION_REASONS,
+);

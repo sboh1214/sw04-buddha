@@ -27,6 +27,7 @@ import {
   useSessionEnded,
 } from './portfolio';
 import { MyAuthoredPreview } from './posts/my-authored';
+import { MyProposalsPreview } from './proposals/my-proposals';
 import { LedgerRow } from './wallet/ledger-list';
 import { StartGrantPendingNotice } from './wallet/start-grant-notice';
 import { WatchlistBody } from './watchlist/watchlist';
@@ -44,6 +45,9 @@ function tab(key: MyTabKey) {
  * (알림 #53). The previews run in the tab bar's order (MY_TABS, the owner's): 내 글 — rows since
  * #51 (ADR-0080), the newest three posts and the newest three comments — then 관심 시장 — rows since
  * #89 (ADR-0064), the newest three watches as market cards — then the 준비 중 of 알림.
+ *
+ * 내 제안 (#77, ADR-0089) closes the summary: not a tab (ADR-0069 decision 4 #77 위치), so after
+ * the tab bar's previews, its newest proposals with 전체 보기 to `/my/proposals`.
  *
  * The holdings, 정산 이력 and the orders are read once here and handed to every card that shows
  * them, so the summary card and the previews are drawn from one price and one list.
@@ -97,6 +101,9 @@ export function MySummary() {
       <PostsPreview />
       <WatchlistPreview />
       <ComingSoonPreview tabKey="notifications" />
+      {/* 내 제안 (#77, ADR-0089): a MY sub-page, not a tab — linked from here (ADR-0069 decision
+          4 #77 위치), after the tabs' previews since it is none of them. */}
+      <MyProposalsPreview limit={MY_PREVIEW_ROWS} />
     </Stack>
   );
 }

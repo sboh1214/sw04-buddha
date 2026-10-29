@@ -230,7 +230,10 @@ export const copy = {
   // 본인확인 발송 기록이 번호·실명을 보존기간 동안 남긴다(ADR-0070 2차 답 1 — #57-18 즉시 삭제의 예외). 시작
   // Coin을 받은 계정에만 같은 번호로 다시 가입해도 다시 받지 못한다는 줄이 있다(#57-1, 오너 결정 2026-10-23
   // (3차) 9 — 기다리던 지급은 탈퇴 때 취소되어 그 번호가 다시 받을 수 있으므로 보이지 않고, 번호로 이어 세는
-  // 다른 한도는 말하지 않는다). 제목·힌트·단추·401 문장은 이대로다(같은 답 7).
+  // 다른 한도는 말하지 않는다). 제목·힌트·단추·401 문장은 이대로다(같은 답 7). 접수·검토 중인 시장 제안이
+  // 있는 계정에만 남는 것의 줄 바로 아래에 그 제안의 줄이 있다(#77, ADR-0089의 오너 결정 2026-10-24 —
+  // 시작 Coin의 줄처럼. ADR-0069 결정 4 #140 «처리 중인 … 제안: 그대로 검토하고 결과를 기록한다. 탈퇴한
+  // 본인은 볼 수 없다»).
   closureTitle: '탈퇴',
   closureHint: '계정을 닫습니다. 탈퇴는 되돌릴 수 없습니다.',
   closureOpen: '탈퇴하기',
@@ -242,6 +245,7 @@ export const copy = {
     '닉네임·프로필 이미지·소개·관심 카테고리와 이메일·로그인 수단은 곧바로 지워집니다.',
   closurePhoneRecords: '휴대전화 본인확인 기록(번호·실명)은 보존기간 동안 보관된 뒤 지워집니다.',
   closureKept: "작성한 글·댓글과 누른 좋아요는 남고, 작성자는 '탈퇴한 사용자'로 보입니다.",
+  closureProposals: '낸 시장 제안은 운영자가 그대로 처리하며, 탈퇴한 뒤에는 볼 수 없습니다.',
   closureStartGrant: '같은 휴대전화 번호로 다시 가입해도 시작 Coin은 다시 받을 수 없습니다.',
   closureConfirmLabel: "확인을 위해 '탈퇴'를 입력해 주세요.",
   closureSubmit: '탈퇴하기',
@@ -881,6 +885,9 @@ export const copy = {
   adminRetentionKindLinkFlags: '반복 링크 검토 목록',
   adminRetentionKindConsentRecords: '동의 기록',
   adminRetentionKindPhoneVerificationRecords: '본인확인 기록',
+  // 시장 제안(#77, ADR-0089): 탈퇴한 계정의 것, 처리가 끝난 뒤 — 새 항목 '시장 제안 기록 보존기간'(ADR-0087의
+  // 오너 결정 2026-10-24 13)의 기간으로 센다.
+  adminRetentionKindMarketProposals: '시장 제안 기록',
 
   // --- markets (M4) ---
   // 홈 (PLAN 11.3, ADR-0041 Kalshi 형): 헤더 2단의 상위 카테고리 · 왼쪽 세부 분류 · 정렬 · 검색.
@@ -1672,6 +1679,11 @@ export const copy = {
   // 무기한이면 풀릴 때까지). 같은 꼴로 뒤에 '(…까지).'나 '(무기한).'이 붙고 열려 있는 것은 없다.
   errRestrictedClosure: '작성 제한 중에는 탈퇴할 수 없습니다',
   errRestrictedAccountClosure: '계정 제한 중에는 탈퇴할 수 없습니다',
+  // 시장 제안(#77, ADR-0089; ADR-0069 결정 4 #77 자격 «계정 제한과 작성 제한 중에는 낼 수 없다»): 새 제안만
+  // 막는다 — 접수 제안의 철회는 열려 있다(내 제안 화면이라 이 거절에는 말하지 않는다). 같은 꼴로 뒤에
+  // '(…까지).'나 '(무기한).'이 붙고, 양식이 그 아래에 조치·신고 내역 링크를 둔다(ADR-0085 결과 5).
+  errRestrictedProposal: '작성 제한 중에는 시장을 제안할 수 없습니다',
+  errRestrictedAccountProposal: '계정 제한 중에는 시장을 제안할 수 없습니다',
   // 경고의 안내 띠(오너 결정 2026-10-21): 경고한 때부터 이의 기한 14일 동안 MY 요약에만 보이고(글쓰기
   // 화면은 제한만), 조치·신고 내역으로 잇는다. 취소된 경고에는 없다. 이 문장과 링크뿐이고 이의의 안내는
   // 없다(오너 결정 2026-10-22 답 3, #186).
@@ -2318,6 +2330,151 @@ export const copy = {
   errRefundGatewayError:
     '결제대행사의 응답을 받지 못했습니다. 결제는 「환불 처리 중」으로 남아 있으니 잠시 뒤 다시 시도해 주세요.',
   errRefundInProgress: '이전 환불 요청이 아직 처리 중입니다. 1분쯤 뒤에 다시 시도해 주세요.',
+
+  // --- 시장 제안 (#77, ADR-0089; 오너 결정 ADR-0069 결정 4의 #77 행) ---
+  // 양식(/proposals/new)·내 제안(/my/proposals)·진입점(검색 결과 없음과 탐색 홈 아래). 채택을 Coin 지급이나
+  // 개설의 약속으로 말하지 않는다(N05 §6) — 시장 없이 채택될 수도 있어 '나중에 열린다'로도 읽히지 않게 한다.
+  // 처리 대기 5건과 24시간 3건, 칸마다의 글자 수는 PROPOSAL_LIMITS·PROPOSAL_*_MAX와 같은 수다
+  // (proposals.test.ts가 본다).
+  proposeMarket: '시장 제안하기',
+  proposeMarketEntry: '찾는 시장이 없다면 운영자에게 새 시장을 제안해 주세요.',
+  proposalNewTitle: '시장 제안',
+  proposalNewIntro:
+    '질문과 결과가 정해질 날짜, YES 조건, 예상 출처를 적어 주세요. 운영자가 같은 시장이 있는지와 결과를 판정할 수 있는지를 검토합니다.',
+  proposalNotice:
+    '채택되어도 시장이 열린다는 보장은 없습니다. 시장은 운영자의 개설 절차를 거쳐야 열리며, 채택에 따른 Coin 지급은 없습니다.',
+  proposalLimitsHint:
+    '처리를 기다리는 제안(접수·검토)은 5건까지, 24시간 동안 3건까지 낼 수 있습니다. 낸 제안은 고칠 수 없습니다.',
+  proposalQuestion: '질문',
+  proposalQuestionHint: 'YES 또는 NO로 답할 수 있게 100자까지 적어 주세요.',
+  proposalDeadline: '결과가 정해질 날짜',
+  proposalDeadlineHint:
+    '이 날짜까지 결과가 알려지는 질문이어야 합니다. 한국 날짜로 오늘부터 고를 수 있습니다.',
+  proposalYesCondition: 'YES 조건',
+  proposalYesConditionHint: '어떤 일이 일어나면 YES인지 판정할 수 있게 1,000자까지 적어 주세요.',
+  proposalExpectedSources: '예상 출처',
+  proposalExpectedSourcesHint:
+    '결과를 확인할 수 있는 곳(기관·매체·주소 등)을 500자까지 적어 주세요.',
+  proposalBackground: '배경 설명',
+  proposalCategory: '희망 카테고리',
+  // 양식의 선택 항목 표시. 내 제안과 관리자 화면은 항목 이름만 쓴다.
+  proposalOptionalTag: '(선택)',
+  proposalCategoryNone: '고르지 않음',
+  proposalSubmit: '제안하기',
+  proposalSubmitted: '제안을 접수했습니다.',
+  errProposalQuestion: '질문을 1~100자로 입력해 주세요.',
+  errProposalDeadline: '오늘(한국 날짜)이나 그 뒤의 날짜를 골라 주세요.',
+  errProposalYesCondition: 'YES 조건을 1~1,000자로 입력해 주세요.',
+  errProposalSources: '예상 출처를 1~500자로 입력해 주세요.',
+  errProposalBackground: '배경 설명은 5,000자까지 입력할 수 있습니다.',
+  errProposalCategory: '고를 수 없는 카테고리입니다. 다시 골라 주세요.',
+  errProposalPendingLimit:
+    '처리를 기다리는 제안(접수·검토)이 이미 5건입니다. 운영자가 처리하거나 접수 상태의 제안을 철회하면 다시 낼 수 있습니다.',
+  errProposalDailyLimit: '제안은 24시간 동안 3건까지 낼 수 있습니다.',
+  errProposalTooManyRequests: '요청이 많습니다. 잠시 후 다시 시도해 주세요.',
+  errProposalOnboarding: '온보딩을 마친 뒤에 제안할 수 있습니다.',
+  errProposalVerification: '본인확인을 마친 뒤에 제안할 수 있습니다.',
+  // 내 제안: MY 아래 하위 화면(탭이 아니다). MY 요약과 설정에서 연결한다.
+  myProposals: '내 제안',
+  myProposalsEmpty: '아직 낸 제안이 없습니다.',
+  myProposalsSettingsHint: '내가 낸 시장 제안의 상태와 처리 결과를 봅니다.',
+  myProposalsOpen: '내 제안 보기',
+  proposalStatusSubmitted: '접수',
+  proposalStatusReviewing: '검토',
+  proposalStatusAdopted: '채택',
+  proposalStatusRejected: '반려',
+  proposalStatusRetracted: '철회',
+  proposalSubmittedAt: '제안',
+  proposalReviewStartedAt: '검토 시작',
+  proposalRejectionReason: '반려 사유',
+  proposalReasonDuplicate: '중복',
+  proposalReasonAmbiguousCriteria: '판정 기준이 모호함',
+  proposalReasonProhibitedTopic: '개설 금지 주제',
+  proposalReasonOther: '기타',
+  proposalDuplicateMarket: '기존 시장',
+  proposalAdoptionMemo: '채택 메모',
+  proposalMarket: '시장',
+  proposalContent: '제안 내용',
+  proposalRetract: '철회',
+  proposalRetractTitle: '제안을 철회합니다',
+  proposalRetractBody:
+    '철회한 제안은 되돌릴 수 없고 운영자가 검토하지 않습니다. 철회해도 24시간 동안 낸 제안 수에는 들어갑니다.',
+  proposalRetracted: '제안을 철회했습니다.',
+  errProposalRetractStatus: '검토가 시작되었거나 이미 처리된 제안이라 철회할 수 없습니다.',
+  errProposalNotFound: '제안을 찾을 수 없습니다.',
+  // 관리자: 목록·상세(/admin/proposals). 검토 시작·채택·반려한 운영자와 시각을 보인다.
+  adminProposals: '시장 제안',
+  adminProposalStatusAll: '모든 상태',
+  adminNoProposals: '제안이 없습니다.',
+  adminProposalBack: '목록으로',
+  adminProposalProposer: '제안자',
+  adminProposalRecord: '처리 기록',
+  adminProposalResult: '처리 결과',
+  adminProposalActions: '처리',
+  adminProposalNoCategory: '없음',
+  adminProposalNoBackground: '없음',
+  adminProposalNoMarket: '연결한 시장 없음',
+  adminProposalStartReview: '검토 시작',
+  adminProposalReviewStarted: '검토를 시작했습니다.',
+  adminProposalAdopt: '채택',
+  adminProposalAdoptTitle: '제안을 채택합니다',
+  adminProposalAdoptBody:
+    '채택은 되돌릴 수 없습니다. 채택해도 시장은 열리지 않고 Coin도 지급되지 않습니다.',
+  // '제안 내용으로 초안 만들기'를 고른 채택에만 덧붙인다(연결하지 않음·기존 시장 연결에는 초안이 없다).
+  adminProposalAdoptDraftBody: '초안은 시장 화면에서 검토해 엽니다.',
+  adminProposalAdopted: '채택했습니다.',
+  adminProposalAdoptMemo: '채택 메모 (선택, 제안자에게 보임)',
+  adminProposalMarketChoice: '시장',
+  adminProposalMarketNone: '연결하지 않음',
+  adminProposalMarketDraft: '제안 내용으로 초안 만들기',
+  adminProposalMarketExisting: '기존 시장 연결',
+  adminProposalDraftCategory: '초안의 카테고리',
+  adminProposalDraftCategoryFromProposal: '제안의 희망 카테고리',
+  // 희망 카테고리가 하위 카테고리가 있는 상위일 때: 시장은 하위에 둔다(ADR-0041).
+  adminProposalDraftCategoryPickLeaf: '하위 카테고리가 있어 초안에는 그 가운데 하나를 골라 주세요.',
+  // 희망 카테고리가 제안한 뒤에 쓰이지 않게 되었을 때(오너 결정 2026-10-19): 초안의 기본값으로 쓰지 않고
+  // 칸 아래에 '제안자가 바란 카테고리: X (지금은 쓰지 않는 카테고리)'로 보인다(retiredWishLine).
+  adminProposalDraftCategoryWishedBy: '제안자가 바란 카테고리',
+  adminProposalDraftCategoryRetired: '(지금은 쓰지 않는 카테고리)',
+  adminProposalDraftCloseAt: '초안의 마감 시각 (KST, 선택)',
+  adminProposalDraftCloseAtHint:
+    '비우면 결과가 정해질 날짜의 0시(한국 시간)입니다. 초안의 모든 칸은 열기 전에 시장 화면에서 고칠 수 있습니다.',
+  // 시장 없이 채택한 제안에 나중에 한 번 시장을 잇는다(오너 결정 2026-10-19). 상태는 채택 그대로다.
+  adminProposalLink: '시장 연결',
+  adminProposalLinkHint:
+    '시장 없이 채택한 제안입니다. 시장은 한 번만 연결할 수 있고, 연결한 뒤에는 바꿀 수 없습니다.',
+  adminProposalLinkTitle: '제안에 시장을 연결합니다',
+  adminProposalLinkBody:
+    '연결한 시장은 바꿀 수 없습니다. 연결해도 시장은 열리지 않고 Coin도 지급되지 않습니다. 시장이 공개되면 제안자가 내 제안에서 그 링크를 봅니다.',
+  adminProposalLinked: '시장을 연결했습니다.',
+  adminProposalReject: '반려',
+  adminProposalRejectTitle: '제안을 반려합니다',
+  adminProposalRejectBody: '반려는 되돌릴 수 없습니다. 고른 사유와 설명이 제안자에게 보입니다.',
+  adminProposalRejected: '반려했습니다.',
+  adminProposalRejectReasonPlaceholder: '사유 선택',
+  adminProposalRejectExplanation: '제안자에게 보일 설명',
+  adminProposalDuplicateMarket: '중복된 기존 시장',
+  adminProposalExistingMarket: '연결할 시장',
+  adminProposalPickMarket: '시장 찾기',
+  adminProposalPick: '선택',
+  adminProposalPicked: '선택한 시장',
+  adminProposalRepick: '다시 고르기',
+  adminProposalInternalMemo: '내부 메모',
+  adminProposalInternalMemoHint: '운영자만 봅니다. 제안자에게는 보이지 않습니다.',
+  adminProposalInternalMemoSaved: '내부 메모를 저장했습니다.',
+  errProposalRejectReason: '반려 사유를 골라 주세요.',
+  errProposalExplanation: '설명을 1~1,000자로 입력해 주세요.',
+  errProposalDuplicateMarket: '중복된 기존 시장을 골라 주세요.',
+  errProposalExistingMarket: '연결할 시장을 골라 주세요.',
+  errProposalMemo: '메모는 1,000자까지 입력할 수 있습니다.',
+  errProposalDraftCategory: '초안의 카테고리를 골라 주세요.',
+  errProposalDraftCategoryInactive:
+    '더 이상 쓸 수 없는 카테고리입니다. 다른 카테고리를 골라 주세요.',
+  errProposalDraftCloseAt: '마감 시각은 지금보다 뒤여야 합니다.',
+  errProposalStatus: '제안의 상태가 바뀌었습니다. 새로 읽은 상태를 확인해 주세요.',
+  errProposalMarketAlreadyLinked: '이미 시장이 연결된 제안입니다. 새로 읽은 내용을 확인해 주세요.',
+  errProposalMarketNotFound: '시장을 찾을 수 없습니다.',
+  errProposalCategoryNotFound: '카테고리를 찾을 수 없습니다.',
 
   // --- generic ---
   errUnknown: '문제가 발생했습니다. 잠시 후 다시 시도해 주세요.',

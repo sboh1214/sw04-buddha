@@ -26,6 +26,7 @@ import { PhoneVerificationModule } from './phone-verification/phone-verification
 import { PostsModule } from './posts/posts.module.js';
 import { ProfileImageModule } from './profile-image/profile-image.module.js';
 import { ProfilesModule } from './profiles/profiles.module.js';
+import { ProposalsModule } from './proposals/proposals.module.js';
 import { RateLimitModule } from './rate-limit/rate-limit.module.js';
 import { RealtimeModule } from './realtime/realtime.module.js';
 import { ReleaseSettingsModule } from './release-settings/release-settings.module.js';
@@ -107,9 +108,12 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     // 탈퇴 (#140): the member's closure of the account. After the modules above, so the document
     // keeps the routes before it where they were.
     AccountClosureModule,
-    // 개인정보 보존기간 (#184): the admins' read of what the worker's retention purge deleted. Last,
-    // so the document keeps the routes before it where they were.
+    // 개인정보 보존기간 (#184): the admins' read of what the worker's retention purge deleted. After
+    // the modules above, so the document keeps the routes before it where they were.
     RetentionModule,
+    // 시장 제안 (#77): the proposer's /me/proposals and the operators' /admin/proposals. After the
+    // modules above, so the document keeps their routes where they were.
+    ProposalsModule,
   ],
   controllers: [HealthController],
 })

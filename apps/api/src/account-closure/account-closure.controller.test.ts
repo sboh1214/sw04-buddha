@@ -33,6 +33,7 @@ import {
   createPost,
   createPostLike,
   createProfileImage,
+  createProposal,
   createReport,
   createSearch,
   createStartGrant,
@@ -330,12 +331,13 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
 
       // What the confirmation screen says first: the Coin to be forfeited, nothing refusing, and
       // that the start Coin was paid — the screen says its number gets none again (owner decision
-      // 2026-10-23 (3차) 9).
+      // 2026-10-23 (3차) 9) — and no market proposal waiting (#77).
       expect(await checkOf(member)).toEqual({
         availableCoin: '10000',
         refusals: [],
         restriction: null,
         startGrantReceived: true,
+        pendingProposals: false,
       });
       const result = await closed(member);
       expect(result.forfeitedCoin).toBe('10000');
@@ -926,6 +928,55 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       ).toMatchObject({ reason: 'posts_10m' });
     });
 
+    it('says a market proposal is being processed only while one of the account’s own is 접수 or 검토, and closes all the same (#77, owner decision 2026-10-24)', async () => {
+      const phone = '01055556666';
+      const proposer = await onboarded(phone);
+      const pending = async () => (await checkOf(proposer)).pendingProposals;
+      // None proposed: nothing to say.
+      expect(await pending()).toBe(false);
+      // Decided or retracted ones are done with — the closure leaves nothing of them in process.
+      for (const status of ['adopted', 'rejected', 'retracted'] as const) {
+        await createProposal(t.db, { userId: proposer.id, status, adminId: admin.id });
+      }
+      // Another account's waiting ones are not the member's, even on the member's own number (the
+      // limits count by number, ADR-0069 decision 7 — this line is about what the member proposed).
+      await createProposal(t.db, {
+        userId: other.id,
+        phoneHash: t.app.get(PhoneHasher).hash(phone),
+      });
+      await createProposal(t.db, { userId: other.id, status: 'reviewing', adminId: admin.id });
+      expect(await pending()).toBe(false);
+      expect((await checkOf(other)).pendingProposals).toBe(true);
+
+      // 접수: said; taken back (철회), no longer.
+      const submitted = await createProposal(t.db, { userId: proposer.id });
+      expect(await pending()).toBe(true);
+      dataOf(await post(`/me/proposals/${submitted.id}/retract`, {}, proposer));
+      expect(await pending()).toBe(false);
+      // 검토: said too.
+      const reviewing = await createProposal(t.db, {
+        userId: proposer.id,
+        status: 'reviewing',
+        adminId: admin.id,
+      });
+      expect(await checkOf(proposer)).toEqual({
+        availableCoin: '0',
+        refusals: [],
+        restriction: null,
+        startGrantReceived: false,
+        pendingProposals: true,
+      });
+
+      // It refuses nothing (ADR-0069 decision 4 #140): the closure goes ahead and the proposal
+      // stays, waiting for the operators as it was.
+      await closed(proposer);
+      const [kept] = await t.db
+        .select({ status: schema.marketProposals.status, userId: schema.marketProposals.userId })
+        .from(schema.marketProposals)
+        .where(eq(schema.marketProposals.id, reviewing.id));
+      expect(kept).toEqual({ status: 'reviewing', userId: proposer.id });
+    });
+
     it('closes an account that never finished the onboarding, with sign-in only', async () => {
       const fresh = await signUpTestUser(t);
       expect(await checkOf(fresh)).toEqual({
@@ -933,6 +984,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         refusals: [],
         restriction: null,
         startGrantReceived: false,
+        pendingProposals: false,
       });
       expect((await closed(fresh)).forfeitedCoin).toBe('0');
       expect(await profileOf(fresh.id)).toMatchObject({ nickname: null });

@@ -17,6 +17,8 @@ import { identifierWords } from './excluded.js';
  * A hidden post's or comment's mark and reason are its author's (#45-5, ADR-0080). Reports and the
  * operators' actions are operators' (N04 §6, #45-13), the reporter's own reports and the member's
  * own actions theirs (#50, ADR-0081).
+ * A market proposal and its proposer are the proposer's and the operators' alone (#77, ADR-0069
+ * decision 4).
  * Items nothing stores yet
  * are named ahead (`pending`), so the route or event that brings one is refused from its first
  * day.
@@ -45,6 +47,7 @@ export const PRIVATE_DATA_IDS = [
   'identity-verification',
   'consent',
   'former-nickname',
+  'proposal',
   'auth-secret',
   'risk-flag',
   'author-holding',
@@ -355,6 +358,17 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
       ['nickname', 'hold'],
       ['nickname', 'holds'],
     ],
+  },
+  {
+    id: 'proposal',
+    name: '시장 제안(내용·상태·사유·메모)과 제안자',
+    basis: 'ADR-0069 결정 4(#77 공개 범위), 결정 3(#37-11)',
+    // Only the proposer and the operators see a proposal (#77): a public shape never carries one
+    // or says who proposed a market (`proposal`, `proposals`, `proposalId`, `proposer`,
+    // `proposedBy`, `proposerNickname`), and a market opened from one does not name it. The words
+    // of the form itself (a YES condition, sources) are a market's too and are not listed. The
+    // proposer's own `GET /me/proposals` is an owner-only route, which this list does not read.
+    fields: [['proposal'], ['proposals'], ['proposer'], ['proposers'], ['proposed']],
   },
   {
     id: 'auth-secret',

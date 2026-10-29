@@ -328,6 +328,7 @@ const TAG_LABELS = {
   watchlist: '관심 시장',
   'search-history': '최근 검색',
   themes: '테마',
+  proposals: '시장 제안',
 };
 
 /**
@@ -402,6 +403,8 @@ const ERROR_NOTES = {
     '탈퇴(#140)를 받지 않는다. `details.reason` 이 까닭을 말한다 — `admin`(관리자 권한이 있는 계정이다. 권한을 회수받은 뒤에 탈퇴한다, ADR-0069 결정 1 #57-17), `unsettled_contracts`(정산되지 않은 계약이 있다. 모두 정산된 뒤에 탈퇴한다, #57-16), `payment_in_progress`(진행 중인 결제·환불이 있다, 결정 7), `pending_orders`(대기 주문이 있다 — 탈퇴 전의 취소는 #178이 한다). 작성 제한·계정 제한 중이면 `RESTRICTED` 다. 승인을 기다리는 계정 제한 요청은 탈퇴를 막지 않는다(탈퇴 때 거절로 닫힌다).',
   ACCOUNT_CLOSED:
     '본인이 탈퇴한 계정이다(#140). 그 계정의 원장은 탈퇴 소멸에서 끝나므로 운영자의 잔액 조정을 받지 않고, 다시 로그인하지 못하고 프로필이 바뀌지 않으므로 관리자 권한 부여도 받지 않는다.',
+  PROPOSAL_LIMITED:
+    '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

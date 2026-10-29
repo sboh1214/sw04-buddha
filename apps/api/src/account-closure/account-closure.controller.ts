@@ -36,8 +36,9 @@ export class MeClosureController {
   @ApiOperation({
     operationId: 'getMyClosureCheck',
     summary:
-      'What closing the account would do now: the Coin it forfeits, what refuses it, and whether ' +
-      'the start Coin was paid to it — its number gets none again (탈퇴, #140)',
+      'What closing the account would do now: the Coin it forfeits, what refuses it, whether ' +
+      'the start Coin was paid to it — its number gets none again — and whether a market proposal ' +
+      'of it is still being processed (탈퇴, #140; #77)',
   })
   @ApiData(accountClosureCheckSchema)
   @ApiErrors('UNAUTHENTICATED', 'NOT_FOUND')

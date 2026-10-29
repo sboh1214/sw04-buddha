@@ -1,6 +1,7 @@
 import { Container, Flex, Stack } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
+import { ProposeMarketEntry } from '@/components/proposals/propose-market-entry';
 import { copy } from '@/copy';
 import {
   fetchCategoriesServer,
@@ -133,6 +134,9 @@ export default async function HomePage({
             {withThemes && <HomeThemes />}
             <MarketFilters filters={filters} categories={categories} />
             <MarketList filters={filters} now={fetchedAt === 0 ? undefined : fetchedAt} />
+            {/* 시장 제안하기 at the bottom of the explore home (ADR-0069 decision 4 #77 위치): a
+                link, the same for every visitor and every view, so this HTML stays one page. */}
+            <ProposeMarketEntry testId="home-propose-market" />
           </Stack>
         </Flex>
       </HydrationBoundary>

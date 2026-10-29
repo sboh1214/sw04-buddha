@@ -456,6 +456,29 @@ export async function expectOnboardingClosureLink(page: Page): Promise<void> {
 }
 
 /**
+ * Opens the 탈퇴 screen (#140) — by its address, or by `open` (a link followed) — and waits until
+ * its read (`GET /me/closure`, in the browser once the session is known) has answered: before it,
+ * the button is off and the lines that depend on the account (the start Coin's, the market
+ * proposals' — #77) are not drawn, for no reason the test means. account-closure.spec.ts and
+ * proposals.spec.ts open it.
+ */
+export async function openClosure(
+  page: Page,
+  open: () => Promise<unknown> = () => page.goto('/my/settings/closure'),
+): Promise<void> {
+  const read = page.waitForResponse(
+    (response) =>
+      response.request().method() === 'GET' &&
+      new URL(response.url()).pathname === '/api/v1/me/closure',
+  );
+  await open();
+  await expect(page).toHaveURL('/my/settings/closure');
+  const response = await read;
+  expect(response.status(), await response.text()).toBe(200);
+  await expect(page.getByTestId('closure-coin')).toBeVisible();
+}
+
+/**
  * The first half of a sign-up (ADR-0024): the form takes the email only, and the link in the
  * mail signs the user in and lands on /set-password. The account is signed in from here on
  * but has neither a password nor any onboarding step done — which is also the state the

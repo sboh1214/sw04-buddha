@@ -11,6 +11,7 @@ import {
   freshEmail,
   freshTag,
   meOf,
+  openClosure,
   openSetPassword,
   setFirstPassword,
   signIn,
@@ -97,27 +98,6 @@ async function commentThroughApi(
   });
   expect(res.status(), await res.text()).toBe(201);
   return ((await res.json()) as { data: { id: string } }).data.id;
-}
-
-/**
- * Opens the closure screen — by its address, or by `open` (a link followed) — and waits until its
- * read (`GET /me/closure`, in the browser once the session is known) has answered: before it, the
- * button is off for no reason the test means.
- */
-async function openClosure(
-  page: Page,
-  open: () => Promise<unknown> = () => page.goto('/my/settings/closure'),
-): Promise<void> {
-  const read = page.waitForResponse(
-    (response) =>
-      response.request().method() === 'GET' &&
-      new URL(response.url()).pathname === '/api/v1/me/closure',
-  );
-  await open();
-  await expect(page).toHaveURL('/my/settings/closure');
-  const response = await read;
-  expect(response.status(), await response.text()).toBe(200);
-  await expect(page.getByTestId('closure-coin')).toBeVisible();
 }
 
 /**
@@ -250,6 +230,9 @@ test.describe('탈퇴', () => {
     await expect(page.getByTestId('closure-phone-records')).toHaveText(copy.closurePhoneRecords);
     await expect(page.getByTestId('closure-kept')).toHaveText(copy.closureKept);
     await expect(page.getByTestId('closure-start-grant')).toHaveCount(0);
+    // Nothing proposed, so nothing of proposals (#77, owner decision 2026-10-24 — proposals.spec.ts
+    // shows the line to an account with one waiting).
+    await expect(page.getByTestId('closure-proposals')).toHaveCount(0);
     await expect(page.getByTestId('closure-blocked')).toHaveCount(0);
     const submit = page.getByTestId('closure-submit');
     const confirmation = page.getByTestId('closure-confirmation');

@@ -109,7 +109,7 @@ export function restrictedError(restriction: RestrictedDetails): AppError {
  * An account restriction refuses none of them (#57-12: «커뮤니티 작성은 막지 않는다»). The public
  * profile items' check point asks both restrictions (`sanctionInForce` is `restrictionInForce`,
  * then `restrictedError` — #41's `assertPublicItemEdit`), and so do #77's market proposals and
- * #140's 탈퇴 once they are stacked here (`assertNotRestricted`, ADR-0069 decision 4 #77 and #140).
+ * #140's 탈퇴 (`assertNotRestricted`, ADR-0069 decision 4 #77 and #140).
  */
 export async function assertNotWritingRestricted(
   executor: Executor,
@@ -123,12 +123,12 @@ export async function assertNotWritingRestricted(
  * Refuses what both restrictions refuse while either stands (RESTRICTED with the one that ends
  * later, `restrictionInForce`): #77's market proposal (ADR-0069 decision 4 #77 «계정 제한과 작성 제한
  * 중에는 낼 수 없다») and #140's 탈퇴 (decision 4 #140 «작성 제한·계정 제한이 끝날 때까지 막는다») call
- * it once they are stacked here, in their transaction after locking the account's profile row (an
- * operator's writing restriction and an approved account restriction lock it FOR UPDATE before
- * they are written, so the answer holds until the caller commits). #77's branch has the hook
- * already — `ProposalRestrictions.assertMayPropose`, which lets everything through until then —
- * and its restack onto this fills it with this call (ADR-0085 결과 5). The public profile items ask
- * the same through their own check point (`assertPublicItemEdit`).
+ * it in their transaction after locking the account's profile row (an operator's writing
+ * restriction and an approved account restriction lock it FOR UPDATE before they are written, so
+ * the answer holds until the caller commits): the proposal through
+ * `ProposalRestrictions.assertMayPropose`, after taking that row FOR KEY SHARE (ADR-0085 결과 5),
+ * and the closure in `AccountClosureService`, which holds it FOR UPDATE. The public profile items
+ * ask the same through their own check point (`assertPublicItemEdit`).
  */
 export async function assertNotRestricted(executor: Executor, userId: string): Promise<void> {
   const restriction = await restrictionInForce(executor, userId);
