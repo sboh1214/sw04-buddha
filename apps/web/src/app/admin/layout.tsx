@@ -26,10 +26,12 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * (ADR-0056), 출시 설정 #170's (ADR-0055), 보존기간 처리 #184's (ADR-0087 — beside the settings
  * that hold its periods), SMS 발송 #183's (ADR-0070), 공지 #138's (ADR-0077), 신고·조치 #50's
  * (ADR-0081 — the report queue, whose own row of links leads on to the action log and to #187's
- * 반복 링크, ADR-0083). The row wraps rather than scrolling sideways at phone width.
+ * 반복 링크, ADR-0083), 테마 #81's (ADR-0088 — next to 시장, whose markets it groups). The row
+ * wraps rather than scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
+  { href: '/admin/themes', label: copy.adminThemes },
   { href: '/admin/notices', label: copy.adminNotices },
   { href: '/admin/users', label: copy.adminUsers },
   { href: '/admin/reports', label: copy.adminModeration },

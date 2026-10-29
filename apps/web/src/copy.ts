@@ -176,7 +176,9 @@ export const copy = {
   passwordChanged: '비밀번호를 변경했습니다.',
   passwordWrong: '현재 비밀번호가 올바르지 않습니다.',
   passwordNotSet: '아직 비밀번호가 없습니다. 설정하면 이메일로도 로그인할 수 있습니다.',
-  settingsTheme: '테마',
+  // 라이트/다크 전환 칸. 시장 묶음의 이름이 '테마'(#81)라 이 칸은 '화면 모드'다(오너 결정 2026-10-19
+  // 2차, ADR-0088).
+  settingsTheme: '화면 모드',
   settingsThemeHint: '라이트/다크 모드를 전환합니다.',
   // 시간대 (ADR-0061 #60-8, ADR-0063). 고르지 않으면 브라우저 시간대를 따르고, 그 선택지 뒤에
   // 지금 브라우저의 시간대를 괄호로 붙인다. 시간대는 선택지마다 IANA 이름과 브라우저가 주는
@@ -471,6 +473,99 @@ export const copy = {
   adminRelatedAlreadyLinked: '연결됨',
   adminRelatedThisMarket: '이 시장',
   errRelatedSelf: '같은 시장끼리는 연결할 수 없습니다.',
+  // 관리자 테마 (#81, ADR-0088): 만들기·고치기(주소·이름·소개·기간), 시장 넣기·빼기(제목으로 찾기),
+  // 공지 쓰기·고치기·숨기기, 공개·비공개 전환. 지우는 기능은 없다(ADR-0069 결정 4의 #81 '공개 뒤',
+  // 공지는 오너 결정 2026-10-19). 담당자와 시각만 기록에 남고 사유와 다른 운영자의 승인은 받지 않는다
+  // ('기록·승인'). 시각은 한국 시간으로 본다(ADR-0063).
+  adminThemes: '테마',
+  adminThemeCreate: '테마 만들기',
+  adminThemeCreated: '테마를 만들었습니다.',
+  adminThemeSlug: '주소',
+  // 주소는 만들 때 정하고 공개한 뒤에는 바꾸지 않는다(오너 결정 2026-10-19). 글자는 시장 주소와 같다.
+  adminThemeSlugHint:
+    '/themes/ 뒤에 붙는 주소입니다. 영문 소문자·숫자·한글·하이픈(-)으로 3~80자이고, 공개한 뒤에는 바꿀 수 없습니다.',
+  adminThemeSlugFixed: '공개한 적이 있는 테마라 주소를 바꿀 수 없습니다.',
+  adminThemeName: '이름',
+  adminThemeIntro: '소개',
+  adminThemeStartDate: '시작일',
+  adminThemeEndDate: '종료일',
+  // 기간의 뜻(오너 결정 2026-10-19): 한국 날짜 단위, 두 날 모두 기간에 든다. 날짜는 2000년 1월 1일부터
+  // 2100년 12월 31일까지(같은 날 2차).
+  adminThemePeriodHint:
+    '한국 날짜로 넣습니다(2000년 1월 1일~2100년 12월 31일). 시작일 0시부터 진행 중, 종료일 다음 날 0시부터 종료로 보입니다.',
+  adminThemesEmpty: '만든 테마가 없습니다.',
+  adminThemeNotFound: '테마를 찾을 수 없습니다.',
+  adminBackToThemes: '테마 목록으로',
+  adminThemePublished: '공개',
+  adminThemeUnpublished: '비공개',
+  adminThemePublish: '공개하기',
+  adminThemePublishDone: '테마를 공개했습니다.',
+  adminThemeUnpublish: '비공개로 돌리기',
+  adminThemeUnpublishTitle: '테마를 비공개로 돌립니다',
+  adminThemeUnpublishBody:
+    '비공개로 돌리면 테마 목록·테마 페이지·홈·시장 상세에서 보이지 않습니다. 테마는 지워지지 않고 다시 공개할 수 있습니다. 계속할까요?',
+  adminThemeUnpublishDone: '테마를 비공개로 돌렸습니다.',
+  adminThemeViewPublic: '공개 페이지 보기',
+  adminThemeEdit: '수정',
+  adminThemeSaved: '테마를 저장했습니다.',
+  adminThemeCreatedBy: '만든 관리자',
+  adminThemeCreatedAt: '만든 시각',
+  adminThemeUpdatedAt: '고친 시각',
+  adminThemePublishedAt: '공개 시각',
+  adminThemeMarkets: '시장',
+  // 편성은 자유롭다(ADR-0069 결정 4의 #81 '편성 규칙'): 어느 상태의 시장이든 넣고, 초안 시장은 공개
+  // 페이지에 보이지 않으며 공개 조건에도 세지 않는다(오너 결정 2026-10-19 2차). 넣고 빼는 것은 시장의
+  // 규칙·거래·판정·정산을 바꾸지 않는다(N05 §7).
+  adminThemeMarketsHint:
+    '넣은 시장은 테마 페이지에 시장 카드로 보입니다. 초안 시장은 열릴 때까지 보이지 않고, 공개에 필요한 시장으로도 세지 않습니다. 넣고 빼도 시장의 규칙·거래·판정·정산은 바뀌지 않습니다.',
+  adminThemeMarketsEmpty: '넣은 시장이 없습니다.',
+  adminThemeMarketLinkedAt: '넣음',
+  adminThemeMarketUnlink: '빼기',
+  adminThemeMarketUnlinkTitle: '테마에서 시장을 뺍니다',
+  adminThemeMarketUnlinkBody: '빼면 테마 페이지의 시장과 결과에서 보이지 않습니다. 계속할까요?',
+  // 공개에는 초안이 아닌 시장이 하나 이상 있어야 한다(오너 결정 2026-10-19, 초안은 세지 않는 것은 같은
+  // 날 2차). 공개한 뒤 모두 빼는 것은 된다. 앞의 것은 공개 거절, 뒤의 것은 공개 전의 공개하기 옆 안내.
+  adminThemePublishNeedsMarket:
+    '초안이 아닌 시장을 하나 이상 넣어야 공개할 수 있습니다. 초안 시장은 세지 않습니다.',
+  adminThemePublishHint:
+    '공개하려면 초안이 아닌 시장이 하나 이상 들어 있어야 합니다. 초안 시장은 열린 뒤부터 셉니다.',
+  adminThemeMarketUnlinked: '테마에서 시장을 뺐습니다.',
+  adminThemeMarketSearchLabel: '넣을 시장 찾기',
+  adminThemeMarketSearchSubmit: '찾기',
+  adminThemeMarketLink: '넣기',
+  adminThemeMarketLinked: '테마에 시장을 넣었습니다.',
+  adminThemeMarketAlreadyLinked: '들어 있음',
+  // 테마 공지(ADR-0069 결정 2 #45-8, 결정 4의 #81 '공지'): 커뮤니티 공지와 따로, 테마 페이지 안에만
+  // 보인다. 평문이고 웹 주소는 링크가 되며, 지우지 않고 숨긴다(오너 결정 2026-10-19).
+  adminThemeNotices: '공지',
+  adminThemeNoticesHint:
+    '공지는 테마 페이지에 최신순으로 보입니다. 평문이고 http·https 주소는 링크가 됩니다. 고친 공지에는 수정됨이 붙고, 숨긴 공지는 지워지지 않아 다시 보이게 할 수 있습니다.',
+  adminThemeNoticesEmpty: '쓴 공지가 없습니다.',
+  adminThemeNoticeTitle: '제목',
+  adminThemeNoticeBody: '내용',
+  adminThemeNoticeCreate: '공지 올리기',
+  adminThemeNoticeCreated: '공지를 올렸습니다.',
+  adminThemeNoticeEdit: '고치기',
+  adminThemeNoticeSaved: '공지를 고쳤습니다.',
+  adminThemeNoticeHide: '숨기기',
+  adminThemeNoticeHideTitle: '공지를 숨깁니다',
+  adminThemeNoticeHideBody: '숨기면 테마 페이지에서 보이지 않습니다. 계속할까요?',
+  adminThemeNoticeHidden: '공지를 숨겼습니다.',
+  adminThemeNoticeShow: '다시 보이기',
+  adminThemeNoticeShown: '공지를 다시 보이게 했습니다.',
+  adminThemeNoticeHiddenTag: '숨김',
+  adminThemeNoticeEditedAt: '고침',
+  errThemeSlug: '주소는 영문 소문자·숫자·한글·하이픈(-)으로 3~80자여야 합니다.',
+  errThemeSlugTaken: '이미 다른 테마가 쓰는 주소입니다.',
+  errThemeName: '이름은 1~100자로 입력해 주세요.',
+  errThemeIntro: '소개는 1~5,000자로 입력해 주세요.',
+  errThemeStartDate: '시작일을 입력해 주세요.',
+  errThemeStartDateOrder: '시작일은 종료일과 같거나 앞서야 합니다.',
+  errThemeEndDateRequired: '종료일을 입력해 주세요.',
+  errThemeEndDate: '종료일은 시작일과 같거나 뒤여야 합니다.',
+  errThemeDateRange: '날짜는 2000년 1월 1일부터 2100년 12월 31일 사이로 입력해 주세요.',
+  errThemeNoticeTitle: '제목은 1~100자로 입력해 주세요.',
+  errThemeNoticeBody: '내용은 1~5,000자로 입력해 주세요.',
   adminMarketFills: '최근 체결',
   adminNoFills: '아직 체결이 없습니다.',
   buy: '매수',
@@ -882,6 +977,44 @@ export const copy = {
   // 상태(진행 중·거래 마감·판정 완료·정산 완료)의 시장이 없을 때도 같은 글이라 '연결된'을 붙이지 않는다.
   marketRelated: '관련 시장',
   marketRelatedEmpty: '관련 시장이 없습니다.',
+  // 테마 (#81, ADR-0088): 운영자가 이름·소개·기간으로 묶은 시장(N05 §7 '주제별 시장 묶음'). 화면 이름은
+  // '테마'이고 순위·보상이 없다는 안내는 두지 않는다(ADR-0069 결정 4의 #81 '이름', 서비스 안내 #136이
+  // 맡는다). 기간으로 예정·진행 중·종료를 나눠 보인다('진행 기간'). 공개 목록·테마 페이지·홈·시장 상세의
+  // 소속 테마 링크로 들어오고 비로그인도 본다('들어오는 길'). 결과는 판정 완료·정산 완료·무효 시장의
+  // 결과(YES·NO·무효)뿐이고 사람마다의 성과는 없다('결과 목록').
+  themesTitle: '테마',
+  themesEmpty: '공개된 테마가 없습니다.',
+  themeStatusUpcoming: '예정',
+  themeStatusOngoing: '진행 중',
+  themeStatusEnded: '종료',
+  themePeriod: '기간',
+  // 테마 기간의 날짜(오너 결정 2026-10-19 '10월 20일 ~ 11월 3일'): 올해가 아닌 날짜가 있으면 연도를
+  // 붙인다('2025년 10월 20일 ~ 11월 3일', 같은 날 2차).
+  dateYearSuffix: '년',
+  dateMonthSuffix: '월',
+  dateDaySuffix: '일',
+  themeNotFound: '테마를 찾을 수 없습니다.',
+  themeBackToList: '테마 목록',
+  themeNotices: '공지',
+  themeNoticesEmpty: '공지가 없습니다.',
+  // 고친 공지의 표시(오너 결정 2026-10-19).
+  themeNoticeEdited: '수정됨',
+  themeMarkets: '시장',
+  themeMarketsEmpty: '시장이 없습니다.',
+  themeResults: '결과',
+  themeResultsEmpty: '결과가 나온 시장이 없습니다.',
+  themeResultVoided: '무효',
+  // 탐색 홈의 테마 줄(ADR-0069 결정 4의 #81 '탐색 홈 노출', 오너 결정 2026-10-19 2차): 진행 중인 테마,
+  // 없으면 예정된 테마의 카드와 '모든 테마'. 모두 종료면 카드 없이 제목·안내·'모든 테마'이고, 공개된
+  // 테마가 하나도 없을 때만 줄이 없다. 예정·종료 때의 제목과 안내 글은 이 PR이 골랐다(ADR-0088).
+  homeThemesOngoing: '진행 중인 테마',
+  homeThemesUpcoming: '예정된 테마',
+  homeThemesNone: '테마',
+  homeThemesNoneBody: '진행 중이거나 예정된 테마가 없습니다.',
+  homeThemesAll: '모든 테마',
+  // 시장 상세의 소속 테마 링크(ADR-0069 결정 4의 #81 '시장 상세의 소속 묶음 링크'). 공개된 테마만,
+  // 종료된 테마도, 링크마다 '이름 · 진행 중'처럼 상태를 붙인다(오너 결정 2026-10-19 2차).
+  marketThemes: '테마',
   // 비로그인 방문자에게 개인 영역(내 포지션·내 대기 주문·내 거래) 대신 그 자리에 하나만 보이는
   // 로그인 안내(오너 결정 2026-10-17, '로그인 안내 하나'). 버튼은 copy.login이고 이 상세로 돌아온다.
   marketPersonalSignedOut: '로그인하면 이 시장의 내 포지션·대기 주문·거래를 볼 수 있습니다.',

@@ -55,6 +55,7 @@ import {
   wroteAnOrder,
 } from '@/lib/market-live';
 import { restartQueries } from '@/lib/query-client';
+import { refreshThemeResultsOnStatus } from '@/lib/themes';
 import { type CachedSeries, appendTick } from '@/lib/ticks';
 
 /**
@@ -549,8 +550,9 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // end up right without one, and it falls into exactly two kinds.
         //
         //  - the event cannot BUILD the row it is about: this one (a transition carries no
-        //    price), `market:trade` → `refreshFills`, `user:position` → `['orders']`,
-        //    `user:balance` → `['me']` while the account's start Coin waits (#70).
+        //    price) and its theme results line below, `market:trade` → `refreshFills`,
+        //    `user:position` → `['orders']`, `user:balance` → `['me']` while the account's start
+        //    Coin waits (#70).
         //  - the cache could not TAKE the event, so the answer already on the wire is the stale
         //    one: this one again on an unseeded key (below), `market:tick` → `['market', id]`
         //    while its first answer is in flight, `user:position` → `['positions']` for a list
@@ -593,6 +595,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // what these entries need: they are `['ticks', id, range]`, one per range this tab opened.
         void restartQueries(queryClient, marketKey(event.marketId));
         void restartQueries(queryClient, [...TICKS_KEY, event.marketId]);
+        // The first kind of the RULE again: a theme page's results list (#81, ADR-0088) cannot
+        // build the row of a market that has just been judged or voided — the event carries no
+        // title, slug or decided time — while its card beside it already says so. Restarted only
+        // for 판정 완료·정산 완료·무효, and only a list on screen asks again (`refetchType`
+        // 'active'), so it costs a request where a theme page is open and nowhere else.
+        void refreshThemeResultsOnStatus(queryClient, event.status);
       },
 
       'market:trade': (raw: unknown) => {

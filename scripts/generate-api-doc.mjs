@@ -327,6 +327,7 @@ const TAG_LABELS = {
   trades: '거래·포지션',
   watchlist: '관심 시장',
   'search-history': '최근 검색',
+  themes: '테마',
 };
 
 /**

@@ -2,11 +2,17 @@ import { Container, Flex, Stack } from '@chakra-ui/react';
 import { HydrationBoundary } from '@tanstack/react-query';
 import type { Metadata } from 'next';
 import { copy } from '@/copy';
-import { fetchCategoriesServer, fetchMarketsPageServer } from '@/lib/api.server';
+import {
+  fetchCategoriesServer,
+  fetchHomeThemesServer,
+  fetchMarketsPageServer,
+} from '@/lib/api.server';
 import { isWatchlistView } from '@/lib/home-view';
 import { dehydratePublic, marketsKey } from '@/lib/market-keys';
 import { type MarketSearchParams, filtersFromSearchParams } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
+import { prefetchHomeThemes, showsHomeThemes } from '@/lib/themes';
+import { HomeThemes } from './home-themes';
 import { MarketFilters } from './market-filters';
 import { MarketList } from './market-list';
 import { SubcategorySidebar } from './subcategory-sidebar';
@@ -59,6 +65,11 @@ export const metadata: Metadata = { title: `${copy.homeTitle} | ${copy.appName}`
  *
  * The home has no status filter (ADR-0061 decision 1, item 13): every list here is of open
  * markets, and a bookmarked `?status=` or `?sort=volume` is normalised away, not redirected.
+ *
+ * The theme row (#81, ADR-0069 decision 4, '탐색 홈 노출'; ADR-0088) heads the main column on 전체
+ * (`showsHomeThemes`): the ongoing themes, else the upcoming ones, with 모든 테마 whenever a theme
+ * is public (`homeThemesRow`). Read here beside the list, once (`retry: false`, lib/themes.ts),
+ * public and so in every visitor's HTML.
  */
 export default async function HomePage({
   searchParams,
@@ -70,6 +81,7 @@ export default async function HomePage({
   // The public list is read here; the 관심 시장 view's is the caller's, so nothing of it is — the
   // client asks once the session is known, and this HTML stays the same for every visitor.
   const publicFilters = isWatchlistView(filters) ? undefined : filters;
+  const withThemes = showsHomeThemes(filters);
   const [, categories] = await Promise.all([
     publicFilters &&
       queryClient.prefetchInfiniteQuery({
@@ -84,6 +96,7 @@ export default async function HomePage({
     // falls back to 예측시장, the sidebar renders nothing, and the list still works without
     // them. The prefetch above swallows its failure the same way.
     fetchCategoriesServer().catch(() => undefined),
+    withThemes && prefetchHomeThemes(queryClient, fetchHomeThemesServer),
   ]);
 
   /**
@@ -117,6 +130,7 @@ export default async function HomePage({
         <Flex align="flex-start" gap="6">
           <SubcategorySidebar filters={filters} categories={categories} />
           <Stack flex="1" minW="0" gap="4">
+            {withThemes && <HomeThemes />}
             <MarketFilters filters={filters} categories={categories} />
             <MarketList filters={filters} now={fetchedAt === 0 ? undefined : fetchedAt} />
           </Stack>

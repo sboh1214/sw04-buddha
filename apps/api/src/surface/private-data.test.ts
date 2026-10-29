@@ -60,6 +60,9 @@ import {
   createReport,
   createSearch,
   createStartGrant,
+  createTheme,
+  createThemeMarket,
+  createThemeNotice,
   createUser,
   createWatch,
 } from '@buddha/db/test';
@@ -100,6 +103,7 @@ import { AUTH_ROUTES, OWNER_ROUTES, PUBLIC_ROUTES } from './registry.js';
 const ORIGIN = 'http://localhost:3000';
 
 type MarketRow = typeof schema.markets.$inferSelect;
+type ThemeRow = typeof schema.themes.$inferSelect;
 
 /**
  * One of A's values. `text` is looked for anywhere in an answer (ids, addresses, names, keys);
@@ -154,6 +158,13 @@ interface Fixture {
    * routes may show it and no other may — a sentinel like A's nickname and public id.
    */
   profileImageId: string;
+  /**
+   * A published theme (#81) holding A's market and a resolved one, with a notice: the theme
+   * routes answer items, a market card, a result and the theme `market`'s detail links to.
+   */
+  theme: ThemeRow;
+  /** The resolved market in `theme`: the one row of its results list. */
+  judgedMarket: MarketRow;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -334,6 +345,22 @@ const B_POST_BODY = {
   type: 'doc',
   content: [{ type: 'paragraph', content: [{ type: 'text', text: 'B의 근거' }] }],
 };
+
+/**
+ * Path parameters of one public route where the name means something else than in
+ * PUBLIC_PARAMS: a theme route's `:id` is the theme holding A's market, and its page is read at
+ * its slug, the page's address (#81).
+ */
+const PUBLIC_ROUTE_PARAMS: Readonly<
+  Record<string, Readonly<Record<string, (fixture: Fixture) => string>>>
+> = {
+  'GET /themes/:idOrSlug': { idOrSlug: (fixture) => fixture.theme.slug },
+  'GET /themes/:id/markets': { id: (fixture) => fixture.theme.id },
+  'GET /themes/:id/results': { id: (fixture) => fixture.theme.id },
+};
+
+/** The path parameters a public route is called with. */
+const publicParamsOf = (key: string) => ({ ...PUBLIC_PARAMS, ...PUBLIC_ROUTE_PARAMS[key] });
 
 /** Bodies of the public routes that take one: A's own address, the request most about A. */
 const PUBLIC_BODIES: Readonly<Record<string, (fixture: Fixture) => unknown>> = {
@@ -881,7 +908,7 @@ describe('private data cases (static)', () => {
       const route = routeOf(key);
       return [
         ...paramsOf(route)
-          .filter((name) => !(name in PUBLIC_PARAMS))
+          .filter((name) => !(name in publicParamsOf(key)))
           .map((name) => `${key} :${name}`),
         ...(SAFE_METHODS.has(route.method) || key in PUBLIC_BODIES ? [] : [`${key} body`]),
       ];
@@ -1428,6 +1455,25 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       targetType: 'notice',
       targetId: unpinnedNotice.id,
     });
+    // 테마 (#81): a published theme holding A's market and a resolved one, with a notice, so
+    // every theme route answers items rather than an empty page or a 404 — the theme page, its
+    // market cards, its results, and the link on A's market's detail. Not the watched market: a
+    // closed one would be listed, and its id is A's sentinel.
+    const theme = await createTheme(t.db, { createdBy: admin.id, publishedAt: new Date() });
+    const judged = await createMarket(t.db, {
+      createdBy: admin.id,
+      status: 'resolved',
+      resolvedResult: 'YES',
+      resolvedAt: new Date(),
+    });
+    for (const linked of [market, judged]) {
+      await createThemeMarket(t.db, {
+        themeId: theme.id,
+        marketId: linked.id,
+        createdBy: admin.id,
+      });
+    }
+    await createThemeNotice(t.db, { themeId: theme.id, createdBy: admin.id });
 
     // A's search (#15): a term nobody else types, and no market's title holds it.
     const searchTerm = `leak-search-${tag}`;
@@ -1475,6 +1521,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       publicId,
       bio,
       profileImageId: profileImage.id,
+      theme,
+      judgedMarket: judged,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       phone,
@@ -1617,7 +1665,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         ['A', f.a.cookie],
       ] as const) {
         const res = await call(routeOf(key), {
-          params: valuesOf(PUBLIC_PARAMS, f),
+          params: valuesOf(publicParamsOf(key), f),
           body: PUBLIC_BODIES[key]?.(f),
           cookie,
         });
@@ -1778,6 +1826,24 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(bodies.get('GET /markets')).toContain(f.market.id);
     const related = parse(bodies.get('GET /markets/:id/related')!) as { data: { id: string }[] };
     expect(related.data.map((row) => row.id)).toEqual([f.relatedMarket.id]);
+    // The theme routes (#81) answered the theme, its two markets, its one result and the link
+    // on A's market — so their items' field names were checked — and none names the admin who
+    // made the theme, put the markets in or wrote the notice.
+    const ids = (key: string, field = 'id') =>
+      (parse(bodies.get(key)!) as { data: Record<string, string>[] }).data.map((row) => row[field]);
+    expect(ids('GET /themes')).toEqual([f.theme.id]);
+    expect(ids('GET /markets/:id/themes')).toEqual([f.theme.id]);
+    expect(ids('GET /themes/:id/markets').sort()).toEqual([f.market.id, f.judgedMarket.id].sort());
+    expect(ids('GET /themes/:id/results', 'marketId')).toEqual([f.judgedMarket.id]);
+    const page = parse(bodies.get('GET /themes/:idOrSlug')!) as { data: { notices: object[] } };
+    expect(page.data.notices).toHaveLength(1);
+    for (const key of [
+      ...Object.keys(PUBLIC_ROUTE_PARAMS),
+      'GET /themes',
+      'GET /markets/:id/themes',
+    ]) {
+      expect(bodies.get(key), key).not.toContain(f.admin.id);
+    }
     const fills = parse(bodies.get('GET /markets/:id/fills')!) as { data: object[] };
     expect(fills.data).toEqual([
       expect.objectContaining({

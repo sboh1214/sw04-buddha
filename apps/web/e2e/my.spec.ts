@@ -104,6 +104,12 @@ test.describe('MY', () => {
     // Opened by its address, the last tab is scrolled into the strip, which a phone starts at the
     // first tab; a click proves nothing here, since Playwright scrolls what it clicks.
     await page.goto('/my/settings');
+    // The light/dark section is 화면 모드, apart from the market groups called 테마 (owner
+    // decision 2026-10-19, second round, ADR-0088).
+    await expect(page.getByTestId('settings-theme').getByRole('heading', { level: 3 })).toHaveText(
+      copy.settingsTheme,
+    );
+    expect(copy.settingsTheme).toBe('화면 모드');
     await expect
       .poll(() =>
         tabs.evaluate((strip) => {

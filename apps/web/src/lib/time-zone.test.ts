@@ -524,6 +524,12 @@ const KST_CALLERS: Readonly<Record<string, { names: readonly string[]; reason: s
     names: ['smsAsOf'],
     reason: 'the admin SMS send status (ADR-0070): 기준 시각, when the counts were read',
   },
+  'lib/admin-themes.ts': {
+    names: ['formatThemeMarketLinked', 'formatThemeNoticeByline'],
+    reason:
+      'the admin theme detail (#81, ADR-0088): when and by whom a market was put in, and a ' +
+      'notice written and edited',
+  },
   'lib/moderation.ts': {
     names: [
       'accountRequestTargetText',

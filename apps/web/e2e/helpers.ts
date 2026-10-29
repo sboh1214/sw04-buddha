@@ -796,6 +796,22 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
+  options: CreateOpenMarketOptions = {},
+): Promise<TestMarket> {
+  const draft = await createDraftMarket(admin, options);
+  const open = await unwrap<AdminMarket>(
+    await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
+  );
+  return { ...draft, id: open.id, slug: open.slug };
+}
+
+/**
+ * A draft through `POST /admin/markets`, left a draft: on no public page, for a spec that checks
+ * what a draft does not do (a theme of drafts alone is not published, ADR-0088). The options and
+ * the title are `createOpenMarket`'s, which opens one of these.
+ */
+export async function createDraftMarket(
+  admin: APIRequestContext,
   { topLevelCategory = 0, group, description }: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
   const categories = await unwrap<Category[]>(await admin.get('/api/v1/categories'));
@@ -824,10 +840,7 @@ export async function createOpenMarket(
       },
     }),
   );
-  const open = await unwrap<AdminMarket>(
-    await admin.post(`/api/v1/admin/markets/${draft.id}/open`),
-  );
-  return { id: open.id, slug: open.slug, title, rules, tag, categorySlug: category.slug };
+  return { id: draft.id, slug: draft.slug, title, rules, tag, categorySlug: category.slug };
 }
 
 /**

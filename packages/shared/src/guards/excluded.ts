@@ -42,6 +42,7 @@ export type IdentifierSurface = Exclude<ExclusionSurface, 'screen'>;
 export const EXCLUDED_FEATURE_IDS = [
   'probability-input',
   'scoring',
+  'contest',
   'paid-purchase',
   'activity-reward',
   'coin-transfer',
@@ -131,8 +132,6 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
     tokens: ['forecast', 'belief', 'credence', 'slider'],
   },
   {
-    // Not the contest words 상금·참가비·우승: the challenges (#81) revisit them (owner decision
-    // 2026-10-14 #113).
     id: 'scoring',
     name: '점수·평판·카테고리 등급·순위·실력 배지',
     basis: 'N04 §4, N00 §3-08, N02 §2',
@@ -152,6 +151,18 @@ export const EXCLUDED_FEATURES: readonly ExcludedFeature[] = [
       /\bscor(?:e|es|ing)\b/i,
     ],
     tokens: ['score', 'rank', 'leaderboard', 'reputation', 'grade', 'badge', 'skill', 'brier'],
+  },
+  {
+    // The themes (#81) gather markets under a name and a period and stop there: no winner, no
+    // entry fee, no prize (N05 §7). Screen text only (ADR-0069 decision 5): the words are what a
+    // contest would show, and its stored or API names would be the `scoring` tokens' (a rank, a
+    // leaderboard) or the `activity-reward` ones' (a reward). 순위·배지 stay `scoring`'s.
+    id: 'contest',
+    name: '대회의 우승·참가비·상금',
+    basis: 'N05 §7, N00 §3-11, D5, ADR-0069 결정 5',
+    surfaces: ['screen'],
+    words: [/우승/, /참가비/, /상금/],
+    tokens: [],
   },
   {
     // Coupons are hidden with the charge (D9, ADR-0049) though N06 does not name them.
@@ -414,6 +425,7 @@ export const TEXT_ALLOWANCES: readonly TextAllowance[] = [
     features: [
       'probability-input',
       'scoring',
+      'contest',
       'paid-purchase',
       'activity-reward',
       'coin-transfer',

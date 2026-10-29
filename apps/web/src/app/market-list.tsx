@@ -154,7 +154,8 @@ export interface CardList {
  * decision 2026-10-20 7). The home's two lists draw it, and so do the search screen's results
  * (app/search/market-search.tsx), whose failure says whether the server could be reached at all,
  * and the detail's 관련 시장 (app/markets/[slug]/related-markets.tsx, #65, ADR-0068) under its
- * heading, with no card around it, whose e2e (related.spec.ts) reads this grid's own test ids.
+ * heading, with no card around it, whose e2e (related.spec.ts) reads this grid's own test ids,
+ * and a theme page's markets (app/themes/[slug]/theme-page.tsx, #81, ADR-0088) under its section.
  */
 export function MarketGrid({
   list,
@@ -169,7 +170,7 @@ export function MarketGrid({
   emptyMessage: string;
   errorMessage?: string;
   /** The cards' heading level: `MarketCard`'s own default (`h2`) unless a screen nests them. */
-  cardTitleAs?: 'h2' | 'h3';
+  cardTitleAs?: 'h2' | 'h3' | 'h4';
   testId: string;
 }) {
   const rows = list.data?.pages.flatMap((page) => page.items) ?? [];

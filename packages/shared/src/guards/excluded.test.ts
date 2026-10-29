@@ -61,8 +61,8 @@ describe('EXCLUDED_FEATURES (#113)', () => {
     }
   });
 
-  it('looks for the term rows, 예측 and the gambling words in screen text only', () => {
-    for (const id of ['replaced-term', 'prediction-word', 'gambling'] as const) {
+  it('looks for the term rows, 예측, the gambling and the contest words in screen text only', () => {
+    for (const id of ['replaced-term', 'prediction-word', 'gambling', 'contest'] as const) {
       expect(EXCLUDED_FEATURES.find((feature) => feature.id === id)?.surfaces, id).toEqual([
         'screen',
       ]);
@@ -113,6 +113,11 @@ describe('findExcludedText', () => {
     ['실력 배지', 'scoring'],
     ['Leaderboard', 'scoring'],
     ['Brier score', 'scoring'],
+    // Contest words (ADR-0069 decision 5, #81): a theme names no winner, entry fee or prize.
+    ['이번 테마 우승자', 'contest'],
+    ['참가비 1,000 Coin', 'contest'],
+    ['우승 상금', 'contest'],
+    ['상금을 받으세요', 'contest'],
     ['코인 충전', 'paid-purchase'],
     ['결제하기', 'paid-purchase'],
     ['Coin 구매', 'paid-purchase'],
@@ -209,8 +214,9 @@ describe('findExcludedText', () => {
     '회원 2명',
     '10원칙',
     '잘못 입력한 내용의 보상은 운영 정책을 따릅니다.',
-    // Contest words: the challenges (#81) revisit them (owner decision 2026-10-14 #113).
-    '우승 상금과 참가비',
+    // A theme's own words: a period, its markets and their results (#81).
+    '테마 진행 기간',
+    '진행 중인 테마의 결과 목록',
     'underscore',
     'market-status-badge',
   ])('lets %s through', (text) => {
@@ -270,6 +276,12 @@ describe('findExcludedText', () => {
     expect(features('점수를 확인하세요.', 'service-guide')).toEqual(['scoring']);
     // Gambling words are never cleared by a notice.
     expect(features('베팅은 할 수 없습니다.', 'service-guide')).toEqual(['gambling']);
+    // The contest words are: that a theme has no prize is the guide's to say (ADR-0069 decision
+    // 4, the #81 '이름' row), and nowhere else may say it.
+    const contest = '테마에는 우승·참가비·상금이 없습니다.';
+    expect(features(contest)).toEqual(['contest']);
+    expect(features(contest, 'service-guide')).toEqual([]);
+    expect(features('우승하면 상금을 드립니다.', 'service-guide')).toEqual(['contest']);
   });
 
   it.each<[string, ExcludedFeatureId[]]>([

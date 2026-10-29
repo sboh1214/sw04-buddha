@@ -50,6 +50,7 @@ export * from './retention.js';
 export * from './search-history.js';
 export * from './start-grant.js';
 export * from './terms.js';
+export * from './themes.js';
 export * from './ticks.js';
 export * from './time-zone.js';
 export * from './wallet.js';

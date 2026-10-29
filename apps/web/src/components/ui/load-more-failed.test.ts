@@ -5,12 +5,12 @@ import { SRC, screenSources } from '@/test/screen-text';
 
 /**
  * Every 더 보기 list says when its 더 보기 failed (owner decision 2026-10-20 7, ADR-0075 5-14): the
- * 토론, the community list, the comments, the home's, the search's and 관련 시장's market grid,
- * MY's lists (조치·신고 내역's two too, #50), the admin lists (the report queue and the action log
- * too, #50, #187's review list of repeated links, its rows and a row's entries, #139's account
- * restriction requests and #184's retention records) and the market picker (the write screen's and the community list's market
- * filter) —
- * each draws `LoadMoreFailed` first in its 더 보기 button's own condition
+ * 토론, the community list, the comments, the home's, the search's, 관련 시장's and a theme's
+ * market grid, the theme list and a theme's results (#81), MY's lists (조치·신고 내역's two too,
+ * #50), the admin lists (the report queue and the action log too, #50, #187's review list of
+ * repeated links, its rows and a row's entries, #139's account restriction requests, #184's
+ * retention records, and #81's themes and a theme's market picker) and the market picker (the
+ * write screen's and the community list's market filter) — each draws `LoadMoreFailed` first in its 더 보기 button's own condition
  * (`… && (<>`), so the two come and go together and a list with no 더 보기 says nothing (5-14(c));
  * on the list the button pages; with that list's own first-read failure message (5-14(a)). No
  * DOM under node, so the sources are read, per list: one more 더 보기 written without the notice,
@@ -139,6 +139,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/reports/admin-reports.tsx',
         'app/admin/retention/admin-retention-purges.tsx',
         'app/admin/settings/admin-release-settings.tsx',
+        'app/admin/themes/[id]/admin-theme-detail.tsx',
+        'app/admin/themes/admin-themes.tsx',
         'app/admin/users/admin-users.tsx',
         'app/community/community-screen.tsx',
         'app/market-list.tsx',
@@ -148,6 +150,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/my/wallet/ledger-list.tsx',
         'app/my/wallet/payment-history.tsx',
         'app/my/watchlist/watchlist.tsx',
+        'app/themes/[slug]/theme-page.tsx',
+        'app/themes/theme-list.tsx',
         'components/authored/authored-list.tsx',
         'components/post/comments-section.tsx',
         'components/post/market-picker.tsx',
@@ -228,6 +232,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useAdminRelatedSearch',
         'useAdminReportQueue',
         'useAdminRoleChanges',
+        'useAdminThemes',
         'useComments',
         'useCommunityPosts',
         'useLedger',
@@ -241,6 +246,9 @@ describe('the notice above a 더 보기 that failed', () => {
         'useRelatedMarkets',
         'useReleaseSettingChanges',
         'useRetentionPurges',
+        'useThemeList',
+        'useThemeMarkets',
+        'useThemeResults',
         'useWatchlist',
       ].sort(),
     );

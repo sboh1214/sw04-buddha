@@ -161,6 +161,11 @@ export interface MarketDetailProps {
    * and its cards' socket rooms, so it is mounted once.
    */
   related: ReactNode;
+  /**
+   * The themes this market is in (#81, ADR-0088): a line of links at the end of 요약, rendered by
+   * the server component with the list it read. It renders nothing when there is none.
+   */
+  themes: ReactNode;
 }
 
 export function MarketDetail({
@@ -170,6 +175,7 @@ export function MarketDetail({
   background,
   rules,
   related,
+  themes,
 }: MarketDetailProps) {
   useMarketSocket([marketId]);
   const market = useMarket(marketId);
@@ -238,6 +244,7 @@ export function MarketDetail({
             <StatusNotice market={data} />
           </>
         )}
+        {themes}
       </Stack>
     ),
     chart: data !== undefined && (

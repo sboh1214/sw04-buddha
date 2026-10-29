@@ -8,14 +8,17 @@ import { LiveRulesSection } from '@/components/market/live-rules-section';
 import { copy } from '@/copy';
 import {
   fetchMarketServer,
+  fetchMarketThemesServer,
   fetchRelatedMarketsPageServer,
   fetchTicksServer,
 } from '@/lib/api.server';
 import { dehydratePublic, relatedMarketsKey } from '@/lib/market-keys';
 import { detailWindowEnd, prefetchRelatedMarkets, seedMarketDetail } from '@/lib/market-ssr';
 import { getQueryClient } from '@/lib/query-client';
+import { prefetchMarketThemes } from '@/lib/themes';
 import { DEFAULT_TICK_RANGE } from '@/lib/ticks';
 import { MarketDetail } from './market-detail';
+import { MarketThemes } from './market-themes';
 import { RelatedMarkets } from './related-markets';
 
 /**
@@ -92,9 +95,12 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
   // 토론 (#47) is NOT read here: it loads in the browser only (owner decision 2026-10-20 1, the
   // header comment above), its loading state in the HTML.
   const queryClient = getQueryClient();
+  // The themes it is in (#81, ADR-0088) are read beside them the same way: once, a failure left
+  // to the browser.
   const [series] = await Promise.all([
     fetchTicksServer(market.id, DEFAULT_TICK_RANGE),
     prefetchRelatedMarkets(queryClient, market.id, fetchRelatedMarketsPageServer),
+    prefetchMarketThemes(queryClient, market.id, fetchMarketThemesServer),
   ]);
   seedMarketDetail(queryClient, market, series);
   // The related cards' countdowns measure against the server's read of them, as the home's do
@@ -154,6 +160,8 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           // cards for the markets an admin linked to this one, first page read above. 토론 (#47)
           // needs nothing from here: `MarketDetail` builds it from the id, and it reads its posts
           // in the browser.
+          // The themes this market is in (#81, ADR-0088): links at the end of 요약, public.
+          themes={<MarketThemes marketId={market.id} />}
           related={
             <RelatedMarkets
               marketId={market.id}

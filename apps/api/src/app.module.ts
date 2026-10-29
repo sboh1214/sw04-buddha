@@ -32,6 +32,7 @@ import { ReleaseSettingsModule } from './release-settings/release-settings.modul
 import { RetentionModule } from './retention/retention.module.js';
 import { SearchHistoryModule } from './search-history/search-history.module.js';
 import { StartGrantModule } from './start-grant/start-grant.module.js';
+import { ThemesModule } from './themes/themes.module.js';
 import { TradesModule } from './trades/trades.module.js';
 import { WalletModule } from './wallet/wallet.module.js';
 import { WatchlistModule } from './watchlist/watchlist.module.js';
@@ -63,6 +64,7 @@ import { WatchlistModule } from './watchlist/watchlist.module.js';
     TradesModule,
     WatchlistModule,
     SearchHistoryModule,
+    ThemesModule,
     ReleaseSettingsModule,
     AdminAccountsModule,
     AdminSmsStatusModule,

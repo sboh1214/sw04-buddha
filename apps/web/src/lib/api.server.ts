@@ -10,6 +10,8 @@ import {
   type Post,
   type PriceSeries,
   type PublicProfile,
+  type Theme,
+  type ThemeSummary,
   isApiError,
   unwrap,
 } from './api';
@@ -27,6 +29,12 @@ import {
   lookUpWriteMarket,
   postListQuery,
 } from './posts';
+import {
+  type ThemeListPage,
+  type ThemeResultPage,
+  homeThemesQuery,
+  themePageQuery,
+} from './themes';
 import { type TickRange, ticksQueryFor } from './ticks';
 
 const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
@@ -261,3 +269,67 @@ export const fetchNoticeServer = cache(async (noticeId: string): Promise<Notice 
     throw error;
   }
 });
+
+/**
+ * 테마 (#81, ADR-0088): a theme's page by the slug of its address (or its id), or `null` for
+ * every address that names no published theme — unknown, unpublished, or a segment the route
+ * schema refuses — which is one 404 to a visitor, as a market's detail is. React-cached so the
+ * metadata and the page share one request.
+ */
+export const fetchThemeServer = cache(async (idOrSlug: string): Promise<Theme | null> => {
+  try {
+    return unwrap(
+      await serverApi.GET('/api/v1/themes/{idOrSlug}', { params: { path: { idOrSlug } } }),
+    ).data;
+  } catch (error) {
+    if (isApiError(error, 'NOT_FOUND') || isApiError(error, 'VALIDATION_ERROR')) return null;
+    throw error;
+  }
+});
+
+/** One page of the public theme list (`GET /themes`), for `/themes`. */
+export async function fetchThemeListPageServer(cursor?: string): Promise<ThemeListPage> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/themes', { params: { query: themePageQuery(cursor) } }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}
+
+/** The explore home's theme row: the first few of `GET /themes`, every status (`homeThemesRow`). */
+export async function fetchHomeThemesServer(): Promise<ThemeSummary[]> {
+  return unwrap(await serverApi.GET('/api/v1/themes', { params: { query: homeThemesQuery() } }))
+    .data;
+}
+
+/** One page of a theme's markets, the home's card rows. */
+export async function fetchThemeMarketsPageServer(
+  themeId: string,
+  cursor?: string,
+): Promise<{ items: MarketSummary[]; nextCursor: string | null }> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/themes/{id}/markets', {
+      params: { path: { id: themeId }, query: themePageQuery(cursor) },
+    }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}
+
+/** One page of a theme's results list. */
+export async function fetchThemeResultsPageServer(
+  themeId: string,
+  cursor?: string,
+): Promise<ThemeResultPage> {
+  const { data, meta } = unwrap(
+    await serverApi.GET('/api/v1/themes/{id}/results', {
+      params: { path: { id: themeId }, query: themePageQuery(cursor) },
+    }),
+  );
+  return { items: data, nextCursor: meta.nextCursor };
+}
+
+/** The published themes a market is in, for its detail's links. */
+export async function fetchMarketThemesServer(marketId: string): Promise<ThemeSummary[]> {
+  return unwrap(
+    await serverApi.GET('/api/v1/markets/{id}/themes', { params: { path: { id: marketId } } }),
+  ).data;
+}

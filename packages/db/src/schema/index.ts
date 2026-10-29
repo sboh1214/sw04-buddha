@@ -48,5 +48,6 @@ export * from './relations.js';
 export * from './release-settings.js';
 export * from './retention-purges.js';
 export * from './start-grants.js';
+export * from './themes.js';
 export * from './watchlist.js';
 export * from './write-limits.js';
