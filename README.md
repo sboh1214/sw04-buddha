@@ -286,7 +286,7 @@ pnpm dev                                             # 이미 떠 있으면 그�
 pnpm --filter web test:e2e --project=desktop-1280    # 개발 DB에서는 24시간에 한 프로젝트 한 판까지 — 아래 본인확인 발송 한도
 ```
 
-전체(두 프로젝트)는 개발 DB에서 24시간 안에 돌릴 수 없다 — **e2e 전용 DB**에서 프로젝트마다 한 판씩, 그 사이에 발송 기록을 비우고 돈다(CI도 그렇게 한다). 개발 서버가 떠 있으면 Playwright가 그것(개발 DB)을 그대로 쓰므로 끄고 돌린다 — 아래 셸의 값으로 Playwright가 API·웹·워커를 띄운다.
+전체(두 프로젝트)는 개발 DB에서 24시간 안에 돌릴 수 없다 — **e2e 전용 DB**에서 프로젝트마다 한 판씩, 그 사이에 발송 기록을 비우고 돈다(CI는 샤드마다 새 DB에서 돈다 — 아래). 개발 서버가 떠 있으면 Playwright가 그것(개발 DB)을 그대로 쓰므로 끄고 돌린다 — 아래 셸의 값으로 Playwright가 API·웹·워커를 띄운다.
 
 ```bash
 # 한 번: 개발 컨테이너에 e2e 전용 DB — 역할은 이미 있으니 그 DB의 소유와 권한만 준다
@@ -309,7 +309,7 @@ done
 pnpm --filter web exec playwright show-report playwright-report/mobile-375   # 한 판의 리포트
 ```
 
-- 다른 웹 오리진은 `E2E_BASE_URL`로 가리킨다. 가입 흐름은 `MAILPIT_URL`(기본 `http://127.0.0.1:8025`)의 메일함을 폴링한다. 본인확인 인증번호도 그 메일함에서 읽으므로 API가 개발용 발송기(`SMS_PROVIDER` 비움이나 `dev`)로 떠 있어야 한다. 가입마다 새 휴대전화 번호를 쓴다(번호 하나에 계정 하나). 시험의 계정은 온보딩을 API로 마치고(`completeOnboardingThroughApi`: 동의 → 인증번호 → 자동 닉네임 확정 → 관심 카테고리 건너뛰기), 화면의 단계는 `onboarding.spec.ts`·`phone-verification.spec.ts`가 본다. 시작 지급액은 e2e DB에서 미정이어야 한다 — 값을 넣으면 워커가 모든 시험 계정에 지급해 잔고 0을 보는 시험이 깨진다(ADR-0072 결정 7-22). 전체를 한 번 돌 때(두 프로젝트) 인증번호를 500통 남짓 보내고 그 발송 기록은 지우지 않으므로(ADR-0070), 두 프로젝트를 한 번에 돌리면 끝 무렵에 서비스 전체 한도(24시간 500건 — 오너가 정한 고정값)에 걸린다 — 헬퍼가 그 거절을 알아보고 멈춘다. 한 프로젝트가 250통 남짓이라 개발 DB에서는 24시간에 한 판까지이고(손으로 한 가입도 센다, 개발 DB의 기록은 지우지 않는다), 전체는 위의 e2e 전용 DB에서 판마다 마이그레이션 롤로 `phone_verification_codes`와 `phone_verification_refused_sends`를 비우고 돈다. 리포트와 결과를 판마다 따로 쓰지 않으면 둘째 판이 첫 판의 것(`apps/web/playwright-report/`의 HTML 리포트, `apps/web/test-results/`의 실패 스크린숏 따위)을 지운다. CI도 그렇게 두 번 돌고 그 사이에 비운다(`.github/workflows/ci.yml`, 리포트와 결과는 `apps/web/playwright-report/<프로젝트>/`·`apps/web/test-results/<프로젝트>/` — ADR-0092 결과 2).
+- 다른 웹 오리진은 `E2E_BASE_URL`로 가리킨다. 가입 흐름은 `MAILPIT_URL`(기본 `http://127.0.0.1:8025`)의 메일함을 폴링한다. 본인확인 인증번호도 그 메일함에서 읽으므로 API가 개발용 발송기(`SMS_PROVIDER` 비움이나 `dev`)로 떠 있어야 한다. 가입마다 새 휴대전화 번호를 쓴다(번호 하나에 계정 하나). 시험의 계정은 온보딩을 API로 마치고(`completeOnboardingThroughApi`: 동의 → 인증번호 → 자동 닉네임 확정 → 관심 카테고리 건너뛰기), 화면의 단계는 `onboarding.spec.ts`·`phone-verification.spec.ts`가 본다. 시작 지급액은 e2e DB에서 미정이어야 한다 — 값을 넣으면 워커가 모든 시험 계정에 지급해 잔고 0을 보는 시험이 깨진다(ADR-0072 결정 7-22). 전체를 한 번 돌 때(두 프로젝트) 인증번호를 500통 남짓 보내고 그 발송 기록은 지우지 않으므로(ADR-0070), 두 프로젝트를 한 번에 돌리면 끝 무렵에 서비스 전체 한도(24시간 500건 — 오너가 정한 고정값)에 걸린다 — 헬퍼가 그 거절을 알아보고 멈춘다. 한 프로젝트가 250통 남짓이라 개발 DB에서는 24시간에 한 판까지이고(손으로 한 가입도 센다, 개발 DB의 기록은 지우지 않는다), 전체는 위의 e2e 전용 DB에서 판마다 마이그레이션 롤로 `phone_verification_codes`와 `phone_verification_refused_sends`를 비우고 돈다. 리포트와 결과를 판마다 따로 쓰지 않으면 둘째 판이 첫 판의 것(`apps/web/playwright-report/`의 HTML 리포트, `apps/web/test-results/`의 실패 스크린숏 따위)을 지운다. CI는 두 프로젝트의 시험을 샤드 셋으로 나눠 샤드마다 시험이 돌지 않은 새 DB에 시드하고 돌므로, 한 DB가 받는 발송은 전체의 셋에 하나 남짓이라 비우지 않는다(`.github/workflows/ci.yml`, ADR-0022의 2026-10-27 추기, ADR-0092 결과 5).
 - 스펙은 매번 자기 계정과 자기 시장을 새로 만들므로 같은 데이터베이스에서 반복 실행해도 된다.
 - 관리자 계정 스펙(`admin-accounts.spec.ts`)은 시드한 관리자 둘이 필요하다 — `.env`에 `SEED_SECOND_ADMIN_*`를 두고 빈 DB에 시드한다(관리자가 이미 있으면 시드가 둘째를 만들지 않는다). 2명 하한을 시드한 두 관리자만 있는 상태에서 확인하므로, 역할을 바꾸는 시험은 데스크톱 프로젝트에서만 순서대로 돌고 셋째 관리자가 남아 있으면 그 `e2e-` 계정부터 회수한다.
 - 정산 스펙(`settlement.spec.ts`)은 워커가 떠 있어야 한다(`pnpm dev`가 띄운다. 없으면 Playwright가 `WORKER_HEALTH_PORT`(기본 4100)의 `/health`를 확인해 직접 띄우고, `0`이면 확인할 포트가 없어 이 스펙만 건너뛴다). 관리자가 판정하면 워커가 곧바로 정산하므로 기다리는 기간은 없다(ADR-0046).

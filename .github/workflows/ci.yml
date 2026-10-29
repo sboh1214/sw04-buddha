@@ -210,6 +210,9 @@ jobs:
 
     # The specs are split across the shards by test (fullyParallel), mobile-375 and
     # desktop-1280 alike. Add a shard here to split them further.
+    # Each shard seeds a database of its own, and the service-wide limit of 500 verification
+    # sends in 24 hours (ADR-0070, a fixed owner value) counts that database's sends alone: the
+    # whole suite sends some five hundred (ADR-0092), so it needs two shards at least.
     strategy:
       fail-fast: false
       matrix:

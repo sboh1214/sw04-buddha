@@ -101,14 +101,15 @@ const ADMIN_VERIFY_POLL_MS = 2_000;
  * What a run says when the service-wide limit refuses its codes: every send stays as an
  * account's 본인확인 기록 (ADR-0070), so a database counts the sends of every run of the last 24
  * hours against the service's five hundred — a fixed owner value. A full run sends some five
- * hundred across both projects (about half each), so the whole suite runs one project at a time
- * with the sends deleted in between: CI does (`.github/workflows/ci.yml`, ADR-0092 결과 2), and so
- * does a full local run on an isolated e2e database (README).
+ * hundred across both projects (about half each), so no one database takes the whole suite in a
+ * day: CI splits it into shards, each on a database of its own (`.github/workflows/ci.yml`), and a
+ * full local run goes one project at a time on an isolated e2e database with the sends deleted in
+ * between (README, ADR-0092 결과 5).
  */
 const SERVICE_LIMIT_HELP =
   'the service-wide limit of 500 verification codes in 24 hours (ADR-0070) is reached in this ' +
   "database, which keeps every earlier run's sends — a full run sends some five hundred, so run " +
-  'one project at a time (`--project=mobile-375`, then `--project=desktop-1280`, as CI does): on ' +
+  'one project at a time (`--project=mobile-375`, then `--project=desktop-1280`): on ' +
   'an isolated e2e database delete them before each (`DELETE FROM phone_verification_codes` and ' +
   '`DELETE FROM phone_verification_refused_sends`, as the migration role) or wait until the ' +
   'oldest is 24 hours old';
