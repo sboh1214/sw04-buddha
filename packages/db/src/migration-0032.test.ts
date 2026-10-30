@@ -205,10 +205,9 @@ describe.skipIf(!hasTestDb())(
 
     async function account(id: string, userId: string, tokens: Tokens): Promise<void> {
       await migrate.query(
-        `INSERT INTO "account" (id, issuer, account_id, provider_id, user_id, id_token, access_token,
+        `INSERT INTO "account" (id, account_id, provider_id, user_id, id_token, access_token,
          refresh_token, access_token_expires_at, refresh_token_expires_at, scope, updated_at)
-       VALUES ($1, 'https://accounts.google.com', $1, 'google', $2, $3, $4, $5, $6, $7,
-         'openid,email', now())`,
+       VALUES ($1, $1, 'google', $2, $3, $4, $5, $6, $7, 'openid,email', now())`,
         [
           id,
           userId,

@@ -385,7 +385,6 @@ describe.skipIf(!hasTestInfra)(
         const id = `${user.id}-google`;
         await t.db.insert(schema.account).values({
           id,
-          issuer: 'local:oauth:google',
           accountId: `google-${user.id}`,
           providerId: 'google',
           userId: user.id,

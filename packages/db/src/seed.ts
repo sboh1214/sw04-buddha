@@ -70,11 +70,7 @@ const SUBCATEGORY_NAMES = {
   'air-quality': '대기질',
 } as const satisfies Record<SubcategorySlug, string>;
 
-/**
- * better-auth 1.7 stores a synthetic issuer on every account row and looks credential
- * accounts up by (issuer, accountId): `createLocalAccountIssuer('credential')`.
- */
-const CREDENTIAL_ISSUER = 'local:credential';
+/** better-auth looks a credential account up by (providerId 'credential', accountId = user id). */
 const CREDENTIAL_PROVIDER = 'credential';
 
 async function seedCategories(db: Db): Promise<void> {
@@ -274,7 +270,6 @@ async function seedOneAdmin(tx: Tx, input: AdminInput, at: Date): Promise<string
   if (!credential) {
     await tx.insert(account).values({
       id: randomUUID(),
-      issuer: CREDENTIAL_ISSUER,
       accountId: userId,
       providerId: CREDENTIAL_PROVIDER,
       userId,

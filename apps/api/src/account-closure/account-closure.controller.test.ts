@@ -1743,7 +1743,6 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
       await expect(
         t.db.insert(schema.account).values({
           id: randomUUID(),
-          issuer: 'local:credential',
           accountId: member.id,
           providerId: 'credential',
           userId: member.id,

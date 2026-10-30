@@ -330,6 +330,13 @@
       "when": 1792891060885,
       "tag": "0046_market_proposals",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1793380819705,
+      "tag": "0047_account_provider_key",
+      "breakpoints": true
     }
   ]
 }

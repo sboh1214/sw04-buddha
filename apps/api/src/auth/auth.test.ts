@@ -94,6 +94,15 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     return row;
   }
 
+  it('passes better-auth’s schema check, which every auth request awaits (ADR-0094)', async () => {
+    // Since 1.7.3 better-auth checks @buddha/db's Drizzle tables at start and on every request,
+    // getSession included, and a mismatch fails them all: a 1.7.2 schema's NOT NULL
+    // `account.issuer` (PR #244) failed some 850 tests at once. This names the cause.
+    const check = (await t.auth.$context).explicitSchemaCheck;
+    expect(check).toBeDefined();
+    await expect(Promise.resolve(check?.())).resolves.toBeUndefined();
+  });
+
   it('rejects a malformed address with the PLAN 7 envelope', async () => {
     const res = await register({ email: 'not-an-email' });
     expect(res.statusCode).toBe(400);
@@ -188,7 +197,6 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       { email: 'it-auth-social-grant@test.local', name: 'social', emailVerified: true },
       {
         providerId: 'kakao',
-        issuer: 'https://kauth.kakao.com',
         accountId: `kakao-${String(Date.now())}`,
       },
     );
@@ -231,7 +239,6 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       },
       {
         providerId: 'kakao',
-        issuer: 'https://kauth.kakao.com',
         accountId: `kakao-name-${String(Date.now())}`,
       },
     );
@@ -312,7 +319,6 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
       { email: 'it-auth-social-token@test.local', name: '', emailVerified: true },
       {
         providerId: 'google',
-        issuer: 'https://accounts.google.com',
         accountId: `google-token-${String(Date.now())}`,
         ...providerTokens('google-1'),
         scope: 'openid,email',
@@ -340,7 +346,6 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     const linked = await context.internalAdapter.linkAccount({
       userId: created.user.id,
       providerId: 'kakao',
-      issuer: 'https://kauth.kakao.com',
       accountId: `kakao-token-${String(Date.now())}`,
       ...providerTokens('kakao'),
       scope: 'account_email',
@@ -351,7 +356,6 @@ describe.skipIf(!hasTestInfra)('auth (integration)', () => {
     const account = await context.internalAdapter.createAccount({
       userId: created.user.id,
       providerId: 'naver',
-      issuer: 'https://nid.naver.com',
       accountId: `naver-token-${String(Date.now())}`,
       ...providerTokens('naver'),
     });
