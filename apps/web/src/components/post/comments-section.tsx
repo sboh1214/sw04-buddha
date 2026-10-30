@@ -33,7 +33,7 @@ import { RefusalText } from '@/components/moderation/refusal-text';
 import { ReportButton } from '@/components/moderation/report-button';
 import { EmptyState } from '@/components/ui/empty-state';
 import { LoadMoreFailed } from '@/components/ui/load-more-failed';
-import { toaster } from '@/components/ui/toaster';
+import { toastAfterCommit, toaster } from '@/components/ui/toaster';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import {
@@ -415,7 +415,8 @@ export function CommentsSection({
       reopenedOnce(commentId, one);
       if (one.brought <= broughtTold.current) return;
       broughtTold.current = one.brought;
-      toaster.create({ type: 'info', title: copy.commentDraftRestored });
+      // Called from `useReopened`'s effect: raised once the effects are over (ADR-0092 8-37).
+      toastAfterCommit({ type: 'info', title: copy.commentDraftRestored });
     },
     [dismissHeld, reopenedOnce],
   );

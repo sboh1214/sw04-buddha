@@ -237,6 +237,22 @@ const restoredToasts = (page: Page) =>
     .getByRole('status')
     .filter({ hasText: copy.commentDraftRestored });
 
+/**
+ * What the page reports as an error from now on: each `console.error` and each uncaught exception.
+ * React's 'flushSync was called from inside a lifecycle method' (a development warning: the
+ * toaster's flushSync from an effect, ADR-0092 8-37) is one of the first.
+ */
+function pageErrors(page: Page): string[] {
+  const seen: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error') seen.push(message.text());
+  });
+  page.on('pageerror', (error) => {
+    seen.push(`${error.name}: ${error.message}`);
+  });
+  return seen;
+}
+
 /** The id of the comment `article` drawn (its test id is `comment-<id>`). */
 async function idOf(article: Locator): Promise<string> {
   const testId = await article.getAttribute('data-testid');
@@ -2954,6 +2970,117 @@ test.describe('탭의 세션이 먼저 다른 회원을 말하는 글 화면의 
       await expect(page.getByTestId('comment-held')).toHaveCount(0);
       expect(writes).toEqual([]);
       expect(asked).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+});
+
+test.describe('계정이 바뀌었다 돌아온 글 화면의 콘솔 — 되살린 댓글 상자의 알림과 React의 flushSync (ADR-0092 8-37)', () => {
+  // The comment drafts taken back after an account switch are said in a toast raised from an
+  // effect (`useCommentDraftsTakenBack`). The toaster stores its toasts with React's `flushSync`,
+  // which React cannot run while it runs effects: in development each such toast logged 'flushSync
+  // was called from inside a lifecycle method' once for each subscriber of the store — four on the
+  // return, eight in the mixed order, whose second raise (the same id) updates the toast. The toast
+  // is now raised once the effects are over (`toastAfterCommit`): said as before, nothing logged.
+  // React logs it in development only — against the local `next dev` these fail without the fix;
+  // the CI's run against `next start` cannot see it, and the source guard in
+  // components/ui/toaster.test.ts holds it there.
+
+  test('세션이 먼저 다른 회원으로 바뀌었다가 앞 계정으로 돌아와 새 댓글·답글·수정 상자에 쓰던 것을 되살리고 알려도 — 정순서도, `GET /me`가 세션보다 먼저 답하는 섞인 순서도 — 콘솔에 flushSync 오류가 없다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const errors = pageErrors(page);
+    const { open, toB, toA, toAMeFirst, close } = await membersSwitchingSessions(browser, page);
+    try {
+      const postId = await postThroughApi(admin, market.id, `콘솔을 보는 글 ${tag}`, tag);
+      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const composer = page.getByTestId('comment-composer');
+      const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+      const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+      await open(`/community/posts/${postId}`);
+
+      // --- A's three boxes, each with text.
+      await composer.getByTestId('comment-input').fill(`앞 계정의 새 댓글 ${tag}`);
+      await commentOf(page, theirs).getByTestId('comment-reply').click();
+      await replyBox.getByTestId('comment-input').fill(`앞 계정의 답글 ${tag}`);
+      await commentOf(page, mine).getByTestId('comment-edit').click();
+      await editForm.getByTestId('comment-input').fill(`앞 계정이 고친 댓글 ${tag}`);
+      const takenBack = async () => {
+        await expect(composer.getByTestId('comment-input')).toHaveValue(`앞 계정의 새 댓글 ${tag}`);
+        await expect(replyBox.getByTestId('comment-input')).toHaveValue(`앞 계정의 답글 ${tag}`);
+        await expect(editForm.getByTestId('comment-input')).toHaveValue(
+          `앞 계정이 고친 댓글 ${tag}`,
+        );
+        await expect(restoredToasts(page)).toHaveCount(1);
+      };
+      const bOnScreen = async () => {
+        await expect(composer.getByTestId('comment-input')).toHaveValue('');
+        await expect(replyBox).toHaveCount(0);
+        await expect(editForm).toHaveCount(0);
+      };
+
+      // --- the forward order: the session says B, then A again — A's taken back, said.
+      await toB();
+      await bOnScreen();
+      await toA();
+      await takenBack();
+
+      // --- the mixed order: B again, then A back with `GET /me` before the session — taken back
+      // in place, and again in the boxes the session's reset draws, said in the one toast.
+      await toB();
+      await bOnScreen();
+      await toAMeFirst(takenBack);
+      await takenBack();
+
+      expect(errors.filter((text) => text.includes('flushSync'))).toEqual([]);
+    } finally {
+      await close();
+    }
+  });
+
+  test('`GET /me`가 그 자리에서 먼저 다른 회원으로 바뀌었다가(반대 순서) 앞 계정으로 돌아와 새 댓글·답글·수정 상자에 쓰던 것을 되살리고 알려도 콘솔에 flushSync 오류가 없다', async ({
+    admin,
+    browser,
+    page,
+  }) => {
+    const market = await createOpenMarket(admin);
+    const tag = freshTag();
+    const errors = pageErrors(page);
+    const { open, toB, toA, close } = await membersTurningInPlace(browser, page);
+    try {
+      const postId = await postThroughApi(admin, market.id, `콘솔을 보는 글 ${tag}`, tag);
+      const theirs = await commentThroughApi(admin, postId, null, `운영자의 댓글 ${tag}`);
+      const mine = await commentThroughApi(page.request, postId, null, `앞 계정의 댓글 ${tag}`);
+      const composer = page.getByTestId('comment-composer');
+      const replyBox = page.getByTestId(`comment-thread-${theirs}`).getByTestId('reply-composer');
+      const editForm = commentOf(page, mine).getByTestId('comment-edit-form');
+      await open(`/community/posts/${postId}`);
+
+      // --- A's three boxes, each with text.
+      await composer.getByTestId('comment-input').fill(`앞 계정의 새 댓글 ${tag}`);
+      await commentOf(page, theirs).getByTestId('comment-reply').click();
+      await replyBox.getByTestId('comment-input').fill(`앞 계정의 답글 ${tag}`);
+      await commentOf(page, mine).getByTestId('comment-edit').click();
+      await editForm.getByTestId('comment-input').fill(`앞 계정이 고친 댓글 ${tag}`);
+
+      // --- B on screen in place, then A again: A's taken back, said.
+      await toB();
+      await expect(composer.getByTestId('comment-input')).toHaveValue('');
+      await expect(replyBox).toHaveCount(0);
+      await expect(editForm).toHaveCount(0);
+      await toA();
+      await expect(composer.getByTestId('comment-input')).toHaveValue(`앞 계정의 새 댓글 ${tag}`);
+      await expect(replyBox.getByTestId('comment-input')).toHaveValue(`앞 계정의 답글 ${tag}`);
+      await expect(editForm.getByTestId('comment-input')).toHaveValue(`앞 계정이 고친 댓글 ${tag}`);
+      await expect(restoredToasts(page)).toHaveCount(1);
+
+      expect(errors.filter((text) => text.includes('flushSync'))).toEqual([]);
     } finally {
       await close();
     }
