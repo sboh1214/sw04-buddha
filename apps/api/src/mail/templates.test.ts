@@ -1302,7 +1302,7 @@ describe('mail goes through the templates (#113)', () => {
       '    return this.mailer.send;',
       '  }',
       '  smtp() {',
-      "    return createTransport({ host: 'h' });",
+      "    return createTransport({ host: 'h' }, { replyTo: 'r' });",
       '  }',
       '}',
       // A mailer of its own type, and content from a function that declares no type.
@@ -1345,8 +1345,9 @@ describe('mail goes through the templates (#113)', () => {
         // A destructured `send` is a send too.
         'markets/__planted__.ts:33: digest(…) is not a template in mail/templates.ts',
         'markets/__planted__.ts:34: Mailer.send is handed on; what it sends cannot be seen',
-        // A mail package's options are a message too, here taken from outside a transport.
-        'markets/__planted__.ts:37: carries host, which a MailMessage does not say',
+        // A mail package's defaults are a message too, here taken from outside a transport. Its
+        // connection settings are not (nodemailer 10 types them apart from a message).
+        'markets/__planted__.ts:37: carries replyTo, which a MailMessage does not say',
         'markets/__planted__.ts:48: untyped(…) is not a template in mail/templates.ts',
         'markets/__planted__.ts:52: writes html outside mail/templates.ts',
         'markets/__planted__.ts:52: writes subject outside mail/templates.ts',

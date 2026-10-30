@@ -27,7 +27,7 @@ export interface Mailer {
 }
 
 /**
- * SMTP mailer (nodemailer 9). Locally the target is Mailpit (docker/docker-compose.yml):
+ * SMTP mailer (nodemailer 10). Locally the target is Mailpit (docker/docker-compose.yml):
  * no auth, no TLS. In production it is AWS SES over its SMTP interface (PLAN 17 Q3,
  * decision 2026-09-03): with credentials present the connection must be encrypted, so
  * STARTTLS is required unless `secure` (implicit TLS) is on; credentials are never sent

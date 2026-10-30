@@ -51,7 +51,6 @@
     "@nestjs/testing": "catalog:",
     "@standard-schema/spec": "catalog:",
     "@types/node": "catalog:",
-    "@types/nodemailer": "catalog:",
     "eslint": "catalog:",
     "pino-pretty": "catalog:",
     "socket.io-client": "catalog:",
