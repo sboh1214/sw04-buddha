@@ -85,7 +85,7 @@ catalog:
   socket.io-client: 4.8.3
   # auth / mail (M1)
   better-auth: 1.7.7
-  auth: 1.7.2
+  auth: 1.7.7 # the schema generator (packages/db db:auth-schema): keep it at better-auth's version
   "@thallesp/nestjs-better-auth": 2.7.0
   nodemailer: 10.3.1 # 10 is TypeScript and ships its own types (no @types/nodemailer)
   "@nestjs/swagger": 12.0.1

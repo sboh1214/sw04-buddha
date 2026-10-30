@@ -462,7 +462,7 @@ PLAN §7은 zod 스키마(`packages/shared`)를 요청/응답 DTO로 쓰고 `@ne
 ## ADR-0021 — better-auth 스키마는 `auth` CLI로 생성, timestamptz, relations는 한 곳에
 
 - 날짜: 2026-09-03
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0094: 맥락의 '1.7의 `account`에는 `issuer` 컬럼과 `(issuer, account_id)` 유니크가 추가됐다'와 결정의 시드 계정의 `issuer 'local:credential'` — better-auth 1.7.3부터 `account`에 `issuer`가 없고(마이그레이션 0047), 유니크는 `(provider_id, account_id)`이며(`account_providerId_accountId_uidx`, 생성기 출력에 없어 손으로 더한 것), 시드의 자격증명 계정은 `providerId 'credential'`, `accountId = user.id`다. 나머지 결정은 유효)
 
 ### 맥락
 
@@ -10187,3 +10187,34 @@ ADR-0069 결과 2의 'ADR-0061의 #89(#57) 행 "서버는 로그인만 확인한
 - #174를 배포하면 배포 DB가 계정까지 비워진다(docs/RESET.md). 테스터에게 다시 가입해야 한다고 알린다.
 - 출시 운영 담당(#133)에 관리자를 셋 이상 둔다(결정 4).
 - 이의 기간(#152·#175)과 선행 마감 최소 간격(#22)의 출시 설정 항목이 등록되면 `/admin/settings`에 값을 넣는다(이의 기간 24시간, 선행 마감 간격은 제안 1시간).
+
+---
+
+## ADR-0094 — better-auth 1.7.7: `account.issuer`를 지우고 계정의 열쇠는 `(provider_id, account_id)` 유니크로, 스키마 생성기 `auth`도 1.7.7 (PR #244)
+
+- 날짜: 2026-10-31
+- 상태: 채택
+
+### 맥락
+
+Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Magic Link의 계정 탈취 권고(GHSA-965c-763c-88jm)를 고친 판이다(이 저장소는 Magic Link도 OAuth Proxy도 쓰지 않는다).
+
+- 1.7.0\~1.7.2는 `account`에 `issuer`(NOT NULL)와 `(issuer, account_id)` 유니크를 두고 로그인 계정을 그 쌍으로 찾았다(ADR-0021, 마이그레이션 0000). 1.7.3은 1.6의 스키마로 돌아가 계정을 `(providerId, accountId)`로 찾고 `issuer`를 쓰지 않는다. 그 판의 업그레이드 안내는 `issuer`의 NOT NULL을 풀고 그 인덱스를 지우라고 하고, 컬럼은 나중에 지워도 된다고 한다.
+- 1.7.3부터 인증 인스턴스는 Drizzle 스키마를 검사한다(`advanced.database.validateSchema`, 기본값 켜짐, 운영에서도). 시작할 때 결과를 로그에 남기고, `/api/auth`의 모든 요청과 서버의 모든 `auth.api.*` 호출 — `SessionGuard`의 `getSession`도 — 이 그 결과를 기다려 어긋나면 실패한다. Drizzle에서는 DB에 붙지 않고 TS 스키마만 본다. 우리 `schema/auth.ts`는 better-auth가 쓰지 않는 필수 컬럼 `account.issuer`를 가졌다.
+- 그래서 PR #244의 CI가 실패했다. Type Check: `auth.test.ts`가 `createOAuthUser`·`linkAccount`에 넘기던 `issuer`가 1.7.7의 계정 형식에 없다(TS2353 넷). Integration Tests (api): 검사가 'Required columns Better Auth never writes: account.issuer'를 내어, 가입과 로그인부터 세션 읽기(`getSession`)까지 인증을 거치는 요청이 500으로 실패했고 시험 850개가 실패했다(세션 없는 요청에 401을 바라던 시험도 500을 받았다). E2E Tests (Playwright 1/3·2/3·3/3)도 같은 까닭으로, 관리자 로그인이 500을 받아 실패했다.
+
+### 결정
+
+1. **마이그레이션 0047**(`0047_account_provider_key`, `drizzle-kit generate` 그대로에 머리 주석만 손으로): `account_issuer_accountId_uidx`와 `account.issuer`를 지우고, `account_providerId_accountId_uidx`(`provider_id`, `account_id`) 유니크를 만든다. 업그레이드 안내의 정리(NOT NULL 풀기와 인덱스 지우기)에 더해 컬럼도 지운다 — 읽는 곳이 없고, 1.7.7 생성기의 출력에도 없다.
+2. **유니크는 손으로 더한 것이다.** 1.7.7 생성기의 `account`에는 `user_id` 인덱스 하나뿐이다. 그래도 지운 인덱스가 지키던 '로그인 하나에 행 하나'를 better-auth가 찾는 열쇠로 계속 지킨다. better-auth는 두 행이 맞는 조회를 거절하므로, 경합으로 둘째 행이 생기면 그 회원은 그 로그인으로 들어오지 못한다. 같은 `account_id`라도 제공자가 다르면 다른 행이다. 1.7.2에서는 제공자마다 issuer가 하나로 정해져 있었다(credential → `local:credential`, google → `https://accounts.google.com`, kakao·naver → `local:oauth:<id>` — 우리 설정은 `accountIssuer`를 바꾸지 않는다). 그래서 옛 인덱스가 받은 행은 새 열쇠로도 유일하다. `schema/auth.ts`의 머리 주석에 손으로 고친 것으로 적었다(ADR-0021의 timestamptz·relations 다음의 셋째).
+3. **스키마 생성기 `auth`도 1.7.7로 올린다**(catalog — better-auth와 같은 판으로 둔다는 주석과 함께). 1.7.2의 생성기는 `issuer`를 다시 만들고, lockfile에 better-auth 1.7.2 한 벌(권고의 판)을 남겼다. 생성기만 쓰는 `better-auth.config.ts`는 테이블이 없는 mock이라 검사가 생성 때마다 모든 테이블을 없다고 로그에 남기므로, 거기서만 검사를 끈다(`validateSchema: false`). API의 인스턴스는 검사를 켠 채 둔다.
+4. **시드와 시험은 `issuer`를 쓰지 않는다.** 시드의 자격증명 계정은 `providerId 'credential'`, `accountId = user.id`다(`CREDENTIAL_ISSUER`를 지웠다). `account`에 행을 넣는 시험 다섯 파일의 열 자리(api의 `auth.test.ts` 다섯·`screen-account.test.ts`·`account-closure.controller.test.ts`, db의 `schema.test.ts` 둘·`migration-0032.test.ts`)에서도 뺐다. `migration-0032.test.ts`의 날 SQL과 `createAccount`(형식이 남는 키를 받는다)의 것은 tsc가 잡지 못한다.
+5. **검사를 시험 하나로 부른다.** `auth.test.ts`의 'passes better-auth’s schema check'가 인스턴스의 `explicitSchemaCheck`를 기다린다. 다음에 스키마가 어긋나면 수백 개의 가입 실패보다 먼저 그 원인을 이름으로 보인다.
+
+### 결과
+
+- **상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1). ADR-0021: 맥락의 `issuer` 컬럼과 `(issuer, account_id)` 유니크, 결정의 시드 계정의 `issuer 'local:credential'`. 나머지 결정(`auth` CLI로 생성, timestamptz, relations는 한 곳에)은 유효하다.
+- **배포.** `deploy.sh`는 `migrate`(마이그레이션과 시드)를 돌린 뒤에 API를 바꾼다. 그 사이 아직 도는 1.7.2의 API는 어댑터가 `account`를 읽고 쓸 때마다 없는 컬럼을 대므로 가입·로그인·연결·비밀번호 바꾸기가 실패한다. 세션과 `GET /me`는 그대로다. 새 컨테이너가 뜨면 풀린다(ADR-0046 D3의 창, 마이그레이션 0028과 같다 — ADR-0070 결과 3). 1.7.7은 OAuth state의 저장 형식(검증 행의 식별자에 `auth-state:` 접두사)도 바꿔, 배포 전 5분(서명된 state 쿠키의 수명) 안에 시작해 배포 뒤에 끝나는 Google·Kakao·Naver 로그인과 연결은 state 불일치로 실패한다. 다시 하면 된다. 0047이 실패하면 drizzle이 그 묶음을 되돌리고 `deploy.sh`가 거기서 멈춰 옛 API가 그대로 돈다.
+- **되돌리기.** 0047을 적용한 DB에는 #244 이전의 이미지를 다시 배포할 수 없다. 그 API는 `issuer`를 찾아 계정의 모든 읽기와 쓰기가 실패한다. 앞으로 고친다(terraform/README.md '롤백' — 마이그레이션은 앞으로만 간다). 로컬의 개발 DB도 이 가지에서는 `pnpm db:migrate`를 거쳐야 가입이 된다(검사는 TS 스키마만 보므로 API는 뜬다).
+- **다음 업그레이드.** better-auth가 바뀐 스키마를 바라면 그 판을 배포한 API는 모든 인증 요청을 거절한다. ADR-0021대로 그 판의 `auth` 생성기 출력과 `schema/auth.ts`를 견주고, 손으로 고친 셋(timestamptz, relations, 이 유니크)은 남긴다.
+- 확인: 0046까지 적용하고 1.7.2 식의 계정 다섯 행(credential, google, kakao, naver, 그리고 google 행과 같은 `account_id`를 가진 kakao 행)을 넣은 DB에 0047을 적용했다. 컬럼과 인덱스가 바뀌었고 다섯 행이 그대로 남았다. 앱 롤이 같은 `(kakao, k-1)`로 둘째 행을 넣는 것은 새 유니크로 거절됐다. `drizzle-kit check`는 문제가 없고, 다시 `generate`해도 바뀐 것이 없다.

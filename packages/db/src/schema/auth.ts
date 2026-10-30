@@ -1,13 +1,14 @@
 /**
- * better-auth 1.7.2 tables (PLAN 6.1). Generated with
+ * better-auth 1.7.7 tables (PLAN 6.1). Generated with
  *   pnpm --filter @buddha/db run db:auth-schema
  * (the `auth` CLI, config in packages/db/better-auth.config.ts) and adjusted by hand:
  * every `timestamp()` got `{ withTimezone: true, mode: 'date', precision: 3 }` (repo
  * convention, matching schema/columns.ts — a JS Date holds no more than milliseconds) and the
  * `relations()` block the CLI appends was removed: every relation on these tables lives once
  * in relations.ts (drizzle merges duplicate `relations(user, ...)` calls at runtime but not
- * in the query types). Column names are explicit snake_case, so drizzle's `casing` setting
- * does not affect them. better-auth reads/writes these tables through its Drizzle adapter;
+ * in the query types), and `account` got a unique (provider_id, account_id), the key better-auth
+ * looks an account up by (ADR-0094). Column names are explicit snake_case, so drizzle's `casing`
+ * setting does not affect them. better-auth reads/writes these tables through its Drizzle adapter;
  * application code never writes them (PLAN 6.1) except the seed, test factories and an admin
  * revoke, which deletes the account's `session` rows to sign it out everywhere (#171).
  * Re-run the generator only on a better-auth upgrade and diff against this file.
@@ -54,8 +55,6 @@ export const account = pgTable(
   'account',
   {
     id: text('id').primaryKey(),
-    /** 'local:credential' for email/password, the provider issuer or 'local:oauth:<id>' for OAuth. */
-    issuer: text('issuer').notNull(),
     /** Provider-side subject; equals user.id for credential accounts. */
     accountId: text('account_id').notNull(),
     providerId: text('provider_id').notNull(),
@@ -76,7 +75,7 @@ export const account = pgTable(
       .notNull(),
   },
   (table) => [
-    uniqueIndex('account_issuer_accountId_uidx').on(table.issuer, table.accountId),
+    uniqueIndex('account_providerId_accountId_uidx').on(table.providerId, table.accountId),
     index('account_userId_idx').on(table.userId),
   ],
 );

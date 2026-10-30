@@ -3087,7 +3087,6 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       });
       await t.db.insert(account).values({
         id: randomUUID(),
-        issuer: 'local:credential',
         accountId: member.id,
         providerId: 'credential',
         userId: member.id,
@@ -3371,7 +3370,6 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         });
         const accountInsert = t.db.insert(account).values({
           id: randomUUID(),
-          issuer: 'local:credential',
           accountId: userId,
           providerId: 'credential',
           userId,
