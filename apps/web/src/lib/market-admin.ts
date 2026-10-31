@@ -6,16 +6,22 @@ import {
   MINUS_SIGN,
   type MarketEventType,
   type MarketResult,
+  type MarketRuleItems,
+  type MarketSource,
   type MarketStatus,
   OPEN_ITEMS,
   type OpenItem,
   type PaymentStatus,
+  RULE_ITEMS,
+  type RuleItem,
   type SettlementStep,
   type SettlementStepStatus,
   formatCoin,
+  isCompleteSource,
   marketResultSchema,
   coinAmountSchema,
   parseCoinAmount,
+  ruleItemSchema,
   uuidParamSchema,
 } from '@buddha/shared';
 import * as z from 'zod';
@@ -26,6 +32,7 @@ import {
   isForAnotherAccount,
   validationField,
   validationMessage,
+  validationPath,
 } from './api';
 import { formatKst } from './datetime';
 
@@ -385,7 +392,43 @@ const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
  * event, as the web reads them. `.nullish()` where the writer may omit or null a field: the
  * 판정 detail nulls a blank note.
  */
-const RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
+// The rules text a `rules_edited` row written before #23 holds, before and after the edit.
+const LEGACY_RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
+const EVENT_SOURCE = z.object({ name: z.string(), url: z.string() });
+/**
+ * One rule item's value in a `rules_edited` row (#23, ADR-0097), as the API writes it
+ * (`rulesEditedPayload`): a text, a nullable 배경, the event deadline as an instant or null, a source
+ * as `{name, url}` or null, the fallbacks as their ordered list, the long-delay days or null.
+ */
+const RULE_ITEM_VALUE: { readonly [K in RuleItem]: z.ZodType<MarketRuleItems[K]> } = {
+  description: z.string().nullable(),
+  yesCondition: z.string(),
+  noCondition: z.string(),
+  eventDeadline: kstInstant.nullable(),
+  primarySource: EVENT_SOURCE.nullable(),
+  fallbackSources: z.array(EVENT_SOURCE),
+  fallbackCondition: z.string(),
+  longDelayDays: z.number().int().nullable(),
+  delayHandling: z.string(),
+};
+/**
+ * `rules_edited` since #23: the items the edit changed, in RULE_ITEMS order, and each one's value
+ * before and after it. Every listed item must carry both values of its own shape, or the row is
+ * not read (`compactJson` instead).
+ */
+const RULES_EDITED_PAYLOAD = z
+  .object({
+    items: z.array(ruleItemSchema).min(1),
+    before: z.record(z.string(), z.unknown()),
+    after: z.record(z.string(), z.unknown()),
+  })
+  .refine(({ items, before, after }) =>
+    items.every(
+      (item) =>
+        RULE_ITEM_VALUE[item].safeParse(before[item]).success &&
+        RULE_ITEM_VALUE[item].safeParse(after[item]).success,
+    ),
+  );
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
 /** The worker's resolved → settling (#174): `{source: 'job'}`, which the 시스템 actor already says. */
@@ -424,12 +467,13 @@ function resolveDetailRows(detail: {
 
 /**
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
- * write (design 3.4's 이벤트 로그, 5.5): the rules diff, the open and close instants, the 판정
- * with its note and evidence, the finalize summary — and no row at all for the start of the
- * payout, whose only field is the `source` the 시스템 actor beside it already says. The payload is
- * `unknown` on the wire (jsonb), so each shape is checked before it is read; `created` (the whole
- * create body) and anything that does not match are `undefined`, and the screen shows those as
- * `compactJson` instead of a half-read row.
+ * write (design 3.4's 이벤트 로그, 5.5): the rules diff (each changed rule item since #23, the one
+ * rules text before it), the open and close instants, the 판정 with its note and evidence, the
+ * finalize summary — and no row at all for the start of the payout, whose only field is the
+ * `source` the 시스템 actor beside it already says. The payload is `unknown` on the wire (jsonb),
+ * so each shape is checked before it is read; `created` (the whole create body) and anything that
+ * does not match are `undefined`, and the screen shows those as `compactJson` instead of a
+ * half-read row.
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
   switch (type) {
@@ -462,10 +506,14 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
     }
     case 'rules_edited': {
       const parsed = RULES_EDITED_PAYLOAD.safeParse(payload);
-      if (!parsed.success) return undefined;
+      // The event deadline in KST, as every time in these rows.
+      if (parsed.success) return rulesEditedRows(parsed.data, (iso) => formatKst(iso));
+      // A row written before #23: the one rules text.
+      const legacy = LEGACY_RULES_EDITED_PAYLOAD.safeParse(payload);
+      if (!legacy.success) return undefined;
       return [
-        { label: copy.eventRulesBefore, value: parsed.data.before || '—' },
-        { label: copy.eventRulesAfter, value: parsed.data.after || '—' },
+        { label: copy.eventRulesBefore, value: legacy.data.before || '—' },
+        { label: copy.eventRulesAfter, value: legacy.data.after || '—' },
       ];
     }
     case 'opened': {
@@ -488,13 +536,94 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
 
 /**
  * The open-items check's names (#17), in OPEN_ITEMS order: the draft's notice and the toast of a
- * refused 열기 say the same words (brief labels: 정산 규칙 · 카테고리 · 태그 1~5개).
+ * refused 열기 say the same words — 질문, the rule items' names (#23, ADR-0097), 카테고리 and 태그
+ * 1~5개. A rule item's name is also its name in the `rules_edited` rows.
  */
 export const OPEN_ITEM_LABEL: Record<OpenItem, string> = {
-  rules: copy.openItemRules,
+  title: copy.openItemTitle,
+  description: copy.openItemDescription,
+  yesCondition: copy.openItemYesCondition,
+  noCondition: copy.openItemNoCondition,
+  eventDeadline: copy.openItemEventDeadline,
+  primarySource: copy.openItemPrimarySource,
+  fallbackSources: copy.openItemFallbackSources,
+  fallbackCondition: copy.openItemFallbackCondition,
+  longDelayDays: copy.openItemLongDelayDays,
+  delayHandling: copy.openItemDelayHandling,
   category: copy.openItemCategory,
   tags: copy.openItemTags,
 };
+
+/**
+ * A source as one line of text: 'name (url)', or whichever half it has; '—' for none, or a
+ * source with both halves blank (`market_sources` refuses that one, but an event row is history).
+ */
+function sourceText(source: MarketSource | null): string {
+  const name = source?.name.trim() ?? '';
+  const url = source?.url.trim() ?? '';
+  if (name !== '' && url !== '') return `${name} (${url})`;
+  return name || url || '—';
+}
+
+const textOrDash = (text: string | null): string =>
+  text === null || text.trim() === '' ? '—' : text;
+
+/**
+ * Each rule item's value as text, for the `rules_edited` rows (#23): a blank text '—', the event
+ * deadline as `time` renders an instant (KST, which `marketEventRows` hands it), a source as
+ * `sourceText`, the fallbacks one numbered line each or '없음', the long-delay days in words.
+ */
+const RULE_ITEM_TEXT: {
+  readonly [K in RuleItem]: (value: MarketRuleItems[K], time: (iso: string) => string) => string;
+} = {
+  description: textOrDash,
+  yesCondition: textOrDash,
+  noCondition: textOrDash,
+  eventDeadline: (iso, time) => (iso === null ? '—' : time(iso)),
+  primarySource: sourceText,
+  fallbackSources: (sources) =>
+    sources.length === 0
+      ? copy.adminMarketFallbackNone
+      : sources.map((source, index) => `${String(index + 1)}. ${sourceText(source)}`).join('\n'),
+  fallbackCondition: textOrDash,
+  // As the rules area words it (`longDelayText`, lib/market-detail.ts, which imports this file).
+  longDelayDays: (days) =>
+    days === null ? '—' : `${copy.rulesLongDelayBefore} ${String(days)}${copy.rulesLongDelayTail}`,
+  delayHandling: textOrDash,
+};
+
+/** `raw` (checked by RULES_EDITED_PAYLOAD) as the text of `item`'s value. */
+function ruleItemText<K extends RuleItem>(
+  item: K,
+  raw: unknown,
+  time: (iso: string) => string,
+): string {
+  return RULE_ITEM_TEXT[item](RULE_ITEM_VALUE[item].parse(raw), time);
+}
+
+/**
+ * The rows of a `rules_edited` event since #23: '바뀐 항목 YES 조건 · 1차 출처', then each item's
+ * value before and after the edit, in RULE_ITEMS order.
+ */
+function rulesEditedRows(
+  payload: z.infer<typeof RULES_EDITED_PAYLOAD>,
+  time: (iso: string) => string,
+): EventRow[] {
+  const items = RULE_ITEMS.filter((item) => payload.items.includes(item));
+  return [
+    { label: copy.eventRulesItems, value: items.map((item) => OPEN_ITEM_LABEL[item]).join(' · ') },
+    ...items.flatMap((item) => [
+      {
+        label: `${OPEN_ITEM_LABEL[item]} ${copy.eventRulesBefore}`,
+        value: ruleItemText(item, payload.before[item], time),
+      },
+      {
+        label: `${OPEN_ITEM_LABEL[item]} ${copy.eventRulesAfter}`,
+        value: ruleItemText(item, payload.after[item], time),
+      },
+    ]),
+  ];
+}
 
 /** `items` as one line of labels, in OPEN_ITEMS order whatever order they came in, each once. */
 function openItemList(items: readonly OpenItem[]): string {
@@ -504,10 +633,10 @@ function openItemList(items: readonly OpenItem[]): string {
 }
 
 /**
- * The admin draft's notice (#17): '열기 전에 채울 항목: 정산 규칙 · 태그 1~5개' while the open-items
- * check finds something missing (`AdminMarket.missingOpenItems`), `undefined` when nothing is. A
- * draft only — the check is what leaving the draft takes; an open market whose category was hidden
- * later keeps it (#172 item 1) and gets no notice.
+ * The admin draft's notice (#17): '열기 전에 채울 항목: YES 조건 · 1차 출처 · 태그 1~5개' while
+ * the open-items check finds something missing (`AdminMarket.missingOpenItems`), `undefined` when
+ * nothing is. A draft only — the check is what leaving the draft takes; an open market whose
+ * category was hidden later keeps it (#172 item 1) and gets no notice.
  */
 export function openItemsNotice(market: {
   status: MarketStatus;
@@ -538,7 +667,8 @@ function missingItemsOf(error: ApiError): OpenItem[] {
  * for any other state-machine violation — the two "refresh the screen" messages, since the state
  * on screen is what is stale (a second 판정 of a market another admin has already judged lands
  * here). RULES_REQUIRED is no transition's any more (open answers OPEN_ITEMS_MISSING instead): it
- * is the PATCH that blanks an open market's rules, which `marketFormError` puts on the field.
+ * is the PATCH that leaves an open market without a rule item it had (#23), which
+ * `marketFormError` puts on that item's field.
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
  * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
  * `marketFormError` first. The cookie of another account (`isForAnotherAccount` — every market
@@ -566,75 +696,193 @@ export function transitionErrorMessage(error: unknown): string {
   return copy.errUnknown;
 }
 
+/**
+ * Where on the market form (lib/market-form.ts) an API refusal can land, as react-hook-form names
+ * it: a field, a fallback source's row, or its name or address input (`fallbackSources.1.url`,
+ * #23). Spelled out rather than taken from the form's values: this file is a member screen's too
+ * (lib/market-detail.ts), and the form is the admin's alone (excluded-features.test.ts).
+ * `setError` checks each against the form's paths.
+ */
 export type MarketFormField =
   | 'title'
   | 'description'
-  | 'rules'
-  | 'resolutionSource'
+  | 'yesCondition'
+  | 'noCondition'
+  | 'eventDeadline'
+  | 'primarySourceName'
+  | 'primarySourceUrl'
+  | 'fallbackSources'
+  | `fallbackSources.${number}`
+  | `fallbackSources.${number}.${'name' | 'url'}`
+  | 'fallbackCondition'
+  | 'longDelayDays'
+  | 'delayHandling'
   | 'categoryId'
   | 'tags'
   | 'imageUrl'
   | 'closeAt'
   | 'slug';
 
-const API_FIELD_TO_FORM: Record<string, MarketFormField> = {
-  title: 'title',
-  description: 'description',
-  rules: 'rules',
-  resolutionSource: 'resolutionSource',
-  categoryId: 'categoryId',
-  tags: 'tags',
-  imageUrl: 'imageUrl',
-  closeAt: 'closeAt',
-  slug: 'slug',
+/** The body fields that are form fields of the same name, each with what its refusal says. */
+const FIELD_MESSAGE: Readonly<Record<string, string>> = {
+  title: copy.errMarketTitle,
+  description: copy.errMarketText,
+  yesCondition: copy.errMarketText,
+  noCondition: copy.errMarketText,
+  eventDeadline: copy.errMarketEventDeadline,
+  longDelayDays: copy.errMarketLongDelayDays,
+  delayHandling: copy.errMarketText,
+  imageUrl: copy.errMarketImageUrl,
+  closeAt: copy.errMarketCloseAt,
 };
+
+/**
+ * Where an open market's RULES_REQUIRED lands (#23): the item's field, or for a source, when the
+ * form's values do not show its blank input (`blankSourceInput`), the primary's name or the
+ * fallback list itself. Each detail names one item; the first is placed, as for any refusal.
+ */
+const RULE_ITEM_FIELD: { readonly [K in RuleItem]: MarketFormField } = {
+  description: 'description',
+  yesCondition: 'yesCondition',
+  noCondition: 'noCondition',
+  eventDeadline: 'eventDeadline',
+  primarySource: 'primarySourceName',
+  fallbackSources: 'fallbackSources',
+  fallbackCondition: 'fallbackCondition',
+  longDelayDays: 'longDelayDays',
+  delayHandling: 'delayHandling',
+};
+
+/** A source's inputs on the form: its name's, its address's, and for a fallback its row. */
+interface SourceInputs {
+  name: MarketFormField;
+  url: MarketFormField;
+  row?: MarketFormField;
+}
+
+const PRIMARY_SOURCE_INPUTS: SourceInputs = { name: 'primarySourceName', url: 'primarySourceUrl' };
+
+const fallbackSourceInputs = (at: number): SourceInputs => ({
+  name: `fallbackSources.${at}.name`,
+  url: `fallbackSources.${at}.url`,
+  row: `fallbackSources.${at}`,
+});
+
+/**
+ * The market form's source inputs as typed: `MarketFormValues` (lib/market-form.ts) holds them,
+ * and is spelled out here for the reason `MarketFormField` is — that file is the admin's alone.
+ */
+export interface MarketSourceInputs {
+  primarySourceName: string;
+  primarySourceUrl: string;
+  fallbackSources: readonly MarketSource[];
+}
+
+/**
+ * The blank input of a source an open market's RULES_REQUIRED names (#23, ADR-0097), read from
+ * the form's values as sent: the form's own rule puts its refusal under every blank input
+ * (`missingItemPaths`, lib/market-form.ts), and this one refusal goes under the first of them in
+ * the form's order — the primary's name when it is blank, alone or with the address, else its
+ * address; the first fallback that is not complete (`isCompleteSource`), its name or else its
+ * address. `undefined` for any other item, or when the values hold no such input (the API judged
+ * other values).
+ */
+function blankSourceInput(item: RuleItem, values: MarketSourceInputs): MarketFormField | undefined {
+  const blankOf = (source: MarketSource, inputs: SourceInputs) => {
+    if (source.name.trim() === '') return inputs.name;
+    return source.url.trim() === '' ? inputs.url : undefined;
+  };
+  if (item === 'primarySource') {
+    const primary = { name: values.primarySourceName, url: values.primarySourceUrl };
+    return blankOf(primary, PRIMARY_SOURCE_INPUTS);
+  }
+  if (item !== 'fallbackSources') return undefined;
+  const at = values.fallbackSources.findIndex((source) => !isCompleteSource(source));
+  const source = values.fallbackSources[at];
+  return source === undefined ? undefined : blankOf(source, fallbackSourceInputs(at));
+}
+
+/**
+ * A source's refusal (`marketSourceSchema`): its name or its address, on that input, or both
+ * blank, on a fallback's row as the form says it. The form sends no primary source with both
+ * inputs blank (that is `null`), so it has no `row`, and that refusal is the generic toast.
+ */
+function sourceRefusal(
+  inputs: SourceInputs,
+  part: unknown,
+  message: string | undefined,
+): { field: MarketFormField; message: string } | undefined {
+  if (part === 'name') return { field: inputs.name, message: copy.errMarketSourceName };
+  if (part === 'url') return { field: inputs.url, message: copy.errMarketSourceUrl };
+  if (part === undefined && message === 'empty source' && inputs.row !== undefined) {
+    return { field: inputs.row, message: copy.errMarketSourceEmpty };
+  }
+  return undefined;
+}
 
 /**
  * Where a refused create/update lands on the form: the field the API named, with the message
  * the admin can act on. `slug` is the UNIQUE collision (design 3.4), `categoryId` an unknown
  * (404) category or one a market may not be filed under, said by why (#17: hidden, under a hidden
  * parent, or holding sub-categories), `tags` (and `tags.N`) a list the API refused — a second
- * name of one tag, a malformed name, too many, or none left on an open market. Anything else —
+ * name of one tag, a malformed name, too many, or none left on an open market. The rule items
+ * (#23) land on their own fields, a source's on the input the path names (`validationPath`:
+ * `['fallbackSources', 1, 'url']` is `fallbackSources.1.url`), and RULES_REQUIRED — an open market
+ * edited so a rule item it had goes missing — on the first item it names: its field, or for a
+ * source the blank input `values` (the form's, as sent) shows (`blankSourceInput`), as the form's
+ * own rule places it; without them, the primary's name or the fallback list. Anything else —
  * including a VALIDATION_ERROR naming `status`, which is not a field the form has — is
  * `undefined` and goes to the generic toast.
  */
 export function marketFormError(
   error: unknown,
+  values?: MarketSourceInputs,
 ): { field: MarketFormField; message: string } | undefined {
   if (!isApiError(error)) return undefined;
-  // A PATCH that would blank the rules of an open market: the API's RULES_REQUIRED names
-  // `rules`, and the field is where the admin can fix it.
-  if (isApiError(error, 'RULES_REQUIRED'))
-    return { field: 'rules', message: copy.errMarketRulesOpen };
+  if (isApiError(error, 'RULES_REQUIRED')) {
+    const item = ruleItemSchema.safeParse(validationField(error));
+    if (!item.success) return undefined;
+    const blank = values === undefined ? undefined : blankSourceInput(item.data, values);
+    return { field: blank ?? RULE_ITEM_FIELD[item.data], message: copy.errMarketRulesOpen };
+  }
   if (!isApiError(error, 'VALIDATION_ERROR') && !isApiError(error, 'NOT_FOUND')) return undefined;
-  const named = validationField(error);
-  if (named === undefined) return undefined;
-  const field = API_FIELD_TO_FORM[named];
-  if (field === undefined) return undefined;
-  return { field, message: fieldMessage(field, error) };
-}
-
-function fieldMessage(field: MarketFormField, error: ApiError): string {
-  switch (field) {
+  const path = validationPath(error);
+  const [named, at, part] = path ?? [];
+  const message = validationMessage(error);
+  switch (named) {
     case 'slug':
       // The unique-index refusal (design 3.4) says "already exists" in its issue; the shared
       // zod rule's refusal (pattern / uuid-shaped) says how the slug is malformed.
-      return isSlugTaken(error) ? copy.errMarketSlugTaken : copy.errMarketSlug;
+      return {
+        field: 'slug',
+        message: isSlugTaken(error) ? copy.errMarketSlugTaken : copy.errMarketSlug,
+      };
     case 'categoryId':
-      return categoryMessage(error);
+      return { field: 'categoryId', message: categoryMessage(error) };
     case 'tags':
-      return tagsMessage(error);
-    case 'closeAt':
-      return copy.errMarketCloseAt;
-    case 'title':
-      return copy.errMarketTitle;
-    case 'description':
-    case 'rules':
-      return copy.errMarketText;
-    case 'resolutionSource':
-      return copy.errMarketSource;
-    case 'imageUrl':
-      return copy.errMarketImageUrl;
+      return { field: 'tags', message: tagsMessage(error) };
+    case 'primarySource':
+      return sourceRefusal(PRIMARY_SOURCE_INPUTS, at, message);
+    case 'fallbackSources':
+      // The list itself: more than MARKET_FALLBACK_SOURCES_MAX.
+      if (at === undefined) {
+        return { field: 'fallbackSources', message: copy.errMarketFallbackSourcesMax };
+      }
+      if (typeof at !== 'number') return undefined;
+      return sourceRefusal(fallbackSourceInputs(at), part, message);
+    case 'fallbackCondition':
+      return {
+        field: 'fallbackCondition',
+        message:
+          message === 'no fallback source'
+            ? copy.errMarketFallbackConditionNoSource
+            : copy.errMarketText,
+      };
+    default: {
+      if (typeof named !== 'string' || !Object.hasOwn(FIELD_MESSAGE, named)) return undefined;
+      const text = FIELD_MESSAGE[named];
+      return text === undefined ? undefined : { field: named as MarketFormField, message: text };
+    }
   }
 }
 

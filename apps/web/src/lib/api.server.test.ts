@@ -172,7 +172,7 @@ describe('the write page’s read of its market (lookUpWriteMarketServer)', () =
 
   it('is none only when the API says there is no such market, and failed for any other failure (Codex review of #219, round 2)', async () => {
     fakeFetch.mockImplementationOnce(() =>
-      answer(200, { data: { id, title: '기준금리 인하?', status: 'closed', rules: '…' } }),
+      answer(200, { data: { id, title: '기준금리 인하?', status: 'closed', yesCondition: '…' } }),
     );
     await expect(lookUpWriteMarketServer(id)).resolves.toEqual({
       kind: 'found',

@@ -4,9 +4,11 @@ import {
   INT4_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
+  MARKET_TEXT_MAX,
   TICKS_MAX_POINTS,
 } from './constants.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
+import { STORABLE_INSTANT_MIN, STORABLE_INSTANT_TOO_EARLY } from './market-rules.js';
 import {
   ALL_MARKET_STATUSES,
   DEFAULT_MARKET_SORT,
@@ -63,8 +65,14 @@ const summary = {
 const market = {
   ...summary,
   description: null,
-  rules: '종가 기준',
-  resolutionSource: 'KRX',
+  yesCondition: '12월 30일 코스피 종가가 3000 이상이면 YES.',
+  noCondition: '사건 기한까지 3000 이상으로 마감하지 않으면 NO.',
+  eventDeadline: '2026-12-30T06:30:00.000Z',
+  primarySource: { name: '한국거래소', url: 'https://data.krx.co.kr' },
+  fallbackSources: [{ name: '한국거래소 보도자료', url: 'https://www.krx.co.kr' }],
+  fallbackCondition: '1차 출처에 종가가 없으면 대체 출처를 본다.',
+  longDelayDays: 14,
+  delayHandling: '장기 지연 기한까지 종가가 나오지 않으면 무효로 판정한다.',
   tags: ['코스피', 'S&P500'],
   resolvedAt: null,
   settledAt: null,
@@ -196,6 +204,14 @@ describe('read DTOs', () => {
       adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['tags', 'deadline'] }).success,
     ).toBe(false);
     expect(marketSchema.parse(admin)).not.toHaveProperty('netCollectedCoin');
+    // The rule items are in the open-items check's list (#23); the old single item is not.
+    expect(
+      adminMarketSchema.parse({ ...admin, missingOpenItems: ['title', 'eventDeadline', 'tags'] })
+        .missingOpenItems,
+    ).toEqual(['title', 'eventDeadline', 'tags']);
+    expect(adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['rules'] }).success).toBe(
+      false,
+    );
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
     // No LMSR state on the admin shape either (#125).
     expect(
@@ -225,6 +241,34 @@ describe('read DTOs', () => {
     // summary itself: a stray `sparkline` is stripped like any other unknown key.
     expect(marketSummarySchema.parse({ ...summary, sparkline: [5250] })).toEqual(summary);
     expect(marketSchema.parse({ ...market, sparkline: [5250] })).not.toHaveProperty('sparkline');
+  });
+
+  it('carry the rule items on the detail and none of them on a card (#23)', () => {
+    // The single rules text and the free-text source are gone, stripped like any unknown key.
+    const parsed = marketSchema.parse({ ...market, rules: '종가 기준', resolutionSource: 'KRX' });
+    expect(parsed).toEqual(market);
+    expect(parsed).not.toHaveProperty('rules');
+    expect(parsed).not.toHaveProperty('resolutionSource');
+    // A market opened before #23: every item blank.
+    const older = {
+      ...market,
+      description: null,
+      yesCondition: '',
+      noCondition: '',
+      eventDeadline: null,
+      primarySource: null,
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: null,
+      delayHandling: '',
+    };
+    expect(marketSchema.parse(older)).toEqual(older);
+    const { yesCondition: _yes, ...withoutYes } = market;
+    expect(marketSchema.safeParse(withoutYes).success).toBe(false);
+    const card = marketSummarySchema.parse(market);
+    for (const key of ['description', 'yesCondition', 'primarySource', 'fallbackSources']) {
+      expect(card).not.toHaveProperty(key);
+    }
   });
 
   it('describe a price series by the stride and the window the server served', () => {
@@ -388,25 +432,22 @@ const account = { expectedAccountId: 'admin-1' } as const;
 describe('createMarketBodySchema', () => {
   const body = {
     title: ' 2026년 안에 코스피 3000? ',
-    rules: '',
     categoryId: 1,
     closeAt: at,
     ...account,
   };
 
   it('accepts the minimal draft and trims the title', () => {
+    // Every rule item is optional (#23): a draft starts from a title, a category and a close time.
     expect(createMarketBodySchema.parse(body)).toEqual({
       ...body,
       title: '2026년 안에 코스피 3000?',
     });
     const full = createMarketBodySchema.parse({
       ...body,
-      description: 'd',
-      resolutionSource: 'KRX ',
       imageUrl: 'https://cdn.example.com/a.png',
       slug: 'kospi-3000',
     });
-    expect(full.resolutionSource).toBe('KRX');
     expect(full.slug).toBe('kospi-3000');
     // No initial probability or liquidity any more (#125): a market is created without them.
     expect(
@@ -429,7 +470,6 @@ describe('createMarketBodySchema', () => {
     for (const patch of [
       { title: '' },
       { title: 'x'.repeat(121) },
-      { rules: 'x'.repeat(5001) },
       { categoryId: 0 },
       { categoryId: 1.5 },
       // int4: without the cap this reaches Postgres as an out-of-range parameter (500).
@@ -449,7 +489,6 @@ describe('createMarketBodySchema', () => {
         JSON.stringify(patch),
       ).toBe(false);
     }
-    expect(createMarketBodySchema.safeParse({ ...body, rules: undefined }).success).toBe(false);
   });
 
   it('requires the admin on screen (ADR-0092)', () => {
@@ -475,8 +514,8 @@ describe('createMarketBodySchema', () => {
 
 describe('updateMarketBodySchema', () => {
   it('accepts any single field but not an empty patch', () => {
-    expect(updateMarketBodySchema.parse({ rules: '새 규칙', ...account })).toEqual({
-      rules: '새 규칙',
+    expect(updateMarketBodySchema.parse({ yesCondition: '새 조건', ...account })).toEqual({
+      yesCondition: '새 조건',
       ...account,
     });
     // The AMM inputs are stripped, so a patch of only them is an empty patch.
@@ -497,9 +536,156 @@ describe('updateMarketBodySchema', () => {
   });
 
   it('requires the admin on screen (ADR-0092)', () => {
-    const parsed = updateMarketBodySchema.safeParse({ rules: '새 규칙' });
+    const parsed = updateMarketBodySchema.safeParse({ yesCondition: '새 조건' });
     expect(parsed.success).toBe(false);
     expect(issuePaths(parsed)).toEqual(['expectedAccountId']);
+  });
+});
+
+describe('the rule items of the create and update bodies (#23)', () => {
+  const body = { title: '2026년 안에 코스피 3000?', categoryId: 1, closeAt: at, ...account };
+  const source = { name: '한국거래소 보도자료', url: 'https://www.krx.co.kr' };
+  const items = {
+    description: ' 코스피가 연말에 3000을 넘는지 묻는다. ',
+    yesCondition: ' 12월 30일 종가가 3000 이상이면 YES. ',
+    noCondition: '\n사건 기한까지 3000 이상으로 마감하지 않으면 NO.\n',
+    eventDeadline: '2026-12-30T06:30:00.000Z',
+    primarySource: { name: ' 한국거래소 ', url: ' https://data.krx.co.kr ' },
+    fallbackSources: [source, { name: '연합뉴스', url: '' }],
+    fallbackCondition: ' 1차 출처에 종가가 없으면 대체 출처를 본다. ',
+    longDelayDays: 14,
+    delayHandling: ' 장기 지연 기한까지 종가가 나오지 않으면 무효로 판정한다. ',
+  };
+
+  it('takes every item, each text trimmed', () => {
+    const trimmed = {
+      description: '코스피가 연말에 3000을 넘는지 묻는다.',
+      yesCondition: '12월 30일 종가가 3000 이상이면 YES.',
+      noCondition: '사건 기한까지 3000 이상으로 마감하지 않으면 NO.',
+      eventDeadline: '2026-12-30T06:30:00.000Z',
+      primarySource: { name: '한국거래소', url: 'https://data.krx.co.kr' },
+      fallbackSources: [source, { name: '연합뉴스', url: '' }],
+      fallbackCondition: '1차 출처에 종가가 없으면 대체 출처를 본다.',
+      longDelayDays: 14,
+      delayHandling: '장기 지연 기한까지 종가가 나오지 않으면 무효로 판정한다.',
+    };
+    expect(createMarketBodySchema.parse({ ...body, ...items })).toEqual({ ...body, ...trimmed });
+    expect(updateMarketBodySchema.parse({ ...items, ...account })).toEqual({
+      ...trimmed,
+      ...account,
+    });
+    // The old fields are gone: stripped like any unknown key.
+    const old = createMarketBodySchema.parse({
+      ...body,
+      rules: '종가 기준',
+      resolutionSource: 'KRX',
+    });
+    expect(old).not.toHaveProperty('rules');
+    expect(old).not.toHaveProperty('resolutionSource');
+  });
+
+  it('clears a nullable item with null and replaces the fallbacks as a whole', () => {
+    const cleared = {
+      description: null,
+      eventDeadline: null,
+      primarySource: null,
+      longDelayDays: null,
+      ...account,
+    };
+    expect(updateMarketBodySchema.parse(cleared)).toEqual(cleared);
+    // What the web sends when the last fallback goes: both together.
+    expect(
+      updateMarketBodySchema.parse({ fallbackSources: [], fallbackCondition: '', ...account }),
+    ).toEqual({ fallbackSources: [], fallbackCondition: '', ...account });
+    expect(
+      updateMarketBodySchema.parse({ fallbackSources: [source, source, source], ...account })
+        .fallbackSources,
+    ).toHaveLength(3);
+  });
+
+  it('holds every text to 5,000 characters, counted after the trim', () => {
+    for (const field of [
+      'description',
+      'yesCondition',
+      'noCondition',
+      'fallbackCondition',
+      'delayHandling',
+    ]) {
+      const longest = 'x'.repeat(MARKET_TEXT_MAX);
+      expect(createMarketBodySchema.safeParse({ ...body, [field]: longest }).success, field).toBe(
+        true,
+      );
+      expect(
+        createMarketBodySchema.safeParse({ ...body, [field]: ` ${longest}\n` }).success,
+        field,
+      ).toBe(true);
+      const over = createMarketBodySchema.safeParse({ ...body, [field]: `${longest}x` });
+      expect(issuePaths(over), field).toEqual([field]);
+      expect(
+        issuePaths(updateMarketBodySchema.safeParse({ [field]: `${longest}x`, ...account })),
+      ).toEqual([field]);
+    }
+  });
+
+  it('refuses a bad item naming its path, inside a source included', () => {
+    for (const [patch, path] of [
+      [{ primarySource: { name: '한국거래소', url: 'ftp://data.krx.co.kr' } }, 'primarySource.url'],
+      [{ primarySource: { name: '한국거래소', url: 'javascript:alert(1)' } }, 'primarySource.url'],
+      [{ primarySource: { name: '한국거래소', url: 'data.krx.co.kr' } }, 'primarySource.url'],
+      [
+        { primarySource: { name: '한국거래소', url: `https://a.kr/${'a'.repeat(488)}` } },
+        'primarySource.url',
+      ],
+      [{ primarySource: { name: 'x'.repeat(501), url: '' } }, 'primarySource.name'],
+      [{ primarySource: { name: ' ', url: '' } }, 'primarySource'],
+      [
+        { fallbackSources: [source, { name: '연합뉴스', url: 'www.yna.co.kr' }] },
+        'fallbackSources.1.url',
+      ],
+      [{ fallbackSources: [source, { name: '', url: '' }] }, 'fallbackSources.1'],
+      [{ fallbackSources: [source, source, source, source] }, 'fallbackSources'],
+      [{ longDelayDays: 0 }, 'longDelayDays'],
+      [{ longDelayDays: 366 }, 'longDelayDays'],
+      [{ longDelayDays: 1.5 }, 'longDelayDays'],
+      [{ longDelayDays: '14' }, 'longDelayDays'],
+      [{ eventDeadline: '2026-12-30' }, 'eventDeadline'],
+      [{ eventDeadline: '2026-12-30T15:30:00+09:00' }, 'eventDeadline'],
+      [{ eventDeadline: 'tomorrow' }, 'eventDeadline'],
+      // Year 0000 (Postgres refuses it) and any year below 100 (read back as another), ADR-0097.
+      [{ eventDeadline: '0000-12-31T15:00:00Z' }, 'eventDeadline'],
+      [{ eventDeadline: '0099-12-31T23:59:59.999Z' }, 'eventDeadline'],
+      [{ yesCondition: null }, 'yesCondition'],
+    ] as const) {
+      const created = createMarketBodySchema.safeParse({ ...body, ...patch });
+      expect(issuePaths(created), JSON.stringify(patch)).toEqual([path]);
+      const updated = updateMarketBodySchema.safeParse({ ...patch, ...account });
+      expect(issuePaths(updated), JSON.stringify(patch)).toEqual([path]);
+    }
+    const empty = createMarketBodySchema.safeParse({
+      ...body,
+      fallbackSources: [{ name: '', url: ' ' }],
+    });
+    expect(empty.error?.issues[0]?.message).toBe('empty source');
+    expect(issuePaths(empty)).toEqual(['fallbackSources.0']);
+  });
+
+  it('takes an event deadline from STORABLE_INSTANT_MIN on, with no order against closeAt', () => {
+    // Storage's bound only (ADR-0097): how it orders against the other times is #22's.
+    for (const eventDeadline of [STORABLE_INSTANT_MIN, '9999-12-31T23:59:59.999Z']) {
+      expect(createMarketBodySchema.parse({ ...body, eventDeadline }).eventDeadline).toBe(
+        eventDeadline,
+      );
+      expect(updateMarketBodySchema.parse({ eventDeadline, ...account }).eventDeadline).toBe(
+        eventDeadline,
+      );
+    }
+    const early = updateMarketBodySchema.safeParse({
+      eventDeadline: '0000-12-31T15:00:00Z',
+      ...account,
+    });
+    expect(early.error?.issues).toMatchObject([
+      { path: ['eventDeadline'], message: STORABLE_INSTANT_TOO_EARLY },
+    ]);
   });
 });
 

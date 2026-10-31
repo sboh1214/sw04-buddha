@@ -351,6 +351,13 @@
       "when": 1793423829903,
       "tag": "0049_category_tags",
       "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1793436640186,
+      "tag": "0050_market_rule_items",
+      "breakpoints": true
     }
   ]
 }

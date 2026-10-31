@@ -9,6 +9,8 @@ import {
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
   MARKET_RESULTS,
+  MARKET_SOURCE_MAX,
+  MARKET_SOURCE_URL_MAX,
   MARKET_STATUSES,
   OUTCOMES,
   MODERATION_REASONS,
@@ -21,9 +23,11 @@ import {
   REPORT_TARGET_TYPES,
   closedAccountEmail,
   currentConsentVersion,
+  missingRuleItems,
   nicknameSchema,
   releaseSettingChangeBodySchema,
   releaseSettingChangePayloadSchema,
+  type MarketRuleItems,
 } from '@buddha/shared';
 import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -46,6 +50,7 @@ import {
   marketSearchTerms,
   marketSearches,
   marketSettlementSteps,
+  marketSources,
   marketTags,
   marketWatchEvents,
   marketWatches,
@@ -162,6 +167,15 @@ function sqlConstraint(error: unknown): string | undefined {
 function errorMessage(error: unknown): string {
   const e = error as { message?: string; cause?: { message?: string } } | null;
   return e?.cause?.message ?? e?.message ?? '';
+}
+
+/** A refusal's SQLSTATE and constraint, from a write expected to fail. */
+async function refusal(write: Promise<unknown>) {
+  const error = await write.then(
+    () => undefined,
+    (caught: unknown) => caught,
+  );
+  return { state: sqlState(error), constraint: sqlConstraint(error) };
 }
 
 describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () => {
@@ -724,15 +738,6 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
   });
 
   describe('tags and the category tree (migration 0049, #17)', () => {
-    /** A refusal's SQLSTATE and constraint, from a write expected to fail. */
-    async function refusal(write: Promise<unknown>) {
-      const error = await write.then(
-        () => undefined,
-        (caught: unknown) => caught,
-      );
-      return { state: sqlState(error), constraint: sqlConstraint(error) };
-    }
-
     it('keeps one tag per name, case ignored: name_key is lower(name), generated', async () => {
       // ADR-0093 decision 2 #172 item 2: two names that differ only in case are one tag, and the
       // tag keeps the spelling it was first made with (#17).
@@ -891,6 +896,275 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(await refusal(createCategory(t.db, { nameKo: '금리', parentId: economy.id }))).toEqual(
         taken,
       );
+    });
+  });
+
+  describe('the rule items and market_sources (migration 0050, #23)', () => {
+    /** A market's rule items as the API reads them (ADR-0097): its row and its sources. */
+    async function ruleItemsOf(marketId: string): Promise<MarketRuleItems> {
+      const market = await t.db.query.markets.findFirst({
+        where: eq(markets.id, marketId),
+        with: { sources: { orderBy: (row, { asc }) => [asc(row.priority)] } },
+      });
+      const source = ({ name, url }: { name: string; url: string }) => ({ name, url });
+      const primary = market!.sources.find((row) => row.priority === 0);
+      return {
+        description: market!.description,
+        yesCondition: market!.yesCondition,
+        noCondition: market!.noCondition,
+        eventDeadline: market!.eventDeadline?.toISOString() ?? null,
+        primarySource: primary ? source(primary) : null,
+        fallbackSources: market!.sources.filter((row) => row.priority > 0).map(source),
+        fallbackCondition: market!.fallbackCondition,
+        longDelayDays: market!.longDelayDays,
+        delayHandling: market!.delayHandling,
+      };
+    }
+
+    /** Every rule item a market made before #23 misses once 0050 ran: all but the fallbacks. */
+    const ALL_MISSING = [
+      'description',
+      'yesCondition',
+      'noCondition',
+      'eventDeadline',
+      'primarySource',
+      'longDelayDays',
+      'delayHandling',
+    ];
+
+    it('replaces rules and resolution_source with the items, blank until written (D4)', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'markets'
+          AND column_name IN ('description', 'yes_condition', 'no_condition', 'event_deadline',
+            'fallback_condition', 'long_delay_days', 'delay_handling', 'rules', 'resolution_source')
+        ORDER BY ordinal_position`);
+      // The old two are gone, text and all; 배경 stays as it was.
+      expect(columns).toEqual([
+        { column: 'description', type: 'text', nullable: 'YES', default: null },
+        { column: 'yes_condition', type: 'text', nullable: 'NO', default: "''::text" },
+        { column: 'no_condition', type: 'text', nullable: 'NO', default: "''::text" },
+        {
+          column: 'event_deadline',
+          type: 'timestamp with time zone',
+          nullable: 'YES',
+          default: null,
+        },
+        { column: 'fallback_condition', type: 'text', nullable: 'NO', default: "''::text" },
+        { column: 'long_delay_days', type: 'smallint', nullable: 'YES', default: null },
+        { column: 'delay_handling', type: 'text', nullable: 'NO', default: "''::text" },
+      ]);
+      // A row written without them — as every market before #23 is after the migration — has
+      // every item blank: missing to the open-items check, the empty fallback list aside ('없음').
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const category = await createCategory(t.db);
+      await t.db.execute(sql`
+        INSERT INTO markets (slug, title, category_id, close_at, created_by)
+        VALUES ('before-23', '#23 전의 시장', ${category.id}, now() + interval '7 days', ${admin.id})`);
+      const [bare] = await t.db.select().from(markets).where(eq(markets.slug, 'before-23'));
+      expect(bare).toMatchObject({
+        description: null,
+        yesCondition: '',
+        noCondition: '',
+        eventDeadline: null,
+        fallbackCondition: '',
+        longDelayDays: null,
+        delayHandling: '',
+      });
+      expect(bare).not.toHaveProperty('rules');
+      expect(bare).not.toHaveProperty('resolutionSource');
+      expect(missingRuleItems(await ruleItemsOf(bare!.id))).toEqual(ALL_MISSING);
+
+      // 사건 기한 to the millisecond, like every time column (columns.ts).
+      const deadline = new Date('2026-11-30T14:59:59.999Z');
+      await t.db.update(markets).set({ eventDeadline: deadline }).where(eq(markets.id, bare!.id));
+      const [read] = await t.db.select().from(markets).where(eq(markets.id, bare!.id));
+      expect(read?.eventDeadline?.toISOString()).toBe(deadline.toISOString());
+
+      // 장기 지연 기한: whole days 1..365 (MARKET_LONG_DELAY_DAYS_MIN/MAX), or none.
+      const days = (longDelayDays: number | null) =>
+        t.db.update(markets).set({ longDelayDays }).where(eq(markets.id, bare!.id));
+      for (const value of [1, 365, null]) await days(value);
+      for (const value of [0, -1, 366]) {
+        expect(await refusal(days(value)), String(value)).toEqual({
+          state: '23514',
+          constraint: 'markets_long_delay_days_check',
+        });
+      }
+    });
+
+    it('holds a market’s sources at priorities 0..3, http(s) or no address, never both blank', async () => {
+      // ADR-0093 decision 2 #172 item 9 and decision 3 '#23 출처 주소', whoever writes.
+      const market = await createMarket(t.db, { status: 'draft', primarySource: null });
+      const write = (priority: number, name: string, url?: string, marketId = market.id) =>
+        t.db.insert(marketSources).values({ marketId, priority, name, url });
+      // 1차 at 0 and 대체 at 1..3; a draft may hold half a source, and the scheme in either case.
+      await write(0, '한국은행 보도자료', 'https://www.bok.or.kr');
+      await write(1, '연합뉴스', 'http://www.yna.co.kr');
+      await write(2, '이름만'); // the address defaults to '', not NULL
+      await write(3, '', 'HTTPS://KOSTAT.GO.KR');
+      for (const priority of [4, -1]) {
+        expect(await refusal(write(priority, '넷째')), String(priority)).toEqual({
+          state: '23514',
+          constraint: 'market_sources_priority_check',
+        });
+      }
+      expect(await refusal(write(1, '둘째', 'https://example.com'))).toEqual({
+        state: '23505',
+        constraint: 'market_sources_market_id_priority_pk',
+      });
+      const clear = (priority: number) =>
+        t.db
+          .delete(marketSources)
+          .where(and(eq(marketSources.marketId, market.id), eq(marketSources.priority, priority)));
+      await clear(3);
+      // http or https only, at the very start: the API trims before it stores.
+      for (const url of [
+        'ftp://example.com',
+        'javascript:alert(1)',
+        'mailto:news@example.com',
+        'www.bok.or.kr',
+        ' https://www.bok.or.kr',
+        'httpss://example.com',
+      ]) {
+        expect(await refusal(write(3, '출처', url)), url).toEqual({
+          state: '23514',
+          constraint: 'market_sources_url_check',
+        });
+      }
+      expect(await refusal(write(3, '', ''))).toEqual({
+        state: '23514',
+        constraint: 'market_sources_not_empty_check',
+      });
+      // 500 characters each (MARKET_SOURCE_MAX, MARKET_SOURCE_URL_MAX), Hangul one each.
+      const address = (length: number) =>
+        `https://example.com/${'a'.repeat(length - 'https://example.com/'.length)}`;
+      await write(3, '가'.repeat(MARKET_SOURCE_MAX), address(MARKET_SOURCE_URL_MAX));
+      await clear(3);
+      expect((await refusal(write(3, '가'.repeat(MARKET_SOURCE_MAX + 1)))).state).toBe('22001');
+      expect((await refusal(write(3, '', address(MARKET_SOURCE_URL_MAX + 1)))).state).toBe('22001');
+      // The bound is per market: another takes the same priorities.
+      const other = await createMarket(t.db, { status: 'draft' });
+      await write(1, '대체', 'https://example.org', other.id);
+      // Relations both ways: a market's sources in priority order, a source's market.
+      const withSources = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { sources: { orderBy: (row, { asc }) => [asc(row.priority)] } },
+      });
+      expect(withSources?.sources.map((row) => [row.priority, row.name, row.url])).toEqual([
+        [0, '한국은행 보도자료', 'https://www.bok.or.kr'],
+        [1, '연합뉴스', 'http://www.yna.co.kr'],
+        [2, '이름만', ''],
+      ]);
+      const back = await t.db.query.marketSources.findFirst({
+        where: and(eq(marketSources.marketId, other.id), eq(marketSources.priority, 1)),
+        with: { market: true },
+      });
+      expect(back?.market.slug).toBe(other.slug);
+      // A half source is stored, and the open-items check names it — and, with fallbacks now
+      // listed, the switch condition the factory left blank when there were none.
+      expect(missingRuleItems(await ruleItemsOf(market.id))).toEqual([
+        'fallbackSources',
+        'fallbackCondition',
+      ]);
+    });
+
+    it('keeps a market while it has sources (RESTRICT), and lets buddha_app replace them', async () => {
+      const market = await createMarket(t.db, {
+        status: 'draft',
+        fallbackSources: [{ name: '대체', url: 'https://example.org' }],
+      });
+      expect(await refusal(t.db.delete(markets).where(eq(markets.id, market.id)))).toEqual({
+        state: '23503',
+        constraint: 'market_sources_market_id_markets_id_fk',
+      });
+      expect(
+        await refusal(
+          t.db
+            .insert(marketSources)
+            .values({ marketId: randomUUID(), priority: 0, name: '없는 시장' }),
+        ),
+      ).toEqual({ state: '23503', constraint: 'market_sources_market_id_markets_id_fk' });
+      const { rows: actions } = await t.db.execute<{ name: string; action: string }>(sql`
+        SELECT conname AS name, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_sources'::regclass AND contype = 'f'`);
+      expect(actions).toEqual([{ name: 'market_sources_market_id_markets_id_fk', action: 'r' }]);
+      // An edit of a market's sources, as the API's role writes it: delete the rows, insert the
+      // new ordered set (the privileges are asserted with the other tables' below).
+      const sources = [
+        { name: '새 1차', url: 'https://example.com/primary' },
+        { name: '새 대체 하나', url: 'https://example.com/one' },
+        { name: '새 대체 둘', url: 'https://example.com/two' },
+      ];
+      await t.db.transaction(async (tx) => {
+        await tx.delete(marketSources).where(eq(marketSources.marketId, market.id));
+        await tx
+          .insert(marketSources)
+          .values(
+            sources.map((source, priority) => ({ marketId: market.id, priority, ...source })),
+          );
+      });
+      const read = await ruleItemsOf(market.id);
+      expect(read.primarySource).toEqual(sources[0]);
+      expect(read.fallbackSources).toEqual(sources.slice(1));
+    });
+
+    it('createMarket fills every item by default, blanks them on request, the sources in order', async () => {
+      const closeAt = new Date('2026-12-01T00:00:00.000Z');
+      const complete = await createMarket(t.db, { status: 'draft', closeAt });
+      const items = await ruleItemsOf(complete.id);
+      expect(missingRuleItems(items)).toEqual([]);
+      expect(items).toMatchObject({
+        primarySource: { url: 'https://example.com/source' },
+        fallbackSources: [],
+        fallbackCondition: '',
+        longDelayDays: 14,
+      });
+      expect(complete.eventDeadline!.getTime()).toBeGreaterThan(closeAt.getTime());
+      // Fallbacks in the order given, with a switch condition unless one is given.
+      const fallbacks = [
+        { name: '대체 하나', url: 'https://example.org/1' },
+        { name: '대체 둘', url: 'https://example.org/2' },
+      ];
+      const withFallbacks = await createMarket(t.db, { fallbackSources: fallbacks });
+      const read = await ruleItemsOf(withFallbacks.id);
+      expect(read.fallbackSources).toEqual(fallbacks);
+      expect(missingRuleItems(read)).toEqual([]);
+      // A market from before #23, opened: every item blank.
+      const before = await createMarket(t.db, { status: 'open', blankRuleItems: true });
+      expect(missingRuleItems(await ruleItemsOf(before.id))).toEqual(ALL_MISSING);
+      expect(
+        missingRuleItems(
+          await ruleItemsOf(
+            (await createMarket(t.db, { blankRuleItems: true, yesCondition: 'YES 조건만' })).id,
+          ),
+        ),
+      ).toEqual(ALL_MISSING.filter((item) => item !== 'yesCondition'));
+      // One item at a time, or half a source.
+      const halves = await createMarket(t.db, {
+        status: 'draft',
+        noCondition: '',
+        eventDeadline: null,
+        primarySource: { name: '이름만', url: '' },
+        fallbackSources: [{ name: '', url: 'https://example.org' }],
+        fallbackCondition: '',
+        longDelayDays: null,
+      });
+      expect(missingRuleItems(await ruleItemsOf(halves.id))).toEqual([
+        'noCondition',
+        'eventDeadline',
+        'primarySource',
+        'fallbackSources',
+        'fallbackCondition',
+        'longDelayDays',
+      ]);
     });
   });
 
@@ -6940,7 +7214,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
             'profile_interest_categories', 'post_likes', 'comment_likes',
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
-            'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories')
+            'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
+            'market_sources')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -7014,6 +7289,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('tags')).toEqual(['INSERT', 'SELECT']);
       expect(privs('market_tags')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       expect(privs('categories')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0050 (#23): an edit of a market's sources deletes and inserts them, as its tags.
+      expect(privs('market_sources')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

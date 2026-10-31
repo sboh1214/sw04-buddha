@@ -26,10 +26,40 @@ export const markets = pgTable(
     id: uuid().primaryKey().defaultRandom(),
     slug: varchar({ length: 80 }).notNull().unique(),
     title: varchar({ length: 120 }).notNull(),
+    /**
+     * The rule items (#23, ADR-0097; ADR-0093 decision 2 #172 items 7–10), RULE_ITEMS of
+     * @buddha/shared, each required to open (the open-items check) and blank on a draft until
+     * written. Migration 0050 dropped the single `rules` text and `resolution_source` they replace,
+     * text and all (D4: no conversion). The texts hold at most MARKET_TEXT_MAX characters, the
+     * API's limit; no CHECK holds it, as none held `rules`'. The sources are `market_sources`.
+     *
+     * 배경. Kept from before the items, under its name, and nullable for older rows: null and blank
+     * are both not filled in.
+     */
     description: text(),
-    /** Resolution criteria. Required to open (PLAN 0.2). */
-    rules: text().notNull(),
-    resolutionSource: text(),
+    /** YES 조건. */
+    yesCondition: text().notNull().default(''),
+    /** NO 조건: what makes it NO, and that no event by `event_deadline` is NO. */
+    noCondition: text().notNull().default(''),
+    /**
+     * 사건 기한 (#172 item 8): the instant the event must happen by. A result published after it
+     * is a judgement delay, never a NO by itself (#173 item 11). No order against the close time
+     * is held here or by the API yet (#22).
+     */
+    eventDeadline: timestampTz(),
+    /** 전환 조건: when the judgement moves to a 대체 출처. Blank while the market has none. */
+    fallbackCondition: text().notNull().default(''),
+    /**
+     * 장기 지연 기한 in whole days, 1..365 (MARKET_LONG_DELAY_DAYS_MIN/MAX): N × 24 hours after
+     * the scheduled judgement (#172 item 10; that instant is #22's).
+     */
+    longDelayDays: smallint(),
+    /**
+     * 지연·취소·무효 처리: what happens at the long-delay deadline, the VOID switch criteria and an
+     * event cancelled or postponed (N03 §4). VOID's 50/50 payout is one rule for every market
+     * (#173 item 9), stored nowhere per market.
+     */
+    delayHandling: text().notNull().default(''),
     categoryId: integer()
       .notNull()
       .references(() => categories.id, { onDelete: 'restrict' }),
@@ -116,6 +146,7 @@ export const markets = pgTable(
     check('markets_volume_coin_check', sql`${t.volumeCoin} >= 0`),
     check('markets_trade_count_check', sql`${t.tradeCount} >= 0`),
     check('markets_trader_count_check', sql`${t.traderCount} >= 0`),
+    check('markets_long_delay_days_check', sql`${t.longDelayDays} BETWEEN 1 AND 365`),
     check(
       'markets_fee_bps_check',
       sql`${t.takerFeeBps} BETWEEN 0 AND 10000 AND ${t.settlementFeeBps} BETWEEN 0 AND 10000`,

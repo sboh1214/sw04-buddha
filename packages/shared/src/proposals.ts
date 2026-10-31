@@ -43,11 +43,12 @@ import {
 
 /** The question, the market's title-to-be (owner decision: 100 characters). */
 export const PROPOSAL_QUESTION_MAX = 100;
-/** The YES condition, the market's rules-to-be (owner decision: 1,000 characters). */
+/** The YES condition, the market's YES condition-to-be (owner decision: 1,000 characters). */
 export const PROPOSAL_YES_CONDITION_MAX = 1_000;
 /**
  * The expected sources. The owner set no length; this PR takes the length of the market field a
- * draft fills from it (`resolutionSource`, MARKET_SOURCE_MAX), so an adopted proposal always fits.
+ * draft fills from it (the primary source's name since #23, MARKET_SOURCE_MAX), so an adopted
+ * proposal always fits.
  */
 export const PROPOSAL_SOURCES_MAX = MARKET_SOURCE_MAX;
 /**
@@ -301,10 +302,12 @@ export type AdminProposalListQuery = z.infer<typeof adminProposalListQuerySchema
 
 /**
  * The market of a 채택 (ADR-0069 decision 4 #77, 채택과 시장): a draft made from the proposal
- * (`draft`) — titled with the question, the YES condition as its rules, the sources as its
- * resolution source, the background as its description — in the category given here, else the
- * proposal's, closing at the time given here, else `proposalDraftCloseAt`; or a market that exists
- * already, in any status (`existing`).
+ * (`draft`) — titled with the question, the background as its 배경 (`description`), the YES
+ * condition as its YES condition and the sources as its primary source's name, whose address the
+ * operator fills in (#23, ADR-0097); its other rule items start blank, and the proposal's date is
+ * not its event deadline — in the category given here, else the proposal's, closing at the time
+ * given here, else `proposalDraftCloseAt`; or a market that exists already, in any status
+ * (`existing`).
  */
 export const proposalAdoptionMarketSchema = z
   .discriminatedUnion('type', [

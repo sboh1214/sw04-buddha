@@ -5,13 +5,13 @@ import { uuidParamSchema } from './api/path-param.js';
 import {
   BP_MAX,
   INT4_MAX,
+  MARKET_FALLBACK_SOURCES_MAX,
   MARKET_IMAGE_URL_MAX,
   MARKET_RESOLVE_EVIDENCE_URL_MAX,
   MARKET_RESOLVE_NOTE_MAX,
   MARKET_SEARCH_TERM_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
-  MARKET_SOURCE_MAX,
   MARKET_TEXT_MAX,
   MARKET_TITLE_MAX,
   PRICE_MAX,
@@ -20,6 +20,12 @@ import {
 } from './constants.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { openItemSchema } from './market-open-items.js';
+import {
+  marketLongDelayDaysSchema,
+  marketRuleItemsSchema,
+  marketSourceSchema,
+  storableInstantSchema,
+} from './market-rules.js';
 import { marketTagsSchema } from './tags.js';
 import {
   type MarketStatus,
@@ -123,14 +129,13 @@ export type MarketSummary = z.infer<typeof marketSummarySchema>;
 
 /**
  * Public detail (PLAN 7.1): no author, exposure or settlement steps — those are
- * `adminMarketSchema` only.
+ * `adminMarketSchema` only. The rule items (`marketRuleItemsSchema`, #23) are public in every
+ * public status, signed in or not (N02 §2); cards carry none of them.
  */
 export const marketSchema = z
   .object({
     ...marketSummaryFields,
-    description: z.string().nullable(),
-    rules: z.string(),
-    resolutionSource: z.string().nullable(),
+    ...marketRuleItemsSchema.shape,
     /**
      * The market's tags (#17), in the order the operator entered them, each as its tag's stored
      * spelling — the one it was first made with. The detail shows them, each a link to its
@@ -488,9 +493,10 @@ export const adminMarketSchema = marketSchema
     /** Newest first, at most 100. */
     events: z.array(marketEventSchema),
     /**
-     * What the open-items check finds missing (`missingOpenItems`, #17), in OPEN_ITEMS order —
-     * on a draft, what the open refuses it for; empty once it may open. Every status reports it,
-     * so a market whose category was hidden after it opened shows that too.
+     * What the open-items check finds missing (`missingOpenItems`, #17, #23), in OPEN_ITEMS order
+     * — on a draft, what the open refuses it for; empty once it may open. Every status reports it,
+     * so a market whose category was hidden after it opened shows that too, and so does one opened
+     * before #23 with its rule items blank.
      */
     missingOpenItems: z.array(openItemSchema),
   })
@@ -508,12 +514,42 @@ export const marketSlugSchema = z
   .regex(MARKET_SLUG_PATTERN, 'only a-z, 0-9, Korean syllables and -, 3..80 characters')
   .refine((slug) => !uuidParamSchema.safeParse(slug).success, 'slug must not look like a uuid');
 
+/** A rule text (#23): trimmed, at most MARKET_TEXT_MAX; blank while not filled in. */
+const ruleTextSchema = z.string().trim().max(MARKET_TEXT_MAX);
+
+/**
+ * The rule items (market-rules.ts, #23) are each optional and may be blank, null or empty: a draft
+ * saves half-done and the open-items check names what is missing. A create without one starts it
+ * blank (null for a nullable one); an edit without one keeps the stored value; null clears a
+ * nullable one. On an open market an edit that newly leaves one missing is RULES_REQUIRED, and a
+ * switch condition while the result has no fallback is refused ('no fallback source') — both the
+ * service's, on the stored values merged with the body.
+ */
 const marketFields = {
   title: z.string().trim().min(1).max(MARKET_TITLE_MAX),
-  description: z.string().max(MARKET_TEXT_MAX).nullish(),
-  /** May be blank while draft; the open-items check counts a blank one missing (`rules`). */
-  rules: z.string().max(MARKET_TEXT_MAX),
-  resolutionSource: z.string().trim().max(MARKET_SOURCE_MAX).nullish(),
+  /** 배경. */
+  description: ruleTextSchema.nullish(),
+  yesCondition: ruleTextSchema.optional(),
+  noCondition: ruleTextSchema.optional(),
+  /**
+   * 사건 기한 (#172 item 8); the admin enters it in KST. From STORABLE_INSTANT_MIN on: an earlier one
+   * Postgres refuses or drizzle reads back as another year (ADR-0097). No order against other
+   * times (#22).
+   */
+  eventDeadline: storableInstantSchema.nullish(),
+  /** 1차 출처: `market_sources` priority 0. */
+  primarySource: marketSourceSchema.nullish(),
+  /**
+   * 대체 출처, the whole ordered list (priorities 1..3), as `tags`: an edit with it replaces them, `[]`
+   * removes them all.
+   */
+  fallbackSources: z.array(marketSourceSchema).max(MARKET_FALLBACK_SOURCES_MAX).optional(),
+  /** 전환 조건: blank unless there is a fallback. */
+  fallbackCondition: ruleTextSchema.optional(),
+  /** 장기 지연 기한 in days after the scheduled judgement. */
+  longDelayDays: marketLongDelayDaysSchema.nullish(),
+  /** 지연·취소·무효 처리. */
+  delayHandling: ruleTextSchema.optional(),
   /**
    * int4 column: an unbounded id would reach Postgres as an out-of-range parameter (500). One a new
    * market may be filed under (`categoryUnselectableReason`), refused naming the field otherwise.

@@ -199,7 +199,11 @@ export const MARKET_EVENT_TYPES = [
   'closed',
   /** settling → settled: the worker finished every SETTLEMENT_STEPS step. */
   'finalized',
-  /** No status change: a rules edit of an open market (`from_status`/`to_status` null). */
+  /**
+   * No status change (`from_status`/`to_status` null): an edit of a draft or open market that
+   * changed rule items (#23), payload `{items, before, after}` (`rulesEditedPayload`). Rows from
+   * before #23 carry `{before, after}` as the old rules text.
+   */
   'rules_edited',
   /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}` (until #152). */
   'resolved',

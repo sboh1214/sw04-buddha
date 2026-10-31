@@ -42,8 +42,14 @@ const draft: AdminMarket = {
   slug: 'rate-cut-2026',
   title: '기준금리 인하?',
   description: null,
-  rules: '한국은행 발표 기준.',
-  resolutionSource: null,
+  yesCondition: '한국은행이 기준금리를 내리면 YES.',
+  noCondition: '',
+  eventDeadline: null,
+  primarySource: null,
+  fallbackSources: [],
+  fallbackCondition: '',
+  longDelayDays: null,
+  delayHandling: '',
   category: { slug: 'economy', nameKo: '경제' },
   imageUrl: null,
   status: 'draft',
@@ -308,7 +314,14 @@ describe('refreshAfterMarketFormRefusal (#17)', () => {
       queryClient.setQueryData(adminMarketKey(ID), draft);
       answer = [economy, rates];
 
-      for (const field of ['slug', 'tags', 'closeAt'] as const) {
+      // A rule item's input, a fallback source's (#23) included, is no category either.
+      for (const field of [
+        'slug',
+        'tags',
+        'closeAt',
+        'yesCondition',
+        'fallbackSources.1.url',
+      ] as const) {
         await refreshAfterMarketFormRefusal(queryClient, field);
       }
       expect(fetches).toBe(1);

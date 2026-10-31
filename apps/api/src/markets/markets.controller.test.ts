@@ -18,6 +18,7 @@ import {
   type MarketSummary,
   type Outcome,
   PUBLIC_MARKET_STATUSES,
+  RULE_ITEMS,
   marketSummarySchema,
   type PriceSeries,
 } from '@buddha/shared';
@@ -904,10 +905,22 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
   });
 
   it('finds a market by id, by slug and by a decomposed (NFD) slug; hides drafts and reviews', async () => {
+    const eventDeadline = new Date('2026-12-31T14:59:00.000Z');
     const open = await market({
       slug: '한글-시장-2026',
       title: '한글 시장',
-      description: '설명',
+      description: '배경',
+      yesCondition: 'YES 조건',
+      noCondition: 'NO 조건',
+      eventDeadline,
+      primarySource: { name: '1차 출처', url: 'https://example.com/primary' },
+      fallbackSources: [
+        { name: '대체 출처 하나', url: 'https://example.com/one' },
+        { name: '대체 출처 둘', url: 'https://example.com/two' },
+      ],
+      fallbackCondition: '전환 조건',
+      longDelayDays: 30,
+      delayHandling: '지연·취소·무효 처리',
       tags: ['한국', 'K-팝'],
     });
     const draft = await market({ slug: 'draft-market', status: 'draft' });
@@ -920,13 +933,44 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
       id: open.id,
       slug: '한글-시장-2026',
       title: '한글 시장',
-      description: '설명',
-      rules: open.rules,
-      resolutionSource: open.resolutionSource,
       status: 'open',
       resolvedAt: null,
       // In position order, the stored spelling (#17).
       tags: ['한국', 'K-팝'],
+    });
+    // The rule items, signed out (#23, N02 §2): the sources in priority order, the event deadline
+    // an ISO instant. The single rules text and resolution source they replaced are gone.
+    const items = Object.fromEntries(RULE_ITEMS.map((item) => [item, detail[item]]));
+    expect(items).toEqual({
+      description: '배경',
+      yesCondition: 'YES 조건',
+      noCondition: 'NO 조건',
+      eventDeadline: eventDeadline.toISOString(),
+      primarySource: { name: '1차 출처', url: 'https://example.com/primary' },
+      fallbackSources: [
+        { name: '대체 출처 하나', url: 'https://example.com/one' },
+        { name: '대체 출처 둘', url: 'https://example.com/two' },
+      ],
+      fallbackCondition: '전환 조건',
+      longDelayDays: 30,
+      delayHandling: '지연·취소·무효 처리',
+    });
+    expect(detail).not.toHaveProperty('rules');
+    expect(detail).not.toHaveProperty('resolutionSource');
+    // A card carries none of them (the detail does).
+    const [card] = (await get(`/api/v1/markets?q=${encodeURIComponent('한글 시장')}`)).json<{
+      data: MarketSummary[];
+    }>().data;
+    expect(card!.id).toBe(open.id);
+    for (const item of RULE_ITEMS) expect(card).not.toHaveProperty(item);
+    // A market with no source row and no fallback reads null and '없음' (an empty list).
+    const bare = await market({ primarySource: null, longDelayDays: null, eventDeadline: null });
+    expect((await get(`/api/v1/markets/${bare.id}`)).json<{ data: Market }>().data).toMatchObject({
+      primarySource: null,
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: null,
+      eventDeadline: null,
     });
     expect(detail).not.toHaveProperty('voidedAt');
     // Nothing of the admin detail's open-items check.
