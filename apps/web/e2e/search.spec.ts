@@ -231,7 +231,7 @@ test.describe('시장 검색', () => {
     await expect(page).toHaveURL(`/markets/${market.slug}`);
   });
 
-  test('모든 상태가 처음이라 마감된 시장도 찾고, 거래 마감만 골라도 찾으며, 진행 중에는 없다', async ({
+  test('모든 상태가 처음이라 마감된 시장도 찾고, 거래 마감만 골라도 찾으며, 거래 중에는 없다', async ({
     page,
     admin,
   }) => {
@@ -246,14 +246,19 @@ test.describe('시장 검색', () => {
     // change reaches the router once the session is known.
     await sessionKnown(page, false);
 
-    // '모든 상태' and one choice per status label, in order (ADR-0061 decision 1, item 13).
+    // '모든 상태' and one choice per public status label, in lifecycle order, 취소 included and no
+    // 무효 (ADR-0061 decision 1, item 13; ADR-0093 decision 3, the #174 row).
     await expect(page.getByTestId('search-status').locator('option')).toHaveText([
       copy.searchStatusAll,
+      copy.marketStatusScheduled,
       copy.marketStatusOpen,
+      copy.marketStatusPaused,
       copy.marketStatusClosed,
+      copy.marketStatusProvisional,
       copy.marketStatusResolved,
+      copy.marketStatusSettling,
       copy.marketStatusSettled,
-      copy.marketStatusVoided,
+      copy.marketStatusCancelled,
     ]);
 
     await page.getByTestId('search-status').selectOption('closed');

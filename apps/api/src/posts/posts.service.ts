@@ -7,6 +7,7 @@ import {
   canonicalJson,
   decodeKeyset,
   encodeKeyset,
+  isPublicMarketStatus,
   mediaPath,
   postDocumentLinks,
   postExcerpt,
@@ -34,7 +35,6 @@ import {
   ilike,
   inArray,
   isNull,
-  ne,
   sql,
 } from 'drizzle-orm';
 import {
@@ -48,7 +48,7 @@ import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { postLikeCountSql } from '../likes/like-queries.js';
 import { LinkReviewService } from '../link-review/link-review.service.js';
-import { inCategory, likePattern } from '../markets/market.service.js';
+import { inCategory, isPublicMarket, likePattern } from '../markets/market.service.js';
 import { assertWriter } from '../moderation/restrictions.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { WriteLimitsService, type Writer } from '../write-limits/write-limits.service.js';
@@ -243,8 +243,9 @@ export class PostsService {
    * the detail, 20 more per 더 보기, and the count shown). The community list narrowed to the
    * market — the same cards, newest first, never a deleted or a hidden post — and `total`, how many
    * the whole list holds, which is what the section counts. Readable in every public status, ended
-   * markets too (N05 §3; #45-6 takes posts on all of them); NOT_FOUND for a draft and an unknown
-   * market, as the detail and its other sub-resources answer.
+   * markets too (N05 §3; #45-6 takes posts on all of them; ADR-0093 decision 3: SCHEDULED, PAUSED
+   * and CANCELLED included); NOT_FOUND for a DRAFT or REVIEW market and an unknown one, as the
+   * detail and its other sub-resources answer.
    *
    * One read-only REPEATABLE READ transaction, so the count and the page come from one snapshot,
    * the one its first statement takes: a post committed between two statements cannot make one
@@ -258,7 +259,7 @@ export class PostsService {
         const [market] = await tx
           .select({ id: markets.id })
           .from(markets)
-          .where(and(eq(markets.id, marketId), ne(markets.status, 'draft')))
+          .where(and(eq(markets.id, marketId), isPublicMarket()))
           .limit(1);
         if (!market) throw new AppError('NOT_FOUND', { message: 'Market not found' });
         const inMarket = eq(posts.marketId, marketId);
@@ -367,8 +368,9 @@ export class PostsService {
   }
 
   /**
-   * `POST /posts`: a post on a market in any public status (#45-6). The market must exist and not
-   * be a draft (NOT_FOUND naming `marketId`, as the public never sees a draft); every image must be
+   * `POST /posts`: a post on a market in any public status (#45-6; ADR-0093 decision 3: SCHEDULED,
+   * PAUSED and CANCELLED included). The market must exist and be public — not DRAFT or REVIEW
+   * (NOT_FOUND naming `marketId`, as the public never sees one); every image must be
    * the author's own upload, taken by no other post (`claimImages`). An author under a writing
    * restriction is refused before anything is read (RESTRICTED, `checkWriter`, #185). Then the post
    * counts against the person's limits (#187: 3 in 10 minutes, 20 a day — WRITE_LIMITED, nothing
@@ -386,7 +388,7 @@ export class PostsService {
         .select({ status: markets.status })
         .from(markets)
         .where(eq(markets.id, marketId));
-      if (!market || market.status === 'draft') {
+      if (!market || !isPublicMarketStatus(market.status)) {
         throw new AppError('NOT_FOUND', {
           message: 'Market not found',
           details: [{ path: ['marketId'], message: 'no such market' }],

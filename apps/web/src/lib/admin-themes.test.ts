@@ -205,11 +205,12 @@ describe('the refusals in words', () => {
     expect(themeFormError(new Error('network'))).toBeUndefined();
   });
 
-  it('says a publish needs a market that is not a draft (owner decisions 2026-10-19)', () => {
+  it('says a publish needs a market that is neither a draft nor in review (2026-10-19, #174)', () => {
     expect(themeWriteErrorMessage(refused('markets', THEME_REFUSALS.noPublicMarket.message))).toBe(
       copy.adminThemePublishNeedsMarket,
     );
-    expect(copy.adminThemePublishNeedsMarket).toContain('초안');
+    expect(copy.adminThemePublishNeedsMarket).toContain(copy.marketStatusDraft);
+    expect(copy.adminThemePublishNeedsMarket).toContain(copy.marketStatusReview);
     expect(themeWriteErrorMessage(new ApiError(404, { code: 'NOT_FOUND', message: 'x' }))).toBe(
       copy.adminThemeNotFound,
     );

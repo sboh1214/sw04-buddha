@@ -321,7 +321,7 @@ describe('markToLiveMarket', () => {
 
   it('marks the STATUS too, which no user event ever moves', () => {
     // A transition publishes `market:status` and nothing else — no `user:position` — so a
-    // holding in a market that has just closed kept announcing 진행 중 until an unrelated
+    // holding in a market that has just closed kept announcing 거래 중 until an unrelated
     // positions refetch. Refetching the lists on that event would be two private requests per
     // signed-in tab to move one denormalized enum.
     const row = position({ marketStatus: 'open' });
@@ -331,13 +331,17 @@ describe('markToLiveMarket', () => {
 
   it('runs the status through `liveMarketStatus` rather than a `??`, wiring included', () => {
     // The guard has to be reached THROUGH this function, not merely exist beside it: a row the
-    // list fetched as 마감 must survive a `['market', id]` entry left at 진행 중 by a failed
+    // list fetched as 마감 must survive a `['market', id]` entry left at 거래 중 by a failed
     // refetch, and an open holding must not be badged with a terminal status while it is still
     // valued at the last traded price. Both are `markToLiveMarket`'s callers' actual arguments (portfolio.tsx).
     const closed = position({ marketStatus: 'closed', marketLastPrice: 50 });
     expect(markToLiveMarket(closed, { status: 'open', lastPrice: 50 })).toBe(closed);
     const open = position({ marketStatus: 'open', marketLastPrice: 50 });
-    expect(markToLiveMarket(open, { status: 'voided', lastPrice: 50 })).toBe(open);
+    expect(markToLiveMarket(open, { status: 'cancelled', lastPrice: 50 })).toBe(open);
+    expect(markToLiveMarket(open, { status: 'settled', lastPrice: 50 })).toBe(open);
+    // And the one way back a holding goes, through the same wiring: resumed after the list read.
+    const paused = position({ marketStatus: 'paused', marketLastPrice: 50 });
+    expect(markToLiveMarket(paused, { status: 'open', lastPrice: 50 }).marketStatus).toBe('open');
   });
 
   it('takes the live row saying 체결 없음 as it is, and only an absent row as no reading', () => {
@@ -399,51 +403,77 @@ describe('총 실현 손익 across the two lists', () => {
 });
 
 describe('liveMarketStatus', () => {
-  it('takes the live status only while it is strictly newer, so a market refetch that failed cannot walk 마감 back to 진행 중', () => {
+  it('refuses a live status the lifecycle never goes back to, so a failed refetch cannot walk 마감 back to 거래 중', () => {
     // `['market', id]` and `['positions', …]` are two independent fetches, and the market's can
     // be the OLDER of the two: react-query keeps the row it already had when a REFETCH fails,
     // so a positions answer carrying 마감 was overwritten on screen by a market entry still
-    // saying 진행 중 — with nothing scheduled to correct it. Ranked by the same order
-    // `applyStatus` and `joinMarket` compare on, so no reading here walks a badge backwards.
+    // saying 거래 중 — with nothing scheduled to correct it. Compared by the lifecycle's order,
+    // so no reading here walks a badge back where the lifecycle never goes.
     expect(liveMarketStatus('closed', 'open')).toBe('closed');
+    expect(liveMarketStatus('closed', 'paused')).toBe('closed');
+    expect(liveMarketStatus('settling', 'resolved')).toBe('settling');
     expect(liveMarketStatus('resolved', 'closed')).toBe('resolved');
     // Equal is not newer: an event that has already been applied writes nothing either.
     expect(liveMarketStatus('closed', 'closed')).toBe('closed');
     // And an absent entry — the market this tab holds no cache row for — is not a status.
     expect(liveMarketStatus('closed', undefined)).toBe('closed');
-    // The half this guard must NOT break: 진행 중 → 마감 is strictly newer and stays taken.
+    // The half this guard must NOT break: 거래 중 → 마감 is newer and stays taken.
     expect(liveMarketStatus('open', 'closed')).toBe('closed');
+    expect(liveMarketStatus('resolved', 'settling')).toBe('settling');
+  });
+
+  it('takes the live row either way between 거래 중 and 거래 일시 중단, which goes both ways (#174)', () => {
+    // OPEN ↔ PAUSED (ADR-0093 decision 1, item 3): ranked by `statusRank` alone, a market resumed
+    // after the list was read (snapshot `paused`, live `open`) kept its 거래 일시 중단 badge for good,
+    // since `open` sorts first. The value cannot say which of the two came later; the live row is
+    // the one its room keeps in event order (`statusSupersedes`), the snapshot a frozen join.
+    expect(liveMarketStatus('paused', 'open')).toBe('open');
+    expect(liveMarketStatus('open', 'paused')).toBe('paused');
+    // Neither is a way back past the close: a closed market is never paused or open again.
+    expect(liveMarketStatus('closed', 'paused')).toBe('closed');
+    expect(liveMarketStatus('paused', 'closed')).toBe('closed');
   });
 
   it('leaves a terminal status to the REST answer, the only thing that moves a row between the two lists', () => {
-    // A settlement or a void moves the row to 정산 이력 (`positions.settled`), and both publish
-    // their own `user:position`, which restarts BOTH lists. Taking the status here instead would
-    // badge an open holding 무효 while 평가 금액 and 총 평가 금액 still value it at the last
-    // traded price — the fiction `positionValueCoin` and 정산 이력 are documented never to print.
+    // A settlement moves the row to 정산 이력 (`positions.settled`) and publishes its own
+    // `user:position`, which restarts BOTH lists. Taking the status here instead would badge an
+    // open holding 지급 완료 while 평가 금액 and 총 평가 금액 still value it at the last traded
+    // price — the fiction `positionValueCoin` and 정산 이력 are documented never to print. A
+    // cancelled market lists with the finished ones (`positionListStatusFor`) and is refused alike.
     expect(liveMarketStatus('open', 'settled')).toBe('open');
-    expect(liveMarketStatus('resolved', 'voided')).toBe('resolved');
+    expect(liveMarketStatus('settling', 'settled')).toBe('settling');
+    expect(liveMarketStatus('paused', 'cancelled')).toBe('paused');
     // The refusal is about MEMBERSHIP, not about the word: a row already in the settled list
-    // takes a terminal status from the live row like any other same-list transition.
-    expect(liveMarketStatus('settled', 'voided')).toBe('voided');
+    // takes a later status from the live row like any other same-list transition.
+    expect(liveMarketStatus('settled', 'cancelled')).toBe('cancelled');
   });
 
   it('classifies every pair, so a new status cannot fall through by default', () => {
     // The whole table, like `positionListStatusFor`'s: a status added to MARKET_STATUSES fails
     // this with whatever it was silently given, which is a decision that has to be made rather
-    // than inherited. Every cell is the held status unless the live one is BOTH strictly newer
-    // and in the same list.
+    // than inherited. Every cell is the held status unless the live one is BOTH not behind it in
+    // the lifecycle (`paused` on `open`'s step) and in the same list.
+    const [D, RV, SC, O, P, C, PR, RS, SG, ST, CA] = MARKET_STATUSES;
     const table = MARKET_STATUSES.map((held) =>
       MARKET_STATUSES.map((live) => liveMarketStatus(held, live)),
     );
+    // Columns: the live status in MARKET_STATUSES order — D RV SC O P C PR RS SG ST CA.
     expect(table).toEqual([
-      // held 'draft'  — nothing is newer only for itself; settled/voided change the list.
-      ['draft', 'open', 'closed', 'resolved', 'draft', 'draft'],
-      ['open', 'open', 'closed', 'resolved', 'open', 'open'],
-      ['closed', 'closed', 'closed', 'resolved', 'closed', 'closed'],
-      ['resolved', 'resolved', 'resolved', 'resolved', 'resolved', 'resolved'],
-      // held 'settled' — already in 정산 이력, so a terminal live status is same-list.
-      ['settled', 'settled', 'settled', 'settled', 'settled', 'voided'],
-      ['voided', 'voided', 'voided', 'voided', 'voided', 'voided'],
+      // held draft, review, scheduled — anything later in the open list; settled/cancelled
+      // change the list.
+      [D, RV, SC, O, P, C, PR, RS, SG, D, D],
+      [RV, RV, SC, O, P, C, PR, RS, SG, RV, RV],
+      [SC, SC, SC, O, P, C, PR, RS, SG, SC, SC],
+      // held open and paused — each takes the other (one step), and everything after.
+      [O, O, O, O, P, C, PR, RS, SG, O, O],
+      [P, P, P, O, P, C, PR, RS, SG, P, P],
+      [C, C, C, C, C, C, PR, RS, SG, C, C],
+      [PR, PR, PR, PR, PR, PR, PR, RS, SG, PR, PR],
+      [RS, RS, RS, RS, RS, RS, RS, RS, SG, RS, RS],
+      [SG, SG, SG, SG, SG, SG, SG, SG, SG, SG, SG],
+      // held settled — already in 정산 이력, so a later live status is same-list.
+      [ST, ST, ST, ST, ST, ST, ST, ST, ST, ST, CA],
+      [CA, CA, CA, CA, CA, CA, CA, CA, CA, CA, CA],
     ]);
   });
 });
@@ -455,16 +485,22 @@ describe('positionListStatusFor', () => {
     // A detail screen that only ever asked for 'open' therefore answered "아직 이 시장에 참여하지
     // 않았습니다" to an account that had just been paid out — while /portfolio listed the very
     // same row under 정산 이력.
-    expect(positionListStatusFor('voided')).toBe('settled');
     expect(positionListStatusFor('settled')).toBe('settled');
-    // Trading has stopped in these two and nothing has been paid out yet: the rows are still
-    // open holdings, and asking for the settled list would empty the card the other way.
-    expect(positionListStatusFor('closed')).toBe('open');
-    expect(positionListStatusFor('resolved')).toBe('open');
+    // A cancelled market ended with no user fill (ADR-0093 decision 1, item 10): over, so it
+    // lists with the finished ones should a row ever exist, never among priced holdings.
+    expect(positionListStatusFor('cancelled')).toBe('settled');
+    // Trading has stopped or the payout is under way, and nothing has been paid out yet: the
+    // rows are still open holdings — the worker flips `positions.settled` in the transaction that
+    // takes `settling` to `settled` — and asking for the settled list would empty the card the
+    // other way.
+    for (const status of ['paused', 'closed', 'provisional', 'resolved', 'settling'] as const) {
+      expect(positionListStatusFor(status), status).toBe('open');
+    }
     expect(positionListStatusFor('open')).toBe('open');
-    // A draft never reaches the detail route (the API 404s it), but the prop is typed over
-    // every status, so it must still answer with the list that exists.
+    // A draft or one in review never reaches the detail route (the API 404s it), but the prop is
+    // typed over every status, so it must still answer with the list that exists.
     expect(positionListStatusFor('draft')).toBe('open');
+    expect(positionListStatusFor('review')).toBe('open');
   });
 
   it('classifies every status, so a new one cannot fall to a list by default', () => {
@@ -473,11 +509,16 @@ describe('positionListStatusFor', () => {
     // made deliberately — the wrong default is invisible on screen, it just empties the card.
     expect(MARKET_STATUSES.map((status) => [status, positionListStatusFor(status)])).toEqual([
       ['draft', 'open'],
+      ['review', 'open'],
+      ['scheduled', 'open'],
       ['open', 'open'],
+      ['paused', 'open'],
       ['closed', 'open'],
+      ['provisional', 'open'],
       ['resolved', 'open'],
+      ['settling', 'open'],
       ['settled', 'settled'],
-      ['voided', 'settled'],
+      ['cancelled', 'settled'],
     ]);
   });
 });

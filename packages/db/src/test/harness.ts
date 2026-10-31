@@ -77,8 +77,8 @@ export interface TestDb {
   /** Application-role handle (buddha_app): pass this to the code under test and factories. */
   db: Db;
   /**
-   * Truncates every table in schema `public` (RESTART IDENTITY) with the statement migration
-   * 0017 and deploy/reset-db.sh run (wipe.ts). Call in beforeEach.
+   * Truncates every table in schema `public` (RESTART IDENTITY) with the statement migrations
+   * 0017 and 0048 and deploy/reset-db.sh run (wipe.ts). Call in beforeEach.
    */
   reset(): Promise<void>;
   /** Releases the file lock and closes both connections. Call in afterAll. */

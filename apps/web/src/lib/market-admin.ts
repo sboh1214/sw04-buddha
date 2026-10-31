@@ -5,12 +5,13 @@ import {
   COIN_UNIT,
   MINUS_SIGN,
   type MarketEventType,
+  type MarketResult,
   type MarketStatus,
   type PaymentStatus,
   type SettlementStep,
   type SettlementStepStatus,
   formatCoin,
-  outcomeSchema,
+  marketResultSchema,
   coinAmountSchema,
   parseCoinAmount,
   uuidParamSchema,
@@ -33,40 +34,72 @@ import { formatKst } from './datetime';
  * from the API and @buddha/shared (PLAN 11.5).
  */
 
+/**
+ * The status badge's words (ADR-0093 decision 1, item 12): the user labels as the owner gave them,
+ * and 초안·검수 중 for the two statuses only an admin sees (검수 중 is #174's choice).
+ */
 export const MARKET_STATUS_LABEL: Record<MarketStatus, string> = {
   draft: copy.marketStatusDraft,
+  review: copy.marketStatusReview,
+  scheduled: copy.marketStatusScheduled,
   open: copy.marketStatusOpen,
+  paused: copy.marketStatusPaused,
   closed: copy.marketStatusClosed,
+  provisional: copy.marketStatusProvisional,
   resolved: copy.marketStatusResolved,
+  settling: copy.marketStatusSettling,
   settled: copy.marketStatusSettled,
-  voided: copy.marketStatusVoided,
+  cancelled: copy.marketStatusCancelled,
 };
 
 /**
- * Chakra colorPalette per status: brand while live, orange while it waits on the admin (판정) or
- * the worker (정산), gray when it is over, `no` for voided.
+ * Chakra colorPalette per status, never the state alone (the label is always beside it, PLAN
+ * 11.2). ADR-0093 sets no colours, so these keep the old meanings (#174's choice):
+ * - `brand` while it trades: OPEN alone.
+ * - `orange` while it waits for something to happen to it — a time (SCHEDULED opens, PAUSED still
+ *   closes on schedule), the admin (CLOSED waits for the 판정, PROVISIONAL for its confirmation)
+ *   or the worker (RESOLVED and SETTLING for the payout).
+ * - `gray` when nothing is coming: over (SETTLED, CANCELLED), or not public yet (DRAFT, REVIEW),
+ *   which is where a draft always was.
+ *
+ * `no` is left to a refusal or a failure (a failed settlement step, a failed payment): VOID is a
+ * result now, not a status, and a cancelled market is ended, not failed.
  */
-export const MARKET_STATUS_PALETTE: Record<MarketStatus, 'brand' | 'gray' | 'orange' | 'no'> = {
+export const MARKET_STATUS_PALETTE: Record<MarketStatus, 'brand' | 'gray' | 'orange'> = {
   draft: 'gray',
+  review: 'gray',
+  scheduled: 'orange',
   open: 'brand',
+  paused: 'orange',
   closed: 'orange',
+  provisional: 'orange',
   resolved: 'orange',
+  settling: 'orange',
   settled: 'gray',
-  voided: 'no',
+  cancelled: 'gray',
+};
+
+/**
+ * A judgement's result in words (ADR-0093 decision 1, item 12): the contracts' 예·아니오 for YES
+ * and NO, 무효 for VOID. Every screen that names a result reads it here — the detail's 결과, 내
+ * 포지션, MY's 정산 이력, the admin detail and its event log, a theme's results — so none can
+ * mistake VOID for NO. A missing result (`null`: before a judgement, or a cancelled market) is the
+ * caller's '—'.
+ */
+export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
+  YES: copy.yes,
+  NO: copy.no,
+  VOID: copy.marketResultVoid,
 };
 
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
   opened: copy.eventOpened,
   closed: copy.eventClosed,
-  // The M5 dispute flow's two events (legacy, ADR-0046): no longer written, but market_events is
-  // append-only and a market judged before the change still shows them in its log.
-  resolve_proposed: copy.eventResolveProposed,
-  result_changed: copy.eventResultChanged,
-  finalized: copy.eventFinalized,
-  voided: copy.eventVoided,
-  rules_edited: copy.eventRulesEdited,
   resolved: copy.eventResolved,
+  settling: copy.eventSettling,
+  finalized: copy.eventFinalized,
+  rules_edited: copy.eventRulesEdited,
 };
 
 export const SETTLEMENT_STEP_LABEL: Record<SettlementStep, string> = {
@@ -130,15 +163,16 @@ export function auditFailureKindLabel(kind: string): string {
 export const CLOSING_SOON_MS = 24 * 60 * 60 * 1000;
 
 /**
- * 마감 임박 (PLAN 12): an open market whose close time is within the next 24 hours. A close
- * time already in the past is not "soon" — the market is waiting for the close job, and the
- * 판정 대기 badge takes over once it is closed.
+ * 마감 임박 (PLAN 12): an open or paused market whose close time is within the next 24 hours —
+ * a paused market still closes on schedule (ADR-0093 decision 1, item 3). A scheduled one is not
+ * "closing" before it has opened. A close time already in the past is not "soon" — the market is
+ * waiting for the close job, and the 판정 대기 badge takes over once it is closed.
  */
 export function isClosingSoon(
   market: { status: MarketStatus; closeAt: string },
   now: number = Date.now(),
 ): boolean {
-  if (market.status !== 'open') return false;
+  if (market.status !== 'open' && market.status !== 'paused') return false;
   const closeAt = new Date(market.closeAt).getTime();
   if (Number.isNaN(closeAt)) return false;
   return closeAt > now && closeAt - now <= CLOSING_SOON_MS;
@@ -150,25 +184,27 @@ export function isAwaitingResolution(status: MarketStatus): boolean {
 }
 
 /**
- * 정산 대기 (ADR-0046): judged, and the worker's settlement steps have not all finished. The
- * worker runs them right after the 판정, so this lasts seconds; a market that keeps the badge is
- * the operational signal that a step is failing (the detail's 정산 단계 panel says which).
+ * 정산 대기 (ADR-0046): the result is confirmed and the worker's settlement steps have not all
+ * finished — `resolved` until the worker starts the payout, `settling` while it runs (ADR-0093
+ * decision 1, items 1 and 14). The worker runs them right after the 판정, so this lasts seconds;
+ * a market that keeps the badge is the operational signal that a step is failing (the detail's
+ * 정산 단계 panel says which), which leaves it in `settling`.
  */
 export function isAwaitingSettlement(status: MarketStatus): boolean {
-  return status === 'resolved';
+  return status === 'resolved' || status === 'settling';
 }
 
 /** How often the admin detail re-reads a judged market until it is settled (ADR-0046). */
 export const SETTLEMENT_POLL_INTERVAL_MS = 5_000;
 
 /**
- * `refetchInterval` of the admin detail: every 5 s while the market is `resolved`. Nothing else
- * tells this screen that the worker finished or failed a step — the admin query joins no
- * realtime room, and a failed attempt publishes nothing at all — so without it the 정산 단계
- * panel keeps the `pending` row the 판정 answered with until a reload. Not budgeted like the
- * 결제 내역 poll (payments.ts): a failing step is retried by the worker's per-minute scan,
- * and this panel is where an operator watches those attempts. query-core pauses the interval
- * while the tab is hidden, and it stops by itself at `settled`.
+ * `refetchInterval` of the admin detail: every 5 s while the market is `resolved` or `settling`
+ * (`isAwaitingSettlement`). Nothing else tells this screen that the worker finished or failed a
+ * step — the admin query joins no realtime room, and a failed attempt publishes nothing at all —
+ * so without it the 정산 단계 panel keeps the `pending` row the 판정 answered with until a
+ * reload. Not budgeted like the 결제 내역 poll (payments.ts): a failing step is retried by the
+ * worker's per-minute scan, and this panel is where an operator watches those attempts.
+ * query-core pauses the interval while the tab is hidden, and it stops by itself at `settled`.
  */
 export function settlementPollInterval(
   market: { status: MarketStatus } | undefined,
@@ -185,7 +221,8 @@ export function isEditable(status: MarketStatus): boolean {
 
 /**
  * 판정 (PLAN 12, ADR-0046): a closed market only, once. The result is final at once; there is no
- * way to change it afterwards (#26 decides re-judgement).
+ * way to change it afterwards. The interim edge closed → resolved until #152 replaces it with a
+ * judgement another admin approves (ADR-0093 result 2).
  */
 export function canResolve(status: MarketStatus): boolean {
   return status === 'closed';
@@ -349,37 +386,26 @@ const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
 const RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
+/** The worker's resolved → settling (#174): `{source: 'job'}`, which the 시스템 actor already says. */
+const SETTLING_PAYLOAD = z.object({ source: z.string() });
 const RESOLVE_DETAIL = {
   note: z.string().nullish(),
   evidenceUrl: z.string().nullish(),
 };
-/** The 판정 (ADR-0046): `{result, note, evidenceUrl}`. */
-const RESOLVED_PAYLOAD = z.object({ result: outcomeSchema, ...RESOLVE_DETAIL });
 /**
- * M5's two legacy events (no longer written, still in old logs). Both carried the dispute
- * window's end; it is optional here and never shown — the window no longer means anything, and
- * a row reading 이의 마감 would describe a stage the product does not have.
+ * The 판정 (ADR-0046): `{result, note, evidenceUrl}`. The result is the stored result type
+ * (YES·NO·VOID, #174), so a row that carries VOID reads 무효 rather than falling back to JSON —
+ * though the interim 판정 writes YES or NO alone until #152.
  */
-const LEGACY_RESOLVE_DETAIL = { ...RESOLVE_DETAIL, disputeUntil: kstInstant.optional() };
-const RESOLVE_PROPOSED_PAYLOAD = z.object({ result: outcomeSchema, ...LEGACY_RESOLVE_DETAIL });
-const RESULT_CHANGED_PAYLOAD = z.object({
-  before: outcomeSchema,
-  after: outcomeSchema,
-  ...LEGACY_RESOLVE_DETAIL,
-});
+const RESOLVED_PAYLOAD = z.object({ result: marketResultSchema, ...RESOLVE_DETAIL });
 // The counts and the total are what the worker writes today; optional so an older row (or a
-// leaner writer) still reads as "정산 완료 · 결과 YES" rather than falling back to JSON.
+// leaner writer) still reads as "지급 완료 · 결과 YES" rather than falling back to JSON.
 const FINALIZED_PAYLOAD = z.object({
-  result: outcomeSchema,
+  result: marketResultSchema,
   settledAccounts: z.number().int().nonnegative().optional(),
   paidAccounts: z.number().int().nonnegative().optional(),
   paidCoin: coinAmountSchema.optional(),
 });
-
-/** `copy.yes` / `copy.no` for a result row: the screen's label, never the raw wire value. */
-function outcomeLabel(outcome: 'YES' | 'NO'): string {
-  return outcome === 'YES' ? copy.yes : copy.no;
-}
 
 /** The note / evidence rows the resolve events share; blanks are left out. */
 function resolveDetailRows(detail: {
@@ -397,10 +423,10 @@ function resolveDetailRows(detail: {
 /**
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
  * write (design 3.4's 이벤트 로그, 5.5): the rules diff, the open and close instants, the 판정
- * with its note and evidence (and M5's legacy proposed / changed result), the finalize summary.
- * The payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
- * `created` (the whole create body), `voided` (nothing writes one since the admin void went,
- * #125) and anything that does not match are `undefined`, and the screen shows those as
+ * with its note and evidence, the finalize summary — and no row at all for the start of the
+ * payout, whose only field is the `source` the 시스템 actor beside it already says. The payload is
+ * `unknown` on the wire (jsonb), so each shape is checked before it is read; `created` (the whole
+ * create body) and anything that does not match are `undefined`, and the screen shows those as
  * `compactJson` instead of a half-read row.
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
@@ -409,33 +435,18 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
       const parsed = RESOLVED_PAYLOAD.safeParse(payload);
       if (!parsed.success) return undefined;
       return [
-        { label: copy.marketResolvedResult, value: outcomeLabel(parsed.data.result) },
+        { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[parsed.data.result] },
         ...resolveDetailRows(parsed.data),
       ];
     }
-    case 'resolve_proposed': {
-      const parsed = RESOLVE_PROPOSED_PAYLOAD.safeParse(payload);
-      if (!parsed.success) return undefined;
-      return [
-        { label: copy.marketResolvedResult, value: outcomeLabel(parsed.data.result) },
-        ...resolveDetailRows(parsed.data),
-      ];
-    }
-    case 'result_changed': {
-      const parsed = RESULT_CHANGED_PAYLOAD.safeParse(payload);
-      if (!parsed.success) return undefined;
-      return [
-        { label: copy.eventRulesBefore, value: outcomeLabel(parsed.data.before) },
-        { label: copy.eventRulesAfter, value: outcomeLabel(parsed.data.after) },
-        ...resolveDetailRows(parsed.data),
-      ];
-    }
+    case 'settling':
+      return SETTLING_PAYLOAD.safeParse(payload).success ? [] : undefined;
     case 'finalized': {
       const parsed = FINALIZED_PAYLOAD.safeParse(payload);
       if (!parsed.success) return undefined;
       const { result, settledAccounts, paidAccounts, paidCoin } = parsed.data;
       return [
-        { label: copy.marketResolvedResult, value: outcomeLabel(result) },
+        { label: copy.marketResolvedResult, value: MARKET_RESULT_LABEL[result] },
         ...(settledAccounts === undefined
           ? []
           : [{ label: copy.eventSettledAccounts, value: String(settledAccounts) }]),

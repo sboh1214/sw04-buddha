@@ -68,11 +68,11 @@ export class MarketsController {
   @ApiOperation({
     operationId: 'listMarkets',
     summary:
-      'Markets by status (default open; all is every public status), never drafts, optionally ' +
-      'by category and a title search (q, a case-insensitive partial match); sorted recommended ' +
-      '(24-hour volume, then the latest opening; the default), newest (latest opening) or ' +
-      'closing (soonest close; with any status but open, the open markets first and then the ' +
-      'ended ones, latest close first)',
+      'Markets by status (default open; all is every public status), never draft or in review, ' +
+      'optionally by category and a title search (q, a case-insensitive partial match); sorted ' +
+      'recommended (24-hour volume, then the latest opening; the default), newest (latest ' +
+      'opening) or closing (soonest close; with all or an ended status, the markets not closed ' +
+      'yet (scheduled, open, paused) first and then the ended ones, latest close first)',
   })
   @ApiPageOf(marketSummarySchema)
   @ApiErrors('VALIDATION_ERROR')
@@ -86,7 +86,7 @@ export class MarketsController {
   @Get(':idOrSlug')
   @ApiOperation({
     operationId: 'getMarket',
-    summary: 'One market by id or slug (a draft is NOT_FOUND to the public)',
+    summary: 'One market by id or slug (a draft or in-review one is NOT_FOUND to the public)',
   })
   @ApiData(marketSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')
@@ -115,9 +115,9 @@ export class MarketsController {
   @ApiOperation({
     operationId: 'listRelatedMarkets',
     summary:
-      'Markets linked to this one (links are two-way): open, closed, resolved and settled ones, ' +
-      'never voided or drafts, sorted recommended (24-hour volume, then the latest opening); ' +
-      'a draft or unknown market is NOT_FOUND',
+      'Markets linked to this one (links are two-way): every public status but cancelled, ' +
+      'never one whose result is VOID, sorted recommended (24-hour volume, then the latest ' +
+      'opening); a draft, in-review or unknown market is NOT_FOUND',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])

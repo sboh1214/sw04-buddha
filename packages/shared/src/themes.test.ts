@@ -78,12 +78,16 @@ describe('themeStatusAt (#81 진행 기간, owner decision 2026-10-19)', () => {
 });
 
 describe('THEME_RESULT_STATUSES (#81 결과 목록)', () => {
-  it('is 판정 완료·정산 완료·무효: the public statuses a result is known in', () => {
-    expect(THEME_RESULT_STATUSES).toEqual(['resolved', 'settled', 'voided']);
+  it('is 결과 확정·지급 중·지급 완료: the result is confirmed, never only provisional (#174)', () => {
+    expect(THEME_RESULT_STATUSES).toEqual(['resolved', 'settling', 'settled']);
     const shown: readonly string[] = THEME_RESULT_STATUSES;
     expect(PUBLIC_MARKET_STATUSES.filter((status) => !shown.includes(status))).toEqual([
+      'scheduled',
       'open',
+      'paused',
       'closed',
+      'provisional',
+      'cancelled',
     ]);
   });
 });
@@ -220,7 +224,7 @@ describe('THEME_REFUSALS', () => {
   it('names markets when a publish has no public market: a draft does not count (owner decision 2026-10-19, second round)', () => {
     expect(THEME_REFUSALS.noPublicMarket).toEqual({
       field: 'markets',
-      message: 'at least one market that is not a draft is required to publish',
+      message: 'at least one public market (not a draft or under review) is required to publish',
     });
   });
 });

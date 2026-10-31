@@ -27,7 +27,7 @@ function visibleCommentsOf(authorId: string) {
 /**
  * The public profile's counts (#41, ADR-0069 decision 3 #37-4: «글·댓글 수와 받은 좋아요 합계»). They
  * count what the profile's lists show (#37-14, #51): the member's posts and comments that are
- * neither deleted nor hidden — those on an ended or voided market and those written during a
+ * neither deleted nor hidden — those on an ended (cancelled, 무효) market and those written during a
  * restriction included — and the likes on exactly those (owner decision 2026-10-20: a deleted or
  * hidden post's or comment's likes leave the total). The same visibility a post page reads for
  * each: a 대댓글 under a deleted or hidden 댓글 stays in view and counts, and so does a comment under

@@ -541,7 +541,7 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // The reducer above has already moved the badge and the notice; this fills in what the
         // event does not carry. `create` publishes nothing, and an EDIT to an open market
         // publishes this event with the status unchanged for exactly this refetch — no event
-        // carries `closeAt`, `title` or `rules`, and `applyStatus` drops a repeat on rank, so
+        // carries `closeAt`, `title` or `rules`, and `applyStatus` drops a repeat on its key, so
         // the restart below is the whole delivery of an admin edit (A-M4-36).
         //
         // It is a SANCTIONED refetch, and this file has kept a count of those twice now and been
@@ -576,9 +576,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // positions row cannot correct it, the closed market publishes no further tick, and the
         // success dispatch cleared the invalidation flag and restamped `dataUpdatedAt`, so the
         // row sits inside `staleTime` with nothing scheduled. Only a focus, a reconnect or a
-        // remount does. The reachable transition is open → closed alone: draft → open cannot be
-        // held (a draft is on no public route) and a terminal status arrives per holder as
-        // `user:position`, which `liveMarketStatus` refuses as terminal anyway. Measured: bare invalidation → one
+        // remount does. The reachable transitions are those of a market that has traded and has
+        // not reached the other position list — open → closed, open ↔ paused, and on to resolved
+        // and settling (#174): draft → open cannot be held (a draft is on no public route) and a
+        // terminal status (settled, cancelled) arrives per holder as `user:position`, which
+        // `liveMarketStatus` refuses as terminal anyway. Measured: bare invalidation → one
         // fetch and the row stays `open`; restarted → two and it reads `closed`.
         //
         // No gate and no throttle here, unlike the tick handler. This refetch is sanctioned on
@@ -596,10 +598,11 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         void restartQueries(queryClient, marketKey(event.marketId));
         void restartQueries(queryClient, [...TICKS_KEY, event.marketId]);
         // The first kind of the RULE again: a theme page's results list (#81, ADR-0088) cannot
-        // build the row of a market that has just been judged or voided — the event carries no
+        // build the row of a market whose result has just been confirmed — the event carries no
         // title, slug or decided time — while its card beside it already says so. Restarted only
-        // for 판정 완료·정산 완료·무효, and only a list on screen asks again (`refetchType`
-        // 'active'), so it costs a request where a theme page is open and nowhere else.
+        // for 결과 확정·지급 중·지급 완료 (`THEME_RESULT_STATUSES`), and only a list on screen asks
+        // again (`refetchType` 'active'), so it costs a request where a theme page is open and
+        // nowhere else.
         void refreshThemeResultsOnStatus(queryClient, event.status);
       },
 

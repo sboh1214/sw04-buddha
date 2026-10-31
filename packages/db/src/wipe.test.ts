@@ -20,14 +20,17 @@ function withoutLeadingComments(statement: string): string {
   return lines.join('\n').trim();
 }
 
-describe('the wipe statement (#125, #149)', () => {
-  it('is the first statement of migration 0017, verbatim', () => {
-    // deploy/reset-db.sh re-runs WIPE_PUBLIC_TABLES_SQL; it must be the very statement the
-    // deploy of #125 ran once, and it must run before 0017 drops the enum values a row could
-    // still hold.
-    const [first] = migrationSql('0017_remove_direct_amm').split(STATEMENT_BREAKPOINT);
-    expect(withoutLeadingComments(first ?? '')).toBe(WIPE_PUBLIC_TABLES_SQL);
-  });
+describe('the wipe statement (#125, #149, #174)', () => {
+  it.each(['0017_remove_direct_amm', '0048_market_lifecycle'])(
+    'is the first statement of migration %s, verbatim',
+    (tag) => {
+      // deploy/reset-db.sh re-runs WIPE_PUBLIC_TABLES_SQL; it must be the very statement the
+      // deploys of #125 and #174 ran once each, and it must run before the migration drops the
+      // enum values a row could still hold (0017 the AMM's, 0048 the `voided` status).
+      const [first] = migrationSql(tag).split(STATEMENT_BREAKPOINT);
+      expect(withoutLeadingComments(first ?? '')).toBe(WIPE_PUBLIC_TABLES_SQL);
+    },
+  );
 
   it('is what the reset script runs: deploy/reset-db.sh calls wipe-cli, which runs this constant', () => {
     // The script lives outside this package, so packages/db/turbo.json names it as an input of

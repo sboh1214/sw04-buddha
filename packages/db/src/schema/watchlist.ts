@@ -22,7 +22,8 @@ import { markets } from './markets.js';
  *
  * The account FK is CASCADE like `profiles` and `phone_verifications`: a watch is a preference of
  * the account and nothing references it. The market FK is RESTRICT like every other reference to
- * a market (markets are never deleted; a draft cannot be watched and no market returns to draft).
+ * a market (markets are never deleted). Only a public market can be watched; one that goes back to
+ * DRAFT from SCHEDULED (#78·#21) keeps its rows.
  */
 export const marketWatches = pgTable(
   'market_watches',

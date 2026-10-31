@@ -55,7 +55,10 @@ import { MarketFormFields } from './market-form-fields';
 
 const createSchema = marketFormSchema();
 
-/** PLAN 12 시장 목록 + 생성 폼. The status filter includes drafts, which the public list hides. */
+/**
+ * PLAN 12 시장 목록 + 생성 폼. The status filter is every status in lifecycle order, drafts and
+ * reviews included, which the public list hides (ADR-0093 decision 1, item 12).
+ */
 export function AdminMarkets() {
   const [status, setStatus] = useState<MarketStatus | ''>('');
   // The admin on screen: 시장 만들기 is drawn again for each (ADR-0092 answer 1, `OperatorFieldset`).
@@ -150,8 +153,8 @@ export function AdminMarkets() {
                     </Badge>
                   )}
                   {/* The two "waits on someone" badges (ADR-0046): closed waits for the admin's
-                      판정, resolved for the worker's settlement — a resolved row that keeps its
-                      badge is a failing step, which the detail's 정산 단계 panel names. */}
+                      판정, resolved and settling for the worker's payout — a settling row that
+                      keeps its badge is a failing step, which the detail's 정산 단계 panel names. */}
                   {isAwaitingResolution(market.status) && (
                     <Badge colorPalette="brand" variant="solid">
                       {copy.adminMarketAwaitingResolution}

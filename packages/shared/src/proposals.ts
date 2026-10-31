@@ -33,9 +33,9 @@ import {
  *   explanation the proposer reads; a 채택 may carry a memo. The operators' internal memo is apart
  *   and never reaches the proposer.
  * - A 채택 may make a market draft filled from the proposal, or link an existing market; the
- *   proposer sees the market's link once it is public (not a draft). It grants no Coin and opens
- *   nothing: the market opens through the operators' own steps (#78 adds the second reviewer). A
- *   proposal adopted with no market may have one linked later, once, the same two ways
+ *   proposer sees the market's link once it is public (not DRAFT or REVIEW). It grants no Coin and
+ * opens   nothing: the market opens through the operators' own steps (#78 adds the second
+ * reviewer). A   proposal adopted with no market may have one linked later, once, the same two ways
  *   (`canLinkProposalMarket`, owner decision 2026-10-19); it stays 채택.
  * - Only the proposer and the operators see a proposal. A market never shows who proposed it, and
  *   a proposal is not something to report.
@@ -202,7 +202,7 @@ const proposalFields = {
 
 /**
  * A public market a proposal points the proposer at: its address (`slug`) and title. Only once it
- * is public — never a draft, which no public route serves.
+ * is public — never a DRAFT or REVIEW one, which no public route serves.
  */
 export const proposalMarketSchema = z
   .object({ id: z.uuid(), slug: z.string(), title: z.string() })
@@ -216,10 +216,10 @@ export type ProposalMarket = z.infer<typeof proposalMarketSchema>;
  * nor its hash.
  *
  * - `rejection` is there once 반려: the reason, the explanation, and for a 중복 the existing market
- *   while it is public (`duplicateMarket`, null while it is a draft).
+ *   while it is public (`duplicateMarket`, null while it is DRAFT or REVIEW).
  * - `adoption` is there once 채택: the memo, if any, and the market it led to while that market is
- *   public (`market`, null while it is a draft or when none was linked — at the 채택 or later).
- *   Never a promise of Coin or of opening.
+ *   public (`market`, null while it is DRAFT or REVIEW or when none was linked — at the 채택 or
+ * later).   Never a promise of Coin or of opening.
  */
 export const proposalSchema = z
   .object({

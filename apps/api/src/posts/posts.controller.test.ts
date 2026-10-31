@@ -20,6 +20,7 @@ import {
 } from '@buddha/db/test';
 import {
   POST_BODY_MAX_LENGTH,
+  PUBLIC_MARKET_STATUSES,
   postDeletionSchema,
   postDocumentInputSchema,
   postExcerpt,
@@ -231,26 +232,29 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     expect(row).toMatchObject({ authorId: author.id, bodyText: '첫 줄\n둘째 줄', imageIds: [] });
   });
 
-  it('writes on a market in every public status, never a draft or an unknown one', async () => {
-    // The last by the other account: one person writes 3 posts in 10 minutes at most (#187).
-    const writers = [author, author, author, other];
-    for (const [index, status] of (
-      ['closed', 'resolved', 'settled', 'voided'] as const
-    ).entries()) {
-      const ended = await createMarket(t.db, { status });
-      const who = writers[index]!;
-      const res = await write({ marketId: ended.id, expectedAccountId: who.id }, who);
+  it('writes on a market in every public status, never a draft, a review or an unknown one', async () => {
+    // Every public status, SCHEDULED, PAUSED and CANCELLED included (ADR-0093 decision 3). One
+    // person writes 3 posts in 10 minutes at most (#187), so three accounts take turns.
+    const third = await signUpTestUser(t);
+    await completeOnboarding(t.db, { userId: third.id });
+    const writers = [author, other, third];
+    for (const [index, status] of PUBLIC_MARKET_STATUSES.entries()) {
+      const at = await createMarket(t.db, { status });
+      const who = writers[index % writers.length]!;
+      const res = await write({ marketId: at.id, expectedAccountId: who.id }, who);
       expect({ status, code: res.statusCode }).toEqual({ status, code: 201 });
     }
+    // DRAFT and REVIEW are the admin's alone: NOT_FOUND, as for a market that does not exist.
     const draft = await createMarket(t.db, { status: 'draft' });
-    for (const marketId of [draft.id, '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60']) {
+    const review = await createMarket(t.db, { status: 'review' });
+    for (const marketId of [draft.id, review.id, '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60']) {
       const res = await write({ marketId });
       expect(res.statusCode).toBe(404);
       expect(res.json<{ error: { details: unknown } }>().error.details).toEqual([
         { path: ['marketId'], message: 'no such market' },
       ]);
     }
-    expect(await t.db.select().from(schema.posts)).toHaveLength(4);
+    expect(await t.db.select().from(schema.posts)).toHaveLength(PUBLIC_MARKET_STATUSES.length);
   });
 
   it('is open to a signed-in account that finished the onboarding, naming itself', async () => {
@@ -940,9 +944,10 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     expect(theirs.meta).toEqual({ nextCursor: null, total: 1 });
   });
 
-  it('is read on a market in every public status, empty with 0, and NOT_FOUND for a draft or unknown one', async () => {
-    // N05 §3: an ended market's discussion is read as it was; #45-6 takes posts on all of them.
-    for (const status of ['open', 'closed', 'resolved', 'settled', 'voided'] as const) {
+  it('is read on a market in every public status, empty with 0, and NOT_FOUND for a draft, a review or an unknown one', async () => {
+    // N05 §3: an ended market's discussion is read as it was; #45-6 takes posts on all of them,
+    // SCHEDULED, PAUSED and CANCELLED included (ADR-0093 decision 3).
+    for (const status of PUBLIC_MARKET_STATUSES) {
       const at = await createMarket(t.db, { status });
       expect(await discussion(at.id), status).toEqual({
         data: [],
@@ -957,7 +962,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
       expect(body.data[0]?.market).toMatchObject({ id: at.id, status });
     }
     const draft = await createMarket(t.db, { status: 'draft' });
-    for (const marketId of [draft.id, '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60']) {
+    const review = await createMarket(t.db, { status: 'review' });
+    for (const marketId of [draft.id, review.id, '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60']) {
       const res = await discussionAt(marketId);
       expect(res.statusCode).toBe(404);
       expect(res.json<{ error: { code: string } }>().error.code).toBe('NOT_FOUND');

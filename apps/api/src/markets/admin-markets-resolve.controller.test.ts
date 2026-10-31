@@ -1,11 +1,11 @@
 /**
  * Admin judgement and the M5 jobs (PLAN 5.5, 7.3; ADR-0046; m5 design 3.3–3.5) against the
- * docker `test` profile: the judgement (closed → resolved, final at once) with its event, its
- * `market_settlement_steps` rows and its audit row in one transaction, the finalize and close
- * jobs the API registers in the `markets` queue (inspected with a BullMQ Queue on the test
- * Redis, as the worker sees them), `settlementSteps` on the admin detail, and `statusEventId`
- * — the transition's `market_events.id` — on every market DTO and every `market:status`
- * published. Skips when TEST_* are unset.
+ * docker `test` profile: the judgement (closed → resolved, final at once — the interim edge until
+ * #152) with its event, its `market_settlement_steps` rows and its audit row in one transaction,
+ * the finalize and close jobs the API registers in the `markets` queue (inspected with a BullMQ
+ * Queue on the test Redis, as the worker sees them), `settlementSteps` on the admin detail, and
+ * `statusEventId` — the transition's `market_events.id` — on every market DTO and every
+ * `market:status` published. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -22,8 +22,8 @@ import {
   SETTLEMENT_STEPS,
   type AdminMarket,
   type Market,
+  type MarketResult,
   type MarketSummary,
-  type Outcome,
 } from '@buddha/shared';
 import { Queue } from 'bullmq';
 import { asc, eq } from 'drizzle-orm';
@@ -45,7 +45,7 @@ type ErrorBody = {
 type StatusEvent = {
   type: string;
   status: string;
-  resolvedResult: Outcome | null;
+  resolvedResult: MarketResult | null;
   statusEventId: string | null;
   ts: string;
 };
@@ -197,8 +197,9 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       status: 'resolved',
       resolvedResult: 'YES',
       settledAt: null,
-      voidedAt: null,
     });
+    // VOID is a result now, not a status with its own instant (#174).
+    expect(resolved).not.toHaveProperty('voidedAt');
     expect(resolved.resolvedAt).toBe(resolved.updatedAt);
     expect(resolved).not.toHaveProperty('disputeUntil');
     expect(resolved).not.toHaveProperty('disputeCounts');
@@ -206,7 +207,8 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     const events = await eventsFor(row.id);
     expect(events.map((event) => event.type)).toEqual(['resolved']);
     const event = events[0]!;
-    expect(event.actorId).toBe(admin.id);
+    // Who, when, from and to (#174): the row the transition table let through.
+    expect(event).toMatchObject({ actorId: admin.id, fromStatus: 'closed', toStatus: 'resolved' });
     expect(event.payload).toEqual({
       result: 'YES',
       note: '한국은행 9월 발표 기준 3.00%.',
@@ -216,7 +218,14 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     // The event row's id is the market's ordering key, on the row and on every DTO.
     expect((await marketRow(row.id)).statusEventId).toBe(event.id);
     expect(resolved.statusEventId).toBe(String(event.id));
-    expect(resolved.events[0]).toMatchObject({ id: String(event.id), type: 'resolved' });
+    expect(resolved.events[0]).toMatchObject({
+      id: String(event.id),
+      type: 'resolved',
+      actorId: admin.id,
+      fromStatus: 'closed',
+      toStatus: 'resolved',
+      createdAt: resolved.resolvedAt,
+    });
 
     // D5: exactly one `pending` row per SETTLEMENT_STEPS step, stamped with the judgement's
     // instant — written by the same transaction (the same clock read) — and on the answer.
@@ -360,11 +369,25 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(await jobIds()).toEqual([jobId]);
 
     // A market already judged (or settled) by the factory, and the statuses before closed and
-    // after it. None of them gains an event, an audit row or a step row.
-    for (const status of ['draft', 'open', 'resolved', 'settled', 'voided'] as const) {
+    // after it — a PROVISIONAL one included: CLOSED → RESOLVED is the interim edge, and
+    // PROVISIONAL → RESOLVED is the dispute window's end (#175), never this action. None of them
+    // gains an event, an audit row or a step row.
+    const judged = new Set<string>(['provisional', 'resolved', 'settling', 'settled']);
+    for (const status of [
+      'draft',
+      'review',
+      'scheduled',
+      'open',
+      'paused',
+      'provisional',
+      'resolved',
+      'settling',
+      'settled',
+      'cancelled',
+    ] as const) {
       const other = await market({
         status,
-        ...(status === 'resolved' || status === 'settled' ? { resolvedResult: 'NO' } : {}),
+        ...(judged.has(status) ? { resolvedResult: 'NO' } : {}),
       });
       const stepsBefore = (await stepRows(other.id)).length;
       const res = await resolve(other.id, { result: 'YES' });
@@ -388,6 +411,8 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     for (const bad of [
       {},
       { result: 'MAYBE' },
+      // VOID is a result, but chosen in #152's judgement and paid by #126: not this action's.
+      { result: 'VOID' },
       { result: 'YES', evidenceUrl: 'javascript:alert(1)' },
       { result: 'YES', note: 'x'.repeat(1_001) },
     ]) {
@@ -515,8 +540,17 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     const stepsOf = async (id: string) =>
       detail(await get(`/api/v1/admin/markets/${id}`)).settlementSteps;
 
-    // Before the judgement there is nothing to settle.
-    for (const status of ['draft', 'open', 'closed', 'voided'] as const) {
+    // Before the result's confirmation there is nothing to settle, nor on a cancelled market.
+    for (const status of [
+      'draft',
+      'review',
+      'scheduled',
+      'open',
+      'paused',
+      'closed',
+      'provisional',
+      'cancelled',
+    ] as const) {
       const before = await market({ status });
       expect({ status, steps: await stepsOf(before.id) }).toEqual({ status, steps: [] });
     }
@@ -535,10 +569,10 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       },
     ]);
 
-    // A step whose attempts rolled back: still `resolved`, and the reason is on the detail —
-    // what the admin's '정산 대기' badge points at.
+    // A step whose attempts rolled back: still `settling` (ADR-0093 decision 1 item 14), and the
+    // reason is on the detail — what the admin's '정산 대기' badge points at.
     const failing = await market({
-      status: 'resolved',
+      status: 'settling',
       resolvedResult: 'NO',
       settlementSteps: false,
     });

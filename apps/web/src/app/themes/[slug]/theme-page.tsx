@@ -90,9 +90,10 @@ export function ThemePage({
 }
 
 /**
- * The theme's markets as the home's cards (ADR-0069 decision 4: every public status but a draft,
- * a voided one too — owner decision 2026-10-19), each joining its market's room so a tick or a
- * status moves it without a request.
+ * The theme's markets as the home's cards (ADR-0069 decision 4: every public status — never a
+ * draft or, since #174, one in review — a voided one too, owner decision 2026-10-19, which since
+ * #174 is a cancelled one and one whose result is 무효), each joining its market's room so a tick
+ * or a status moves it without a request.
  */
 function ThemeMarkets({ themeId, now }: { themeId: string; now?: number }) {
   const markets = useThemeMarkets(themeId);
@@ -189,8 +190,9 @@ function LinkedText({ text }: { text: string }) {
 }
 
 /**
- * 결과 목록 (ADR-0069 decision 4): the theme's markets that are 판정 완료·정산 완료·무효, each with
- * its status label, its result — YES, NO or 무효 — and when it was decided, the latest first. The
+ * 결과 목록 (ADR-0069 decision 4): the theme's markets whose result is confirmed — 결과 확정·지급
+ * 중·지급 완료, never a provisional result (ADR-0093 decision 3, the #174 row) — each with its
+ * status label, its result — YES, NO or 무효 — and when it was confirmed, the latest first. The
  * markets' own outcome only: nobody's trades, performance or PnL. A row opens its market. A 더 보기
  * that failed keeps the rows read so far and says so above its button (`LoadMoreFailed`, the first
  * read's `copy.errUnknown` — owner decision 2026-10-20 7, ADR-0075 5-14, as every 더 보기 list).

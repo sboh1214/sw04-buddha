@@ -57,10 +57,11 @@ function linkedTo(db: Executor, marketId: string) {
  * 관련 시장 (#65, ADR-0068): the links between markets, read on a detail and kept by an admin.
  *
  * Owner decisions (ADR-0061 decision 1, item 19; decision 3, the #65 rows): two-way and with no
- * cap; a detail lists the linked markets in RELATED_MARKET_STATUSES — not voided, never a draft —
- * in the home's 추천 order (`marketOrder`, the one place every market order lives), as the home's
- * cards; only an admin links and unlinks, in any status of either market, and each change records
- * its actor and time alone. A link is read by nothing but these routes: no rule, order, judgement
+ * cap; a detail lists the linked markets in RELATED_MARKET_STATUSES — every public status but
+ * CANCELLED — whose result is not VOID (ADR-0093 decision 3, the #174 row), in the home's 추천
+ * order (`marketOrder`, the one place every market order lives), as the home's cards; only an
+ * admin links and unlinks, in any status of either market, and each change records its actor
+ * and time alone. A link is read by nothing but these routes: no rule, order, judgement
  * or settlement path looks at `market_links`, so a link cannot change either market's.
  *
  * A link or an unlink that changes the state writes one `admin_actions` row in the same
@@ -81,8 +82,12 @@ export class RelatedMarketsService {
    * `GET /markets/:id/related`: a public market's related markets, ordered by 추천 — the 24-hour
    * volume, then the actual open time, then the id — and keyset-paginated on 추천's own cursor,
    * whose first page fixes the window as the home's does (market-order.ts). NOT_FOUND for an
-   * unknown market and for a draft, as the detail and its other sub-resources answer. A cursor
-   * that does not decode serves the first page.
+   * unknown market and for a DRAFT or REVIEW one, as the detail and its other sub-resources
+   * answer. A cursor that does not decode serves the first page.
+   *
+   * The linked markets shown are `isRelatedMarketShown`'s: a status in RELATED_MARKET_STATUSES and
+   * a result other than VOID, in whatever status it holds that result — a PROVISIONAL VOID too,
+   * since the result is not a status. `IS DISTINCT FROM`, so a market with no result yet stays.
    *
    * `marketOrder`'s status is `undefined`, "every public status", for what it says about the list
    * — it can hold ended markets — which only 마감 임박 reads; 추천 does not.
@@ -106,6 +111,7 @@ export class RelatedMarketsService {
         and(
           linkedTo(this.db, marketId),
           inArray(markets.status, [...RELATED_MARKET_STATUSES]),
+          sql`${markets.resolvedResult} IS DISTINCT FROM 'VOID'`,
           order.after,
         ),
       )
@@ -123,8 +129,8 @@ export class RelatedMarketsService {
 
   /**
    * `GET /admin/markets/:id/related`: every market linked to one market, whatever either's status
-   * (drafts and voided ones included — the admin keeps the links, the reader's statuses filter
-   * them), the latest link first. NOT_FOUND for an unknown market.
+   * and result (DRAFT, REVIEW, CANCELLED and VOID ones included — the admin keeps the links, the
+   * reader's rule filters them), the latest link first. NOT_FOUND for an unknown market.
    */
   async listAdmin(marketId: string): Promise<AdminRelatedMarket[]> {
     await this.requireMarkets(this.db, marketId);

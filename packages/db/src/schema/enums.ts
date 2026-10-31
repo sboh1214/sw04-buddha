@@ -7,6 +7,7 @@ import {
   APPROVAL_STATUSES,
   COUNTERPARTY_TYPES,
   LEDGER_ENTRY_TYPES,
+  MARKET_RESULTS,
   MARKET_STATUSES,
   MARKET_VISIBILITIES,
   ORDER_SIDES,
@@ -32,6 +33,8 @@ export const paymentStatusEnum = pgEnum('payment_status', PAYMENT_STATUSES);
 export const marketStatusEnum = pgEnum('market_status', MARKET_STATUSES);
 export const marketVisibilityEnum = pgEnum('market_visibility', MARKET_VISIBILITIES);
 export const outcomeEnum = pgEnum('outcome', OUTCOMES);
+/** A market's result type, apart from the contract side `outcome` (#174, migration 0048). */
+export const marketResultEnum = pgEnum('market_result', MARKET_RESULTS);
 export const orderSideEnum = pgEnum('order_side', ORDER_SIDES);
 export const orderTypeEnum = pgEnum('order_type', ORDER_TYPES);
 export const orderStatusEnum = pgEnum('order_status', ORDER_STATUSES);

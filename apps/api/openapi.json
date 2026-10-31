@@ -2794,11 +2794,15 @@
               "default": "open",
               "type": "string",
               "enum": [
+                "scheduled",
                 "open",
+                "paused",
                 "closed",
+                "provisional",
                 "resolved",
+                "settling",
                 "settled",
-                "voided",
+                "cancelled",
                 "all"
               ]
             }
@@ -2876,7 +2880,7 @@
             }
           }
         },
-        "summary": "Markets by status (default open; all is every public status), never drafts, optionally by category and a title search (q, a case-insensitive partial match); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with any status but open, the open markets first and then the ended ones, latest close first)",
+        "summary": "Markets by status (default open; all is every public status), never draft or in review, optionally by category and a title search (q, a case-insensitive partial match); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first)",
         "tags": [
           "markets"
         ]
@@ -2949,7 +2953,7 @@
             }
           }
         },
-        "summary": "One market by id or slug (a draft is NOT_FOUND to the public)",
+        "summary": "One market by id or slug (a draft or in-review one is NOT_FOUND to the public)",
         "tags": [
           "markets"
         ]
@@ -3125,7 +3129,7 @@
             }
           }
         },
-        "summary": "Markets linked to this one (links are two-way): open, closed, resolved and settled ones, never voided or drafts, sorted recommended (24-hour volume, then the latest opening); a draft or unknown market is NOT_FOUND",
+        "summary": "Markets linked to this one (links are two-way): every public status but cancelled, never one whose result is VOID, sorted recommended (24-hour volume, then the latest opening); a draft, in-review or unknown market is NOT_FOUND",
         "tags": [
           "markets"
         ]
@@ -3325,11 +3329,16 @@
               "type": "string",
               "enum": [
                 "draft",
+                "review",
+                "scheduled",
                 "open",
+                "paused",
                 "closed",
+                "provisional",
                 "resolved",
+                "settling",
                 "settled",
-                "voided"
+                "cancelled"
               ]
             }
           },
@@ -3427,7 +3436,7 @@
             "session": []
           }
         ],
-        "summary": "Every market, drafts included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches",
+        "summary": "Every market, draft and in-review ones included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches",
         "tags": [
           "admin"
         ]
@@ -4248,7 +4257,7 @@
             "session": []
           }
         ],
-        "summary": "draft → open; refused without rules (RULES_REQUIRED) or with a past closeAt",
+        "summary": "draft → open (interim, until review and the scheduled open); refused without rules (RULES_REQUIRED) or with a past closeAt",
         "tags": [
           "admin"
         ]
@@ -4365,7 +4374,7 @@
             "session": []
           }
         ],
-        "summary": "open → closed",
+        "summary": "open → closed by one admin (interim); any other status is MARKET_NOT_OPEN",
         "tags": [
           "admin"
         ]
@@ -4482,7 +4491,7 @@
             "session": []
           }
         ],
-        "summary": "closed → resolved: record the final result; settlement starts immediately",
+        "summary": "closed → resolved (interim, until the approved provisional judgement): record the final result, YES or NO; the payout starts immediately",
         "tags": [
           "admin"
         ]
@@ -4698,11 +4707,15 @@
             "schema": {
               "type": "string",
               "enum": [
+                "scheduled",
                 "open",
+                "paused",
                 "closed",
+                "provisional",
                 "resolved",
+                "settling",
                 "settled",
-                "voided"
+                "cancelled"
               ]
             }
           },
@@ -4883,7 +4896,7 @@
             "session": []
           }
         ],
-        "summary": "Whether the account watches one market (a draft is NOT_FOUND)",
+        "summary": "Whether the account watches one market (a draft or in-review one is NOT_FOUND)",
         "tags": [
           "watchlist"
         ]
@@ -4988,7 +5001,7 @@
             "session": []
           }
         ],
-        "summary": "Watch or unwatch one market; repeating either changes nothing (a draft is NOT_FOUND)",
+        "summary": "Watch or unwatch one market in any public status; repeating either changes nothing (a draft or in-review one is NOT_FOUND)",
         "tags": [
           "watchlist"
         ]
@@ -5594,7 +5607,7 @@
             }
           }
         },
-        "summary": "The theme's markets in every public status, voided ones too (never drafts): open ones first, soonest close first, then the ended ones, latest close first",
+        "summary": "The theme's markets in every public status, cancelled ones too (never draft or in review): those not closed yet first, soonest close first, then the ended ones, latest close first",
         "tags": [
           "themes"
         ]
@@ -5695,7 +5708,7 @@
             }
           }
         },
-        "summary": "The theme's resolved, settled and voided markets with their result (YES or NO; none when voided), the most recently decided first",
+        "summary": "The theme's markets whose result is confirmed (resolved, settling or settled; never provisional) with that result (YES, NO or VOID), the most recently confirmed first",
         "tags": [
           "themes"
         ]
@@ -5770,7 +5783,7 @@
             }
           }
         },
-        "summary": "The published themes this market is in, any status, in the public list order; a draft or unknown market is NOT_FOUND",
+        "summary": "The published themes this market is in, any status, in the public list order; a draft, in-review or unknown market is NOT_FOUND",
         "tags": [
           "themes"
         ]
@@ -6319,7 +6332,7 @@
             "session": []
           }
         ],
-        "summary": "Make the theme public; refused naming markets while it has no market that is not a draft (drafts do not count); a published theme stays as it is",
+        "summary": "Make the theme public; refused naming markets while it has no public market (draft and in-review ones do not count); a published theme stays as it is",
         "tags": [
           "admin"
         ]
@@ -9161,7 +9174,7 @@
             }
           }
         },
-        "summary": "A market’s discussion: its posts as the community list’s cards, newest first, never a deleted or hidden one, and meta.total, how many the whole list holds; readable in every public status, ended markets too. A draft or unknown market is NOT_FOUND",
+        "summary": "A market’s discussion: its posts as the community list’s cards, newest first, never a deleted or hidden one, and meta.total, how many the whole list holds; readable in every public status, ended markets too. A draft, in-review or unknown market is NOT_FOUND",
         "tags": [
           "posts"
         ]
@@ -12048,7 +12061,7 @@
             }
           }
         },
-        "summary": "A member’s posts on their profile, newest first, as the community list’s cards: never a deleted or hidden one; those on ended and voided markets included, and all of them while the member is under a restriction. An unknown public id is NOT_FOUND, as the profile",
+        "summary": "A member’s posts on their profile, newest first, as the community list’s cards: never a deleted or hidden one; those on ended, cancelled and VOID markets included, and all of them while the member is under a restriction. An unknown public id is NOT_FOUND, as the profile",
         "tags": [
           "profiles"
         ]
@@ -19382,11 +19395,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "lastPrice": {
@@ -19421,10 +19439,10 @@
           },
           "resolvedResult": {
             "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
             ]
           },
           "statusEventId": {
@@ -19455,6 +19473,14 @@
           "createdAt"
         ],
         "additionalProperties": false
+      },
+      "MarketResult": {
+        "type": "string",
+        "enum": [
+          "YES",
+          "NO",
+          "VOID"
+        ]
       },
       "Market": {
         "type": "object",
@@ -19494,11 +19520,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "lastPrice": {
@@ -19533,10 +19564,10 @@
           },
           "resolvedResult": {
             "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
             ]
           },
           "statusEventId": {
@@ -19570,12 +19601,6 @@
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "voidedAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           }
         },
         "required": [
@@ -19598,8 +19623,7 @@
           "rules",
           "resolutionSource",
           "resolvedAt",
-          "settledAt",
-          "voidedAt"
+          "settledAt"
         ],
         "additionalProperties": false
       },
@@ -19807,11 +19831,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "lastPrice": {
@@ -19846,10 +19875,10 @@
           },
           "resolvedResult": {
             "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
             ]
           },
           "statusEventId": {
@@ -19965,11 +19994,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "lastPrice": {
@@ -20004,10 +20038,10 @@
           },
           "resolvedResult": {
             "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
             ]
           },
           "statusEventId": {
@@ -20037,12 +20071,6 @@
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
           },
           "settledAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "voidedAt": {
             "nullable": true,
             "type": "string",
             "format": "date-time",
@@ -20113,7 +20141,6 @@
           "resolutionSource",
           "resolvedAt",
           "settledAt",
-          "voidedAt",
           "createdBy",
           "updatedAt",
           "netCollectedCoin",
@@ -20189,17 +20216,49 @@
               "created",
               "opened",
               "closed",
-              "resolve_proposed",
-              "result_changed",
               "finalized",
-              "voided",
               "rules_edited",
-              "resolved"
+              "resolved",
+              "settling"
             ]
           },
           "actorId": {
             "nullable": true,
             "type": "string"
+          },
+          "fromStatus": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "draft",
+              "review",
+              "scheduled",
+              "open",
+              "paused",
+              "closed",
+              "provisional",
+              "resolved",
+              "settling",
+              "settled",
+              "cancelled"
+            ]
+          },
+          "toStatus": {
+            "nullable": true,
+            "type": "string",
+            "enum": [
+              "draft",
+              "review",
+              "scheduled",
+              "open",
+              "paused",
+              "closed",
+              "provisional",
+              "resolved",
+              "settling",
+              "settled",
+              "cancelled"
+            ]
           },
           "payload": {
             "nullable": true
@@ -20214,6 +20273,8 @@
           "id",
           "type",
           "actorId",
+          "fromStatus",
+          "toStatus",
           "payload",
           "createdAt"
         ],
@@ -20392,11 +20453,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "marketLastPrice": {
@@ -20407,10 +20473,10 @@
           },
           "resolvedResult": {
             "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
             ]
           },
           "outcome": {
@@ -20794,17 +20860,12 @@
             "type": "string",
             "enum": [
               "resolved",
-              "settled",
-              "voided"
+              "settling",
+              "settled"
             ]
           },
           "result": {
-            "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
-            ]
+            "$ref": "#/components/schemas/MarketResult"
           },
           "decidedAt": {
             "type": "string",
@@ -21138,11 +21199,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "lastPrice": {
@@ -21177,10 +21243,10 @@
           },
           "resolvedResult": {
             "nullable": true,
-            "type": "string",
-            "enum": [
-              "YES",
-              "NO"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketResult"
+              }
             ]
           },
           "statusEventId": {
@@ -21982,11 +22048,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           },
           "category": {
@@ -26820,11 +26891,16 @@
             "type": "string",
             "enum": [
               "draft",
+              "review",
+              "scheduled",
               "open",
+              "paused",
               "closed",
+              "provisional",
               "resolved",
+              "settling",
               "settled",
-              "voided"
+              "cancelled"
             ]
           }
         },

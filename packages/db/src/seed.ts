@@ -455,6 +455,7 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           marketId: market.id,
           type: 'created',
           actorId: adminId,
+          toStatus: 'draft',
           payload: { source: 'seed' },
         })
         .returning({ id: marketEvents.id });
@@ -474,7 +475,9 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
     // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed. Only
-    // a draft or an open market has a close time still ahead of it to care about.
+    // a draft or an open market has a close time still ahead of it to care about: the other
+    // statuses before the close (review, scheduled, paused) come with #78·#21·#114, which say
+    // what an admin does about a passed cutoff there.
     if (outcome.status !== 'draft' && outcome.status !== 'open') continue;
     const remainingMs = outcome.closeAt.getTime() - reportedAt.getTime();
     if (remainingMs <= 0 && outcome.status === 'draft') {

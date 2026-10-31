@@ -42,8 +42,9 @@ export class ProfileAuthoredController {
     operationId: 'listProfilePosts',
     summary:
       'A member’s posts on their profile, newest first, as the community list’s cards: never a ' +
-      'deleted or hidden one; those on ended and voided markets included, and all of them while ' +
-      'the member is under a restriction. An unknown public id is NOT_FOUND, as the profile',
+      'deleted or hidden one; those on ended, cancelled and VOID markets included, and all of ' +
+      'them while the member is under a restriction. An unknown public id is NOT_FOUND, as the ' +
+      'profile',
   })
   @ApiQuery(CURSOR_QUERY_PARAMS[0])
   @ApiQuery(CURSOR_QUERY_PARAMS[1])

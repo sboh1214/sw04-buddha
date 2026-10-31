@@ -77,8 +77,8 @@ export interface WriteMarket {
 /**
  * What the write page's read of `?market=` came to (WritePage, ADR-0073 9-44): `found`; `none` —
  * no `?market=`, or one that names no public market (the API's 404, or its 400 for an id it does
- * not take: a draft or an unknown id); or `failed` — the read failed otherwise (the API
- * unreachable, a 5xx, a 429), which says nothing about the market.
+ * not take: a draft, one in review or an unknown id); or `failed` — the read failed otherwise (the
+ * API unreachable, a 5xx, a 429), which says nothing about the market.
  */
 export type WriteMarketLookup =
   { kind: 'found'; market: WriteMarket } | { kind: 'none' } | { kind: 'failed'; marketId: string };

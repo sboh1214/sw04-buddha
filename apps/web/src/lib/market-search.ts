@@ -64,8 +64,9 @@ function searchTerm(value: string | undefined): string | undefined {
  * the server, as `filtersFromSearchParams` does for the home. Nothing throws and nothing
  * redirects: a value the screen cannot show is dropped and the default stands — every public
  * status (`all`), 추천, no category. A blank, over-long or NUL term is no term, so the screen
- * shows what it shows with none. `?status=draft` is not a public status and falls back to all;
- * `?status=open` and the four others are the filter's choices.
+ * shows what it shows with none. `?status=draft` or `?status=review` is not a public status, and
+ * a bookmarked `?status=voided` names a status that is gone (#174): each falls back to all;
+ * `?status=open` and the eight other public statuses are the filter's choices.
  */
 export function searchFiltersFromSearchParams(searchParams: SearchSearchParams): SearchFilters {
   const q = searchTerm(firstValue(searchParams.q));
@@ -125,8 +126,10 @@ export function recentSearchPath(filters: SearchFilters, query: string): string 
 /**
  * The status select's choices, in order (ADR-0061 decision 1, item 13): '모든 상태', then one per
  * public status in the order the statuses go, labelled as the status badge is
- * (`MARKET_STATUS_LABEL`). Today every public status has a label of its own, so one per status is
- * one per label; when #173 changes the labels or #174 the statuses, these follow.
+ * (`MARKET_STATUS_LABEL`): 개장 예정 through 지급 완료, and 취소 (ADR-0093 decision 3, the #174
+ * row). Every public status has a label of its own, so one per status is one per label. A result
+ * (무효) and a display ('판정 지연') are not statuses and get no choice; grouping the choices is
+ * #60·#15's.
  */
 export function searchStatusOptions(): readonly { value: MarketListStatus; label: string }[] {
   return [

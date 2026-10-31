@@ -23,6 +23,7 @@ import {
 import {
   COMMENT_BODY_EMPTY_MESSAGE,
   COMMENT_REPLIES_PAGE_SIZE,
+  PUBLIC_MARKET_STATUSES,
   commentBodyTooLongMessage,
   commentDeletionSchema,
   commentThreadSchema,
@@ -953,10 +954,12 @@ describe.skipIf(!hasTestInfra)('/api/v1 comments (integration)', () => {
   });
 
   it('writes on a post of a market in every public status', async () => {
-    for (const status of ['closed', 'resolved', 'settled', 'voided'] as const) {
+    // Not yet open, paused, ended, cancelled (ADR-0093 decision 3): the post's state decides.
+    // One person writes 5 comments a minute at most (#187), so the two accounts take turns.
+    for (const [index, status] of PUBLIC_MARKET_STATUSES.entries()) {
       const ended = await createMarket(t.db, { status });
       const there = await createPost(t.db, { marketId: ended.id, authorId: other.id });
-      const res = await write({}, author, there.id);
+      const res = await write({}, index % 2 === 0 ? author : other, there.id);
       expect(res.statusCode, `${status}: ${res.body}`).toBe(201);
     }
   });

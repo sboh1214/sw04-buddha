@@ -1,7 +1,8 @@
 /**
- * market.finalize integration test (PLAN M5 AC 3, ADR-0046 정산 단계) against the docker `test`
- * profile: the database through the packages/db harness, Redis through TEST_REDIS_URL. Skips
- * when either is unset, exactly like ledger-audit.test.ts.
+ * market.finalize integration test (PLAN M5 AC 3, ADR-0046 정산 단계; resolved → settling →
+ * settled, ADR-0093 decision 1 items 1 and 14) against the docker `test` profile: the database
+ * through the packages/db harness, Redis through TEST_REDIS_URL. Skips when either is unset,
+ * exactly like ledger-audit.test.ts.
  *
  * Holders are built as a buy would have left them: a position row plus the balance debit and
  * the TRADE_BUY ledger row that explains it, so the audit (PLAN 5.6) can be run on the result.
@@ -19,9 +20,11 @@ import {
   type TestDb,
 } from '@buddha/db/test';
 import {
+  MARKET_STATUSES,
   SETTLEMENT_STEP_ERROR_MAX,
   marketChannel,
   userChannel,
+  type MarketResult,
   type Outcome,
 } from '@buddha/shared';
 import { DrizzleQueryError, and, asc, eq, sql } from 'drizzle-orm';
@@ -104,12 +107,13 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   /**
    * A market judged `result` at `resolvedAt` (default a minute ago), as the judgement leaves it:
    * `resolved`, and one `pending` row per settlement step (the factory writes them, unless
-   * `settlementSteps: false`).
+   * `settlementSteps: false`). `status: 'settling'` is the same market once the worker's
+   * resolved → settling committed (a run whose steps then failed).
    */
   async function resolved(
-    result: Outcome = 'YES',
+    result: MarketResult = 'YES',
     resolvedAt = new Date(Date.now() - MINUTE_MS),
-    options: { settlementSteps?: boolean } = {},
+    options: { settlementSteps?: boolean; status?: 'resolved' | 'settling' } = {},
   ) {
     return createMarket(t.db, {
       status: 'resolved',
@@ -226,20 +230,29 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   }
 
   /**
-   * `t.db` with a seam between the two transactions of a failing `finalizeMarket`: the first
-   * runs the settlement and, only once it has rejected, the second records the attempt
-   * (`recordStepFailure`). `beforeRecord` runs right before the second opens — the rollback has
-   * released the market lock, so another writer gets in exactly there, and a rejection from it
-   * is the record's own transaction failing. `inserts` counts the INSERTs the record issues, so
+   * `t.db` with seams between the transactions of one `finalizeMarket`: the first is
+   * resolved → settling (`startSettling`, opened for every market), the second runs the steps
+   * and, only once that has rejected, the third records the attempt (`recordStepFailure`).
+   * `beforeSteps` runs right before the second opens — resolved → settling has committed and
+   * released the market lock. `beforeRecord` runs right before the third — the rollback has
+   * released it, so another writer gets in exactly there, and a rejection from it is the
+   * record's own transaction failing. `inserts` counts the INSERTs the record issues, so
    * "records nothing" is told apart from "the upsert's guard kept the row". The rest is `t.db`.
    */
-  function seamed(beforeRecord: () => Promise<void>) {
+  function seamed(hooks: {
+    beforeSteps?: () => Promise<void>;
+    beforeRecord?: () => Promise<void>;
+  }) {
     const seam = { db: t.db, inserts: 0 };
     let opened = 0;
     const transaction: Db['transaction'] = async (run, config) => {
       opened += 1;
       if (opened === 1) return t.db.transaction(run, config);
-      await beforeRecord();
+      if (opened === 2) {
+        await hooks.beforeSteps?.();
+        return t.db.transaction(run, config);
+      }
+      await hooks.beforeRecord?.();
       return t.db.transaction(
         (tx) =>
           run(
@@ -393,12 +406,23 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect((await balanceOf(dave)).availableCoin).toBe(10_000n);
       expect(await positionOf(dave, market.id, 'YES')).toMatchObject({ qty: 3, version: 1 });
 
-      // --- market ------------------------------------------------------------------------
+      // --- market: resolved → settling → settled, the worker the actor of both ----------
       const row = await marketRow(market.id);
-      const [event] = await eventsOf(market.id);
+      const [settling, event, ...more] = await eventsOf(market.id);
+      expect(more).toEqual([]);
+      expect(settling).toMatchObject({
+        type: 'settling',
+        actorId: null,
+        fromStatus: 'resolved',
+        toStatus: 'settling',
+        payload: { source: 'job' },
+      });
+      expect(settling!.createdAt.getTime()).toBeLessThanOrEqual(result.settledAt.getTime());
       expect(event).toMatchObject({
         type: 'finalized',
         actorId: null,
+        fromStatus: 'settling',
+        toStatus: 'settled',
         payload: {
           result: 'YES',
           settledAccounts: 3,
@@ -432,13 +456,21 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       ]);
 
       // --- published after COMMIT (PLAN 8) -----------------------------------------------
-      await waitForMessages(subscriber.of(marketChannel(market.id)), 1, 'market:status');
+      await waitForMessages(subscriber.of(marketChannel(market.id)), 2, 'market:status');
       await waitForMessages(subscriber.of(userChannel(alice)), 2, "alice's events");
       await waitForMessages(subscriber.of(userChannel(bob)), 1, "bob's events");
       await waitForMessages(subscriber.of(userChannel(carol)), 1, "carol's events");
       await sleep(100);
       const ts = result.settledAt.toISOString();
       expect(subscriber.of(marketChannel(market.id))).toEqual([
+        {
+          type: 'market:status',
+          marketId: market.id,
+          status: 'settling',
+          resolvedResult: 'YES',
+          statusEventId: String(settling!.id),
+          ts: settling!.createdAt.toISOString(),
+        },
         {
           type: 'market:status',
           marketId: market.id,
@@ -491,6 +523,124 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect(audit.checked).toBe(6); // four holders + the two markets' creators
       expect(audit.mismatches).toEqual([]);
       expect(audit.recorded).toBe(0);
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
+  it('commits resolved → settling and publishes it before the steps run, then settles (ADR-0093 decision 1 item 1)', async () => {
+    const market = await resolved('YES');
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({
+      userId: alice,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisCoin: 500n,
+    });
+    const subscriber = await subscribeTo([marketChannel(market.id)]);
+    // What another connection sees between the two transactions: the settling transition is
+    // committed and announced while no step has run yet.
+    const between: {
+      row?: typeof schema.markets.$inferSelect;
+      events?: (typeof schema.marketEvents.$inferSelect)[];
+      steps?: (typeof schema.marketSettlementSteps.$inferSelect)[];
+      position?: typeof schema.positions.$inferSelect;
+      published?: Record<string, unknown>[];
+    } = {};
+    const seam = seamed({
+      beforeSteps: async () => {
+        between.row = await marketRow(market.id);
+        between.events = await eventsOf(market.id);
+        between.steps = await stepsOf(market.id);
+        between.position = await positionOf(alice, market.id, 'YES');
+        await waitForMessages(subscriber.of(marketChannel(market.id)), 1, 'settling status');
+        between.published = [...subscriber.of(marketChannel(market.id))];
+      },
+    });
+    try {
+      const result = await finalizeMarket(seam.db, market.id, publish, logger);
+      expect(result.outcome).toBe('settled');
+      if (result.outcome !== 'settled') return;
+
+      const [settling] = between.events!;
+      expect(between.events).toEqual([
+        expect.objectContaining({
+          type: 'settling',
+          // The worker acted (decision 1 item 1: an automatic edge).
+          actorId: null,
+          fromStatus: 'resolved',
+          toStatus: 'settling',
+          payload: { source: 'job' },
+        }),
+      ]);
+      expect(between.row).toMatchObject({
+        status: 'settling',
+        statusEventId: settling!.id,
+        updatedAt: settling!.createdAt,
+        resolvedResult: 'YES',
+        settledAt: null,
+      });
+      expect(between.steps).toEqual([
+        expect.objectContaining({ step: 'coin', status: 'pending', attempts: 0 }),
+      ]);
+      expect(between.position).toMatchObject({ qty: 10, settled: false, version: 1 });
+      expect(between.published).toEqual([
+        {
+          type: 'market:status',
+          marketId: market.id,
+          status: 'settling',
+          resolvedResult: 'YES',
+          statusEventId: String(settling!.id),
+          ts: settling!.createdAt.toISOString(),
+        },
+      ]);
+
+      // Then the step transaction: settling → settled, a second event after the first.
+      const events = await eventsOf(market.id);
+      expect(events).toEqual([
+        settling,
+        expect.objectContaining({
+          type: 'finalized',
+          actorId: null,
+          fromStatus: 'settling',
+          toStatus: 'settled',
+          createdAt: result.settledAt,
+        }),
+      ]);
+      expect(await marketRow(market.id)).toMatchObject({
+        status: 'settled',
+        statusEventId: events[1]!.id,
+        settledAt: result.settledAt,
+      });
+      expect(result.settledAt.getTime()).toBeGreaterThanOrEqual(settling!.createdAt.getTime());
+      await waitForMessages(subscriber.of(marketChannel(market.id)), 2, 'settled status');
+      expect(subscriber.of(marketChannel(market.id)).map((event) => event.status)).toEqual([
+        'settling',
+        'settled',
+      ]);
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
+  it('settles a market already settling (a run whose steps failed) without a second settling event', async () => {
+    const market = await resolved('NO', undefined, { status: 'settling' });
+    const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({ userId: bob, marketId: market.id, outcome: 'NO', qty: 5, costBasisCoin: 300n });
+    const subscriber = await subscribeTo([marketChannel(market.id)]);
+    try {
+      const result = await finalizeMarket(t.db, market.id, publish, logger);
+      expect(result).toMatchObject({ outcome: 'settled', paidAccounts: 1, paidCoin: 500n });
+      expect(await eventsOf(market.id)).toEqual([
+        expect.objectContaining({ type: 'finalized', fromStatus: 'settling', toStatus: 'settled' }),
+      ]);
+      expect((await marketRow(market.id)).status).toBe('settled');
+      await waitForMessages(subscriber.of(marketChannel(market.id)), 1, 'settled status');
+      await sleep(100);
+      expect(subscriber.of(marketChannel(market.id))).toEqual([
+        expect.objectContaining({ status: 'settled', resolvedResult: 'NO' }),
+      ]);
     } finally {
       await subscriber.quit();
     }
@@ -557,8 +707,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect(result).toMatchObject({ outcome: 'settled', paidAccounts: 1, paidCoin: 1_000n });
       expect((await balanceOf(alice)).availableCoin).toBe(10_000n - 500n + 1_000n);
       expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ qty: 0, settled: true });
-      // One warn per event that could not go out: the status, the balance and the position.
-      expect(warns).toHaveLength(3);
+      // One warn per event that could not go out: the two statuses (settling, settled), the
+      // balance and the position.
+      expect(warns).toHaveLength(4);
       expect(warns.every((line) => (line as { msg: string }).msg === 'realtime publish failed'));
       // The step is done: a publish after COMMIT is not part of it.
       expect(await stepsOf(market.id)).toEqual([
@@ -589,7 +740,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       await expect(finalizeMarket(t.db, market.id, publish, logger)).resolves.toEqual({
         outcome: 'skipped',
         marketId: market.id,
-        reason: 'not_resolved',
+        reason: 'not_settling',
       });
       await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toEqual({
         settled: 0,
@@ -603,7 +754,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect(ledger.filter((entry) => entry.type === 'SETTLEMENT_PAYOUT')).toHaveLength(1);
       expectLedgerChain(ledger, 10_500n);
       expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ version: 2 });
-      expect(await eventsOf(market.id)).toHaveLength(1);
+      // settling and finalized from the first run, nothing from the second.
+      expect(await eventsOf(market.id)).toHaveLength(2);
       // The skip happens before the step rows: the done row is exactly as the first run left it.
       expect(await stepsOf(market.id)).toEqual(stepsAfterFirst);
       await sleep(100);
@@ -614,8 +766,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     }
   });
 
-  it.each(['draft', 'open', 'closed', 'settled', 'voided'] as const)(
-    'skips a %s market: only a judged (resolved) market is settled',
+  // Every status but the two a settlement picks up: `resolved` goes to `settling` first.
+  it.each(MARKET_STATUSES.filter((status) => status !== 'resolved' && status !== 'settling'))(
+    'skips a %s market: only a judged (resolved or settling) market is settled',
     async (status) => {
       const market = await createMarket(t.db, {
         status,
@@ -634,9 +787,10 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       await expect(finalizeMarket(t.db, market.id, publish, logger)).resolves.toEqual({
         outcome: 'skipped',
         marketId: market.id,
-        reason: 'not_resolved',
+        reason: 'not_settling',
       });
       expect((await marketRow(market.id)).status).toBe(status);
+      expect(await eventsOf(market.id)).toEqual([]);
       expect((await balanceOf(alice)).availableCoin).toBe(9_500n);
       expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ qty: 10, settled: false });
       // A skip is not an attempt: no step row is written or touched (a settled market keeps its
@@ -646,8 +800,8 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     },
   );
 
-  it('fails loudly — and rolls back — on a resolved market without a result, and records it', async () => {
-    const market = await createMarket(t.db, { status: 'resolved', resolvedResult: null });
+  it('fails loudly — and rolls back — on a settling market without a result, and records it', async () => {
+    const market = await createMarket(t.db, { status: 'settling', resolvedResult: null });
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await hold({
       userId: alice,
@@ -658,7 +812,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     });
 
     await expect(finalizeMarket(t.db, market.id, publish, logger)).rejects.toThrow(
-      `Market ${market.id} is resolved without a result`,
+      `Market ${market.id} is settling without a result`,
     );
     // Nothing settled as a loser by default: the row and the market are as they were.
     expect(await positionOf(alice, market.id, 'YES')).toMatchObject({
@@ -666,7 +820,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       settled: false,
       version: 1,
     });
-    expect((await marketRow(market.id)).status).toBe('resolved');
+    expect((await marketRow(market.id)).status).toBe('settling');
     expect(await eventsOf(market.id)).toEqual([]);
     // The throw came before any step started, so the first step that is not done carries it.
     expect(await stepsOf(market.id)).toEqual([
@@ -675,13 +829,110 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         status: 'failed',
         attempts: 1,
         completedAt: null,
-        lastError: `Market ${market.id} is resolved without a result`,
+        lastError: `Market ${market.id} is settling without a result`,
       }),
     ]);
     expect(logs).toEqual([]);
   });
 
-  it('a failing step rolls the whole settlement back and is recorded; once fixed, a rerun settles (ADR-0046)', async () => {
+  it('a VOID result throws before anything is paid: the market stays settling, the step records why (#126 pays it)', async () => {
+    // `settle(won)` pays winners only, so a VOID run that got through would close every holder
+    // out as a loser. The interim judgement takes YES or NO only; this keeps a VOID that got in
+    // some other way from ever reaching the payout.
+    const market = await resolved('VOID');
+    const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({
+      userId: alice,
+      marketId: market.id,
+      outcome: 'YES',
+      qty: 10,
+      costBasisCoin: 500n,
+    });
+    const bob = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
+    await hold({ userId: bob, marketId: market.id, outcome: 'NO', qty: 5, costBasisCoin: 300n });
+    const before = {
+      alice: { balance: await balanceOf(alice), ledger: await ledgerOf(alice) },
+      bob: { balance: await balanceOf(bob), ledger: await ledgerOf(bob) },
+    };
+    const message = `Market ${market.id} is settling a VOID result, which only #126 can pay`;
+
+    const subscriber = await subscribeTo([
+      marketChannel(market.id),
+      userChannel(alice),
+      userChannel(bob),
+    ]);
+    try {
+      await expect(finalizeMarket(t.db, market.id, publish, logger)).rejects.toThrow(message);
+
+      // Nobody paid, nobody closed out.
+      for (const [userId, was] of [
+        [alice, before.alice],
+        [bob, before.bob],
+      ] as const) {
+        expect(await balanceOf(userId)).toEqual(was.balance);
+        expect(await ledgerOf(userId)).toEqual(was.ledger);
+      }
+      expect(await positionOf(alice, market.id, 'YES')).toMatchObject({
+        qty: 10,
+        settled: false,
+        version: 1,
+      });
+      expect(await positionOf(bob, market.id, 'NO')).toMatchObject({
+        qty: 5,
+        settled: false,
+        version: 1,
+      });
+
+      // The payout started — resolved → settling committed on its own — and stopped there.
+      const events = await eventsOf(market.id);
+      expect(events).toEqual([
+        expect.objectContaining({ type: 'settling', fromStatus: 'resolved', toStatus: 'settling' }),
+      ]);
+      expect(await marketRow(market.id)).toMatchObject({
+        status: 'settling',
+        resolvedResult: 'VOID',
+        settledAt: null,
+        statusEventId: events[0]!.id,
+      });
+      // Thrown before any step started: the first step that is not done carries it.
+      expect(await stepsOf(market.id)).toEqual([
+        expect.objectContaining({
+          step: 'coin',
+          status: 'failed',
+          attempts: 1,
+          completedAt: null,
+          lastError: message,
+        }),
+      ]);
+      expect(logs).toEqual([]);
+
+      await waitForMessages(subscriber.of(marketChannel(market.id)), 1, 'settling status');
+      await sleep(100);
+      expect(subscriber.of(marketChannel(market.id))).toEqual([
+        expect.objectContaining({ status: 'settling', resolvedResult: 'VOID' }),
+      ]);
+      expect(subscriber.of(userChannel(alice))).toEqual([]);
+      expect(subscriber.of(userChannel(bob))).toEqual([]);
+
+      // The scan keeps trying it every minute — reported, counted, and still paying nothing.
+      await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toMatchObject({
+        settled: 0,
+        skipped: 0,
+        failed: 1,
+        failures: [{ marketId: market.id, message }],
+      });
+      expect(await stepsOf(market.id)).toEqual([
+        expect.objectContaining({ status: 'failed', attempts: 2 }),
+      ]);
+      expect(await eventsOf(market.id)).toHaveLength(1);
+      expect((await balanceOf(alice)).availableCoin).toBe(before.alice.balance.availableCoin);
+      expect((await runLedgerAudit(t.db)).recorded).toBe(0);
+    } finally {
+      await subscriber.quit();
+    }
+  });
+
+  it('a failing step rolls the settlement back and is recorded, the market left settling; once fixed, a rerun settles (ADR-0046, ADR-0093 item 14)', async () => {
     // buddha_app keeps DELETE on `balances` (ledger-audit.test.ts), so a winner without a row
     // is reachable through a bug. The deliberate choice (market-finalize.ts) is all or
     // nothing: paying the other winners and leaving this row unsettled would be a partial
@@ -731,16 +982,25 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         settled: false,
         version: 1,
       });
-      expect(await marketRow(market.id)).toMatchObject({
-        status: 'resolved',
-        settledAt: null,
-        statusEventId: null,
-        updatedAt: market.updatedAt,
+      // resolved → settling committed in its own transaction before the steps, so the rollback
+      // leaves the market there: 지급 중, with nothing paid (ADR-0093 decision 1 item 14).
+      const [settling, ...rest] = await eventsOf(market.id);
+      expect(rest).toEqual([]);
+      expect(settling).toMatchObject({
+        type: 'settling',
+        actorId: null,
+        fromStatus: 'resolved',
+        toStatus: 'settling',
       });
-      expect(await eventsOf(market.id)).toEqual([]);
+      expect(await marketRow(market.id)).toMatchObject({
+        status: 'settling',
+        settledAt: null,
+        statusEventId: settling!.id,
+        updatedAt: settling!.createdAt,
+      });
 
       // The attempt, written in a transaction of its own after the rollback (D6): why the
-      // market is still `resolved` is readable without the worker's logs.
+      // market stays `settling` is readable without the worker's logs.
       const [failedStep] = await stepsOf(market.id);
       expect(failedStep).toMatchObject({
         step: 'coin',
@@ -753,9 +1013,12 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect(failedStep!.updatedAt.getTime()).toBeGreaterThan(stepBefore!.updatedAt.getTime());
       expect(logs).toEqual([]);
 
-      // Nothing committed, so nothing to tell anyone.
+      // Only the settling transition committed, so it is all anyone is told.
+      await waitForMessages(subscriber.of(marketChannel(market.id)), 1, 'settling status');
       await sleep(100);
-      expect(subscriber.of(marketChannel(market.id))).toEqual([]);
+      expect(subscriber.of(marketChannel(market.id))).toEqual([
+        expect.objectContaining({ status: 'settling', statusEventId: String(settling!.id) }),
+      ]);
       expect(subscriber.of(userChannel(alice))).toEqual([]);
       expect(subscriber.of(userChannel(bob))).toEqual([]);
 
@@ -764,6 +1027,11 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       const result = await finalizeMarket(t.db, market.id, publish, logger);
       expect(result).toMatchObject({ outcome: 'settled', paidAccounts: 2, paidCoin: 1_500n });
       if (result.outcome !== 'settled') return;
+      // The rerun starts from `settling`: no second settling event.
+      expect(await eventsOf(market.id)).toEqual([
+        settling,
+        expect.objectContaining({ type: 'finalized', fromStatus: 'settling', toStatus: 'settled' }),
+      ]);
       expect(await stepsOf(market.id)).toEqual([
         expect.objectContaining({
           step: 'coin',
@@ -819,7 +1087,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     // Spec 5's double guard: a `done` row means the step committed — its positions were closed
     // out in that same transaction — so the row alone is trusted and the step body is not run
     // again. The unsettled position below exists only to prove that; the API never leaves a
-    // `resolved` market with every step done (with one step, done and settled commit together).
+    // judged market with every step done (with one step, done and settled commit together).
     const market = await resolved('YES', undefined, { settlementSteps: false });
     const completedAt = new Date(Date.now() - MINUTE_MS);
     await createSettlementStep(t.db, {
@@ -850,12 +1118,20 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       status: 'settled',
       settledAt: result.settledAt,
     });
-    const [event] = await eventsOf(market.id);
-    expect(event).toMatchObject({
-      type: 'finalized',
-      payload: { result: 'YES', settledAccounts: 0, paidAccounts: 0, paidCoin: '0', positions: 0 },
-      createdAt: result.settledAt,
-    });
+    expect(await eventsOf(market.id)).toEqual([
+      expect.objectContaining({ type: 'settling' }),
+      expect.objectContaining({
+        type: 'finalized',
+        payload: {
+          result: 'YES',
+          settledAccounts: 0,
+          paidAccounts: 0,
+          paidCoin: '0',
+          positions: 0,
+        },
+        createdAt: result.settledAt,
+      }),
+    ]);
     expect(await stepsOf(market.id)).toEqual([
       expect.objectContaining({ status: 'done', attempts: 1, completedAt }),
     ]);
@@ -931,7 +1207,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       await owner.execute(sql.raw('DROP FUNCTION IF EXISTS finalize_test_deadlock()'));
       await closeDb(owner);
     }
-    expect((await marketRow(market.id)).status).toBe('resolved');
+    expect((await marketRow(market.id)).status).toBe('settling');
     expect(await positionOf(alice, market.id, 'YES')).toMatchObject({ settled: false, version: 1 });
     expect(logs).toEqual([]);
   });
@@ -944,9 +1220,11 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     const market = await resolved('YES');
     const alice = await poisonedWinner(market.id);
     const other: { result?: FinalizeResult } = {};
-    const seam = seamed(async () => {
-      await t.db.insert(schema.balances).values(alice.balance);
-      other.result = await finalizeMarket(t.db, market.id, publish, logger);
+    const seam = seamed({
+      beforeRecord: async () => {
+        await t.db.insert(schema.balances).values(alice.balance);
+        other.result = await finalizeMarket(t.db, market.id, publish, logger);
+      },
     });
 
     await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
@@ -975,20 +1253,22 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
   });
 
   it("keeps a done step done: the record's upsert does not overwrite it (setWhere guard)", async () => {
-    // The market is still `resolved`, so the status re-check lets the record through and only the
+    // The market is still `settling`, so the status re-check lets the record through and only the
     // upsert's `status <> 'done'` condition stands between it and the row — a row that disagrees
     // with its market, written by hand in the seam (with one step, the API never leaves one).
     const market = await resolved('YES');
     const alice = await poisonedWinner(market.id);
     const written: (typeof schema.marketSettlementSteps.$inferSelect)[] = [];
-    const seam = seamed(async () => {
-      written.push(
-        ...(await t.db
-          .update(schema.marketSettlementSteps)
-          .set({ status: 'done', attempts: 1, completedAt: new Date(Date.now() - MINUTE_MS) })
-          .where(eq(schema.marketSettlementSteps.marketId, market.id))
-          .returning()),
-      );
+    const seam = seamed({
+      beforeRecord: async () => {
+        written.push(
+          ...(await t.db
+            .update(schema.marketSettlementSteps)
+            .set({ status: 'done', attempts: 1, completedAt: new Date(Date.now() - MINUTE_MS) })
+            .where(eq(schema.marketSettlementSteps.marketId, market.id))
+            .returning()),
+        );
+      },
     });
 
     await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
@@ -998,7 +1278,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expect(seam.inserts).toBe(1);
     expect(written).toHaveLength(1);
     expect(await stepsOf(market.id)).toEqual(written);
-    expect((await marketRow(market.id)).status).toBe('resolved');
+    expect((await marketRow(market.id)).status).toBe('settling');
     expect(logs).toEqual([]);
   });
 
@@ -1006,7 +1286,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     // With no step running, the record goes on the first step that is not `done`; when every
     // step is done there is none, and the done row is left alone without an upsert at all.
     const market = await createMarket(t.db, {
-      status: 'resolved',
+      status: 'settling',
       resolvedResult: null,
       settlementSteps: false,
     });
@@ -1016,10 +1296,10 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       attempts: 1,
       completedAt: new Date(Date.now() - MINUTE_MS),
     });
-    const seam = seamed(() => Promise.resolve());
+    const seam = seamed({});
 
     await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
-      `Market ${market.id} is resolved without a result`,
+      `Market ${market.id} is settling without a result`,
     );
     expect(seam.inserts).toBe(0);
     expect(await stepsOf(market.id)).toEqual([done]);
@@ -1032,7 +1312,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     const market = await resolved('YES');
     const alice = await poisonedWinner(market.id);
     const stepsBefore = await stepsOf(market.id);
-    const seam = seamed(() => Promise.reject(new Error('Connection terminated unexpectedly')));
+    const seam = seamed({
+      beforeRecord: () => Promise.reject(new Error('Connection terminated unexpectedly')),
+    });
 
     await expect(finalizeMarket(seam.db, market.id, publish, logger)).rejects.toThrow(
       `Balance not found for account ${alice.userId}`,
@@ -1048,7 +1330,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       }),
     ]);
     expect(await stepsOf(market.id)).toEqual(stepsBefore);
-    expect((await marketRow(market.id)).status).toBe('resolved');
+    expect((await marketRow(market.id)).status).toBe('settling');
   });
 
   it('a holder of both outcomes: one payout row for the winning row, the balance event carries its id', async () => {
@@ -1126,7 +1408,9 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     // The instant of a payout is read after the account's balance lock, not after the market
     // lock (ADR-0027 addendum): a buy on ANOTHER market that lands between the two must come
     // first in `/me/ledger`'s (created_at, id) order. Reproduced by holding the market lock
-    // in one transaction while a buy commits, then letting the finalize through.
+    // in one transaction while a buy commits, then letting the finalize through. The lock is
+    // taken once resolved → settling has committed (the seam), so what queues on it is the step
+    // transaction, already begun — the one whose clock reads are under test.
     const market = await resolved('YES');
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await hold({
@@ -1142,19 +1426,25 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     const lockHeld = new Promise<void>((resolve) => (releaseLock = resolve));
     let lockTaken!: () => void;
     const lockTakenPromise = new Promise<void>((resolve) => (lockTaken = resolve));
-    const holder = t.db.transaction(async (tx) => {
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext((${market.id})::uuid::text))`);
-      lockTaken();
-      await lockHeld;
+    const held: { holder?: Promise<void> } = {};
+    const seam = seamed({
+      beforeSteps: async () => {
+        held.holder = t.db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext((${market.id})::uuid::text))`);
+          lockTaken();
+          await lockHeld;
+        });
+        await lockTakenPromise;
+      },
     });
-    await lockTakenPromise;
 
-    const finalize = finalizeMarket(t.db, market.id, publish, logger);
-    // Give the finalize time to queue on the advisory lock, then commit a buy elsewhere.
+    const finalize = finalizeMarket(seam.db, market.id, publish, logger);
+    await lockTakenPromise;
+    // Give the step transaction time to queue on the advisory lock, then commit a buy elsewhere.
     await sleep(200);
     await hold({ userId: alice, marketId: other.id, outcome: 'NO', qty: 1, costBasisCoin: 40n });
     releaseLock();
-    await holder;
+    await held.holder;
 
     const result = await finalize;
     expect(result.outcome).toBe('settled');
@@ -1170,23 +1460,40 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
     expectLedgerChain(ledger, balance.availableCoin);
   });
 
-  it('scan settles every resolved market, judged longest ago first, each in its own transaction', async () => {
-    // Created in the opposite order of their judgements: the scan orders by `resolved_at`.
-    const later = await resolved('NO', new Date(Date.now() - MINUTE_MS));
+  it('scan settles every resolved and settling market, judged longest ago first, and leaves the rest alone', async () => {
+    // Created in the opposite order of their judgements: the scan orders by `resolved_at`. The
+    // later one is already `settling` (a run whose steps failed); the earlier one is still
+    // `resolved` (its job was lost) and goes to `settling` first.
+    const later = await resolved('NO', new Date(Date.now() - MINUTE_MS), { status: 'settling' });
     const earlier = await resolved('YES', new Date(Date.now() - 2 * MINUTE_MS));
     const closed = await createMarket(t.db, {
       status: 'closed',
       closeAt: new Date(Date.now() - MINUTE_MS),
+    });
+    // Judged but not confirmed: nothing settles a provisional result (#152).
+    const provisional = await createMarket(t.db, {
+      status: 'provisional',
+      closeAt: new Date(Date.now() - 2 * MINUTE_MS),
+      resolvedResult: 'YES',
+      resolvedAt: new Date(Date.now() - 3 * MINUTE_MS),
     });
     const settled = await createMarket(t.db, {
       status: 'settled',
       resolvedResult: 'YES',
       settledAt: new Date(Date.now() - MINUTE_MS),
     });
+    const cancelled = await createMarket(t.db, { status: 'cancelled' });
     const alice = (await createUser(t.db, { balanceCoin: 10_000n })).user.id;
     await hold({ userId: alice, marketId: earlier.id, outcome: 'YES', qty: 1, costBasisCoin: 50n });
     await hold({ userId: alice, marketId: later.id, outcome: 'NO', qty: 2, costBasisCoin: 60n });
     await hold({ userId: alice, marketId: closed.id, outcome: 'YES', qty: 3, costBasisCoin: 70n });
+    await hold({
+      userId: alice,
+      marketId: provisional.id,
+      outcome: 'YES',
+      qty: 4,
+      costBasisCoin: 80n,
+    });
 
     await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toEqual({
       settled: 2,
@@ -1197,27 +1504,46 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
 
     expect((await marketRow(earlier.id)).status).toBe('settled');
     expect((await marketRow(later.id)).status).toBe('settled');
-    expect(await marketRow(closed.id)).toMatchObject({ status: 'closed', statusEventId: null });
-    expect(await eventsOf(settled.id)).toEqual([]);
-    // Judged longest ago first: the earlier market's event has the smaller id.
-    const [eventEarlier] = await eventsOf(earlier.id);
-    const [eventLater] = await eventsOf(later.id);
-    expect(eventEarlier!.id).toBeLessThan(eventLater!.id);
+    expect(await eventsOf(earlier.id)).toEqual([
+      expect.objectContaining({ type: 'settling', fromStatus: 'resolved', toStatus: 'settling' }),
+      expect.objectContaining({ type: 'finalized', fromStatus: 'settling', toStatus: 'settled' }),
+    ]);
+    expect(await eventsOf(later.id)).toEqual([
+      expect.objectContaining({ type: 'finalized', fromStatus: 'settling', toStatus: 'settled' }),
+    ]);
+    for (const [market, status] of [
+      [closed, 'closed'],
+      [provisional, 'provisional'],
+      [settled, 'settled'],
+      [cancelled, 'cancelled'],
+    ] as const) {
+      expect(await marketRow(market.id)).toMatchObject({ status, statusEventId: null });
+      expect(await eventsOf(market.id)).toEqual([]);
+    }
+    // Judged longest ago first: the earlier market settled first.
+    const [, finalizedEarlier] = await eventsOf(earlier.id);
+    const [finalizedLater] = await eventsOf(later.id);
+    expect(finalizedEarlier!.id).toBeLessThan(finalizedLater!.id);
     for (const market of [earlier, later]) {
       expect(await stepsOf(market.id)).toEqual([
         expect.objectContaining({ step: 'coin', status: 'done', attempts: 1 }),
       ]);
     }
     expect(await stepsOf(closed.id)).toEqual([]);
+    expect(await stepsOf(provisional.id)).toEqual([]);
 
     const balance = await balanceOf(alice);
-    expect(balance.availableCoin).toBe(10_000n - 50n - 60n - 70n + 100n + 200n);
+    expect(balance.availableCoin).toBe(10_000n - 50n - 60n - 70n - 80n + 100n + 200n);
     const ledger = await ledgerOf(alice);
     expect(
       ledger.filter((entry) => entry.type === 'SETTLEMENT_PAYOUT').map((e) => e.amountCoin),
     ).toEqual([100n, 200n]);
     expectLedgerChain(ledger, balance.availableCoin);
     expect(await positionOf(alice, closed.id, 'YES')).toMatchObject({ qty: 3, settled: false });
+    expect(await positionOf(alice, provisional.id, 'YES')).toMatchObject({
+      qty: 4,
+      settled: false,
+    });
 
     await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toEqual({
       settled: 0,
@@ -1266,14 +1592,17 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         ],
       });
 
-      // The poisoned market: rolled back, still resolved, nobody paid, nothing announced —
-      // and the attempt recorded on its step.
+      // The poisoned market: its steps rolled back, left `settling` (its resolved → settling
+      // committed first), nobody paid — and the attempt recorded on its step.
+      const poisonedEvents = await eventsOf(poisoned.id);
+      expect(poisonedEvents).toEqual([
+        expect.objectContaining({ type: 'settling', fromStatus: 'resolved', toStatus: 'settling' }),
+      ]);
       expect(await marketRow(poisoned.id)).toMatchObject({
-        status: 'resolved',
+        status: 'settling',
         settledAt: null,
-        statusEventId: null,
+        statusEventId: poisonedEvents[0]!.id,
       });
-      expect(await eventsOf(poisoned.id)).toEqual([]);
       expect(await positionOf(alice, poisoned.id, 'YES')).toMatchObject({
         qty: 4,
         settled: false,
@@ -1297,14 +1626,23 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
         expect.objectContaining({ step: 'coin', status: 'done', attempts: 1, lastError: null }),
       ]);
 
-      await waitForMessages(subscriber.of(marketChannel(healthy.id)), 1, 'healthy market status');
+      await waitForMessages(subscriber.of(marketChannel(healthy.id)), 2, 'healthy market status');
+      await waitForMessages(subscriber.of(marketChannel(poisoned.id)), 1, 'poisoned settling');
       await waitForMessages(subscriber.of(userChannel(bob)), 2, "bob's events");
       await sleep(100);
-      expect(subscriber.of(marketChannel(poisoned.id))).toEqual([]);
+      expect(subscriber.of(marketChannel(healthy.id)).map((event) => event.status)).toEqual([
+        'settling',
+        'settled',
+      ]);
+      // The poisoned market's payout started (지급 중) and stays there: all it announced.
+      expect(subscriber.of(marketChannel(poisoned.id))).toEqual([
+        expect.objectContaining({ status: 'settling' }),
+      ]);
       expect(subscriber.of(userChannel(alice))).toEqual([]);
 
-      // A minute later: the poisoned market is still first, still fails, is still reported —
-      // still does not throw — and each attempt is counted on its step (no retry cap, D6).
+      // A minute later: the poisoned market, `settling` now, is still first, still fails, is
+      // still reported — still does not throw — and each attempt is counted on its step (no
+      // retry cap, D6). Its resolved → settling is not repeated.
       await expect(finalizeDueMarkets(t.db, publish, logger)).resolves.toMatchObject({
         settled: 0,
         skipped: 0,
@@ -1314,6 +1652,7 @@ describe.skipIf(!hasTestInfra)('market.finalize (integration)', () => {
       expect(await stepsOf(poisoned.id)).toEqual([
         expect.objectContaining({ status: 'failed', attempts: 2 }),
       ]);
+      expect(await eventsOf(poisoned.id)).toEqual(poisonedEvents);
       expect(logs).toEqual([]);
     } finally {
       await subscriber.quit();

@@ -2,7 +2,7 @@ import * as z from 'zod';
 import { adminAccountActorSchema } from './admin-accounts.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { uuidSchema } from './api/uuid.js';
-import { outcomeSchema } from './enums.js';
+import { marketResultSchema } from './enums.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { type PublicMarketStatus, marketSlugSchema, marketSummarySchema } from './market.js';
 
@@ -18,11 +18,12 @@ import { type PublicMarketStatus, marketSlugSchema, marketSummarySchema } from '
  * - The period sorts a theme as 예정·진행 중·종료 (`ThemeStatus`).
  * - Composition is free: no cap on markets, a market may be in several themes, no category tie,
  *   markets that open or close outside the period may be in it, and it may be changed after the
- *   period. A draft market is in no public answer.
+ *   period. A DRAFT or REVIEW market is in no public answer.
  * - The notices are the theme page's own, written by admins (#45 item 8) — not the community's
  *   pinned notices (#138).
- * - The results list is the linked markets that are 판정 완료·정산 완료·무효 with their result
- *   (YES·NO·무효); no one's performance or PnL. Provisional results wait for #174.
+ * - The results list is the linked markets whose result is confirmed — 결과 확정·지급 중·지급
+ *   완료 — with that result (YES·NO·무효); no one's performance or PnL. A provisional result is
+ *   not in it, and a CANCELLED market has none (ADR-0093 decision 3, the #174 row).
  * - A published theme can be unpublished and never deleted.
  * - Creating, editing, linking or unlinking a market and publishing or unpublishing record the
  *   admin and the time; no reason and no second admin (as 관련 시장, ADR-0068).
@@ -31,8 +32,9 @@ import { type PublicMarketStatus, marketSlugSchema, marketSummarySchema } from '
  * a notice is plain text whose addresses become links, hidden and shown again but never deleted,
  * and marked 수정됨 once edited; the public list runs 진행 중 → 예정 → 종료; the address is a slug
  * the operator chooses at creation and cannot change once the theme has been published; a voided
- * market is among the theme's cards; a theme is published only with a market in it. And of the
- * second round the same day: that market must be a public one — a draft does not count; the slug
+ * market is among the theme's cards (since #174 a cancelled one, and one whose result is VOID);
+ * a theme is published only with a market in it. And of the second round the same day: that
+ * market must be a public one — a draft (or since #174 a REVIEW one) does not count; the slug
  * stays fixed from the first publish on, through an unpublish; the introduction's addresses are
  * links too; the dates lie within 2000-01-01 and 2100-12-31; the name and introduction bounds
  * stand.
@@ -149,14 +151,14 @@ export const THEME_LIST_STATUS_ORDER = [
 ] as const satisfies readonly ThemeStatus[];
 
 /**
- * The statuses of a theme's results list (ADR-0069 decision 4, #81 '결과 목록'): 판정 완료·정산
- * 완료·무효. A judged market's result is YES or NO; a voided one has none. #174 revisits this when
- * a provisional result exists.
+ * The statuses of a theme's results list (ADR-0069 decision 4, #81 '결과 목록', moved onto the new
+ * statuses by ADR-0093 decision 3, the #174 row): the result is confirmed — 결과 확정·지급 중·지급
+ * 완료 — and is YES, NO or VOID (무효). PROVISIONAL is left out: its result may still be corrected.
  */
 export const THEME_RESULT_STATUSES = [
   'resolved',
+  'settling',
   'settled',
-  'voided',
 ] as const satisfies readonly PublicMarketStatus[];
 export type ThemeResultStatus = (typeof THEME_RESULT_STATUSES)[number];
 
@@ -214,9 +216,9 @@ export const themeSchema = z
 export type Theme = z.infer<typeof themeSchema>;
 
 /**
- * One row of a theme's results list (`GET /themes/:id/results`): a linked market that is 판정
- * 완료·정산 완료·무효, its result — YES or NO, null for a voided one — and when that was decided
- * (the judgement, or the voiding). Nothing about anyone's trades in it.
+ * One row of a theme's results list (`GET /themes/:id/results`): a linked market whose result is
+ * confirmed (`THEME_RESULT_STATUSES`), that result — YES, NO or VOID — and when it was confirmed
+ * (`resolved_at`). Nothing about anyone's trades in it.
  */
 export const themeResultSchema = z
   .object({
@@ -224,7 +226,7 @@ export const themeResultSchema = z
     slug: z.string(),
     title: z.string(),
     status: z.enum(THEME_RESULT_STATUSES),
-    result: outcomeSchema.nullable(),
+    result: marketResultSchema,
     decidedAt: z.iso.datetime(),
   })
   .meta({ id: 'ThemeResult' });
@@ -259,17 +261,18 @@ const themeFields = {
  * a slug another theme has, a slug change once the theme has been published, a publish of a
  * theme with no public market in it (owner decisions 2026-10-19: a theme goes public with one
  * market at least, and of the second round, a market that is not a draft — a draft is on no
- * public page, so a theme of drafts alone would be an empty page; taking every market out
- * afterwards is allowed), and a period that would end before it starts, named by the half the
- * request sent — the end when it sent both or the end alone, the start when it sent the start
- * alone (the end is then the stored one). The web reads them to say which, in words that fit.
+ * public page, so a theme of drafts alone would be an empty page; since #174 a REVIEW market is
+ * hidden as well; taking every market out afterwards is allowed), and a period that would end
+ * before it starts, named by the half the request sent — the end when it sent both or the end
+ * alone, the start when it sent the start alone (the end is then the stored one). The web reads
+ * them to say which, in words that fit.
  */
 export const THEME_REFUSALS = {
   slugTaken: { field: 'slug', message: 'already exists' },
   slugFixed: { field: 'slug', message: 'fixed once published' },
   noPublicMarket: {
     field: 'markets',
-    message: 'at least one market that is not a draft is required to publish',
+    message: 'at least one public market (not a draft or under review) is required to publish',
   },
   endBeforeStart: { field: 'endDate', message: 'must not be before startDate' },
   startAfterEnd: { field: 'startDate', message: 'must not be after endDate' },
@@ -322,8 +325,9 @@ export const updateThemeBodySchema = z
 export type UpdateThemeBody = z.infer<typeof updateThemeBodySchema>;
 
 /**
- * `POST /admin/themes/:id/markets`: the market to put in the theme, in any status (a draft too:
- * it shows once it opens), lower-cased on the way in like every request-supplied uuid.
+ * `POST /admin/themes/:id/markets`: the market to put in the theme, in any status (a DRAFT or
+ * REVIEW one too: it shows once it is public), lower-cased on the way in like every
+ * request-supplied uuid.
  */
 export const linkThemeMarketBodySchema = z
   .object({ marketId: uuidSchema, expectedAccountId: expectedAccountIdSchema })

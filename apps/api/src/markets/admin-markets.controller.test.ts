@@ -152,10 +152,16 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     for (const field of AMM_FIELDS) expect(created).not.toHaveProperty(field);
     expect(created.events.map((event) => event.type)).toEqual(['created']);
+    // The row's birth names the status it starts in and no status it left (#174).
     expect(created.events[0]).toMatchObject({
       actorId: admin.id,
+      fromStatus: null,
+      toStatus: 'draft',
       payload: { slug: 'rate-cut-2026' },
     });
+    expect(await eventsFor(created.id)).toMatchObject([
+      { type: 'created', actorId: admin.id, fromStatus: null, toStatus: 'draft' },
+    ]);
     // Keyed from birth (M5): the `created` event is the row's first transition event.
     expect(created.statusEventId).toBe(created.events[0]!.id);
     expect((await marketRow(created.id)).statusEventId).toBe(Number(created.events[0]!.id));
@@ -286,6 +292,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       before: draft.rules,
       after: '새 규칙: 한국은행 홈페이지 공지 기준.',
     });
+    // A rules edit changes no status, so it names none (#174) and leaves the key alone.
+    expect(updated.events[0]).toMatchObject({ fromStatus: null, toStatus: null });
+    expect(updated.statusEventId).toBe(draft.statusEventId);
 
     const actions = await actionsFor(draft.id);
     expect(actions.map((action) => action.type)).toEqual(['market_create', 'market_update']);
@@ -501,6 +510,19 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       expect(opened.status).toBe('open');
       expect(opened.openAt).not.toBeNull();
       expect(opened.events.map((event) => event.type)).toEqual(['opened', 'created']);
+      // Who, when, from and to (#174), on the detail and on the row alike.
+      expect(opened.events[0]).toMatchObject({
+        actorId: admin.id,
+        fromStatus: 'draft',
+        toStatus: 'open',
+        createdAt: opened.openAt,
+      });
+      expect((await eventsFor(draft.id)).at(-1)).toMatchObject({
+        type: 'opened',
+        actorId: admin.id,
+        fromStatus: 'draft',
+        toStatus: 'open',
+      });
 
       // Opening is not a price: the chart starts at the first fill (N02 §5).
       const ticks = await t.db
@@ -619,6 +641,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     }
     expect(closed.status).toBe('closed');
     expect(closed.events.map((event) => event.type)).toEqual(['closed']);
+    expect(closed.events[0]).toMatchObject({
+      actorId: admin.id,
+      fromStatus: 'open',
+      toStatus: 'closed',
+      createdAt: closed.updatedAt,
+    });
+    expect(await eventsFor(row.id)).toMatchObject([
+      { type: 'closed', actorId: admin.id, fromStatus: 'open', toStatus: 'closed' },
+    ]);
     expect(closed.statusEventId).toBe(closed.events[0]!.id);
     const actions = await actionsFor(row.id);
     expect(actions.map((action) => action.type)).toEqual(['market_close']);
@@ -632,12 +663,41 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(again.statusCode).toBe(409);
     expect(errorOf(again).code).toBe('MARKET_NOT_OPEN');
 
-    const draft = await market({ status: 'draft' });
-    const onDraft = await close(draft.id);
-    expect(onDraft.statusCode).toBe(409);
-    expect(errorOf(onDraft).code).toBe('MARKET_NOT_OPEN');
-    expect((await marketRow(draft.id)).status).toBe('draft');
-    expect(await actionsFor(draft.id)).toHaveLength(0);
+    // Every other status, PAUSED too: its early close is #114's, with another admin's approval.
+    for (const status of ['draft', 'review', 'scheduled', 'paused', 'cancelled'] as const) {
+      const other = await market({ status });
+      const refused = await close(other.id);
+      expect({ status, code: refused.statusCode }).toEqual({ status, code: 409 });
+      expect(errorOf(refused).code).toBe('MARKET_NOT_OPEN');
+      expect((await marketRow(other.id)).status).toBe(status);
+      expect(await actionsFor(other.id)).toHaveLength(0);
+      expect(await eventsFor(other.id)).toHaveLength(0);
+    }
+  });
+
+  it('opens a draft only: any other status is refused naming status, with nothing written', async () => {
+    // draft → open is the interim edge (#21 removes it); REVIEW → OPEN and the rest are not
+    // edges at all, and SCHEDULED → OPEN is #21's timer, not this action (ADR-0093).
+    for (const status of [
+      'review',
+      'scheduled',
+      'paused',
+      'closed',
+      'provisional',
+      'cancelled',
+    ] as const) {
+      const row = await market({ status, rules: '규칙' });
+      const res = await open(row.id);
+      expect({ status, code: res.statusCode }).toEqual({ status, code: 400 });
+      expect(errorOf(res)).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: `Market is ${status}`,
+      });
+      expect(detailPath(res)).toEqual(['status']);
+      expect(await marketRow(row.id)).toMatchObject({ status, statusEventId: null });
+      expect(await eventsFor(row.id)).toHaveLength(0);
+      expect(await actionsFor(row.id)).toHaveLength(0);
+    }
   });
 
   it.each([
@@ -675,11 +735,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   );
 
   // --- list / detail --------------------------------------------------------------------
-  it('lists every status including drafts, newest first, with a keyset cursor', async () => {
+  it('lists every status including drafts and reviews, newest first, with a keyset cursor', async () => {
     const ids: string[] = [];
     const base = Date.now() - 60 * 60 * 1000;
     const rows: { id: string; createdAt: Date }[] = [];
-    for (const [i, status] of (['draft', 'open', 'closed', 'draft', 'voided'] as const).entries()) {
+    for (const [i, status] of (
+      ['draft', 'review', 'closed', 'draft', 'cancelled'] as const
+    ).entries()) {
       const row = await market({ status });
       ids.push(row.id);
       // Pairs share a created_at, so the id half of the keyset is what orders them.
@@ -714,6 +776,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       'draft',
       'draft',
     ]);
+    const reviews = await get('/api/v1/admin/markets?status=review');
+    expect(reviews.json<ListPage>().data.map((row) => row.id)).toEqual([ids[1]]);
     expect((await get('/api/v1/admin/markets?status=nope')).statusCode).toBe(400);
   });
 
@@ -790,8 +854,21 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       },
     ]);
     await t.db.insert(schema.marketEvents).values([
-      { marketId: row.id, type: 'created', actorId: admin.id, payload: { source: 'test' } },
-      { marketId: row.id, type: 'opened', actorId: null, payload: null },
+      {
+        marketId: row.id,
+        type: 'created',
+        actorId: admin.id,
+        toStatus: 'draft',
+        payload: { source: 'test' },
+      },
+      {
+        marketId: row.id,
+        type: 'opened',
+        actorId: null,
+        fromStatus: 'draft',
+        toStatus: 'open',
+        payload: null,
+      },
     ]);
 
     const res = await get(`/api/v1/admin/markets/${row.id}`);
@@ -807,9 +884,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       settlementSteps: [],
     });
     for (const field of AMM_FIELDS) expect(shown).not.toHaveProperty(field);
-    expect(shown.events.map((event) => [event.type, event.actorId])).toEqual([
-      ['opened', null],
-      ['created', admin.id],
+    expect(
+      shown.events.map((event) => [event.type, event.actorId, event.fromStatus, event.toStatus]),
+    ).toEqual([
+      ['opened', null, 'draft', 'open'],
+      ['created', admin.id, null, 'draft'],
     ]);
     expect(shown.events[1]!.payload).toEqual({ source: 'test' });
 

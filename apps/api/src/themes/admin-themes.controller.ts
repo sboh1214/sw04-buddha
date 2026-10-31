@@ -140,8 +140,8 @@ export class AdminThemesController {
   @ApiOperation({
     operationId: 'adminPublishTheme',
     summary:
-      'Make the theme public; refused naming markets while it has no market that is not a ' +
-      'draft (drafts do not count); a published theme stays as it is',
+      'Make the theme public; refused naming markets while it has no public market (draft and ' +
+      'in-review ones do not count); a published theme stays as it is',
   })
   @ApiData(adminThemeSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
@@ -172,8 +172,8 @@ export class AdminThemesController {
   }
 
   /**
-   * The theme's markets in every status, drafts too — the admin keeps them and the public answers
-   * leave the drafts out. Unpaginated: it is the list they are managed from, one theme's.
+   * The theme's markets in every status, DRAFT and REVIEW too — the admin keeps them and the
+   * public answers leave those out. Unpaginated: it is the list they are managed from, one theme's.
    */
   @Get(':id/markets')
   @ApiOperation({
