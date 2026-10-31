@@ -6,7 +6,7 @@ import { RulesSection } from '@/components/market/rules-section';
 import { copy } from '@/copy';
 import { type Category, type MarketSummary } from '@/lib/api';
 import { type MarketFormValues, toCreateMarketBody } from '@/lib/market-form';
-import { toPreviewMarket } from '@/lib/market-preview';
+import { toPreviewMarket, toPreviewRules } from '@/lib/market-preview';
 
 /**
  * 카드·상세 미리보기 (PLAN 12), the preview ADR-0027 deferred to M4 (Q-M3-6).
@@ -64,15 +64,9 @@ export function MarketPreview({ values, categories, base }: MarketPreviewProps) 
           <Text fontSize="sm" color="fg.muted">
             {copy.adminMarketPreviewDetail}
           </Text>
-          {/* Its own id: `market-rules` is the 규칙 textarea's above. */}
-          <RulesSection
-            market={{
-              rules: body.rules,
-              resolutionSource: body.resolutionSource ?? null,
-              closeAt: body.closeAt,
-            }}
-            data-testid="market-preview-rules"
-          />
+          {/* Every rule item the form holds but 배경 (#23), as the visitor's rules area draws
+              them. Its own id: a test reaching `market-rules` means the public detail's. */}
+          <RulesSection market={toPreviewRules(body)} data-testid="market-preview-rules" />
         </Stack>
       </SimpleGrid>
     </Stack>

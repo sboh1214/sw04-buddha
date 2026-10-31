@@ -60,9 +60,23 @@ export const POSITION_QTY_MAX = INT4_MAX;
 export const MAX_COIN_AMOUNT = 10n ** 15n;
 
 export const MARKET_TITLE_MAX = 120;
-/** description / rules. */
+/**
+ * Each rule text (#23, ADR-0093 decision 3 '#23 문장 길이와 표시'): 배경 (`description`), the YES and
+ * NO conditions, the switch condition and the delay handling (market-rules.ts).
+ */
 export const MARKET_TEXT_MAX = 5_000;
+/** A rule source's name (`MarketSource.name`, #23). */
 export const MARKET_SOURCE_MAX = 500;
+/** A rule source's http(s) address (`MarketSource.url`, #23, ADR-0093 decision 3 '#23 출처 주소'). */
+export const MARKET_SOURCE_URL_MAX = 500;
+/** Fallback sources a market's rules may name, in priority order (#172 item 9: 0..3). */
+export const MARKET_FALLBACK_SOURCES_MAX = 3;
+/**
+ * 장기 지연 기한 (`longDelayDays`, #172 item 10): whole days after the scheduled judgement instant,
+ * N × 24 hours (ADR-0097). `markets.long_delay_days` has the same CHECK.
+ */
+export const MARKET_LONG_DELAY_DAYS_MIN = 1;
+export const MARKET_LONG_DELAY_DAYS_MAX = 365;
 export const MARKET_IMAGE_URL_MAX = 500;
 
 /**

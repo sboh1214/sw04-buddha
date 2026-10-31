@@ -205,13 +205,13 @@ export function AdminMarkets() {
 
 /**
  * 시장 만들기 → a draft (design 3.4). On success the admin lands on the detail page, where
- * 열기 is: a draft cannot be opened from here, and what it may still lack to open — rules, tags
- * (#17: a draft may be made with none) — is named there and filled in from its form. The
- * draft is made as the admin on screen (`useOperatorId`, ADR-0092): 만들기 waits for `GET /me`,
- * and the cookie of another account is refused (`copy.sessionChanged`, the session asked again).
- * The card is drawn for that admin (keyed by it above) and its fields wait for it too
- * (`OperatorFieldset`): `['me']` turning from A to B in place drops what A typed (ADR-0092,
- * owner decision 2026-10-26 17:21 answer 1).
+ * 열기 is: a draft cannot be opened from here, and what it may still lack to open — rule items
+ * (#23), tags (#17) — is named there and filled in from its form; a draft may be made without
+ * any of them. The draft is made as the admin on screen (`useOperatorId`, ADR-0092): 만들기
+ * waits for `GET /me`, and the cookie of another account is refused (`copy.sessionChanged`, the
+ * session asked again). The card is drawn for that admin (keyed by it above) and its fields wait
+ * for it too (`OperatorFieldset`): `['me']` turning from A to B in place drops what A typed
+ * (ADR-0092, owner decision 2026-10-26 17:21 answer 1).
  */
 function CreateMarketCard() {
   const router = useRouter();
@@ -244,9 +244,10 @@ function CreateMarketCard() {
     },
     onError: (error) => {
       sessionChanged(error);
-      // A taken slug, a category a market may not be filed under or a refused tag lands on its
-      // field (design §4, #17); the rest — and a VALIDATION_ERROR naming nothing the form has — is
-      // the toast. A refused category also reads the select's list again.
+      // A taken slug, a category a market may not be filed under, a refused tag or rule item (a
+      // source's name or address on its own input) lands on its field (design §4, #17, #23); the
+      // rest — and a VALIDATION_ERROR naming nothing the form has — is the toast. A refused
+      // category also reads the select's list again.
       const fieldError = marketFormError(error);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });

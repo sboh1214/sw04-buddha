@@ -290,7 +290,7 @@ export type paths = {
         /** Every market, draft and in-review ones included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches */
         get: operations["adminListMarkets"];
         put?: never;
-        /** Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag */
+        /** Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag; rule items not sent start blank */
         post: operations["adminCreateMarket"];
         delete?: never;
         options?: never;
@@ -312,7 +312,7 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit a draft (any field) or an open market (text, close time, category, tags; slug refused naming the field, blank rules refused with RULES_REQUIRED, no tags refused naming tags); tags replace the whole ordered set; other statuses refuse naming status */
+        /** Edit a draft (any field) or an open market (text, rule items, close time, category, tags; slug refused naming the field, a rule item it had filled left missing refused with RULES_REQUIRED naming each, no tags refused naming tags); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status */
         patch: operations["adminUpdateMarket"];
         trace?: never;
     };
@@ -342,7 +342,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds rules, category or tags missing, then with a past closeAt */
+        /** draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, the category or the tags missing, then with a past closeAt */
         post: operations["adminOpenMarket"];
         delete?: never;
         options?: never;
@@ -2850,25 +2850,31 @@ export type components = {
             /** Format: date-time */
             createdAt: string;
             createdBy: string;
+            delayHandling: string;
             description: string | null;
+            /** Format: date-time */
+            eventDeadline: string | null;
             events: components["schemas"]["MarketEvent"][];
+            fallbackCondition: string;
+            fallbackSources: components["schemas"]["MarketSource"][];
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
             lastPrice: number | null;
+            longDelayDays: number | null;
             missingOpenItems: components["schemas"]["OpenItem"][];
             netCollectedCoin: components["schemas"]["CoinAmount"];
+            noCondition: string;
             /** Format: date-time */
             openAt: string | null;
             openInterest: {
                 no: number;
                 yes: number;
             };
-            resolutionSource: string | null;
+            primarySource: components["schemas"]["MarketSource"] | null;
             /** Format: date-time */
             resolvedAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
-            rules: string;
             /** Format: date-time */
             settledAt: string | null;
             settlementSteps: components["schemas"]["AdminSettlementStep"][];
@@ -2883,6 +2889,7 @@ export type components = {
             /** Format: date-time */
             updatedAt: string;
             volumeCoin: components["schemas"]["CoinAmount"];
+            yesCondition: string;
         };
         AdminModerationAction: {
             /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
@@ -3485,15 +3492,22 @@ export type components = {
             categoryId: number;
             /** Format: date-time */
             closeAt: string;
+            delayHandling?: string;
             description?: string | null;
+            /** Format: date-time */
+            eventDeadline?: string | null;
             expectedAccountId: string;
+            fallbackCondition?: string;
+            fallbackSources?: components["schemas"]["MarketSource"][];
             /** Format: uri */
             imageUrl?: string | null;
-            resolutionSource?: string | null;
-            rules: string;
+            longDelayDays?: number | null;
+            noCondition?: string;
+            primarySource?: components["schemas"]["MarketSource"] | null;
             slug?: string;
             tags?: string[];
             title: string;
+            yesCondition?: string;
         };
         CreateNoticeBody: {
             /** @description A PostDocument (the editor’s JSON). Formatting outside the allow-list is removed; at most 5000 characters of text and 10 images, each an upload of the author's own. */
@@ -3674,18 +3688,24 @@ export type components = {
             closeAt: string;
             /** Format: date-time */
             createdAt: string;
+            delayHandling: string;
             description: string | null;
+            /** Format: date-time */
+            eventDeadline: string | null;
+            fallbackCondition: string;
+            fallbackSources: components["schemas"]["MarketSource"][];
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
             lastPrice: number | null;
+            longDelayDays: number | null;
+            noCondition: string;
             /** Format: date-time */
             openAt: string | null;
-            resolutionSource: string | null;
+            primarySource: components["schemas"]["MarketSource"] | null;
             /** Format: date-time */
             resolvedAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
-            rules: string;
             /** Format: date-time */
             settledAt: string | null;
             slug: string;
@@ -3697,6 +3717,7 @@ export type components = {
             tradeCount: number;
             traderCount: number;
             volumeCoin: components["schemas"]["CoinAmount"];
+            yesCondition: string;
         };
         MarketEvent: {
             actorId: string | null;
@@ -3713,6 +3734,10 @@ export type components = {
         };
         /** @enum {string} */
         MarketResult: "YES" | "NO" | "VOID";
+        MarketSource: {
+            name: string;
+            url: string;
+        };
         MarketSummary: {
             category: {
                 nameKo: string;
@@ -3945,7 +3970,7 @@ export type components = {
         /** @enum {string} */
         OnboardingStep: "consent" | "verification" | "nickname";
         /** @enum {string} */
-        OpenItem: "rules" | "category" | "tags";
+        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "category" | "tags";
         Order: {
             amountCoin: components["schemas"]["CoinAmount"] | null;
             /** Format: date-time */
@@ -4659,15 +4684,22 @@ export type components = {
             categoryId?: number;
             /** Format: date-time */
             closeAt?: string;
+            delayHandling?: string;
             description?: string | null;
+            /** Format: date-time */
+            eventDeadline?: string | null;
             expectedAccountId: string;
+            fallbackCondition?: string;
+            fallbackSources?: components["schemas"]["MarketSource"][];
             /** Format: uri */
             imageUrl?: string | null;
-            resolutionSource?: string | null;
-            rules?: string;
+            longDelayDays?: number | null;
+            noCondition?: string;
+            primarySource?: components["schemas"]["MarketSource"] | null;
             slug?: string;
             tags?: string[];
             title?: string;
+            yesCondition?: string;
         };
         UpdateMeBody: {
             expectedAccountId: string;

@@ -6,10 +6,11 @@
  * person's rule counts even when an operator's change of the number brought it to three; links
  * compared normalised (case of the host, trailing slash, tracking parameters); the window's edges,
  * for both rules;
- * items deleted or hidden since counted as the uses they were; the market's official sources and
- * an operator's writes left out; an edit that puts a link in counted, one that keeps it not (a
- * post's or a comment's); the first 20 links of an item in body order looked at, and an edit that
- * brings one into them counting it (owner decision 2026-10-22); a body with thousands of links
+ * items deleted or hidden since counted as the uses they were; the market's official sources (the
+ * addresses of its primary and fallback sources, #23) and an operator's writes left out; an edit
+ * that puts a link in counted, one that keeps it not (a post's or a comment's); the first 20
+ * links of an item in body order looked at, and an edit that brings one into them counting it
+ * (owner decision 2026-10-22); a body with thousands of links
  * taking no more locks than the links it records, and a write refused or changing nothing taking
  * none; the review list grouped by link and rule, newest group first, a group's entries with each
  * item's own author a page at a time, admins only; and the mark '확인함' (owner decision
@@ -90,7 +91,7 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     for (const who of [author, other, third]) await completeOnboarding(t.db, { userId: who.id });
     market = await createMarket(t.db, {
       title: '기준금리 인하',
-      resolutionSource: '한국은행 보도자료 https://www.bok.or.kr',
+      primarySource: { name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
     });
   });
 
@@ -412,8 +413,20 @@ describe.skipIf(!hasTestInfra)('repeated links (integration, #187)', () => {
     }
     expect(await uses()).toBe(0);
     expect(await flags()).toEqual([]);
-    // Another market's source is not this market's: on a market without it, it counts.
-    const elsewhere = await createMarket(t.db, { resolutionSource: '통계청' });
+    // A fallback source's address is an official source too (#23: every priority); a source
+    // with no address yet gives none.
+    const fallback = await createMarket(t.db, {
+      primarySource: { name: '통계청', url: '' },
+      fallbackSources: [
+        { name: '국가통계포털', url: '' },
+        { name: '한국은행 경제통계시스템', url: 'https://ecos.bok.or.kr' },
+      ],
+    });
+    await writePost(linkedDoc('https://ecos.bok.or.kr/api/x'), other, fallback.id);
+    expect(await uses()).toBe(0);
+    // Another market's source is not this market's: on a market without it, it counts — and a
+    // source named with no address, like this one's, exempts nothing.
+    const elsewhere = await createMarket(t.db, { primarySource: { name: '통계청', url: '' } });
     for (let index = 0; index < 3; index += 1) {
       await writePost(linkedDoc('https://www.bok.or.kr/x'), third, elsewhere.id);
     }

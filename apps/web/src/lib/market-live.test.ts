@@ -59,8 +59,14 @@ const card: MarketSummary = { ...summary };
 const detail: Market = {
   ...summary,
   description: null,
-  rules: '한국은행 발표 기준.',
-  resolutionSource: null,
+  yesCondition: '한국은행 발표 기준.',
+  noCondition: '',
+  eventDeadline: null,
+  primarySource: null,
+  fallbackSources: [],
+  fallbackCondition: '',
+  longDelayDays: null,
+  delayHandling: '',
   resolvedAt: null,
   settledAt: null,
   tags: [],
@@ -393,7 +399,13 @@ describe('joinMarket', () => {
     tradeCount: 11,
     traderCount: 7,
   };
-  const stale: Market = { ...detail, title: '10월 기준금리 인하?', traderCount: 9 };
+  const stale: Market = {
+    ...detail,
+    title: '10월 기준금리 인하?',
+    yesCondition: '10월 회의에서 기준금리를 내리면 YES.',
+    primarySource: { name: '한국은행', url: 'https://www.bok.or.kr' },
+    traderCount: 9,
+  };
 
   it('keeps the live stats under an older snapshot while taking its descriptive fields', () => {
     const joined = joinMarket(live, stale);
@@ -401,6 +413,9 @@ describe('joinMarket', () => {
     expect(joined.volumeCoin).toBe('130000');
     expect(joined.tradeCount).toBe(11);
     expect(joined.title).toBe(stale.title);
+    // The rule items (#23) are descriptive too: only a REST answer carries an admin's edit of them.
+    expect(joined.yesCondition).toBe(stale.yesCondition);
+    expect(joined.primarySource).toEqual(stale.primarySource);
     // `traderCount` rides with the price, NOT with the descriptive fields: a trade moves it, so
     // an older snapshot must not drag the participant count back under a newer probability —
     // even though this stale answer names a higher one.

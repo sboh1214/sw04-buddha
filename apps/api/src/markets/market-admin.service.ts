@@ -14,6 +14,8 @@ import {
   MARKET_TAGS_MIN,
   marketSlugSchema,
   missingOpenItems,
+  missingRuleItems,
+  rulesEditedPayload,
   serializeCoinAmount,
   SETTLEMENT_STEPS,
   slugify,
@@ -23,10 +25,12 @@ import {
   type AdminSettlementStep,
   type CategoryUnselectableReason,
   type CreateMarketBody,
+  type MarketRuleItems,
   type MarketStatus,
   type MarketSummary,
   type OpenItem,
   type ResolveMarketBody,
+  type RuleItem,
   type UpdateMarketBody,
   type WithoutExpectedAccount,
 } from '@buddha/shared';
@@ -46,9 +50,16 @@ import { MarketPublisher } from '../realtime/market-publisher.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { lockMarket } from './market-lock.js';
 import {
+  readMarketSources,
+  replaceMarketSources,
+  sameSources,
+  type MarketSources,
+} from './market-sources.js';
+import {
   likePattern,
   marketTagNames,
   marketWithCategory,
+  ruleItemsOf,
   toMarket,
   toMarketSummary,
   type MarketRow,
@@ -108,14 +119,86 @@ function wrongStatus(status: MarketStatus): AppError {
 }
 
 /**
- * PLAN 12: a market trades against its rules, so it cannot be edited down to none while open.
- * (Opening without them is the open-items check's `rules`, `openItemsMissing`.)
+ * PLAN 12: a market trades against its rules, so an edit may not leave a rule item missing on an
+ * open market that it had filled (#23, ADR-0097): one issue per such item, in RULE_ITEMS order. An
+ * item missing already — every one, on a market opened before #23 — blocks no other edit. (Opening
+ * without them is the open-items check's, `openItemsMissing`.)
  */
-function rulesRequired(message: string): AppError {
+function rulesRequired(items: readonly RuleItem[]): AppError {
   return new AppError('RULES_REQUIRED', {
-    message,
-    details: [{ path: ['rules'], message: 'required' }],
+    message: `Rule items cannot be left missing while the market is open: ${items.join(', ')}`,
+    details: items.map((item) => ({ path: [item], message: 'required while open' })),
   });
+}
+
+/** The rule items a create sends none of start as these: blank, null or none (#23). */
+const BLANK_RULE_ITEMS: MarketRuleItems = {
+  description: null,
+  yesCondition: '',
+  noCondition: '',
+  eventDeadline: null,
+  primarySource: null,
+  fallbackSources: [],
+  fallbackCondition: '',
+  longDelayDays: null,
+  delayHandling: '',
+};
+
+/** The rule-item fields of a create or update body (`marketFields`, #23). */
+type RuleItemsBody = Pick<WithoutExpectedAccount<UpdateMarketBody>, RuleItem>;
+
+/**
+ * The rule items a write leaves (#23): the body's value of each item it sends, the stored one of
+ * each it does not — null clears a nullable item, and `fallbackSources` replaces the whole ordered
+ * list. The event deadline as an ISO instant, as `ruleItemsOf` reads it back.
+ */
+function withRuleItems(stored: MarketRuleItems, body: RuleItemsBody): MarketRuleItems {
+  const { eventDeadline } = body;
+  return {
+    description: body.description === undefined ? stored.description : body.description,
+    yesCondition: body.yesCondition ?? stored.yesCondition,
+    noCondition: body.noCondition ?? stored.noCondition,
+    eventDeadline:
+      eventDeadline === undefined
+        ? stored.eventDeadline
+        : eventDeadline === null
+          ? null
+          : new Date(eventDeadline).toISOString(),
+    primarySource: body.primarySource === undefined ? stored.primarySource : body.primarySource,
+    fallbackSources: body.fallbackSources ?? stored.fallbackSources,
+    fallbackCondition: body.fallbackCondition ?? stored.fallbackCondition,
+    longDelayDays: body.longDelayDays === undefined ? stored.longDelayDays : body.longDelayDays,
+    delayHandling: body.delayHandling ?? stored.delayHandling,
+  };
+}
+
+/** The `markets` columns of the rule items; the sources are `market_sources` rows. */
+function ruleItemColumns(items: MarketRuleItems) {
+  return {
+    description: items.description,
+    yesCondition: items.yesCondition,
+    noCondition: items.noCondition,
+    eventDeadline: items.eventDeadline === null ? null : new Date(items.eventDeadline),
+    fallbackCondition: items.fallbackCondition,
+    longDelayDays: items.longDelayDays,
+    delayHandling: items.delayHandling,
+  };
+}
+
+/**
+ * A switch condition says when the judgement moves to a fallback source (#172 item 9), so a write
+ * whose result has one and no fallback is refused naming it (#23): the body's items over the
+ * stored ones. The caller asks only when the write sends either, so a row stored that way by
+ * another writer blocks no unrelated edit.
+ */
+function assertFallbackCondition(items: MarketRuleItems): void {
+  if (items.fallbackSources.length === 0 && items.fallbackCondition.trim() !== '') {
+    throw fieldError(
+      'fallbackCondition',
+      'A switch condition needs a fallback source to switch to',
+      'no fallback source',
+    );
+  }
 }
 
 /** The top-level message of a category refusal, per reason; the detail is the reason itself. */
@@ -217,17 +300,20 @@ function assertFutureCloseAt(closeAt: Date, now: Date): void {
 
 /**
  * What an `admin_actions` payload records about a market (jsonb: Coin as strings, dates as ISO,
- * never bigint). `tags` are its tag names in order (`marketTagNames`; #17): the row holds none, so
- * the caller hands them in — a tag edit is then a `market_update` with its before and after
- * (ADR-0093 decision 2 #172 item 14).
+ * never bigint). `tags` are its tag names in order (`marketTagNames`; #17) and `sources` its
+ * sources (`readMarketSources`; #23): the row holds neither, so the caller hands them in — a tag or
+ * source edit is then a `market_update` with its before and after (ADR-0093 decision 2 #172 item
+ * 14). The rule items (`ruleItemsOf`) are in it whole, so an edit of any of them moves it.
  */
-function snapshot(row: MarketRow, tags: readonly string[]): Record<string, unknown> {
+function snapshot(
+  row: MarketRow,
+  tags: readonly string[],
+  sources: MarketSources,
+): Record<string, unknown> {
   return {
     slug: row.slug,
     title: row.title,
-    description: row.description,
-    rules: row.rules,
-    resolutionSource: row.resolutionSource,
+    ...ruleItemsOf(row, sources),
     categoryId: row.categoryId,
     tags: [...tags],
     imageUrl: row.imageUrl,
@@ -312,7 +398,9 @@ export class MarketAdminService {
    * N02 §5). The slug is the admin's or derived from the title; a taken slug is a
    * VALIDATION_ERROR naming `slug` (the unique index decides). The category must be one a new
    * market may be filed under (`assertSelectableCategory`); the tags are linked in the order
-   * sent, none when absent (#17).
+   * sent, none when absent (#17). A rule item not sent starts blank (#23): a draft may save any
+   * missing, and the open-items check names them; a switch condition with no fallback source is
+   * refused naming `fallbackCondition` before anything else is read.
    */
   async create(
     adminId: string,
@@ -335,6 +423,8 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     const closeAt = new Date(body.closeAt);
     const slug = body.slug ?? generateSlug(body.title);
+    const items = withRuleItems(BLANK_RULE_ITEMS, body);
+    assertFallbackCondition(items);
     // Every instant this service writes or compares comes from the database clock, read inside
     // the transaction AFTER the last lock it queues on (clock.ts). The category's rows are taken
     // FOR SHARE first (`readCategorySelectability`), a read that can wait behind a category write
@@ -352,9 +442,7 @@ export class MarketAdminService {
         .values({
           slug,
           title: body.title,
-          description: body.description ?? null,
-          rules: body.rules,
-          resolutionSource: body.resolutionSource ?? null,
+          ...ruleItemColumns(items),
           categoryId: body.categoryId,
           imageUrl: body.imageUrl ?? null,
           status: 'draft',
@@ -377,6 +465,11 @@ export class MarketAdminService {
     }
     if (!inserted) throw new AppError('INTERNAL', { message: 'Market insert failed' });
     const tags = await linkTags(tx, inserted.id, body.tags ?? []);
+    const sources: MarketSources = {
+      primarySource: items.primarySource,
+      fallbackSources: items.fallbackSources,
+    };
+    await replaceMarketSources(tx, inserted.id, sources);
     // The event references the market and the market keys on the event, so the row is
     // inserted, then the event, then the key written back: two statements, one transaction,
     // and the row that leaves it has the key every other transition writes in its UPDATE. No
@@ -388,7 +481,8 @@ export class MarketAdminService {
         type: 'created',
         actorId: adminId,
         toStatus: 'draft',
-        // The body is JSON-safe as parsed: strings, numbers, nulls and the tag names as sent.
+        // The body is JSON-safe as parsed: strings, numbers, nulls, the tag names and the sources
+        // as sent.
         payload: { ...body, slug },
         createdAt: now,
       })
@@ -405,22 +499,33 @@ export class MarketAdminService {
       type: 'market_create',
       targetType: 'market',
       targetId: row.id,
-      payload: { after: snapshot(row, tags) },
+      payload: { after: snapshot(row, tags, sources) },
       createdAt: now,
     });
     // Read the detail inside the transaction, as every other write path does: after the
     // commit it would be a fresh snapshot on the pool and could already show somebody
     // else's write in the answer to "here is what you created".
-    return await this.toAdminMarket(tx, row, tags);
+    return await this.toAdminMarket(tx, row, tags, sources);
   }
 
   /**
    * PATCH per status: a draft accepts every field; an open market accepts the descriptive
-   * fields, the close time, the category and the tags, and refuses `slug` naming the field; any
-   * other status — REVIEW, SCHEDULED and PAUSED too, whose edits #78, #21 and #114 define —
-   * refuses everything naming `status`. A rules change is also a `rules_edited` market event
-   * (PLAN 12: allowed after a warning, which is the web's dialog), which changes no status: its
-   * `from_status`/`to_status` stay null.
+   * fields, the rule items, the close time, the category and the tags, and refuses `slug` naming
+   * the field; any other status — REVIEW, SCHEDULED and PAUSED too, whose edits #78, #21 and #114
+   * define — refuses everything naming `status`. An open market's rule items stay editable until
+   * #80's supplements replace the path (ADR-0096, ADR-0097), but an edit that would leave one
+   * missing that the market had filled is RULES_REQUIRED naming each (`rulesRequired`). Refusals
+   * come in this order: status, slug, a switch condition with no fallback source
+   * (`assertFallbackCondition`), RULES_REQUIRED, tags, category, close time.
+   *
+   * A change of any rule item (`changedRuleItems`: 배경 included, the title not) is also a
+   * `rules_edited` market event (PLAN 12: allowed after a warning, which is the web's dialog)
+   * whose payload names the items changed with each one's before and after
+   * (`rulesEditedPayload`, #23). It changes no status: its `from_status`/`to_status` stay null.
+   *
+   * `primarySource` and `fallbackSources` are the market's `market_sources` rows (#23): sending
+   * either writes the whole set again (`replaceMarketSources`) unless it is the stored one; the
+   * other keeps its stored value.
    *
    * `tags` replace the whole ordered set (#17, ADR-0093 decision 2 #172 items 2 and 14): the
    * market's `market_tags` rows are deleted and the new ones linked — unless they name the same
@@ -431,7 +536,7 @@ export class MarketAdminService {
    *
    * An edit that MOVES an open market publishes `market:status` after COMMIT. No live event can
    * carry a descriptive field: `market:tick` and `market:status` carry absolute numbers, and a
-   * client takes `title`, `rules`, `category` and `closeAt` from a REST answer alone
+   * client takes `title`, the rule items, `category` and `closeAt` from a REST answer alone
    * (`joinMarket`, market-live.ts), so without it a viewer would keep the old text and close
    * time until something else made it refetch (A-M4-36).
    */
@@ -450,11 +555,25 @@ export class MarketAdminService {
             'immutable while open',
           );
         }
+      } else if (current.status !== 'draft') {
+        throw wrongStatus(current.status);
+      }
+      // Under the row lock every writer of a market's sources holds, so the set read is the set
+      // replaced.
+      const currentSources = await readMarketSources(tx, id);
+      const before = ruleItemsOf(current, currentSources);
+      const items = withRuleItems(before, body);
+      if (body.fallbackSources !== undefined || body.fallbackCondition !== undefined) {
+        assertFallbackCondition(items);
+      }
+      if (current.status === 'open') {
         // What open() required must hold for as long as the market trades: a draft may keep
-        // blank rules or no tags, a live market may not be edited down to none.
-        if (body.rules !== undefined && body.rules.trim() === '') {
-          throw rulesRequired('Rules cannot be blank while the market is open');
-        }
+        // rule items missing or no tags, a live market may not be edited down to them.
+        const missingBefore = missingRuleItems(before);
+        const newlyMissing = missingRuleItems(items).filter(
+          (item) => !missingBefore.includes(item),
+        );
+        if (newlyMissing.length > 0) throw rulesRequired(newlyMissing);
         if (body.tags !== undefined && body.tags.length < MARKET_TAGS_MIN) {
           throw fieldError(
             'tags',
@@ -462,8 +581,6 @@ export class MarketAdminService {
             'required while open',
           );
         }
-      } else if (current.status !== 'draft') {
-        throw wrongStatus(current.status);
       }
 
       // A category change takes the new category's rows FOR SHARE (`readCategorySelectability`)
@@ -483,9 +600,15 @@ export class MarketAdminService {
       const now = await clockTimestamp(tx);
       const set: Partial<typeof schema.markets.$inferInsert> = { updatedAt: now };
       if (body.title !== undefined) set.title = body.title;
-      if (body.description !== undefined) set.description = body.description ?? null;
-      if (body.rules !== undefined) set.rules = body.rules;
-      if (body.resolutionSource !== undefined) set.resolutionSource = body.resolutionSource ?? null;
+      // The rule items the body sends, as `items` holds them; the sources are written below.
+      const columns = ruleItemColumns(items);
+      if (body.description !== undefined) set.description = columns.description;
+      if (body.yesCondition !== undefined) set.yesCondition = columns.yesCondition;
+      if (body.noCondition !== undefined) set.noCondition = columns.noCondition;
+      if (body.eventDeadline !== undefined) set.eventDeadline = columns.eventDeadline;
+      if (body.fallbackCondition !== undefined) set.fallbackCondition = columns.fallbackCondition;
+      if (body.longDelayDays !== undefined) set.longDelayDays = columns.longDelayDays;
+      if (body.delayHandling !== undefined) set.delayHandling = columns.delayHandling;
       if (body.imageUrl !== undefined) set.imageUrl = body.imageUrl ?? null;
       if (body.slug !== undefined) set.slug = body.slug;
       if (categoryChange) {
@@ -525,24 +648,34 @@ export class MarketAdminService {
         await tx.delete(schema.marketTags).where(eq(schema.marketTags.marketId, id));
         tags = await linkTags(tx, id, body.tags);
       }
+      let sources = currentSources;
+      const nextSources: MarketSources = {
+        primarySource: items.primarySource,
+        fallbackSources: items.fallbackSources,
+      };
+      if (!sameSources(nextSources, currentSources)) {
+        await replaceMarketSources(tx, id, nextSources);
+        sources = nextSources;
+      }
 
-      if (body.rules !== undefined && body.rules.trim() !== current.rules.trim()) {
+      const edited = rulesEditedPayload(before, ruleItemsOf(row, sources));
+      if (edited) {
         await tx.insert(schema.marketEvents).values({
           marketId: id,
           type: 'rules_edited',
           actorId: adminId,
-          payload: { before: current.rules, after: row.rules },
+          payload: { ...edited },
           createdAt: now,
         });
       }
-      const before = snapshot(current, currentTags);
-      const after = snapshot(row, tags);
+      const beforeSnapshot = snapshot(current, currentTags, currentSources);
+      const afterSnapshot = snapshot(row, tags, sources);
       await tx.insert(schema.adminActions).values({
         adminId,
         type: 'market_update',
         targetType: 'market',
         targetId: current.id,
-        payload: { before, after },
+        payload: { before: beforeSnapshot, after: afterSnapshot },
         createdAt: now,
       });
       // Gated twice, so a no-op PATCH costs no viewer a request. Of the two statuses an edit
@@ -552,8 +685,10 @@ export class MarketAdminService {
       // and not `updatedAt`, so resaving identical text differs nowhere, and the gate stays exact
       // when the next editable column is added.
       return {
-        market: await this.toAdminMarket(tx, row, tags),
-        moved: current.status === 'open' && JSON.stringify(before) !== JSON.stringify(after),
+        market: await this.toAdminMarket(tx, row, tags, sources),
+        moved:
+          current.status === 'open' &&
+          JSON.stringify(beforeSnapshot) !== JSON.stringify(afterSnapshot),
         // The delayed close job is keyed by market AND instant (marketCloseJobId), so a moved
         // close time is a cancel of the old registration plus a new one, never an edit.
         closeMoved:
@@ -578,10 +713,10 @@ export class MarketAdminService {
   /**
    * draft → open, the interim edge until #78's review and #21's scheduled open replace it
    * (`INTERIM_MARKET_TRANSITIONS`). Any other status — REVIEW and SCHEDULED included — is refused
-   * naming `status`. A draft the open-items check finds wanting (#17: rules, never without them
-   * — PLAN 0.2; a category a new market may be filed under; 1..5 tags) is refused with
-   * OPEN_ITEMS_MISSING naming every missing item, before the past close time is: what the market
-   * lacks comes first, as RULES_REQUIRED did. The category is read FOR SHARE
+   * naming `status`. A draft the open-items check finds wanting (#17, #23: the title and every
+   * rule item, never without them — PLAN 0.2; a category a new market may be filed under; 1..5
+   * tags) is refused with OPEN_ITEMS_MISSING naming every missing item, before the past close time
+   * is: what the market lacks comes first, as RULES_REQUIRED did. The category is read FOR SHARE
    * (`readCategorySelectability`), so a hide that commits meanwhile either precedes this read or
    * waits for the open to commit. Writes the 'opened' event, then publishes
    * `market:status` and registers the delayed `market.close` job for `closeAt` (PLAN 5.5). No
@@ -594,9 +729,11 @@ export class MarketAdminService {
       const current = await this.lockedRow(tx, id);
       if (current.status !== 'draft') throw wrongStatus(current.status);
       const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
       const category = await readCategorySelectability(tx, current.categoryId);
       const missing = missingOpenItems({
-        rules: current.rules,
+        title: current.title,
+        ...ruleItemsOf(current, sources),
         categorySelectable: category.found && category.reason === null,
         tagCount: tags.length,
       });
@@ -620,10 +757,10 @@ export class MarketAdminService {
         type: 'market_open',
         targetType: 'market',
         targetId: current.id,
-        payload: { before: snapshot(current, tags), after: snapshot(row, tags) },
+        payload: { before: snapshot(current, tags, sources), after: snapshot(row, tags, sources) },
         createdAt: now,
       });
-      return { market: await this.toAdminMarket(tx, row, tags), now };
+      return { market: await this.toAdminMarket(tx, row, tags, sources), now };
     });
     await Promise.all([
       this.publishStatus(market),
@@ -651,6 +788,7 @@ export class MarketAdminService {
       // after it.
       const now = await clockTimestamp(tx);
       const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
       const row = await this.transition(tx, current, {
         to: 'closed',
         type: 'closed',
@@ -663,10 +801,13 @@ export class MarketAdminService {
         type: 'market_close',
         targetType: 'market',
         targetId: current.id,
-        payload: { before: snapshot(current, tags), after: snapshot(row, tags) },
+        payload: { before: snapshot(current, tags, sources), after: snapshot(row, tags, sources) },
         createdAt: now,
       });
-      return { market: await this.toAdminMarket(tx, row, tags), closeAt: current.closeAt };
+      return {
+        market: await this.toAdminMarket(tx, row, tags, sources),
+        closeAt: current.closeAt,
+      };
     });
     await Promise.all([this.publishStatus(market), this.jobs.cancelClose(market.id, closeAt)]);
     return market;
@@ -703,6 +844,7 @@ export class MarketAdminService {
       // market while the transaction queued, and the job id carries this instant.
       const now = await clockTimestamp(tx);
       const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
       const detail = {
         result: body.result,
         note: body.note ?? null,
@@ -733,10 +875,14 @@ export class MarketAdminService {
         type: 'market_resolve',
         targetType: 'market',
         targetId: current.id,
-        payload: { ...detail, before: snapshot(current, tags), after: snapshot(row, tags) },
+        payload: {
+          ...detail,
+          before: snapshot(current, tags, sources),
+          after: snapshot(row, tags, sources),
+        },
         createdAt: now,
       });
-      return { market: await this.toAdminMarket(tx, row, tags), now };
+      return { market: await this.toAdminMarket(tx, row, tags, sources), now };
     });
     // `resolved_at` was written as `now`, so the job is due at once; its id carries the
     // judgement instant (marketFinalizeJobId).
@@ -790,7 +936,8 @@ export class MarketAdminService {
       .where(eq(schema.markets.id, id))
       .limit(1);
     if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    return this.toAdminMarket(this.db, row, await marketTagNames(this.db, id));
+    const tags = await marketTagNames(this.db, id);
+    return this.toAdminMarket(this.db, row, tags, await readMarketSources(this.db, id));
   }
 
   /**
@@ -834,9 +981,10 @@ export class MarketAdminService {
 
   /**
    * The admin detail: the public shape plus exposure figures, settlement steps, the event log
-   * and what the open-items check finds missing (#17, every status). Reads through `executor`
-   * so a transition returns the state it just committed; `tags` are the market's names in order
-   * (`marketTagNames`), which every caller holds already.
+   * and what the open-items check finds missing (#17, #23, every status). Reads through
+   * `executor` so a transition returns the state it just committed; `tags` are the market's names
+   * in order (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every
+   * caller holds already.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -847,6 +995,7 @@ export class MarketAdminService {
     executor: Executor,
     row: MarketRow,
     tags: string[],
+    sources: MarketSources,
   ): Promise<AdminMarket> {
     const parent = alias(schema.categories, 'parent');
     const child = alias(schema.categories, 'child');
@@ -915,7 +1064,7 @@ export class MarketAdminService {
       .limit(ADMIN_EVENTS_LIMIT);
 
     return {
-      ...toMarket(row, { slug: category.slug, nameKo: category.nameKo }, tags),
+      ...toMarket(row, { slug: category.slug, nameKo: category.nameKo }, tags, sources),
       createdBy: row.createdBy,
       updatedAt: row.updatedAt.toISOString(),
       // sum() over bigint is numeric, which pg hands over as a string of digits.
@@ -924,7 +1073,8 @@ export class MarketAdminService {
       settlementSteps: toSettlementSteps(stepRows),
       events: events.map(toMarketEvent),
       missingOpenItems: missingOpenItems({
-        rules: row.rules,
+        title: row.title,
+        ...ruleItemsOf(row, sources),
         categorySelectable: unselectable === null,
         tagCount: tags.length,
       }),

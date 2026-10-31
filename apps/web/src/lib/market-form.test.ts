@@ -1,8 +1,12 @@
 import {
+  MARKET_FALLBACK_SOURCES_MAX,
+  MARKET_LONG_DELAY_DAYS_MAX,
+  MARKET_LONG_DELAY_DAYS_MIN,
   MARKET_TAGS_MAX,
   MARKET_TAGS_MIN,
   TAG_NAME_MAX,
   marketTagsSchema,
+  missingRuleItems,
   tagNameSchema,
 } from '@buddha/shared';
 import fc from 'fast-check';
@@ -16,6 +20,7 @@ import {
   FOLLOW_SERVER_RESET,
   type MarketFormValues,
   addTags,
+  formRuleItems,
   isHttpUrl,
   marketFormSchema,
   marketToFormValues,
@@ -37,9 +42,16 @@ const now = () => NOW;
 const valid: MarketFormValues = {
   ...EMPTY_MARKET_FORM,
   title: '  10월 기준금리가 인하될까?  ',
-  description: '설명',
-  rules: '한국은행 발표 기준',
-  resolutionSource: '한국은행',
+  description: '배경',
+  yesCondition: '한국은행이 기준금리를 내리면 YES',
+  noCondition: '사건 기한까지 내리지 않으면 NO',
+  eventDeadline: '2026-10-31T23:59',
+  primarySourceName: '한국은행',
+  primarySourceUrl: 'https://www.bok.or.kr',
+  fallbackSources: [],
+  fallbackCondition: '',
+  longDelayDays: '14',
+  delayHandling: '장기 지연 기한까지 발표가 없으면 무효로 판정한다.',
   categoryId: '3',
   imageUrl: 'https://example.com/a.png',
   closeAt: '2026-10-01T09:00',
@@ -48,6 +60,23 @@ const valid: MarketFormValues = {
 
 const messages = (result: { error?: { issues: { message: string }[] } }) =>
   result.error?.issues.map((issue) => issue.message) ?? [];
+
+const pick = <K extends keyof MarketFormValues>(values: MarketFormValues, keys: readonly K[]) =>
+  Object.fromEntries(keys.map((key) => [key, values[key]])) as Pick<MarketFormValues, K>;
+
+/** The form's rule-item fields (#23). */
+const RULE_FIELDS = [
+  'description',
+  'yesCondition',
+  'noCondition',
+  'eventDeadline',
+  'primarySourceName',
+  'primarySourceUrl',
+  'fallbackSources',
+  'fallbackCondition',
+  'longDelayDays',
+  'delayHandling',
+] as const;
 
 describe('isHttpUrl', () => {
   it('accepts http(s) only', () => {
@@ -69,11 +98,131 @@ describe('marketFormSchema', () => {
     expect(result.data?.title).toBe('10월 기준금리가 인하될까?');
   });
 
-  it('accepts blank rules, description, source, image and slug (draft may lack them)', () => {
+  it('accepts every rule item, the image and the slug blank (a draft may lack them, #23)', () => {
     expect(
-      schema.safeParse({ ...valid, rules: '', description: '', resolutionSource: '', imageUrl: '' })
+      schema.safeParse({ ...EMPTY_MARKET_FORM, ...pick(valid, ['title', 'categoryId', 'closeAt']) })
         .success,
     ).toBe(true);
+    // A source with one of its inputs blank is a draft's too: the open-items check names it.
+    expect(
+      schema.safeParse({
+        ...valid,
+        primarySourceUrl: '',
+        fallbackSources: [{ name: '', url: 'https://kosis.kr' }],
+        fallbackCondition: '1차 출처가 없으면',
+      }).success,
+    ).toBe(true);
+  });
+
+  it("checks each source as the API's marketSourceSchema: http(s), 500 characters, trimmed", () => {
+    const at = (values: Partial<MarketFormValues>) =>
+      schema.safeParse({ ...valid, ...values }).error?.issues.map((issue) => ({
+        path: issue.path.join('.'),
+        message: issue.message,
+      })) ?? [];
+    for (const bad of ['ftp://example.com', 'javascript:alert(1)', 'example.com', 'mailto:a@b.c']) {
+      expect(at({ primarySourceUrl: bad }), bad).toEqual([
+        { path: 'primarySourceUrl', message: copy.errMarketSourceUrl },
+      ]);
+      expect(
+        at({ fallbackSources: [{ name: '통계청', url: bad }], fallbackCondition: '없으면' }),
+        bad,
+      ).toEqual([{ path: 'fallbackSources.0.url', message: copy.errMarketSourceUrl }]);
+    }
+    const url500 = `https://e.com/${'a'.repeat(500 - 'https://e.com/'.length)}`;
+    expect(at({ primarySourceUrl: url500 })).toEqual([]);
+    expect(at({ primarySourceUrl: `${url500}a` })).toEqual([
+      { path: 'primarySourceUrl', message: copy.errMarketSourceUrl },
+    ]);
+    expect(at({ primarySourceName: '가'.repeat(500) })).toEqual([]);
+    expect(at({ primarySourceName: '가'.repeat(501) })).toEqual([
+      { path: 'primarySourceName', message: copy.errMarketSourceName },
+    ]);
+    expect(
+      schema.safeParse({ ...valid, primarySourceUrl: '  http://bok.or.kr  ' }).data
+        ?.primarySourceUrl,
+    ).toBe('http://bok.or.kr');
+  });
+
+  it('refuses a fallback row with both inputs blank, and a fourth fallback', () => {
+    const row = (name: string) => ({ name, url: `https://e.com/${name}` });
+    const issues = (values: Partial<MarketFormValues>) =>
+      schema
+        .safeParse({ ...valid, fallbackCondition: '없으면', ...values })
+        .error?.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`) ?? [];
+    expect(issues({ fallbackSources: [row('a'), { name: '  ', url: '' }] })).toEqual([
+      `fallbackSources.1: ${copy.errMarketSourceEmpty}`,
+    ]);
+    const full = Array.from({ length: MARKET_FALLBACK_SOURCES_MAX }, (_, index) =>
+      row(String(index)),
+    );
+    expect(issues({ fallbackSources: full })).toEqual([]);
+    expect(issues({ fallbackSources: [...full, row('x')] })).toEqual([
+      `fallbackSources: ${copy.errMarketFallbackSourcesMax}`,
+    ]);
+  });
+
+  it('refuses a switch condition with no fallback to switch to, as the API does', () => {
+    expect(
+      messages(schema.safeParse({ ...valid, fallbackCondition: '1차 출처가 없으면' })),
+    ).toEqual([copy.errMarketFallbackConditionNoSource]);
+    expect(schema.safeParse({ ...valid, fallbackCondition: '   ' }).success).toBe(true);
+  });
+
+  it('takes the long-delay deadline as whole days from 1 to 365, or blank', () => {
+    const days = (longDelayDays: string) => messages(schema.safeParse({ ...valid, longDelayDays }));
+    for (const ok of [
+      '',
+      String(MARKET_LONG_DELAY_DAYS_MIN),
+      String(MARKET_LONG_DELAY_DAYS_MAX),
+      ' 30 ',
+    ]) {
+      expect(days(ok), ok).toEqual([]);
+    }
+    for (const bad of ['0', '366', '1.5', '-3', '1e2', '열흘']) {
+      expect(days(bad), bad).toEqual([copy.errMarketLongDelayDays]);
+    }
+  });
+
+  it('takes the event deadline as a KST time or blank, unordered against the close time', () => {
+    // Its order against the other times is #22's question (ADR-0097): the form asks none.
+    expect(schema.safeParse({ ...valid, eventDeadline: '' }).success).toBe(true);
+    expect(schema.safeParse({ ...valid, eventDeadline: '2026-09-30T09:00' }).success).toBe(true);
+    expect(messages(schema.safeParse({ ...valid, eventDeadline: 'nope' }))).toEqual([
+      copy.errMarketEventDeadline,
+    ]);
+  });
+
+  it('refuses an event deadline the API cannot store, under its input (ADR-0097)', () => {
+    // 0100-01-01 09:00 KST is STORABLE_INSTANT_MIN, the first instant the API keeps.
+    expect(schema.safeParse({ ...valid, eventDeadline: '0100-01-01T09:00' }).success).toBe(true);
+    expect(schema.safeParse({ ...valid, eventDeadline: '9999-12-31T23:59' }).success).toBe(true);
+    // 0001-01-01 00:00 KST is year 0000 in UTC, which Postgres refuses; one minute before the
+    // bound is year 99, which the API would read back as 1999.
+    for (const eventDeadline of ['0001-01-01T00:00', '0100-01-01T08:59']) {
+      const result = schema.safeParse({ ...valid, eventDeadline });
+      expect(
+        result.error?.issues.map((issue) => issue.path),
+        eventDeadline,
+      ).toEqual([['eventDeadline']]);
+      expect(messages(result), eventDeadline).toEqual([copy.errMarketEventDeadline]);
+    }
+  });
+
+  it('bounds every rule text to 5,000 characters', () => {
+    for (const field of ['description', 'yesCondition', 'noCondition', 'delayHandling'] as const) {
+      expect(schema.safeParse({ ...valid, [field]: 'a'.repeat(5000) }).success, field).toBe(true);
+      expect(messages(schema.safeParse({ ...valid, [field]: 'a'.repeat(5001) })), field).toEqual([
+        copy.errMarketText,
+      ]);
+    }
+    const withFallback = {
+      ...valid,
+      fallbackSources: [{ name: '통계청', url: 'https://kosis.kr' }],
+    };
+    expect(
+      messages(schema.safeParse({ ...withFallback, fallbackCondition: 'a'.repeat(5001) })),
+    ).toEqual([copy.errMarketText]);
   });
 
   it('requires a title within 120 characters', () => {
@@ -159,13 +308,60 @@ describe('toCreateMarketBody', () => {
     expect(toCreateMarketBody({ ...valid, description: '  ', imageUrl: '' })).toEqual({
       title: '10월 기준금리가 인하될까?',
       description: null,
-      rules: '한국은행 발표 기준',
-      resolutionSource: '한국은행',
+      yesCondition: '한국은행이 기준금리를 내리면 YES',
+      noCondition: '사건 기한까지 내리지 않으면 NO',
+      eventDeadline: '2026-10-31T14:59:00.000Z',
+      primarySource: { name: '한국은행', url: 'https://www.bok.or.kr' },
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: 14,
+      delayHandling: '장기 지연 기한까지 발표가 없으면 무효로 판정한다.',
       categoryId: 3,
       tags: [],
       imageUrl: null,
       closeAt: '2026-10-01T00:00:00.000Z',
     });
+  });
+
+  it('sends every rule item, a blank one as blank (#23): a draft may be made without them', () => {
+    const body = toCreateMarketBody({
+      ...EMPTY_MARKET_FORM,
+      ...pick(valid, ['title', 'categoryId', 'closeAt']),
+    });
+    expect(body).toMatchObject({
+      description: null,
+      yesCondition: '',
+      noCondition: '',
+      eventDeadline: null,
+      primarySource: null,
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: null,
+      delayHandling: '',
+    });
+  });
+
+  it('trims the sources, keeps a half-filled one, and keeps the fallbacks in order', () => {
+    const body = toCreateMarketBody({
+      ...valid,
+      primarySourceName: '  한국은행 ',
+      primarySourceUrl: '   ',
+      fallbackSources: [
+        { name: ' 연합뉴스 ', url: ' https://yna.co.kr ' },
+        { name: '', url: 'https://kosis.kr' },
+      ],
+      fallbackCondition: '  1차 출처에 없으면  ',
+    });
+    expect(body.primarySource).toEqual({ name: '한국은행', url: '' });
+    expect(body.fallbackSources).toEqual([
+      { name: '연합뉴스', url: 'https://yna.co.kr' },
+      { name: '', url: 'https://kosis.kr' },
+    ]);
+    expect(body.fallbackCondition).toBe('1차 출처에 없으면');
+    // Both primary inputs blank is no source at all.
+    expect(
+      toCreateMarketBody({ ...valid, primarySourceName: ' ', primarySourceUrl: '' }).primarySource,
+    ).toBeNull();
   });
 
   it('sends the tags in entry order, and none as an empty list (a draft may have none, #17)', () => {
@@ -198,16 +394,94 @@ describe('toUpdateMarketBody', () => {
   it('sends only the fields that differ', () => {
     expect(
       toUpdateMarketBody(
-        { ...original, title: '새 질문', rules: '새 기준', closeAt: '2026-10-01T09:00' },
+        { ...original, title: '새 질문', yesCondition: '새 기준', closeAt: '2026-10-01T09:00' },
         original,
       ),
-    ).toEqual({ title: '새 질문', rules: '새 기준', closeAt: '2026-10-01T00:00:00.000Z' });
+    ).toEqual({ title: '새 질문', yesCondition: '새 기준', closeAt: '2026-10-01T00:00:00.000Z' });
     expect(toUpdateMarketBody({ ...original, description: '' }, original)).toEqual({
       description: null,
     });
     expect(toUpdateMarketBody({ ...original, categoryId: '4' }, original)).toEqual({
       categoryId: 4,
     });
+  });
+
+  it('sends each rule item that changed as the API compares it (#23)', () => {
+    process.env.TZ = 'UTC';
+    expect(
+      toUpdateMarketBody(
+        {
+          ...original,
+          noCondition: '  사건 기한까지 내리지 않으면 NO  ',
+          eventDeadline: '2026-11-30T23:59',
+          longDelayDays: '30',
+          delayHandling: '',
+        },
+        original,
+      ),
+    ).toEqual({ eventDeadline: '2026-11-30T14:59:00.000Z', longDelayDays: 30, delayHandling: '' });
+    // Cleared: null for the nullable items.
+    expect(
+      toUpdateMarketBody(
+        { ...original, eventDeadline: '', longDelayDays: '', description: ' ' },
+        original,
+      ),
+    ).toEqual({ description: null, eventDeadline: null, longDelayDays: null });
+    // A source by name and address: the whole source, or null once both inputs are blank.
+    expect(
+      toUpdateMarketBody({ ...original, primarySourceUrl: 'https://bok.or.kr/a' }, original),
+    ).toEqual({
+      primarySource: { name: '한국은행', url: 'https://bok.or.kr/a' },
+    });
+    expect(
+      toUpdateMarketBody({ ...original, primarySourceName: '', primarySourceUrl: '' }, original),
+    ).toEqual({ primarySource: null });
+    expect(toUpdateMarketBody({ ...original, primarySourceName: ' 한국은행 ' }, original)).toEqual(
+      {},
+    );
+  });
+
+  it('sends the fallbacks as the whole ordered list, always with the switch condition', () => {
+    const a = { name: '연합뉴스', url: 'https://yna.co.kr' };
+    const b = { name: '통계청', url: 'https://kosis.kr' };
+    const withFallbacks = { ...original, fallbackSources: [a, b], fallbackCondition: '없으면' };
+    expect(toUpdateMarketBody(withFallbacks, withFallbacks)).toEqual({});
+    // Reordered, one added, one removed: the list and the condition together.
+    expect(
+      toUpdateMarketBody({ ...withFallbacks, fallbackSources: [b, a] }, withFallbacks),
+    ).toEqual({
+      fallbackSources: [b, a],
+      fallbackCondition: '없으면',
+    });
+    expect(
+      toUpdateMarketBody(
+        { ...original, fallbackSources: [a], fallbackCondition: '없으면' },
+        original,
+      ),
+    ).toEqual({
+      fallbackSources: [a],
+      fallbackCondition: '없으면',
+    });
+    // The last one removed: the field cleared the condition, and both go (the API takes [], '').
+    expect(
+      toUpdateMarketBody(
+        { ...withFallbacks, fallbackSources: [], fallbackCondition: '' },
+        withFallbacks,
+      ),
+    ).toEqual({ fallbackSources: [], fallbackCondition: '' });
+    // The condition alone.
+    expect(
+      toUpdateMarketBody({ ...withFallbacks, fallbackCondition: '둘 다 없으면' }, withFallbacks),
+    ).toEqual({
+      fallbackCondition: '둘 다 없으면',
+    });
+    // An address only re-spaced is no change.
+    expect(
+      toUpdateMarketBody(
+        { ...withFallbacks, fallbackSources: [{ ...a, url: ` ${a.url} ` }, b] },
+        withFallbacks,
+      ),
+    ).toEqual({});
   });
 
   it('sends the whole ordered tag set only when it changed (#17)', () => {
@@ -354,6 +628,16 @@ describe('sameTags', () => {
   });
 });
 
+describe('the rule-item copy', () => {
+  it('names the shared bounds of the long-delay deadline and the fallbacks', () => {
+    expect(copy.errMarketLongDelayDays).toContain(
+      `${String(MARKET_LONG_DELAY_DAYS_MIN)}~${String(MARKET_LONG_DELAY_DAYS_MAX)}일`,
+    );
+    expect(copy.errMarketFallbackSourcesMax).toContain(`${String(MARKET_FALLBACK_SOURCES_MAX)}개`);
+    expect(copy.adminMarketFallbackSources).toContain(`${String(MARKET_FALLBACK_SOURCES_MAX)}개`);
+  });
+});
+
 describe('the tag copy', () => {
   it('names the shared bounds, so a change to them shows here', () => {
     expect(copy.openItemTags).toContain(`${String(MARKET_TAGS_MIN)}~${String(MARKET_TAGS_MAX)}개`);
@@ -375,8 +659,14 @@ const market: AdminMarket = {
   slug: 'rate-cut-2026',
   title: '기준금리 인하?',
   description: null,
-  rules: '',
-  resolutionSource: null,
+  yesCondition: '',
+  noCondition: '',
+  eventDeadline: null,
+  primarySource: null,
+  fallbackSources: [],
+  fallbackCondition: '',
+  longDelayDays: null,
+  delayHandling: '',
   category: { slug: 'weather', nameKo: '날씨' },
   imageUrl: null,
   status: 'draft',
@@ -429,7 +719,7 @@ describe('marketFormSchema tags', () => {
   });
 
   it('refuses an open market edited down to no tags, as the API does', () => {
-    const open = marketFormSchema({ now, tagsRequired: true });
+    const open = marketFormSchema({ now, openMarket: true });
     expect(tagMessages(open.safeParse({ ...valid, tags: [] }))).toEqual([
       `tags: ${copy.errMarketTagsOpen}`,
     ]);
@@ -438,17 +728,17 @@ describe('marketFormSchema tags', () => {
     const tagged = { ...valid, tags: ['금리'] };
     expect(
       tagMessages(
-        marketFormSchema({ now, original: tagged, tagsRequired: true }).safeParse({
+        marketFormSchema({ now, original: tagged, openMarket: true }).safeParse({
           ...tagged,
           tags: [],
         }),
       ),
     ).toEqual([`tags: ${copy.errMarketTagsOpen}`]);
-    // Untouched and empty is exempt, unlike the rules: a market opened before #17 has no tags,
-    // and an edit of its title or close time must still save (the form then sends no tags).
+    // Untouched and empty is exempt: a market opened before #17 has no tags, and an edit of its
+    // title or close time must still save (the form then sends no tags).
     const legacy = { ...valid, tags: [] };
     expect(
-      marketFormSchema({ now, original: legacy, tagsRequired: true }).safeParse({
+      marketFormSchema({ now, original: legacy, openMarket: true }).safeParse({
         ...legacy,
         title: '새 제목',
       }).success,
@@ -464,22 +754,91 @@ describe('marketFormSchema tags', () => {
   });
 });
 
-describe('marketFormSchema rulesRequired', () => {
-  it('requires rules only for the edit form of an open market', () => {
-    const blank = { ...valid, rules: '   ' };
-    expect(marketFormSchema({ now }).safeParse(blank).success).toBe(true);
-    const refused = marketFormSchema({ now, rulesRequired: true }).safeParse(blank);
-    expect(refused.success).toBe(false);
-    expect(messages(refused)).toEqual([copy.errMarketRulesOpen]);
-    expect(marketFormSchema({ now, rulesRequired: true }).safeParse(valid).success).toBe(true);
+describe('marketFormSchema openMarket: the rule items (#23)', () => {
+  const tagged = { ...valid, tags: ['금리'] };
+  const fallback = { name: '연합뉴스', url: 'https://yna.co.kr' };
+  const issues = (original: MarketFormValues | undefined, values: MarketFormValues) =>
+    marketFormSchema({ now, original, openMarket: true })
+      .safeParse(values)
+      .error?.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`) ?? [];
+
+  it('refuses an item the market had emptied, under the input that empties it', () => {
+    expect(issues(tagged, { ...tagged, yesCondition: '  ' })).toEqual([
+      `yesCondition: ${copy.errMarketRulesOpen}`,
+    ]);
+    expect(
+      issues(tagged, { ...tagged, description: '', eventDeadline: '', longDelayDays: '' }),
+    ).toEqual([
+      `description: ${copy.errMarketRulesOpen}`,
+      `eventDeadline: ${copy.errMarketRulesOpen}`,
+      `longDelayDays: ${copy.errMarketRulesOpen}`,
+    ]);
+    // A source: the blank input, or both once the source is gone.
+    expect(issues(tagged, { ...tagged, primarySourceUrl: '' })).toEqual([
+      `primarySourceUrl: ${copy.errMarketRulesOpen}`,
+    ]);
+    expect(issues(tagged, { ...tagged, primarySourceName: '', primarySourceUrl: '' })).toEqual([
+      `primarySourceName: ${copy.errMarketRulesOpen}`,
+      `primarySourceUrl: ${copy.errMarketRulesOpen}`,
+    ]);
+    // A fallback left half-filled, and its condition emptied.
+    const withFallback = { ...tagged, fallbackSources: [fallback], fallbackCondition: '없으면' };
+    expect(
+      issues(withFallback, {
+        ...withFallback,
+        fallbackSources: [fallback, { name: '통계청', url: '' }],
+        fallbackCondition: '',
+      }),
+    ).toEqual([
+      `fallbackSources.1.url: ${copy.errMarketRulesOpen}`,
+      `fallbackCondition: ${copy.errMarketRulesOpen}`,
+    ]);
+    // Every one of them is the API's RULES_REQUIRED item for item.
+    expect(issues(tagged, tagged)).toEqual([]);
   });
 
-  it('does not exempt untouched blank rules on an open market', () => {
-    // Unlike closeAt: an open market without rules is an anomaly to fix, not a state to keep.
-    const original = { ...valid, rules: '' };
-    const refused = marketFormSchema({ now, original, rulesRequired: true }).safeParse(original);
-    expect(refused.success).toBe(false);
-    expect(messages(refused)).toEqual([copy.errMarketRulesOpen]);
+  it('lets the fallbacks go: none is no missing item, and the condition goes with them', () => {
+    const withFallback = { ...tagged, fallbackSources: [fallback], fallbackCondition: '없으면' };
+    expect(
+      issues(withFallback, { ...withFallback, fallbackSources: [], fallbackCondition: '' }),
+    ).toEqual([]);
+  });
+
+  it('blocks nothing with an item that was already missing: a market opened before #23', () => {
+    // Opened with every rule item blank (they did not exist): its other fields stay editable,
+    // and filling one item in is no refusal of the others.
+    const legacy = { ...tagged, ...pick(EMPTY_MARKET_FORM, RULE_FIELDS) };
+    expect(issues(legacy, { ...legacy, title: '고친 질문' })).toEqual([]);
+    expect(issues(legacy, { ...legacy, yesCondition: '이제 채운 YES 조건' })).toEqual([]);
+    // Once filled, the item is the market's: emptying it again is refused.
+    const filled = { ...legacy, yesCondition: '채운 YES 조건' };
+    expect(issues(filled, { ...filled, yesCondition: '' })).toEqual([
+      `yesCondition: ${copy.errMarketRulesOpen}`,
+    ]);
+  });
+
+  it('asks nothing of a draft, and every item of an open market with no original', () => {
+    const blank = { ...tagged, ...pick(EMPTY_MARKET_FORM, RULE_FIELDS) };
+    expect(marketFormSchema({ now, original: tagged }).safeParse(blank).success).toBe(true);
+    expect(marketFormSchema({ now }).safeParse(blank).success).toBe(true);
+    expect(issues(undefined, { ...tagged, delayHandling: '' })).toEqual([
+      `delayHandling: ${copy.errMarketRulesOpen}`,
+    ]);
+  });
+
+  it("matches the shared check's missing items, so the form refuses what the API would", () => {
+    // RULES_REQUIRED compares missingRuleItems before and after the edit; the form compares the
+    // same items of its two values (`formRuleItems`).
+    expect(missingRuleItems(formRuleItems(valid))).toEqual([]);
+    expect(missingRuleItems(formRuleItems(EMPTY_MARKET_FORM))).toEqual([
+      'description',
+      'yesCondition',
+      'noCondition',
+      'eventDeadline',
+      'primarySource',
+      'longDelayDays',
+      'delayHandling',
+    ]);
   });
 });
 
@@ -505,7 +864,7 @@ describe('edit-form reset policies', () => {
     form.setValue('title', '  새 제목  ', { shouldDirty: true });
 
     // Another writer changed the rules; the `values` prop resets the form to the new row.
-    const fromServer = { ...original, rules: '다른 관리자가 고친 규칙' };
+    const fromServer = { ...original, yesCondition: '다른 관리자가 고친 YES 조건' };
     form.reset(fromServer, FOLLOW_SERVER_RESET);
     expect(form.getValues()).toEqual({ ...fromServer, title: '  새 제목  ' });
     expect(form.control._getDirty()).toBe(true);
@@ -537,8 +896,15 @@ describe('marketToFormValues', () => {
     expect(marketToFormValues(market, categories)).toEqual({
       title: '기준금리 인하?',
       description: '',
-      rules: '',
-      resolutionSource: '',
+      yesCondition: '',
+      noCondition: '',
+      eventDeadline: '',
+      primarySourceName: '',
+      primarySourceUrl: '',
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: '',
+      delayHandling: '',
       categoryId: '2',
       tags: [],
       tagInput: '',
@@ -562,6 +928,46 @@ describe('marketToFormValues', () => {
   it('round-trips through toUpdateMarketBody as "no change"', () => {
     const values = marketToFormValues(market, categories);
     expect(toUpdateMarketBody(values, values)).toEqual({});
+  });
+
+  it('prefills every rule item (#23): the deadline in KST, the sources as their inputs', () => {
+    process.env.TZ = 'UTC';
+    const ruled: AdminMarket = {
+      ...market,
+      description: '배경',
+      yesCondition: 'YES 조건',
+      noCondition: 'NO 조건',
+      eventDeadline: '2026-10-31T14:59:59.000Z',
+      primarySource: { name: '한국은행', url: 'https://www.bok.or.kr' },
+      fallbackSources: [
+        { name: '연합뉴스', url: 'https://yna.co.kr' },
+        { name: '통계청', url: '' },
+      ],
+      fallbackCondition: '없으면',
+      longDelayDays: 14,
+      delayHandling: '무효로 판정한다.',
+    };
+    const values = marketToFormValues(ruled, categories);
+    expect(values).toMatchObject({
+      description: '배경',
+      yesCondition: 'YES 조건',
+      noCondition: 'NO 조건',
+      // Seconds dropped, as for the close time: the control has none.
+      eventDeadline: '2026-10-31T23:59',
+      primarySourceName: '한국은행',
+      primarySourceUrl: 'https://www.bok.or.kr',
+      fallbackSources: [
+        { name: '연합뉴스', url: 'https://yna.co.kr' },
+        { name: '통계청', url: '' },
+      ],
+      fallbackCondition: '없으면',
+      longDelayDays: '14',
+      delayHandling: '무효로 판정한다.',
+    });
+    // Nothing touched, nothing sent — the deadline's seconds included.
+    expect(toUpdateMarketBody(values, values)).toEqual({});
+    // The fallbacks are copies: editing the form never edits the cached row.
+    expect(values.fallbackSources[0]).not.toBe(ruled.fallbackSources[0]);
   });
 });
 

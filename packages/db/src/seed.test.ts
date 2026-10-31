@@ -10,6 +10,7 @@ import {
   CATEGORY_SLUGS,
   SEED_ADMIN_GRANT_REASON,
   SUBCATEGORY_SLUGS,
+  missingRuleItems,
   tagKey,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
@@ -22,6 +23,7 @@ import {
   chargePackages,
   ledgerEntries,
   marketEvents,
+  marketSources,
   marketTags,
   markets,
   phoneVerifications,
@@ -31,7 +33,7 @@ import {
   tags,
   user,
 } from './schema/index.js';
-import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO } from './seed-markets.js';
+import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO, type SeedMarket } from './seed-markets.js';
 import { createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 
@@ -618,7 +620,14 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           id: markets.id,
           slug: markets.slug,
           title: markets.title,
-          rules: markets.rules,
+          // 배경 and the rule items (#23); the sources are below.
+          description: markets.description,
+          yesCondition: markets.yesCondition,
+          noCondition: markets.noCondition,
+          eventDeadline: markets.eventDeadline,
+          fallbackCondition: markets.fallbackCondition,
+          longDelayDays: markets.longDelayDays,
+          delayHandling: markets.delayHandling,
           category: categories.slug,
           status: markets.status,
           lastPrice: markets.lastPrice,
@@ -643,7 +652,41 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .innerJoin(tags, eq(tags.id, marketTags.tagId))
         .orderBy(asc(markets.slug), asc(marketTags.position));
       const tagRows = await t.db.select().from(tags).orderBy(asc(tags.id));
-      return { rows, ticks, events, linked, tagRows };
+      // #23: each market's sources, priority 0 the 1차 출처 and the 대체 출처 after it.
+      const sources = await t.db
+        .select({
+          slug: markets.slug,
+          priority: marketSources.priority,
+          name: marketSources.name,
+          url: marketSources.url,
+        })
+        .from(marketSources)
+        .innerJoin(markets, eq(markets.id, marketSources.marketId))
+        .orderBy(asc(markets.slug), asc(marketSources.priority));
+      return { rows, ticks, events, linked, tagRows, sources };
+    }
+
+    /** 배경 and the rule-item columns a seed market is inserted with (#23, ADR-0097). */
+    function storedRuleItems(seed: SeedMarket) {
+      return {
+        description: seed.description,
+        yesCondition: seed.yesCondition,
+        noCondition: seed.noCondition,
+        eventDeadline: new Date(seed.eventDeadline),
+        fallbackCondition: seed.fallbackCondition,
+        longDelayDays: seed.longDelayDays,
+        delayHandling: seed.delayHandling,
+      };
+    }
+
+    /** Its `market_sources` rows (#23): priority 0 the 1차 출처, then the 대체 출처 in order. */
+    function storedSources(seed: SeedMarket) {
+      return [seed.primarySource, ...seed.fallbackSources].map((source, priority) => ({
+        slug: seed.slug,
+        priority,
+        name: source.name,
+        url: source.url,
+      }));
     }
 
     it('creates the 14 markets as drafts with a created event, and no price or tick', async () => {
@@ -651,7 +694,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // (N02 §5): the direct AMM's initial probability and opening tick are gone.
       runSeed();
       const { id: adminId } = await adminState();
-      const { rows, ticks, events } = await marketState();
+      const { rows, ticks, events, sources } = await marketState();
+      const seeds = new Map(SEED_MARKETS.map((seed) => [seed.slug, seed]));
+      const sourcesBySlug = Object.groupBy(sources, (source) => source.slug);
 
       expect(rows).toHaveLength(SEED_MARKET_COUNT);
       const bySlug = Object.groupBy(rows, (row) => row.category);
@@ -681,9 +726,28 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           tradeCount: 0,
           createdBy: adminId,
         });
-        expect(row.rules.length).toBeGreaterThan(20);
+        // Every rule item as written (#23), and the sources in priority order.
+        const seed = seeds.get(row.slug)!;
+        expect(row, row.slug).toMatchObject(storedRuleItems(seed));
+        const own = sourcesBySlug[row.slug] ?? [];
+        expect(own, row.slug).toEqual(storedSources(seed));
+        // Read back as the API reads them, none is missing: the reviewer can open the draft.
+        expect(
+          missingRuleItems({
+            description: row.description,
+            yesCondition: row.yesCondition,
+            noCondition: row.noCondition,
+            eventDeadline: row.eventDeadline?.toISOString() ?? null,
+            primarySource: own.find((source) => source.priority === 0) ?? null,
+            fallbackSources: own.filter((source) => source.priority > 0),
+            fallbackCondition: row.fallbackCondition,
+            longDelayDays: row.longDelayDays,
+            delayHandling: row.delayHandling,
+          }),
+          row.slug,
+        ).toEqual([]);
         // N03 §4: a late publication never makes it NO on its own.
-        expect(row.rules).toContain(SEED_RULE_NO_DELAY_NO);
+        expect(row.delayHandling).toContain(SEED_RULE_NO_DELAY_NO);
         // Absolute, not seed time + N days: the rules name fixed cutoffs.
         expect(row.closeAt.toISOString()).toBe(EXPECTED_CLOSE_AT[row.slug]);
 
@@ -884,7 +948,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout } = runSeedIo();
       expect(stdout).toContain(
-        "markets: 0 inserted, 14 already existed (13 of them given the seed's tags), 0 skipped",
+        "markets: 0 inserted, 14 already existed (13 of them given the seed's tags, 0 the seed's rule items), 0 skipped",
       );
       const tagged = stdout.split(NEWLINE).filter((line) => line.includes('(it had none)'));
       expect(tagged).toHaveLength(SEED_MARKET_COUNT - 1);
@@ -905,7 +969,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // And once only: the next run finds every market tagged.
       const again = await marketState();
       expect(runSeed()).toContain(
-        "markets: 0 inserted, 14 already existed (0 of them given the seed's tags)",
+        "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items)",
       );
       expect(await marketState()).toEqual(again);
     });
@@ -931,11 +995,285 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout } = runSeedIo();
       expect(stdout).toContain(
-        `markets: 0 inserted, 14 already existed (${SEED_MARKET_COUNT - 2} of them given the seed's tags)`,
+        `markets: 0 inserted, 14 already existed (${SEED_MARKET_COUNT - 2} of them given the seed's tags, 0 the seed's rule items)`,
       );
       const linked = (await marketState()).linked;
       expect(linked.filter((row) => row.slug === cleared || row.slug === opened)).toEqual([]);
       expect(new Set(linked.map((row) => row.slug)).size).toBe(SEED_MARKET_COUNT - 2);
+    });
+
+    describe('rule items of a draft seeded before #23 (ADR-0097, ADR-0096 7-14)', () => {
+      /** The market ids of `slugs`. */
+      async function idsOf(slugs: readonly string[]): Promise<string[]> {
+        const rows = await t.db
+          .select({ id: markets.id })
+          .from(markets)
+          .where(inArray(markets.slug, [...slugs]));
+        return rows.map((row) => row.id);
+      }
+
+      /**
+       * What migration 0050 leaves of a market made before #23 deployed: `rules` and
+       * `resolution_source` dropped with their text (D4), every rule item at its column default
+       * and no source. 배경 is the `description` it already had. Done by hand after a fresh seed.
+       */
+      async function blankRuleItems(slugs: readonly string[]) {
+        const ids = await idsOf(slugs);
+        await t.db.delete(marketSources).where(inArray(marketSources.marketId, ids));
+        await t.db
+          .update(markets)
+          .set({
+            yesCondition: '',
+            noCondition: '',
+            eventDeadline: null,
+            fallbackCondition: '',
+            longDelayDays: null,
+            delayHandling: '',
+          })
+          .where(inArray(markets.id, ids));
+      }
+
+      /** A market row apart from 배경 and the rule items: what the fill must not touch. */
+      function withoutRuleItems(row: Awaited<ReturnType<typeof marketState>>['rows'][number]) {
+        const {
+          description: _description,
+          yesCondition: _yesCondition,
+          noCondition: _noCondition,
+          eventDeadline: _eventDeadline,
+          fallbackCondition: _fallbackCondition,
+          longDelayDays: _longDelayDays,
+          delayHandling: _delayHandling,
+          ...rest
+        } = row;
+        return rest;
+      }
+
+      async function updatedAts(): Promise<Map<string, number>> {
+        const rows = await t.db
+          .select({ slug: markets.slug, updatedAt: markets.updatedAt })
+          .from(markets);
+        return new Map(rows.map((row) => [row.slug, row.updatedAt.getTime()]));
+      }
+
+      it('fills the items 0050 left blank, 배경 only where blank, and the tags on their own', async () => {
+        // Every draft lost its items; five lost their tags as well, as in an environment #17
+        // had not reached either. Of the 배경s, one is null, one blank and one an older seed's.
+        runSeed();
+        const slugs = SEED_MARKETS.map((seed) => seed.slug);
+        await blankRuleItems(slugs);
+        const [noBackground, blankBackground, oldBackground] = slugs;
+        const OLD_BACKGROUND = '옛 시드의 설명을 묻는 시장입니다.';
+        const setDescription = (slug: string, description: string | null) =>
+          t.db.update(markets).set({ description }).where(eq(markets.slug, slug));
+        await setDescription(noBackground!, null);
+        await setDescription(blankBackground!, '  ');
+        await setDescription(oldBackground!, OLD_BACKGROUND);
+        const untagged = slugs.slice(-5);
+        await t.db.delete(marketTags).where(inArray(marketTags.marketId, await idsOf(untagged)));
+        const before = await marketState();
+
+        // The child's clock an hour ahead: the fill's `updated_at` is the database's (ADR-0027).
+        const startedAt = await dbNow();
+        const { stdout } = runSeedIo({ clockShiftMs: 60 * 60 * 1000 });
+        const readAt = await dbNow();
+        const after = await marketState();
+        expect(stdout).toContain(
+          "markets: 0 inserted, 14 already existed (5 of them given the seed's tags, 14 the seed's rule items), 0 skipped",
+        );
+        const lines = stdout.split(NEWLINE);
+        const both = lines.filter((line) =>
+          line.includes("given the seed's tags (it had none) and rule items (they were blank)"),
+        );
+        expect(both).toHaveLength(untagged.length);
+        for (const slug of untagged) expect(both.some((line) => line.includes(slug))).toBe(true);
+        expect(
+          lines.filter((line) => line.includes("given the seed's rule items (they were blank)")),
+        ).toHaveLength(SEED_MARKET_COUNT - untagged.length);
+
+        const sourcesBySlug = Object.groupBy(after.sources, (source) => source.slug);
+        const linkedBySlug = Object.groupBy(after.linked, (row) => row.slug);
+        const touchedAfter = await updatedAts();
+        for (const seed of SEED_MARKETS) {
+          expect(
+            after.rows.find((row) => row.slug === seed.slug),
+            seed.slug,
+          ).toMatchObject({
+            ...storedRuleItems(seed),
+            description: seed.slug === oldBackground ? OLD_BACKGROUND : seed.description,
+          });
+          expect(sourcesBySlug[seed.slug], seed.slug).toEqual(storedSources(seed));
+          expect(
+            linkedBySlug[seed.slug]?.map((row) => [row.position, row.name]),
+            seed.slug,
+          ).toEqual(seed.tags.map((name, index) => [index + 1, name]));
+          const touched = touchedAfter.get(seed.slug)!;
+          expect(touched, seed.slug).toBeGreaterThanOrEqual(startedAt);
+          expect(touched, seed.slug).toBeLessThanOrEqual(readAt);
+        }
+        // Nothing else of the rows, the same events and tags, and no record: what is filled is
+        // what a fresh seed would have inserted (ADR-0096 7-14's way).
+        expect(after.rows.map(withoutRuleItems)).toEqual(before.rows.map(withoutRuleItems));
+        expect(after.events).toEqual(before.events);
+        expect(after.tagRows).toEqual(before.tagRows);
+        expect(
+          await t.db.select().from(adminActions).where(eq(adminActions.targetType, 'market')),
+        ).toEqual([]);
+
+        // And once only: the next run finds every item and tag in place.
+        expect(runSeed()).toContain(
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items)",
+        );
+        expect(await marketState()).toEqual(after);
+      }, 60_000);
+
+      it('leaves a draft an admin set the items of since #23, one with any item, and an open market', async () => {
+        runSeed();
+        const slugs = SEED_MARKETS.map((seed) => seed.slug);
+        await blankRuleItems(slugs);
+        const [emptied, written, sourced, opened] = slugs;
+        // Emptied on purpose since #23: the admin's record names the items in its snapshot.
+        const [emptiedRow] = await t.db
+          .select({ id: markets.id, createdBy: markets.createdBy })
+          .from(markets)
+          .where(eq(markets.slug, emptied!));
+        await t.db.insert(adminActions).values({
+          adminId: emptiedRow!.createdBy,
+          type: 'market_update',
+          targetType: 'market',
+          targetId: emptiedRow!.id,
+          payload: { before: { yesCondition: 'YES 조건.' }, after: { yesCondition: '' } },
+        });
+        // One item written, by whoever, and the market is no longer blank: a text, or a source.
+        await t.db
+          .update(markets)
+          .set({ delayHandling: '운영자가 적은 처리입니다.' })
+          .where(eq(markets.slug, written!));
+        const [sourcedId] = await idsOf([sourced!]);
+        await t.db
+          .insert(marketSources)
+          .values({ marketId: sourcedId!, priority: 0, name: '운영자가 적은 출처', url: '' });
+        // Past the draft, its items change on the record only.
+        await t.db.update(markets).set({ status: 'open' }).where(eq(markets.slug, opened!));
+        const before = await marketState();
+
+        const { stdout } = runSeedIo();
+        const left = [emptied!, written!, sourced!, opened!];
+        expect(stdout).toContain(
+          `markets: 0 inserted, 14 already existed (0 of them given the seed's tags, ${String(
+            SEED_MARKET_COUNT - left.length,
+          )} the seed's rule items), 0 skipped`,
+        );
+        const after = await marketState();
+        for (const slug of left) {
+          expect(
+            after.rows.find((row) => row.slug === slug),
+            slug,
+          ).toEqual(before.rows.find((row) => row.slug === slug));
+          expect(
+            after.sources.filter((source) => source.slug === slug),
+            slug,
+          ).toEqual(before.sources.filter((source) => source.slug === slug));
+        }
+        for (const seed of SEED_MARKETS.filter((market) => !left.includes(market.slug))) {
+          expect(
+            after.rows.find((row) => row.slug === seed.slug),
+            seed.slug,
+          ).toMatchObject(storedRuleItems(seed));
+        }
+      });
+
+      it('leaves blank a draft an admin re-titled before #23, its tags to #17 as before', async () => {
+        // A PATCH before #23 recorded the old `rules` and no rule item, so the title alone tells
+        // that a draft asks another question, which the seed's items would contradict. Its tags
+        // follow #17's own test (`adminSetTags`), unchanged: kept when it has some, given when it
+        // has none and no record names them. A record from before #23 that kept the seed's title
+        // does not stop the fill.
+        runSeed();
+        const slugs = SEED_MARKETS.map((seed) => seed.slug);
+        await blankRuleItems(slugs);
+        const [retitled, retitledUntagged, recorded] = SEED_MARKETS;
+        const OLD_RULES = '운영자가 고친 옛 규칙입니다.';
+        /** An admin's `market_update` record from before #23: the old `rules`, no rule item. */
+        async function recordPre23(
+          seed: SeedMarket,
+          after: { title: string; tags?: readonly string[] },
+        ) {
+          const [row] = await t.db
+            .select({ id: markets.id, createdBy: markets.createdBy })
+            .from(markets)
+            .where(eq(markets.slug, seed.slug));
+          const tagsOf = (names?: readonly string[]) => (names ? { tags: [...names] } : {});
+          await t.db.insert(adminActions).values({
+            adminId: row!.createdBy,
+            type: 'market_update',
+            targetType: 'market',
+            targetId: row!.id,
+            payload: {
+              before: { title: seed.title, rules: '옛 시드의 규칙입니다.', ...tagsOf(after.tags) },
+              after: { title: after.title, rules: OLD_RULES, ...tagsOf(after.tags) },
+            },
+          });
+          await t.db.update(markets).set({ title: after.title }).where(eq(markets.slug, seed.slug));
+        }
+        // Re-titled after #17 (the record names its tags), tags kept.
+        await recordPre23(retitled!, {
+          title: '운영자가 고친 다른 질문일까?',
+          tags: retitled!.tags,
+        });
+        // Re-titled before #17 (no `tags` key), and no tag: a draft #17's fill would tag.
+        await recordPre23(retitledUntagged!, { title: '운영자가 고친 또 다른 질문일까?' });
+        await t.db
+          .delete(marketTags)
+          .where(inArray(marketTags.marketId, await idsOf([retitledUntagged!.slug])));
+        // Edited before #23 with the seed's title kept: still the seed's question.
+        await recordPre23(recorded!, { title: recorded!.title, tags: recorded!.tags });
+        const before = await marketState();
+        const touchedBefore = await updatedAts();
+
+        const { stdout } = runSeedIo();
+        expect(stdout).toContain(
+          `markets: 0 inserted, 14 already existed (1 of them given the seed's tags, ${String(
+            SEED_MARKET_COUNT - 2,
+          )} the seed's rule items), 0 skipped`,
+        );
+        const lineOf = (slug: string) =>
+          stdout.split(NEWLINE).filter((line) => line.includes(slug));
+        expect(lineOf(retitled!.slug)).toEqual([expect.stringMatching(/already exists$/)]);
+        expect(lineOf(retitledUntagged!.slug)).toEqual([
+          expect.stringMatching(/given the seed's tags \(it had none\)$/),
+        ]);
+        const after = await marketState();
+        const touchedAfter = await updatedAts();
+        for (const seed of [retitled!, retitledUntagged!]) {
+          // Its row as the admin left it — blank items, their title — written by nobody.
+          expect(
+            after.rows.find((row) => row.slug === seed.slug),
+            seed.slug,
+          ).toEqual(before.rows.find((row) => row.slug === seed.slug));
+          expect(touchedAfter.get(seed.slug), seed.slug).toBe(touchedBefore.get(seed.slug));
+          expect(after.sources.filter((source) => source.slug === seed.slug)).toEqual([]);
+          // #17's fill alone: the tags it kept, or the seed's where it had none.
+          expect(
+            after.linked
+              .filter((row) => row.slug === seed.slug)
+              .map((row) => [row.position, row.name]),
+            seed.slug,
+          ).toEqual(seed.tags.map((name, index) => [index + 1, name]));
+        }
+        expect(after.rows.find((row) => row.slug === recorded!.slug)).toMatchObject({
+          title: recorded!.title,
+          ...storedRuleItems(recorded!),
+        });
+        expect(after.sources.filter((source) => source.slug === recorded!.slug)).toEqual(
+          storedSources(recorded!),
+        );
+
+        // And on every run after: the re-titled drafts stay blank for their admin.
+        expect(runSeed()).toContain(
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items)",
+        );
+        expect(await marketState()).toEqual(after);
+      }, 60_000);
     });
 
     it('skips a seed market whose category the operators kept out of the tree, with a warning', async () => {
@@ -954,7 +1292,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain(
-        "markets: 13 inserted, 0 already existed (0 of them given the seed's tags), 1 skipped (category not in the tree)",
+        "markets: 13 inserted, 0 already existed (0 of them given the seed's tags, 0 the seed's rule items), 1 skipped (category not in the tree)",
       );
       const skipped = stderr
         .split(NEWLINE)
@@ -1020,6 +1358,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     );
     expect(await t.db.select().from(tags)).toHaveLength(
       new Set(SEED_MARKETS.flatMap((market) => market.tags.map(tagKey))).size,
+    );
+    // And each market's sources once (#23).
+    expect(await t.db.select().from(marketSources)).toHaveLength(
+      SEED_MARKETS.reduce((count, market) => count + 1 + market.fallbackSources.length, 0),
     );
   }, 60_000);
 });

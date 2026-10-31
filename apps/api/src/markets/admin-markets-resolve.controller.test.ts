@@ -107,10 +107,16 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   const create = (overrides: Record<string, unknown> = {}) =>
     post('/api/v1/admin/markets', {
       title: '기준금리 3% 이하로 인하?',
-      rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 NO.',
+      // Every rule item (#23) and a tag, so the draft passes the open-items check (#17).
+      description: '한국은행 금융통화위원회가 기준금리를 정한다.',
+      yesCondition: '사건 기한까지 기준금리를 3% 이하로 내리면 YES.',
+      noCondition: '사건 기한까지 3% 이하로 내리지 않으면 NO.',
+      eventDeadline: new Date(Date.now() + 8 * DAY_MS).toISOString(),
+      primarySource: { name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
+      longDelayDays: 14,
+      delayHandling: '장기 지연 기한까지 발표가 없으면 무효로 판정한다.',
       categoryId: category.id,
       closeAt: new Date(Date.now() + 7 * DAY_MS).toISOString(),
-      // Tagged, so the draft passes the open-items check (#17).
       tags: ['금리'],
       ...overrides,
     });
@@ -488,9 +494,11 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     let closed!: AdminMarket;
     try {
       opened = detail(await open(created.id));
-      // A rules edit is not a transition: it republishes the UNCHANGED key (A-M4-36), which
+      // A rule-item edit is not a transition: it republishes the UNCHANGED key (A-M4-36), which
       // is what lets a client drop the repeat and still refetch the row.
-      edited = detail(await patch(`/api/v1/admin/markets/${created.id}`, { rules: '고친 규칙' }));
+      edited = detail(
+        await patch(`/api/v1/admin/markets/${created.id}`, { yesCondition: '고친 YES 조건' }),
+      );
       closed = detail(await close(created.id));
       await waitForMessages(received, 3, 'market:status of open, edit and close');
       await sleep(100);

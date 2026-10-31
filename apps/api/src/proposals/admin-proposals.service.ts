@@ -114,11 +114,11 @@ export class AdminProposalsService {
   /**
    * `POST /admin/proposals/:id/adopt`: 검토 → 채택, with the memo the proposer reads and the market
    * it led to, if any — a draft made here from the proposal (`proposalAdoptionMarketSchema`: the
-   * question as its title, the YES condition as its rules, the sources as its resolution source,
-   * the background as its description; the category and close time given, else the proposal's
-   * category and `proposalDraftCloseAt`) or an existing market in any status. A draft that cannot
-   * be made — no category, or a close time not in the future — is VALIDATION_ERROR naming the
-   * field under `market`, and nothing is adopted.
+   * question as its title, the background as its 배경, the YES condition as its YES condition, the
+   * sources as its primary source's name with the address left for the operator (#23); the
+   * category and close time given, else the proposal's category and `proposalDraftCloseAt`) or an
+   * existing market in any status. A draft that cannot be made — no category, or a close time not
+   * in the future — is VALIDATION_ERROR naming the field under `market`, and nothing is adopted.
    *
    * The proposal's category stands in only where the market form would file a market: a leaf, or
    * a parent with no active leaves (ADR-0041, markets sit on leaves). A wish for a parent that has
@@ -295,11 +295,15 @@ export class AdminProposalsService {
   /**
    * The market a 채택 or a later link leads to: an existing market in any status (an unknown id is
    * NOT_FOUND naming `market.marketId`), or a draft made here from the proposal — titled with the
-   * question, the YES condition as its rules, the sources as its resolution source, the background
-   * as its description — in the category given, else the proposal's where a market may sit
-   * (`requireDraftCategory`), closing at the time given, else `proposalDraftCloseAt`. A draft that
-   * cannot be made — no category, one a new market may not be filed under, a close time not in
-   * the future — is VALIDATION_ERROR naming the field under `market`, and nothing is written.
+   * question, the background as its 배경 (`description`), the YES condition as its YES condition,
+   * and the sources as its primary source's name (#23, ADR-0097; ADR-0089 decision 4: 판정 출처는
+   * 예상 출처) whose address the operator fills in, so the open-items check names the primary
+   * source until then; its other rule items start blank, and the proposal's date — the day the
+   * result is to be known — is its close time's, never its event deadline — in the category given,
+   * else the proposal's where a market may sit (`requireDraftCategory`), closing at the time given,
+   * else `proposalDraftCloseAt`. A draft that cannot be made — no category, one a new market may
+   * not be filed under, a close time not in the future — is VALIDATION_ERROR naming the field under
+   * `market`, and nothing is written.
    */
   private async marketFor(
     tx: Tx,
@@ -336,8 +340,10 @@ export class AdminProposalsService {
     const draft = await this.markets.createIn(tx, adminId, {
       title: current.question,
       description: current.background,
-      rules: current.yesCondition,
-      resolutionSource: current.expectedSources,
+      yesCondition: current.yesCondition,
+      // Never blank (the proposal's CHECK) and within MARKET_SOURCE_MAX (PROPOSAL_SOURCES_MAX), so
+      // `market_sources` takes it as a name with no address.
+      primarySource: { name: current.expectedSources, url: '' },
       categoryId,
       closeAt: closeAt.toISOString(),
     });

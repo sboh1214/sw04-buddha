@@ -264,9 +264,20 @@ describe('findPrivateField', () => {
     // The form's words are a market's too (#77): a YES condition, sources, a background, a date.
     'yesCondition',
     'expectedSources',
-    'resolutionSource',
     'background',
     'deadline',
+    // A market's rule items are public (#23, N02 §2): a deadline, a source's name and address and
+    // a delay are the market's, with no whose-word.
+    'description',
+    'noCondition',
+    'eventDeadline',
+    'primarySource',
+    'fallbackSources',
+    'fallbackCondition',
+    'longDelayDays',
+    'delayHandling',
+    'name',
+    'url',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

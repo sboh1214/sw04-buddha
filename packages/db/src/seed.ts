@@ -21,7 +21,7 @@ import { hashPassword } from 'better-auth/crypto';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { closeDb, createDb, type Db } from './client.js';
 import { loadRootEnv } from './env.js';
-import { SEED_MARKETS } from './seed-markets.js';
+import { SEED_MARKETS, type SeedMarket } from './seed-markets.js';
 import { clockTimestamp, lockAdminRoles } from './tx-helpers.js';
 import {
   account,
@@ -30,6 +30,7 @@ import {
   categories,
   chargePackages,
   marketEvents,
+  marketSources,
   marketTags,
   markets,
   profiles,
@@ -466,13 +467,8 @@ async function hasTags(tx: Tx, marketId: string): Promise<boolean> {
   return row !== undefined;
 }
 
-/**
- * Whether an admin has set this market's tags since #17: every admin market record from #17 on
- * (`market_create`, `market_update`, the transitions) carries the tag names in its `after`
- * snapshot, an empty set too, so a draft an admin cleared on purpose has one. Records written
- * before #17 have no `tags` key — the market's tags were never anybody's choice.
- */
-async function adminSetTags(tx: Tx, marketId: string): Promise<boolean> {
+/** Whether any admin record of the market has `key` in its `after` snapshot. */
+async function adminSnapshotHas(tx: Tx, marketId: string, key: string): Promise<boolean> {
   const [row] = await tx
     .select({ id: adminActions.id })
     .from(adminActions)
@@ -480,41 +476,150 @@ async function adminSetTags(tx: Tx, marketId: string): Promise<boolean> {
       and(
         eq(adminActions.targetType, 'market'),
         eq(adminActions.targetId, marketId),
-        sql`${adminActions.payload} -> 'after' ? 'tags'`,
+        sql`${adminActions.payload} -> 'after' ? ${key}`,
       ),
     )
     .limit(1);
   return row !== undefined;
 }
 
-/** What `seedMarkets` did with one seed market, and the row the staleness report judges. */
+/**
+ * Whether an admin has set this market's tags since #17: every admin market record from #17 on
+ * (`market_create`, `market_update`, the transitions) carries the tag names in its `after`
+ * snapshot, an empty set too, so a draft an admin cleared on purpose has one. Records written
+ * before #17 have no `tags` key — the market's tags were never anybody's choice.
+ */
+async function adminSetTags(tx: Tx, marketId: string): Promise<boolean> {
+  return adminSnapshotHas(tx, marketId, 'tags');
+}
+
+/**
+ * Whether an admin has set this market's rule items since #23 (ADR-0097): every admin market
+ * record from #23 on carries them all in its `after` snapshot, blank ones too, `yesCondition`
+ * among them — so a draft an admin emptied on purpose has one. Records written before #23 have no
+ * such key: what they recorded was the old `rules` text, which migration 0050 dropped (D4).
+ */
+async function adminSetRuleItems(tx: Tx, marketId: string): Promise<boolean> {
+  return adminSnapshotHas(tx, marketId, 'yesCondition');
+}
+
+/**
+ * A seed market's rule items (#23) as `markets` columns; its sources are `market_sources` rows
+ * (`insertSeedSources`). 배경 is `description`, written apart: the fill below keeps one a market
+ * already has.
+ */
+function seedRuleColumns(seed: SeedMarket) {
+  return {
+    yesCondition: seed.yesCondition,
+    noCondition: seed.noCondition,
+    eventDeadline: new Date(seed.eventDeadline),
+    fallbackCondition: seed.fallbackCondition,
+    longDelayDays: seed.longDelayDays,
+    delayHandling: seed.delayHandling,
+  } satisfies Partial<typeof markets.$inferInsert>;
+}
+
+/**
+ * A seed market's sources, the way the admin create path writes them (#23): priority 0 the 1차
+ * 출처, 1..n the 대체 출처 in the order given. The market has no `market_sources` row when this
+ * runs.
+ */
+async function insertSeedSources(tx: Tx, marketId: string, seed: SeedMarket): Promise<void> {
+  await tx.insert(marketSources).values(
+    [seed.primarySource, ...seed.fallbackSources].map((source, priority) => ({
+      marketId,
+      priority,
+      name: source.name,
+      url: source.url,
+    })),
+  );
+}
+
+/**
+ * Whether a market's rule items (#23) are all blank, 배경 aside, and whether its 배경 is: what
+ * migration 0050 left of a market made before #23 — `rules` and `resolution_source` dropped with
+ * their text (D4), every new column at its default and no `market_sources` row. Any item written
+ * since, by whoever, makes them not blank. 배경 is the `description` such a market already had.
+ */
+async function blankRuleItems(
+  tx: Tx,
+  marketId: string,
+): Promise<{ items: boolean; description: boolean }> {
+  const [row] = await tx
+    .select({
+      description: markets.description,
+      yesCondition: markets.yesCondition,
+      noCondition: markets.noCondition,
+      eventDeadline: markets.eventDeadline,
+      fallbackCondition: markets.fallbackCondition,
+      longDelayDays: markets.longDelayDays,
+      delayHandling: markets.delayHandling,
+    })
+    .from(markets)
+    .where(eq(markets.id, marketId));
+  const [source] = await tx
+    .select({ priority: marketSources.priority })
+    .from(marketSources)
+    .where(eq(marketSources.marketId, marketId))
+    .limit(1);
+  const blank = (text: string | null | undefined) => (text ?? '').trim() === '';
+  return {
+    items:
+      row !== undefined &&
+      source === undefined &&
+      blank(row.yesCondition) &&
+      blank(row.noCondition) &&
+      row.eventDeadline === null &&
+      blank(row.fallbackCondition) &&
+      row.longDelayDays === null &&
+      blank(row.delayHandling),
+    description: blank(row?.description),
+  };
+}
+
+/**
+ * What `seedMarkets` did with one seed market, and the row the staleness report judges. A market
+ * that existed may have been given the seed's tags (`tagged`, #17) and its rule items (`ruled`,
+ * #23), each on its own.
+ */
 type SeedMarketOutcome =
-  | { kind: 'inserted' | 'existed' | 'tagged'; status: MarketStatus; closeAt: Date }
+  | { kind: 'inserted'; status: MarketStatus; closeAt: Date }
+  | { kind: 'existed'; status: MarketStatus; closeAt: Date; tagged: boolean; ruled: boolean }
   | { kind: 'no-category' };
 
 /**
  * Inserts the seed markets as drafts, one transaction per market under the seed lock: the market
- * row, its tags and its 'created' event, as the admin create path writes them (M3 design 3.4;
- * #17), so a crash never leaves a market without its history or with half its tags. Drafts,
- * because a market opens only once another reviewer has checked its rules (N03 §2; #125) — the
- * seed never opens one. No price and no tick: a market has none before its first fill (N02 §5).
- * Runs after `seedAdmins`: the first admin is `created_by` and the actor of the event.
+ * row with its rule items, its sources, its tags and its 'created' event, as the admin create path
+ * writes them (M3 design 3.4; #17; #23), so a crash never leaves a market without its history or
+ * with half its tags or sources. Drafts, because a market opens only once another reviewer has
+ * checked its rules (N03 §2; #125) — the seed never opens one. No price and no tick: a market has
+ * none before its first fill (N02 §5). Runs after `seedAdmins`: the first admin is `created_by`
+ * and the actor of the event.
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
  * `assertFutureCloseAt` refuses a past one on create while this writes it anyway, so a late-run
  * seed still gets its 14 drafts. Opening such a draft is refused until an admin moves its close
  * time; the loop below says so on every run.
  *
- * A market whose slug exists is never updated, with one exception: a DRAFT with no `market_tags`
- * row whose tags no admin has set since #17 (`adminSetTags`) gets the seed's tags (#17 AC 9). An
- * environment seeded before the tag tables existed — a database #174's migration 0048 wiped and
- * seeded before #17 deployed — would otherwise keep its 14 drafts with no tags, which the
- * open-items check refuses to open. A market with any tag keeps its set, a draft an admin cleared
- * on purpose stays clear, and a market past the draft is left alone (after the open a tag change
- * is on the record, #172 item 14, and the seed writes none). The market row is taken FOR UPDATE
- * before both are read again, the lock the admin PATCH takes, so an admin who tags it meanwhile
- * wins. Nothing else of the row changes, and no record is written: the tags are the ones a fresh
- * seed would have inserted with it.
+ * A market whose slug exists is never updated, with two exceptions, each on its own and on a
+ * DRAFT only. An environment seeded by an older seed — a database #174's migration 0048 wiped and
+ * seeded before #17 and #23 deployed — would otherwise keep its 14 drafts without what the
+ * open-items check asks for, and none could open:
+ * - Tags (#17 AC 9): a draft with no `market_tags` row whose tags no admin has set since #17
+ *   (`adminSetTags`) gets the seed's tags. A market with any tag keeps its set, and a draft an
+ *   admin cleared on purpose stays clear.
+ * - Rule items (#23, ADR-0097): a draft whose rule items are all blank (`blankRuleItems`: what
+ *   migration 0050 left of it), whose rule items no admin has set since #23 (`adminSetRuleItems`)
+ *   and whose title is still the seed's, as stored, gets the seed's — its 배경 only when it has
+ *   none, so the one it was seeded with stays. A draft with any item written keeps them all, one
+ *   an admin emptied on purpose stays empty, and one an admin re-titled stays blank: the seed's
+ *   items answer the seed's question, and a record from before #23 holds no rule item to tell.
+ *
+ * A market past the draft is left alone: after the open a change is on the record (#172 item 14),
+ * and the seed writes none. The market row is taken FOR UPDATE before its status, its title,
+ * its tags and its rule items are read again, the lock the admin PATCH takes, so an admin who
+ * writes it meanwhile wins. No record is written: what is filled is what a fresh seed would have
+ * inserted with the market. The rule fill moves `updated_at`, on the database clock.
  *
  * A seed market whose category is not in the tree — `seedCategories` skipped its slug because an
  * operator's sibling took the name — is skipped with a warning: like the categories, a deploy's
@@ -530,16 +635,16 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
   // round trip rather than one per market.
   const reportedAt = await dbNow(db);
 
-  const counts: Record<SeedMarketOutcome['kind'], number> = {
-    inserted: 0,
-    existed: 0,
-    tagged: 0,
-    'no-category': 0,
-  };
+  const counts = { inserted: 0, existed: 0, tagged: 0, ruled: 0, 'no-category': 0 };
   for (const seed of SEED_MARKETS) {
     const closeAt = new Date(seed.closeAt);
     if (Number.isNaN(closeAt.getTime())) {
       throw new Error(`[db:seed] market ${seed.slug}: closeAt "${seed.closeAt}" is not a date`);
+    }
+    if (Number.isNaN(Date.parse(seed.eventDeadline))) {
+      throw new Error(
+        `[db:seed] market ${seed.slug}: eventDeadline "${seed.eventDeadline}" is not a date`,
+      );
     }
     // The names the API would take (#17), as written: the literal is the spelling a tag the seed
     // makes is stored with, so it must be normalised already.
@@ -563,25 +668,55 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       // working with. Its status and close time are read back so the report below judges the
       // row that exists, not the literal in this file.
       if (existing) {
-        const row = { status: existing.status, closeAt: existing.closeAt };
-        // Only a draft is given tags: a market that opened changes them on the record alone
-        // (#172 item 14), and the seed writes none.
-        if (existing.status !== 'draft' || (await hasTags(tx, existing.id))) {
-          return { kind: 'existed', ...row };
+        const unchanged = {
+          kind: 'existed',
+          status: existing.status,
+          closeAt: existing.closeAt,
+          tagged: false,
+          ruled: false,
+        } as const;
+        // Only a draft is filled: a market that opened changes its tags and rule items on the
+        // record alone (#172 item 14), and the seed writes none.
+        if (existing.status !== 'draft') return unchanged;
+        if ((await hasTags(tx, existing.id)) && !(await blankRuleItems(tx, existing.id)).items) {
+          return unchanged;
         }
-        // A draft with no tag at all, seeded before #17. Locked, then read again — an admin's
-        // PATCH that committed while this waited is the market's set — and given the seed's tags
-        // unless an admin has set its tags since #17 (cleared them on purpose, say).
-        await tx
-          .select({ id: markets.id })
+        // A draft seeded before #17 (no tag at all) or #23 (no rule item). Locked, then read
+        // again, title included — an admin's PATCH or open that committed while this waited is
+        // the market's — and each filled on its own unless an admin has set it since (cleared it
+        // on purpose, say): a draft seeded before both needs both.
+        const [locked] = await tx
+          .select({ status: markets.status, closeAt: markets.closeAt, title: markets.title })
           .from(markets)
           .where(eq(markets.id, existing.id))
           .for('update');
-        if ((await hasTags(tx, existing.id)) || (await adminSetTags(tx, existing.id))) {
-          return { kind: 'existed', ...row };
+        if (locked?.status !== 'draft') {
+          return locked
+            ? { ...unchanged, status: locked.status, closeAt: locked.closeAt }
+            : unchanged;
         }
-        await insertSeedTags(tx, existing.id, seed.tags);
-        return { kind: 'tagged', ...row };
+        const row = { kind: 'existed', status: locked.status, closeAt: locked.closeAt } as const;
+        const tagged = !(await hasTags(tx, existing.id)) && !(await adminSetTags(tx, existing.id));
+        if (tagged) await insertSeedTags(tx, existing.id, seed.tags);
+        const blank = await blankRuleItems(tx, existing.id);
+        // The seed's items answer the seed's question: a draft an admin re-titled before #23 has
+        // no record naming a rule item, so its title, compared as stored, is what tells it apart.
+        const ruled =
+          blank.items && locked.title === seed.title && !(await adminSetRuleItems(tx, existing.id));
+        if (ruled) {
+          await tx
+            .update(markets)
+            .set({
+              ...seedRuleColumns(seed),
+              ...(blank.description ? { description: seed.description } : {}),
+              // The database clock, as every instant the seed leaves (ADR-0027), not the
+              // runner's that `$onUpdate` would write.
+              updatedAt: sql`clock_timestamp()`,
+            })
+            .where(eq(markets.id, existing.id));
+          await insertSeedSources(tx, existing.id, seed);
+        }
+        return { ...row, tagged, ruled };
       }
 
       // `seedCategories` ran first and skipped only what the operators' tree blocks.
@@ -595,8 +730,7 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           slug: seed.slug,
           title: seed.title,
           description: seed.description,
-          rules: seed.rules,
-          resolutionSource: seed.resolutionSource,
+          ...seedRuleColumns(seed),
           categoryId,
           status: 'draft',
           openAt: null,
@@ -605,6 +739,7 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
         })
         .returning({ id: markets.id, status: markets.status });
       if (!market) throw new Error(`[db:seed] market ${seed.slug}: insert returned no row`);
+      await insertSeedSources(tx, market.id, seed);
       await insertSeedTags(tx, market.id, seed.tags);
       const [created] = await tx
         .insert(marketEvents)
@@ -631,15 +766,21 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       );
       continue;
     }
-    console.log(
-      `[db:seed] market ${seed.slug}: ${
-        outcome.kind === 'inserted'
-          ? 'created'
-          : outcome.kind === 'tagged'
-            ? "already exists, given the seed's tags (it had none)"
-            : 'already exists'
-      }`,
-    );
+    if (outcome.kind === 'inserted') {
+      console.log(`[db:seed] market ${seed.slug}: created`);
+    } else {
+      if (outcome.tagged) counts.tagged++;
+      if (outcome.ruled) counts.ruled++;
+      const given = [
+        ...(outcome.tagged ? ['tags (it had none)'] : []),
+        ...(outcome.ruled ? ['rule items (they were blank)'] : []),
+      ];
+      console.log(
+        `[db:seed] market ${seed.slug}: already exists${
+          given.length > 0 ? `, given the seed's ${given.join(' and ')}` : ''
+        }`,
+      );
+    }
     // Every run, not only the one that inserts: the cutoffs are absolute, so an environment
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
@@ -677,10 +818,10 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
   }
   console.log(
     `[db:seed] markets: ${String(counts.inserted)} inserted, ${String(
-      counts.existed + counts.tagged,
-    )} already existed (${String(counts.tagged)} of them given the seed's tags), ${String(
-      counts['no-category'],
-    )} skipped (category not in the tree)`,
+      counts.existed,
+    )} already existed (${String(counts.tagged)} of them given the seed's tags, ${String(
+      counts.ruled,
+    )} the seed's rule items), ${String(counts['no-category'])} skipped (category not in the tree)`,
   );
 }
 

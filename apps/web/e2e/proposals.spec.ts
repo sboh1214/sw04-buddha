@@ -4,7 +4,7 @@ import {
   type Browser,
   type Page,
 } from '@playwright/test';
-import type { Me, Proposal } from '@buddha/shared';
+import type { AdminMarket, Me, Proposal } from '@buddha/shared';
 import { copy } from '../src/copy';
 import {
   accountIdOf,
@@ -20,6 +20,7 @@ import {
   nextMeRead,
   openClosure,
   openSetPassword,
+  ruleItemsFor,
   setFirstPassword,
   signIn,
   signUp,
@@ -115,8 +116,9 @@ async function proposeThroughApi(page: Page, question: string): Promise<Proposal
 }
 
 /**
- * A draft market straight at the admin API (not opened), titled with `title`: under a category a
- * market may be filed under and with a tag, so the operators can open it later (#17).
+ * A draft market straight at the admin API (not opened), titled with `title`: with every rule item
+ * (`ruleItemsFor`, #23), under a category a market may be filed under and with a tag, so the
+ * operators can open it later (#17).
  */
 async function createDraftMarket(
   admin: APIRequestContext,
@@ -128,9 +130,7 @@ async function createDraftMarket(
     await admin.post('/api/v1/admin/markets', {
       data: {
         title,
-        description: null,
-        rules: `자동화 테스트가 만든 초안입니다. ${tag}`,
-        resolutionSource: `테스트 출처 ${tag}`,
+        ...ruleItemsFor(tag),
         categoryId: category.id,
         tags: [tag],
         imageUrl: null,
@@ -320,13 +320,44 @@ test.describe('시장 제안', () => {
       await expect(page.getByTestId(`my-proposal-market-${proposal.id}`)).toHaveCount(0);
 
       // --- the operators open the market through its own steps; then the member sees its link.
-      // A 채택's draft has no tags (#17): they are one of those steps, before 열기.
-      const tagged = await dataOf<{ tags: string[] }>(
+      // A 채택's draft takes the question as its title, the 배경 설명 as its 배경, the YES 조건 as
+      // its own and the 예상 출처 as its 1차 출처's name with no address (#23, ADR-0097); the rest
+      // of the rule items, that address and the tags (#17) are those steps, before 열기. The
+      // proposal's date is no 사건 기한.
+      const adopted = await dataOf<AdminMarket>(
+        await admin.get(`/api/v1/admin/markets/${marketId}`),
+      );
+      expect(adopted.description).toBe('배경 설명입니다.');
+      expect(adopted.yesCondition).toBe(`${question} — 공식 발표가 있으면 YES`);
+      expect(adopted.primarySource).toEqual({ name: '공식 보도자료와 통계 누리집', url: '' });
+      expect(adopted.eventDeadline).toBeNull();
+      expect(adopted.missingOpenItems).toEqual([
+        'noCondition',
+        'eventDeadline',
+        'primarySource',
+        'longDelayDays',
+        'delayHandling',
+        'tags',
+      ]);
+      const items = ruleItemsFor(tag);
+      const filled = await dataOf<AdminMarket>(
         await admin.patch(`/api/v1/admin/markets/${marketId}`, {
-          data: { tags: [tag], expectedAccountId: await accountIdOf(admin) },
+          data: {
+            noCondition: items.noCondition,
+            eventDeadline: items.eventDeadline,
+            primarySource: { name: '공식 보도자료와 통계 누리집', url: items.primarySource?.url },
+            longDelayDays: items.longDelayDays,
+            delayHandling: items.delayHandling,
+            tags: [tag],
+            // An ASCII address before it goes public: `/markets/[slug]` does not reach the slug
+            // made from the Korean question yet (a defect apart from #23).
+            slug: `e2e-${tag}`,
+            expectedAccountId: await accountIdOf(admin),
+          },
         }),
       );
-      expect(tagged.tags).toEqual([tag]);
+      expect(filled.tags).toEqual([tag]);
+      expect(filled.missingOpenItems).toEqual([]);
       const opened = await dataOf<{ slug: string; status: string }>(
         await admin.post(`/api/v1/admin/markets/${marketId}/open`, {
           data: { expectedAccountId: await accountIdOf(admin) },

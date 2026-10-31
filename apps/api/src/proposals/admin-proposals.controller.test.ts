@@ -131,6 +131,20 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     post(`/${id}/reject`, payload, who);
   const link = (id: string, payload: object, who: TestUser = admin) =>
     post(`/${id}/market`, payload, who);
+  /**
+   * A draft's sources as stored (#23): what a 채택 maps the expected sources to, the primary
+   * source's name with no address.
+   */
+  const sourcesOf = (marketId: string) =>
+    t.db
+      .select({
+        priority: schema.marketSources.priority,
+        name: schema.marketSources.name,
+        url: schema.marketSources.url,
+      })
+      .from(schema.marketSources)
+      .where(eq(schema.marketSources.marketId, marketId))
+      .orderBy(asc(schema.marketSources.priority));
   const actions = () =>
     t.db
       .select({
@@ -406,20 +420,44 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       .select()
       .from(schema.markets)
       .where(eq(schema.markets.id, marketId));
+    // The rule items (#23, ADR-0097): the background as 배경, the YES condition as the YES
+    // condition, the expected sources as the primary source's name with the address left for
+    // the operator; the rest blank — the proposal's date is no event deadline.
     expect(market).toMatchObject({
       status: 'draft',
       title: submitted.question,
-      rules: submitted.yesCondition,
-      resolutionSource: submitted.expectedSources,
       description: submitted.background,
+      yesCondition: submitted.yesCondition,
+      noCondition: '',
+      eventDeadline: null,
+      fallbackCondition: '',
+      longDelayDays: null,
+      delayHandling: '',
       categoryId: category.id,
       createdBy: admin.id,
       openAt: null,
     });
+    expect(await sourcesOf(marketId)).toEqual([
+      { priority: 0, name: submitted.expectedSources, url: '' },
+    ]);
     // 00:00 in Korea of the proposal's date, unless the operator gives a close time.
     expect(market!.closeAt.toISOString()).toBe(
       proposalDraftCloseAt(submitted.deadline).toISOString(),
     );
+    // So the open-items check names what the operator still fills in, the address among them.
+    const draft = await t.app.inject({
+      method: 'GET',
+      url: `/api/v1/admin/markets/${marketId}`,
+      headers: { cookie: admin.cookie },
+    });
+    expect(draft.json<{ data: { missingOpenItems: string[] } }>().data.missingOpenItems).toEqual([
+      'noCondition',
+      'eventDeadline',
+      'primarySource',
+      'longDelayDays',
+      'delayHandling',
+      'tags',
+    ]);
     expect((await actions()).map((row) => row.type)).toEqual([
       'proposal_review',
       'market_create',
@@ -799,13 +837,16 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     expect(market).toMatchObject({
       status: 'draft',
       title: adopted.question,
-      rules: adopted.yesCondition,
-      resolutionSource: adopted.expectedSources,
       description: adopted.background,
+      yesCondition: adopted.yesCondition,
+      eventDeadline: null,
       categoryId: category.id,
       createdBy: admin.id,
       openAt: null,
     });
+    expect(await sourcesOf(marketId)).toEqual([
+      { priority: 0, name: adopted.expectedSources, url: '' },
+    ]);
     expect(market!.closeAt.toISOString()).toBe(
       proposalDraftCloseAt(adopted.deadline).toISOString(),
     );

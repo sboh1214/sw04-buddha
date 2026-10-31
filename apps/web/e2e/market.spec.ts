@@ -124,9 +124,10 @@ test.describe('시장 상세', () => {
     // inside the page's HydrationBoundary and falls back to the row the server fetched
     // (`?? fallback`), so this holds whether or not the seeded query is readable. Delete
     // that fallback and this assertion goes red, which is why it is not optional polish.
-    // The heading as an element: '규칙' alone is a word other text on the page could carry.
+    // The heading as an element: '규칙' alone is a word other text on the page could carry. The
+    // snippet is the YES 조건 (#23 AC 2); every other row is market-rules.spec.ts's.
     expect(html).toMatch(new RegExp(`<h2[^>]*>${copy.rulesSectionTitle}</h2>`));
-    expect(html).toContain(market.rules);
+    expect(html).toContain(market.yesCondition);
 
     /*
      * The chart is in the first paint, and with no fill it is the 체결 없음 state rather than a
@@ -1158,8 +1159,9 @@ test.describe('시장 상세 · 상태와 로그인', () => {
     }
     await expect(detail.getByRole('link', { name: copy.login })).toHaveCount(1);
     await expect(page.getByText(copy.marketPersonalSignedOut)).toHaveCount(1);
-    // A market without a description has no 배경 section either, in neither width's place.
-    await expect(page.locator('[data-testid^="market-background"]')).toHaveCount(0);
+    // No market opens without a 배경 since #23 (an open item), so a detail with no 배경 section —
+    // a market opened before #23 — is no longer one a spec can make: `backgroundText`'s null
+    // (lib/market-detail.test.ts) is what keeps that section out.
 
     // The seed admin, whose phone the `admin` fixture verified (helpers.ts).
     await signIn(page, adminAccount.email, adminAccount.password);

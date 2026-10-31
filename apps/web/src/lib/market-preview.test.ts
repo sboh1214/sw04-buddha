@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { type Category, type CreateMarketFields, type MarketSummary } from './api';
-import { toPreviewMarket } from './market-preview';
+import { toPreviewMarket, toPreviewRules } from './market-preview';
 
 const categories: Category[] = [
   { id: 1, slug: 'weather', nameKo: '날씨', sortOrder: 1, parentId: null },
@@ -9,8 +9,7 @@ const categories: Category[] = [
 const body: CreateMarketFields = {
   title: '첫눈이 올까?',
   description: null,
-  rules: '기상청 발표 기준',
-  resolutionSource: null,
+  yesCondition: '기상청이 서울의 첫눈을 발표하면 YES',
   imageUrl: null,
   categoryId: 1,
   closeAt: '2026-12-01T00:00:00.000Z',
@@ -127,5 +126,48 @@ describe('toPreviewMarket', () => {
     });
     expect(preview.status).toBe('settled');
     expect(preview.resolvedResult).toBe('YES');
+  });
+});
+
+describe('toPreviewRules', () => {
+  it('hands the rules area every rule item the body holds but 배경, and the close time (#23)', () => {
+    const full: CreateMarketFields = {
+      ...body,
+      description: '배경은 따로 그린다',
+      noCondition: '사건 기한까지 발표가 없으면 NO',
+      eventDeadline: '2026-11-30T14:59:00.000Z',
+      primarySource: { name: '기상청', url: 'https://www.weather.go.kr' },
+      fallbackSources: [{ name: '연합뉴스', url: 'htt' }],
+      fallbackCondition: '1차 출처에 없으면',
+      longDelayDays: 14,
+      delayHandling: '무효로 판정한다.',
+    };
+    expect(toPreviewRules(full)).toEqual({
+      yesCondition: '기상청이 서울의 첫눈을 발표하면 YES',
+      noCondition: '사건 기한까지 발표가 없으면 NO',
+      eventDeadline: '2026-11-30T14:59:00.000Z',
+      primarySource: { name: '기상청', url: 'https://www.weather.go.kr' },
+      // A half-typed address goes as typed: the area links only an http(s) one (`sourceView`).
+      fallbackSources: [{ name: '연합뉴스', url: 'htt' }],
+      fallbackCondition: '1차 출처에 없으면',
+      longDelayDays: 14,
+      delayHandling: '무효로 판정한다.',
+      closeAt: '2026-12-01T00:00:00.000Z',
+    });
+    expect(toPreviewRules(full)).not.toHaveProperty('description');
+  });
+
+  it('draws an item the body leaves out as not filled in: blank, null, no fallback', () => {
+    expect(toPreviewRules({ ...body, yesCondition: undefined })).toEqual({
+      yesCondition: '',
+      noCondition: '',
+      eventDeadline: null,
+      primarySource: null,
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: null,
+      delayHandling: '',
+      closeAt: body.closeAt,
+    });
   });
 });

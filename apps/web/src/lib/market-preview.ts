@@ -1,6 +1,6 @@
 import { isPublicMarketStatus } from '@buddha/shared';
 import { copy } from '@/copy';
-import { type Category, type CreateMarketFields, type MarketSummary } from '@/lib/api';
+import { type Category, type CreateMarketFields, type Market, type MarketSummary } from '@/lib/api';
 import { isHttpUrl } from '@/lib/market-form';
 
 /**
@@ -86,5 +86,43 @@ export function toPreviewMarket(
     // 마감됨 until a close time is typed. Inventing an instant would mean reading the clock here.
     closeAt: body.closeAt,
     ...history,
+  };
+}
+
+/**
+ * What the detail's rules area (`RulesSection`) draws (#23): the rule items but 배경, which is its
+ * own section before it, and the close time.
+ */
+export type PreviewRules = Pick<
+  Market,
+  | 'yesCondition'
+  | 'noCondition'
+  | 'eventDeadline'
+  | 'primarySource'
+  | 'fallbackSources'
+  | 'fallbackCondition'
+  | 'longDelayDays'
+  | 'delayHandling'
+  | 'closeAt'
+>;
+
+/**
+ * The form's rule items as the detail's rules area draws them (#23), for the 상세 미리보기:
+ * `toCreateMarketBody` has trimmed them, so a blank item reads '—' as on the visitor's screen and
+ * an empty fallback list 없음. A half-typed source address goes as typed:
+ * the area links a name only to an http(s) address (`sourceView`), as it does for a visitor.
+ * Total, so a half-typed form is safe to hand it.
+ */
+export function toPreviewRules(body: CreateMarketFields): PreviewRules {
+  return {
+    yesCondition: body.yesCondition ?? '',
+    noCondition: body.noCondition ?? '',
+    eventDeadline: body.eventDeadline ?? null,
+    primarySource: body.primarySource ?? null,
+    fallbackSources: body.fallbackSources ?? [],
+    fallbackCondition: body.fallbackCondition ?? '',
+    longDelayDays: body.longDelayDays ?? null,
+    delayHandling: body.delayHandling ?? '',
+    closeAt: body.closeAt,
   };
 }

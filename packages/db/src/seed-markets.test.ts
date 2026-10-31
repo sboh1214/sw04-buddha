@@ -4,8 +4,10 @@ import {
   MARKET_TAGS_MAX,
   MARKET_TAGS_MIN,
   SUBCATEGORY_SLUGS,
+  createMarketBodySchema,
   findExcludedText,
   marketTagsSchema,
+  missingOpenItems,
   tagKey,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
@@ -24,6 +26,49 @@ const PUBLICATION_MISSING_NO = [
   /그마저 없으면/,
 ];
 
+/**
+ * A VOID market's contracts are paid by the one 50/50 rule (#173 item 9), never handed back as a
+ * refund of what they cost (N03 §6, #23's last AC).
+ */
+const REFUND_WORDING = /환불|원금|돌려(드리|받|줍)/;
+
+/**
+ * The seed's text a market's screen shows: the card and the detail with its 배경 and rule items
+ * (#23, ADR-0097), each source by its name and its address. Its tags are on the detail too
+ * (#17), checked one by one below.
+ */
+const SCREEN_FIELDS = [
+  'title',
+  'description',
+  'yesCondition',
+  'noCondition',
+  'primarySource',
+  'fallbackSources',
+  'fallbackCondition',
+  'delayHandling',
+] as const;
+type ScreenField = (typeof SCREEN_FIELDS)[number];
+/** The fields that are one text: the sources are a name and an address each. */
+type TextField = Exclude<ScreenField, 'primarySource' | 'fallbackSources'>;
+
+type ScreenCopy = Pick<SeedMarket, 'slug' | ScreenField>;
+
+/** What a field shows: its text, or each of its sources' name and address. */
+function screenTexts(market: ScreenCopy, field: ScreenField): string[] {
+  if (field === 'primarySource') return [market.primarySource.name, market.primarySource.url];
+  if (field === 'fallbackSources') {
+    return market.fallbackSources.flatMap((source) => [source.name, source.url]);
+  }
+  return [market[field]];
+}
+
+/** Every text a market's screen shows, with the field it is in. */
+function allScreenTexts(market: ScreenCopy): { field: ScreenField; text: string }[] {
+  return SCREEN_FIELDS.flatMap((field) =>
+    screenTexts(market, field).map((text) => ({ field, text })),
+  );
+}
+
 describe('seed market copy (#125)', () => {
   it('has 14 markets with unique, valid slugs filed under a leaf category', () => {
     expect(SEED_MARKETS).toHaveLength(14);
@@ -34,19 +79,116 @@ describe('seed market copy (#125)', () => {
       expect(market.slug).toMatch(MARKET_SLUG_PATTERN);
       expect(leaves.has(market.category), market.slug).toBe(true);
       expect(Number.isNaN(Date.parse(market.closeAt)), market.slug).toBe(false);
+      expect(Number.isNaN(Date.parse(market.eventDeadline)), market.slug).toBe(false);
     }
   });
 
   it('never answers NO only because the source published late (N03 §4)', () => {
-    for (const { slug, rules } of SEED_MARKETS) {
-      expect(rules, slug).toContain(SEED_RULE_NO_DELAY_NO);
-      for (const pattern of PUBLICATION_MISSING_NO) expect(rules, slug).not.toMatch(pattern);
+    for (const market of SEED_MARKETS) {
+      // The delay clause lives in 지연·취소·무효 처리 (#23), and no field says the opposite.
+      expect(market.delayHandling, market.slug).toContain(SEED_RULE_NO_DELAY_NO);
+      for (const { field, text } of allScreenTexts(market)) {
+        for (const pattern of PUBLICATION_MISSING_NO) {
+          expect(text, `${market.slug} ${field}`).not.toMatch(pattern);
+        }
+      }
     }
   });
 
-  it('states the NO side of every rule, apart from the delay clause (N03 §2)', () => {
-    for (const { slug, rules } of SEED_MARKETS) {
-      expect(rules.replace(SEED_RULE_NO_DELAY_NO, ''), slug).toMatch(/NO(입니다|로 판정합니다)/);
+  it('states the NO side of every market, against its event deadline (N03 §2, #172 item 8)', () => {
+    for (const { slug, noCondition } of SEED_MARKETS) {
+      expect(noCondition, slug).toMatch(/NO(입니다|로 판정합니다)/);
+      expect(noCondition, slug).toContain('사건 기한');
+    }
+  });
+
+  it('gives every market its VOID criteria and promises no refund (N03 §4·§6, #23)', () => {
+    for (const market of SEED_MARKETS) {
+      expect(market.delayHandling, market.slug).toContain('무효(VOID)');
+      for (const { field, text } of allScreenTexts(market)) {
+        expect(text, `${market.slug} ${field}`).not.toMatch(REFUND_WORDING);
+      }
+    }
+    // The check reads the wording: a refund promise fails.
+    expect('무효로 판정되면 원금을 돌려드립니다.').toMatch(REFUND_WORDING);
+  });
+});
+
+describe('seed market rule items (#23, ADR-0097)', () => {
+  it('gives every market every item the open-items check asks for', () => {
+    for (const market of SEED_MARKETS) {
+      expect(
+        missingOpenItems({
+          ...market,
+          fallbackSources: [...market.fallbackSources],
+          // The seed files it under a leaf and gives it its tags (`seedMarkets`).
+          categorySelectable: true,
+          tagCount: market.tags.length,
+        }),
+        market.slug,
+      ).toEqual([]);
+    }
+  });
+
+  it('writes each item as the admin entry would take and store it', () => {
+    // The create body's own schema, the category and the account aside: the limits, the source
+    // rules and the event deadline's form. Its output is the literal itself — already trimmed.
+    const entry = createMarketBodySchema.omit({ categoryId: true, expectedAccountId: true });
+    for (const market of SEED_MARKETS) {
+      const body = {
+        slug: market.slug,
+        title: market.title,
+        description: market.description,
+        yesCondition: market.yesCondition,
+        noCondition: market.noCondition,
+        eventDeadline: market.eventDeadline,
+        primarySource: market.primarySource,
+        fallbackSources: [...market.fallbackSources],
+        fallbackCondition: market.fallbackCondition,
+        longDelayDays: market.longDelayDays,
+        delayHandling: market.delayHandling,
+        tags: [...market.tags],
+        closeAt: market.closeAt,
+      };
+      const parsed = entry.safeParse(body);
+      expect(parsed.error?.issues, market.slug).toBeUndefined();
+      expect(parsed.data, market.slug).toEqual(body);
+      // The service's own refusal ('no fallback source'): a switch condition needs a fallback.
+      expect(market.fallbackCondition !== '', market.slug).toBe(market.fallbackSources.length > 0);
+    }
+  });
+
+  it('cites every source by a name and an https address', () => {
+    for (const market of SEED_MARKETS) {
+      for (const source of [market.primarySource, ...market.fallbackSources]) {
+        expect(source.name.trim(), market.slug).not.toBe('');
+        expect(new URL(source.url).protocol, `${market.slug} ${source.url}`).toBe('https:');
+      }
+    }
+  });
+
+  it('gives a fallback only where the rule names one, in priority order (#172 item 9)', () => {
+    const fallbacks = Object.fromEntries(
+      SEED_MARKETS.filter((market) => market.fallbackSources.length > 0).map((market) => [
+        market.slug,
+        market.fallbackSources.map((source) => source.name),
+      ]),
+    );
+    expect(fallbacks).toEqual({
+      // The close when the market's own does not show it.
+      'krw-usd-yearend-2026-above-1400': ['서울외국환중개 환율 고시'],
+      // The daily totals when the monthly data is not out by 11월 15일.
+      'seoul-october-2026-rain-above-50mm': ['기상자료개방포털 일자료'],
+      // Three newsrooms that count alike: one primary, the other two after it in order.
+      'korea-telco-6g-trial-2026': ['KT 보도자료', 'LG유플러스 뉴스룸'],
+    });
+    const telco = SEED_MARKETS.find((market) => market.slug === 'korea-telco-6g-trial-2026')!;
+    expect(telco.primarySource.name).toBe('SK텔레콤 뉴스룸');
+  });
+
+  it('sets the long-delay deadline by how the source publishes: 14 or 30 days', () => {
+    for (const { slug, longDelayDays } of SEED_MARKETS) {
+      expect([14, 30], slug).toContain(longDelayDays);
     }
   });
 });
@@ -87,32 +229,24 @@ describe('seed market tags (#17, ADR-0093 decision 2 #172 item 2)', () => {
   });
 });
 
-/**
- * The seed's text a market's screen shows: the card and the detail with its 규칙 and 출처. Its
- * tags are on the detail too (#17), checked one by one below.
- */
-const SCREEN_FIELDS = ['title', 'description', 'rules', 'resolutionSource'] as const;
-type ScreenField = (typeof SCREEN_FIELDS)[number];
-
 const KRW_USD = 'krw-usd-yearend-2026-above-1400';
 
 /**
  * The won amounts a question is about, each for the one market and field that states it: the
  * KRW/USD close is that market's subject, not a price for Coin, which is what paid purchase's
- * won-price word looks for (N06: no price table). A won amount anywhere else fails.
+ * won-price word looks for (N06: no price table). A won amount anywhere else fails — in a source
+ * too, which lists none.
  */
-const WON_AMOUNTS: readonly { slug: string; field: ScreenField; amount: string }[] = [
+const WON_AMOUNTS: readonly { slug: string; field: TextField; amount: string }[] = [
   { slug: KRW_USD, field: 'title', amount: '1,400원' },
-  { slug: KRW_USD, field: 'rules', amount: '1,400.0원' },
-  { slug: KRW_USD, field: 'rules', amount: '1,399.9원' },
+  { slug: KRW_USD, field: 'yesCondition', amount: '1,400.0원' },
+  { slug: KRW_USD, field: 'noCondition', amount: '1,399.9원' },
 ];
-
-type ScreenCopy = Pick<SeedMarket, 'slug' | ScreenField>;
 
 const escapeRegExp = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /** Where a market's field states one of its listed won amounts, as [start, end). */
-function wonAmountSpans(market: ScreenCopy, field: ScreenField): [number, number][] {
+function wonAmountSpans(market: ScreenCopy, field: TextField): [number, number][] {
   return WON_AMOUNTS.filter((entry) => entry.slug === market.slug && entry.field === field).flatMap(
     ({ amount }) =>
       [
@@ -126,6 +260,10 @@ function wonAmountSpans(market: ScreenCopy, field: ScreenField): [number, number
 
 /** What a market's field names of the excluded features, past its listed won amounts. */
 function excludedIn(market: ScreenCopy, field: ScreenField): ExcludedTextHit[] {
+  if (field === 'primarySource' || field === 'fallbackSources') {
+    // Each name and address alone, as the detail shows them; no amount is listed for one.
+    return screenTexts(market, field).flatMap((text) => findExcludedText(text));
+  }
   const spans = wonAmountSpans(market, field);
   return findExcludedText(market[field]).filter(
     (hit) =>
@@ -191,11 +329,21 @@ describe('seed market copy and the excluded features (#113)', () => {
     expect(
       matches({ ...krwUsd, description: 'Coin 가격은 1,000원입니다.' }, 'description'),
     ).toEqual(['0원']);
-    // The listed amount does not travel to another market or field.
+    // The listed amount does not travel to another market or field, a source included.
     expect(matches({ ...other, title: krwUsd.title }, 'title')).toEqual(['0원']);
-    expect(matches({ ...krwUsd, resolutionSource: krwUsd.title }, 'resolutionSource')).toEqual([
+    expect(matches({ ...krwUsd, delayHandling: krwUsd.title }, 'delayHandling')).toEqual(['0원']);
+    expect(matches({ ...krwUsd, noCondition: krwUsd.yesCondition }, 'noCondition')).toEqual([
       '0원',
     ]);
+    expect(
+      matches({ ...krwUsd, primarySource: { name: krwUsd.title, url: '' } }, 'primarySource'),
+    ).toEqual(['0원']);
+    expect(
+      matches(
+        { ...krwUsd, fallbackSources: [{ name: '환율 고시', url: 'https://example.com/충전' }] },
+        'fallbackSources',
+      ),
+    ).toEqual(['충전']);
     // In its own field, only the listed amount: a second amount there fails, and so do the
     // paid-purchase words and the won sign.
     expect(

@@ -54,7 +54,10 @@ import { RelatedMarkets } from './related-markets';
  */
 export const dynamic = 'force-dynamic';
 
-/** Search engines cut a description around here; the rules are the market's own summary. */
+/**
+ * Search engines cut a description around here. The market's own summary is its 배경, or, for a
+ * market without one, its YES 조건 (#23).
+ */
 const META_DESCRIPTION_MAX = 160;
 
 export async function generateMetadata({
@@ -66,9 +69,16 @@ export async function generateMetadata({
   // The same React-cached call the body makes, so metadata costs no second round trip.
   const market = await fetchMarketServer(slug);
   if (market === null) return { title: `${copy.marketNotFound} | ${copy.appName}` };
+  // The 배경 the detail draws (null and blank are none, as `backgroundText`), else the YES 조건.
+  // Not `backgroundText` itself: lib/market-detail loads the Chakra system, which a server
+  // component cannot (its `perWidth` note).
+  const background = market.description?.trim() ?? '';
   return {
     title: `${market.title} | ${copy.appName}`,
-    description: market.rules.slice(0, META_DESCRIPTION_MAX),
+    description: (background === '' ? market.yesCondition : background).slice(
+      0,
+      META_DESCRIPTION_MAX,
+    ),
   };
 }
 
@@ -148,11 +158,11 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
             md: <LiveBackgroundSection fallback={market} width="md" />,
             base: <LiveBackgroundSection fallback={market} width="base" />,
           }}
-          // PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail. It promises no
-          // 판정 schedule (#22's '일정' panel will). The row fetched here is the FALLBACK, not
-          // the source: the section follows the live cache so an admin's edit to the rules or
-          // the close time cannot leave this panel describing a market the countdown above has
-          // already moved past.
+          // PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail — every rule item
+          // (#23), the VOID payout and the close time. It promises no 판정 schedule (#22's '일정'
+          // panel will). The row fetched here is the FALLBACK, not the source: the section
+          // follows the live cache so an admin's edit to a rule item or the close time cannot
+          // leave this panel describing a market the countdown above has already moved past.
           rules={{
             md: <LiveRulesSection fallback={market} width="md" />,
             base: <LiveRulesSection fallback={market} width="base" />,

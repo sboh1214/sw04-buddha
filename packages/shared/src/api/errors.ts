@@ -11,6 +11,11 @@ export const ERROR_CODES = [
   'PRICE_MOVED',
   'DUPLICATE_REQUEST',
   'RATE_LIMITED',
+  /**
+   * An edit of an open market would leave a rule item missing that was filled before it, as the
+   * open-items check counts one (#23). Details carry one issue per such item, its path naming the
+   * item as a field. Items already missing block no other edit.
+   */
   'RULES_REQUIRED',
   // No brackets or quotes in the comments of this list: scripts/generate-api-doc.mjs reads it
   // with a regex. The detail shapes of the codes below are in its ERROR_NOTES.
@@ -190,8 +195,9 @@ export const ERROR_CODES = [
   'PROPOSAL_LIMITED',
   /**
    * The market misses items the open-items check requires before it leaves the draft (#17): a
-   * blank rules text, a category no new market may be filed under, or too few tags. Details carry
-   * one issue per missing item, in the order of the check, its path naming the item as a field.
+   * blank title, a rule item not filled in (#23), a category no new market may be filed under, or
+   * too few tags. Details carry one issue per missing item, in the order of the check, its path
+   * naming the item as a field.
    * (No apostrophe in a comment inside this array: scripts/generate-api-doc.mjs reads every quoted
    * run in it as a code.)
    */
