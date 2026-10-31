@@ -26,6 +26,7 @@ import {
   searchStatusOptions,
   searchToRecord,
   seedsSearchResults,
+  tagSearchPath,
 } from './market-search';
 
 /**
@@ -183,6 +184,18 @@ describe('searchPath and searchQuery', () => {
       `/search?q=${encodeURIComponent('금리')}&status=closed&sort=newest`,
     );
     expect(recentSearchPath(DEFAULT_SEARCH_FILTERS, 'rain')).toBe('/search?q=rain');
+  });
+
+  it("opens a tag's own search: its name as the term, every filter the screen's default (#17)", () => {
+    expect(tagSearchPath('서울')).toBe(`/search?q=${encodeURIComponent('서울')}`);
+    // The characters a tag may hold come back as the same term, spaces and '&' and '+' included.
+    for (const name of ['S&P500', 'C++', '한국 영화', '원·달러', 'K-팝']) {
+      const query = new URL(tagSearchPath(name), 'https://buddha.test').searchParams;
+      expect(searchFiltersFromSearchParams({ q: query.get('q') ?? undefined }), name).toEqual({
+        ...DEFAULT_SEARCH_FILTERS,
+        q: name,
+      });
+    }
   });
 });
 

@@ -413,6 +413,22 @@ export const copy = {
   adminMarketSource: '출처',
   adminMarketCategory: '카테고리',
   adminMarketCategoryPlaceholder: '카테고리 선택',
+  // 태그 (#17, ADR-0093 결정 2 #172 2항): 카테고리 다음 칸. 이름을 치고 Enter나 넣기로 넣고(쉼표로 나눈
+  // 목록은 한 번에), 칩의 빼기로 뺀다. 넣은 순서가 상세의 순서다. 대소문자·띄어쓰기만 다른 이름은 같은
+  // 태그이고, 이미 있는 태그는 처음 만든 표기로 붙는다(#17 구현의 선택 10). 초안은 없어도 저장된다.
+  adminMarketTags: '태그',
+  adminMarketTagsPlaceholder: '태그 이름',
+  adminMarketTagAdd: '넣기',
+  adminMarketTagRemove: '빼기',
+  adminMarketTagsHint:
+    '시장을 열려면 1~5개가 있어야 합니다. Enter나 넣기로 넣고, 쉼표로 나눈 목록은 한 번에 들어갑니다. 대소문자만 다른 이름은 같은 태그입니다.',
+  // 개설 항목 검사 (#17): 초안을 열기 전에 채울 항목의 이름. 초안 상세의 안내(빠진 것이 없으면 안내도
+  // 없다)와 열기를 거절한 알림이 같은 이름을 OPEN_ITEMS 순서로 ' · '로 잇는다. 초안이 아닌 시장에는 안내가
+  // 없다(검사는 초안을 떠날 때의 것이다).
+  openItemRules: '정산 규칙',
+  openItemCategory: '카테고리',
+  openItemTags: '태그 1~5개',
+  adminMarketOpenItems: '열기 전에 채울 항목',
   adminMarketImageUrl: '이미지 URL',
   adminMarketImageUrlPlaceholder: 'https://',
   adminMarketCloseAt: '마감 시각 (KST)',
@@ -582,6 +598,61 @@ export const copy = {
   errThemeDateRange: '날짜는 2000년 1월 1일부터 2100년 12월 31일 사이로 입력해 주세요.',
   errThemeNoticeTitle: '제목은 1~100자로 입력해 주세요.',
   errThemeNoticeBody: '내용은 1~5,000자로 입력해 주세요.',
+  // 관리자 카테고리 (#17, ADR-0093 결정 2 #172 1항, 결정 3의 #17 행): 상위·하위 두 단계를 더하고, 이름을
+  // 바꾸고, 같은 묶음 안에서 순서를 옮기고(새 카테고리는 맨 뒤), 숨기거나 다시 보이게 한다. 지우지 않는다.
+  // 주소(slug)는 만들 때 정하고 바꾸지 않는다(#17 구현의 선택). 바꿀 때마다 담당자·시각·전후 값이 기록에
+  // 남고 사유와 다른 운영자의 승인은 받지 않는다. 숨긴 카테고리는 새 시장 입력·탐색·관심 카테고리 선택에서
+  // 빠지고 기존 시장은 그대로 갖는다. 상위를 숨기면 하위도 함께 빠진다.
+  adminCategories: '카테고리',
+  adminCategoriesHint:
+    '숨긴 카테고리는 새 시장 입력·시장 탐색·관심 카테고리 선택에서 빠지고, 이미 그 카테고리에 있는 시장은 그대로 둡니다. 상위 카테고리를 숨기면 그 하위 카테고리도 함께 빠집니다.',
+  adminCategoriesHintKeep:
+    '카테고리는 지우지 않고 숨깁니다. 순서는 같은 묶음 안에서 옮기고, 새 카테고리는 맨 뒤에 붙습니다.',
+  adminCategoriesEmpty: '카테고리가 없습니다.',
+  adminCategoryCreateTop: '상위 카테고리 추가',
+  adminCategoryCreateChild: '하위 카테고리 추가',
+  adminCategoryCreate: '추가',
+  adminCategoryCreated: '카테고리를 추가했습니다.',
+  adminCategorySlug: '주소',
+  adminCategorySlugHint:
+    '?category= 뒤에 붙는 주소입니다. 영문 소문자·숫자·하이픈(-)으로 2~32자이고, 만든 뒤에는 바꿀 수 없습니다.',
+  adminCategoryName: '이름',
+  // 시장이 있는 상위 카테고리에 첫 하위가 생겨도 그 시장은 그대로 남는다(#17 구현의 선택 3).
+  adminCategoryChildHint:
+    '하위 카테고리가 있으면 새 시장은 하위 카테고리에만 넣을 수 있습니다. 이미 이 카테고리에 있는 시장은 그대로입니다.',
+  adminCategoryHiddenTag: '숨김',
+  // 자기는 켜져 있지만 상위가 숨겨져 함께 빠진 하위 카테고리. 상위를 다시 보이게 하면 돌아온다.
+  adminCategoryHiddenByParentTag: '상위 숨김',
+  adminCategoryMarkets: '시장',
+  adminCategoryMarketsUnit: '개',
+  adminCategoryMoveUp: '위로',
+  adminCategoryMoveDown: '아래로',
+  adminCategoryMoved: '순서를 바꿨습니다.',
+  adminCategoryRename: '이름 바꾸기',
+  adminCategoryRenamed: '이름을 바꿨습니다.',
+  adminCategoryHide: '숨기기',
+  adminCategoryHideTitle: '카테고리를 숨깁니다',
+  adminCategoryHideBody:
+    '숨기면 새 시장 입력·시장 탐색·관심 카테고리 선택에서 빠집니다. 이미 이 카테고리에 있는 시장은 그대로이고, 다시 보이게 할 수 있습니다. 계속할까요?',
+  adminCategoryHideTopBody: '상위 카테고리라 그 하위 카테고리도 함께 빠집니다.',
+  adminCategoryHidden: '카테고리를 숨겼습니다.',
+  adminCategoryShow: '다시 보이기',
+  adminCategoryShown: '카테고리를 다시 보이게 했습니다.',
+  adminCategoryNotFound: '카테고리를 찾을 수 없습니다. 목록을 다시 읽었습니다.',
+  adminCategoryErrSlug:
+    '주소는 영문 소문자·숫자로 2~32자이고, 하이픈(-)은 단어 사이에 하나씩만 씁니다.',
+  adminCategoryErrSlugTaken:
+    '이미 다른 카테고리가 쓰는 주소입니다. 숨긴 카테고리의 주소도 쓸 수 없습니다.',
+  adminCategoryErrName: '이름은 1~32자로 입력해 주세요.',
+  adminCategoryErrNameTaken:
+    '같은 묶음(상위끼리, 또는 같은 상위 아래)에 이미 같은 이름의 카테고리가 있습니다. 숨긴 것도 셉니다.',
+  adminCategoryErrParentNotTopLevel: '하위 카테고리 아래에는 카테고리를 만들 수 없습니다.',
+  adminCategoryErrParentInactive:
+    '숨긴 상위 카테고리에는 하위 카테고리를 추가할 수 없습니다. 목록을 다시 읽었습니다.',
+  adminCategoryErrGroupFull:
+    '한 묶음(상위끼리, 또는 같은 상위 아래)에는 카테고리를 200개까지 둘 수 있습니다. 숨긴 것도 셉니다.',
+  adminCategoryErrOrder:
+    '그사이 카테고리 목록이 바뀌어 순서를 바꾸지 못했습니다. 다시 읽은 목록에서 옮겨 주세요.',
   adminMarketFills: '최근 체결',
   adminNoFills: '아직 체결이 없습니다.',
   buy: '매수',
@@ -593,12 +664,31 @@ export const copy = {
   errMarketSource: '출처는 500자 이하로 입력해 주세요.',
   errMarketCategory: '카테고리를 선택해 주세요.',
   errMarketCategoryUnavailable: '선택할 수 없는 카테고리입니다.',
+  // 새 시장을 넣을 수 없는 카테고리(#17, ADR-0093 결정 2 #172 1항): 숨긴 것, 숨긴 상위 아래의 것, 하위
+  // 카테고리가 있는 상위. API가 categoryId를 짚어 거절한 까닭(inactive·parent_inactive·subcategories)이다.
+  errMarketCategoryHidden: '숨긴 카테고리입니다. 다른 카테고리를 골라 주세요.',
+  errMarketCategoryParentHidden:
+    '상위 카테고리가 숨겨진 카테고리입니다. 다른 카테고리를 골라 주세요.',
+  errMarketCategoryHasChildren:
+    '하위 카테고리가 있는 카테고리입니다. 그 아래의 하위 카테고리를 골라 주세요.',
+  // 태그 한 개의 규칙(@buddha/shared tags.ts의 TAG_NAME_MAX·TAG_NAME_PATTERN)과 목록의 규칙(1~5개,
+  // 같은 태그 두 번 없음). 열린 시장은 태그를 모두 뺄 수 없다(#17 구현의 선택). 칸에 치고 넣지 않은 이름은
+  // 저장할 때 버리지 않고 거절한다.
+  errMarketTagLength: '태그는 20자까지 쓸 수 있습니다.',
+  errMarketTagFormat:
+    '태그는 한글·영문·숫자와 띄어쓰기, 기호 - _ . & + · 로 씁니다. 첫 글자는 한글·영문·숫자이고, 띄어쓰기나 - _ · 로 끝날 수 없습니다.',
+  errMarketTagDuplicate: '이미 넣은 태그입니다. 대소문자만 다른 이름도 같은 태그입니다.',
+  errMarketTagsMax: '태그는 5개까지 넣을 수 있습니다.',
+  errMarketTagsOpen: '열린 시장의 태그는 모두 뺄 수 없습니다.',
+  errMarketTagPending: '넣지 않은 태그가 있습니다. Enter나 넣기로 넣거나 지워 주세요.',
   errMarketImageUrl: 'http 또는 https로 시작하는 500자 이하의 URL을 입력해 주세요.',
   errMarketCloseAt: '마감 시각은 현재보다 뒤여야 합니다.',
   errMarketSlug: '슬러그는 영문 소문자·숫자·한글·하이픈 3~80자로 입력하거나 비워 두세요.',
   errMarketSlugTaken: '이미 사용 중인 슬러그입니다.',
   errMarketInvalid: '입력값을 확인해 주세요.',
-  errMarketRulesRequired: '규칙을 채워야 시장을 열 수 있습니다.',
+  // 열기의 개설 항목 검사 거절(OPEN_ITEMS_MISSING): 뒤에 ': '와 빠진 항목의 이름(openItem…)이 붙는다.
+  // 응답이 항목을 싣지 않았으면 마침표로 끝낸다. 상세는 다시 읽혀 초안의 안내가 같은 항목을 보인다.
+  errMarketOpenItemsMissing: '열기 전에 채울 항목이 있습니다',
   errMarketRulesOpen: '열린 시장의 규칙은 비울 수 없습니다.',
   errMarketNotOpen: '거래 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
@@ -927,8 +1017,8 @@ export const copy = {
   marketsEmpty: '아직 열린 시장이 없습니다.',
   // 시장 검색 (#15, ADR-0066): 홈과 다른 결과 화면(ADR-0061 결정 1의 14). 처음에는 공개된 모든 상태를
   // 보이고, 상태 필터는 '모든 상태'와 상태 라벨마다 하나다(결정 1의 13, 취소 포함은 ADR-0093 결정 3의 #174
-  // 행). 결과 '무효'와 표시 '판정 지연'의 필터는 없다. 제목의 부분 일치로 찾는다
-  // (태그는 #17). 결과 없음 · 불러오는 중 · 연결 오류를 서로 다르게 보인다(N02 §3).
+  // 행). 결과 '무효'와 표시 '판정 지연'의 필터는 없다. 제목의 부분 일치나 태그 이름의 완전 일치(대소문자·
+  // 띄어쓰기는 가리지 않는다, #17)로 찾는다. 결과 없음 · 불러오는 중 · 연결 오류를 서로 다르게 보인다(N02 §3).
   searchTitle: '시장 검색',
   searchStatus: '상태',
   searchStatusAll: '모든 상태',
@@ -1038,6 +1128,10 @@ export const copy = {
   // 시장 상세의 소속 테마 링크(ADR-0069 결정 4의 #81 '시장 상세의 소속 묶음 링크'). 공개된 테마만,
   // 종료된 테마도, 링크마다 '이름 · 진행 중'처럼 상태를 붙인다(오너 결정 2026-10-19 2차).
   marketThemes: '테마',
+  // 시장 상세의 태그 (#17, ADR-0093 결정 2 #172 2항): 요약 끝, 테마 링크 앞 한 줄에 넣은 순서대로
+  // '#이름' 칩을 보이고, 칩마다 그 태그의 검색(/search?q=이름)으로 간다. '#'은 그리기만 하고 태그에 저장하지
+  // 않는다. 태그가 없으면 줄도 없다. 이것은 칩 목록의 접근 이름이다.
+  marketTags: '태그',
   // 비로그인 방문자에게 개인 영역(내 포지션·내 대기 주문·내 거래) 대신 그 자리에 하나만 보이는
   // 로그인 안내(오너 결정 2026-10-17, '로그인 안내 하나'). 버튼은 copy.login이고 이 상세로 돌아온다.
   marketPersonalSignedOut: '로그인하면 이 시장의 내 포지션·대기 주문·거래를 볼 수 있습니다.',
@@ -1241,13 +1335,13 @@ export const copy = {
   postDraftDiscardConfirm: '버리기',
   postDraftDiscarded: '되살린 내용을 버렸습니다.',
   // 시장 고르기: 공개 상태의 모든 시장(개장 예정부터 지급 완료·취소까지, #45-6과 ADR-0093 결정 3의 #174
-  // 행)을 제목으로 찾는다.
+  // 행)을 시장 검색과 같이 제목·태그로 찾는다: 제목의 일부나 태그 이름 그대로(#17).
   marketPickerLabel: '시장 찾기',
-  marketPickerPlaceholder: '시장 제목의 일부',
+  marketPickerPlaceholder: '시장 제목의 일부나 태그',
   marketPickerSubmit: '찾기',
-  marketPickerPrompt: '글을 쓸 시장을 제목으로 찾아 고르세요.',
-  marketPickerFilterPrompt: '글을 볼 시장을 제목으로 찾아 고르세요.',
-  marketPickerEmpty: '제목에 이 글자가 들어간 시장이 없습니다.',
+  marketPickerPrompt: '글을 쓸 시장을 제목·태그로 찾아 고르세요.',
+  marketPickerFilterPrompt: '글을 볼 시장을 제목·태그로 찾아 고르세요.',
+  marketPickerEmpty: '제목에 이 글자가 들어가거나 이 태그가 붙은 시장이 없습니다.',
   marketPickerPick: '고르기',
   // 편집기 도구 막대(서식은 #45-3의 허용 목록뿐이다).
   editorToolbar: '서식',

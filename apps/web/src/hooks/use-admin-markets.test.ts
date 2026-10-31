@@ -6,8 +6,18 @@ import {
   partialMatchKey,
 } from '@tanstack/react-query';
 import { describe, expect, it, vi } from 'vitest';
-import { type AdminMarket, type AdminRelatedMarket, type MarketSummary } from '@/lib/api';
-import { DEFAULT_MARKET_FILTERS, marketsKey, relatedMarketsKey } from '@/lib/market-keys';
+import {
+  type AdminMarket,
+  type AdminRelatedMarket,
+  type Category,
+  type MarketSummary,
+} from '@/lib/api';
+import {
+  CATEGORIES_QUERY_KEY,
+  DEFAULT_MARKET_FILTERS,
+  marketsKey,
+  relatedMarketsKey,
+} from '@/lib/market-keys';
 import { type MarketPage, type MarketPages } from '@/lib/market-live';
 import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
@@ -22,6 +32,7 @@ import {
   applyMarket,
   applyRelatedMarkets,
   marketFillsKey,
+  refreshAfterMarketFormRefusal,
 } from './use-admin-markets';
 
 const ID = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
@@ -53,6 +64,8 @@ const draft: AdminMarket = {
   settlementSteps: [],
   statusEventId: '1',
   events: [],
+  tags: [],
+  missingOpenItems: [],
 };
 
 const opened: AdminMarket = { ...draft, status: 'open', openAt: '2026-09-07T00:00:00.000Z' };
@@ -265,6 +278,53 @@ function mountedLinks(queryClient: QueryClient, id: string, rows: AdminRelatedMa
   const unsubscribe = observer.subscribe(() => undefined);
   return { loaded: observer.refetch(), unsubscribe, fetches: () => fetches };
 }
+
+describe('refreshAfterMarketFormRefusal (#17)', () => {
+  it("reads the form's category list again after a refusal naming the category, and only then", async () => {
+    // The tree moved under the form: the category picked was hidden, or got its first
+    // sub-category, in another tab. The select must drop it, or offer the sub-categories the
+    // field's message points at, without waiting for the list to go stale.
+    const economy: Category = {
+      id: 1,
+      slug: 'economy',
+      nameKo: '경제',
+      sortOrder: 10,
+      parentId: null,
+    };
+    const rates: Category = { id: 2, slug: 'rates', nameKo: '금리', sortOrder: 10, parentId: 1 };
+    let answer = [economy];
+    let fetches = 0;
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const observer = new QueryObserver<Category[]>(queryClient, {
+      queryKey: CATEGORIES_QUERY_KEY,
+      queryFn: () => {
+        fetches += 1;
+        return Promise.resolve(answer);
+      },
+    });
+    const unsubscribe = observer.subscribe(() => undefined);
+    try {
+      await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual([economy]));
+      queryClient.setQueryData(adminMarketKey(ID), draft);
+      answer = [economy, rates];
+
+      for (const field of ['slug', 'tags', 'closeAt'] as const) {
+        await refreshAfterMarketFormRefusal(queryClient, field);
+      }
+      expect(fetches).toBe(1);
+      expect(queryClient.getQueryState(CATEGORIES_QUERY_KEY)?.isInvalidated).toBe(false);
+
+      await refreshAfterMarketFormRefusal(queryClient, 'categoryId');
+      expect(fetches).toBe(2);
+      expect(observer.getCurrentResult().data).toEqual([economy, rates]);
+      // Nothing else: the market itself did not change.
+      expect(queryClient.getQueryState(adminMarketKey(ID))?.isInvalidated).toBe(false);
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
+  });
+});
 
 describe('applyRelatedMarkets (#65, ADR-0068)', () => {
   it('keeps the links the write answered on screen when the refetch after it fails', async () => {

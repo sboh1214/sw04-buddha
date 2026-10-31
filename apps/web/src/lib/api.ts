@@ -65,6 +65,13 @@ export type AdminRelatedMarket = components['schemas']['AdminRelatedMarket'];
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];
 export type Category = components['schemas']['Category'];
+/**
+ * 카테고리 관리 (#17, ADR-0093) for admins: a row of `GET /admin/categories` (hidden ones too, with
+ * how many markets are filed under it), and the bodies of 카테고리 추가 and 이름 바꾸기.
+ */
+export type AdminCategory = components['schemas']['AdminCategory'];
+export type CreateCategoryBody = components['schemas']['CreateCategoryBody'];
+export type RenameCategoryBody = components['schemas']['RenameCategoryBody'];
 export type Fill = components['schemas']['Fill'];
 export type PriceTick = components['schemas']['PriceTick'];
 /** The tick route's envelope: the window and bucket the server chose, plus `points`. */

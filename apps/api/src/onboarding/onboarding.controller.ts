@@ -140,7 +140,8 @@ export class OnboardingController {
   // write answers the step (picks or the skip while it is unanswered) or adds a category.
   // RESTRICTED (with its end): a category added under a writing restriction (#37-9, #185) once the
   // step is answered, or 24 hours after the nickname step while it is not.
-  // VALIDATION_ERROR: a category that does not exist or is not active (details name each).
+  // VALIDATION_ERROR: a category that does not exist, is not active or sits under a hidden one
+  // (#17; details name each).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',
@@ -174,8 +175,8 @@ export class OnboardingController {
   @ApiData(meSchema)
   // ONBOARDING_REQUIRED: the consent, the verification or the nickname step is not done, and the
   // write adds a category. RESTRICTED (with its end): a category added under a writing
-  // restriction (#37-9, #185) — dropping is open. VALIDATION_ERROR: a category that does not exist
-  // or is not active (details name each).
+  // restriction (#37-9, #185) — dropping is open. VALIDATION_ERROR: a category that does not exist,
+  // is not active or sits under a hidden one (#17; details name each).
   @ApiErrors(
     'UNAUTHENTICATED',
     'FORBIDDEN',

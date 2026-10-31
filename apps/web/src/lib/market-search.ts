@@ -20,7 +20,8 @@ import { firstValue } from './market-ssr';
  * 시장 검색 (#15, ADR-0066): the search screen's URL and the decisions it draws from, as pure
  * functions the node test runner reaches (the rule `market-ssr.ts` states). Owner decisions
  * (ADR-0061): the results are a screen of their own (decision 1, item 14) sorted as the home is
- * (추천 · 신규 · 마감 임박, 추천 first) and matched on the title; the status filter starts on every
+ * (추천 · 신규 · 마감 임박, 추천 first) and matched on the title — or, since #17, on a tag named
+ * exactly the term (ADR-0061 result 3, ADR-0066 result 3); the status filter starts on every
  * public status and offers '모든 상태' and one choice per status label (item 13); the search is
  * public (item 18); a signed-in member's submitted term is recorded, and with no term the screen
  * shows the member's recent searches, or a prompt to a visitor (decision 3, the #15 rows).
@@ -104,6 +105,16 @@ export function searchQuery(filters: SearchFilters): Record<string, string> {
 export function searchPath(filters: SearchFilters): string {
   const search = new URLSearchParams(searchQuery(filters)).toString();
   return search === '' ? SEARCH_PATH : `${SEARCH_PATH}?${search}`;
+}
+
+/**
+ * A tag's own search (#17, ADR-0093 decision 2 #172 item 2): the detail's '#이름' chip links here —
+ * the term is the tag's name as stored, and every other filter is the screen's default, so it
+ * lists every public market carrying that tag (and any whose title holds the name). Opened by its
+ * address, it is not recorded in the reader's recent searches (ADR-0066, `searchToRecord`).
+ */
+export function tagSearchPath(name: string): string {
+  return searchPath({ ...DEFAULT_SEARCH_FILTERS, q: name });
 }
 
 /**

@@ -281,6 +281,12 @@ export const ADMIN_ACTION_TYPES = [
   'charge_package_delete',
   'coupon_create',
   'coupon_update',
+  /**
+   * A market's draft (payload `{after}`) and an edit of it (`{before, after}`): the snapshot holds
+   * every field a PATCH reaches, its tags (#17) included, so an edit of an open market's category
+   * or tags is recorded with the actor, the time and both values (ADR-0093 decision 2 #172 item
+   * 14).
+   */
   'market_create',
   'market_update',
   'market_open',
@@ -329,6 +335,28 @@ export const ADMIN_ACTION_TYPES = [
   'theme_notice_hide',
   /** A hidden notice is shown again (`hidden_at` cleared). Payload `{noticeId}`. */
   'theme_notice_show',
+  /**
+   * 카테고리 관리 (#17, ADR-0093 decision 2 #172 item 1): an admin added a category — target
+   * `category` / its id, payload `{after: {slug, nameKo, parentId, sortOrder, isActive}}`. Every
+   * category record below has the same target (a reorder: the parent's id, or none for the
+   * top-level group) and records the actor, the time and the value before and after; no reason,
+   * no second admin. Each is written only when its write changed something.
+   */
+  'category_create',
+  /** The name changed: payload `{before: {nameKo}, after: {nameKo}}`. */
+  'category_rename',
+  /**
+   * One group's order changed — the top-level categories or one parent's sub-categories: payload
+   * `{parentId, before, after}`, each the group's ids first to last.
+   */
+  'category_reorder',
+  /**
+   * It left new-market entry, the explore categories and the interest pick: payload
+   * `{before: {isActive}, after: {isActive}}`.
+   */
+  'category_hide',
+  /** It came back: the same payload. */
+  'category_show',
   'payment_refund',
   /**
    * A release setting's status and value changed (#170): target `release_setting` / its key,
@@ -705,9 +733,10 @@ export const proposalRejectionReasonSchema = z
   .meta({ id: 'ProposalRejectionReason' });
 
 /**
- * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs. Never sports or elections
- * (PLAN 0.2). These are the second row of the header and, through their leaves, the home
- * screen's sub-category sidebar.
+ * Seed categories (PLAN 1.3, 6.2): the five TOP-LEVEL slugs the seed starts the tree with. Since
+ * #17 the operators keep the tree (`/admin/categories`) and may add any category, sports and
+ * politics included (owner decision D10): these lists are the first deploy's data, not the set of
+ * categories there are, and the seed never changes a category that exists (`seedCategories`).
  */
 export const CATEGORY_SLUGS = ['economy', 'culture', 'entertainment', 'tech', 'weather'] as const;
 export type CategorySlug = (typeof CATEGORY_SLUGS)[number];
@@ -721,7 +750,6 @@ export const categorySlugSchema = z.enum(CATEGORY_SLUGS);
  * Two levels and no more: `categories.parent_id` points at a top-level row, and nothing here or
  * in the seed makes a leaf a parent. The slugs are unique ACROSS the whole tree, not just within
  * a parent, because `?category=<slug>` names one row without saying which level it is on.
- * Never sports or elections here either (PLAN 0.2).
  */
 export const SUBCATEGORY_SLUGS = {
   economy: ['housing', 'jobs', 'fx', 'rates', 'prices'],

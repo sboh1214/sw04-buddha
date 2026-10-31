@@ -61,9 +61,11 @@ export function locateCategory(
  * The top-level slug a slug belongs to, from the SEEDED tree in `@buddha/shared` rather than
  * from a query: a top-level slug is its own answer, a seeded leaf answers its parent, anything
  * else `undefined`. Static on purpose — a card needs the parent to pick its glyph
- * (`CategoryIcon`) inside the server's HTML, where no `['categories']` query has resolved yet,
- * and the tree has no admin UI, so the seed IS the tree. `locateCategory` is the live answer
- * for the screens that hold the query.
+ * (`CategoryIcon`) inside the server's HTML, where no `['categories']` query has resolved yet.
+ * Since #17 admins add categories (/admin/categories), and the glyphs stay keyed to the seed's
+ * slugs: a category added there, or a leaf added under a seeded parent, answers `undefined` and
+ * draws the neutral glyph (cards are #61's; #17 implementation choice 16). `locateCategory` is
+ * the live answer for the screens that hold the query.
  */
 export function parentCategorySlug(slug: string): CategorySlug | undefined {
   for (const parent of CATEGORY_SLUGS) {

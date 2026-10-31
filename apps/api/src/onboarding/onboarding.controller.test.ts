@@ -1079,18 +1079,23 @@ describe.skipIf(!hasTestInfra)('온보딩 /api/v1/me (integration, #58)', () => 
       expect(meOf(await answerInterests(held, [])).onboarding.interests).toBe(true);
     });
 
-    it('refuses a category that does not exist or is retired, naming each, and writes nothing', async () => {
+    it('refuses a category that does not exist, is retired or sits under a retired one, naming each, and writes nothing', async () => {
       await completeOnboarding(t.db, { userId: user.id });
       const active = await createCategory(t.db);
       const retired = await createCategory(t.db, { isActive: false });
+      // #17: hiding a top-level category hides its sub-categories with it, their own state kept.
+      const underRetired = await createCategory(t.db, { parentId: retired.id });
       for (const write of [answerInterests, setInterests]) {
-        const res = await write(user, [active.id, retired.id, 999_999]);
-        expect(
-          (refusal(res, 400, 'VALIDATION_ERROR') as ValidationIssue[]).map((issue) => issue.path),
-        ).toEqual([
+        const res = await write(user, [active.id, retired.id, 999_999, underRetired.id]);
+        const issues = refusal(res, 400, 'VALIDATION_ERROR') as ValidationIssue[];
+        expect(issues.map((issue) => issue.path)).toEqual([
           ['categoryIds', 1],
           ['categoryIds', 2],
+          ['categoryIds', 3],
         ]);
+        expect(new Set(issues.map((issue) => issue.message))).toEqual(
+          new Set(['not an active category']),
+        );
       }
       expect(await t.db.select().from(schema.profileInterestCategories)).toEqual([]);
       expect((await getMe(user)).onboarding.interests).toBe(false);

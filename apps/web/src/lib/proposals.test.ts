@@ -765,6 +765,18 @@ describe('adminProposalFailure', () => {
       field: 'categoryId',
       refresh: false,
     });
+    // #17: under a parent hidden meanwhile is as retired; a pick that got sub-categories
+    // meanwhile asks for a leaf, as a missing one does.
+    expect(adminProposalFailure(invalid(['market', 'categoryId'], 'parent_inactive'))).toEqual({
+      message: copy.errProposalDraftCategoryInactive,
+      field: 'categoryId',
+      refresh: false,
+    });
+    expect(adminProposalFailure(invalid(['market', 'categoryId'], 'subcategories'))).toEqual({
+      message: copy.errProposalDraftCategory,
+      field: 'categoryId',
+      refresh: false,
+    });
     expect(adminProposalFailure(invalid(['market', 'categoryId']))).toEqual({
       message: copy.errProposalDraftCategory,
       field: 'categoryId',

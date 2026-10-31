@@ -15,6 +15,7 @@ import {
   freshEmail,
   freshTag,
   logOut,
+  marketCategoryOf,
   meOf,
   nextMeRead,
   openClosure,
@@ -113,16 +114,15 @@ async function proposeThroughApi(page: Page, question: string): Promise<Proposal
   );
 }
 
-/** A draft market straight at the admin API (not opened), titled with `title`. */
+/**
+ * A draft market straight at the admin API (not opened), titled with `title`: under a category a
+ * market may be filed under and with a tag, so the operators can open it later (#17).
+ */
 async function createDraftMarket(
   admin: APIRequestContext,
   title: string,
 ): Promise<{ id: string; slug: string; title: string }> {
-  const categories = await dataOf<{ id: number; parentId: number | null }[]>(
-    await admin.get('/api/v1/categories'),
-  );
-  const category = categories.find((row) => row.parentId === null);
-  if (category === undefined) throw new Error('no active category: run `pnpm db:seed`');
+  const { leaf: category } = await marketCategoryOf(admin);
   const tag = freshTag();
   const draft = await dataOf<{ id: string; slug: string }>(
     await admin.post('/api/v1/admin/markets', {
@@ -132,6 +132,7 @@ async function createDraftMarket(
         rules: `자동화 테스트가 만든 초안입니다. ${tag}`,
         resolutionSource: `테스트 출처 ${tag}`,
         categoryId: category.id,
+        tags: [tag],
         imageUrl: null,
         closeAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
         slug: `e2e-${tag}`,
@@ -281,7 +282,7 @@ test.describe('시장 제안', () => {
         copy.adminProposalDraftCategoryPickLeaf,
       );
       // Which line, and the blank option's label, are draftCategoryView's (unit-tested there,
-      // the retired wish included — no API retires a category, so e2e cannot reach that one).
+      // the retired wish included — e2e hides no seed category, which other workers file under).
       await expect(adminPage.getByTestId('admin-proposal-draft-category-retired')).toHaveCount(0);
       await expect(
         adminPage.getByTestId('admin-proposal-draft-category').locator('option').first(),
@@ -319,6 +320,13 @@ test.describe('시장 제안', () => {
       await expect(page.getByTestId(`my-proposal-market-${proposal.id}`)).toHaveCount(0);
 
       // --- the operators open the market through its own steps; then the member sees its link.
+      // A 채택's draft has no tags (#17): they are one of those steps, before 열기.
+      const tagged = await dataOf<{ tags: string[] }>(
+        await admin.patch(`/api/v1/admin/markets/${marketId}`, {
+          data: { tags: [tag], expectedAccountId: await accountIdOf(admin) },
+        }),
+      );
+      expect(tagged.tags).toEqual([tag]);
       const opened = await dataOf<{ slug: string; status: string }>(
         await admin.post(`/api/v1/admin/markets/${marketId}/open`, {
           data: { expectedAccountId: await accountIdOf(admin) },

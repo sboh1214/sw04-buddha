@@ -38,6 +38,7 @@ import { priceTicks } from './price-ticks.js';
 import { profiles } from './profiles.js';
 import { releaseSettings } from './release-settings.js';
 import { startGrantNumbers, startGrants } from './start-grants.js';
+import { marketTags, tags } from './tags.js';
 import { themeMarkets, themeNotices, themes } from './themes.js';
 import { marketWatchEvents, marketWatches } from './watchlist.js';
 
@@ -158,6 +159,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   linksAsHigh: many(marketLinks, { relationName: 'market_link_high' }),
   // 테마 (#81): the themes this market is in.
   themeMarkets: many(themeMarkets),
+  // 태그 (#17): its tags, `position` the order.
+  tags: many(marketTags),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -327,6 +330,15 @@ export const themeMarketsRelations = relations(themeMarkets, ({ one }) => ({
   theme: one(themes, { fields: [themeMarkets.themeId], references: [themes.id] }),
   market: one(markets, { fields: [themeMarkets.marketId], references: [markets.id] }),
   creator: one(user, { fields: [themeMarkets.createdBy], references: [user.id] }),
+}));
+
+export const tagsRelations = relations(tags, ({ many }) => ({
+  markets: many(marketTags),
+}));
+
+export const marketTagsRelations = relations(marketTags, ({ one }) => ({
+  market: one(markets, { fields: [marketTags.marketId], references: [markets.id] }),
+  tag: one(tags, { fields: [marketTags.tagId], references: [tags.id] }),
 }));
 
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({

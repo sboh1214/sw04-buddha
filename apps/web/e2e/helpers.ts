@@ -23,10 +23,12 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * The market is created per run, never taken from `pnpm db:seed`. The seed's markets are drafts
  * waiting for review (#125) with absolute KST close times, so a spec pinned to them would pass
  * today and rot on a date nobody will connect to the failure. The two things a spec still needs from
- * the seed are the ones no public or admin route can make: the bootstrap admins (PLAN 10.5 — two
- * since #171, as the two-person rule needs distinct admins in every environment) and the
- * category rows. Both are named in the error a helper throws, so a missing seed reads as
- * "run pnpm db:seed" rather than as a 401 or a 404 in the middle of a flow.
+ * the seed are the bootstrap admins (PLAN 10.5 — two since #171, as the two-person rule needs
+ * distinct admins in every environment), which no route can make, and the category tree: an admin
+ * route makes categories since #17, but the specs file their markets under the seed's own tree
+ * (`createDraftMarket`) and leave it as it is for the other workers. Both are named in the error a
+ * helper throws, so a missing seed reads as "run pnpm db:seed" rather than as a 401 or a 404 in
+ * the middle of a flow.
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -1062,21 +1064,32 @@ export interface TestMarket {
   title: string;
   rules: string;
   /**
-   * The random part of the title and the slug. Unique per run, so `/search?q=<tag>` is a search
-   * screen holding exactly this market's card and nothing else — which is what makes AC 1's card
-   * assertion independent of how many markets the database already has. Every status is
-   * searched until one is picked (ADR-0066), so it finds the market after a close too.
+   * The random part of the title and the slug — and the market's one tag unless `tags` named
+   * others (#17). Unique per run, so `/search?q=<tag>` is a search screen holding exactly this
+   * market's card and nothing else — which is what makes AC 1's card assertion independent of
+   * how many markets the database already has. Every status is searched until one is picked
+   * (ADR-0066), so it finds the market after a close too.
    */
   tag: string;
-  /** The slug of the category it is filed under: `/?category=<slug>` lists it. */
+  /** Its tags as sent, in order (#17): `[tag]` unless `tags` named others. */
+  tags: string[];
+  /**
+   * The slug of the TOP-LEVEL category it is under: the market is filed under that category's
+   * first sub-category, or under it when it has none (#17: a category with sub-categories takes no
+   * market). `/?category=<slug>` lists it — a top-level slug lists its sub-categories' markets — as
+   * do the header's category row and the search and community screens' category selects, which
+   * offer that slug. The admin market form and the proposal draft select do not: their options are
+   * ids, and a top-level category with sub-categories is no pickable option there.
+   */
   categorySlug: string;
 }
 
 export interface CreateOpenMarketOptions {
   /**
    * Which TOP-LEVEL category, by position in `GET /categories` (parents first, in display
-   * order): 0, the default, is the first. A spec that needs markets in two different categories
-   * passes 1 for the second. Throws when the seed has fewer.
+   * order): 0, the default, is the first. The market goes under its first sub-category, the
+   * category a market may be filed under (#17), or under it when it has none. A spec that needs
+   * markets in two different categories passes 1 for the second. Throws when the seed has fewer.
    *
    * A spec that must find its market on the HOME itself (which takes no search term since
    * ADR-0066) opens `/?category=<slug>&sort=newest`: the market it just opened is on that first
@@ -1097,6 +1110,12 @@ export interface CreateOpenMarketOptions {
    * is one (#122). None, the default: the detail has no 배경 section.
    */
   description?: string;
+  /**
+   * Its tags, 1..5 (#17: opening takes at least one), in the order the detail shows them. The
+   * default is the market's own `tag`, which no other market has, so a search for it still finds
+   * this market alone. `[]` makes a draft without tags, which `createOpenMarket` cannot open.
+   */
+  tags?: string[];
 }
 
 /**
@@ -1137,21 +1156,38 @@ export async function createOpenMarket(
 }
 
 /**
+ * The category a spec's market is filed under for `topLevelCategory` (`CreateOpenMarketOptions`):
+ * that top-level category's first sub-category in display order, or the category itself when it
+ * has none — a category with an active sub-category takes no new market (#17, ADR-0093 decision 2
+ * #172 item 1). The public list holds active categories under active parents only, so either is
+ * one the API accepts. `top` is what `TestMarket.categorySlug` names.
+ */
+export async function marketCategoryOf(
+  admin: APIRequestContext,
+  topLevelCategory = 0,
+): Promise<{ top: Category; leaf: Category }> {
+  const categories = await unwrap<Category[]>(await admin.get('/api/v1/categories'));
+  const top = categories.filter((row) => row.parentId === null)[topLevelCategory];
+  if (top === undefined) {
+    throw new Error('no active category: run `pnpm db:seed` (the specs file under its tree)');
+  }
+  return { top, leaf: categories.find((row) => row.parentId === top.id) ?? top };
+}
+
+/**
  * A draft through `POST /admin/markets`, left a draft: on no public page, for a spec that checks
  * what a draft does not do (a theme of drafts alone is not published, ADR-0088). The options and
- * the title are `createOpenMarket`'s, which opens one of these.
+ * the title are `createOpenMarket`'s, which opens one of these: it has rules, a category a market
+ * may be filed under and its tags, so the open-items check passes (#17).
  */
 export async function createDraftMarket(
   admin: APIRequestContext,
-  { topLevelCategory = 0, group, description }: CreateOpenMarketOptions = {},
+  { topLevelCategory = 0, group, description, tags }: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
-  const categories = await unwrap<Category[]>(await admin.get('/api/v1/categories'));
-  const category = categories.filter((row) => row.parentId === null)[topLevelCategory];
-  if (category === undefined) {
-    throw new Error('no active category: run `pnpm db:seed` (categories have no admin route)');
-  }
+  const { top, leaf } = await marketCategoryOf(admin, topLevelCategory);
 
   const tag = freshTag();
+  const marketTags = tags ?? [tag];
   const title = group === undefined ? `E2E 시장 ${tag}` : `E2E 시장 ${group} ${tag}`;
   // Deliberately does NOT contain 규칙: AC 2 looks for the section heading and for this
   // text separately, and a rules body carrying the heading would satisfy both on its own.
@@ -1164,7 +1200,8 @@ export async function createDraftMarket(
         description: description ?? null,
         rules,
         resolutionSource: `테스트 출처 ${tag}`,
-        categoryId: category.id,
+        categoryId: leaf.id,
+        tags: marketTags,
         imageUrl: null,
         closeAt: new Date(Date.now() + CLOSE_IN_MS).toISOString(),
         slug: `e2e-${tag}`,
@@ -1172,7 +1209,15 @@ export async function createDraftMarket(
       },
     }),
   );
-  return { id: draft.id, slug: draft.slug, title, rules, tag, categorySlug: category.slug };
+  return {
+    id: draft.id,
+    slug: draft.slug,
+    title,
+    rules,
+    tag,
+    tags: marketTags,
+    categorySlug: top.slug,
+  };
 }
 
 /**

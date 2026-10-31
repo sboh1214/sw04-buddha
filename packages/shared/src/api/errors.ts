@@ -188,6 +188,14 @@ export const ERROR_CODES = [
    * retryAfterSeconds, proposalLimitedDetailsSchema.
    */
   'PROPOSAL_LIMITED',
+  /**
+   * The market misses items the open-items check requires before it leaves the draft (#17): a
+   * blank rules text, a category no new market may be filed under, or too few tags. Details carry
+   * one issue per missing item, in the order of the check, its path naming the item as a field.
+   * (No apostrophe in a comment inside this array: scripts/generate-api-doc.mjs reads every quoted
+   * run in it as a code.)
+   */
+  'OPEN_ITEMS_MISSING',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

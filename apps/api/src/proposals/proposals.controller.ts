@@ -83,7 +83,7 @@ export class MeProposalsController {
    * Submits a proposal, 접수 (ADR-0069 decision 4 #77). Refused for an account that has not
    * finished the onboarding (the guard, before the body is read), under a writing or an account
    * restriction (RESTRICTED, proposal-restrictions.ts), for a date before today in Korea or a
-   * category that is not active, and past a member's limits.
+   * category that is not active or sits under a hidden one (#17), and past a member's limits.
    */
   @Post()
   @UseGuards(OnboardedGuard)
@@ -98,7 +98,8 @@ export class MeProposalsController {
   // cookie's account (nothing written), or RESTRICTED: a writing or an account restriction stands
   // (its kind and end, the later-ending one). ONBOARDING_REQUIRED: the onboarding is not done.
   // VERIFICATION_REQUIRED: the 본인확인 record went away while the request ran (a withdrawal).
-  // VALIDATION_ERROR: the form, a date before today (Korea), a category that is not active.
+  // VALIDATION_ERROR: the form, a date before today (Korea), a category that is not active or
+  // sits under a hidden one (#17).
   // PROPOSAL_LIMITED: the verified number's waiting or daily proposals (a member's: an operator's
   // account is exempt, owner decision 2026-10-19). RATE_LIMITED is every route's address bucket,
   // named here beside the other 429 so the document keeps both.
