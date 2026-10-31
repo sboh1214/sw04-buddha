@@ -26,7 +26,9 @@ import {
   marketSourceSchema,
   storableInstantSchema,
 } from './market-rules.js';
+import { marketTimesSchema } from './market-times.js';
 import { marketTagsSchema } from './tags.js';
+import { timeZoneSchema } from './time-zone.js';
 import {
   type MarketStatus,
   marketEventTypeSchema,
@@ -87,6 +89,14 @@ const marketSummaryFields = {
   imageUrl: z.string().nullable(),
   status: marketStatusSchema,
   /**
+   * Whether the market reads '판정 지연' in place of its status label '거래 마감' (ADR-0093 decision
+   * 1 #173 items 11–12, #22, ADR-0098): CLOSED with its scheduled judgement passed
+   * (`isJudgementDelayed`), on the server's clock at the read — so the card needs no time of its
+   * own. A display, not a status: nothing changes at that time, and no list filters by it (ADR-0095
+   * 8-6).
+   */
+  judgementDelayed: z.boolean(),
+  /**
    * YES price 1..99 of the last fill (PLAN 5.3); null until the market's first fill, which a
    * client shows as '체결 없음' (N02 §5). #121 and #64 define the market's price fields.
    */
@@ -129,13 +139,15 @@ export type MarketSummary = z.infer<typeof marketSummarySchema>;
 
 /**
  * Public detail (PLAN 7.1): no author, exposure or settlement steps — those are
- * `adminMarketSchema` only. The rule items (`marketRuleItemsSchema`, #23) are public in every
- * public status, signed in or not (N02 §2); cards carry none of them.
+ * `adminMarketSchema` only. The rule items (`marketRuleItemsSchema`, #23) and the market's times
+ * and judgement time zone (`marketTimesSchema`, #22: the close is the summary's) are public in
+ * every public status, signed in or not (N02 §2, N03 §4); cards carry none of them.
  */
 export const marketSchema = z
   .object({
     ...marketSummaryFields,
     ...marketRuleItemsSchema.shape,
+    ...marketTimesSchema.shape,
     /**
      * The market's tags (#17), in the order the operator entered them, each as its tag's stored
      * spelling — the one it was first made with. The detail shows them, each a link to its
@@ -493,12 +505,20 @@ export const adminMarketSchema = marketSchema
     /** Newest first, at most 100. */
     events: z.array(marketEventSchema),
     /**
-     * What the open-items check finds missing (`missingOpenItems`, #17, #23), in OPEN_ITEMS order
-     * — on a draft, what the open refuses it for; empty once it may open. Every status reports it,
-     * so a market whose category was hidden after it opened shows that too, and so does one opened
-     * before #23 with its rule items blank.
+     * What the open-items check finds missing (`missingOpenItems`, #17, #23, #22), in OPEN_ITEMS
+     * order — on a draft, what the open refuses it for; empty once it may open. Every status
+     * reports it, so a market whose category was hidden after it opened shows that too, and so does
+     * one opened before #23 or #22 with its rule items or times blank.
      */
     missingOpenItems: z.array(openItemSchema),
+    /**
+     * The 선행 마감 gap in minutes the check above holds the market to (#22, ADR-0098): the one its
+     * lead close was last checked against (`markets.lead_close_gap_minutes`, which the open stores,
+     * or an open market's first lead check) once there is one, else the release setting
+     * `market.lead_close_gap`'s current reading; null while that is undecided and the market has
+     * none. The admin screen recomputes which time rule is broken from it (`timeRuleViolations`).
+     */
+    leadCloseGapMinutes: z.number().int().min(0).nullable(),
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;
@@ -524,6 +544,13 @@ const ruleTextSchema = z.string().trim().max(MARKET_TEXT_MAX);
  * nullable one. On an open market an edit that newly leaves one missing is RULES_REQUIRED, and a
  * switch condition while the result has no fallback is refused ('no fallback source') — both the
  * service's, on the stored values merged with the body.
+ *
+ * The time items (market-times.ts, #22, ADR-0098) are the same but the close, which a create
+ * requires: each instant from STORABLE_INSTANT_MIN on, stored as entered. The service refuses a
+ * write whose result breaks an order rule (`timeRuleViolations`, whole minutes) naming both ends;
+ * the lead close (선행 마감) is the open-items check's, never refused on a draft. On an open market
+ * the close only moves later, never past the scheduled judgement, with the lead close checked
+ * again; the scheduled open and judgement are fixed; clearing the zone is RULES_REQUIRED.
  */
 const marketFields = {
   title: z.string().trim().min(1).max(MARKET_TITLE_MAX),
@@ -533,8 +560,8 @@ const marketFields = {
   noCondition: ruleTextSchema.optional(),
   /**
    * 사건 기한 (#172 item 8); the admin enters it in KST. From STORABLE_INSTANT_MIN on: an earlier one
-   * Postgres refuses or drizzle reads back as another year (ADR-0097). No order against other
-   * times (#22).
+   * Postgres refuses or drizzle reads back as another year (ADR-0097). At or before the scheduled
+   * judgement (owner answer 2026-10-31 A1, whole minutes); no order against the close.
    */
   eventDeadline: storableInstantSchema.nullish(),
   /** 1차 출처: `market_sources` priority 0. */
@@ -565,7 +592,25 @@ const marketFields = {
     .url({ protocol: /^https?$/ })
     .max(MARKET_IMAGE_URL_MAX)
     .nullish(),
-  closeAt: z.iso.datetime(),
+  /**
+   * 예정 개장 시각 (#22): the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before
+   * the close, in whole minutes.
+   */
+  scheduledOpenAt: storableInstantSchema.nullish(),
+  /**
+   * 거래 마감 시각: from STORABLE_INSTANT_MIN on (#22), and in the future (the service's). At or
+   * before the scheduled judgement, in whole minutes (#172 item 12).
+   */
+  closeAt: storableInstantSchema,
+  /**
+   * 발표 예정 시각 (#172 item 13); null is '없음'. The close leads it by the release setting
+   * `market.lead_close_gap` (the open-items check's `leadClose`).
+   */
+  scheduledAnnouncementAt: storableInstantSchema.nullish(),
+  /** 예정 판정 시각: at or after the close and 사건 기한, in whole minutes (#172 item 12, A1). */
+  scheduledJudgementAt: storableInstantSchema.nullish(),
+  /** 판정 기준 시간대 (#172 item 11): an IANA name (`timeZoneSchema`), trimmed, stored as given. */
+  judgementTimeZone: timeZoneSchema.nullish(),
   /** Omitted: the server derives one from the title (`slugify` + a random tag). */
   slug: marketSlugSchema.optional(),
 };

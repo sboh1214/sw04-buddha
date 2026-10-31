@@ -45,6 +45,7 @@ const marketColumns = {
   slug: schema.markets.slug,
   title: schema.markets.title,
   status: schema.markets.status,
+  scheduledJudgementAt: schema.markets.scheduledJudgementAt,
   categorySlug: schema.categories.slug,
   categoryNameKo: schema.categories.nameKo,
 };
@@ -54,6 +55,7 @@ interface MarketRow {
   slug: string;
   title: string;
   status: MarketStatus;
+  scheduledJudgementAt: Date | null;
   categorySlug: string;
   categoryNameKo: string;
 }

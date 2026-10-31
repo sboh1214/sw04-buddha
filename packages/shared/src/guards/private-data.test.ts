@@ -223,7 +223,14 @@ describe('findPrivateField', () => {
     'robot',
     'limit',
     'liquid',
-    // A market's judging time zone (#22): a zone with no whose-word is public.
+    // A market's judgement time zone (#22): a zone with no whose-word is public, and so are the
+    // market's times, the gap its lead close is checked against and its '판정 지연' display.
+    'judgementTimeZone',
+    'scheduledOpenAt',
+    'scheduledAnnouncementAt',
+    'scheduledJudgementAt',
+    'leadCloseGapMinutes',
+    'judgementDelayed',
     'timeZone',
     'time_zone',
     'timezone',

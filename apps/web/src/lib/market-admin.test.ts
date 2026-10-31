@@ -6,9 +6,11 @@ import {
   MARKET_STATUSES,
   MINUS_SIGN,
   OPEN_ITEMS,
+  type OpenItem,
   PUBLIC_MARKET_STATUSES,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
+  TIME_RULE_MESSAGES,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
@@ -428,6 +430,37 @@ describe('marketEventRows', () => {
     ]);
   });
 
+  it('words the two time items rules_edited counts since #22: the announcement and the zone', () => {
+    const at = '2026-11-01T23:00:00.000Z';
+    expect(
+      marketEventRows('rules_edited', {
+        // RULES_EDITED_ITEMS order: the rule items, then the announcement and the zone.
+        items: ['judgementTimeZone', 'scheduledAnnouncementAt', 'yesCondition'],
+        before: { yesCondition: 'YES', scheduledAnnouncementAt: null, judgementTimeZone: null },
+        after: { yesCondition: 'YES!', scheduledAnnouncementAt: at, judgementTimeZone: 'ROK' },
+      }),
+    ).toEqual([
+      { label: copy.eventRulesItems, value: 'YES 조건 · 발표 예정 시각 · 판정 기준 시간대' },
+      { label: 'YES 조건 이전', value: 'YES' },
+      { label: 'YES 조건 이후', value: 'YES!' },
+      // None is 없음 (#172 item 13); the time in KST as every time in these rows.
+      { label: '발표 예정 시각 이전', value: copy.adminMarketAnnouncementNone },
+      { label: '발표 예정 시각 이후', value: formatKst(at) },
+      // The zone by its name as stored, an alias included.
+      { label: '판정 기준 시간대 이전', value: '—' },
+      { label: '판정 기준 시간대 이후', value: 'ROK' },
+    ]);
+    // The scheduled open, the close and the judgement are market_update's, never listed here: a
+    // row naming one is not read.
+    expect(
+      marketEventRows('rules_edited', {
+        items: ['closeAt'],
+        before: { closeAt: at },
+        after: { closeAt: at },
+      }),
+    ).toBeUndefined();
+  });
+
   it('renders the open and close instants in KST', () => {
     expect(marketEventRows('opened', { openAt, closeAt })).toEqual([
       { label: copy.marketOpenAt, value: formatKst(openAt) },
@@ -539,7 +572,21 @@ describe('marketEventRows', () => {
 });
 
 describe('openItemsNotice', () => {
-  it('names every open item, in OPEN_ITEMS order (#17, #23 ADR-0097)', () => {
+  type NoticeTimes = Omit<Parameters<typeof openItemsNotice>[0], 'status' | 'missingOpenItems'>;
+  /** A draft's times, none filled in, and the gap undecided: no time rule can be judged. */
+  const UNTIMED: NoticeTimes = {
+    scheduledOpenAt: null,
+    closeAt: '2026-10-01T00:00:00.000Z',
+    scheduledAnnouncementAt: null,
+    scheduledJudgementAt: null,
+    judgementTimeZone: null,
+    eventDeadline: null,
+    leadCloseGapMinutes: null,
+  };
+  const draft = (missingOpenItems: OpenItem[], times: Partial<NoticeTimes> = {}) =>
+    openItemsNotice({ ...UNTIMED, ...times, status: 'draft', missingOpenItems });
+
+  it('names every open item, in OPEN_ITEMS order (#17, #23 ADR-0097, #22 ADR-0098)', () => {
     expect(OPEN_ITEMS.map((item) => OPEN_ITEM_LABEL[item])).toEqual([
       '질문',
       '배경',
@@ -551,38 +598,82 @@ describe('openItemsNotice', () => {
       '전환 조건',
       '장기 지연 기한',
       '지연·취소·무효 처리',
+      '예정 개장 시각',
+      '거래 마감 시각',
+      '예정 판정 시각',
+      '판정 기준 시간대',
+      '시각 순서',
+      '선행 마감',
       '카테고리',
       '태그 1~5개',
     ]);
     // '정산' is Coin's payout (ADR-0052): no item is named with it any more.
     for (const item of OPEN_ITEMS) expect(OPEN_ITEM_LABEL[item], item).not.toContain('정산');
+    // #78's checklist lines (ADR-0093 decision 2 #172 item 4).
+    expect([OPEN_ITEM_LABEL.timeOrder, OPEN_ITEM_LABEL.leadClose]).toEqual([
+      '시각 순서',
+      '선행 마감',
+    ]);
   });
 
   it("says what a draft still lacks, joined with ' · ' in OPEN_ITEMS order", () => {
-    expect(openItemsNotice({ status: 'draft', missingOpenItems: [...OPEN_ITEMS] })).toBe(
-      '열기 전에 채울 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · 대체 출처 · ' +
-        '전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 카테고리 · 태그 1~5개',
+    expect(draft([...OPEN_ITEMS])).toBe(
+      '열기 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
+        '대체 출처 · 전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 예정 개장 시각 · ' +
+        '거래 마감 시각 · 예정 판정 시각 · 판정 기준 시간대 · 시각 순서 · 선행 마감 · 카테고리 · 태그 1~5개',
     );
-    expect(openItemsNotice({ status: 'draft', missingOpenItems: ['tags'] })).toBe(
-      '열기 전에 채울 항목: 태그 1~5개',
-    );
-    expect(
-      openItemsNotice({
-        status: 'draft',
-        missingOpenItems: ['tags', 'primarySource', 'yesCondition'],
-      }),
-    ).toBe(
+    expect(draft(['tags'])).toBe('열기 전에 채우거나 고칠 항목: 태그 1~5개');
+    expect(draft(['tags', 'primarySource', 'yesCondition'])).toBe(
       `${copy.adminMarketOpenItems}: ` +
         [copy.openItemYesCondition, copy.openItemPrimarySource, copy.openItemTags].join(' · '),
     );
   });
 
+  it('adds a line per time rule the market breaks, under 시각 순서 and 선행 마감 (#22)', () => {
+    // An announcement and the gap undecided: 선행 마감 cannot hold (ADR-0098).
+    const announced = {
+      scheduledOpenAt: '2026-09-06T00:00:00.000Z',
+      scheduledAnnouncementAt: '2026-10-01T03:00:00.000Z',
+      scheduledJudgementAt: '2026-10-02T01:00:00.000Z',
+    };
+    expect(draft(['leadClose'], announced)).toBe(
+      `${copy.adminMarketOpenItems}: ${copy.openItemLeadClose}\n` +
+        `${copy.openItemLeadClose}: ${copy.openItemRuleLeadCloseUndecided}`,
+    );
+    // At a decided gap the line says its minutes: 240 asked, but the close leads by 180.
+    expect(draft(['leadClose'], { ...announced, leadCloseGapMinutes: 240 })).toBe(
+      `${copy.adminMarketOpenItems}: ${copy.openItemLeadClose}\n` +
+        `${copy.openItemLeadClose}: ${copy.openItemRuleLeadCloseBefore} 240${copy.openItemRuleLeadCloseTail}`,
+    );
+    // The order rules — which the database keeps stored rows from breaking, so this is what the
+    // check would say, not what a stored market shows — one line each, in TIME_RULES order.
+    expect(
+      draft(['timeOrder'], {
+        scheduledOpenAt: '2026-10-01T00:00:30.000Z',
+        scheduledJudgementAt: '2026-09-30T00:00:00.000Z',
+        eventDeadline: '2026-10-31T00:00:00.000Z',
+      }),
+    ).toBe(
+      [
+        `${copy.adminMarketOpenItems}: ${copy.openItemTimeOrder}`,
+        `${copy.openItemTimeOrder}: ${copy.openItemRuleOpenBeforeClose}`,
+        `${copy.openItemTimeOrder}: ${copy.openItemRuleCloseByJudgement}`,
+        `${copy.openItemTimeOrder}: ${copy.openItemRuleDeadlineByJudgement}`,
+      ].join('\n'),
+    );
+    // No line for a relation the server did not name.
+    expect(draft(['tags'], announced)).toBe(`${copy.adminMarketOpenItems}: ${copy.openItemTags}`);
+  });
+
   it('is nothing once nothing is missing, and nothing on any status but draft', () => {
-    expect(openItemsNotice({ status: 'draft', missingOpenItems: [] })).toBeUndefined();
+    expect(draft([])).toBeUndefined();
     // An open market whose category was hidden later keeps it (#172 item 1): the check is what
     // leaving the draft takes, so there is no notice even though the API reports the item.
     for (const status of MARKET_STATUSES.filter((value) => value !== 'draft')) {
-      expect(openItemsNotice({ status, missingOpenItems: ['category'] }), status).toBeUndefined();
+      expect(
+        openItemsNotice({ ...UNTIMED, status, missingOpenItems: ['category'] }),
+        status,
+      ).toBeUndefined();
     }
   });
 });
@@ -720,6 +811,14 @@ describe('transitionErrorMessage', () => {
         apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['closeAt'], message: 'past' }]),
       ),
     ).toBe(copy.errMarketCloseAt);
+    // 열기 before the scheduled open (#22, ADR-0093 decision 3 '#21 앞당긴 개장'): move it earlier.
+    expect(
+      transitionErrorMessage(
+        apiError(422, 'VALIDATION_ERROR', 'x', [
+          { path: ['scheduledOpenAt'], message: 'not reached yet' },
+        ]),
+      ),
+    ).toBe(copy.errMarketScheduledOpenNotReached);
   });
 
   it('names the refusal of a second 판정 as a stale screen', () => {
@@ -761,7 +860,7 @@ describe('transitionErrorMessage', () => {
         { path: ['category'], message: 'subcategories' },
         { path: ['tags'], message: 'required' },
       ]),
-    ).toBe('열기 전에 채울 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개');
+    ).toBe('열기 전에 채우거나 고칠 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개');
     expect(refused([{ path: ['tags'], message: 'required' }])).toBe(
       `${copy.errMarketOpenItemsMissing}: ${copy.openItemTags}`,
     );
@@ -782,7 +881,24 @@ describe('transitionErrorMessage', () => {
       `${copy.errMarketOpenItemsMissing}.`,
     );
     // No details, or none this screen knows: the line alone.
-    expect(refused()).toBe('열기 전에 채울 항목이 있습니다.');
+    expect(refused()).toBe('열기 전에 채우거나 고칠 항목이 있습니다.');
+    // The times and the relations between them (#22), with their messages.
+    expect(
+      refused([
+        { path: ['leadClose'], message: 'gap undecided' },
+        { path: ['scheduledJudgementAt'], message: 'required' },
+        { path: ['timeOrder'], message: 'closeByJudgement' },
+        { path: ['scheduledOpenAt'], message: 'required' },
+      ]),
+    ).toBe(
+      `${copy.errMarketOpenItemsMissing}: ` +
+        [
+          copy.openItemScheduledOpenAt,
+          copy.openItemScheduledJudgementAt,
+          copy.openItemTimeOrder,
+          copy.openItemLeadClose,
+        ].join(' · '),
+    );
     expect(refused([{ path: ['times'], message: 'required' }])).toBe(
       `${copy.errMarketOpenItemsMissing}.`,
     );
@@ -923,6 +1039,72 @@ describe('marketFormError', () => {
     expect(named('resolutionSource')).toBeUndefined();
     // Nor does a name that is no form field, an inherited one included.
     expect(named('toString')).toBeUndefined();
+  });
+
+  it('lands a refused time on its input, said by which rule the message is (#22)', () => {
+    const refused = (path: string, message: string, gap?: number | null) =>
+      marketFormError(
+        apiError(422, 'VALIDATION_ERROR', 'x', [{ path: [path], message }]),
+        undefined,
+        gap,
+      );
+    // Each order rule says one sentence on both its ends.
+    const ORDER = {
+      openBeforeClose: copy.errMarketTimeOpenBeforeClose,
+      closeByJudgement: copy.errMarketTimeCloseByJudgement,
+      deadlineByJudgement: copy.errMarketTimeDeadlineByJudgement,
+    } as const;
+    for (const [rule, text] of Object.entries(ORDER) as [keyof typeof ORDER, string][]) {
+      for (const [field, message] of Object.entries(TIME_RULE_MESSAGES[rule])) {
+        expect(refused(field, message), `${rule} ${field}`).toEqual({ field, message: text });
+      }
+    }
+    // The lead close with the gap the market is held to, or without minutes when unknown.
+    for (const [field, message] of Object.entries(TIME_RULE_MESSAGES.leadClose)) {
+      expect(refused(field, message, 60)).toEqual({
+        field,
+        message: `${copy.errMarketLeadCloseBefore} 60${copy.errMarketLeadCloseTail}`,
+      });
+      expect(refused(field, message)).toEqual({ field, message: copy.errMarketLeadClose });
+    }
+    // The open market's own refusals.
+    expect(refused('closeAt', 'cannot move earlier while open')).toEqual({
+      field: 'closeAt',
+      message: copy.errMarketCloseEarlier,
+    });
+    expect(refused('scheduledJudgementAt', 'immutable while open')).toEqual({
+      field: 'scheduledJudgementAt',
+      message: copy.errMarketTimeFixed,
+    });
+    expect(refused('scheduledAnnouncementAt', 'lead-close gap undecided')).toEqual({
+      field: 'scheduledAnnouncementAt',
+      message: copy.errMarketLeadCloseUndecided,
+    });
+    // Anything else is the field's own: the close's future, a time's format, the zone's name.
+    expect(refused('closeAt', 'must be in the future')).toEqual({
+      field: 'closeAt',
+      message: copy.errMarketCloseAt,
+    });
+    expect(refused('scheduledOpenAt', 'Invalid ISO datetime')).toEqual({
+      field: 'scheduledOpenAt',
+      message: copy.errMarketScheduledTime,
+    });
+    expect(refused('judgementTimeZone', 'must be an IANA time zone name')).toEqual({
+      field: 'judgementTimeZone',
+      message: copy.errMarketTimeZone,
+    });
+    expect(refused('eventDeadline', 'Invalid ISO datetime')).toEqual({
+      field: 'eventDeadline',
+      message: copy.errMarketEventDeadline,
+    });
+    // The zone cleared on an open market: RULES_REQUIRED, on the select.
+    expect(
+      marketFormError(
+        apiError(422, 'RULES_REQUIRED', 'x', [
+          { path: ['judgementTimeZone'], message: 'required while open' },
+        ]),
+      ),
+    ).toEqual({ field: 'judgementTimeZone', message: copy.errMarketRulesOpen });
   });
 
   it('lands a refused source on the input its path names (#23)', () => {

@@ -3540,7 +3540,7 @@
             "session": []
           }
         ],
-        "summary": "Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag; rule items not sent start blank",
+        "summary": "Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag; rule items and times not sent start blank; times out of order are refused naming both ends",
         "tags": [
           "admin"
         ]
@@ -4130,7 +4130,7 @@
             "session": []
           }
         ],
-        "summary": "Edit a draft (any field) or an open market (text, rule items, close time, category, tags; slug refused naming the field, a rule item it had filled left missing refused with RULES_REQUIRED naming each, no tags refused naming tags); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status",
+        "summary": "Edit a draft (any field) or an open market (text, rule items, times, category, tags; slug refused naming the field, a rule item it had filled or its judgement time zone left missing refused with RULES_REQUIRED naming each, no tags refused naming tags, the scheduled open and judgement fixed, the close moved later only, up to the scheduled judgement, with the lead close checked again); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status",
         "tags": [
           "admin"
         ]
@@ -4257,7 +4257,7 @@
             "session": []
           }
         ],
-        "summary": "draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, the category or the tags missing, then with a past closeAt",
+        "summary": "draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the time order, the lead close, the category or the tags missing, then with a past closeAt, then before the scheduled open; stores the lead-close gap it checked against",
         "tags": [
           "admin"
         ]
@@ -4492,6 +4492,350 @@
           }
         ],
         "summary": "closed → resolved (interim, until the approved provisional judgement): record the final result, YES or NO; the payout starts immediately",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/release-settings": {
+      "get": {
+        "operationId": "adminListReleaseSettings",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/ReleaseSettingStatus"
+                }
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReleaseSetting"
+                      }
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Every registered release setting with its status and value, in registry order; `status=undecided` lists the ones with no value",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/release-settings/changes": {
+      "get": {
+        "operationId": "adminListReleaseSettingChanges",
+        "parameters": [
+          {
+            "name": "cursor",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 20,
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          },
+          {
+            "name": "key",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/ReleaseSettingChange"
+                      }
+                    },
+                    "meta": {
+                      "$ref": "#/components/schemas/PageMeta"
+                    }
+                  },
+                  "required": [
+                    "data",
+                    "meta"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`)",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/v1/admin/release-settings/{key}": {
+      "patch": {
+        "operationId": "adminChangeReleaseSetting",
+        "parameters": [
+          {
+            "name": "key",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "maxLength": 64,
+              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReleaseSettingChangeBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/ReleaseSetting"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused",
         "tags": [
           "admin"
         ]
@@ -7306,350 +7650,6 @@
           }
         ],
         "summary": "Show a hidden notice on the page again. Answers the theme",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/v1/admin/release-settings": {
-      "get": {
-        "operationId": "adminListReleaseSettings",
-        "parameters": [
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "allOf": [
-                {
-                  "$ref": "#/components/schemas/ReleaseSettingStatus"
-                }
-              ]
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/ReleaseSetting"
-                      }
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "ONBOARDING_REQUIRED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Every registered release setting with its status and value, in registry order; `status=undecided` lists the ones with no value",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/v1/admin/release-settings/changes": {
-      "get": {
-        "operationId": "adminListReleaseSettingChanges",
-        "parameters": [
-          {
-            "name": "cursor",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": 20,
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
-            }
-          },
-          {
-            "name": "key",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "maxLength": 64,
-              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "type": "array",
-                      "items": {
-                        "$ref": "#/components/schemas/ReleaseSettingChange"
-                      }
-                    },
-                    "meta": {
-                      "$ref": "#/components/schemas/PageMeta"
-                    }
-                  },
-                  "required": [
-                    "data",
-                    "meta"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "ONBOARDING_REQUIRED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Release setting changes, newest first: before and after, reason, admin and time (of one key with `key`)",
-        "tags": [
-          "admin"
-        ]
-      }
-    },
-    "/api/v1/admin/release-settings/{key}": {
-      "patch": {
-        "operationId": "adminChangeReleaseSetting",
-        "parameters": [
-          {
-            "name": "key",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "maxLength": 64,
-              "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$"
-            }
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReleaseSettingChangeBody"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "data": {
-                      "$ref": "#/components/schemas/ReleaseSetting"
-                    }
-                  },
-                  "required": [
-                    "data"
-                  ],
-                  "additionalProperties": false
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "VALIDATION_ERROR",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "UNAUTHENTICATED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "FORBIDDEN",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "NOT_FOUND",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "ONBOARDING_REQUIRED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          },
-          "429": {
-            "description": "RATE_LIMITED",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorEnvelope"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "session": []
-          }
-        ],
-        "summary": "Set the status and value of a release setting with a reason (recorded); `undecided` takes no value, the others require one that fits the item, and a change to the current status and value is refused",
         "tags": [
           "admin"
         ]
@@ -20051,6 +20051,9 @@
               "cancelled"
             ]
           },
+          "judgementDelayed": {
+            "type": "boolean"
+          },
           "lastPrice": {
             "nullable": true,
             "type": "integer",
@@ -20106,6 +20109,7 @@
           "category",
           "imageUrl",
           "status",
+          "judgementDelayed",
           "lastPrice",
           "volumeCoin",
           "tradeCount",
@@ -20175,6 +20179,9 @@
               "settled",
               "cancelled"
             ]
+          },
+          "judgementDelayed": {
+            "type": "boolean"
           },
           "lastPrice": {
             "nullable": true,
@@ -20266,6 +20273,29 @@
           "delayHandling": {
             "type": "string"
           },
+          "scheduledOpenAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledAnnouncementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledJudgementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "judgementTimeZone": {
+            "nullable": true,
+            "type": "string",
+            "maxLength": 64
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -20292,6 +20322,7 @@
           "category",
           "imageUrl",
           "status",
+          "judgementDelayed",
           "lastPrice",
           "volumeCoin",
           "tradeCount",
@@ -20310,6 +20341,10 @@
           "fallbackCondition",
           "longDelayDays",
           "delayHandling",
+          "scheduledOpenAt",
+          "scheduledAnnouncementAt",
+          "scheduledJudgementAt",
+          "judgementTimeZone",
           "tags",
           "resolvedAt",
           "settledAt"
@@ -20550,6 +20585,9 @@
               "cancelled"
             ]
           },
+          "judgementDelayed": {
+            "type": "boolean"
+          },
           "lastPrice": {
             "nullable": true,
             "type": "integer",
@@ -20613,6 +20651,7 @@
           "category",
           "imageUrl",
           "status",
+          "judgementDelayed",
           "lastPrice",
           "volumeCoin",
           "tradeCount",
@@ -20713,6 +20752,9 @@
               "cancelled"
             ]
           },
+          "judgementDelayed": {
+            "type": "boolean"
+          },
           "lastPrice": {
             "nullable": true,
             "type": "integer",
@@ -20803,6 +20845,29 @@
           "delayHandling": {
             "type": "string"
           },
+          "scheduledOpenAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledAnnouncementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledJudgementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "judgementTimeZone": {
+            "nullable": true,
+            "type": "string",
+            "maxLength": 64
+          },
           "tags": {
             "type": "array",
             "items": {
@@ -20869,6 +20934,12 @@
             "items": {
               "$ref": "#/components/schemas/OpenItem"
             }
+          },
+          "leadCloseGapMinutes": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
           }
         },
         "required": [
@@ -20878,6 +20949,7 @@
           "category",
           "imageUrl",
           "status",
+          "judgementDelayed",
           "lastPrice",
           "volumeCoin",
           "tradeCount",
@@ -20896,6 +20968,10 @@
           "fallbackCondition",
           "longDelayDays",
           "delayHandling",
+          "scheduledOpenAt",
+          "scheduledAnnouncementAt",
+          "scheduledJudgementAt",
+          "judgementTimeZone",
           "tags",
           "resolvedAt",
           "settledAt",
@@ -20905,7 +20981,8 @@
           "openInterest",
           "settlementSteps",
           "events",
-          "missingOpenItems"
+          "missingOpenItems",
+          "leadCloseGapMinutes"
         ],
         "additionalProperties": false
       },
@@ -21052,6 +21129,12 @@
           "fallbackCondition",
           "longDelayDays",
           "delayHandling",
+          "scheduledOpenAt",
+          "closeAt",
+          "scheduledJudgementAt",
+          "judgementTimeZone",
+          "timeOrder",
+          "leadClose",
           "category",
           "tags"
         ]
@@ -21131,10 +21214,34 @@
             "maxLength": 500,
             "format": "uri"
           },
+          "scheduledOpenAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "closeAt": {
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledAnnouncementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledJudgementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "judgementTimeZone": {
+            "nullable": true,
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
           },
           "slug": {
             "type": "string",
@@ -21228,10 +21335,34 @@
             "maxLength": 500,
             "format": "uri"
           },
+          "scheduledOpenAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
           "closeAt": {
             "type": "string",
             "format": "date-time",
             "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledAnnouncementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "scheduledJudgementAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "judgementTimeZone": {
+            "nullable": true,
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
           },
           "slug": {
             "type": "string",
@@ -21289,6 +21420,171 @@
         },
         "required": [
           "result",
+          "expectedAccountId"
+        ]
+      },
+      "ReleaseSettingStatus": {
+        "type": "string",
+        "enum": [
+          "undecided",
+          "proposal",
+          "test",
+          "approved"
+        ]
+      },
+      "ReleaseSetting": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "unit": {
+            "nullable": true,
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "valueSchema": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "status": {
+            "$ref": "#/components/schemas/ReleaseSettingStatus"
+          },
+          "value": {
+            "nullable": true
+          },
+          "updatedAt": {
+            "nullable": true,
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "updatedBy": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ReleaseSettingActor"
+              }
+            ]
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "unit",
+          "description",
+          "valueSchema",
+          "status",
+          "value",
+          "updatedAt",
+          "updatedBy"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingActor": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "nickname": {
+            "nullable": true,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "nickname"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingChange": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "key": {
+            "type": "string"
+          },
+          "label": {
+            "nullable": true,
+            "type": "string"
+          },
+          "before": {
+            "$ref": "#/components/schemas/ReleaseSettingState"
+          },
+          "after": {
+            "$ref": "#/components/schemas/ReleaseSettingState"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/components/schemas/ReleaseSettingActor"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          }
+        },
+        "required": [
+          "id",
+          "key",
+          "label",
+          "before",
+          "after",
+          "reason",
+          "actor",
+          "createdAt"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingState": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ReleaseSettingStatus"
+          },
+          "value": {
+            "nullable": true
+          }
+        },
+        "required": [
+          "status",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "ReleaseSettingChangeBody": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "$ref": "#/components/schemas/ReleaseSettingStatus"
+          },
+          "value": {},
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "status",
+          "reason",
           "expectedAccountId"
         ]
       },
@@ -22068,6 +22364,9 @@
               "cancelled"
             ]
           },
+          "judgementDelayed": {
+            "type": "boolean"
+          },
           "lastPrice": {
             "nullable": true,
             "type": "integer",
@@ -22131,6 +22430,7 @@
           "category",
           "imageUrl",
           "status",
+          "judgementDelayed",
           "lastPrice",
           "volumeCoin",
           "tradeCount",
@@ -22209,171 +22509,6 @@
           }
         },
         "required": [
-          "expectedAccountId"
-        ]
-      },
-      "ReleaseSettingStatus": {
-        "type": "string",
-        "enum": [
-          "undecided",
-          "proposal",
-          "test",
-          "approved"
-        ]
-      },
-      "ReleaseSetting": {
-        "type": "object",
-        "properties": {
-          "key": {
-            "type": "string"
-          },
-          "label": {
-            "type": "string"
-          },
-          "unit": {
-            "nullable": true,
-            "type": "string"
-          },
-          "description": {
-            "type": "string"
-          },
-          "valueSchema": {
-            "type": "object",
-            "additionalProperties": {}
-          },
-          "status": {
-            "$ref": "#/components/schemas/ReleaseSettingStatus"
-          },
-          "value": {
-            "nullable": true
-          },
-          "updatedAt": {
-            "nullable": true,
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          },
-          "updatedBy": {
-            "nullable": true,
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/ReleaseSettingActor"
-              }
-            ]
-          }
-        },
-        "required": [
-          "key",
-          "label",
-          "unit",
-          "description",
-          "valueSchema",
-          "status",
-          "value",
-          "updatedAt",
-          "updatedBy"
-        ],
-        "additionalProperties": false
-      },
-      "ReleaseSettingActor": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "nickname": {
-            "nullable": true,
-            "type": "string"
-          }
-        },
-        "required": [
-          "id",
-          "nickname"
-        ],
-        "additionalProperties": false
-      },
-      "ReleaseSettingChange": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
-          },
-          "key": {
-            "type": "string"
-          },
-          "label": {
-            "nullable": true,
-            "type": "string"
-          },
-          "before": {
-            "$ref": "#/components/schemas/ReleaseSettingState"
-          },
-          "after": {
-            "$ref": "#/components/schemas/ReleaseSettingState"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "actor": {
-            "$ref": "#/components/schemas/ReleaseSettingActor"
-          },
-          "createdAt": {
-            "type": "string",
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
-          }
-        },
-        "required": [
-          "id",
-          "key",
-          "label",
-          "before",
-          "after",
-          "reason",
-          "actor",
-          "createdAt"
-        ],
-        "additionalProperties": false
-      },
-      "ReleaseSettingState": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "$ref": "#/components/schemas/ReleaseSettingStatus"
-          },
-          "value": {
-            "nullable": true
-          }
-        },
-        "required": [
-          "status",
-          "value"
-        ],
-        "additionalProperties": false
-      },
-      "ReleaseSettingChangeBody": {
-        "type": "object",
-        "properties": {
-          "status": {
-            "$ref": "#/components/schemas/ReleaseSettingStatus"
-          },
-          "value": {},
-          "reason": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "expectedAccountId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 255
-          }
-        },
-        "required": [
-          "status",
-          "reason",
           "expectedAccountId"
         ]
       },
@@ -22917,6 +23052,9 @@
               "cancelled"
             ]
           },
+          "judgementDelayed": {
+            "type": "boolean"
+          },
           "category": {
             "type": "object",
             "properties": {
@@ -22939,6 +23077,7 @@
           "slug",
           "title",
           "status",
+          "judgementDelayed",
           "category"
         ],
         "additionalProperties": false

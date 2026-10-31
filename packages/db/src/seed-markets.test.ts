@@ -1,5 +1,7 @@
 import {
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   type ExcludedTextHit,
+  LEAD_CLOSE_GAP_UNDECIDED,
   MARKET_SLUG_PATTERN,
   MARKET_TAGS_MAX,
   MARKET_TAGS_MIN,
@@ -7,11 +9,18 @@ import {
   createMarketBodySchema,
   findExcludedText,
   marketTagsSchema,
+  minuteOf,
   missingOpenItems,
   tagKey,
+  timeRuleViolations,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
-import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO, type SeedMarket } from './seed-markets.js';
+import {
+  SEED_MARKETS,
+  SEED_RULE_NO_DELAY_NO,
+  type SeedMarket,
+  seedScheduledOpenAt,
+} from './seed-markets.js';
 
 /**
  * The phrasings the seed rules used before #125 to turn a late or missing publication into a
@@ -114,19 +123,43 @@ describe('seed market copy (#125)', () => {
   });
 });
 
+/**
+ * Clocks a seed may run at: before every close, on 2026-10-31 (the day #22 was written, mid-minute
+ * and between stale closes), and after every close.
+ */
+const RUN_CLOCKS = [
+  new Date('2026-09-01T00:00:00.000Z'),
+  new Date('2026-10-31T13:00:30.500Z'),
+  new Date('2027-07-01T00:00:00.000Z'),
+];
+
+/** The proposed 선행 마감 gap (ADR-0093 result 3: 1시간), in minutes. */
+const PROPOSED_GAP_MINUTES = 60;
+
+/** A seed market as the open-items check reads it once seeded at `now` (`seedMarkets`). */
+function openItemsOf(market: SeedMarket, now: Date, leadCloseGapMinutes: number | null) {
+  return {
+    ...market,
+    fallbackSources: [...market.fallbackSources],
+    scheduledOpenAt: seedScheduledOpenAt(new Date(market.closeAt), now).toISOString(),
+    // The seed files it under a leaf and gives it its tags (`seedMarkets`).
+    categorySelectable: true,
+    tagCount: market.tags.length,
+    leadCloseGapMinutes,
+  };
+}
+
 describe('seed market rule items (#23, ADR-0097)', () => {
   it('gives every market every item the open-items check asks for', () => {
-    for (const market of SEED_MARKETS) {
-      expect(
-        missingOpenItems({
-          ...market,
-          fallbackSources: [...market.fallbackSources],
-          // The seed files it under a leaf and gives it its tags (`seedMarkets`).
-          categorySelectable: true,
-          tagCount: market.tags.length,
-        }),
-        market.slug,
-      ).toEqual([]);
+    // The times too (#22): with the scheduled open a run writes, whenever it runs, and the gap
+    // the design proposes.
+    for (const now of RUN_CLOCKS) {
+      for (const market of SEED_MARKETS) {
+        expect(
+          missingOpenItems(openItemsOf(market, now, PROPOSED_GAP_MINUTES)),
+          `${market.slug} at ${now.toISOString()}`,
+        ).toEqual([]);
+      }
     }
   });
 
@@ -149,6 +182,10 @@ describe('seed market rule items (#23, ADR-0097)', () => {
         delayHandling: market.delayHandling,
         tags: [...market.tags],
         closeAt: market.closeAt,
+        // The times (#22) but the scheduled open, which the seed takes from its run's clock.
+        scheduledAnnouncementAt: market.scheduledAnnouncementAt,
+        scheduledJudgementAt: market.scheduledJudgementAt,
+        judgementTimeZone: market.judgementTimeZone,
       };
       const parsed = entry.safeParse(body);
       expect(parsed.error?.issues, market.slug).toBeUndefined();
@@ -189,6 +226,160 @@ describe('seed market rule items (#23, ADR-0097)', () => {
   it('sets the long-delay deadline by how the source publishes: 14 or 30 days', () => {
     for (const { slug, longDelayDays } of SEED_MARKETS) {
       expect([14, 30], slug).toContain(longDelayDays);
+    }
+  });
+});
+
+/**
+ * Each seed market's 발표 예정 and 예정 판정 (UTC; KST in seed-markets.ts), as verified with each
+ * publisher on 2026-10-31 (ADR-0098). Null is '없음': the source has no scheduled release. Kept in
+ * step with the copy by hand, as EXPECTED_CLOSE_AT is (seed.test.ts): a change is a copy change
+ * for the owner to review (Q-M3-4), never a guess.
+ */
+const EXPECTED_TIMES: Record<string, { announcement: string | null; judgement: string }> = {
+  'bok-october-rate-cut-2026': {
+    announcement: '2026-10-22T01:30:00Z',
+    judgement: '2026-11-02T01:00:00Z',
+  },
+  'cpi-september-2026-above-2pct': {
+    announcement: '2026-10-01T23:00:00Z',
+    judgement: '2026-10-02T01:00:00Z',
+  },
+  'krw-usd-yearend-2026-above-1400': {
+    announcement: '2026-12-30T06:30:00Z',
+    judgement: '2026-12-31T01:00:00Z',
+  },
+  'seoul-apartment-price-november-2026-up': {
+    announcement: '2026-12-14T15:00:00Z',
+    judgement: '2026-12-16T01:00:00Z',
+  },
+  'unemployment-october-2026-below-3pct': {
+    announcement: '2026-11-10T23:00:00Z',
+    judgement: '2026-11-11T01:00:00Z',
+  },
+  'seoul-first-snow-before-nov-20-2026': { announcement: null, judgement: '2026-11-20T01:00:00Z' },
+  'seoul-october-2026-rain-above-50mm': { announcement: null, judgement: '2026-11-02T01:00:00Z' },
+  'seoul-november-2026-below-minus-5': { announcement: null, judgement: '2026-12-01T01:00:00Z' },
+  'korea-telco-6g-trial-2026': { announcement: null, judgement: '2027-01-04T01:00:00Z' },
+  'samsung-trifold-korea-launch-2026': { announcement: null, judgement: '2027-01-04T01:00:00Z' },
+  'november-2026-korean-film-3m-in-2-weeks': {
+    announcement: null,
+    judgement: '2026-12-14T01:00:00Z',
+  },
+  'melon-last-week-2026-domestic-no1': { announcement: null, judgement: '2026-12-29T01:00:00Z' },
+  'national-museum-2026-visitors-above-4m': {
+    announcement: null,
+    judgement: '2027-01-04T01:00:00Z',
+  },
+  'korea-new-books-2026-more-than-2025': {
+    announcement: null,
+    judgement: '2027-06-01T01:00:00Z',
+  },
+};
+
+/** Korea's offset, +09:00 all year (no daylight saving). */
+const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
+
+describe('seed market times (#22, ADR-0098)', () => {
+  it("gives each market its publisher's scheduled release or '없음', and its judgement", () => {
+    expect(
+      Object.fromEntries(
+        SEED_MARKETS.map((market) => [
+          market.slug,
+          { announcement: market.scheduledAnnouncementAt, judgement: market.scheduledJudgementAt },
+        ]),
+      ),
+    ).toEqual(EXPECTED_TIMES);
+    // '없음' where the publisher has no calendar: observations, ad-hoc announcements, data with no
+    // stated time (#172 item 13).
+    expect(SEED_MARKETS.filter((market) => market.scheduledAnnouncementAt === null)).toHaveLength(
+      9,
+    );
+  });
+
+  it('breaks no time rule at the proposed gap, whenever the seed runs (#172 items 12-13, A1)', () => {
+    // Scheduled open < close <= scheduled judgement, 사건 기한 <= scheduled judgement, and the close
+    // at least 60 minutes before a release: what the database CHECKs (all but the lead) and the
+    // open-items check hold the seed to.
+    for (const now of RUN_CLOCKS) {
+      for (const market of SEED_MARKETS) {
+        expect(
+          timeRuleViolations(openItemsOf(market, now, PROPOSED_GAP_MINUTES), PROPOSED_GAP_MINUTES),
+          `${market.slug} at ${now.toISOString()}`,
+        ).toEqual([]);
+      }
+    }
+  });
+
+  it('holds back only the markets with a release while the gap is undecided', () => {
+    // Until the owner enters `market.lead_close_gap`, a market with a scheduled release cannot
+    // open (its 선행 마감 cannot be judged); a '없음' market is not held (ADR-0098).
+    const now = RUN_CLOCKS[1]!;
+    for (const market of SEED_MARKETS) {
+      const held = market.scheduledAnnouncementAt !== null;
+      expect(timeRuleViolations(openItemsOf(market, now, null), null), market.slug).toEqual(
+        held
+          ? [
+              {
+                rule: 'leadClose',
+                fields: ['closeAt', 'scheduledAnnouncementAt'],
+                reason: LEAD_CLOSE_GAP_UNDECIDED,
+              },
+            ]
+          : [],
+      );
+      expect(missingOpenItems(openItemsOf(market, now, null)), market.slug).toEqual(
+        held ? ['leadClose'] : [],
+      );
+    }
+  });
+
+  it("judges at 10:00 KST on a weekday after 사건 기한 and the release, in the seed's zone", () => {
+    // The seed's rule (ADR-0098 구현의 선택); the public holidays it skips are in each comment.
+    for (const market of SEED_MARKETS) {
+      const judgement = Date.parse(market.scheduledJudgementAt);
+      const kst = new Date(judgement + KST_OFFSET_MS);
+      expect(
+        [kst.getUTCHours(), kst.getUTCMinutes(), kst.getUTCSeconds(), kst.getUTCMilliseconds()],
+        market.slug,
+      ).toEqual([10, 0, 0, 0]);
+      expect([1, 2, 3, 4, 5], market.slug).toContain(kst.getUTCDay());
+      expect(judgement, market.slug).toBeGreaterThan(Date.parse(market.eventDeadline));
+      if (market.scheduledAnnouncementAt !== null) {
+        expect(judgement, market.slug).toBeGreaterThan(Date.parse(market.scheduledAnnouncementAt));
+      }
+      expect(market.judgementTimeZone, market.slug).toBe(DEFAULT_JUDGEMENT_TIME_ZONE);
+    }
+  });
+
+  it("opens at the run's clock floored to the minute, or the minute before a close it reached", () => {
+    const open = (closeAt: string, now: string) =>
+      seedScheduledOpenAt(new Date(closeAt), new Date(now)).toISOString();
+    // Passed already, so a reviewer may open it at once (ADR-0093 decision 2 #172 item 6).
+    expect(open('2026-12-31T14:59:59Z', '2026-10-31T13:00:30.500Z')).toBe(
+      '2026-10-31T13:00:00.000Z',
+    );
+    // A run two minutes before the close's own minute still gets its clock…
+    expect(open('2026-10-31T14:59:59Z', '2026-10-31T14:57:59.999Z')).toBe(
+      '2026-10-31T14:57:00.000Z',
+    );
+    // …and a run in that minute, or past the close (a stale seed), the minute before the close.
+    expect(open('2026-10-31T14:59:59Z', '2026-10-31T14:59:00.000Z')).toBe(
+      '2026-10-31T14:58:00.000Z',
+    );
+    expect(open('2026-09-30T14:59:59Z', '2026-10-31T13:00:30.500Z')).toBe(
+      '2026-09-30T14:58:00.000Z',
+    );
+    expect(open('2026-11-19T15:00:00Z', '2026-12-01T00:00:00Z')).toBe('2026-11-19T14:59:00.000Z');
+    // Whenever the seed runs, each one is a whole minute, has passed, and is before the close.
+    for (const now of RUN_CLOCKS) {
+      for (const market of SEED_MARKETS) {
+        const opens = seedScheduledOpenAt(new Date(market.closeAt), now);
+        const label = `${market.slug} at ${now.toISOString()}`;
+        expect(opens.getTime() % 60_000, label).toBe(0);
+        expect(opens.getTime(), label).toBeLessThanOrEqual(now.getTime());
+        expect(minuteOf(opens.toISOString()), label).toBeLessThan(minuteOf(market.closeAt));
+      }
     }
   });
 });

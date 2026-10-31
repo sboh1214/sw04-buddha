@@ -21,13 +21,19 @@ import {
   REPORT_REASONS,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   closedAccountEmail,
   currentConsentVersion,
+  missingOpenItems,
   missingRuleItems,
+  missingTimeItems,
   nicknameSchema,
   releaseSettingChangeBodySchema,
   releaseSettingChangePayloadSchema,
+  timeRuleViolations,
   type MarketRuleItems,
+  type TimeOrderRule,
+  type TimeRuleInput,
 } from '@buddha/shared';
 import { TransactionRollbackError, and, eq, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -899,28 +905,28 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
     });
   });
 
-  describe('the rule items and market_sources (migration 0050, #23)', () => {
-    /** A market's rule items as the API reads them (ADR-0097): its row and its sources. */
-    async function ruleItemsOf(marketId: string): Promise<MarketRuleItems> {
-      const market = await t.db.query.markets.findFirst({
-        where: eq(markets.id, marketId),
-        with: { sources: { orderBy: (row, { asc }) => [asc(row.priority)] } },
-      });
-      const source = ({ name, url }: { name: string; url: string }) => ({ name, url });
-      const primary = market!.sources.find((row) => row.priority === 0);
-      return {
-        description: market!.description,
-        yesCondition: market!.yesCondition,
-        noCondition: market!.noCondition,
-        eventDeadline: market!.eventDeadline?.toISOString() ?? null,
-        primarySource: primary ? source(primary) : null,
-        fallbackSources: market!.sources.filter((row) => row.priority > 0).map(source),
-        fallbackCondition: market!.fallbackCondition,
-        longDelayDays: market!.longDelayDays,
-        delayHandling: market!.delayHandling,
-      };
-    }
+  /** A market's rule items as the API reads them (ADR-0097): its row and its sources. */
+  async function ruleItemsOf(marketId: string): Promise<MarketRuleItems> {
+    const market = await t.db.query.markets.findFirst({
+      where: eq(markets.id, marketId),
+      with: { sources: { orderBy: (row, { asc }) => [asc(row.priority)] } },
+    });
+    const source = ({ name, url }: { name: string; url: string }) => ({ name, url });
+    const primary = market!.sources.find((row) => row.priority === 0);
+    return {
+      description: market!.description,
+      yesCondition: market!.yesCondition,
+      noCondition: market!.noCondition,
+      eventDeadline: market!.eventDeadline?.toISOString() ?? null,
+      primarySource: primary ? source(primary) : null,
+      fallbackSources: market!.sources.filter((row) => row.priority > 0).map(source),
+      fallbackCondition: market!.fallbackCondition,
+      longDelayDays: market!.longDelayDays,
+      delayHandling: market!.delayHandling,
+    };
+  }
 
+  describe('the rule items and market_sources (migration 0050, #23)', () => {
     /** Every rule item a market made before #23 misses once 0050 ran: all but the fallbacks. */
     const ALL_MISSING = [
       'description',
@@ -1164,6 +1170,351 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         'fallbackSources',
         'fallbackCondition',
         'longDelayDays',
+      ]);
+    });
+  });
+
+  describe('the market times (migration 0051, #22)', () => {
+    /** A market's times as the API reads them (ADR-0098), with the close and 사건 기한. */
+    async function timesOf(marketId: string): Promise<TimeRuleInput> {
+      const [row] = await t.db.select().from(markets).where(eq(markets.id, marketId));
+      const iso = (value: Date | null) => value?.toISOString() ?? null;
+      return {
+        scheduledOpenAt: iso(row!.scheduledOpenAt),
+        closeAt: row!.closeAt.toISOString(),
+        scheduledAnnouncementAt: iso(row!.scheduledAnnouncementAt),
+        scheduledJudgementAt: iso(row!.scheduledJudgementAt),
+        judgementTimeZone: row!.judgementTimeZone,
+        eventDeadline: iso(row!.eventDeadline),
+      };
+    }
+
+    /** What a market misses to the open-items check, a selectable category and a tag given. */
+    async function missingOf(marketId: string, leadCloseGapMinutes: number | null = null) {
+      const [row] = await t.db.select().from(markets).where(eq(markets.id, marketId));
+      const times = await timesOf(marketId);
+      return missingOpenItems({
+        ...(await ruleItemsOf(marketId)),
+        ...times,
+        closeAt: times.closeAt!,
+        title: row!.title,
+        categorySelectable: true,
+        tagCount: 1,
+        leadCloseGapMinutes,
+      });
+    }
+
+    it('adds the times blank with no default, the zone as given and a gap of 0 or more (D4)', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+        length: number | null;
+        precision: number | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default", character_maximum_length AS length,
+          datetime_precision AS precision
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'markets'
+          AND column_name IN ('open_at', 'scheduled_open_at', 'close_at',
+            'scheduled_announcement_at', 'scheduled_judgement_at', 'judgement_time_zone',
+            'lead_close_gap_minutes')
+        ORDER BY ordinal_position`);
+      const instant = (column: string, nullable: string) => ({
+        column,
+        type: 'timestamp with time zone',
+        nullable,
+        default: null,
+        length: null,
+        precision: 3,
+      });
+      // `open_at` stays the actual open (ADR-0065); the new columns come after, null and with no
+      // default — the zone's pre-fill is the form's, for the operator to confirm (#172 item 11).
+      expect(columns).toEqual([
+        instant('open_at', 'YES'),
+        instant('close_at', 'NO'),
+        instant('scheduled_open_at', 'YES'),
+        instant('scheduled_announcement_at', 'YES'),
+        instant('scheduled_judgement_at', 'YES'),
+        {
+          column: 'judgement_time_zone',
+          type: 'character varying',
+          nullable: 'YES',
+          default: null,
+          length: 64,
+          precision: null,
+        },
+        {
+          column: 'lead_close_gap_minutes',
+          type: 'integer',
+          nullable: 'YES',
+          default: null,
+          length: null,
+          precision: null,
+        },
+      ]);
+      // A row written without them — as every market before #22 is after the migration — has them
+      // all null: the open-items check names the required ones, and no CHECK refuses it.
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const category = await createCategory(t.db);
+      await t.db.execute(sql`
+        INSERT INTO markets (slug, title, category_id, close_at, event_deadline, created_by)
+        VALUES ('before-22', '#22 전의 시장', ${category.id}, now() + interval '7 days',
+          now() + interval '30 days', ${admin.id})`);
+      const [bare] = await t.db.select().from(markets).where(eq(markets.slug, 'before-22'));
+      expect(bare).toMatchObject({
+        scheduledOpenAt: null,
+        scheduledAnnouncementAt: null,
+        scheduledJudgementAt: null,
+        judgementTimeZone: null,
+        leadCloseGapMinutes: null,
+      });
+      expect(missingTimeItems(await timesOf(bare!.id))).toEqual([
+        'scheduledOpenAt',
+        'scheduledJudgementAt',
+        'judgementTimeZone',
+      ]);
+      const set = (values: Partial<typeof markets.$inferInsert>) =>
+        t.db.update(markets).set(values).where(eq(markets.id, bare!.id));
+
+      // Each instant to the millisecond, like every time column (columns.ts): stored as entered.
+      const at = (iso: string) => new Date(iso);
+      await set({
+        scheduledOpenAt: at('2026-11-01T00:00:59.999Z'),
+        closeAt: at('2026-11-30T14:59:59.999Z'),
+        scheduledAnnouncementAt: at('2026-12-01T00:00:00.001Z'),
+        scheduledJudgementAt: at('2026-12-31T01:00:00.500Z'),
+        eventDeadline: at('2026-12-31T01:00:59.999Z'),
+      });
+      expect(await timesOf(bare!.id)).toEqual({
+        scheduledOpenAt: '2026-11-01T00:00:59.999Z',
+        closeAt: '2026-11-30T14:59:59.999Z',
+        scheduledAnnouncementAt: '2026-12-01T00:00:00.001Z',
+        scheduledJudgementAt: '2026-12-31T01:00:00.500Z',
+        judgementTimeZone: null,
+        eventDeadline: '2026-12-31T01:00:59.999Z',
+      });
+
+      // The zone is stored as given: no CHECK can read pg_timezone_names, so the API's
+      // `timeZoneSchema` is what refuses a name it does not know, as for `profiles.time_zone`.
+      for (const zone of ['Asia/Seoul', 'ROK', 'America/New_York', `${'A'.repeat(63)}/`]) {
+        await set({ judgementTimeZone: zone });
+        expect((await timesOf(bare!.id)).judgementTimeZone).toBe(zone);
+      }
+      expect((await refusal(set({ judgementTimeZone: 'A'.repeat(65) }))).state).toBe('22001');
+
+      // The gap the lead close was last checked against: minutes, 0 (close ≤ announcement) or more.
+      for (const leadCloseGapMinutes of [0, 60, 10_080, null]) await set({ leadCloseGapMinutes });
+      expect(await refusal(set({ leadCloseGapMinutes: -1 }))).toEqual({
+        state: '23514',
+        constraint: 'markets_lead_close_gap_minutes_check',
+      });
+    });
+
+    it('holds the order of the times in whole UTC minutes once both ends are set, as timeRuleViolations does', async () => {
+      // #172 item 12 (scheduled open < close ≤ scheduled judgement) and A1 (사건 기한 ≤ scheduled
+      // judgement), whoever writes, in whole minutes: `minuteOf`'s and the CHECKs' must agree.
+      const market = await createMarket(t.db, {
+        status: 'draft',
+        blankTimes: true,
+        eventDeadline: null,
+      });
+      /** A rule, its earlier and later end, and whether it holds between them. */
+      type Case = [rule: TimeOrderRule, earlier: string, later: string, holds: boolean];
+      const cases: Case[] = [
+        // Before the close by a minute at least: a millisecond across a minute is enough...
+        ['openBeforeClose', '2026-11-02T00:59:59.999Z', '2026-11-02T01:00:00.000Z', true],
+        // ...one minute is not, however far apart in seconds.
+        ['openBeforeClose', '2026-11-02T01:00:00.000Z', '2026-11-02T01:00:59.999Z', false],
+        ['openBeforeClose', '2026-11-02T01:01:00.000Z', '2026-11-02T01:00:00.000Z', false],
+        // The close may be in the judgement's minute, even seconds after it (the accepted edge of
+        // ADR-0098: every screen shows the minute), never a minute after.
+        ['closeByJudgement', '2026-11-02T01:00:00.000Z', '2026-11-02T01:00:00.000Z', true],
+        ['closeByJudgement', '2026-11-02T01:00:30.000Z', '2026-11-02T01:00:00.000Z', true],
+        ['closeByJudgement', '2026-11-02T01:01:00.000Z', '2026-11-02T01:00:59.999Z', false],
+        ['deadlineByJudgement', '2026-11-01T14:59:59.999Z', '2026-11-02T01:00:00.000Z', true],
+        ['deadlineByJudgement', '2026-11-02T01:00:59.999Z', '2026-11-02T01:00:00.000Z', true],
+        ['deadlineByJudgement', '2026-11-02T01:01:00.000Z', '2026-11-02T01:00:59.999Z', false],
+        // Before 1970 a minute still floors toward −∞ in both; and Seoul's local mean time then
+        // (+08:27:52) puts 00:00:05Z and 00:00:10Z in two local minutes but in one UTC minute.
+        ['openBeforeClose', '1900-01-01T00:00:05.000Z', '1900-01-01T00:00:10.000Z', false],
+        ['openBeforeClose', '1899-12-31T23:59:59.999Z', '1900-01-01T00:00:00.000Z', true],
+        ['closeByJudgement', '1900-01-01T00:00:10.000Z', '1900-01-01T00:00:05.000Z', true],
+        ['deadlineByJudgement', '1900-01-01T00:00:00.000Z', '1899-12-31T23:59:59.999Z', false],
+      ];
+      const CHECK_OF: Record<TimeOrderRule, string> = {
+        openBeforeClose: 'markets_open_before_close_check',
+        closeByJudgement: 'markets_close_by_judgement_check',
+        deadlineByJudgement: 'markets_deadline_by_judgement_check',
+      };
+      /** The four columns a case writes: its two ends, the others null or out of its way. */
+      const valuesOf = ([rule, earlier, later]: Case) => {
+        const [from, to] = [new Date(earlier), new Date(later)];
+        const none = { scheduledOpenAt: null, scheduledJudgementAt: null, eventDeadline: null };
+        switch (rule) {
+          case 'openBeforeClose':
+            return { ...none, scheduledOpenAt: from, closeAt: to };
+          case 'closeByJudgement':
+            return { ...none, closeAt: from, scheduledJudgementAt: to };
+          case 'deadlineByJudgement':
+            // The close at the judgement, which close ≤ judgement takes.
+            return { ...none, closeAt: to, scheduledJudgementAt: to, eventDeadline: from };
+        }
+      };
+      const iso = (value: Date | null) => value?.toISOString() ?? null;
+      type Tx = Parameters<Parameters<TestDb['db']['transaction']>[0]>[0];
+      /** Runs `query` in a transaction whose session TimeZone is `zone`. */
+      const inZone = <T>(zone: string, query: (tx: Tx) => Promise<T>) =>
+        t.db.transaction(async (tx) => {
+          await tx.execute(sql`SELECT set_config('TimeZone', ${zone}, true)`);
+          return query(tx);
+        });
+
+      // The 1900 cases mean something only if the session's zone moves a bare truncation.
+      const { rows: truncations } = await inZone('Asia/Seoul', (tx) =>
+        tx.execute<{ local: boolean; utc: boolean }>(sql`
+          SELECT date_trunc('minute', a) = date_trunc('minute', b) AS local,
+            date_trunc('minute', a AT TIME ZONE 'UTC')
+              = date_trunc('minute', b AT TIME ZONE 'UTC') AS utc
+          FROM (VALUES ('1900-01-01T00:00:05Z'::timestamptz, '1900-01-01T00:00:10Z'::timestamptz))
+            AS pair (a, b)`),
+      );
+      expect(truncations).toEqual([{ local: false, utc: true }]);
+
+      for (const testCase of cases) {
+        const [rule, earlier, later, holds] = testCase;
+        const values = valuesOf(testCase);
+        const label = `${rule} ${earlier} → ${later}`;
+        const violations = timeRuleViolations(
+          {
+            scheduledOpenAt: iso(values.scheduledOpenAt),
+            closeAt: iso(values.closeAt),
+            scheduledAnnouncementAt: null,
+            scheduledJudgementAt: iso(values.scheduledJudgementAt),
+            judgementTimeZone: null,
+            eventDeadline: iso(values.eventDeadline),
+          },
+          null,
+        );
+        expect(
+          violations.map((violation) => violation.rule),
+          label,
+        ).toEqual(holds ? [] : [rule]);
+        // In UTC and in a session zone whose truncation would differ: the CHECKs read UTC alone.
+        for (const zone of ['UTC', 'Asia/Seoul']) {
+          const write = inZone(zone, (tx) =>
+            tx.update(markets).set(values).where(eq(markets.id, market.id)),
+          );
+          expect(await refusal(write), `${label} in ${zone}`).toEqual(
+            holds
+              ? { state: undefined, constraint: undefined }
+              : { state: '23514', constraint: CHECK_OF[rule] },
+          );
+        }
+      }
+
+      // Each end alone, or the rule's other end null, holds nothing: a draft may stay partial.
+      const partial = [
+        { scheduledJudgementAt: null, eventDeadline: new Date('2030-01-01T00:00:00Z') },
+        { scheduledJudgementAt: new Date('2026-11-02T01:00:00Z'), eventDeadline: null },
+      ];
+      for (const values of partial) {
+        await t.db
+          .update(markets)
+          .set({ ...values, closeAt: new Date('2026-11-02T00:00:00Z') })
+          .where(eq(markets.id, market.id));
+      }
+      // The lead close is no CHECK: it depends on the release setting `market.lead_close_gap`.
+      await t.db
+        .update(markets)
+        .set({ scheduledAnnouncementAt: new Date('2026-11-01T00:00:00Z') })
+        .where(eq(markets.id, market.id));
+      expect(
+        timeRuleViolations(await timesOf(market.id), 60).map((violation) => violation.rule),
+      ).toEqual(['leadClose']);
+    });
+
+    it('createMarket fills the times complete and in order by default, blank or as given on request', async () => {
+      // The scheduled open a minute before the earlier of now and the close, floored; the
+      // scheduled judgement 24 hours after the later of the close and 사건 기한, raised to the
+      // minute; Asia/Seoul; no announcement ('없음'). It opens at once under any gap.
+      const before = Date.now();
+      const closeAt = new Date('2099-12-01T00:00:30.500Z');
+      const draft = await createMarket(t.db, { status: 'draft', closeAt });
+      const after = Date.now();
+      const times = await timesOf(draft.id);
+      const opens = Date.parse(times.scheduledOpenAt!);
+      expect(opens % 60_000).toBe(0);
+      expect(opens).toBeGreaterThanOrEqual(Math.floor(before / 60_000) * 60_000 - 60_000);
+      expect(opens).toBeLessThanOrEqual(after - 60_000);
+      expect(times).toMatchObject({
+        closeAt: '2099-12-01T00:00:30.500Z',
+        // 사건 기한 is the close + 24 hours by default (#23), so the judgement is 48 hours on.
+        eventDeadline: '2099-12-02T00:00:30.500Z',
+        scheduledJudgementAt: '2099-12-03T00:01:00.000Z',
+        scheduledAnnouncementAt: null,
+        judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+      });
+      expect(draft.leadCloseGapMinutes).toBeNull();
+      expect(await missingOf(draft.id)).toEqual([]);
+      expect(await missingOf(draft.id, 60)).toEqual([]);
+
+      // A past close — a market the worker closes, or one a test closed — opens before it.
+      const closed = await createMarket(t.db, {
+        status: 'closed',
+        closeAt: new Date('2020-01-01T00:00:30.000Z'),
+        eventDeadline: new Date('2019-12-31T00:00:00.000Z'),
+      });
+      expect(await timesOf(closed.id)).toMatchObject({
+        scheduledOpenAt: '2019-12-31T23:59:00.000Z',
+        // The close is the later end here (no order between the close and 사건 기한, ADR-0097).
+        scheduledJudgementAt: '2020-01-02T00:01:00.000Z',
+      });
+      expect(timeRuleViolations(await timesOf(closed.id), 0)).toEqual([]);
+      // No deadline: from the close alone; a whole minute is not raised.
+      const noDeadline = await createMarket(t.db, {
+        closeAt: new Date('2099-12-01T00:00:00.000Z'),
+        eventDeadline: null,
+      });
+      expect((await timesOf(noDeadline.id)).scheduledJudgementAt).toBe('2099-12-02T00:00:00.000Z');
+
+      // As given — an announcement, a zone, the gap the open stored — or one left blank.
+      const given = await createMarket(t.db, {
+        closeAt: new Date('2099-12-01T00:00:00.000Z'),
+        scheduledAnnouncementAt: new Date('2099-12-01T01:00:00.000Z'),
+        judgementTimeZone: 'America/New_York',
+        scheduledJudgementAt: null,
+        leadCloseGapMinutes: 60,
+      });
+      expect(await timesOf(given.id)).toMatchObject({
+        scheduledAnnouncementAt: '2099-12-01T01:00:00.000Z',
+        scheduledJudgementAt: null,
+        judgementTimeZone: 'America/New_York',
+      });
+      expect(given.leadCloseGapMinutes).toBe(60);
+      expect(await missingOf(given.id, 60)).toEqual(['scheduledJudgementAt']);
+      // An announcement under the undecided gap fails the lead close, so such a market can't open.
+      expect(await missingOf(given.id, null)).toEqual(['scheduledJudgementAt', 'leadClose']);
+
+      // A market from before #22: every time blank but those given.
+      const blank = await createMarket(t.db, { status: 'open', blankTimes: true });
+      expect(await timesOf(blank.id)).toMatchObject({
+        scheduledOpenAt: null,
+        scheduledAnnouncementAt: null,
+        scheduledJudgementAt: null,
+        judgementTimeZone: null,
+      });
+      expect(await missingOf(blank.id)).toEqual([
+        'scheduledOpenAt',
+        'scheduledJudgementAt',
+        'judgementTimeZone',
+      ]);
+      const zoneOnly = await createMarket(t.db, { blankTimes: true, judgementTimeZone: 'ROK' });
+      expect(missingTimeItems(await timesOf(zoneOnly.id))).toEqual([
+        'scheduledOpenAt',
+        'scheduledJudgementAt',
       ]);
     });
   });

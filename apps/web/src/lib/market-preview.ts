@@ -1,4 +1,4 @@
-import { isPublicMarketStatus } from '@buddha/shared';
+import { type MarketStatus, isPublicMarketStatus } from '@buddha/shared';
 import { copy } from '@/copy';
 import { type Category, type CreateMarketFields, type Market, type MarketSummary } from '@/lib/api';
 import { isHttpUrl } from '@/lib/market-form';
@@ -25,8 +25,9 @@ export const PREVIEW_SLUG = 'preview';
  * is `null` and the card reads 체결 없음 (N02 §5) — there is no initial probability to show as one
  * (#125) — and the status is `open`, the card it is being made into, never the admin's 초안 or 검수
  * 중 on a card meant as the one visitors see. A public market has the card visitors see — a
- * SCHEDULED one its 개장 예정 badge before any fill, one that has traded its price and 참여자 — and
- * the 수정 card must preview that card, not one with 체결 없음 and '참여자 0'. Of that history the card
+ * SCHEDULED one its 개장 예정 badge before any fill, one that has traded its price and 참여자, a
+ * CLOSED one whose scheduled judgement has passed its 판정 지연 (`judgementDelayed`, #22) — and the
+ * 수정 card must preview that card, not one with 체결 없음 and '참여자 0'. Of that history the card
  * draws the price, the status, the countdown and the 참여자; `volumeCoin` and `tradeCount` come along
  * only because a `MarketSummary` carries them.
  *
@@ -52,6 +53,7 @@ export function toPreviewMarket(
       ? {
           lastPrice: base.lastPrice,
           status: base.status,
+          judgementDelayed: base.judgementDelayed,
           volumeCoin: base.volumeCoin,
           tradeCount: base.tradeCount,
           traderCount: base.traderCount,
@@ -62,6 +64,7 @@ export function toPreviewMarket(
       : {
           lastPrice: null,
           status: 'open' as const,
+          judgementDelayed: false,
           volumeCoin: '0',
           tradeCount: 0,
           traderCount: 0,
@@ -90,8 +93,9 @@ export function toPreviewMarket(
 }
 
 /**
- * What the detail's rules area (`RulesSection`) draws (#23): the rule items but 배경, which is its
- * own section before it, and the close time.
+ * What the detail's rules area (`RulesSection`) draws (#23, #22): the rule items but 배경, which is
+ * its own section before it, the times and the judgement time zone, and the status, which says
+ * whether it draws the 예정 개장 시각 row (only before the market opens).
  */
 export type PreviewRules = Pick<
   Market,
@@ -103,17 +107,28 @@ export type PreviewRules = Pick<
   | 'fallbackCondition'
   | 'longDelayDays'
   | 'delayHandling'
+  | 'scheduledOpenAt'
   | 'closeAt'
+  | 'scheduledAnnouncementAt'
+  | 'scheduledJudgementAt'
+  | 'judgementTimeZone'
+  | 'status'
 >;
 
 /**
- * The form's rule items as the detail's rules area draws them (#23), for the 상세 미리보기:
- * `toCreateMarketBody` has trimmed them, so a blank item reads '—' as on the visitor's screen and
- * an empty fallback list 없음. A half-typed source address goes as typed:
- * the area links a name only to an http(s) address (`sourceView`), as it does for a visitor.
+ * The form's rule items and times as the detail's rules area draws them (#23, #22), for the 상세
+ * 미리보기: `toCreateMarketBody` has trimmed them, so a blank item reads '—' as on the visitor's
+ * screen, an empty fallback list 없음 and a blank announcement 없음. A half-typed source address
+ * goes as typed: the area links a name only to an http(s) address (`sourceView`), as it does for a
+ * visitor. The status is the edited market's (`status`), or a draft's on 시장 만들기 — what the
+ * market is now, so the preview draws the 예정 개장 시각 row exactly while a visitor's detail would.
+ * The admin layout holds the area at KST, so no time shows a second, 판정 기준 시간대 line here.
  * Total, so a half-typed form is safe to hand it.
  */
-export function toPreviewRules(body: CreateMarketFields): PreviewRules {
+export function toPreviewRules(
+  body: CreateMarketFields,
+  status: MarketStatus = 'draft',
+): PreviewRules {
   return {
     yesCondition: body.yesCondition ?? '',
     noCondition: body.noCondition ?? '',
@@ -123,6 +138,11 @@ export function toPreviewRules(body: CreateMarketFields): PreviewRules {
     fallbackCondition: body.fallbackCondition ?? '',
     longDelayDays: body.longDelayDays ?? null,
     delayHandling: body.delayHandling ?? '',
+    scheduledOpenAt: body.scheduledOpenAt ?? null,
     closeAt: body.closeAt,
+    scheduledAnnouncementAt: body.scheduledAnnouncementAt ?? null,
+    scheduledJudgementAt: body.scheduledJudgementAt ?? null,
+    judgementTimeZone: body.judgementTimeZone ?? null,
+    status,
   };
 }

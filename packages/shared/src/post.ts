@@ -75,7 +75,9 @@ export type PostAuthor = z.infer<typeof postAuthorSchema>;
 
 /**
  * The market a post belongs to, as a card and the post page link to it: its detail opens in every
- * status, closed and settled ones too (#46's acceptance criteria).
+ * status, closed and settled ones too (#46's acceptance criteria). Its status badge reads as the
+ * market's own cards do: '판정 지연' for a CLOSED market past its scheduled judgement
+ * (`judgementDelayed`, `isJudgementDelayed` at the read; #22, ADR-0098).
  */
 export const postMarketSchema = z
   .object({
@@ -83,6 +85,7 @@ export const postMarketSchema = z
     slug: z.string(),
     title: z.string(),
     status: marketStatusSchema,
+    judgementDelayed: z.boolean(),
     category: z.object({ slug: z.string(), nameKo: z.string() }),
   })
   .meta({ id: 'PostMarket' });

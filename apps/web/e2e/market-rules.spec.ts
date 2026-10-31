@@ -1,6 +1,7 @@
 import { type APIResponse, type Page, type Request } from '@playwright/test';
 import { type MarketSource, PROPOSED_CONTRACT_TERMS, formatCoin } from '@buddha/shared';
 import { copy } from '../src/copy';
+import { formatKst } from '../src/lib/datetime';
 import {
   accountIdOf,
   adminAccount,
@@ -8,10 +9,12 @@ import {
   createOpenMarket,
   detailCopyTestId,
   expect,
+  fillTimeInputs,
   freshTag,
   kstLocalOf,
   signIn,
   test,
+  timesFor,
 } from './helpers';
 
 /**
@@ -25,7 +28,9 @@ import {
  * row left empty are refused under their inputs, the empty row's refusal going as it is typed
  * into. Once every item is filled the notice goes and the market opens, and an open market cannot
  * lose an item it had. 빼기 takes a fallback out, and the last one out takes the switch condition
- * with it: the market saves with no fallback and a blank condition.
+ * with it: the market saves with no fallback and a blank condition. The market's times (#22) are
+ * filled in with the rule items, as 열기 needs them too (market-times.spec.ts takes them through
+ * the form).
  *
  * A visitor who is not signed in reads every item on the detail's 규칙, in the form's order and all
  * of it at once — nothing folds (decision 3 '#23 문장 길이와 표시') — with each source's name a link
@@ -42,9 +47,15 @@ import {
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
-/** `days` from now as the admin's `datetime-local` takes it, in KST (`YYYY-MM-DDTHH:mm`). */
-function kstLocalIn(days: number): string {
-  return kstLocalOf(new Date(Date.now() + days * DAY_MS).toISOString());
+/** `days` from now, an ISO instant: `kstLocalOf` types it as the admin's `datetime-local`. */
+function isoIn(days: number): string {
+  return new Date(Date.now() + days * DAY_MS).toISOString();
+}
+
+/** `days` after the instant `iso`, an ISO instant: a 장기 지연 기한 (#22, ADR-0098). */
+function daysAfter(iso: string | null, days: number): string {
+  if (iso === null) throw new Error('the market has no scheduled judgement');
+  return new Date(Date.parse(iso) + days * DAY_MS).toISOString();
 }
 
 /** `formatInTimeZone`'s style with no marker: Seoul's, which every project's browser is in. */
@@ -59,7 +70,10 @@ const VOID_PAYOUT =
   `${copy.rulesVoidPayoutNo} ${formatCoin(PROPOSED_CONTRACT_TERMS.voidPayoutNoCoin)}` +
   copy.rulesVoidPayoutTail;
 
-/** 규칙's rows in order, as the form's (OPEN_ITEMS) — 배경 is its own section before it. */
+/**
+ * 규칙's rows in order, as the form's (OPEN_ITEMS) — 배경 is its own section before it — and then
+ * an open market's times (#22, ADR-0098): no 예정 개장 시각 once it is open.
+ */
 const RULE_ROWS = [
   copy.rulesYes,
   copy.rulesNo,
@@ -71,7 +85,16 @@ const RULE_ROWS = [
   copy.rulesDelayHandling,
   copy.rulesVoidPayout,
   copy.rulesCloseAt,
+  copy.rulesAnnouncementAt,
+  copy.rulesJudgementAt,
+  copy.rulesJudgementTimeZone,
 ];
+
+/**
+ * What the open-items check names of a draft made on the form with no time but the close (#22):
+ * the scheduled open and judgement. The 판정 기준 시간대 is pre-filled (#172 item 11), so it is not.
+ */
+const MISSING_TIMES = [copy.openItemScheduledOpenAt, copy.openItemScheduledJudgementAt];
 
 /** The open-items notice and refusal join item names so (lib/market-admin.ts `openItemList`). */
 const openItems = (...labels: string[]) => labels.join(' · ');
@@ -115,7 +138,11 @@ test.describe('규칙 항목', () => {
     const background = `배경 문단 ${own}`;
     const yes = `공식 발표가 사건 기한까지 있으면 YES입니다. ${own}`;
     const no = `사건 기한까지 공식 발표가 없으면 NO입니다. ${own}`;
-    const eventDeadline = kstLocalIn(3);
+    const eventDeadlineAt = isoIn(3);
+    const eventDeadline = kstLocalOf(eventDeadlineAt);
+    const closeAt = isoIn(2);
+    // The times too (#22): the scheduled open passed, the judgement after the 사건 기한.
+    const times = timesFor(closeAt, eventDeadlineAt);
     const primary: MarketSource = {
       name: `1차 출처 ${own}`,
       url: `https://example.com/e2e/${own}/primary`,
@@ -195,7 +222,7 @@ test.describe('규칙 항목', () => {
       await category.selectOption(choices[0]!);
       await adminPage.getByTestId('market-tags-input').fill(own);
       await adminPage.getByTestId('market-tags-input').press('Enter');
-      await adminPage.getByTestId('market-close-at').fill(kstLocalIn(2));
+      await adminPage.getByTestId('market-close-at').fill(kstLocalOf(closeAt));
       const created = adminPage.waitForRequest(
         (sent) =>
           sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/v1/admin/markets',
@@ -223,6 +250,7 @@ test.describe('규칙 항목', () => {
         copy.openItemPrimarySource,
         copy.openItemLongDelayDays,
         copy.openItemDelayHandling,
+        ...MISSING_TIMES,
       );
       const notice = adminPage.getByTestId('market-open-items');
       await expect(notice).toHaveText(`${copy.adminMarketOpenItems}: ${missing}`);
@@ -257,6 +285,7 @@ test.describe('규칙 항목', () => {
           copy.openItemFallbackCondition,
           copy.openItemLongDelayDays,
           copy.openItemDelayHandling,
+          ...MISSING_TIMES,
         )}`,
       );
       expect(patches).toHaveLength(1);
@@ -296,6 +325,7 @@ test.describe('규칙 항목', () => {
       await adminPage.getByTestId('market-fallback-condition').fill(condition);
       await adminPage.getByTestId('market-long-delay-days').fill('30');
       await adminPage.getByTestId('market-delay-handling').fill(delayHandling);
+      await fillTimeInputs(adminPage, times);
 
       // --- saved: the fallbacks go as the whole list in the order on screen, with the condition.
       const saved = nextPatch(adminPage, marketId);
@@ -386,14 +416,22 @@ test.describe('규칙 항목', () => {
       );
     }
     await expect(page.getByTestId(`${id}-fallback-condition`)).toHaveText(condition);
-    await expect(page.getByTestId(`${id}-long-delay`)).toHaveText(
+    // The days, then the instant they come to from the scheduled judgement (#22, ADR-0098).
+    await expect(page.getByTestId(`${id}-long-delay`)).toContainText(
       `${copy.rulesLongDelayBefore} 30${copy.rulesLongDelayTail}`,
+    );
+    await expect(page.getByTestId(`${id}-long-delay-viewer-zone`)).toHaveText(
+      formatKst(daysAfter(times.scheduledJudgementAt, 30)),
     );
     await expect(page.getByTestId(`${id}-delay-handling`)).toHaveText(delayHandling);
     const voidPayout = page.getByTestId(`${id}-void-payout`);
     await expect(voidPayout).toHaveText(VOID_PAYOUT);
     await expect(voidPayout).not.toContainText(/환불|원금/);
     await expect(page.getByTestId(`${id}-close-at`)).toHaveText(UNMARKED);
+    await expect(page.getByTestId(`${id}-announcement-at`)).toHaveText(copy.rulesAnnouncementNone);
+    await expect(page.getByTestId(`${id}-judgement-at-viewer-zone`)).toHaveText(UNMARKED);
+    // Judged in Seoul, the zone every project's browser is in: one line per time (#22).
+    await expect(rules.locator('[data-testid$="-judgement-zone"]')).toHaveCount(0);
 
     // The server's HTML holds the rules before any script runs (AC 2): no cookie on `request`.
     const html = await (await request.get(`/markets/${slug}`)).text();
@@ -481,9 +519,12 @@ test.describe('규칙 항목', () => {
       'href',
       source.url,
     );
-    await expect(page.getByTestId(`${id}-long-delay`)).toHaveText(
-      `${copy.rulesLongDelayBefore} ${String(market.ruleItems.longDelayDays)}` +
-        copy.rulesLongDelayTail,
+    const days = market.ruleItems.longDelayDays ?? 0;
+    await expect(page.getByTestId(`${id}-long-delay`)).toContainText(
+      `${copy.rulesLongDelayBefore} ${String(days)}${copy.rulesLongDelayTail}`,
+    );
+    await expect(page.getByTestId(`${id}-long-delay-viewer-zone`)).toHaveText(
+      formatKst(daysAfter(market.times.scheduledJudgementAt, days)),
     );
     await expect(page.getByTestId(`${id}-void-payout`)).toHaveText(VOID_PAYOUT);
   });

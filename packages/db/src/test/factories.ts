@@ -8,12 +8,15 @@ import {
   ACCOUNT_CLOSURE_DECISION_REASON,
   AUTH_USER_NAME,
   CONSENT_ITEMS,
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PRICE_MAX,
   PRICE_MIN,
   currentConsentVersion,
   SETTLEMENT_STEPS,
+  ceilToMinute,
   closedAccountEmail,
+  floorToMinute,
   orphanMediaRetryHours,
   normalizeTagName,
   readPostDocument,
@@ -231,6 +234,36 @@ export interface CreateMarketInput {
   openAt?: Date | null;
   closeAt?: Date;
   /**
+   * The market times beside `closeAt` (#22, ADR-0098), TIME_ITEMS of @buddha/shared. By default
+   * every required one is filled in and in order with the close and 사건 기한 as they end up, so a
+   * market made here misses no time item, passes every order CHECK of migration 0051 and opens
+   * through the route at once with its tags:
+   *
+   * - the scheduled open one minute before the earlier of now and the close, floored to the minute
+   *   — passed, so the interim open takes it, and before the close even when that is past;
+   * - the scheduled judgement 24 hours after the later of the close and 사건 기한, raised to the
+   *   minute first;
+   * - the judgement zone DEFAULT_JUDGEMENT_TIME_ZONE;
+   * - no announcement ('없음'), so the undecided `market.lead_close_gap` never blocks the open.
+   *
+   * A test of a missing time gives `null`, or `blankTimes` for all of them; a given value is stored
+   * as given, held by the CHECKs alone.
+   */
+  scheduledOpenAt?: Date | null;
+  scheduledAnnouncementAt?: Date | null;
+  scheduledJudgementAt?: Date | null;
+  judgementTimeZone?: string | null;
+  /**
+   * Every time item null but those given above: a market made before #22 as migration 0051 left
+   * it. Default false.
+   */
+  blankTimes?: boolean;
+  /**
+   * The 선행 마감 gap the market's lead close was last checked against (`lead_close_gap_minutes`).
+   * Default null: not opened through the route, or opened with the setting undecided.
+   */
+  leadCloseGapMinutes?: number | null;
+  /**
    * Resolution columns, stored as given and null by default: a test that needs a market
    * mid-settlement sets `status: 'settling'` with a result. The factory writes no market event,
    * so `statusEventId` stays null unless given — the rank fallback of `statusSupersedes` is what
@@ -293,11 +326,34 @@ function ruleItemsOf(input: CreateMarketInput, t: string, closeAt: Date) {
   };
 }
 
+const MINUTE_MS = 60_000;
+
+/**
+ * The market times `createMarket` writes (#22, ADR-0098): complete and in order with the close and
+ * 사건 기한 as they end up, blank or as given.
+ */
+function timesOf(input: CreateMarketInput, now: Date, closeAt: Date, eventDeadline: Date | null) {
+  const pick = <T>(given: T | null | undefined, filled: T): T | null =>
+    given !== undefined ? given : input.blankTimes === true ? null : filled;
+  const opens = floorToMinute(Math.min(now.getTime(), closeAt.getTime())) - MINUTE_MS;
+  const closeOrDeadline = Math.max(closeAt.getTime(), eventDeadline?.getTime() ?? -Infinity);
+  return {
+    scheduledOpenAt: pick(input.scheduledOpenAt, new Date(opens)),
+    scheduledAnnouncementAt: input.scheduledAnnouncementAt ?? null,
+    scheduledJudgementAt: pick(
+      input.scheduledJudgementAt,
+      new Date(ceilToMinute(closeOrDeadline) + DAY_MS),
+    ),
+    judgementTimeZone: pick(input.judgementTimeZone, DEFAULT_JUDGEMENT_TIME_ZONE),
+  };
+}
+
 /**
  * Inserts a market as the admin create path leaves it, in the given status: no price until a
- * fill (`lastPrice` null) and statistics at 0 unless given, and its rule items complete unless
+ * fill (`lastPrice` null) and statistics at 0 unless given, its rule items complete unless
  * blanked (`CreateMarketInput.blankRuleItems`, or an item given blank), the sources as
- * `market_sources` rows. Writes no tick and no event.
+ * `market_sources` rows, and its times complete and in order unless blanked (`blankTimes`, or a
+ * time given null). Writes no tick and no event.
  */
 export async function createMarket(db: Db, input: CreateMarketInput = {}) {
   const lastPrice = input.lastPrice ?? null;
@@ -313,6 +369,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
   const now = new Date();
   const closeAt = input.closeAt ?? new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   const items = ruleItemsOf(input, t, closeAt);
+  const times = timesOf(input, now, closeAt, items.eventDeadline);
 
   const [row] = await db
     .insert(markets)
@@ -337,7 +394,12 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
           : status === 'draft' || status === 'review' || status === 'scheduled'
             ? null
             : now,
+      scheduledOpenAt: times.scheduledOpenAt,
       closeAt,
+      scheduledAnnouncementAt: times.scheduledAnnouncementAt,
+      scheduledJudgementAt: times.scheduledJudgementAt,
+      judgementTimeZone: times.judgementTimeZone,
+      leadCloseGapMinutes: input.leadCloseGapMinutes ?? null,
       resolvedResult: input.resolvedResult ?? null,
       resolvedAt: input.resolvedAt ?? null,
       settledAt: input.settledAt ?? null,

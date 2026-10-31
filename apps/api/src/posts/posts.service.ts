@@ -7,6 +7,7 @@ import {
   canonicalJson,
   decodeKeyset,
   encodeKeyset,
+  isJudgementDelayed,
   isPublicMarketStatus,
   mediaPath,
   postDocumentLinks,
@@ -142,20 +143,35 @@ export function postAuthorOf(row: AuthorRow): PostAuthor {
   };
 }
 
-/** The market a post belongs to, as a card and the post page link to it. */
-export function postMarketOf(row: {
-  id: string;
-  slug: string;
-  title: string;
-  status: MarketStatus;
-  categorySlug: string;
-  categoryNameKo: string;
-}): PostMarket {
+/**
+ * The market a post belongs to, as a card and the post page link to it. Its status badge reads as
+ * the market's own cards do (`toMarketSummary`): '판정 지연' for a CLOSED market past its scheduled
+ * judgement by `nowMs`, the API host's clock at the read (`isJudgementDelayed`, #22, ADR-0098).
+ */
+export function postMarketOf(
+  row: {
+    id: string;
+    slug: string;
+    title: string;
+    status: MarketStatus;
+    scheduledJudgementAt: Date | null;
+    categorySlug: string;
+    categoryNameKo: string;
+  },
+  nowMs: number = Date.now(),
+): PostMarket {
   return {
     id: row.id,
     slug: row.slug,
     title: row.title,
     status: row.status,
+    judgementDelayed: isJudgementDelayed(
+      {
+        status: row.status,
+        scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
+      },
+      nowMs,
+    ),
     category: { slug: row.categorySlug, nameKo: row.categoryNameKo },
   };
 }
@@ -211,6 +227,7 @@ export class PostsService {
       slug: schema.markets.slug,
       title: schema.markets.title,
       status: schema.markets.status,
+      scheduledJudgementAt: schema.markets.scheduledJudgementAt,
       categorySlug: schema.categories.slug,
       categoryNameKo: schema.categories.nameKo,
     },

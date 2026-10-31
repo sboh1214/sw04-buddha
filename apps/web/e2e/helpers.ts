@@ -12,7 +12,7 @@ import {
   type Response,
   type Route,
 } from '@playwright/test';
-import type { AdminMarket, Category, MarketRuleItems, Me } from '@buddha/shared';
+import type { AdminMarket, Category, MarketRuleItems, MarketTimes, Me } from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
 
@@ -126,13 +126,29 @@ const REALTIME_READY_MS = 10_000;
 const CLOSE_IN_MS = 24 * 60 * 60 * 1_000;
 
 /**
- * A spec market's 사건 기한 (#23): a day after its close. #23 checks no order between the two
- * (ADR-0097; #22 decides one), so this only keeps the default plausible.
+ * A spec market's 사건 기한 (#23): a day after its close. Nothing orders the two (ADR-0097 result 4
+ * (a), kept by #22), so this only keeps the default plausible; both are at or before the
+ * scheduled judgement (`timesFor`, owner answer 2026-10-31 A1).
  */
 const EVENT_DEADLINE_IN_MS = 2 * CLOSE_IN_MS;
 
 /** Korea's fixed UTC offset: the admin's `datetime-local` inputs are KST wall-clock minutes. */
 const KST_OFFSET_MS = 9 * 60 * 60 * 1_000;
+
+/** The unit every order between market times is compared in (#22, #172 item 12). */
+const MINUTE_MS = 60 * 1_000;
+
+/**
+ * How long after its close and its 사건 기한 a spec market is judged (`timesFor`): a day, as the
+ * database factory's default (ADR-0098).
+ */
+const JUDGEMENT_AFTER_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * The 판정 기준 시간대 the admin form pre-fills and every spec market is judged in unless a spec
+ * says otherwise: shared's DEFAULT_JUDGEMENT_TIME_ZONE, restated (type-only imports, above).
+ */
+export const DEFAULT_JUDGEMENT_TIME_ZONE = 'Asia/Seoul';
 
 // ---- fixtures -----------------------------------------------------------------------
 
@@ -1081,6 +1097,13 @@ export interface TestMarket {
    * `ruleItems` (`CreateOpenMarketOptions`) over it.
    */
   ruleItems: MarketRuleItems;
+  /** Its 거래 마감 시각 as sent: a day from its making unless `closeAt` said otherwise. */
+  closeAt: string;
+  /**
+   * Its times but the close as sent (#22, ADR-0098): `timesFor(closeAt, ruleItems.eventDeadline)`
+   * with `times` (`CreateOpenMarketOptions`) over it.
+   */
+  times: MarketTimes;
   /**
    * The random part of the title and the slug — and the market's one tag unless `tags` named
    * others (#17). Unique per run, so `/search?q=<tag>` is a search screen holding exactly this
@@ -1142,6 +1165,18 @@ export interface CreateOpenMarketOptions {
    * cannot open.
    */
   ruleItems?: Partial<MarketRuleItems>;
+  /**
+   * The 거래 마감 시각, an ISO instant: a day from now by default. A close that has passed is
+   * refused by the API (it must be in the future), and one too near is closed by the worker.
+   */
+  closeAt?: string;
+  /**
+   * Times over `timesFor`'s (#22, ADR-0098): a scheduled open still ahead, say, which the interim
+   * open refuses, another 판정 기준 시간대, or a blank (`null`) for a draft the open-items check
+   * finds incomplete — which `createOpenMarket` cannot open. An announcement time makes a market
+   * that cannot open while the release setting `market.lead_close_gap` is 미정 (ADR-0098).
+   */
+  times?: Partial<MarketTimes>;
 }
 
 /**
@@ -1151,7 +1186,8 @@ export interface CreateOpenMarketOptions {
  * NO (N03 §4·§6). The 1차 출처 has an https address under `https://example.com/e2e/<tag>`, which
  * the link review then exempts for this market alone (ADR-0083 7-9); there is no fallback, so no
  * switch condition, and the detail's 대체 출처 reads 없음. The 사건 기한 is a day after the
- * `createOpenMarket` close. With a title, a category and a tag, the open-items check passes.
+ * `createOpenMarket` close. With a title, the times (`timesFor`), a category and a tag, the
+ * open-items check passes.
  */
 export function ruleItemsFor(tag: string): MarketRuleItems {
   return {
@@ -1204,6 +1240,72 @@ export async function fillRuleItemInputs(page: Page, items: MarketRuleItems): Pr
   await page.getByTestId('market-delay-handling').fill(items.delayHandling);
 }
 
+/** `ms` floored to its whole minute. */
+function floorMinute(ms: number): number {
+  return Math.floor(ms / MINUTE_MS) * MINUTE_MS;
+}
+
+/** `ms` raised to the next whole minute unless it is one. */
+function ceilMinute(ms: number): number {
+  return Math.ceil(ms / MINUTE_MS) * MINUTE_MS;
+}
+
+/**
+ * A complete set of times for a market that closes at `closeAt` with the 사건 기한 `eventDeadline`
+ * (#22, ADR-0098), as the create body and the public `Market` carry them:
+ *
+ * - 예정 개장 시각: a minute before this minute, so the interim open — which refuses a market
+ *   before its scheduled open (ADR-0093 decision 3 '#21 앞당긴 개장') — opens it at once, on any
+ *   clock the database's is a few seconds off from.
+ * - 발표 예정 시각: none ('없음'), so the lead close the open-items check holds a market to
+ *   (`market.lead_close_gap`, a release setting no spec writes — docs/SETTINGS.md) never blocks
+ *   one; while that setting is 미정 a market with an announcement time cannot open.
+ * - 예정 판정 시각: a day after the later of the close and the 사건 기한, on a whole minute — derived
+ *   from the final items, so an override of either still keeps close ≤ judgement (#172 item 12)
+ *   and 사건 기한 ≤ judgement (owner answer 2026-10-31 A1), which the API and the database check
+ *   to the minute.
+ * - 판정 기준 시간대: Asia/Seoul, the form's pre-fill.
+ */
+export function timesFor(
+  closeAt: string,
+  eventDeadline: string | null,
+  now: number = Date.now(),
+): MarketTimes {
+  const latest = Math.max(Date.parse(closeAt), Date.parse(eventDeadline ?? closeAt));
+  return {
+    scheduledOpenAt: new Date(floorMinute(now) - MINUTE_MS).toISOString(),
+    scheduledAnnouncementAt: null,
+    scheduledJudgementAt: new Date(ceilMinute(latest) + JUDGEMENT_AFTER_MS).toISOString(),
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+  };
+}
+
+/**
+ * Types `times` into the admin market form's 시각 (#22, the create card's or the detail's), each
+ * time in KST as `kstLocalOf` writes it — to the minute — and a null as blank, which for the
+ * announcement is '없음'; the close too when `closeAt` is given. The 판정 기준 시간대 is picked
+ * when it is not null; null leaves the select as it is (Asia/Seoul pre-filled, #172 item 11).
+ * For 시장 만들기 or a draft's form: on an open market the scheduled open and judgement inputs are
+ * locked (#172 item 14), so a spec types its close alone.
+ */
+export async function fillTimeInputs(
+  page: Page,
+  times: MarketTimes & { closeAt?: string },
+): Promise<void> {
+  const local = (iso: string | null) => (iso === null ? '' : kstLocalOf(iso));
+  await page.getByTestId('market-scheduled-open-at').fill(local(times.scheduledOpenAt));
+  if (times.closeAt !== undefined) {
+    await page.getByTestId('market-close-at').fill(local(times.closeAt));
+  }
+  await page
+    .getByTestId('market-scheduled-announcement-at')
+    .fill(local(times.scheduledAnnouncementAt));
+  await page.getByTestId('market-scheduled-judgement-at').fill(local(times.scheduledJudgementAt));
+  if (times.judgementTimeZone !== null) {
+    await page.getByTestId('market-judgement-time-zone').selectOption(times.judgementTimeZone);
+  }
+}
+
 /**
  * A word no market title holds yet: base36 time and randomness, [a-z0-9] and so slug-safe
  * (MARKET_SLUG_PATTERN allows '-'). The tag of every `createOpenMarket`, and a spec's own
@@ -1224,9 +1326,10 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
 
 /**
  * Creates a draft through `POST /admin/markets` and opens it, so the spec owns a market that is
- * `open` and closes a day from now whatever the calendar says. It has no fill — there is no way
- * to trade until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty
- * (N02 §5): opening writes no price tick.
+ * `open` and closes a day from now whatever the calendar says. Its scheduled open has passed, so
+ * the interim open takes it at once (`timesFor`, #22). It has no fill — there is no way to trade
+ * until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty (N02 §5):
+ * opening writes no price tick.
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
@@ -1264,13 +1367,22 @@ export async function marketCategoryOf(
  * A draft through `POST /admin/markets`, left a draft: on no public page, for a spec that checks
  * what a draft does not do (a theme of drafts alone is not published, ADR-0088). The options and
  * the title are `createOpenMarket`'s, which opens one of these: it has every rule item
- * (`ruleItemsFor`, #23), a category a market may be filed under and its tags, so the open-items
- * check passes (#17) — unless `ruleItems` or `tags` blanked some. Its address is ASCII
- * (`e2e-<tag>`): `/markets/[slug]` does not reach a slug with Hangul in it yet.
+ * (`ruleItemsFor`, #23), its times and 판정 기준 시간대 (`timesFor`, #22), a category a market may be
+ * filed under and its tags, so the open-items check passes (#17) — unless `ruleItems`, `times` or
+ * `tags` blanked some. Its address is ASCII (`e2e-<tag>`): `/markets/[slug]` does not reach a slug
+ * with Hangul in it yet.
  */
 export async function createDraftMarket(
   admin: APIRequestContext,
-  { topLevelCategory = 0, group, description, tags, ruleItems }: CreateOpenMarketOptions = {},
+  {
+    topLevelCategory = 0,
+    group,
+    description,
+    tags,
+    ruleItems,
+    closeAt = new Date(Date.now() + CLOSE_IN_MS).toISOString(),
+    times,
+  }: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
   const { top, leaf } = await marketCategoryOf(admin, topLevelCategory);
 
@@ -1282,6 +1394,8 @@ export async function createDraftMarket(
     ...(description === undefined ? {} : { description }),
     ...ruleItems,
   };
+  // Derived from the final close and 사건 기한, so an override of either keeps the order.
+  const marketTimes: MarketTimes = { ...timesFor(closeAt, items.eventDeadline), ...times };
 
   const draft = await unwrap<AdminMarket>(
     await admin.post('/api/v1/admin/markets', {
@@ -1291,7 +1405,8 @@ export async function createDraftMarket(
         categoryId: leaf.id,
         tags: marketTags,
         imageUrl: null,
-        closeAt: new Date(Date.now() + CLOSE_IN_MS).toISOString(),
+        closeAt,
+        ...marketTimes,
         slug: `e2e-${tag}`,
         expectedAccountId: await accountIdOf(admin),
       },
@@ -1303,6 +1418,8 @@ export async function createDraftMarket(
     title,
     yesCondition: items.yesCondition,
     ruleItems: items,
+    closeAt,
+    times: marketTimes,
     tag,
     tags: marketTags,
     categorySlug: top.slug,
@@ -1348,7 +1465,9 @@ export function detailWidth(page: Page): 'base' | 'md' {
  * twice — once where md and up draws it, once where a phone does — and hides the other width's
  * copy; each copy's ids carry its width after the section's (lib/market-detail.ts `copyTestId`):
  * `market-rules-md`, `market-rules-base-close-at`. A sub-id goes after this one:
- * `${detailCopyTestId(page, 'market-rules')}-close-at`.
+ * `${detailCopyTestId(page, 'market-rules')}-close-at`, and a time's two lines after that: the
+ * viewer's `-close-at-viewer-zone` and, when the 판정 기준 시간대 differs, `-close-at-judgement-zone`
+ * (#22, `DateTimeText`).
  */
 export function detailCopyTestId(page: Page, testId: string): string {
   return `${testId}-${detailWidth(page)}`;

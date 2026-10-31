@@ -60,6 +60,35 @@ describe('copy', () => {
     ]);
     expect([copy.marketStatusDraft, copy.marketStatusReview]).toEqual(['초안', '검수 중']);
     expect(copy.marketResultVoid).toBe('무효');
+    // A display, not a status (#173 item 11, #22): what a closed market late for its judgement
+    // reads in place of 거래 마감.
+    expect(copy.marketStatusJudgementDelayed).toBe('판정 지연');
+  });
+
+  it("names the rules area's time rows apart from the status badges (#22)", () => {
+    // '개장 예정' and '거래 마감' are badges; the rows are times, and the long delay counts from
+    // the row named 예정 판정 시각.
+    const rows = [
+      copy.rulesScheduledOpenAt,
+      copy.rulesCloseAt,
+      copy.rulesAnnouncementAt,
+      copy.rulesJudgementAt,
+    ];
+    expect(rows).toEqual(['예정 개장 시각', '거래 마감 시각', '발표 예정 시각', '예정 판정 시각']);
+    for (const row of rows) {
+      expect([copy.marketStatusScheduled, copy.marketStatusClosed]).not.toContain(row);
+    }
+    expect(copy.rulesLongDelayBefore).toContain(copy.rulesJudgementAt);
+  });
+
+  it('never makes a late result a NO, nor promises a refund for it (N03 §4, §6)', () => {
+    for (const text of [
+      copy.marketJudgementDelayedNotice,
+      copy.adminMarketJudgementDelayedNote,
+      copy.adminMarketScheduledJudgementAtHint,
+    ]) {
+      expect(text).not.toMatch(/NO|환불|원금/);
+    }
   });
 
   it('has no empty strings (every key renders something)', () => {

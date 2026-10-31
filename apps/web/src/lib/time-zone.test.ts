@@ -15,6 +15,8 @@ import {
   displayTimeZone,
   effectiveTimeZone,
   holdTimeZone,
+  judgementLineZone,
+  sameTimeZone,
   settledTimeZone,
   supportedTimeZones,
   timeZoneFromSelect,
@@ -22,6 +24,7 @@ import {
   timeZoneOptions,
   timeZoneSaveFailure,
   timeZoneSelectValue,
+  timeZoneSettled,
 } from './time-zone';
 
 const originalTz = process.env.TZ;
@@ -277,11 +280,19 @@ const profileOf = (id: string, timeZone: string | null): TimeZoneReading['me'] =
  * keeps for the next (`holdTimeZone` stored in state). Answers the zone handed down each time.
  */
 function provider(readings: readonly TimeZoneReading[]): string[] {
+  return providerOver(readings).map(({ zone }) => zone);
+}
+
+/** The same render, answering whether the zone handed down was settled (`timeZoneSettled`) too. */
+function providerOver(readings: readonly TimeZoneReading[]): { zone: string; settled: boolean }[] {
   let last: HeldTimeZone | null = null;
   return readings.map((reading) => {
     const held = holdTimeZone(last, reading.viewer, settledTimeZone(reading));
     last = held;
-    return displayTimeZone(held, reading.viewer);
+    return {
+      zone: displayTimeZone(held, reading.viewer),
+      settled: timeZoneSettled(held, reading.viewer),
+    };
   });
 }
 
@@ -452,6 +463,76 @@ describe('displayTimeZone (the provider over a visit)', () => {
       SEOUL_TIME_ZONE,
       NEW_YORK,
     ]);
+  });
+});
+
+describe('timeZoneSettled (#22: when the judgement zone line may be drawn)', () => {
+  const NEW_YORK = 'America/New_York';
+
+  it('is false wherever Seoul stands in — the server, hydration, the profile on its way, a new viewer', () => {
+    const a = profileOf('user-a', 'Asia/Tokyo');
+    const visit: TimeZoneReading[] = [
+      { browser: null, viewer: null, profilePending: true, me: undefined }, // server, hydrating
+      { browser: NEW_YORK, viewer: 'user-a', profilePending: true, me: undefined }, // /me out
+      { browser: NEW_YORK, viewer: 'user-a', profilePending: false, me: a },
+      { browser: NEW_YORK, viewer: 'user-a', profilePending: true, me: a }, // a refetch: held
+      // Signed out elsewhere: Seoul until the session is known gone, then the browser's.
+      { browser: NEW_YORK, viewer: null, profilePending: true, me: a },
+      { browser: NEW_YORK, viewer: null, profilePending: false, me: undefined },
+    ];
+    expect(providerOver(visit)).toEqual([
+      { zone: SEOUL_TIME_ZONE, settled: false },
+      { zone: SEOUL_TIME_ZONE, settled: false },
+      { zone: 'Asia/Tokyo', settled: true },
+      { zone: 'Asia/Tokyo', settled: true },
+      { zone: SEOUL_TIME_ZONE, settled: false },
+      { zone: NEW_YORK, settled: true },
+    ]);
+  });
+
+  it('is true for a viewer whose settled zone is Seoul itself: Seoul is then their zone', () => {
+    expect(timeZoneSettled({ viewer: null, zone: SEOUL_TIME_ZONE }, null)).toBe(true);
+    expect(timeZoneSettled(null, null)).toBe(false);
+    expect(timeZoneSettled({ viewer: 'user-a', zone: SEOUL_TIME_ZONE }, 'user-b')).toBe(false);
+  });
+});
+
+describe('sameTimeZone (ADR-0063 result 3: by name, not by offset)', () => {
+  it('is one zone under its own name or an alias this engine resolves to it', () => {
+    expect(sameTimeZone('Asia/Seoul', 'Asia/Seoul')).toBe(true);
+    expect(sameTimeZone('ROK', 'Asia/Seoul')).toBe(true);
+    expect(sameTimeZone('Asia/Seoul', 'ROK')).toBe(true);
+    expect(sameTimeZone('US/Eastern', 'America/New_York')).toBe(true);
+    expect(sameTimeZone('Etc/UTC', 'UTC')).toBe(true);
+  });
+
+  it('tells apart two zones at the same offset, and a name this engine cannot read', () => {
+    // Tokyo is Seoul's offset all year, and still another zone (ADR-0063, the Seoul rule).
+    expect(sameTimeZone('Asia/Tokyo', 'Asia/Seoul')).toBe(false);
+    expect(sameTimeZone('America/New_York', 'America/Toronto')).toBe(false);
+    expect(sameTimeZone('Mars/Olympus_Mons', 'Asia/Seoul')).toBe(false);
+    expect(sameTimeZone('Mars/Olympus_Mons', 'Mars/Olympus_Mons')).toBe(true);
+  });
+});
+
+describe('judgementLineZone (#22: both zones, only when they differ)', () => {
+  it("is the market's judgement zone when it is another zone than the one read in", () => {
+    expect(judgementLineZone('America/New_York', 'Asia/Seoul')).toBe('Asia/Seoul');
+    expect(judgementLineZone('Asia/Seoul', 'America/New_York')).toBe('America/New_York');
+    expect(judgementLineZone('Asia/Seoul', 'Asia/Tokyo')).toBe('Asia/Tokyo');
+    // Kept as stored: the line formats in it, and the engine reads the alias.
+    expect(judgementLineZone('America/New_York', 'ROK')).toBe('ROK');
+  });
+
+  it('is none for no zone, the same zone, or one this browser cannot read', () => {
+    expect(judgementLineZone('Asia/Seoul', null)).toBeNull();
+    expect(judgementLineZone('Asia/Seoul', undefined)).toBeNull();
+    expect(judgementLineZone('Asia/Seoul', 'Asia/Seoul')).toBeNull();
+    expect(judgementLineZone('Asia/Seoul', 'ROK')).toBeNull();
+    expect(judgementLineZone('America/New_York', 'US/Eastern')).toBeNull();
+    // Stored from a browser with newer tzdata, or never a zone: nothing to format it in.
+    expect(judgementLineZone('Asia/Seoul', 'Mars/Olympus_Mons')).toBeNull();
+    expect(judgementLineZone('Asia/Seoul', '+09:00')).toBeNull();
   });
 });
 

@@ -24,6 +24,7 @@ import {
   OUTCOMES,
   formatCoin,
   isPublicMarketStatus,
+  longDelayDeadline,
   parseCoinAmount,
 } from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -91,11 +92,13 @@ import {
   type ResolveMarketFormOutput,
   type ResolveMarketFormValues,
   isHttpUrl,
+  judgementTimeZoneUnconfirmed,
   marketFormSchema,
   marketToFormValues,
   resolveMarketFormSchema,
   toResolveMarketBody,
   toUpdateMarketBody,
+  withJudgementTimeZonePrefilled,
 } from '@/lib/market-form';
 import {
   relatedHint,
@@ -104,7 +107,8 @@ import {
   relatedSearchSection,
   relatedSearchSubmit,
 } from '@/lib/related-markets';
-import { longDelayText } from '@/lib/market-detail';
+import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
+import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
 
 export function AdminMarketDetail({ id }: { id: string }) {
@@ -210,7 +214,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
             </Item>
             <RuleItemRows market={data} />
             <Item label={copy.adminMarketImageUrl}>{data.imageUrl ?? '—'}</Item>
-            <Item label={copy.adminMarketCloseAt}>{formatKst(data.closeAt)}</Item>
+            <TimeRows market={data} />
             <Item label={copy.marketOpenAt}>{data.openAt ? formatKst(data.openAt) : '—'}</Item>
             {/* YES·NO·무효, or '—' before a judgement and on a cancelled market (ADR-0093 decision 1,
                 item 10: a cancelled market has no result, never VOID). */}
@@ -255,11 +259,12 @@ export function AdminMarketDetail({ id }: { id: string }) {
 }
 
 /**
- * What the draft still needs before 열기 (#17, the open-items check): '열기 전에 채울 항목: YES 조건 ·
- * 1차 출처 · 태그 1~5개', from the server's `missingOpenItems` (`openItemsNotice`) — so a category
- * hidden after it was picked shows here too. Nothing once nothing is missing, and nothing on any
- * other status. Beside 열기 rather than in the form: it is what 열기 will refuse, and the form below
- * is where each item is filled in.
+ * What the draft still needs before 열기 (#17, the open-items check): '열기 전에 채우거나 고칠 항목:
+ * YES 조건 · 1차 출처 · 태그 1~5개', from the server's `missingOpenItems` (`openItemsNotice`) — so a
+ * category hidden after it was picked shows here too — with a line under it per time rule the
+ * market breaks (#22: '시각 순서: …', '선행 마감: …'). Nothing once nothing is missing, and nothing
+ * on any other status. Beside 열기 rather than in the form: it is what 열기 will refuse, and the
+ * form below is where each item is filled in.
  */
 function OpenItemsNotice({ market }: { market: AdminMarket }) {
   const notice = openItemsNotice(market);
@@ -268,7 +273,7 @@ function OpenItemsNotice({ market }: { market: AdminMarket }) {
     <Alert.Root status="warning" role="status" data-testid="market-open-items">
       <Alert.Indicator />
       <Alert.Content>
-        <Alert.Description>{notice}</Alert.Description>
+        <Alert.Description whiteSpace="pre-line">{notice}</Alert.Description>
       </Alert.Content>
     </Alert.Root>
   );
@@ -351,11 +356,75 @@ function RuleItemRows({ market }: { market: AdminMarket }) {
         {textOrDash(market.fallbackCondition)}
       </Item>
       <Item label={copy.adminMarketLongDelayDays} testId="market-detail-long-delay-days">
-        {longDelayText(market.longDelayDays) ?? '—'}
+        {longDelayRow(market)}
       </Item>
       <Item label={copy.adminMarketDelayHandling} testId="market-detail-delay-handling">
         {textOrDash(market.delayHandling)}
       </Item>
+    </>
+  );
+}
+
+/**
+ * 장기 지연 기한 as the rules area words it ('예정 판정 시각에서 14일 뒤'), then — once the market has
+ * a scheduled judgement — the instant itself in KST (`longDelayDeadline`, #172 item 10: N×24 hours,
+ * #22), so the admin adds no days; '—' while the days are not filled in.
+ */
+function longDelayRow(market: AdminMarket): string {
+  const text = longDelayText(market.longDelayDays);
+  if (text === null) return '—';
+  const deadline = longDelayDeadline(market.scheduledJudgementAt, market.longDelayDays);
+  return deadline === null ? text : `${text}${LONG_DELAY_SEPARATOR}${formatKst(deadline)}`;
+}
+
+/** A stored time in KST, or `none` while it is not filled in. */
+const kstOr = (iso: string | null, none = '—') => (iso === null ? none : formatKst(iso));
+
+/**
+ * The market's times (#22, ADR-0098), one row each in the form's order, in KST like every admin
+ * time (ADR-0093 decision 3 '#22 시간대'): 예정 개장, 거래 마감, 발표 예정 ('없음' for an event with no
+ * scheduled release) and 예정 판정 시각, then 판정 기준 시간대 by its IANA and Korean names, '—' for
+ * any not filled in — a draft's, or a market's opened before #22. Then the 선행 마감 gap the market
+ * is held to (`leadCloseGapMinutes`: the one its lead close was last checked against, which the
+ * open stores, else the release setting's reading), or 미정; and, once its scheduled judgement has
+ * passed while it is closed, 판정 지연 — what visitors read in place of 거래 마감 (#173 item 11),
+ * while the badge above keeps the admin's status label.
+ */
+function TimeRows({ market }: { market: AdminMarket }) {
+  const gap = market.leadCloseGapMinutes;
+  return (
+    <>
+      <Item label={copy.adminMarketScheduledOpenAt} testId="market-detail-scheduled-open-at">
+        {kstOr(market.scheduledOpenAt)}
+      </Item>
+      <Item label={copy.adminMarketCloseAt} testId="market-detail-close-at">
+        {formatKst(market.closeAt)}
+      </Item>
+      <Item
+        label={copy.adminMarketScheduledAnnouncementAt}
+        testId="market-detail-scheduled-announcement-at"
+      >
+        {kstOr(market.scheduledAnnouncementAt, copy.adminMarketAnnouncementNone)}
+      </Item>
+      <Item
+        label={copy.adminMarketScheduledJudgementAt}
+        testId="market-detail-scheduled-judgement-at"
+      >
+        {kstOr(market.scheduledJudgementAt)}
+      </Item>
+      <Item label={copy.adminMarketJudgementTimeZone} testId="market-detail-judgement-time-zone">
+        {market.judgementTimeZone === null ? '—' : timeZoneLabel(market.judgementTimeZone)}
+      </Item>
+      <Item label={copy.adminMarketLeadCloseGap} testId="market-detail-lead-close-gap">
+        {gap === null
+          ? copy.adminMarketLeadCloseGapUndecided
+          : `${String(gap)}${copy.adminMarketLeadCloseGapMinutes}`}
+      </Item>
+      {market.judgementDelayed && (
+        <Item label={copy.adminMarketJudgementDelayed} testId="market-detail-judgement-delayed">
+          {copy.adminMarketJudgementDelayedNote}
+        </Item>
+      )}
     </>
   );
 }
@@ -395,11 +464,13 @@ function SourceLine({ source }: { source: MarketSource }) {
 
 /**
  * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose refusal —
- * the open-items check (#17, #23: 질문, the rule items, 카테고리, 태그 1~5개), which the draft's
- * notice says beforehand — is reversible from the form below and is named in its toast; the detail
- * is read again then, so the notice names what the server found, a category hidden meanwhile
- * included. 열기 stays while there is no way to trade (owner decision #125 (a)): the market is
- * listed, and its detail says 거래 준비 중 in place of the order panel. There is no 무효: the admin
+ * the open-items check (#17, #23, #22: 질문, the rule items, the times, 시각 순서, 선행 마감, 카테고리,
+ * 태그 1~5개), which the draft's notice says beforehand — is reversible from the form below and is
+ * named in its toast; the detail is read again then, so the notice names what the server found, a
+ * category hidden meanwhile included. So is 열기 before the scheduled open (#22, ADR-0093 decision 3
+ * '#21 앞당긴 개장': no early open), whose toast says to move it earlier. 열기 stays while there is
+ * no way to trade (owner decision #125 (a)): the market is listed, and its detail says 거래 준비 중
+ * in place of the order panel. There is no 무효: the admin
  * void and its cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives
  * in its own component, mounted only while its dialog is open, so every opening starts from an
  * empty form.
@@ -703,13 +774,27 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   // The admin on screen, whom a save names (ADR-0092): 저장 waits for `GET /me`.
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
+  // The stored values, which a save is diffed against; the inputs start from them with a missing
+  // judgement time zone pre-filled (#22, #172 item 11) while the form can save, so a save sends
+  // it — the confirmation — and the save is enabled for it alone (`judgementTimeZoneUnconfirmed`).
+  // A market past the open keeps its '—': nothing could confirm the zone there.
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
+  const start = useMemo(
+    () => (editable ? withJudgementTimeZonePrefilled(original) : original),
+    [original, editable],
+  );
   // An open market may not lose a rule item it had (#23), nor be edited down to no tags (#17): the
   // API refuses both. One opened before #23 with blank items, or before #17 with no tags, keeps its
-  // other fields editable (`marketFormSchema`).
+  // other fields editable (`marketFormSchema`). Its close only moves later, up to the scheduled
+  // judgement, with the lead close checked again at the gap it is held to, and its scheduled open
+  // and judgement are fixed (#22, #172 item 14, owner answer 2026-10-31 A2).
   const openMarket = market.status === 'open';
-  const schema = useMemo(() => marketFormSchema({ original, openMarket }), [original, openMarket]);
+  const gap = market.leadCloseGapMinutes;
+  const schema = useMemo(
+    () => marketFormSchema({ original, openMarket, leadCloseGapMinutes: gap }),
+    [original, openMarket, gap],
+  );
   // The open market's confirmation goes with the form, which EditMarketCard draws again for each
   // admin on screen (`key`): a confirmation A opened never names B (ADR-0092 answer 1).
   const [pending, setPending] = useState<UpdateMarketFields | null>(null);
@@ -721,7 +806,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   // answered with. The resolver reads the schema memoised on the newest `original`.
   const form = useForm<MarketFormValues>({
     resolver: zodResolver(schema),
-    values: original,
+    values: start,
     resetOptions: FOLLOW_SERVER_RESET,
   });
   const {
@@ -745,7 +830,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       // The answer is the saved row (the same shape GET returns): the form restarts from it
       // now, clean, with the trimmed values the API kept. Explicit options — a bare reset()
       // would inherit FOLLOW_SERVER_RESET and keep the just-saved fields as "dirty" input.
-      reset(marketToFormValues(saved, categories), AFTER_SAVE_RESET);
+      const savedValues = marketToFormValues(saved, categories);
+      reset(
+        isEditable(saved.status) ? withJudgementTimeZonePrefilled(savedValues) : savedValues,
+        AFTER_SAVE_RESET,
+      );
       // Same row on the card above the form, whatever the refetch does.
       await apply(saved);
     },
@@ -753,8 +842,9 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       setPending(null);
       sessionChanged(error);
       // A refused category also reads the select's list again (#17). RULES_REQUIRED for a
-      // source lands on the input the values sent left blank (#23).
-      const fieldError = marketFormError(error, form.getValues());
+      // source lands on the input the values sent left blank (#23); a lead close refused says the
+      // gap the market is held to (#22).
+      const fieldError = marketFormError(error, form.getValues(), gap);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
         void refreshAfterMarketFormRefusal(queryClient, fieldError.field);
@@ -787,6 +877,8 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
               form={form}
               categories={categories}
               disabled={!editable}
+              timesFixed={openMarket}
+              leadCloseGapMinutes={gap}
               // The row itself, so the 미리보기 of a market that has opened shows the price and volume
               // it TRADES at rather than an untraded card (market-preview.ts).
               base={market}
@@ -796,7 +888,11 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
               size="sm"
               alignSelf="flex-start"
               loading={isSubmitting || update.isPending}
-              disabled={!editable || !isDirty || operatorId === undefined}
+              disabled={
+                !editable ||
+                !(isDirty || judgementTimeZoneUnconfirmed(original)) ||
+                operatorId === undefined
+              }
               data-testid="market-save"
             >
               {copy.save}

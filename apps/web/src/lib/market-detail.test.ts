@@ -27,6 +27,7 @@ import {
   copyTestId,
   detailViewOf,
   drawnOrder,
+  LONG_DELAY_SEPARATOR,
   longDelayText,
   openOrderSheet,
   orderEntryLabel,
@@ -35,6 +36,7 @@ import {
   personalAreaView,
   ruleText,
   showsOrderArea,
+  showsScheduledOpen,
   sourceView,
   statusNotice,
   viewDisplay,
@@ -260,50 +262,81 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
   it('says something for every public status but 거래 중, and nothing for the admin-only two', () => {
     // An open market's state is its countdown; a draft or one in review never reaches the route.
     for (const status of MARKET_STATUSES) {
-      const notice = statusNotice({ status, resolvedResult: null });
+      const notice = statusNotice({ status, judgementDelayed: false, resolvedResult: null });
       const expected =
         (PUBLIC_MARKET_STATUSES as readonly string[]).includes(status) && status !== 'open';
       expect(notice !== undefined, status).toBe(expected);
     }
     // One sentence per status: no two read alike.
     const messages = PUBLIC_MARKET_STATUSES.filter((status) => status !== 'open').map(
-      (status) => statusNotice({ status, resolvedResult: null })?.message,
+      (status) => statusNotice({ status, judgementDelayed: false, resolvedResult: null })?.message,
     );
     expect(new Set(messages).size).toBe(messages.length);
   });
 
   it('warns where trading is stopped before the end, and says where the payout went once settled', () => {
-    expect(statusNotice({ status: 'paused', resolvedResult: null })).toEqual({
+    expect(
+      statusNotice({ status: 'paused', judgementDelayed: false, resolvedResult: null }),
+    ).toEqual({
       tone: 'warning',
       message: copy.marketPausedNotice,
     });
-    expect(statusNotice({ status: 'closed', resolvedResult: null })?.tone).toBe('warning');
+    expect(
+      statusNotice({ status: 'closed', judgementDelayed: false, resolvedResult: null })?.tone,
+    ).toBe('warning');
     // The 정산 sentence the old `resolved` notice carried is the payout's, now `settling`'s.
-    expect(statusNotice({ status: 'settling', resolvedResult: 'YES' })?.message).toBe(
-      copy.marketSettlingNotice,
-    );
-    expect(statusNotice({ status: 'settled', resolvedResult: 'YES' })).toEqual({
+    expect(
+      statusNotice({ status: 'settling', judgementDelayed: false, resolvedResult: 'YES' })?.message,
+    ).toBe(copy.marketSettlingNotice);
+    expect(
+      statusNotice({ status: 'settled', judgementDelayed: false, resolvedResult: 'YES' }),
+    ).toEqual({
       tone: 'success',
       message: copy.marketSettledNotice,
       detail: copy.marketSettledPayout,
     });
-    expect(statusNotice({ status: 'settled', resolvedResult: 'NO' })?.detail).toBe(
-      copy.marketSettledPayout,
-    );
+    expect(
+      statusNotice({ status: 'settled', judgementDelayed: false, resolvedResult: 'NO' })?.detail,
+    ).toBe(copy.marketSettledPayout);
   });
 
   it('never claims 100 Coin for a 무효 result, which has no winning side', () => {
-    const notice = statusNotice({ status: 'settled', resolvedResult: 'VOID' });
+    const notice = statusNotice({
+      status: 'settled',
+      judgementDelayed: false,
+      resolvedResult: 'VOID',
+    });
     expect(notice?.detail).toBe(copy.marketSettledPayoutVoid);
     expect(notice?.detail).not.toContain('100');
     // Only a settled market carries the second line, whatever its result.
     for (const status of MARKET_STATUSES.filter((s) => s !== 'settled')) {
-      expect(statusNotice({ status, resolvedResult: 'VOID' })?.detail, status).toBeUndefined();
+      expect(
+        statusNotice({ status, judgementDelayed: false, resolvedResult: 'VOID' })?.detail,
+        status,
+      ).toBeUndefined();
+    }
+  });
+
+  it("says '판정 지연' for a closed market past its scheduled judgement, never that it means NO (#22)", () => {
+    const notice = statusNotice({ status: 'closed', judgementDelayed: true, resolvedResult: null });
+    expect(notice).toEqual({ tone: 'warning', message: copy.marketJudgementDelayedNotice });
+    expect(notice?.message).not.toBe(copy.marketClosedNotice);
+    for (const word of ['NO', '환불', '원금']) expect(notice?.message).not.toContain(word);
+    // Only a closed market: a flag read before a later status moved the row says nothing then.
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'closed')) {
+      expect(
+        statusNotice({ status, judgementDelayed: true, resolvedResult: null }),
+        status,
+      ).toEqual(statusNotice({ status, judgementDelayed: false, resolvedResult: null }));
     }
   });
 
   it('names a cancelled market as one with no result, and promises nothing about a refund', () => {
-    const notice = statusNotice({ status: 'cancelled', resolvedResult: null });
+    const notice = statusNotice({
+      status: 'cancelled',
+      judgementDelayed: false,
+      resolvedResult: null,
+    });
     expect(notice?.message).toBe(copy.marketCancelledNotice);
     expect(notice?.message).not.toContain('환불');
     expect(notice?.detail).toBeUndefined();
@@ -417,6 +450,21 @@ describe('longDelayText (장기 지연 기한, #172 item 10)', () => {
     expect(longDelayText(1)).toBe('예정 판정 시각에서 1일 뒤');
     expect(longDelayText(365)).toBe('예정 판정 시각에서 365일 뒤');
     expect(longDelayText(null)).toBeNull();
+  });
+
+  it('is followed by the instant itself, after a separator that is no sentence of its own (#22)', () => {
+    // The row reads '… 14일 뒤 · <instant>' (rules-section.tsx); the separator carries no word.
+    expect(LONG_DELAY_SEPARATOR.trim()).toBe('·');
+  });
+});
+
+describe('showsScheduledOpen (예정 개장 시각, #22)', () => {
+  it('is before the open only: a draft in the preview, one in review, a scheduled market', () => {
+    for (const status of MARKET_STATUSES) {
+      expect(showsScheduledOpen(status), status).toBe(
+        status === 'draft' || status === 'review' || status === 'scheduled',
+      );
+    }
   });
 });
 

@@ -16,7 +16,8 @@ import { copy } from '@/copy';
 import { type PostSummary } from '@/lib/api';
 import { commentCountText } from '@/lib/comments';
 import { likeCountText } from '@/lib/likes';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { marketStatusLabel } from '@/lib/market-status';
 import { authorPublicIdOf } from '@/lib/moderation';
 import { postFirstLine, postPath } from '@/lib/posts';
 import { PostByline } from './post-author';
@@ -113,7 +114,7 @@ export function PostCard({
                   variant="subtle"
                   flexShrink="0"
                 >
-                  {MARKET_STATUS_LABEL[post.market.status]}
+                  {marketStatusLabel(post.market)}
                 </Badge>
               )}
             </HStack>

@@ -172,11 +172,20 @@ describe('the write page’s read of its market (lookUpWriteMarketServer)', () =
 
   it('is none only when the API says there is no such market, and failed for any other failure (Codex review of #219, round 2)', async () => {
     fakeFetch.mockImplementationOnce(() =>
-      answer(200, { data: { id, title: '기준금리 인하?', status: 'closed', yesCondition: '…' } }),
+      answer(200, {
+        data: {
+          id,
+          title: '기준금리 인하?',
+          status: 'closed',
+          judgementDelayed: true,
+          yesCondition: '…',
+        },
+      }),
     );
+    // The write screen's share of the market: its title and what its status badge reads (#22).
     await expect(lookUpWriteMarketServer(id)).resolves.toEqual({
       kind: 'found',
-      market: { id, title: '기준금리 인하?', status: 'closed' },
+      market: { id, title: '기준금리 인하?', status: 'closed', judgementDelayed: true },
     });
     // A draft or an unknown id (404), an id the route does not take (400): no such market.
     fakeFetch.mockImplementationOnce(() => refusal(404, 'NOT_FOUND'));

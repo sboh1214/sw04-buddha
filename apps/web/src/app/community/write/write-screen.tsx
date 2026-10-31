@@ -11,7 +11,8 @@ import { WriteGate } from '@/components/post/write-gate';
 import { useFormatDateTime } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useCreatePost } from '@/hooks/use-posts';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { marketStatusLabel } from '@/lib/market-status';
 import {
   type WriteMarket,
   type WriteMarketLookup,
@@ -168,7 +169,7 @@ function WriteForm({
             </Text>
             {market.status !== 'open' && (
               <Badge size="sm" variant="subtle" colorPalette={MARKET_STATUS_PALETTE[market.status]}>
-                {MARKET_STATUS_LABEL[market.status]}
+                {marketStatusLabel(market)}
               </Badge>
             )}
           </HStack>

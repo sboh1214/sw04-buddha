@@ -51,6 +51,7 @@ import {
   formatContracts,
   formatPricePerContract,
 } from '@/lib/market-admin';
+import { marketStatusLabel } from '@/lib/market-status';
 import { MY_ORDERS_PATH, isPendingOrder, orderHistoryEmpty, showMoreOrders } from '@/lib/my';
 
 /**
@@ -167,6 +168,14 @@ export function useHoldings() {
   return {
     open,
     positions,
+    /**
+     * The markets whose live row reads '판정 지연' (`judgementDelayed`, #22, ADR-0098): a holding
+     * row has no such flag of its own, so its status badge takes it from the same live row its
+     * status is marked from. A market with no live row yet reads its status alone.
+     */
+    judgementDelayed: new Set(
+      [...live.values()].filter((market) => market.judgementDelayed).map((market) => market.id),
+    ),
     /**
      * Whether any market price behind these holdings has stopped being refreshed. The reading
      * itself is `priceIsStale` (use-portfolio.ts) — a node-only runner cannot reach a decision
@@ -362,7 +371,11 @@ export function PositionsBody({ holdings, limit }: { holdings: Holdings; limit?:
       ) : (
         <Stack gap="2">
           {positions.slice(0, limit).map((row) => (
-            <OpenPositionRow key={`${row.marketId}-${row.outcome}`} position={row} />
+            <OpenPositionRow
+              key={`${row.marketId}-${row.outcome}`}
+              position={row}
+              judgementDelayed={holdings.judgementDelayed.has(row.marketId)}
+            />
           ))}
         </Stack>
       )}
@@ -520,7 +533,14 @@ function OrderHistoryEmpty({ pendingOnly }: { pendingOnly: boolean }) {
  * along whenever it is no longer `open`: a holding in a 마감 or 결과 확인 중 market cannot be
  * traded out of, and the row is the only place that says so.
  */
-function OpenPositionRow({ position }: { position: Position }) {
+function OpenPositionRow({
+  position,
+  judgementDelayed,
+}: {
+  position: Position;
+  /** The live market row's '판정 지연' (`useHoldings`), for the status badge. */
+  judgementDelayed: boolean;
+}) {
   const yes = position.outcome === 'YES';
   const average = averageCostCoin(position);
   // All three `undefined` together, for a market with no fill to mark to (체결 없음, N02 §5).
@@ -542,7 +562,7 @@ function OpenPositionRow({ position }: { position: Position }) {
         </Badge>
         {position.marketStatus !== 'open' && (
           <Badge colorPalette={MARKET_STATUS_PALETTE[position.marketStatus]} variant="subtle">
-            {MARKET_STATUS_LABEL[position.marketStatus]}
+            {marketStatusLabel({ status: position.marketStatus, judgementDelayed })}
           </Badge>
         )}
       </HStack>

@@ -3,8 +3,9 @@
  * `test` profile: create/update per status, open/close with their audit rows, list/detail, and
  * the guard surface (401/403/CSRF). The rule items (#23, ADR-0097): every one written trimmed and
  * read back, the sources replaced in order, the entry refusals with their paths, the open-items
- * check naming each, RULES_REQUIRED on an open market and the `rules_edited` record. Skips when
- * TEST_* are unset.
+ * check naming each, RULES_REQUIRED on an open market and the `rules_edited` record. The market
+ * times' own cases (#22) are admin-markets-times.controller.test.ts's; here a complete draft sends
+ * them (`timesFor`). Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -15,11 +16,14 @@ import {
   createUser,
 } from '@buddha/db/test';
 import {
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   INT4_MAX,
   MARKET_TEXT_MAX,
   RULE_ITEMS,
   STORABLE_INSTANT_MIN,
   STORABLE_INSTANT_TOO_EARLY,
+  ceilToMinute,
+  floorToMinute,
   marketChannel,
   type AdminMarket,
   type Market,
@@ -37,6 +41,7 @@ import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60_000;
 /** U+0000: Postgres refuses it in text and jsonb, so the pipe must refuse it first. */
 const NUL = String.fromCharCode(0);
 /** What the direct AMM kept on a market and the admin detail showed (#125 removed them). */
@@ -89,16 +94,38 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     delayHandling: '장기 지연 기한까지 발표가 없으면 무효로 판정한다.',
   });
 
-  // Every rule item and tagged, so a created draft passes the open-items check (#17, #23) unless a
-  // test says otherwise.
-  const createBody = (overrides: Record<string, unknown> = {}) => ({
-    title: '기준금리 3% 이하로 인하?',
-    ...ruleItems(),
-    categoryId: category.id,
-    closeAt: future(),
-    tags: ['금리', '한국은행'],
-    ...overrides,
-  });
+  /**
+   * The times a complete draft sends (#22), from the body's final close and 사건 기한: the scheduled
+   * open a minute ago, floored, so the open takes it at once; the judgement 24 hours after the
+   * later of the two, raised to the minute (ADR-0098); the zone the form pre-fills; and no
+   * announcement ('없음'), so the undecided lead-close gap never blocks the open.
+   */
+  const timesFor = (body: Record<string, unknown>) => {
+    const ends = [body.closeAt, body.eventDeadline]
+      .map((value) => (typeof value === 'string' ? Date.parse(value) : Number.NaN))
+      .filter(Number.isFinite);
+    return {
+      scheduledOpenAt: new Date(floorToMinute(Date.now()) - MINUTE_MS).toISOString(),
+      ...(ends.length > 0 && {
+        scheduledJudgementAt: new Date(ceilToMinute(Math.max(...ends)) + DAY_MS).toISOString(),
+      }),
+      judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+    };
+  };
+
+  // Every rule item and time, and tagged, so a created draft passes the open-items check (#17,
+  // #23, #22) unless a test says otherwise; a time the overrides give wins.
+  const createBody = (overrides: Record<string, unknown> = {}) => {
+    const body = {
+      title: '기준금리 3% 이하로 인하?',
+      ...ruleItems(),
+      categoryId: category.id,
+      closeAt: future(),
+      tags: ['금리', '한국은행'],
+      ...overrides,
+    };
+    return { ...timesFor(body), ...body };
+  };
 
   // Every write names the admin on screen (ADR-0092): `who`'s own account unless the payload
   // names another.
@@ -730,7 +757,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     // turns that into the refetch (A-M4-36). Three assertions on one subscription: an edit that
     // MOVED an open row publishes exactly one, a resave of the same text publishes none, and a
     // draft — which no public route shows — publishes none either.
-    const row = await market({ status: 'open' });
+    // A scheduled judgement far enough out for the extension below (#22, A2).
+    const row = await market({
+      status: 'open',
+      scheduledJudgementAt: new Date(Date.now() + 60 * DAY_MS),
+    });
     const draft = await market({ status: 'draft' });
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
     const received: [string, string][] = [];
@@ -1119,12 +1150,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     });
     expect(atLimit.statusCode).toBe(201);
     expect((await create({ longDelayDays: 1 })).statusCode).toBe(201);
-    // The first and the last instant the deadline takes, each stored and read back unchanged.
-    for (const eventDeadline of [STORABLE_INSTANT_MIN, '9999-12-31T23:59:59.999Z']) {
-      const res = await create({ eventDeadline });
+    // The first and the last instant the deadline takes, each stored and read back unchanged —
+    // with the scheduled judgement at the last one, which it may not precede (#22, A1).
+    const last = '9999-12-31T23:59:59.999Z';
+    for (const eventDeadline of [STORABLE_INSTANT_MIN, last]) {
+      const res = await create({ eventDeadline, scheduledJudgementAt: last });
       expect(res.statusCode).toBe(201);
-      expect(detail(res).eventDeadline).toBe(eventDeadline);
+      expect(detail(res)).toMatchObject({ eventDeadline, scheduledJudgementAt: last });
       expect((await marketRow(detail(res).id)).eventDeadline?.toISOString()).toBe(eventDeadline);
+      expect((await marketRow(detail(res).id)).scheduledJudgementAt?.toISOString()).toBe(last);
     }
     expect(await t.db.select().from(schema.markets)).toHaveLength(5);
     expect((await actionsFor(draft.id)).map((row) => row.type)).toEqual(['market_create']);
@@ -1310,10 +1344,10 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   });
 
   it('refuses to open a draft the open-items check finds wanting (OPEN_ITEMS_MISSING), naming every item in order', async () => {
-    // #17, #23: the title, every rule item, a category a new market may be filed under, 1..5 tags
-    // — all named at once, in OPEN_ITEMS order. Here: no rule item but a blank YES condition and a
-    // fallback with no address, a top-level category that got a sub-category after the draft was
-    // filed, and no tags.
+    // #17, #23, #22: the title, every rule item, the required times, a category a new market may be
+    // filed under, 1..5 tags — all named at once, in OPEN_ITEMS order. Here: no rule item but a
+    // blank YES condition and a fallback with no address, no time but the close, a top-level
+    // category that got a sub-category after the draft was filed, and no tags.
     const created = await post('/api/v1/admin/markets', {
       title: '규칙 항목이 빈 초안',
       yesCondition: '  \n ',
@@ -1333,6 +1367,9 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       'fallbackCondition',
       'longDelayDays',
       'delayHandling',
+      'scheduledOpenAt',
+      'scheduledJudgementAt',
+      'judgementTimeZone',
     ];
     expect(blank.missingOpenItems).toEqual([...blankItems, 'tags']);
     const leaf = await createCategory(t.db, {
@@ -1368,7 +1405,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     // needs its address and then its switch condition; with none, no condition is asked for.
     const draftUrl = `/api/v1/admin/markets/${blank.id}`;
     const fallback = { name: '이름만 적은 대체 출처', url: '' };
-    await patch(draftUrl, { ...ruleItems(), fallbackSources: [fallback], fallbackCondition: '' });
+    const items = ruleItems();
+    await patch(draftUrl, {
+      ...items,
+      ...timesFor({ closeAt: blank.closeAt, ...items }),
+      fallbackSources: [fallback],
+      fallbackCondition: '',
+    });
     expect(errorOf(await open(blank.id)).details).toEqual([
       { path: ['fallbackSources'], message: 'required' },
       { path: ['fallbackCondition'], message: 'required' },

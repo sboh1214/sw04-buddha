@@ -4,6 +4,7 @@ import { ADMIN_ACTION_TYPES, RELEASE_SETTING_STATUSES } from './enums.js';
 import {
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
+  LEAD_CLOSE_GAP_SETTING,
   MARKET_PROPOSALS_RETENTION_SETTING,
   RELEASE_SETTINGS,
   RELEASE_SETTING_STATUS_LABELS,
@@ -21,6 +22,7 @@ import {
   releaseSettingValueJsonSchema,
   type ReleaseSettingValue,
 } from './release-settings.js';
+import { LEAD_CLOSE_GAP_MAX_MINUTES, timeRuleViolations } from './market-times.js';
 import { RETENTION_PERIODS, RETENTION_PERIOD_MAX_DAYS } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
@@ -44,9 +46,11 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70) and the retention periods (#184, #77)', () => {
+  it('ships the items the issues that use them registered: the start grant (#70), the lead-close gap (#22) and the retention periods (#184, #77)', () => {
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       'grant.start_coin',
+      // 선행 마감 최소 간격 (#22, ADR-0093 #172 item 13): the operating values come first.
+      'market.lead_close_gap',
       'retention.consent_records',
       'retention.phone_verification_records',
       'retention.deleted_posts',
@@ -56,6 +60,7 @@ describe('release settings registry', () => {
       'retention.market_proposals',
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
+    expect(RELEASE_SETTINGS.get('market.lead_close_gap')).toBe(LEAD_CLOSE_GAP_SETTING);
     // The worker reads each period through the very object the registry holds.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
@@ -175,6 +180,51 @@ describe('release settings registry', () => {
       status: 'undecided',
       value: null,
     });
+  });
+
+  it('takes the lead-close gap in whole minutes, 0 to a week (#22, ADR-0098)', () => {
+    const accepts = (value: unknown) => LEAD_CLOSE_GAP_SETTING.schema.safeParse(value).success;
+    expect(LEAD_CLOSE_GAP_SETTING).toMatchObject({ label: '선행 마감 최소 간격', unit: '분' });
+    // 0 is a close at or before the announcement; the design proposal is 60 (#172 item 13).
+    for (const value of [0, 60, LEAD_CLOSE_GAP_MAX_MINUTES]) expect(accepts(value)).toBe(true);
+    expect(LEAD_CLOSE_GAP_MAX_MINUTES).toBe(7 * 24 * 60);
+    for (const value of [-1, 0.5, '60', LEAD_CLOSE_GAP_MAX_MINUTES + 1, null]) {
+      expect(accepts(value), String(value)).toBe(false);
+    }
+    expect(
+      readReleaseSetting(RELEASE_SETTINGS, LEAD_CLOSE_GAP_SETTING, {
+        status: 'proposal',
+        value: 60,
+      }),
+    ).toEqual({ key: 'market.lead_close_gap', status: 'proposal', value: 60 });
+    expect(readReleaseSetting(RELEASE_SETTINGS, LEAD_CLOSE_GAP_SETTING, undefined)).toEqual({
+      key: 'market.lead_close_gap',
+      status: 'undecided',
+      value: null,
+    });
+    // Where the owner enters it, it says what an undecided gap does and that no draft is refused.
+    const { description } = LEAD_CLOSE_GAP_SETTING;
+    expect(description).toContain('설계 제안 60분');
+    expect(description).toContain(
+      '미정이면 발표 예정 시각이 있는 시장은 선행 마감을 통과하지 못해 열 수 없다',
+    );
+    expect(description).toContain('초안을 만들거나 고칠 때는 거절하지 않는다');
+    expect(description).toContain('시장은 열 때 읽은 값을 저장해');
+    // The reading is what the time rules take: undecided is null, which a market with an
+    // announcement cannot pass.
+    const times = {
+      scheduledOpenAt: null,
+      closeAt: '2026-11-26T14:59:59.000Z',
+      scheduledAnnouncementAt: '2026-11-27T01:00:00.000Z',
+      scheduledJudgementAt: null,
+      judgementTimeZone: null,
+      eventDeadline: null,
+    };
+    const undecided = readReleaseSetting(RELEASE_SETTINGS, LEAD_CLOSE_GAP_SETTING, undefined);
+    expect(timeRuleViolations(times, undecided.value).map(({ rule }) => rule)).toEqual([
+      'leadClose',
+    ]);
+    expect(timeRuleViolations(times, 60)).toEqual([]);
   });
 
   it('labels every status, and only proposal and test are distinct from approved', () => {

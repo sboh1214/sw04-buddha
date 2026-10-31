@@ -64,9 +64,13 @@ export function MarketPreview({ values, categories, base }: MarketPreviewProps) 
           <Text fontSize="sm" color="fg.muted">
             {copy.adminMarketPreviewDetail}
           </Text>
-          {/* Every rule item the form holds but 배경 (#23), as the visitor's rules area draws
-              them. Its own id: a test reaching `market-rules` means the public detail's. */}
-          <RulesSection market={toPreviewRules(body)} data-testid="market-preview-rules" />
+          {/* Every rule item the form holds but 배경 (#23), and its times (#22), as the visitor's
+              rules area draws them — the 예정 개장 시각 row only while the market has not opened.
+              Its own id: a test reaching `market-rules` means the public detail's. */}
+          <RulesSection
+            market={toPreviewRules(body, base?.status)}
+            data-testid="market-preview-rules"
+          />
         </Stack>
       </SimpleGrid>
     </Stack>

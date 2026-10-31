@@ -3,25 +3,38 @@ import {
   type AdminSettlementStep,
   type AuditFailureKind,
   COIN_UNIT,
+  LEAD_CLOSE_GAP_UNDECIDED,
+  LEAD_CLOSE_GAP_UNDECIDED_MESSAGE,
   MINUS_SIGN,
   type MarketEventType,
   type MarketResult,
-  type MarketRuleItems,
   type MarketSource,
   type MarketStatus,
   OPEN_ITEMS,
   type OpenItem,
   type PaymentStatus,
-  RULE_ITEMS,
+  RULES_EDITED_ITEMS,
   type RuleItem,
+  type RulesEditedItem,
+  type RulesEditedValues,
   type SettlementStep,
   type SettlementStepStatus,
+  TIME_RULES,
+  TIME_RULE_MESSAGES,
+  type TimeOrderRule,
+  type TimeRelationItem,
+  type TimeRule,
+  type TimeRuleField,
+  type TimeRuleInput,
+  type TimeRuleViolation,
   formatCoin,
   isCompleteSource,
   marketResultSchema,
   coinAmountSchema,
   parseCoinAmount,
   ruleItemSchema,
+  rulesEditedItemSchema,
+  timeRuleViolations,
   uuidParamSchema,
 } from '@buddha/shared';
 import * as z from 'zod';
@@ -396,11 +409,15 @@ const kstInstant = z.string().refine((iso) => formatKst(iso) !== '');
 const LEGACY_RULES_EDITED_PAYLOAD = z.object({ before: z.string(), after: z.string() });
 const EVENT_SOURCE = z.object({ name: z.string(), url: z.string() });
 /**
- * One rule item's value in a `rules_edited` row (#23, ADR-0097), as the API writes it
+ * One item's value in a `rules_edited` row (#23, ADR-0097; #22, ADR-0098), as the API writes it
  * (`rulesEditedPayload`): a text, a nullable 배경, the event deadline as an instant or null, a source
- * as `{name, url}` or null, the fallbacks as their ordered list, the long-delay days or null.
+ * as `{name, url}` or null, the fallbacks as their ordered list, the long-delay days or null — and
+ * since #22 the announcement time as an instant or null ('없음') and the judgement time zone as its
+ * name or null.
  */
-const RULE_ITEM_VALUE: { readonly [K in RuleItem]: z.ZodType<MarketRuleItems[K]> } = {
+const RULES_EDITED_VALUE: {
+  readonly [K in RulesEditedItem]: z.ZodType<RulesEditedValues[K]>;
+} = {
   description: z.string().nullable(),
   yesCondition: z.string(),
   noCondition: z.string(),
@@ -410,23 +427,26 @@ const RULE_ITEM_VALUE: { readonly [K in RuleItem]: z.ZodType<MarketRuleItems[K]>
   fallbackCondition: z.string(),
   longDelayDays: z.number().int().nullable(),
   delayHandling: z.string(),
+  scheduledAnnouncementAt: kstInstant.nullable(),
+  judgementTimeZone: z.string().nullable(),
 };
 /**
- * `rules_edited` since #23: the items the edit changed, in RULE_ITEMS order, and each one's value
+ * `rules_edited` since #23: the items the edit changed, in RULES_EDITED_ITEMS order — the rule
+ * items, and since #22 the announcement time and the judgement time zone — and each one's value
  * before and after it. Every listed item must carry both values of its own shape, or the row is
  * not read (`compactJson` instead).
  */
 const RULES_EDITED_PAYLOAD = z
   .object({
-    items: z.array(ruleItemSchema).min(1),
+    items: z.array(rulesEditedItemSchema).min(1),
     before: z.record(z.string(), z.unknown()),
     after: z.record(z.string(), z.unknown()),
   })
   .refine(({ items, before, after }) =>
     items.every(
       (item) =>
-        RULE_ITEM_VALUE[item].safeParse(before[item]).success &&
-        RULE_ITEM_VALUE[item].safeParse(after[item]).success,
+        RULES_EDITED_VALUE[item].safeParse(before[item]).success &&
+        RULES_EDITED_VALUE[item].safeParse(after[item]).success,
     ),
   );
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
@@ -506,7 +526,7 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
     }
     case 'rules_edited': {
       const parsed = RULES_EDITED_PAYLOAD.safeParse(payload);
-      // The event deadline in KST, as every time in these rows.
+      // The event deadline and the announcement in KST, as every time in these rows.
       if (parsed.success) return rulesEditedRows(parsed.data, (iso) => formatKst(iso));
       // A row written before #23: the one rules text.
       const legacy = LEGACY_RULES_EDITED_PAYLOAD.safeParse(payload);
@@ -536,8 +556,9 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
 
 /**
  * The open-items check's names (#17), in OPEN_ITEMS order: the draft's notice and the toast of a
- * refused 열기 say the same words — 질문, the rule items' names (#23, ADR-0097), 카테고리 and 태그
- * 1~5개. A rule item's name is also its name in the `rules_edited` rows.
+ * refused 열기 say the same words — 질문, the rule items' names (#23, ADR-0097), the time items and
+ * the two relations between them, 시각 순서 and 선행 마감 (#22, ADR-0098), 카테고리 and 태그 1~5개. A
+ * rule item's name is also its name in the `rules_edited` rows, and so is the zone's.
  */
 export const OPEN_ITEM_LABEL: Record<OpenItem, string> = {
   title: copy.openItemTitle,
@@ -550,8 +571,33 @@ export const OPEN_ITEM_LABEL: Record<OpenItem, string> = {
   fallbackCondition: copy.openItemFallbackCondition,
   longDelayDays: copy.openItemLongDelayDays,
   delayHandling: copy.openItemDelayHandling,
+  scheduledOpenAt: copy.openItemScheduledOpenAt,
+  closeAt: copy.openItemCloseAt,
+  scheduledJudgementAt: copy.openItemScheduledJudgementAt,
+  judgementTimeZone: copy.openItemJudgementTimeZone,
+  timeOrder: copy.openItemTimeOrder,
+  leadClose: copy.openItemLeadClose,
   category: copy.openItemCategory,
   tags: copy.openItemTags,
+};
+
+/**
+ * The names of the items a `rules_edited` row lists (RULES_EDITED_ITEMS): the open-items check's
+ * for the rule items and the zone, and the announcement time's own — it is no open item ('없음' is
+ * a value, #172 item 13).
+ */
+const RULES_EDITED_LABEL: Record<RulesEditedItem, string> = {
+  description: OPEN_ITEM_LABEL.description,
+  yesCondition: OPEN_ITEM_LABEL.yesCondition,
+  noCondition: OPEN_ITEM_LABEL.noCondition,
+  eventDeadline: OPEN_ITEM_LABEL.eventDeadline,
+  primarySource: OPEN_ITEM_LABEL.primarySource,
+  fallbackSources: OPEN_ITEM_LABEL.fallbackSources,
+  fallbackCondition: OPEN_ITEM_LABEL.fallbackCondition,
+  longDelayDays: OPEN_ITEM_LABEL.longDelayDays,
+  delayHandling: OPEN_ITEM_LABEL.delayHandling,
+  scheduledAnnouncementAt: copy.openItemScheduledAnnouncementAt,
+  judgementTimeZone: OPEN_ITEM_LABEL.judgementTimeZone,
 };
 
 /**
@@ -569,12 +615,16 @@ const textOrDash = (text: string | null): string =>
   text === null || text.trim() === '' ? '—' : text;
 
 /**
- * Each rule item's value as text, for the `rules_edited` rows (#23): a blank text '—', the event
+ * Each item's value as text, for the `rules_edited` rows (#23, #22): a blank text '—', the event
  * deadline as `time` renders an instant (KST, which `marketEventRows` hands it), a source as
- * `sourceText`, the fallbacks one numbered line each or '없음', the long-delay days in words.
+ * `sourceText`, the fallbacks one numbered line each or '없음', the long-delay days in words, the
+ * announcement time as an instant or '없음', the zone by its IANA name.
  */
-const RULE_ITEM_TEXT: {
-  readonly [K in RuleItem]: (value: MarketRuleItems[K], time: (iso: string) => string) => string;
+const RULES_EDITED_TEXT: {
+  readonly [K in RulesEditedItem]: (
+    value: RulesEditedValues[K],
+    time: (iso: string) => string,
+  ) => string;
 } = {
   description: textOrDash,
   yesCondition: textOrDash,
@@ -590,36 +640,42 @@ const RULE_ITEM_TEXT: {
   longDelayDays: (days) =>
     days === null ? '—' : `${copy.rulesLongDelayBefore} ${String(days)}${copy.rulesLongDelayTail}`,
   delayHandling: textOrDash,
+  scheduledAnnouncementAt: (iso, time) =>
+    iso === null ? copy.adminMarketAnnouncementNone : time(iso),
+  judgementTimeZone: textOrDash,
 };
 
 /** `raw` (checked by RULES_EDITED_PAYLOAD) as the text of `item`'s value. */
-function ruleItemText<K extends RuleItem>(
+function rulesEditedText<K extends RulesEditedItem>(
   item: K,
   raw: unknown,
   time: (iso: string) => string,
 ): string {
-  return RULE_ITEM_TEXT[item](RULE_ITEM_VALUE[item].parse(raw), time);
+  return RULES_EDITED_TEXT[item](RULES_EDITED_VALUE[item].parse(raw), time);
 }
 
 /**
  * The rows of a `rules_edited` event since #23: '바뀐 항목 YES 조건 · 1차 출처', then each item's
- * value before and after the edit, in RULE_ITEMS order.
+ * value before and after the edit, in RULES_EDITED_ITEMS order.
  */
 function rulesEditedRows(
   payload: z.infer<typeof RULES_EDITED_PAYLOAD>,
   time: (iso: string) => string,
 ): EventRow[] {
-  const items = RULE_ITEMS.filter((item) => payload.items.includes(item));
+  const items = RULES_EDITED_ITEMS.filter((item) => payload.items.includes(item));
   return [
-    { label: copy.eventRulesItems, value: items.map((item) => OPEN_ITEM_LABEL[item]).join(' · ') },
+    {
+      label: copy.eventRulesItems,
+      value: items.map((item) => RULES_EDITED_LABEL[item]).join(' · '),
+    },
     ...items.flatMap((item) => [
       {
-        label: `${OPEN_ITEM_LABEL[item]} ${copy.eventRulesBefore}`,
-        value: ruleItemText(item, payload.before[item], time),
+        label: `${RULES_EDITED_LABEL[item]} ${copy.eventRulesBefore}`,
+        value: rulesEditedText(item, payload.before[item], time),
       },
       {
-        label: `${OPEN_ITEM_LABEL[item]} ${copy.eventRulesAfter}`,
-        value: ruleItemText(item, payload.after[item], time),
+        label: `${RULES_EDITED_LABEL[item]} ${copy.eventRulesAfter}`,
+        value: rulesEditedText(item, payload.after[item], time),
       },
     ]),
   ];
@@ -632,18 +688,57 @@ function openItemList(items: readonly OpenItem[]): string {
     .join(' · ');
 }
 
+/** What an order rule's line in the draft's notice says is wrong (#172 item 12, A1). */
+const TIME_ORDER_LINE: { readonly [R in TimeOrderRule]: string } = {
+  openBeforeClose: copy.openItemRuleOpenBeforeClose,
+  closeByJudgement: copy.openItemRuleCloseByJudgement,
+  deadlineByJudgement: copy.openItemRuleDeadlineByJudgement,
+};
+
+/** The relation item a broken time rule fails (`missingOpenItems`' own split). */
+const RELATION_OF: { readonly [R in TimeRule]: TimeRelationItem } = {
+  openBeforeClose: 'timeOrder',
+  closeByJudgement: 'timeOrder',
+  deadlineByJudgement: 'timeOrder',
+  leadClose: 'leadClose',
+};
+
+/** One broken time rule as the notice's line says it, after its relation item's name. */
+function timeRuleLine(violation: TimeRuleViolation, gapMinutes: number | null): string {
+  if (violation.rule !== 'leadClose') return TIME_ORDER_LINE[violation.rule];
+  return violation.reason === LEAD_CLOSE_GAP_UNDECIDED || gapMinutes === null
+    ? copy.openItemRuleLeadCloseUndecided
+    : `${copy.openItemRuleLeadCloseBefore} ${String(gapMinutes)}${copy.openItemRuleLeadCloseTail}`;
+}
+
 /**
- * The admin draft's notice (#17): '열기 전에 채울 항목: YES 조건 · 1차 출처 · 태그 1~5개' while
- * the open-items check finds something missing (`AdminMarket.missingOpenItems`), `undefined` when
- * nothing is. A draft only — the check is what leaving the draft takes; an open market whose
+ * The admin draft's notice (#17): '열기 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그 1~5개'
+ * while the open-items check finds something missing (`AdminMarket.missingOpenItems`), `undefined`
+ * when nothing is. A draft only — the check is what leaving the draft takes; an open market whose
  * category was hidden later keeps it (#172 item 1) and gets no notice.
+ *
+ * 시각 순서 and 선행 마감 (#22, ADR-0098) name a relation, not a field, so each adds a line per rule
+ * it breaks, one under another — '시각 순서: 거래 마감 시각이 예정 판정 시각보다 늦습니다', '선행
+ * 마감: 간격(출시 설정)이 미정이라 …' — recomputed from the market's times with the gap the check
+ * used (`timeRuleViolations` with `leadCloseGapMinutes`, the API's own rule).
  */
-export function openItemsNotice(market: {
-  status: MarketStatus;
-  missingOpenItems: readonly OpenItem[];
-}): string | undefined {
+export function openItemsNotice(
+  market: TimeRuleInput & {
+    status: MarketStatus;
+    missingOpenItems: readonly OpenItem[];
+    leadCloseGapMinutes: number | null;
+  },
+): string | undefined {
   if (market.status !== 'draft' || market.missingOpenItems.length === 0) return undefined;
-  return `${copy.adminMarketOpenItems}: ${openItemList(market.missingOpenItems)}`;
+  const gap = market.leadCloseGapMinutes;
+  const lines = timeRuleViolations(market, gap)
+    .filter((violation) => market.missingOpenItems.includes(RELATION_OF[violation.rule]))
+    .map((violation) => {
+      const relation = OPEN_ITEM_LABEL[RELATION_OF[violation.rule]];
+      return `${relation}: ${timeRuleLine(violation, gap)}`;
+    });
+  const head = `${copy.adminMarketOpenItems}: ${openItemList(market.missingOpenItems)}`;
+  return [head, ...lines].join('\n');
 }
 
 /**
@@ -662,8 +757,10 @@ function missingItemsOf(error: ApiError): OpenItem[] {
 
 /**
  * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on open (#17 —
- * '열기 전에 채울 항목이 있습니다: …' naming what the refusal names, or the line alone when it
- * names nothing this screen knows), MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status`
+ * '열기 전에 채우거나 고칠 항목이 있습니다: …' naming what the refusal names, or the line alone when
+ * it names nothing this screen knows), the open before its scheduled open naming `scheduledOpenAt`
+ * (#22, ADR-0093 decision 3 '#21 앞당긴 개장': no early open; move it earlier), MARKET_NOT_OPEN on
+ * close, VALIDATION_ERROR naming `status`
  * for any other state-machine violation — the two "refresh the screen" messages, since the state
  * on screen is what is stale (a second 판정 of a market another admin has already judged lands
  * here). RULES_REQUIRED is no transition's any more (open answers OPEN_ITEMS_MISSING instead): it
@@ -689,6 +786,7 @@ export function transitionErrorMessage(error: unknown): string {
     const field = validationField(error);
     if (field === 'status') return copy.errMarketStatus;
     if (field === 'closeAt') return copy.errMarketCloseAt;
+    if (field === 'scheduledOpenAt') return copy.errMarketScheduledOpenNotReached;
     if (field === 'note') return copy.errMarketResolveNote;
     if (field === 'evidenceUrl') return copy.errMarketResolveEvidence;
     return copy.errMarketInvalid;
@@ -720,21 +818,83 @@ export type MarketFormField =
   | 'categoryId'
   | 'tags'
   | 'imageUrl'
+  | 'scheduledOpenAt'
   | 'closeAt'
+  | 'scheduledAnnouncementAt'
+  | 'scheduledJudgementAt'
+  | 'judgementTimeZone'
   | 'slug';
 
-/** The body fields that are form fields of the same name, each with what its refusal says. */
+/**
+ * The body fields that are form fields of the same name, each with what its refusal says. The
+ * times and 사건 기한 are `timeRefusal`'s: one field's refusals differ by message there.
+ */
 const FIELD_MESSAGE: Readonly<Record<string, string>> = {
   title: copy.errMarketTitle,
   description: copy.errMarketText,
   yesCondition: copy.errMarketText,
   noCondition: copy.errMarketText,
-  eventDeadline: copy.errMarketEventDeadline,
   longDelayDays: copy.errMarketLongDelayDays,
   delayHandling: copy.errMarketText,
   imageUrl: copy.errMarketImageUrl,
-  closeAt: copy.errMarketCloseAt,
 };
+
+/**
+ * The lead-close refusal's sentence (#172 item 13): the minutes of the gap the market is held to
+ * between the two fragments, as copy.ts composes every number (no `{{…}}`); without them, the
+ * sentence that names the gap by its name. The admin form's own rule says the same
+ * (lib/market-form.ts).
+ */
+export function leadCloseMessage(gapMinutes: number | null | undefined): string {
+  return gapMinutes === null || gapMinutes === undefined
+    ? copy.errMarketLeadClose
+    : `${copy.errMarketLeadCloseBefore} ${String(gapMinutes)}${copy.errMarketLeadCloseTail}`;
+}
+
+/** What each order rule's refusal says, on either of its two fields (#172 item 12, A1). */
+const TIME_ORDER_MESSAGE: { readonly [R in TimeOrderRule]: string } = {
+  openBeforeClose: copy.errMarketTimeOpenBeforeClose,
+  closeByJudgement: copy.errMarketTimeCloseByJudgement,
+  deadlineByJudgement: copy.errMarketTimeDeadlineByJudgement,
+};
+
+/** A time field's refusal when no time rule names it: its format, bound or (the close) future. */
+const TIME_FIELD_MESSAGE: { readonly [F in TimeRuleField | 'judgementTimeZone']: string } = {
+  scheduledOpenAt: copy.errMarketScheduledTime,
+  closeAt: copy.errMarketCloseAt,
+  scheduledAnnouncementAt: copy.errMarketScheduledTime,
+  scheduledJudgementAt: copy.errMarketScheduledTime,
+  eventDeadline: copy.errMarketEventDeadline,
+  judgementTimeZone: copy.errMarketTimeZone,
+};
+
+/**
+ * What a refusal naming a time field (#22, ADR-0098) or 사건 기한 says, by its detail message: a
+ * broken time rule by the rule its message is (TIME_RULE_MESSAGES — an order rule one sentence on
+ * both its ends, the lead close with `gapMinutes`), an open market's fixed time ('immutable while
+ * open'), earlier close ('cannot move earlier while open') or lead close it could not check
+ * ('lead-close gap undecided'); anything else is the field's own (TIME_FIELD_MESSAGE).
+ */
+function timeRefusal(
+  field: TimeRuleField | 'judgementTimeZone',
+  message: string | undefined,
+  gapMinutes: number | null | undefined,
+): string {
+  if (message === LEAD_CLOSE_GAP_UNDECIDED_MESSAGE) return copy.errMarketLeadCloseUndecided;
+  if (message === 'immutable while open') return copy.errMarketTimeFixed;
+  if (message === 'cannot move earlier while open') return copy.errMarketCloseEarlier;
+  const rule = TIME_RULES.find((candidate) => {
+    const messages: Partial<Record<string, string>> = TIME_RULE_MESSAGES[candidate];
+    return message !== undefined && messages[field] === message;
+  });
+  if (rule === undefined) return TIME_FIELD_MESSAGE[field];
+  return rule === 'leadClose' ? leadCloseMessage(gapMinutes) : TIME_ORDER_MESSAGE[rule];
+}
+
+/** The fields `timeRefusal` speaks for. */
+function isTimeField(field: unknown): field is TimeRuleField | 'judgementTimeZone' {
+  return typeof field === 'string' && Object.hasOwn(TIME_FIELD_MESSAGE, field);
+}
 
 /**
  * Where an open market's RULES_REQUIRED lands (#23): the item's field, or for a source, when the
@@ -833,13 +993,23 @@ function sourceRefusal(
  * own rule places it; without them, the primary's name or the fallback list. Anything else —
  * including a VALIDATION_ERROR naming `status`, which is not a field the form has — is
  * `undefined` and goes to the generic toast.
+ *
+ * The times (#22, ADR-0098) land on their own inputs, and so does 사건 기한, each said by what the
+ * refusal is (`timeRefusal`): a broken order rule names both its ends, the one the edit sent first,
+ * so the sentence goes under the input the admin changed; a lead close takes its minutes from
+ * `leadCloseGapMinutes`, the gap the market is held to (`AdminMarket.leadCloseGapMinutes`). An open
+ * market's RULES_REQUIRED naming the zone — cleared — lands on its select.
  */
 export function marketFormError(
   error: unknown,
   values?: MarketSourceInputs,
+  leadCloseGapMinutes?: number | null,
 ): { field: MarketFormField; message: string } | undefined {
   if (!isApiError(error)) return undefined;
   if (isApiError(error, 'RULES_REQUIRED')) {
+    if (validationField(error) === 'judgementTimeZone') {
+      return { field: 'judgementTimeZone', message: copy.errMarketRulesOpen };
+    }
     const item = ruleItemSchema.safeParse(validationField(error));
     if (!item.success) return undefined;
     const blank = values === undefined ? undefined : blankSourceInput(item.data, values);
@@ -879,6 +1049,9 @@ export function marketFormError(
             : copy.errMarketText,
       };
     default: {
+      if (isTimeField(named)) {
+        return { field: named, message: timeRefusal(named, message, leadCloseGapMinutes) };
+      }
       if (typeof named !== 'string' || !Object.hasOwn(FIELD_MESSAGE, named)) return undefined;
       const text = FIELD_MESSAGE[named];
       return text === undefined ? undefined : { field: named as MarketFormField, message: text };

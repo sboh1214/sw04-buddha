@@ -1,4 +1,9 @@
-import type { AnyCategorySlug, MarketSource } from '@buddha/shared';
+import {
+  type AnyCategorySlug,
+  DEFAULT_JUDGEMENT_TIME_ZONE,
+  type MarketSource,
+  floorToMinute,
+} from '@buddha/shared';
 
 /**
  * The seed's market copy, apart from seed.ts so a unit test can read it without running the
@@ -53,6 +58,45 @@ export interface SeedMarket {
    * first seed counts).
    */
   closeAt: string;
+  /**
+   * 발표 예정 시각 (#22, ADR-0098; ADR-0093 decision 2 #172 item 13) as an ISO-8601 instant (UTC;
+   * the KST wall-clock time and the publisher's calendar it is taken from are in the entry's
+   * comment), or null for '없음': the source has no scheduled release — checked with the
+   * publisher, never assumed. A release dated without an hour is 00:00 KST of that date, the day's
+   * earliest instant, so the 선행 마감 check (`market.lead_close_gap`) errs on the safe side. The
+   * close leads each one by at least the 60 minutes the design proposes for the gap.
+   */
+  scheduledAnnouncementAt: string | null;
+  /**
+   * 예정 판정 시각 (#22) as an ISO-8601 instant, by one rule of the seed's (ADR-0098 구현의 선택):
+   * 10:00 KST on the first weekday that is not a Korean public holiday after the later of 사건
+   * 기한 and the announcement; a weekday more where the publisher states no hour for a dated
+   * release or for the data; and for a source with no calendar whose data has appeared later than
+   * that plus `longDelayDays`, after its latest observed first appearance, so an ordinary
+   * publication does not reach the long delay. So it is at or after the close and 사건 기한 (#172
+   * item 12, owner answer 2026-10-31 A1), and the long delay counts from it (#172 item 10).
+   */
+  scheduledJudgementAt: string;
+  /** 판정 기준 시간대 (#172 item 11): DEFAULT_JUDGEMENT_TIME_ZONE for all 14, Korean events. */
+  judgementTimeZone: string;
+}
+
+/** One minute in milliseconds. */
+const MINUTE_MS = 60_000;
+
+/**
+ * A seed market's 예정 개장 시각 (#22, ADR-0098): the one seed time relative to the run, so not a
+ * `SeedMarket` literal. `now` — the run's database clock (`seedMarkets` in seed.ts, ADR-0027) —
+ * floored to the minute: a scheduled open already passed, so the draft opens as soon as a reviewer
+ * opens it (ADR-0093 decision 2 #172 item 6: past at the approval, it opens at once). For a stale
+ * seed whose close is not after that minute, the minute before the close instead, so it stays
+ * before the close (`markets_open_before_close_check`): such a draft cannot open anyway — its
+ * close has passed, and the seed's staleness report says so. The close stays absolute (Q-M3-4).
+ */
+export function seedScheduledOpenAt(closeAt: Date, now: Date): Date {
+  return new Date(
+    Math.min(floorToMinute(now.getTime()), floorToMinute(closeAt.getTime()) - MINUTE_MS),
+  );
 }
 
 /**
@@ -67,12 +111,16 @@ export const SEED_RULE_NO_DELAY_NO = '늦어진 것만으로 NO로 판정하지 
  * 14 markets, 2-3 per top-level category (PLAN 13 M3's 12, plus 주택 and 일자리 with the second
  * level), each with every rule item (#23, ADR-0097): the YES criterion and its boundary, the NO
  * side against the event deadline, one official source (and a fallback only where the rule names
- * one), the long-delay deadline and what a delay, a VOID and a cancelled event mean. The seed
- * inserts them as drafts for a reviewer to check and open (N03 §2, #125). The slug is the
- * idempotency key of the seed: a market whose slug exists is left exactly as it is, copy and tags
- * included — an admin may have edited it, and the seed never overwrites (Q-M3: copy refresh
- * cadence) — except for the items it never had (`seedMarkets` in seed.ts: tags, #17; the rule
- * items, #23).
+ * one), the long-delay deadline and what a delay, a VOID and a cancelled event mean — and its
+ * times (#22, ADR-0098): the publisher's scheduled release or '없음', the scheduled judgement and
+ * the judgement zone. The seed inserts them as drafts for a reviewer to check and open (N03 §2,
+ * #125). The slug is the idempotency key of the seed: a market whose slug exists is left exactly
+ * as it is, copy and tags included — an admin may have edited it, and the seed never overwrites
+ * (Q-M3: copy refresh cadence) — except for the items it never had (`seedMarkets` in seed.ts:
+ * tags, #17; the rule items, #23; the times, #22).
+ *
+ * Four of them are stale (bok, cpi, unemployment, rain: their close has passed or ends on
+ * 2026-10-31, Q-M3-4): their times are still the true schedule of the event they ask about.
  */
 export const SEED_MARKETS: readonly SeedMarket[] = [
   {
@@ -96,6 +144,14 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['기준금리', '한국은행', '금통위'],
     // 2026-10-21 23:59:59 KST: the October MPC meeting is on 2026-10-22 (BOK 2026 schedule).
     closeAt: '2026-10-21T14:59:59Z',
+    // 2026-10-22 10:30 KST: the 통화정책방향 release, "10.22(목) 10:30경" in BOK's 주간 보도계획
+    // (잠정) for 2026.10.19~10.26, BOK's own approximate time:
+    // https://www.bok.or.kr/portal/bbs/P0001726/view.do?nttId=11065650&menuNo=200039
+    scheduledAnnouncementAt: '2026-10-22T01:30:00Z',
+    // 2026-11-02 10:00 KST (Mon): the first weekday 10:00 after the 10-31 deadline. Stale — the
+    // close passed before #22 (Q-M3-4) — but still the event's true schedule.
+    scheduledJudgementAt: '2026-11-02T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'prices',
@@ -117,6 +173,14 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['물가', 'CPI', '통계청'],
     // 2026-09-30 23:59:59 KST: the September CPI release lands in the first days of October.
     closeAt: '2026-09-30T14:59:59Z',
+    // 2026-10-02 08:00 KST: "10.02.(금) 08:00 2026년 9월 소비자물가동향" in 국가데이터처 (formerly
+    // 통계청; kostat.go.kr now redirects to mods.go.kr) 2026년 10월 보도계획:
+    // https://www.mods.go.kr/newsPln.es?mid=a10305000000&bid=&oa_mm=10&act=list
+    scheduledAnnouncementAt: '2026-10-01T23:00:00Z',
+    // 2026-10-02 10:00 KST (Fri): the first weekday 10:00 after the release. Stale (Q-M3-4), but
+    // still the event's true schedule.
+    scheduledJudgementAt: '2026-10-02T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'fx',
@@ -144,6 +208,12 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     // 2026-12-29 23:59:59 KST: 2026-12-31 is the year-end market holiday, so the last trading
     // day is 2026-12-30 and trading here stops before it opens.
     closeAt: '2026-12-29T14:59:59Z',
+    // 2026-12-30 15:30 KST: the 서울외환시장 close the rule names is the result itself.
+    scheduledAnnouncementAt: '2026-12-30T06:30:00Z',
+    // 2026-12-31 10:00 KST (Thu): the first weekday 10:00 after the close it judges; the year-end
+    // market holiday is not a public holiday.
+    scheduledJudgementAt: '2026-12-31T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'housing',
@@ -166,6 +236,14 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['아파트', '부동산', '서울', '한국부동산원'],
     // 2026-11-30 23:59:59 KST: the November survey is published in mid-December.
     closeAt: '2026-11-30T14:59:59Z',
+    // 2026-12-15 00:00 KST, a date with no hour: 한국부동산원's 통계공표일정 lists "2026년 11월
+    // 전국주택가격동향조사(월간)" on 2026-12-15 (공표시기 익월 15일, 휴일이면 그 다음날) and states no
+    // time, so the day's earliest instant:
+    // https://www.reb.or.kr/r-one/portal/compose/scheduleStatsPage.do
+    scheduledAnnouncementAt: '2026-12-14T15:00:00Z',
+    // 2026-12-16 10:00 KST (Wed): a weekday after the release date, which states no hour.
+    scheduledJudgementAt: '2026-12-16T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'jobs',
@@ -188,6 +266,13 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['실업률', '고용', '통계청'],
     // 2026-10-31 23:59:59 KST: the October release lands in the second week of November.
     closeAt: '2026-10-31T14:59:59Z',
+    // 2026-11-11 08:00 KST: "11.11.(수) 08:00 2026년 10월 고용동향" in 국가데이터처 2026년 11월
+    // 보도계획: https://www.mods.go.kr/newsPln.es?mid=a10305000000&bid=&oa_mm=11&act=list
+    scheduledAnnouncementAt: '2026-11-10T23:00:00Z',
+    // 2026-11-11 10:00 KST (Wed): the first weekday 10:00 after the release. Stale from its
+    // 10-31 close (Q-M3-4), but still the event's true schedule.
+    scheduledJudgementAt: '2026-11-11T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'rain',
@@ -210,6 +295,11 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['첫눈', '서울', '기상청'],
     // 2026-11-20 00:00 KST: the rule's own cutoff.
     closeAt: '2026-11-19T15:00:00Z',
+    // 없음: a first snow is an observation KMA reports when it happens, on no calendar.
+    scheduledAnnouncementAt: null,
+    // 2026-11-20 10:00 KST (Fri): the first weekday 10:00 after the 11-19 deadline.
+    scheduledJudgementAt: '2026-11-20T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'rain',
@@ -233,6 +323,13 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['강수량', '서울', '기상청'],
     // 2026-10-31 23:59:59 KST: end of the month being measured.
     closeAt: '2026-10-31T14:59:59Z',
+    // 없음: KMA's portal publishes the data on no calendar; its ASOS page states only "전일 자료는
+    // 당일 10시 이후 확인 가능": https://data.kma.go.kr/data/grnd/selectAsosRltmList.do?pgmNo=36
+    scheduledAnnouncementAt: null,
+    // 2026-11-02 10:00 KST (Mon): the first weekday 10:00 after the 10-31 deadline. Stale from its
+    // 10-31 close (Q-M3-4), but still the event's true schedule.
+    scheduledJudgementAt: '2026-11-02T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'temperature',
@@ -255,6 +352,11 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['한파', '기온', '서울', '기상청'],
     // 2026-11-30 23:59:59 KST: end of the month being measured.
     closeAt: '2026-11-30T14:59:59Z',
+    // 없음: daily observations on KMA's portal, on no calendar (its ASOS page, as above).
+    scheduledAnnouncementAt: null,
+    // 2026-12-01 10:00 KST (Tue): the first weekday 10:00 after the 11-30 deadline.
+    scheduledJudgementAt: '2026-12-01T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'devices',
@@ -282,6 +384,12 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['6G', '통신사', 'SK텔레콤', 'KT', 'LG유플러스'],
     // 2026-12-31 23:59:59 KST: the rule's own cutoff.
     closeAt: '2026-12-31T14:59:59Z',
+    // 없음: the companies announce when they announce, on no calendar.
+    scheduledAnnouncementAt: null,
+    // 2027-01-04 10:00 KST (Mon): the first weekday 10:00 after the 12-31 deadline that is not a
+    // holiday (01-01 is one, then a weekend).
+    scheduledJudgementAt: '2027-01-04T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'devices',
@@ -304,6 +412,12 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['삼성전자', '스마트폰', '폴더블'],
     // 2026-12-31 23:59:59 KST: the rule's own cutoff.
     closeAt: '2026-12-31T14:59:59Z',
+    // 없음: a launch is announced when it is, on no calendar.
+    scheduledAnnouncementAt: null,
+    // 2027-01-04 10:00 KST (Mon): the first weekday 10:00 after the 12-31 deadline that is not a
+    // holiday (01-01 is one, then a weekend).
+    scheduledJudgementAt: '2027-01-04T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'movies',
@@ -326,6 +440,11 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['한국 영화', '박스오피스', 'KOBIS'],
     // 2026-12-13 23:59:59 KST: day 14 of a film released on 2026-11-30, the last window.
     closeAt: '2026-12-13T14:59:59Z',
+    // 없음: KOBIS publishes its counts every day, with no scheduled release.
+    scheduledAnnouncementAt: null,
+    // 2026-12-14 10:00 KST (Mon): the first weekday 10:00 after the 12-13 deadline.
+    scheduledJudgementAt: '2026-12-14T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'music',
@@ -348,6 +467,13 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['멜론', '음원 차트', 'K-팝'],
     // 2026-12-27 23:59:59 KST: the last Mon-Sun chart week inside December is 12-21..12-27.
     closeAt: '2026-12-27T14:59:59Z',
+    // 없음: Melon states no publication day or time for the weekly chart, on its chart pages or
+    // in its FAQ: https://www.melon.com/chart/week/index.htm
+    scheduledAnnouncementAt: null,
+    // 2026-12-29 10:00 KST (Tue): a weekday after the first weekday 10:00 past the 12-27
+    // deadline, as the chart's time is not stated.
+    scheduledJudgementAt: '2026-12-29T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'exhibitions',
@@ -370,6 +496,13 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['국립중앙박물관', '박물관', '관람객'],
     // 2026-12-31 23:59:59 KST: end of the year being counted; the announcement comes later.
     closeAt: '2026-12-31T14:59:59Z',
+    // 없음: the museum announces a year's count in an ad-hoc press release, on no calendar —
+    // 2026-01-02 for 2025, 2024-01-04 for 2023 (its press board, https://www.museum.go.kr).
+    scheduledAnnouncementAt: null,
+    // 2027-01-04 10:00 KST (Mon): the first weekday 10:00 after the 12-31 deadline that is not a
+    // holiday; the 30-day long delay covers an early-January release.
+    scheduledJudgementAt: '2027-01-04T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
   {
     category: 'books',
@@ -392,5 +525,13 @@ export const SEED_MARKETS: readonly SeedMarket[] = [
     tags: ['출판', '신간', '대한출판문화협회'],
     // 2026-12-31 23:59:59 KST: end of the year being counted; the announcement comes later.
     closeAt: '2026-12-31T14:59:59Z',
+    // 없음: 대한출판문화협회 has no release calendar. The 2025 count first appeared on 2026-05-29
+    // (its press release); earlier years' counts first appeared in its data files between 02-14
+    // and 04-07, their press releases following as late as 07-25 (https://www.kpa21.or.kr).
+    scheduledAnnouncementAt: null,
+    // 2027-06-01 10:00 KST (Tue): after the latest recent first appearance (05-29), so the 30-day
+    // long delay does not void an ordinary publication.
+    scheduledJudgementAt: '2027-06-01T01:00:00Z',
+    judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   },
 ];

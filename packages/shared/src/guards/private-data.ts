@@ -200,11 +200,11 @@ export const PRIVATE_DATA: readonly PrivateData[] = [
     id: 'time-zone',
     name: '특정 사용자에게 묶인 시간대',
     basis: 'ADR-0063(오너 결정 2026-10-16)',
-    // A zone on its own is public: the judging time zone #22 puts on a market (`timeZone`,
-    // `judgingTimeZone`, `resolutionTimeZone`). A name that says whose it is (`userTimeZone`,
-    // `profileTimeZone`, `memberZone`, `myTz`) is a person's. A person's zone under a bare
-    // `timeZone` in a nested object (`Me.profile.timeZone`) is not caught by its name: the
-    // public route check finds account A's zone by its value (apps/api/src/surface).
+    // A zone on its own is public: a market's judgement time zone (`judgementTimeZone`, #22,
+    // ADR-0098), or another market zone (`timeZone`, `judgingTimeZone`). A name that says whose
+    // it is (`userTimeZone`, `profileTimeZone`, `memberZone`, `myTz`) is a person's. A person's
+    // zone under a bare `timeZone` in a nested object (`Me.profile.timeZone`) is not caught by its
+    // name: the public route check finds account A's zone by its value (apps/api/src/surface).
     fields: [],
     owned: {
       words: ['zone', 'zones', 'timezone', 'timezones', 'tz'],

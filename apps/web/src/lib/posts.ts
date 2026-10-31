@@ -67,11 +67,21 @@ export function writePath(marketId?: string): string {
 
 // ---- the write screen's market ---------------------------------------------------------------
 
-/** The market a new post goes to, as the write screen shows it. */
+/**
+ * The market a new post goes to, as the write screen shows it: its title and its status badge,
+ * which reads '판정 지연' for a closed market past its scheduled judgement (`judgementDelayed`,
+ * `marketStatusLabel`; #22, ADR-0098).
+ */
 export interface WriteMarket {
   id: string;
   title: string;
   status: MarketStatus;
+  judgementDelayed: boolean;
+}
+
+/** The write screen's share of a market read or picked (`Market`, `MarketSummary`). */
+function writeMarketOf({ id, title, status, judgementDelayed }: WriteMarket): WriteMarket {
+  return { id, title, status, judgementDelayed };
 }
 
 /**
@@ -97,9 +107,7 @@ export async function lookUpWriteMarket(
   if (marketId === undefined) return { kind: 'none' };
   try {
     const market = await read(marketId);
-    return market === null
-      ? { kind: 'none' }
-      : { kind: 'found', market: { id: market.id, title: market.title, status: market.status } };
+    return market === null ? { kind: 'none' } : { kind: 'found', market: writeMarketOf(market) };
   } catch {
     return { kind: 'failed', marketId };
   }
@@ -158,10 +166,8 @@ export function writeScreenMarket(
   event: WriteScreenEvent,
 ): WriteScreenMarket {
   switch (event.kind) {
-    case 'picked': {
-      const { id, title, status } = event.market;
-      return { shown: { id, title, status }, read: state.read };
-    }
+    case 'picked':
+      return { shown: writeMarketOf(event.market), read: state.read };
     case 'read':
       return event.lookup === state.read
         ? state

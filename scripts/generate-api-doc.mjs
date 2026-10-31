@@ -361,7 +361,7 @@ const ERROR_NOTES = {
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   RULES_REQUIRED:
-    '거래 중(`open`)인 시장을 고쳐, 채워 두었던 규칙 항목(#23)을 빠진 것으로 만들 수 없다. `details` 가 그렇게 빠질 항목마다 하나씩 규칙 항목의 순서로 온다 — `path` 가 그 항목 하나(`yesCondition` 처럼), `message` 가 `required while open`. 빠졌다고 보는 기준은 `OPEN_ITEMS_MISSING` 과 같고, 이미 빠져 있던 항목(#23 전에 연 시장은 모두)은 다른 수정을 막지 않는다. 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
+    '거래 중(`open`)인 시장을 고쳐, 채워 두었던 규칙 항목(#23)이나 판정 기준 시간대(#22, 판정 항목)를 빠진 것으로 만들 수 없다. `details` 가 그렇게 빠질 항목마다 하나씩 규칙 항목의 순서로, 시간대는 맨 뒤에 온다 — `path` 가 그 항목 하나(`yesCondition`·`judgementTimeZone` 처럼), `message` 가 `required while open`. 빠졌다고 보는 기준은 `OPEN_ITEMS_MISSING` 과 같고, 이미 빠져 있던 항목(#23 전에 연 시장의 규칙 항목, #22 전에 연 시장의 시간대)은 다른 수정을 막지 않으며 다시 비워 보내도 바뀐 것이 아니다. 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
   VERIFICATION_REQUIRED:
     '본인확인(휴대전화 SMS 인증번호)을 마치지 않은 계정이다. `POST /api/v1/me/phone-verification/code` 로 인증번호를 받아 `POST /api/v1/me/phone-verification/confirm` 으로 확인한 뒤 다시 시도한다(ADR-0070).',
   REFUND_NOT_ALLOWED:
@@ -419,7 +419,7 @@ const ERROR_NOTES = {
   PROPOSAL_LIMITED:
     '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
   OPEN_ITEMS_MISSING:
-    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, 지금은 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다).",
+    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, #22, 지금은 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), 시각인 `['scheduledOpenAt']`(예정 개장 시각이 없다)·`['closeAt']`(거래 마감 시각 — 저장된 시장에는 늘 있어 빠지지 않는다)·`['scheduledJudgementAt']`(예정 판정 시각이 없다)·`['judgementTimeZone']`(판정 기준 시간대가 없다), `['timeOrder']`(시각 순서 — 예정 개장 < 거래 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정을 분 단위로 본다. `message` 가 어긴 규칙을 `, ` 로 잇는다. DB 의 CHECK 가 같은 순서를 지키므로 저장된 시장에서는 나오지 않는다), `['leadClose']`(선행 마감 — 발표 예정 시각이 있으면 거래 마감이 그보다 출시 설정 `market.lead_close_gap` 의 분 이상 앞서야 한다. 그 설정이 미정이면 `message` 가 `gap undecided` 이고, 발표 예정 시각이 없음인 시장은 상관없다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다). 이 검사를 통과해도 예정 개장 시각이 되지 않았으면 `VALIDATION_ERROR`(`['scheduledOpenAt']`, `not reached yet`)로 열지 않는다.",
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

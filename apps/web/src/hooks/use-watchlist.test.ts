@@ -189,6 +189,7 @@ describe('the watchlist queries', () => {
       category: { slug: 'economy', nameKo: '경제' },
       imageUrl: null,
       status: 'closed',
+      judgementDelayed: false,
       lastPrice: 63,
       volumeCoin: '130000',
       tradeCount: 11,

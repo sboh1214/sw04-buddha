@@ -42,6 +42,7 @@ const market = {
   slug: 'rate-cut',
   title: '금리 인하?',
   status: 'resolved' as const,
+  judgementDelayed: false,
   category: { slug: 'economy', nameKo: '경제' },
 };
 

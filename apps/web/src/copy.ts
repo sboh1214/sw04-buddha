@@ -379,9 +379,11 @@ export const copy = {
   adminMarketStatusAll: '전체',
   // 상태 배지의 라벨 (ADR-0093 결정 1의 12, #174). 사용자의 라벨은 그 결정의 글 그대로이고, 사용자에게
   // 보이지 않는 초안·검수 중은 관리자 화면의 라벨이다(검수 중은 #174의 선택). '판정 지연'·'이의 검토 중'은
-  // 상태가 아니라 표시라서 그것을 셀 자료가 생기는 #22·#142·#175가 붙인다. 홈은 거래 중만 보이고
-  // (ADR-0065), 다른 상태는 검색(#15)이 고른다. 카운트다운의 marketCloseAt '마감'·marketClosed '마감됨'과는
-  // 다른 자리다.
+  // 상태가 아니라 표시다. #22(ADR-0098)가 예정 판정 시각을 더해, 그 시각이 지난 거래 마감 시장은 사용자
+  // 화면에서 '거래 마감' 대신 '판정 지연'(marketStatusJudgementDelayed)으로 보인다(#173 11항). 지연의 사유와
+  // 다음 검토 시각은 #142가, 잠정 결과의 '이의 검토 중'은 #175가 붙인다. 검색 필터는 없다(ADR-0095 8-6).
+  // 홈은 거래 중만 보이고(ADR-0065), 다른 상태는 검색(#15)이 고른다. 카운트다운의 marketCloseAt '마감'·
+  // marketClosed '마감됨'과는 다른 자리다.
   marketStatusDraft: '초안',
   marketStatusReview: '검수 중',
   marketStatusScheduled: '개장 예정',
@@ -393,6 +395,7 @@ export const copy = {
   marketStatusSettling: '지급 중',
   marketStatusSettled: '지급 완료',
   marketStatusCancelled: '취소',
+  marketStatusJudgementDelayed: '판정 지연',
   // 결과 유형 VOID의 라벨(ADR-0093 결정 1의 12 (b)). VOID는 상태가 아니라 결과라서, YES·NO가 copy.yes·
   // copy.no인 자리(상세·내 포지션·MY·관리자 상세·테마 결과)에 이것이 선다.
   marketResultVoid: '무효',
@@ -432,7 +435,8 @@ export const copy = {
   adminMarketFallbackRemove: '빼기',
   adminMarketFallbackNone: '없음',
   adminMarketFallbackCondition: '대체 출처로 넘어가는 조건',
-  // 장기 지연 기한은 예정 판정 시각부터 센 날수다(#172 10항). 예정 판정 시각은 #22가 넣는다.
+  // 장기 지연 기한은 예정 판정 시각부터 센 날수다(#172 10항). 예정 판정 시각이 있으면 상세가 그 시각에
+  // 날수×24시간을 더한 기한도 보인다(#22, ADR-0098).
   adminMarketLongDelayDays: '장기 지연 기한',
   adminMarketLongDelayDaysSuffix: '일 (예정 판정 시각부터)',
   // '취소'는 사건의 취소·연기이지 시장 상태 '취소'가 아니다(#172 10항). 무효 지급은 시장마다 적지 않고 칸
@@ -440,6 +444,42 @@ export const copy = {
   adminMarketDelayHandling: '지연·취소·무효 처리',
   adminMarketDelayHandlingHint:
     '장기 지연 기한에 이르면 어떻게 하는지, 무효로 바꾸는 기준, 사건이 취소·연기되면 어떻게 하는지 적어 주세요. 늦어진 것만으로 NO로 판정하지 않습니다.',
+  // 시각 (#22, ADR-0098; ADR-0093 결정 2 #172 11~14항): 규칙 항목 다음의 묶음 하나에 예정 개장·거래 마감·
+  // 발표 예정·예정 판정 시각과 판정 기준 시간대가 그 순서로 놓인다. 관리자 화면의 입력과 표시는 한국
+  // 시간이고(결정 3 '#22 시간대'), 판정 기준 시간대는 Asia/Seoul을 미리 채워 운영자가 확인한다(저장이
+  // 확인이다). 순서(개장 < 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정)는 분 단위로 본다(#172 12항, 오너 답
+  // 2026-10-31 A1). 선행 마감 간격은 출시 설정 market.lead_close_gap의 값이고 미정일 수 있다. 개장 뒤에는
+  // 마감을 늦추기만 하고 예정 판정 시각을 넘지 않으며(오너 답 A2), 예정 개장·예정 판정 시각은 바꾸지 않는다.
+  adminMarketTimes: '시각',
+  adminMarketTimesHint:
+    '시각은 한국 시간으로 입력합니다. 예정 개장 시각은 거래 마감 시각보다 앞서고, 거래 마감 시각과 사건 기한은 예정 판정 시각과 같거나 앞서야 합니다.',
+  adminMarketScheduledOpenAt: '예정 개장 시각 (KST)',
+  adminMarketScheduledOpenAtHint: '이 시각이 되어야 열 수 있습니다. 일찍 열려면 앞당기세요.',
+  adminMarketCloseAt: '거래 마감 시각 (KST)',
+  adminMarketCloseAtHint:
+    '경기는 시작 전, 선거는 투표 종료 전에 마감합니다. 개장 뒤에는 늦추기만 할 수 있고 예정 판정 시각을 넘지 않습니다.',
+  adminMarketScheduledAnnouncementAt: '발표 예정 시각 (KST)',
+  adminMarketScheduledAnnouncementAtHint:
+    '발표 일정이 없는 사건이면 비워 두세요(없음). 거래 마감 시각은 이 시각보다 선행 마감 간격(출시 설정) 이상 앞서야 합니다.',
+  adminMarketAnnouncementNone: '없음',
+  adminMarketScheduledJudgementAt: '예정 판정 시각 (KST)',
+  adminMarketScheduledJudgementAtHint:
+    '거래 마감 시각·사건 기한과 같거나 뒤여야 합니다. 개장 뒤에는 바꾸지 않습니다(늦어지면 판정 지연으로 보입니다).',
+  adminMarketJudgementTimeZone: '판정 기준 시간대',
+  adminMarketJudgementTimeZoneHint:
+    '공개 상세는 보는 사람의 시간대로 시각을 보이고, 이 시간대와 다르면 이 시간대로도 함께 보입니다. 시각 입력은 한국 시간입니다.',
+  // 거래 중인 시장에서 잠긴 예정 개장·예정 판정 시각 칸의 안내(#172 14항).
+  adminMarketTimeFixedHint: '시장을 연 뒤에는 바꾸지 않습니다.',
+  // 선행 마감 간격: 숫자 뒤에 '분'이 붙고, 출시 설정이 미정이면 '미정'이다. 시장은 선행 마감을 마지막으로
+  // 검사한 간격(열 때 저장한다)을 쓰므로(ADR-0098) 연 시장은 그 값을, 초안은 지금의 출시 설정 값을 보인다.
+  adminMarketLeadCloseGap: '선행 마감 간격',
+  adminMarketLeadCloseGapMinutes: '분',
+  adminMarketLeadCloseGapUndecided: '미정',
+  // 관리자 상세의 판정 지연 줄(#173 11항): 사용자 화면이 '판정 지연'으로 보이는 시장이다. 상태 배지는
+  // 관리자의 상태 라벨 그대로다.
+  adminMarketJudgementDelayed: '판정 지연',
+  adminMarketJudgementDelayedNote:
+    '예정 판정 시각이 지났습니다. 사용자 화면에는 판정 지연으로 보입니다.',
   adminMarketCategory: '카테고리',
   adminMarketCategoryPlaceholder: '카테고리 선택',
   // 태그 (#17, ADR-0093 결정 2 #172 2항): 카테고리 다음 칸. 이름을 치고 Enter나 넣기로 넣고(쉼표로 나눈
@@ -454,7 +494,9 @@ export const copy = {
   // 개설 항목 검사 (#17): 초안을 열기 전에 채울 항목의 이름. 초안 상세의 안내(빠진 것이 없으면 안내도
   // 없다)와 열기를 거절한 알림이 같은 이름을 OPEN_ITEMS 순서로 ' · '로 잇는다. 초안이 아닌 시장에는 안내가
   // 없다(검사는 초안을 떠날 때의 것이다). 규칙 항목의 이름은 #23(ADR-0097)의 것이고, '정산'은 Coin 지급의
-  // 말이라(ADR-0052) 쓰지 않는다.
+  // 말이라(ADR-0052) 쓰지 않는다. 시각 항목과 시각 순서·선행 마감은 #22(ADR-0098)의 것이고, 뒤의 둘은 #78
+  // 체크리스트의 줄 이름이다(ADR-0093 결정 2 #172 4항). 발표 예정 시각은 개설 항목이 아니지만(없음일 수
+  // 있다) 규칙 수정 기록이 같은 이름으로 짚는다.
   openItemTitle: '질문',
   openItemDescription: '배경',
   openItemYesCondition: 'YES 조건',
@@ -465,12 +507,30 @@ export const copy = {
   openItemFallbackCondition: '전환 조건',
   openItemLongDelayDays: '장기 지연 기한',
   openItemDelayHandling: '지연·취소·무효 처리',
+  openItemScheduledOpenAt: '예정 개장 시각',
+  openItemCloseAt: '거래 마감 시각',
+  openItemScheduledAnnouncementAt: '발표 예정 시각',
+  openItemScheduledJudgementAt: '예정 판정 시각',
+  openItemJudgementTimeZone: '판정 기준 시간대',
+  openItemTimeOrder: '시각 순서',
+  openItemLeadClose: '선행 마감',
   openItemCategory: '카테고리',
   openItemTags: '태그 1~5개',
-  adminMarketOpenItems: '열기 전에 채울 항목',
+  // 초안 상세의 안내는 시각 순서·선행 마감마다 어긋난 것을 한 줄씩 덧붙인다('시각 순서: …', 분 단위).
+  // 선행 마감은 앞뒤 조각 사이에 간격의 분 수가 들어간다.
+  openItemRuleOpenBeforeClose: '예정 개장 시각이 거래 마감 시각과 같거나 늦습니다',
+  openItemRuleCloseByJudgement: '거래 마감 시각이 예정 판정 시각보다 늦습니다',
+  openItemRuleDeadlineByJudgement: '사건 기한이 예정 판정 시각보다 늦습니다',
+  openItemRuleLeadCloseBefore: '거래 마감 시각이 발표 예정 시각보다',
+  openItemRuleLeadCloseTail: '분 이상 앞서지 않습니다',
+  openItemRuleLeadCloseUndecided:
+    '간격(출시 설정)이 미정이라 발표 예정 시각이 있는 시장은 열 수 없습니다',
+  // 시각 순서·선행 마감은 채우는 것이 아니라 고치는 것이라 '채우거나 고칠'이다(#22).
+  adminMarketOpenItems: '열기 전에 채우거나 고칠 항목',
   adminMarketImageUrl: '이미지 URL',
   adminMarketImageUrlPlaceholder: 'https://',
-  adminMarketCloseAt: '마감 시각 (KST)',
+  // 목록의 마감 줄·열기 기록(opened)의 마감(closeAt)과 마감 기록(closed)의 실제로 닫은
+  // 시각(closedAt)에 쓰는 짧은 이름. 시각 묶음의 칸 이름(adminMarketCloseAt)과는 다른 자리다(#22).
   adminMarketCloseAtShort: '마감 시각',
   adminMarketSlug: '슬러그 (비우면 자동 생성)',
   adminMarketEdit: '수정',
@@ -479,7 +539,7 @@ export const copy = {
   adminMarketEditLocked: '이 상태에서는 수정할 수 없습니다.',
   adminMarketEditOpenTitle: '열린 시장을 수정합니다',
   adminMarketEditOpenBody:
-    '이미 거래가 진행 중인 시장입니다. 규칙이나 마감 시각을 바꾸면 참여자에게 영향을 줍니다. 계속할까요?',
+    '이미 거래가 진행 중인 시장입니다. 규칙이나 거래 마감 시각을 바꾸면 참여자에게 영향을 줍니다. 거래 마감 시각은 늦추기만 할 수 있고 예정 판정 시각을 넘을 수 없습니다. 계속할까요?',
   adminMarketOpen: '열기',
   adminMarketOpened: '시장을 열었습니다.',
   adminMarketClose: '마감',
@@ -732,13 +792,34 @@ export const copy = {
   errMarketTagsOpen: '열린 시장의 태그는 모두 뺄 수 없습니다.',
   errMarketTagPending: '넣지 않은 태그가 있습니다. Enter나 넣기로 넣거나 지워 주세요.',
   errMarketImageUrl: 'http 또는 https로 시작하는 500자 이하의 URL을 입력해 주세요.',
-  errMarketCloseAt: '마감 시각은 현재보다 뒤여야 합니다.',
+  errMarketCloseAt: '거래 마감 시각은 현재보다 뒤여야 합니다.',
+  // 시각 (#22, ADR-0098). 순서를 어긴 두 시각은 두 칸 모두에 같은 문장을 보인다(분 단위, #172 12항, 오너 답
+  // 2026-10-31 A1). 선행 마감은 앞뒤 조각 사이에 간격의 분 수가 들어간다('{{…}}'는 쓰지 않는다).
+  errMarketScheduledTime: '날짜와 시각으로 입력하거나 비워 두세요.',
+  errMarketTimeZone: '판정 기준 시간대를 목록에서 골라 주세요.',
+  errMarketTimeOpenBeforeClose: '예정 개장 시각은 거래 마감 시각보다 앞서야 합니다.',
+  errMarketTimeCloseByJudgement: '거래 마감 시각은 예정 판정 시각과 같거나 앞서야 합니다.',
+  errMarketTimeDeadlineByJudgement: '사건 기한은 예정 판정 시각과 같거나 앞서야 합니다.',
+  errMarketLeadCloseBefore: '거래 마감 시각은 발표 예정 시각보다',
+  errMarketLeadCloseTail: '분 이상 앞서야 합니다(선행 마감).',
+  // 간격의 분 수를 모를 때(화면이 그 값을 읽지 못한 거절)의 같은 문장.
+  errMarketLeadClose: '거래 마감 시각은 발표 예정 시각보다 선행 마감 간격 이상 앞서야 합니다.',
+  errMarketLeadCloseUndecided:
+    '선행 마감 간격(출시 설정)이 미정이라 발표 예정 시각에 맞춘 마감을 검사할 수 없습니다. 간격을 정한 뒤 다시 저장해 주세요.',
+  // 거래 중인 시장 (#172 14항, 오너 답 A2): 마감은 늦추기만 하고(앞당기는 것은 조기 마감, 지금은 마감 버튼),
+  // 예정 개장·예정 판정 시각은 바꾸지 않는다.
+  errMarketCloseEarlier:
+    '거래 중인 시장의 거래 마감 시각은 앞당길 수 없습니다. 일찍 끝내려면 마감하세요.',
+  errMarketTimeFixed: '거래 중인 시장에서는 바꿀 수 없습니다.',
+  // 열기 (ADR-0093 결정 3 '#21 앞당긴 개장'): 예정 개장 시각 전에는 열지 않는다.
+  errMarketScheduledOpenNotReached:
+    '예정 개장 시각이 되지 않았습니다. 일찍 열려면 예정 개장 시각을 앞당기세요.',
   errMarketSlug: '슬러그는 영문 소문자·숫자·한글·하이픈 3~80자로 입력하거나 비워 두세요.',
   errMarketSlugTaken: '이미 사용 중인 슬러그입니다.',
   errMarketInvalid: '입력값을 확인해 주세요.',
   // 열기의 개설 항목 검사 거절(OPEN_ITEMS_MISSING): 뒤에 ': '와 빠진 항목의 이름(openItem…)이 붙는다.
   // 응답이 항목을 싣지 않았으면 마침표로 끝낸다. 상세는 다시 읽혀 초안의 안내가 같은 항목을 보인다.
-  errMarketOpenItemsMissing: '열기 전에 채울 항목이 있습니다',
+  errMarketOpenItemsMissing: '열기 전에 채우거나 고칠 항목이 있습니다',
   errMarketRulesOpen: '열린 시장의 규칙은 비울 수 없습니다.',
   errMarketNotOpen: '거래 중인 시장이 아닙니다. 화면을 새로 고쳐 주세요.',
   errMarketStatus: '지금 상태에서는 할 수 없는 작업입니다. 화면을 새로 고쳐 주세요.',
@@ -1209,6 +1290,10 @@ export const copy = {
   marketScheduledNotice: '아직 열리지 않은 시장입니다. 지금은 거래할 수 없습니다.',
   marketPausedNotice: '거래가 일시 중단된 시장입니다. 지금은 거래할 수 없습니다.',
   marketClosedNotice: '마감된 시장입니다. 더 이상 거래할 수 없습니다.',
+  // 판정 지연(#173 11항, #22): 예정 판정 시각이 지난 거래 마감 시장. 늦어진 것만으로 결과를 정하지 않는다.
+  // 지연의 사유와 다음 검토 시각은 #142가 붙인다.
+  marketJudgementDelayedNotice:
+    '예정 판정 시각이 지났지만 아직 결과가 나오지 않았습니다. 더 이상 거래할 수 없습니다.',
   marketProvisionalNotice: '잠정 결과가 나온 시장입니다. 결과는 아직 확정되지 않았습니다.',
   marketResolvedNotice: '결과가 확정된 시장입니다.',
   marketSettlingNotice: '결과가 확정되어 지급을 진행하고 있습니다.',
@@ -1228,8 +1313,9 @@ export const copy = {
   rulesFallbackNone: '없음',
   rulesFallbackCondition: '대체 출처로 넘어가는 조건',
   rulesLongDelay: '장기 지연 기한',
-  // '예정 판정 시각에서 14일 뒤': 앞과 뒤 사이에 longDelayDays(정수)가 들어간다. 예정 판정 시각은 #22가
-  // 넣는다. '{{…}}' 자리표시는 사업자 정보의 것이라(legal/template.ts) 쓰지 않는다.
+  // '예정 판정 시각에서 14일 뒤': 앞과 뒤 사이에 longDelayDays(정수)가 들어간다. 예정 판정 시각이 있으면
+  // 그 뒤에 ' · '와 기한의 시각(예정 판정 시각 + 날수×24시간, #22)이 붙는다. '{{…}}' 자리표시는 사업자
+  // 정보의 것이라(legal/template.ts) 쓰지 않는다.
   rulesLongDelayBefore: '예정 판정 시각에서',
   rulesLongDelayTail: '일 뒤',
   rulesDelayHandling: '지연·취소·무효 처리',
@@ -1241,7 +1327,18 @@ export const copy = {
   rulesVoidPayoutYes: '무효로 판정되면 YES 계약은 계약마다',
   rulesVoidPayoutNo: 'NO 계약은 계약마다',
   rulesVoidPayoutTail: '을 지급합니다. 모든 시장에 같은 규칙입니다.',
-  rulesCloseAt: '마감',
+  // 시각 (#22, ADR-0098; ADR-0093 결정 2 #172 7·11~13항): 무효 지급 다음에 예정 개장·거래 마감·발표 예정·
+  // 예정 판정 시각과 판정 기준 시간대가 그 순서로 놓인다. 시각 줄의 이름은 '시각'으로 끝나 상태 배지('개장
+  // 예정'·'거래 마감')와 다르고, 장기 지연 기한의 '예정 판정 시각에서'가 같은 카드의 줄을 짚는다. 시각은 보는
+  // 사람의 시간대로 보이고, 판정 기준 시간대와 다르면 그 시간대의 시각이 rulesJudgementZoneLine을 앞에 두고
+  // 한 줄 더 보인다(결정 3 '#22 시간대'). 발표 일정이 없는 사건의 발표 예정은 '없음'이다(#172 13항).
+  rulesScheduledOpenAt: '예정 개장 시각',
+  rulesCloseAt: '거래 마감 시각',
+  rulesAnnouncementAt: '발표 예정 시각',
+  rulesAnnouncementNone: '없음',
+  rulesJudgementAt: '예정 판정 시각',
+  rulesJudgementTimeZone: '판정 기준 시간대',
+  rulesJudgementZoneLine: '판정 기준 시간대',
 
   // 시장가격 추이 차트. 값의 이름은 '확률'이 아니라 시장가격이다(N02 §5). 표기 단위 %는 #60.
   chartLabel: '시장가격 추이',
@@ -2624,7 +2721,7 @@ export const copy = {
   // 칸 아래에 '제안자가 바란 카테고리: X (지금은 쓰지 않는 카테고리)'로 보인다(retiredWishLine).
   adminProposalDraftCategoryWishedBy: '제안자가 바란 카테고리',
   adminProposalDraftCategoryRetired: '(지금은 쓰지 않는 카테고리)',
-  adminProposalDraftCloseAt: '초안의 마감 시각 (KST, 선택)',
+  adminProposalDraftCloseAt: '초안의 거래 마감 시각 (KST, 선택)',
   adminProposalDraftCloseAtHint:
     '비우면 결과가 정해질 날짜의 0시(한국 시간)입니다. 초안의 모든 칸은 열기 전에 시장 화면에서 고칠 수 있습니다.',
   // 시장 없이 채택한 제안에 나중에 한 번 시장을 잇는다(오너 결정 2026-10-19). 상태는 채택 그대로다.
@@ -2658,7 +2755,7 @@ export const copy = {
   errProposalDraftCategory: '초안의 카테고리를 골라 주세요.',
   errProposalDraftCategoryInactive:
     '더 이상 쓸 수 없는 카테고리입니다. 다른 카테고리를 골라 주세요.',
-  errProposalDraftCloseAt: '마감 시각은 지금보다 뒤여야 합니다.',
+  errProposalDraftCloseAt: '거래 마감 시각은 지금보다 뒤여야 합니다.',
   errProposalStatus: '제안의 상태가 바뀌었습니다. 새로 읽은 상태를 확인해 주세요.',
   errProposalMarketAlreadyLinked: '이미 시장이 연결된 제안입니다. 새로 읽은 내용을 확인해 주세요.',
   errProposalMarketNotFound: '시장을 찾을 수 없습니다.',

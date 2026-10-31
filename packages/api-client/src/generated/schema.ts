@@ -290,7 +290,7 @@ export type paths = {
         /** Every market, draft and in-review ones included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches */
         get: operations["adminListMarkets"];
         put?: never;
-        /** Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag; rule items not sent start blank */
+        /** Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag; rule items and times not sent start blank; times out of order are refused naming both ends */
         post: operations["adminCreateMarket"];
         delete?: never;
         options?: never;
@@ -312,7 +312,7 @@ export type paths = {
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit a draft (any field) or an open market (text, rule items, close time, category, tags; slug refused naming the field, a rule item it had filled left missing refused with RULES_REQUIRED naming each, no tags refused naming tags); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status */
+        /** Edit a draft (any field) or an open market (text, rule items, times, category, tags; slug refused naming the field, a rule item it had filled or its judgement time zone left missing refused with RULES_REQUIRED naming each, no tags refused naming tags, the scheduled open and judgement fixed, the close moved later only, up to the scheduled judgement, with the lead close checked again); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status */
         patch: operations["adminUpdateMarket"];
         trace?: never;
     };
@@ -342,7 +342,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, the category or the tags missing, then with a past closeAt */
+        /** draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the time order, the lead close, the category or the tags missing, then with a past closeAt, then before the scheduled open; stores the lead-close gap it checked against */
         post: operations["adminOpenMarket"];
         delete?: never;
         options?: never;
@@ -2860,7 +2860,10 @@ export type components = {
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
+            judgementDelayed: boolean;
+            judgementTimeZone: string | null;
             lastPrice: number | null;
+            leadCloseGapMinutes: number | null;
             longDelayDays: number | null;
             missingOpenItems: components["schemas"]["OpenItem"][];
             netCollectedCoin: components["schemas"]["CoinAmount"];
@@ -2875,6 +2878,12 @@ export type components = {
             /** Format: date-time */
             resolvedAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
+            /** Format: date-time */
+            scheduledAnnouncementAt: string | null;
+            /** Format: date-time */
+            scheduledJudgementAt: string | null;
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
             /** Format: date-time */
             settledAt: string | null;
             settlementSteps: components["schemas"]["AdminSettlementStep"][];
@@ -3106,6 +3115,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
+            judgementDelayed: boolean;
             lastPrice: number | null;
             /** Format: date-time */
             linkedAt: string;
@@ -3234,6 +3244,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
+            judgementDelayed: boolean;
             lastPrice: number | null;
             /** Format: date-time */
             linkedAt: string;
@@ -3501,9 +3512,16 @@ export type components = {
             fallbackSources?: components["schemas"]["MarketSource"][];
             /** Format: uri */
             imageUrl?: string | null;
+            judgementTimeZone?: string | null;
             longDelayDays?: number | null;
             noCondition?: string;
             primarySource?: components["schemas"]["MarketSource"] | null;
+            /** Format: date-time */
+            scheduledAnnouncementAt?: string | null;
+            /** Format: date-time */
+            scheduledJudgementAt?: string | null;
+            /** Format: date-time */
+            scheduledOpenAt?: string | null;
             slug?: string;
             tags?: string[];
             title: string;
@@ -3697,6 +3715,8 @@ export type components = {
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
+            judgementDelayed: boolean;
+            judgementTimeZone: string | null;
             lastPrice: number | null;
             longDelayDays: number | null;
             noCondition: string;
@@ -3706,6 +3726,12 @@ export type components = {
             /** Format: date-time */
             resolvedAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
+            /** Format: date-time */
+            scheduledAnnouncementAt: string | null;
+            /** Format: date-time */
+            scheduledJudgementAt: string | null;
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
             /** Format: date-time */
             settledAt: string | null;
             slug: string;
@@ -3750,6 +3776,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
+            judgementDelayed: boolean;
             lastPrice: number | null;
             /** Format: date-time */
             openAt: string | null;
@@ -3970,7 +3997,7 @@ export type components = {
         /** @enum {string} */
         OnboardingStep: "consent" | "verification" | "nickname";
         /** @enum {string} */
-        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "category" | "tags";
+        OpenItem: "title" | "description" | "yesCondition" | "noCondition" | "eventDeadline" | "primarySource" | "fallbackSources" | "fallbackCondition" | "longDelayDays" | "delayHandling" | "scheduledOpenAt" | "closeAt" | "scheduledJudgementAt" | "judgementTimeZone" | "timeOrder" | "leadClose" | "category" | "tags";
         Order: {
             amountCoin: components["schemas"]["CoinAmount"] | null;
             /** Format: date-time */
@@ -4172,6 +4199,7 @@ export type components = {
             };
             /** Format: uuid */
             id: string;
+            judgementDelayed: boolean;
             slug: string;
             /** @enum {string} */
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
@@ -4693,9 +4721,16 @@ export type components = {
             fallbackSources?: components["schemas"]["MarketSource"][];
             /** Format: uri */
             imageUrl?: string | null;
+            judgementTimeZone?: string | null;
             longDelayDays?: number | null;
             noCondition?: string;
             primarySource?: components["schemas"]["MarketSource"] | null;
+            /** Format: date-time */
+            scheduledAnnouncementAt?: string | null;
+            /** Format: date-time */
+            scheduledJudgementAt?: string | null;
+            /** Format: date-time */
+            scheduledOpenAt?: string | null;
             slug?: string;
             tags?: string[];
             title?: string;
