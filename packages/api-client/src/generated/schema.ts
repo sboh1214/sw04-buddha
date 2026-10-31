@@ -72,6 +72,92 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Every category, hidden ones too, in the public order (top-level first, siblings by sortOrder then id), each with the markets filed under it in any status */
+        get: operations["adminListCategories"];
+        put?: never;
+        /** Add a top-level category (parentId null) or a sub-category of an active top-level one, last among its siblings; the slug is fixed from here. A slug any category has or a name a sibling has is refused naming the field, and so is a parent that is a sub-category or hidden; an unknown parent is NOT_FOUND naming parentId */
+        post: operations["adminCreateCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/categories/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Rename a category (its slug never changes); a name a sibling has is refused naming nameKo */
+        patch: operations["adminRenameCategory"];
+        trace?: never;
+    };
+    "/api/v1/admin/categories/{id}/hide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Take a category out of new-market entry, the explore categories and the interest pick (never deleted; its markets keep it). A top-level category’s sub-categories go with it, their own state untouched */
+        post: operations["adminHideCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/categories/{id}/show": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Show a hidden category again */
+        post: operations["adminShowCategory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/categories/order": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Set the order of one group, the top-level categories (parentId null) or one parent’s sub-categories: every id of the group, hidden ones included, once each, first to last (else refused naming ids). Answers the group in its new order */
+        put: operations["adminReorderCategories"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/charge-packages": {
         parameters: {
             query?: never;
@@ -204,7 +290,7 @@ export type paths = {
         /** Every market, draft and in-review ones included, newest first; q narrows it to titles holding the term (a case-insensitive partial match), as the related-market picker searches */
         get: operations["adminListMarkets"];
         put?: never;
-        /** Create a draft market (no price until its first fill) */
+        /** Create a draft market (no price until its first fill) with up to 5 tags in order; a new tag name makes the tag, one differing only in case or spaces links the existing tag */
         post: operations["adminCreateMarket"];
         delete?: never;
         options?: never;
@@ -219,14 +305,14 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One market with its exposure, settlement steps and event log */
+        /** One market with its tags, exposure, settlement steps, event log and what the open-items check finds missing */
         get: operations["adminGetMarket"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit a draft (any field) or an open market (text, close time, category; slug refused naming the field, blank rules refused with RULES_REQUIRED); other statuses refuse naming status */
+        /** Edit a draft (any field) or an open market (text, close time, category, tags; slug refused naming the field, blank rules refused with RULES_REQUIRED, no tags refused naming tags); tags replace the whole ordered set; other statuses refuse naming status */
         patch: operations["adminUpdateMarket"];
         trace?: never;
     };
@@ -256,7 +342,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** draft → open (interim, until review and the scheduled open); refused without rules (RULES_REQUIRED) or with a past closeAt */
+        /** draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds rules, category or tags missing, then with a past closeAt */
         post: operations["adminOpenMarket"];
         delete?: never;
         options?: never;
@@ -1501,7 +1587,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a title search (q, a case-insensitive partial match); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) */
+        /** Markets by status (default open; all is every public status), never draft or in review, optionally by category and a search (q: a title partial match, case-insensitive, or a tag of exactly that name, case and spaces aside); sorted recommended (24-hour volume, then the latest opening; the default), newest (latest opening) or closing (soonest close; with all or an ended status, the markets not closed yet (scheduled, open, paused) first and then the ended ones, latest close first) */
         get: operations["listMarkets"];
         put?: never;
         post?: never;
@@ -1603,7 +1689,7 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One market by id or slug (a draft or in-review one is NOT_FOUND to the public) */
+        /** One market by id or slug, with its tags in order (a draft or in-review one is NOT_FOUND to the public) */
         get: operations["getMarket"];
         put?: never;
         post?: never;
@@ -2632,6 +2718,15 @@ export type components = {
             ledgerEntry: components["schemas"]["LedgerEntry"];
             user: components["schemas"]["AdminUser"];
         };
+        AdminCategory: {
+            id: number;
+            isActive: boolean;
+            marketCount: number;
+            nameKo: string;
+            parentId: number | null;
+            slug: string;
+            sortOrder: number;
+        };
         AdminCommentModeration: {
             actions: components["schemas"]["AdminModerationAction"][];
             author: components["schemas"]["ModerationUser"];
@@ -2761,6 +2856,7 @@ export type components = {
             id: string;
             imageUrl: string | null;
             lastPrice: number | null;
+            missingOpenItems: components["schemas"]["OpenItem"][];
             netCollectedCoin: components["schemas"]["CoinAmount"];
             /** Format: date-time */
             openAt: string | null;
@@ -2780,6 +2876,7 @@ export type components = {
             /** @enum {string} */
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
+            tags: string[];
             title: string;
             tradeCount: number;
             traderCount: number;
@@ -3353,6 +3450,12 @@ export type components = {
             redeemedCount: number;
         };
         CouponCode: string;
+        CreateCategoryBody: {
+            expectedAccountId: string;
+            nameKo: string;
+            parentId: number | null;
+            slug: string;
+        };
         CreateChargePackageBody: {
             amountCoin: components["schemas"]["CoinAmount"];
             expectedAccountId: string;
@@ -3389,6 +3492,7 @@ export type components = {
             resolutionSource?: string | null;
             rules: string;
             slug?: string;
+            tags?: string[];
             title: string;
         };
         CreateNoticeBody: {
@@ -3475,7 +3579,7 @@ export type components = {
             reportIds: string[];
         };
         /** @enum {string} */
-        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "INTERNAL";
+        ErrorCode: "UNAUTHENTICATED" | "FORBIDDEN" | "NOT_FOUND" | "VALIDATION_ERROR" | "MARKET_NOT_OPEN" | "INSUFFICIENT_BALANCE" | "PRICE_MOVED" | "DUPLICATE_REQUEST" | "RATE_LIMITED" | "RULES_REQUIRED" | "VERIFICATION_REQUIRED" | "REFUND_NOT_ALLOWED" | "PAYMENT_GATEWAY_REFUSED" | "PAYMENT_GATEWAY_ERROR" | "ROLE_CHANGE_NOT_ALLOWED" | "APPROVAL_NOT_ALLOWED" | "PHONE_VERIFICATION_NOT_ALLOWED" | "PHONE_VERIFICATION_LIMITED" | "VERIFICATION_CODE_REJECTED" | "SMS_SEND_FAILED" | "SMS_SEND_UNCONFIRMED" | "ONBOARDING_REQUIRED" | "NICKNAME_NOT_ALLOWED" | "POST_NOT_EDITABLE" | "IMAGE_NOT_ALLOWED" | "COMMENT_NOT_ALLOWED" | "COMMENT_NOT_EDITABLE" | "LIKE_NOT_ALLOWED" | "NOTICE_PIN_LIMIT_REACHED" | "NOTICE_EDIT_CONFLICT" | "REPORT_NOT_ALLOWED" | "REPORT_LIMITED" | "MODERATION_NOT_ALLOWED" | "RESTRICTED" | "WRITE_LIMITED" | "CLOSURE_NOT_ALLOWED" | "ACCOUNT_CLOSED" | "PROPOSAL_LIMITED" | "OPEN_ITEMS_MISSING" | "INTERNAL";
         ErrorEnvelope: {
             error: {
                 code: components["schemas"]["ErrorCode"];
@@ -3588,6 +3692,7 @@ export type components = {
             /** @enum {string} */
             status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
             statusEventId: string | null;
+            tags: string[];
             title: string;
             tradeCount: number;
             traderCount: number;
@@ -3839,6 +3944,8 @@ export type components = {
         };
         /** @enum {string} */
         OnboardingStep: "consent" | "verification" | "nickname";
+        /** @enum {string} */
+        OpenItem: "rules" | "category" | "tags";
         Order: {
             amountCoin: components["schemas"]["CoinAmount"] | null;
             /** Format: date-time */
@@ -4331,6 +4438,15 @@ export type components = {
             /** @enum {string} */
             item: "image";
         };
+        RenameCategoryBody: {
+            expectedAccountId: string;
+            nameKo: string;
+        };
+        ReorderCategoriesBody: {
+            expectedAccountId: string;
+            ids: number[];
+            parentId: number | null;
+        };
         ReportedComment: components["schemas"]["ReportedPublishedComment"] | components["schemas"]["ReportedDeletedComment"] | components["schemas"]["ReportedHiddenComment"];
         ReportedCommentTarget: {
             comment: components["schemas"]["ReportedComment"];
@@ -4550,6 +4666,7 @@ export type components = {
             resolutionSource?: string | null;
             rules?: string;
             slug?: string;
+            tags?: string[];
             title?: string;
         };
         UpdateMeBody: {
@@ -4989,6 +5106,464 @@ export interface operations {
             };
             /** @description FORBIDDEN */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminListCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategory"][];
+                    };
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminCreateCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateCategoryBody"];
+            };
+        };
+        responses: {
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategory"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRenameCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RenameCategoryBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategory"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminHideCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategory"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminShowCategory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategory"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminReorderCategories: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReorderCategoriesBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminCategory"][];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -6207,7 +6782,7 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
-            /** @description RULES_REQUIRED */
+            /** @description OPEN_ITEMS_MISSING */
             422: {
                 headers: {
                     [name: string]: unknown;

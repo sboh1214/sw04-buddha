@@ -360,7 +360,8 @@ const ERROR_NOTES = {
   DUPLICATE_REQUEST:
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
-  RULES_REQUIRED: '정산 규칙(`rules`)이 비어 있어 개장하거나 그대로 저장할 수 없다.',
+  RULES_REQUIRED:
+    '열린 시장의 정산 규칙(`rules`)을 비워 저장할 수 없다. 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
   VERIFICATION_REQUIRED:
     '본인확인(휴대전화 SMS 인증번호)을 마치지 않은 계정이다. `POST /api/v1/me/phone-verification/code` 로 인증번호를 받아 `POST /api/v1/me/phone-verification/confirm` 으로 확인한 뒤 다시 시도한다(ADR-0070).',
   REFUND_NOT_ALLOWED:
@@ -417,6 +418,8 @@ const ERROR_NOTES = {
     '본인이 탈퇴한 계정이다(#140). 그 계정의 원장은 탈퇴 소멸에서 끝나므로 운영자의 잔액 조정을 받지 않고, 다시 로그인하지 못하고 프로필이 바뀌지 않으므로 관리자 권한 부여도 받지 않는다.',
   PROPOSAL_LIMITED:
     '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
+  OPEN_ITEMS_MISSING:
+    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, 지금은 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['rules']`(정산 규칙이 비었다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다), `['tags']`(태그가 1개 이상 5개 이하가 아니다).",
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

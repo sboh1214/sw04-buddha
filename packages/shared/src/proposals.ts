@@ -144,10 +144,11 @@ const categoryIdSchema = z.number().int().positive().max(INT4_MAX);
  * `POST /me/proposals`: the form (ADR-0069 decision 4 #77). Every text is trimmed; the four
  * required ones may not be blank, an empty background is none. The date is a calendar date
  * (`YYYY-MM-DD`), today in Korea or later (`isProposalDeadlineOpen`, checked by the server at its
- * clock). The category is any active one, either level, or none. A field the form does not have —
- * a probability, say (N02 §10) — is dropped, never stored. And the account the screen shows
- * (`expectedAccountId`, as on every owner write since A-PG-24): a window still showing account A
- * after another one signed in as B would otherwise propose as B.
+ * clock). The category is any active one under an active parent, either level — the categories
+ * `GET /categories` lists (#17) — or none. A field the form does not have — a probability, say
+ * (N02 §10) — is dropped, never stored. And the account the screen shows (`expectedAccountId`, as
+ * on every owner write since A-PG-24): a window still showing account A after another one signed
+ * in as B would otherwise propose as B.
  */
 export const createProposalBodySchema = z
   .object({

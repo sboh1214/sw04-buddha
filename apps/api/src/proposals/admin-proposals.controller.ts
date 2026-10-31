@@ -108,8 +108,11 @@ export class AdminProposalsController {
   })
   @ApiData(adminProposalSchema)
   // NOT_FOUND names `market.marketId` (an unknown market) or `market.categoryId` (an unknown
-  // category); VALIDATION_ERROR names `status`, `market.categoryId` (none, or inactive) or
-  // `market.closeAt` (not in the future) besides the body schema's own issues.
+  // category); VALIDATION_ERROR names `status`, `market.categoryId` ('required': none, or the
+  // proposal's wished category that has sub-categories; `subcategories` for such a category the
+  // operator gave; `inactive` or `parent_inactive` for a hidden one or one under a hidden parent,
+  // whoever named it — #17) or `market.closeAt` (not in the future) besides the body schema's
+  // own issues.
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminAdoptProposal(
     @CurrentUser() admin: SessionUser,

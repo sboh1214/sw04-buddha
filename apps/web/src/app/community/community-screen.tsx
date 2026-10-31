@@ -49,9 +49,9 @@ const SKELETON_ROWS = [0, 1, 2, 3];
 /**
  * The community list (#46, ADR-0073): the `h2` with 글쓰기, the search box (title and text, within
  * the market and category picked), the market filter (a chip naming the market, or a picker that
- * finds one by its title) and the category select (either level, as the search screen's), and the
- * cards, newest first — the only order (#45-7) — one page per 더 보기. Between the `h2` and the
- * search box, the operators' pinned notices (#138, ADR-0077).
+ * finds one by its title or a tag's exact name, #17) and the category select (either level, as the
+ * search screen's), and the cards, newest first — the only order (#45-7) — one page per 더 보기.
+ * Between the `h2` and the search box, the operators' pinned notices (#138, ADR-0077).
  *
  * Every control writes to the URL and reads its value back out of the `filters` prop the server
  * normalised (the home's rule): the query string is the one source of truth, so a filtered list is

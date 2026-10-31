@@ -8,7 +8,8 @@ import { config as loadEnv } from 'dotenv';
  *
  * The suite needs a whole stack: Postgres, Redis and Mailpit (`pnpm infra:up`), a migrated and
  * SEEDED database (`pnpm db:migrate && pnpm db:seed` — the specs create their own markets, but
- * the two bootstrap admins (#171) and the category rows have no route that could make them), the
+ * the two bootstrap admins (#171) have no route that could make them, and the markets are filed
+ * under the seed's category tree, which the specs leave as it is (#17)), the
  * API on :4000, the web server on :3000 and, since M5, the worker. The `webServer` blocks below
  * start the three processes when nothing is listening; the containers and the migrations remain
  * a prerequisite.

@@ -15,8 +15,8 @@ import { type Refusal } from '@/lib/restriction';
 
 /**
  * 관심 카테고리, the onboarding's last screen (#58, ADR-0069 decision 1 #57-7): after the start Coin
- * and its notice, before the market. The categories are the operators' list (D10) — the seeded one
- * until #17's admin screen, `GET /categories` — top-level and sub-categories alike, as many as the
+ * and its notice, before the market. The categories are the operators' list (D10), kept on
+ * /admin/categories (#17) — `GET /categories` — top-level and sub-categories alike, as many as the
  * member likes (`POST /me/onboarding/interests`). 건너뛰기 sends none, and either way the step is
  * answered and never asked again (#57-7) — nor is it once the account left this screen or the
  * notice before it: the screen shows once, right after the nickname step (오너 결정 2026-10-19

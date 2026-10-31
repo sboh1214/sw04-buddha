@@ -65,6 +65,7 @@ const market = {
   description: null,
   rules: '종가 기준',
   resolutionSource: 'KRX',
+  tags: ['코스피', 'S&P500'],
   resolvedAt: null,
   settledAt: null,
 };
@@ -188,8 +189,12 @@ describe('read DTOs', () => {
         },
       ],
       events: [event],
+      missingOpenItems: [],
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
+    expect(
+      adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['tags', 'deadline'] }).success,
+    ).toBe(false);
     expect(marketSchema.parse(admin)).not.toHaveProperty('netCollectedCoin');
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
     // No LMSR state on the admin shape either (#125).

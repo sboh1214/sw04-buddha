@@ -738,12 +738,13 @@ export interface AdminProposalFailure {
 /**
  * A refusal of an operator's write, read: a status that moved (VALIDATION_ERROR naming `status`),
  * a market linked meanwhile (naming `market`: another operator linked one first — the link is once,
- * owner decision 2026-10-19), the draft's category (none to stand in — `required` — or retired,
- * `inactive` — or unknown, a 404) or close time (past), a market that is not there (a 404 naming
- * the field that carried it), and the proposal itself gone (404). The cookie of another account
- * (`isForAnotherAccount` — every operator write names the admin on screen, ADR-0092) is
- * `copy.sessionChanged` with nothing read again: the caller asks for the session, whose reset
- * reads everything.
+ * owner decision 2026-10-19), the draft's category (none to stand in — `required` — or a pick
+ * that got sub-categories meanwhile — `subcategories` — or retired, `inactive`, or under a hidden
+ * parent, `parent_inactive` (#17) — or unknown, a 404) or close time (past), a market that is not
+ * there (a 404 naming the field that carried it), and the proposal itself gone (404). The cookie
+ * of another account (`isForAnotherAccount` — every operator write names the admin on screen,
+ * ADR-0092) is `copy.sessionChanged` with nothing read again: the caller asks for the session,
+ * whose reset reads everything.
  */
 export function adminProposalFailure(error: unknown): AdminProposalFailure {
   if (isForAnotherAccount(error)) return { message: copy.sessionChanged, refresh: false };
@@ -752,10 +753,13 @@ export function adminProposalFailure(error: unknown): AdminProposalFailure {
     if (path === 'status') return { message: copy.errProposalStatus, refresh: true };
     if (path === 'market') return { message: copy.errProposalMarketAlreadyLinked, refresh: true };
     if (path === 'market.categoryId') {
-      // A retired category — the proposal's own, or the one picked, retired meanwhile — is not
-      // a missing one: the proposal may well name a category.
+      // A retired category — the proposal's own, or the one picked, retired meanwhile, or (#17)
+      // one under a parent hidden meanwhile — is not a missing one: the proposal may well name a
+      // category. A pick that got sub-categories meanwhile ('subcategories') asks for a leaf,
+      // as a missing one does.
+      const reason = issueMessage(error);
       const message =
-        issueMessage(error) === 'inactive'
+        reason === 'inactive' || reason === 'parent_inactive'
           ? copy.errProposalDraftCategoryInactive
           : copy.errProposalDraftCategory;
       return { message, field: 'categoryId', refresh: false };

@@ -82,6 +82,7 @@ const detail: Market = {
   resolutionSource: null,
   resolvedAt: null,
   settledAt: null,
+  tags: [],
 };
 
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({

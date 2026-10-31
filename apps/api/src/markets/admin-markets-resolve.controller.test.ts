@@ -110,6 +110,8 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       rules: '한국은행 발표 기준. 기한까지 3% 이하로 내리지 않으면 NO.',
       categoryId: category.id,
       closeAt: new Date(Date.now() + 7 * DAY_MS).toISOString(),
+      // Tagged, so the draft passes the open-items check (#17).
+      tags: ['금리'],
       ...overrides,
     });
   const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);

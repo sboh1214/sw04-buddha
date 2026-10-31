@@ -46,6 +46,7 @@ import {
   marketSearchTerms,
   marketSearches,
   marketSettlementSteps,
+  marketTags,
   marketWatchEvents,
   marketWatches,
   markets,
@@ -80,6 +81,7 @@ import {
   session,
   startGrantNumbers,
   startGrants,
+  tags,
   themeMarkets,
   themeNotices,
   themes,
@@ -719,6 +721,177 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       .where(eq(themeMarkets.themeId, theme.id))
       .returning();
     expect(removed).toHaveLength(1);
+  });
+
+  describe('tags and the category tree (migration 0049, #17)', () => {
+    /** A refusal's SQLSTATE and constraint, from a write expected to fail. */
+    async function refusal(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), constraint: sqlConstraint(error) };
+    }
+
+    it('keeps one tag per name, case ignored: name_key is lower(name), generated', async () => {
+      // ADR-0093 decision 2 #172 item 2: two names that differ only in case are one tag, and the
+      // tag keeps the spelling it was first made with (#17).
+      const [ai] = await t.db.insert(tags).values({ name: 'AI' }).returning();
+      expect(ai).toMatchObject({ name: 'AI', nameKey: 'ai' });
+      expect(await refusal(t.db.insert(tags).values({ name: 'ai' }))).toEqual({
+        state: '23505',
+        constraint: 'tags_name_key_unique',
+      });
+      // The API's upsert: the second spelling links the first tag and changes nothing.
+      const upserted = await t.db
+        .insert(tags)
+        .values({ name: 'Ai' })
+        .onConflictDoNothing({ target: tags.nameKey })
+        .returning();
+      expect(upserted).toEqual([]);
+      expect(await t.db.select().from(tags)).toEqual([ai]);
+      // Hangul has no case: the key is the name.
+      const [seoul] = await t.db.insert(tags).values({ name: '서울' }).returning();
+      expect(seoul?.nameKey).toBe('서울');
+      // The key is the database's, never the writer's.
+      expect(
+        (await refusal(t.db.execute(sql`INSERT INTO tags (name, name_key) VALUES ('KT', 'kt')`)))
+          .state,
+      ).toBe('428C9');
+      // TAG_NAME_MAX characters, Hangul counted as one each (22001 past it).
+      await t.db.insert(tags).values({ name: '가'.repeat(20) });
+      expect((await refusal(t.db.insert(tags).values({ name: '나'.repeat(21) }))).state).toBe(
+        '22001',
+      );
+    });
+
+    it('holds a market at five tags, each once, in positions 1..5', async () => {
+      // MARKET_TAGS_MAX whoever writes (ADR-0093 decision 2 #172 item 2): the CHECK bounds the
+      // position and the market's positions are unique, so a sixth tag has nowhere to go.
+      const market = await createMarket(t.db, { status: 'draft' });
+      const made = await t.db
+        .insert(tags)
+        .values(['하나', '둘', '셋', '넷', '다섯', '여섯'].map((name) => ({ name })))
+        .returning();
+      const ids = made.map((row) => row.id);
+      await t.db
+        .insert(marketTags)
+        .values(
+          ids
+            .slice(0, 5)
+            .map((tagId, index) => ({ marketId: market.id, tagId, position: index + 1 })),
+        );
+      const link = (tagId: number, position: number, marketId = market.id) =>
+        t.db.insert(marketTags).values({ marketId, tagId, position });
+      for (const position of [6, 0, -1]) {
+        expect(await refusal(link(ids[5]!, position)), String(position)).toEqual({
+          state: '23514',
+          constraint: 'market_tags_position_check',
+        });
+      }
+      expect(await refusal(link(ids[5]!, 5))).toEqual({
+        state: '23505',
+        constraint: 'market_tags_market_id_position_unique',
+      });
+      // One tag once per market, whatever the position.
+      await t.db
+        .delete(marketTags)
+        .where(and(eq(marketTags.marketId, market.id), eq(marketTags.position, 5)));
+      expect(await refusal(link(ids[0]!, 5))).toEqual({
+        state: '23505',
+        constraint: 'market_tags_market_id_tag_id_pk',
+      });
+      // The bound is per market: another market takes the same tags and positions.
+      const other = await createMarket(t.db, { status: 'draft' });
+      await link(ids[0]!, 1, other.id);
+      // Relations both ways: a market's tags in order, a tag's markets.
+      const withTags = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { tags: { with: { tag: true }, orderBy: (row, { asc }) => [asc(row.position)] } },
+      });
+      expect(withTags?.tags.map((row) => [row.position, row.tag.name])).toEqual([
+        [1, '하나'],
+        [2, '둘'],
+        [3, '셋'],
+        [4, '넷'],
+      ]);
+      const first = await t.db.query.tags.findFirst({
+        where: eq(tags.id, ids[0]!),
+        with: { markets: { with: { market: true } } },
+      });
+      expect(first?.markets.map((row) => row.market.id).sort()).toEqual(
+        [market.id, other.id].sort(),
+      );
+    });
+
+    it('never renames or deletes a tag, and keeps a tag and a market while linked (RESTRICT)', async () => {
+      const market = await createMarket(t.db, { status: 'draft' });
+      const [tag] = await t.db.insert(tags).values({ name: '금리' }).returning();
+      await t.db.insert(marketTags).values({ marketId: market.id, tagId: tag!.id, position: 1 });
+      // buddha_app inserts and reads tags only (migration 0049): a tag keeps its first spelling.
+      expect(
+        (await refusal(t.db.update(tags).set({ name: '기준금리' }).where(eq(tags.id, tag!.id))))
+          .state,
+      ).toBe('42501');
+      expect((await refusal(t.db.delete(tags).where(eq(tags.id, tag!.id)))).state).toBe('42501');
+      // A linked market cannot go (markets are never deleted; this only backs that up).
+      expect(await refusal(t.db.delete(markets).where(eq(markets.id, market.id)))).toEqual({
+        state: '23503',
+        constraint: 'market_tags_market_id_markets_id_fk',
+      });
+      // Nor a linked tag, even for the owner.
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        expect(await refusal(owner.delete(tags).where(eq(tags.id, tag!.id)))).toEqual({
+          state: '23503',
+          constraint: 'market_tags_tag_id_tags_id_fk',
+        });
+      } finally {
+        await closeDb(owner);
+      }
+      const { rows: actions } = await t.db.execute<{ name: string; action: string }>(sql`
+        SELECT conname AS name, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_tags'::regclass AND contype = 'f' ORDER BY conname`);
+      expect(actions).toEqual([
+        { name: 'market_tags_market_id_markets_id_fk', action: 'r' },
+        { name: 'market_tags_tag_id_tags_id_fk', action: 'r' },
+      ]);
+      // An edit of a market's tags deletes its rows and inserts the new set.
+      const removed = await t.db
+        .delete(marketTags)
+        .where(eq(marketTags.marketId, market.id))
+        .returning();
+      expect(removed).toHaveLength(1);
+      expect(await t.db.select().from(tags)).toEqual([tag]);
+    });
+
+    it('gives no two siblings one name, the top level a group of its own', async () => {
+      // categories_parent_name_ko_unique (#17): the pickers would show two the same. The key is
+      // (coalesce(parent_id, 0), name_ko), so a top-level row and a sub-category may share one.
+      const economy = await createCategory(t.db, { nameKo: '경제' });
+      const culture = await createCategory(t.db, { nameKo: '문화' });
+      const taken = { state: '23505', constraint: 'categories_parent_name_ko_unique' };
+      expect(await refusal(createCategory(t.db, { nameKo: '경제' }))).toEqual(taken);
+      const rates = await createCategory(t.db, { nameKo: '금리', parentId: economy.id });
+      expect(await refusal(createCategory(t.db, { nameKo: '금리', parentId: economy.id }))).toEqual(
+        taken,
+      );
+      // The same name under another parent, and at the top level.
+      await createCategory(t.db, { nameKo: '금리', parentId: culture.id });
+      await createCategory(t.db, { nameKo: '금리' });
+      await createCategory(t.db, { nameKo: '경제', parentId: economy.id });
+      // A rename into a sibling's name is refused too; a hidden sibling still holds its name.
+      const prices = await createCategory(t.db, { nameKo: '물가', parentId: economy.id });
+      expect(
+        await refusal(
+          t.db.update(categories).set({ nameKo: '금리' }).where(eq(categories.id, prices.id)),
+        ),
+      ).toEqual(taken);
+      await t.db.update(categories).set({ isActive: false }).where(eq(categories.id, rates.id));
+      expect(await refusal(createCategory(t.db, { nameKo: '금리', parentId: economy.id }))).toEqual(
+        taken,
+      );
+    });
   });
 
   it('a recorded search resolves its account and back, and holds a term of 100 at most (#15)', async () => {
@@ -6767,7 +6940,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'market_search_terms', 'market_links', 'consent_records', 'nickname_holds',
             'profile_interest_categories', 'post_likes', 'comment_likes',
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
-            'themes', 'theme_markets', 'theme_notices')
+            'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -6835,6 +7008,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('themes')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
       expect(privs('theme_notices')).toEqual(['INSERT', 'SELECT', 'UPDATE']);
       expect(privs('theme_markets')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0049 (#17): a tag is made by a market entry and never renamed or deleted; an
+      // edit of a market's tags deletes and inserts its links. The API hides a category in place
+      // and never deletes one, but no migration takes DELETE away: RESTRICT keeps one in use.
+      expect(privs('tags')).toEqual(['INSERT', 'SELECT']);
+      expect(privs('market_tags')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      expect(privs('categories')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

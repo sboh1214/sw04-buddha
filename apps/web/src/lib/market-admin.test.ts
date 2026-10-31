@@ -1,9 +1,11 @@
 import {
   AUDIT_FAILURE_KINDS,
+  CATEGORY_UNSELECTABLE_REASONS,
   MARKET_EVENT_TYPES,
   MARKET_RESULTS,
   MARKET_STATUSES,
   MINUS_SIGN,
+  OPEN_ITEMS,
   PUBLIC_MARKET_STATUSES,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
@@ -19,6 +21,7 @@ import {
   MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
+  OPEN_ITEM_LABEL,
   SETTLEMENT_STEP_LABEL,
   SETTLEMENT_STEP_STATUS_LABEL,
   SETTLEMENT_STEP_STATUS_PALETTE,
@@ -40,6 +43,7 @@ import {
   marketIdParam,
   marketEventRows,
   marketFormError,
+  openItemsNotice,
   SETTLEMENT_POLL_INTERVAL_MS,
   settlementPollInterval,
   settlementStepViews,
@@ -453,6 +457,37 @@ describe('marketEventRows', () => {
   });
 });
 
+describe('openItemsNotice', () => {
+  it('names the open-items labels the brief gives, one per item (#17)', () => {
+    expect(OPEN_ITEMS.map((item) => OPEN_ITEM_LABEL[item])).toEqual([
+      '정산 규칙',
+      '카테고리',
+      '태그 1~5개',
+    ]);
+  });
+
+  it("says what a draft still lacks, joined with ' · ' in OPEN_ITEMS order", () => {
+    expect(
+      openItemsNotice({ status: 'draft', missingOpenItems: ['rules', 'category', 'tags'] }),
+    ).toBe('열기 전에 채울 항목: 정산 규칙 · 카테고리 · 태그 1~5개');
+    expect(openItemsNotice({ status: 'draft', missingOpenItems: ['tags'] })).toBe(
+      '열기 전에 채울 항목: 태그 1~5개',
+    );
+    expect(openItemsNotice({ status: 'draft', missingOpenItems: ['tags', 'rules'] })).toBe(
+      `${copy.adminMarketOpenItems}: ${copy.openItemRules} · ${copy.openItemTags}`,
+    );
+  });
+
+  it('is nothing once nothing is missing, and nothing on any status but draft', () => {
+    expect(openItemsNotice({ status: 'draft', missingOpenItems: [] })).toBeUndefined();
+    // An open market whose category was hidden later keeps it (#172 item 1): the check is what
+    // leaving the draft takes, so there is no notice even though the API reports the item.
+    for (const status of MARKET_STATUSES.filter((value) => value !== 'draft')) {
+      expect(openItemsNotice({ status, missingOpenItems: ['category'] }), status).toBeUndefined();
+    }
+  });
+});
+
 describe('marketFormError for RULES_REQUIRED', () => {
   it('puts the refusal of blank rules on an open market under the rules field', () => {
     const error = apiError(
@@ -502,9 +537,6 @@ describe('transitionErrorMessage', () => {
   });
 
   it('names the specific refusals of open / close / void', () => {
-    expect(transitionErrorMessage(apiError(422, 'RULES_REQUIRED'))).toBe(
-      copy.errMarketRulesRequired,
-    );
     expect(transitionErrorMessage(apiError(409, 'MARKET_NOT_OPEN'))).toBe(copy.errMarketNotOpen);
     expect(
       transitionErrorMessage(
@@ -543,6 +575,51 @@ describe('transitionErrorMessage', () => {
     expect(named('evidenceUrl')).toBe(copy.errMarketResolveEvidence);
   });
 
+  it('names every item the open-items check found missing, in OPEN_ITEMS order (#17)', () => {
+    // The API's details: one `{path: [item], message}` per missing item; for the category the
+    // message is why (here 'subcategories'), which the toast does not repeat.
+    const refused = (details?: unknown) =>
+      transitionErrorMessage(
+        apiError(422, 'OPEN_ITEMS_MISSING', 'The market misses what it needs to open', details),
+      );
+    expect(
+      refused([
+        { path: ['rules'], message: 'required' },
+        { path: ['category'], message: 'subcategories' },
+        { path: ['tags'], message: 'required' },
+      ]),
+    ).toBe('열기 전에 채울 항목이 있습니다: 정산 규칙 · 카테고리 · 태그 1~5개');
+    expect(refused([{ path: ['tags'], message: 'required' }])).toBe(
+      `${copy.errMarketOpenItemsMissing}: ${copy.openItemTags}`,
+    );
+    // The order is OPEN_ITEMS', whatever order the answer listed them in, each once.
+    expect(
+      refused([
+        { path: ['tags'], message: 'required' },
+        { path: ['rules'], message: 'required' },
+        { path: ['tags'], message: 'required' },
+      ]),
+    ).toBe(`${copy.errMarketOpenItemsMissing}: ${copy.openItemRules} · ${copy.openItemTags}`);
+    // No details, or none this screen knows: the line alone.
+    expect(refused()).toBe('열기 전에 채울 항목이 있습니다.');
+    expect(refused([{ path: ['times'], message: 'required' }])).toBe(
+      `${copy.errMarketOpenItemsMissing}.`,
+    );
+    expect(refused('nope')).toBe(`${copy.errMarketOpenItemsMissing}.`);
+    // Not a field refusal: the form leaves it to this toast.
+    expect(
+      marketFormError(
+        apiError(422, 'OPEN_ITEMS_MISSING', 'x', [{ path: ['rules'], message: 'required' }]),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('no longer reads RULES_REQUIRED as a refused open: only an open market PATCH answers it', () => {
+    // Open answers OPEN_ITEMS_MISSING since #17; the PATCH's RULES_REQUIRED lands on the rules
+    // field (`marketFormError`), so a stray one here is the generic toast.
+    expect(transitionErrorMessage(apiError(422, 'RULES_REQUIRED'))).toBe(copy.errUnknown);
+  });
+
   it('names a market that no longer exists rather than asking for a retry', () => {
     expect(transitionErrorMessage(apiError(404, 'NOT_FOUND', 'Market not found'))).toBe(
       copy.adminMarketNotFound,
@@ -577,7 +654,7 @@ describe('marketFormError', () => {
     ).toEqual({ field: 'slug', message: copy.errMarketSlug });
   });
 
-  it('lands an unknown or retired category on the category field', () => {
+  it('lands an unknown category, or one a market may not be filed under, on the category field', () => {
     expect(
       marketFormError(
         apiError(404, 'NOT_FOUND', 'Category not found', [
@@ -585,13 +662,57 @@ describe('marketFormError', () => {
         ]),
       ),
     ).toEqual({ field: 'categoryId', message: copy.errMarketCategoryUnavailable });
-    expect(
-      marketFormError(
-        apiError(400, 'VALIDATION_ERROR', 'This category is disabled', [
-          { path: ['categoryId'], message: 'inactive' },
-        ]),
-      ),
-    ).toEqual({ field: 'categoryId', message: copy.errMarketCategoryUnavailable });
+    // #17: the issue's message is why (CATEGORY_UNSELECTABLE_REASONS), and the field says it.
+    const refused = (message: string) =>
+      marketFormError(apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['categoryId'], message }]));
+    expect(refused('inactive')).toEqual({
+      field: 'categoryId',
+      message: copy.errMarketCategoryHidden,
+    });
+    expect(refused('parent_inactive')).toEqual({
+      field: 'categoryId',
+      message: copy.errMarketCategoryParentHidden,
+    });
+    expect(refused('subcategories')).toEqual({
+      field: 'categoryId',
+      message: copy.errMarketCategoryHasChildren,
+    });
+    expect(refused('something new')).toEqual({
+      field: 'categoryId',
+      message: copy.errMarketCategoryUnavailable,
+    });
+    for (const reason of CATEGORY_UNSELECTABLE_REASONS) {
+      expect(refused(reason)?.message, reason).not.toBe(copy.errMarketCategoryUnavailable);
+    }
+  });
+
+  it('lands every refusal of the tags on the tags field, said by which rule (#17)', () => {
+    const refused = (path: (string | number)[], message: string) =>
+      marketFormError(apiError(400, 'VALIDATION_ERROR', 'Validation failed', [{ path, message }]));
+    // marketTagsSchema: a second name of one tag, naming its index.
+    expect(refused(['tags', 1], 'duplicate tag')).toEqual({
+      field: 'tags',
+      message: copy.errMarketTagDuplicate,
+    });
+    // An open market edited down to none (#17 구현의 선택).
+    expect(refused(['tags'], 'required while open')).toEqual({
+      field: 'tags',
+      message: copy.errMarketTagsOpen,
+    });
+    // The list itself over MARKET_TAGS_MAX.
+    expect(refused(['tags'], 'Too big: expected array to have <=5 items')).toEqual({
+      field: 'tags',
+      message: copy.errMarketTagsMax,
+    });
+    // One name: too long, or outside the pattern.
+    expect(refused(['tags', 0], 'Too big: expected string to have <=20 characters')).toEqual({
+      field: 'tags',
+      message: copy.errMarketTagLength,
+    });
+    expect(refused(['tags', 2], 'only Korean, letters, digits, spaces and -_.&+·')).toEqual({
+      field: 'tags',
+      message: copy.errMarketTagFormat,
+    });
   });
 
   it('maps the remaining API field names onto the form', () => {

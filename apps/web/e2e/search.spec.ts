@@ -18,7 +18,8 @@ import {
  * 시장 검색 (#15, ADR-0066; owner decisions in ADR-0061 decision 1, items 13·14·18, and decision
  * 3, the #15 rows): the results are a screen of their own (`/search`), reached from the header's
  * box, on every public status until one is picked — so a closed market is found, and by 거래 마감
- * alone too — matched on the title, sorted as the home is. 'No results', loading and a failure are
+ * alone too — matched on the title (and on a tag's whole name since #17: market-tags.spec.ts),
+ * sorted as the home is. 'No results', loading and a failure are
  * different states, and a failure is never 'no results' (N02 §3). With no term a member sees
  * their own recent searches (distinct, newest first, each deletable, and all at once) and a
  * visitor a prompt; only a member's submitted term — and a recent search they pick, as a new

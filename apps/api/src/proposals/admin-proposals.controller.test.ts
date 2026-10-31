@@ -4,8 +4,9 @@
  * none), 반려 and the internal memo. What the owner decided (ADR-0069 decision 4 #77) is what is
  * pinned: 접수 → 검토 → 채택·반려 and 접수 → 반려 directly, never back and never again; a 반려's reason
  * from the list with an explanation, a 중복's existing market; a 채택's optional memo and its market;
- * the draft opens nothing and is not public, and sits where a market may (the operator's category,
- * else the proposal's when it is a leaf or a parent with no leaves, ADR-0041); who and when kept
+ * the draft opens nothing and is not public, and sits where a market may (the operator's category
+ * where the market API files a new market, #17, else the proposal's when it is a leaf or a parent
+ * with no leaves, ADR-0041; never under a hidden top-level category); who and when kept
  * and shown, each move recorded in `admin_actions` with its operator; the internal memo apart from
  * the proposer. And the owner's answers of 2026-10-19: a 채택 made with no market takes one later,
  * once (a draft or an existing market, `proposal_link`), the status staying 채택; a retired wish is
@@ -477,8 +478,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     expect(errorOf(inactive)).toMatchObject({
       details: [{ path: ['market', 'categoryId'], message: 'inactive' }],
     });
-    // A wish retired after it was proposed (only the database can retire one today) is refused as
-    // retired, not as missing: the proposal does name a category.
+    // A wish retired after it was proposed (an operator's hide, #17; written here through the
+    // database) is refused as retired, not as missing: the proposal does name a category.
     const retiredWish = await proposal({ status: 'reviewing', categoryId: retired.id });
     // The screen reads it as retired (owner decision 2026-10-19: no default for the draft then).
     expect(answerOf(await get(`/${retiredWish.id}`)).category).toEqual({
@@ -496,6 +497,24 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     expect(errorOf(wishInactive)).toMatchObject({
       details: [{ path: ['market', 'categoryId'], message: 'inactive' }],
     });
+    // A sub-category under a hidden top-level category is hidden with it (#17), the operator's
+    // pick and the wish alike, though its own state is untouched.
+    const shelved = await createCategory(t.db, { isActive: false });
+    const underShelved = await createCategory(t.db, { parentId: shelved.id });
+    const pickedUnder = await adopt(noCategory.id, {
+      market: { type: 'draft', categoryId: underShelved.id },
+    });
+    expect(pickedUnder.statusCode).toBe(400);
+    expect(errorOf(pickedUnder)).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: [{ path: ['market', 'categoryId'], message: 'parent_inactive' }],
+    });
+    const wishUnder = await proposal({ status: 'reviewing', categoryId: underShelved.id });
+    const wishedUnder = await adopt(wishUnder.id, { market: { type: 'draft' } });
+    expect(wishedUnder.statusCode).toBe(400);
+    expect(errorOf(wishedUnder)).toMatchObject({
+      details: [{ path: ['market', 'categoryId'], message: 'parent_inactive' }],
+    });
     // An unknown category is NOT_FOUND naming the adoption's field.
     const unknown = await adopt(noCategory.id, {
       market: { type: 'draft', categoryId: 2_000_000_000 },
@@ -508,7 +527,7 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
     expect(await t.db.select().from(schema.markets)).toEqual([]);
     expect(
       (await t.db.select().from(schema.marketProposals)).map((row) => row.status).sort(),
-    ).toEqual(['reviewing', 'reviewing', 'reviewing']);
+    ).toEqual(['reviewing', 'reviewing', 'reviewing', 'reviewing']);
     // With what it lacked, given by the operator, it is made.
     const closeAt = new Date(Date.now() + 7 * DAY_MS).toISOString();
     const made = answerOf(
@@ -557,14 +576,23 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       details: [{ path: ['market', 'categoryId'], message: 'required' }],
     });
     expect(answerOf(await get(`/${parentWish.id}`)).status).toBe('reviewing');
-    // Picked by the operator, the parent itself is taken: the API takes any active level.
+    // Picked by the operator, the parent is refused as the market API refuses it since #17 (a
+    // top-level category with an active sub-category holds no new market), naming the adoption's
+    // field; its leaf is taken.
+    const parentPicked = await adopt(parentWish.id, {
+      market: { type: 'draft', categoryId: category.id },
+    });
+    expect(parentPicked.statusCode).toBe(400);
+    expect(errorOf(parentPicked)).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      details: [{ path: ['market', 'categoryId'], message: 'subcategories' }],
+    });
+    expect(answerOf(await get(`/${parentWish.id}`)).status).toBe('reviewing');
     expect(
       await draftCategory(
-        answerOf(
-          await adopt(parentWish.id, { market: { type: 'draft', categoryId: category.id } }),
-        ),
+        answerOf(await adopt(parentWish.id, { market: { type: 'draft', categoryId: leaf.id } })),
       ),
-    ).toBe(category.id);
+    ).toBe(leaf.id);
     // A parent whose only leaf is retired has none a market could sit on: the wish stands in.
     const lone = await createCategory(t.db, { slug: 'weather', nameKo: '날씨' });
     await createCategory(t.db, {
@@ -584,6 +612,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       createdBy: admin.id,
       categoryId: category.id,
       status: 'draft',
+      // What the open asks of a draft (#17's open-items check), so the route below opens it.
+      tags: ['금리'],
     });
     const linked = await proposal({ status: 'reviewing' });
     expect(
@@ -640,6 +670,8 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       createdBy: admin.id,
       categoryId: category.id,
       status: 'draft',
+      // What the open asks of a draft (#17's open-items check), so the route below opens it.
+      tags: ['금리'],
     });
     // An unknown market is NOT_FOUND naming the field, and nothing is linked.
     const unknown = await link(adopted.id, {
