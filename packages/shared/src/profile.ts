@@ -175,8 +175,8 @@ const profileCountSchema = z.number().int().min(0);
  * for a post's author.
  *
  * The counts read what the profile's lists (#51, #37-14) show: the member's posts and comments
- * (대댓글 included) that are neither deleted nor hidden — those of an ended or voided market and
- * those written during a restriction included — and the likes those posts and comments hold
+ * (대댓글 included) that are neither deleted nor hidden — those of an ended, cancelled or 무효 market
+ * and those written during a restriction included — and the likes those posts and comments hold
  * (a withdrawn liker's too, #37-17; the likes of a deleted or hidden one never, owner decision
  * 2026-10-20; the member's own on their own never, owner decision 2026-10-21 answer 3).
  */

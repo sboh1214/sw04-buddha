@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { MARKET_STATUSES } from '@buddha/shared';
+import { MARKET_STATUSES, PUBLIC_MARKET_STATUSES } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { SRC } from '../test/screen-text';
@@ -28,6 +28,7 @@ import {
   perWidth,
   personalAreaView,
   showsOrderArea,
+  statusNotice,
   viewDisplay,
 } from './market-detail';
 
@@ -243,6 +244,60 @@ describe('showsOrderArea (ADR-0048)', () => {
     }
     // The row not loaded yet: no order area to promise.
     expect(showsOrderArea(undefined)).toBe(false);
+  });
+});
+
+describe('statusNotice (PLAN 11.3, #174)', () => {
+  it('says something for every public status but 거래 중, and nothing for the admin-only two', () => {
+    // An open market's state is its countdown; a draft or one in review never reaches the route.
+    for (const status of MARKET_STATUSES) {
+      const notice = statusNotice({ status, resolvedResult: null });
+      const expected =
+        (PUBLIC_MARKET_STATUSES as readonly string[]).includes(status) && status !== 'open';
+      expect(notice !== undefined, status).toBe(expected);
+    }
+    // One sentence per status: no two read alike.
+    const messages = PUBLIC_MARKET_STATUSES.filter((status) => status !== 'open').map(
+      (status) => statusNotice({ status, resolvedResult: null })?.message,
+    );
+    expect(new Set(messages).size).toBe(messages.length);
+  });
+
+  it('warns where trading is stopped before the end, and says where the payout went once settled', () => {
+    expect(statusNotice({ status: 'paused', resolvedResult: null })).toEqual({
+      tone: 'warning',
+      message: copy.marketPausedNotice,
+    });
+    expect(statusNotice({ status: 'closed', resolvedResult: null })?.tone).toBe('warning');
+    // The 정산 sentence the old `resolved` notice carried is the payout's, now `settling`'s.
+    expect(statusNotice({ status: 'settling', resolvedResult: 'YES' })?.message).toBe(
+      copy.marketSettlingNotice,
+    );
+    expect(statusNotice({ status: 'settled', resolvedResult: 'YES' })).toEqual({
+      tone: 'success',
+      message: copy.marketSettledNotice,
+      detail: copy.marketSettledPayout,
+    });
+    expect(statusNotice({ status: 'settled', resolvedResult: 'NO' })?.detail).toBe(
+      copy.marketSettledPayout,
+    );
+  });
+
+  it('never claims 100 Coin for a 무효 result, which has no winning side', () => {
+    const notice = statusNotice({ status: 'settled', resolvedResult: 'VOID' });
+    expect(notice?.detail).toBe(copy.marketSettledPayoutVoid);
+    expect(notice?.detail).not.toContain('100');
+    // Only a settled market carries the second line, whatever its result.
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'settled')) {
+      expect(statusNotice({ status, resolvedResult: 'VOID' })?.detail, status).toBeUndefined();
+    }
+  });
+
+  it('names a cancelled market as one with no result, and promises nothing about a refund', () => {
+    const notice = statusNotice({ status: 'cancelled', resolvedResult: null });
+    expect(notice?.message).toBe(copy.marketCancelledNotice);
+    expect(notice?.message).not.toContain('환불');
+    expect(notice?.detail).toBeUndefined();
   });
 });
 

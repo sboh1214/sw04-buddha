@@ -1,8 +1,8 @@
 import {
   MARKET_STATUSES,
   type MarketStatusEvent,
+  type MarketResult,
   type MarketTickEvent,
-  type Outcome,
   PRICE_MAX,
   PRICE_MIN,
   REALTIME_SUBSCRIBE_MAX,
@@ -63,7 +63,6 @@ const detail: Market = {
   resolutionSource: null,
   resolvedAt: null,
   settledAt: null,
-  voidedAt: null,
 };
 
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
@@ -241,9 +240,9 @@ describe('applyStatus', () => {
   });
 
   it('keeps settled when the judgement arrives after it', () => {
-    // The API publishes `resolved` and the worker `settled` from two processes, moments apart,
-    // so the socket may deliver them in either order. The key decides: `resolved` (4) is not
-    // newer than `settled` (5), and the screen stays on 정산 완료.
+    // The API publishes `resolved` and the worker `settling` and `settled` from two processes,
+    // moments apart, so the socket may deliver them in any order. The key decides: `resolved` (4)
+    // is not newer than `settled` (5), and the screen stays on 지급 완료.
     const settled: Market = { ...resolved, status: 'settled', statusEventId: '5' };
     expect(
       applyStatus(
@@ -253,21 +252,42 @@ describe('applyStatus', () => {
     ).toBeUndefined();
   });
 
-  it('replaces the result, so a void clears the one a row held', () => {
-    // Nothing voids a market since #125 (VOID comes back as a 판정 with #152) — but the reducer
-    // replaces rather than merges, so an event never inherits a result its own
-    // transition did not carry.
-    const next = applyStatus(resolved, statusEvent({ status: 'voided', statusEventId: '5' }));
-    expect(next?.status).toBe('voided');
+  it('replaces the result, so an event without one clears the one a row held', () => {
+    // No transition takes a judged market to a result-less status today (a cancelled market
+    // never had one, ADR-0093 decision 1, item 10) — but the reducer replaces rather than
+    // merges, so an event never inherits a result its own transition did not carry.
+    const next = applyStatus(resolved, statusEvent({ status: 'settling', statusEventId: '5' }));
+    expect(next?.status).toBe('settling');
     expect(next?.resolvedResult).toBeNull();
     expect(next?.statusEventId).toBe('5');
   });
 
+  it('carries a VOID result as it is, the result type the event carries (#174)', () => {
+    const next = applyStatus(
+      resolved,
+      statusEvent({ status: 'settling', resolvedResult: 'VOID', statusEventId: '5' }),
+    );
+    expect(next?.resolvedResult).toBe('VOID');
+  });
+
+  it('takes PAUSED → OPEN, which goes back in rank, by its newer key (#174)', () => {
+    // OPEN ↔ PAUSED (ADR-0093 decision 1, item 3): `open` sorts before `paused`, so a rank
+    // comparison would drop the resume and leave 거래 일시 중단 on screen. The key says it is later.
+    const paused = { ...detail, status: 'paused' as const, statusEventId: '6' };
+    const resumed = applyStatus(paused, statusEvent({ status: 'open', statusEventId: '7' }));
+    expect(resumed?.status).toBe('open');
+    expect(resumed?.statusEventId).toBe('7');
+    // A late delivery of the pause it already moved past is dropped all the same.
+    expect(
+      applyStatus(resumed, statusEvent({ status: 'paused', statusEventId: '6' })),
+    ).toBeUndefined();
+  });
+
   it('takes the same status under a newer key as a later transition', () => {
-    // THE DAY the rank order stopped holding (A-M3-19): M5's legacy `result_changed` repeated a
-    // status with a new result, and rank alone could only drop it. The event id says it is a
-    // LATER transition, so the whole status group is replaced — a rule the reducer keeps for
-    // any transition that repeats a status.
+    // THE DAY the rank order stopped holding (A-M3-19): M5's `result_changed` repeated a status
+    // with a new result, and rank alone could only drop it — as a correction in PROVISIONAL will
+    // (#176). The event id says it is a LATER transition, so the whole status group is replaced —
+    // a rule the reducer keeps for any transition that repeats a status.
     const repeated = statusEvent({ status: 'resolved', resolvedResult: 'NO', statusEventId: '5' });
     expect(applyStatus(resolved, repeated)).toEqual({
       ...resolved,
@@ -396,7 +416,7 @@ describe('joinMarket', () => {
     // THE RACE the key exists for: the socket delivered the worker's `settled` (key 5), and a
     // `GET /markets/:id` that left before the 판정 lands after it — `closed`, no result. The group
     // moves as one: a row that kept `settled` with the snapshot's null result would badge
-    // 정산 완료 over no answer at all.
+    // 지급 완료 over no answer at all.
     const closed: Market = { ...detail, status: 'closed', statusEventId: '3' };
     const settled: Market = {
       ...detail,
@@ -439,7 +459,7 @@ describe('joinMarket', () => {
         lastPrice: fc.option(fc.integer({ min: PRICE_MIN, max: PRICE_MAX })),
         volumeCoin: fc.integer({ min: 0, max: 1_000_000 }).map(String),
         tradeCount: fc.integer({ min: 0, max: 1000 }),
-        resolvedResult: fc.constantFrom<Outcome | null>('YES', 'NO', null),
+        resolvedResult: fc.constantFrom<MarketResult | null>('YES', 'NO', 'VOID', null),
         // Keyed on both sides: the status is then never consulted, so it is drawn freely above
         // and the assertion is on the key alone. The unkeyed fallback has its own test.
         statusEventId: fc.integer({ min: 1, max: 1000 }).map(String),

@@ -21,8 +21,45 @@ describe('copy', () => {
     }
   });
 
-  it('promises no refund for a voided market (N03 §6: a void is not a cost refund, #125)', () => {
-    expect(copy.marketVoidedNotice).not.toContain('환불');
+  it('promises no refund for a cancelled market or a 무효 result (N03 §6: not a cost refund)', () => {
+    // #125 took the admin void and its cost refund away; since #174 a cancelled market ends with
+    // no result, and a 무효 result is paid 50/50 by #126 — neither is a refund of what was spent.
+    for (const text of [copy.marketCancelledNotice, copy.marketSettledPayoutVoid]) {
+      expect(text).not.toContain('환불');
+    }
+  });
+
+  it('never says 100 Coin for a 무효 result, which has no winning side (ADR-0093 decision 1)', () => {
+    expect(copy.marketSettledPayout).toContain('100 Coin');
+    expect(copy.marketSettledPayoutVoid).not.toContain('100');
+    expect(copy.marketSettledPayoutVoid).not.toContain('정답');
+  });
+
+  it('labels every status as ADR-0093 decision 1 item 12 words it, and VOID as 무효', () => {
+    // The user labels word for word; 초안 and 검수 중 are the admin's alone.
+    expect([
+      copy.marketStatusScheduled,
+      copy.marketStatusOpen,
+      copy.marketStatusPaused,
+      copy.marketStatusClosed,
+      copy.marketStatusProvisional,
+      copy.marketStatusResolved,
+      copy.marketStatusSettling,
+      copy.marketStatusSettled,
+      copy.marketStatusCancelled,
+    ]).toEqual([
+      '개장 예정',
+      '거래 중',
+      '거래 일시 중단',
+      '거래 마감',
+      '잠정 결과',
+      '결과 확정',
+      '지급 중',
+      '지급 완료',
+      '취소',
+    ]);
+    expect([copy.marketStatusDraft, copy.marketStatusReview]).toEqual(['초안', '검수 중']);
+    expect(copy.marketResultVoid).toBe('무효');
   });
 
   it('has no empty strings (every key renders something)', () => {

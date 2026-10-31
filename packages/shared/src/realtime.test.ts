@@ -132,7 +132,12 @@ describe('realtime events (PLAN 8)', () => {
       ...opened,
       resolvedResult: null,
     });
-    expect(realtimeEventSchema.safeParse({ ...opened, status: 'paused' }).success).toBe(false);
+    expect(realtimeEventSchema.parse({ ...opened, status: 'paused' }).type).toBe('market:status');
+    expect(realtimeEventSchema.safeParse({ ...opened, status: 'voided' }).success).toBe(false);
+    // VOID is a result (#174), and arrives on the status event like YES and NO.
+    expect(
+      realtimeEventSchema.parse({ ...opened, status: 'provisional', resolvedResult: 'VOID' }),
+    ).toEqual({ ...opened, status: 'provisional', resolvedResult: 'VOID' });
     // The key may be null (a row with no transition event) but a publisher must say so.
     expect(realtimeEventSchema.parse({ ...opened, statusEventId: null }).type).toBe(
       'market:status',
@@ -186,8 +191,8 @@ describe('ordering keys', () => {
 
   it('orders market:status by the transition event id, and by rank only without one', () => {
     const resolvedYes = { status: 'resolved', statusEventId: '10' } as const;
-    // The same status with a newer event id is a later transition (M5's legacy result_changed)
-    // — the case rank order could not express, and the reason the key exists (A-M3-19).
+    // The same status with a newer event id is a later transition (a correction in PROVISIONAL,
+    // #176) — the case rank order could not express, and the reason the key exists (A-M3-19).
     expect(statusSupersedes({ status: 'resolved', statusEventId: '11' }, resolvedYes)).toBe(true);
     // The admin edit's repeat (A-M4-36) and a duplicate carry the SAME id: dropped.
     expect(statusSupersedes({ status: 'resolved', statusEventId: '10' }, resolvedYes)).toBe(false);
@@ -216,8 +221,15 @@ describe('ordering keys', () => {
         { status: 'open', statusEventId: null },
       ),
     ).toBe(false);
+    // PAUSED → OPEN goes back: the key orders it, the rank would not.
+    expect(
+      statusSupersedes(
+        { status: 'open', statusEventId: '8' },
+        { status: 'paused', statusEventId: '7' },
+      ),
+    ).toBe(true);
     expect(statusRank('draft')).toBe(0);
-    expect(statusRank('voided')).toBe(5);
+    expect(statusRank('cancelled')).toBe(10);
   });
 });
 

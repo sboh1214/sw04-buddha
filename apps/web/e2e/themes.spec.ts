@@ -33,8 +33,9 @@ import {
  * The admin's theme list keeps its rows when a 더 보기 fails and says so above the button (owner
  * decision 2026-10-20 7, ADR-0075 5-14 — as every 더 보기 list), its pages shaped here.
  *
- * The status boundaries, the list's order and the voided markets are the API's integration
- * tests' (themes.controller.test.ts): no product path voids a market yet (M8), and the order is
+ * The status boundaries, the list's order and the cancelled and 무효 markets are the API's
+ * integration tests' (themes.controller.test.ts): no product path cancels a market or judges one
+ * 무효 yet (#20, #152), and the order is
  * checked against themes of chosen dates where no other spec's themes share the list, which the
  * e2e database — shared by every spec and kept between runs — cannot promise.
  */
@@ -326,8 +327,9 @@ test.describe('테마', () => {
       ).toHaveAttribute('href', `/markets/${b.slug}`);
       await expect(results.getByTestId(`theme-result-${a.id}`)).toHaveCount(0);
       await expect(results.getByTestId('theme-results-empty')).toHaveCount(0);
-      // A judged market keeps its card (the 판정 is worked off to 정산 by the worker meanwhile, so
-      // the status label is left unasserted), and the server's HTML has the row too.
+      // A judged market keeps its card (결과 확정 is worked off through 지급 중 to 지급 완료 by the
+      // worker meanwhile, so the status label is left unasserted), and the server's HTML has the
+      // row too.
       await expect(grid.getByTestId(`market-card-${b.id}`)).toBeVisible();
       expect(await (await request.get(`/themes/${slug}`)).text()).toContain(
         `data-testid="theme-result-${b.id}"`,

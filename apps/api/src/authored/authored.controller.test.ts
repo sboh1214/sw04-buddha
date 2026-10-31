@@ -4,13 +4,13 @@
  * (`GET /profiles/:publicId/posts`, `/comments`) and MY '내 글' (`GET /me/posts`, `/me/comments`).
  * Pinned: newest first, a page at a time on the (created at, id) keyset; the profile's lists hold
  * the member's posts and comments (대댓글 included) that are neither deleted nor hidden — on ended
- * and voided markets too, and comments under a hidden post or a deleted post's placeholder — and
- * exactly what the profile counts; anyone reads them, signed in or not, the same answer, naming the
- * member by the public face alone; an unknown or malformed public id is NOT_FOUND as the profile
- * is; a comment names its post by id alone when the post is a placeholder; MY lists the member's
- * own, the hidden ones marked with the standing hiding's reason (#50: a report reason and the
- * operator's explanation, a cancelled hiding's never) and the deleted ones never, and only to the
- * member, who deletes a hidden one through the delete routes (MY's 삭제, owner decision
+ * (cancelled, 무효) markets too, and comments under a hidden post or a deleted post's placeholder —
+ * and exactly what the profile counts; anyone reads them, signed in or not, the same answer, naming
+ * the member by the public face alone; an unknown or malformed public id is NOT_FOUND as the
+ * profile is; a comment names its post by id alone when the post is a placeholder; MY lists the
+ * member's own, the hidden ones marked with the standing hiding's reason (#50: a report reason and
+ * the operator's explanation, a cancelled hiding's never) and the deleted ones never, and only to
+ * the member, who deletes a hidden one through the delete routes (MY's 삭제, owner decision
  * 2026-10-22); N04 §7: a post or comment deleted leaves both lists and the counts, and a public item
  * cleared leaves the profile. Nothing of the member's trading rides on an item. Skips when TEST_*
  * are unset.
@@ -42,10 +42,10 @@ import {
   postSummarySchema,
   publicProfileSchema,
   type AuthoredComment,
-  type MarketStatus,
   type MyComment,
   type MyPost,
   type PostSummary,
+  type PublicMarketStatus,
   type PublicProfile,
 } from '@buddha/shared';
 import { eq } from 'drizzle-orm';
@@ -155,13 +155,19 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
 
   // ---- the profile's 글 tab ----------------------------------------------------------------------
 
-  it('lists the member’s posts newest first, ended and voided markets included, never a deleted or hidden one (#37-14)', async () => {
-    const markets: Record<Exclude<MarketStatus, 'draft'>, typeof market> = {
+  it('lists the member’s posts newest first, on a market of every public status, never a deleted or hidden one (#37-14)', async () => {
+    // Ended, cancelled and 무효 markets included (ADR-0093 decision 3 moved the rule onto the new
+    // statuses): the settled one here is a VOID result.
+    const markets: Record<PublicMarketStatus, typeof market> = {
+      scheduled: await createMarket(t.db, { status: 'scheduled' }),
       open: market,
+      paused: await createMarket(t.db, { status: 'paused' }),
       closed: await createMarket(t.db, { status: 'closed' }),
+      provisional: await createMarket(t.db, { status: 'provisional', resolvedResult: 'NO' }),
       resolved: await createMarket(t.db, { status: 'resolved', resolvedResult: 'YES' }),
-      settled: await createMarket(t.db, { status: 'settled', resolvedResult: 'NO' }),
-      voided: await createMarket(t.db, { status: 'voided' }),
+      settling: await createMarket(t.db, { status: 'settling', resolvedResult: 'YES' }),
+      settled: await createMarket(t.db, { status: 'settled', resolvedResult: 'VOID' }),
+      cancelled: await createMarket(t.db, { status: 'cancelled' }),
     };
     const write = (status: keyof typeof markets, seconds: number, extra = {}) =>
       createPost(t.db, {
@@ -171,30 +177,22 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
         createdAt: at(seconds),
         ...extra,
       });
-    const open = await write('open', 1);
-    const closed = await write('closed', 2);
-    const resolved = await write('resolved', 3);
-    const settled = await write('settled', 4);
-    const voided = await write('voided', 5);
+    const statuses = Object.keys(markets) as PublicMarketStatus[];
+    const written: { id: string }[] = [];
+    for (const [i, status] of statuses.entries()) written.push(await write(status, i + 1));
     // Deleted with a comment under it — the placeholder on its page — and with nothing: both out.
-    const deletedWithReply = await write('open', 6, { deletedAt: at(60) });
+    const deletedWithReply = await write('open', 20, { deletedAt: at(60) });
     await createComment(t.db, { postId: deletedWithReply.id, authorId: other.id });
-    await write('open', 7, { deletedAt: at(60) });
+    await write('open', 21, { deletedAt: at(60) });
     // Hidden by an operator (#50 brings the action): out, deleted or not.
-    await write('open', 8, { hiddenAt: at(60) });
-    await write('open', 9, { hiddenAt: at(60), deletedAt: at(61) });
+    await write('open', 22, { hiddenAt: at(60) });
+    await write('open', 23, { hiddenAt: at(60), deletedAt: at(61) });
     // Another member's post: never on this profile.
-    await createPost(t.db, { marketId: market.id, authorId: other.id, createdAt: at(10) });
+    await createPost(t.db, { marketId: market.id, authorId: other.id, createdAt: at(24) });
 
     const page = await profilePosts();
-    expect(ids(page)).toEqual([voided.id, settled.id, resolved.id, closed.id, open.id]);
-    expect(page.data.map((item) => item.market.status)).toEqual([
-      'voided',
-      'settled',
-      'resolved',
-      'closed',
-      'open',
-    ]);
+    expect(ids(page)).toEqual(written.map((post) => post.id).reverse());
+    expect(page.data.map((item) => item.market.status)).toEqual([...statuses].reverse());
     expect(page.meta.nextCursor).toBeNull();
     // The profile counts what its tab lists (ADR-0078).
     expect((await profile()).postCount).toBe(page.data.length);

@@ -184,7 +184,7 @@ const STANDING_HIDE_REASON = sql<ReportReason | null>`${standingHide.reason}`;
  * time — on the public profile (ADR-0069 decision 3 #37-14) and on the member's own MY '내 글'
  * (decision 4 #51, decision 2 #45-5). One rule for what a list holds, which the profile's counts
  * share (`readProfileCounts`): the member's items their author did not delete — on any market,
- * ended and voided ones too, and whether or not the member is under a restriction, now or when
+ * ended (cancelled, 무효) ones too, and whether or not the member is under a restriction, now or when
  * writing (#37-14: «제재 중인 사람의 글…은 넣는다»; the lists read no restriction) — and, on the
  * profile, none an operator hid. A comment is listed whatever its post's state: a comment under a
  * hidden post, or under a deleted one that stays as the placeholder, is read in full on the post

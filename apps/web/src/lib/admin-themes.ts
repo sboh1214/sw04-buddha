@@ -35,7 +35,8 @@ import { formatKst } from './datetime';
  * chooses at creation and cannot change once the theme has been published; a theme is published
  * with a market in it; a notice is plain text, title up to 100 and body up to 5,000 characters.
  * And of the second round the same day: the dates lie within 2000-01-01 and 2100-12-31, and the
- * market a publish needs is one that is not a draft.
+ * market a publish needs is one that is not a draft — since #174 a public one, neither a draft nor
+ * in review (ADR-0093 decision 1, item 12).
  */
 
 /** The theme form's values: the strings the inputs hold. Dates are `<input type="date">`'s. */
@@ -217,7 +218,8 @@ export function themeFormError(
 
 /**
  * A refused publish or another theme write, in words: a publish of a theme with no market in it
- * that is not a draft (owner decisions 2026-10-19), a theme that is not there, the cookie of
+ * that is public — neither a draft nor in review (owner decisions 2026-10-19, #174) — a theme
+ * that is not there, the cookie of
  * another account (`copy.sessionChanged` — every theme write names the admin on screen, and the
  * caller asks for the session again, ADR-0092), or anything else.
  */
@@ -262,8 +264,9 @@ export function toThemeNoticeBody(values: ThemeNoticeFormValues): ThemeNoticeFor
 /**
  * What the market picker offers for one market it found: `linked` for one already in the theme —
  * the API would change nothing — and `linkable` for the rest, in any status (ADR-0069 decision 4,
- * '편성 규칙': a draft too, which the public pages show once it opens — and which a publish counts
- * from then, not before; owner decision 2026-10-19, second round).
+ * '편성 규칙': a draft or one in review too, which the public pages show once it is public —
+ * 개장 예정 or 거래 중 — and which a publish counts from then, not before; owner decision
+ * 2026-10-19, second round; ADR-0093 decision 1, item 12).
  */
 export function themePickState(
   candidateId: string,

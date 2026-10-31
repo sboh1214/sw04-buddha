@@ -22,6 +22,7 @@ import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-ac
 import {
   type MarketStatus,
   marketEventTypeSchema,
+  marketResultSchema,
   marketStatusSchema,
   orderSideSchema,
   orderStatusSchema,
@@ -91,14 +92,19 @@ const marketSummaryFields = {
   traderCount: countSchema,
   closeAt: z.iso.datetime(),
   openAt: z.iso.datetime().nullable(),
-  resolvedResult: outcomeSchema.nullable(),
+  /**
+   * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
+   * on a CANCELLED market (ADR-0093 decision 1 item 10).
+   */
+  resolvedResult: marketResultSchema.nullable(),
   /**
    * `market_events.id` of the transition that produced the current status, as a decimal string
    * — the ordering key of `market:status` (A-M3-19, Q-M3-8 (3)). Drawn while the writer holds
    * the market row FOR UPDATE, so it is the market's commit order: a client compares a snapshot
    * against an event with `statusSupersedes` (realtime.ts) instead of ranking statuses, which
-   * stopped being a total order once M5's `result_changed` repeated a status. Null only for a
-   * row written outside the transition paths (a test factory); the rank order is the fallback.
+   * are no total order — PAUSED → OPEN goes back, and a correction in PROVISIONAL (#176)
+   * republishes the same status with a new result. Null only for a row written outside the
+   * transition paths (a test factory); the rank order is the fallback.
    */
   statusEventId: z.string().nullable(),
   createdAt: z.iso.datetime(),
@@ -125,21 +131,33 @@ export const marketSchema = z
     resolutionSource: z.string().nullable(),
     resolvedAt: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime().nullable(),
-    voidedAt: z.iso.datetime().nullable(),
   })
   .meta({ id: 'Market' });
 export type Market = z.infer<typeof marketSchema>;
 
-/** Statuses the public list may filter by: a draft is invisible outside the admin. */
+/**
+ * The statuses a user sees (ADR-0093 decision 1 item 12): every one but DRAFT and REVIEW, which
+ * are the admin's alone. A SCHEDULED market's detail is public before it opens. The public list
+ * filters by these, and every public route answers NOT_FOUND for a market in any other status.
+ */
 export const PUBLIC_MARKET_STATUSES = [
+  'scheduled',
   'open',
+  'paused',
   'closed',
+  'provisional',
   'resolved',
+  'settling',
   'settled',
-  'voided',
-] as const satisfies readonly Exclude<MarketStatus, 'draft'>[];
+  'cancelled',
+] as const satisfies readonly Exclude<MarketStatus, 'draft' | 'review'>[];
 export type PublicMarketStatus = (typeof PUBLIC_MARKET_STATUSES)[number];
 export const publicMarketStatusSchema = z.enum(PUBLIC_MARKET_STATUSES);
+
+/** Whether a user may see a market in `status` (`PUBLIC_MARKET_STATUSES`). */
+export function isPublicMarketStatus(status: MarketStatus): status is PublicMarketStatus {
+  return (PUBLIC_MARKET_STATUSES as readonly MarketStatus[]).includes(status);
+}
 
 /**
  * `GET /markets?status=all`: every public status at once — the search screen's '모든 상태', which
@@ -161,9 +179,10 @@ export const marketListStatusSchema = z.enum(MARKET_LIST_STATUSES);
  *   an operator; every fill counts until #132 excludes abnormal ones.
  * - `newest` (신규): the actual open time (`open_at`), latest first.
  * - `closing` (마감 임박): the close time, soonest first, with no window. On a list that can hold
- *   ended markets (`status=all` or an ended status; MY's 관심 시장), the markets still 진행 중
- *   (`open`) come first, soonest first, and every other one after them, the most recently closed
- *   first — ended by its status, not by the clock (ADR-0066, owner decision 2026-10-16).
+ *   ended markets (`status=all` or an ended status; MY's 관심 시장), the markets not closed yet
+ *   (`PRE_CLOSE_MARKET_STATUSES`: 개장 예정·거래 중·거래 일시 중단, #174) come first, soonest
+ *   first, and every other one after them, the most recently closed first — ended by its status,
+ *   not by the clock (ADR-0066, owner decision 2026-10-16).
  *
  * Every order ends on the market id. A market with no open time sorts as the earliest open time
  * there is, so where it lands depends on the order: in `newest` after every market that has one;
@@ -262,7 +281,8 @@ export const positionSchema = z
     marketStatus: marketStatusSchema,
     /** The market's `lastPrice`: null until its first fill. */
     marketLastPrice: priceSchema.nullable(),
-    resolvedResult: outcomeSchema.nullable(),
+    /** The market's result type (YES·NO·VOID); null before a judgement and when cancelled. */
+    resolvedResult: marketResultSchema.nullable(),
     outcome: outcomeSchema,
     qty: countSchema,
     costBasisCoin: coinAmountSchema,
@@ -404,8 +424,14 @@ export const marketEventSchema = z
     /** bigserial as a decimal string. */
     id: z.string(),
     type: marketEventTypeSchema,
-    /** Admin user id, or null for system transitions (worker close/finalize). */
+    /** Admin user id, or null for system transitions (worker close/settling/finalize). */
     actorId: z.string().nullable(),
+    /**
+     * The status change the event made (#174): both set on a transition, only `toStatus` on
+     * `created`, both null on an event that changes no status (`rules_edited`).
+     */
+    fromStatus: marketStatusSchema.nullable(),
+    toStatus: marketStatusSchema.nullable(),
     payload: z.unknown().nullable(),
     createdAt: z.iso.datetime(),
   })
@@ -438,9 +464,10 @@ export const adminMarketSchema = marketSchema
     /** Σ positions.qty per outcome where settled = false. */
     openInterest: z.object({ yes: countSchema, no: countSchema }),
     /**
-     * The settlement steps of a judged market (ADR-0046), in SETTLEMENT_STEPS order: one row per
-     * step from the judgement on, empty before it and for a voided market. A `resolved` market
-     * whose step stays `failed` is what the admin's '정산 대기' badge points at.
+     * The settlement steps of a market (ADR-0046), in SETTLEMENT_STEPS order: one row per step
+     * from the result's confirmation (`resolved`) on, empty before it and on a CANCELLED market.
+     * A `settling` market whose step stays `failed` is what the admin's '정산 대기' badge points
+     * at (ADR-0093 decision 1 item 14).
      */
     settlementSteps: z.array(adminSettlementStepSchema),
     /** Newest first, at most 100. */
@@ -501,10 +528,13 @@ export type UpdateMarketBody = z.infer<typeof updateMarketBodySchema>;
 
 /**
  * `POST /admin/markets/:id/resolve` (PLAN 5.5, 7.3; ADR-0046): judge a closed market. The
- * result is final at once — the market becomes `resolved` and settlement starts; there is no
- * way to change it (#26 decides re-judgement). The note and the evidence are kept on the
- * `market_events` payload and the admin action, not on the market row: they are the audit
- * trail of the judgement.
+ * result is final at once — the market becomes `resolved` and the worker starts the payout
+ * (`settling`); there is no way to change it. An interim path until #152 replaces it with a
+ * judgement another admin approves (CLOSED → PROVISIONAL), which is also where VOID can be
+ * chosen (ADR-0093 decision 1 item 4): until then the result is YES or NO, the two the payout
+ * can pay (VOID's 50/50 is #126). The note and the evidence are kept on the `market_events`
+ * payload and the admin action, not on the market row: they are the audit trail of the
+ * judgement.
  */
 export const resolveMarketBodySchema = z
   .object({
@@ -520,9 +550,9 @@ export const resolveMarketBodySchema = z
 export type ResolveMarketBody = z.infer<typeof resolveMarketBodySchema>;
 
 /**
- * `GET /admin/markets` (no `.meta`: query DTO). Any status, draft included; omitted = all. `q` is
- * a title search like the public list's (a case-insensitive partial match, `%`·`_`·`\` literal),
- * which the admin's 관련 시장 picker finds the market to link with (#65, ADR-0068).
+ * `GET /admin/markets` (no `.meta`: query DTO). Any status, DRAFT and REVIEW included; omitted =
+ * all. `q` is a title search like the public list's (a case-insensitive partial match, `%`·`_`·`\`
+ * literal), which the admin's 관련 시장 picker finds the market to link with (#65, ADR-0068).
  */
 export const adminMarketListQuerySchema = cursorQuerySchema.extend({
   status: marketStatusSchema.optional(),

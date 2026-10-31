@@ -8,7 +8,9 @@ import {
   NOTICE_PIN_LIMIT,
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
+  MARKET_RESULTS,
   MARKET_STATUSES,
+  OUTCOMES,
   MODERATION_REASONS,
   PRICE_TICK_TRIGGERS,
   PROPOSAL_REJECTION_REASONS,
@@ -38,6 +40,7 @@ import {
   ledgerEntries,
   linkFlags,
   linkUses,
+  marketEvents,
   marketLinks,
   marketProposals,
   marketSearchTerms,
@@ -4249,11 +4252,50 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
   });
 
   describe('judgement and settlement steps (migration 0016, ADR-0046)', () => {
-    it('labels market_status like MARKET_STATUSES, in order, with no dispute stage', async () => {
+    it('labels market_status like MARKET_STATUSES, the eleven statuses of #174, in order', async () => {
       const { rows } = await t.db.execute<{ label: string }>(sql`
         SELECT e.enumlabel AS label FROM pg_enum e JOIN pg_type ty ON ty.oid = e.enumtypid
         WHERE ty.typname = 'market_status' ORDER BY e.enumsortorder`);
       expect(rows.map((r) => r.label)).toEqual([...MARKET_STATUSES]);
+    });
+
+    it('stores the result type apart from the contract side, and no voiding time (#174)', async () => {
+      const labels = async (type: string) => {
+        const { rows } = await t.db.execute<{ label: string }>(sql`
+          SELECT e.enumlabel AS label FROM pg_enum e JOIN pg_type ty ON ty.oid = e.enumtypid
+          WHERE ty.typname = ${type} ORDER BY e.enumsortorder`);
+        return rows.map((r) => r.label);
+      };
+      expect(await labels('market_result')).toEqual([...MARKET_RESULTS]);
+      expect(await labels('outcome')).toEqual([...OUTCOMES]);
+      const { rows } = await t.db.execute<{ column: string; type: string }>(sql`
+        SELECT column_name AS "column", udt_name AS "type" FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'markets'
+          AND column_name IN ('resolved_result', 'voided_at')`);
+      expect(rows).toEqual([{ column: 'resolved_result', type: 'market_result' }]);
+      // A contract side is never VOID; a market's result can be.
+      const market = await createMarket(t.db, { status: 'provisional', resolvedResult: 'VOID' });
+      expect(market.resolvedResult).toBe('VOID');
+      await expect(t.db.execute(sql`SELECT 'VOID'::outcome`)).rejects.toSatisfy(
+        (e) => sqlState(e) === '22P02',
+      );
+    });
+
+    it('ties the status change of a market event together (a from needs a different to)', async () => {
+      const market = await createMarket(t.db);
+      const insert = (fromStatus: 'open' | null, toStatus: 'open' | 'closed' | null) =>
+        t.db
+          .insert(marketEvents)
+          .values({ marketId: market.id, type: 'closed', fromStatus, toStatus });
+      await insert('open', 'closed');
+      await insert(null, 'open');
+      await insert(null, null);
+      for (const [from, to] of [
+        ['open', null],
+        ['open', 'open'],
+      ] as const) {
+        await expect(insert(from, to)).rejects.toSatisfy((e) => sqlState(e) === '23514');
+      }
     });
 
     it('has dropped disputes, its type and markets.dispute_until (O-8)', async () => {
@@ -4270,9 +4312,14 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(rows[0]).toEqual({ disputes: null, disputeStatus: 0, disputeUntil: 0 });
     });
 
-    it('createMarket writes the steps a judged or settled market has, and no others', async () => {
+    it('createMarket writes the steps a confirmed, settling or settled market has, and no others', async () => {
       const settledAt = new Date('2026-10-01T03:00:00.000Z');
       const resolved = await createMarket(t.db, { status: 'resolved', resolvedResult: 'YES' });
+      const settling = await createMarket(t.db, { status: 'settling', resolvedResult: 'NO' });
+      const provisional = await createMarket(t.db, {
+        status: 'provisional',
+        resolvedResult: 'YES',
+      });
       const settled = await createMarket(t.db, {
         status: 'settled',
         resolvedResult: 'NO',
@@ -4299,8 +4346,12 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
           completedAt: settledAt,
         }),
       ]);
+      expect(of(settling.id)).toEqual([
+        expect.objectContaining({ step: 'coin', status: 'pending', attempts: 0 }),
+      ]);
       expect(of(bare.id)).toEqual([]);
       expect(of(open.id)).toEqual([]);
+      expect(of(provisional.id)).toEqual([]);
     });
 
     it('keeps one row per (market, step) and ties done to completed_at', async () => {

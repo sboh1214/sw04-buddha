@@ -1,4 +1,4 @@
-import { clockTimestamp, lockMarket, schema, type Db } from '@buddha/db';
+import { clockTimestamp, lockMarket, schema, transitionMarket, type Db } from '@buddha/db';
 import {
   MARKET_SCAN_BATCH_MAX,
   SETTLEMENT_STEP_ERROR_MAX,
@@ -12,7 +12,7 @@ import {
   type SettlementStep,
   type UserRealtimeEvent,
 } from '@buddha/shared';
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import { type Logger } from 'pino';
 import { type Publish } from '../realtime.js';
 import { messageOf, runScan, type ScanFailure } from './scan.js';
@@ -23,7 +23,11 @@ type MarketRow = typeof schema.markets.$inferSelect;
 type PositionRow = typeof schema.positions.$inferSelect;
 type BalanceRow = typeof schema.balances.$inferSelect;
 
-export type FinalizeSkipReason = 'not_resolved';
+/**
+ * The market was neither `resolved` nor `settling` when the run took the lock: settled already
+ * (a duplicate job, the scan after the immediate job), or in a status nothing settles.
+ */
+export type FinalizeSkipReason = 'not_settling';
 
 export type FinalizeResult =
   | {
@@ -41,15 +45,16 @@ export type FinalizeResult =
     }
   /**
    * The run committed its steps but some step of SETTLEMENT_STEPS is still not `done`, so the
-   * market stays `resolved`. Unreachable while every step runs in one transaction (the loop in
-   * `finalizeMarket` finishes them all); the variant is where a step run on its own would land.
+   * market stays `settling` (ADR-0093 decision 1 item 14). Unreachable while every step runs in
+   * one transaction (the loop in `finalizeMarket` finishes them all); the variant is where a step
+   * run on its own would land.
    */
-  | { outcome: 'resolved'; marketId: string; pendingSteps: SettlementStep[] }
+  | { outcome: 'settling'; marketId: string; pendingSteps: SettlementStep[] }
   | { outcome: 'skipped'; marketId: string; reason: FinalizeSkipReason };
 
 export interface FinalizeScanResult {
   settled: number;
-  /** Examined and not settled: no longer `resolved` when its turn came (or steps pending). */
+  /** Examined and not settled: no longer `settling` when its turn came (or steps pending). */
   skipped: number;
   /** Markets whose settlement rejected and rolled back; the scan went on (scan.ts). */
   failed: number;
@@ -229,16 +234,18 @@ async function completeStep(
  * written in a transaction of its own — `failed`, `attempts` + 1, `messageOf(err)` cut to
  * SETTLEMENT_STEP_ERROR_MAX (a database error's SQLSTATE and driver message first, so the cut
  * keeps the reason, not just the failed SQL) — on the step that was running, or, when the throw
- * came before any step started (the "no result" invariant, a lock or connection error), on the
- * first step that is not `done`. That is what lets an operator see why a market stays
- * `resolved` without the worker's logs; the per-minute scan retries it with no cap.
+ * came before any step started (the "no result" and VOID invariants, a lock or connection
+ * error), on the first step that is not `done`. That is what lets an operator see why a market
+ * stays `settling` (ADR-0093 decision 1 item 14) without the worker's logs; the per-minute scan
+ * retries it with no cap.
  *
- * Under the market lock like every writer of market state, and only for a market that is still
- * `resolved`: an unknown id has nowhere to record, and a market another run settled since the
- * rollback (the lock was released with it) is done — so is the `status <> 'done'` guard, which
- * also keeps a finished step finished if a row ever disagrees with the market. Best effort: a
- * failure here is logged and swallowed, and the caller rethrows the ORIGINAL error, which is the
- * one the BullMQ job and the scan must report.
+ * Under the market lock like every writer of market state, and only for a market that is
+ * `settling`: an unknown id has nowhere to record; a market still `resolved` started no payout
+ * (its resolved → settling is what failed, and the next run tries it again); and a market
+ * another run settled since the rollback (the lock was released with it) is done — so is the
+ * `status <> 'done'` guard, which also keeps a finished step finished if a row ever disagrees
+ * with the market. Best effort: a failure here is logged and swallowed, and the caller rethrows
+ * the ORIGINAL error, which is the one the BullMQ job and the scan must report.
  */
 async function recordStepFailure(
   db: Db,
@@ -257,7 +264,7 @@ async function recordStepFailure(
         .from(schema.markets)
         .where(eq(schema.markets.id, marketId))
         .limit(1);
-      if (market?.status !== 'resolved') return;
+      if (market?.status !== 'settling') return;
       let step = running;
       if (step === undefined) {
         const rows = await tx
@@ -297,34 +304,86 @@ async function recordStepFailure(
 }
 
 /**
- * resolved → settled for one market (ADR-0046; PLAN 5.5 정산): the admin's judgement made the
- * result final and wrote one `pending` row per SETTLEMENT_STEPS step; this runs every step that
- * is not `done` yet and, once all of them are, settles the market (O-6: settled means every
- * step finished — `coin`, the only one). One transaction, all rows or nothing: PLAN 5.5 allows
- * committing per hundred accounts, but at MVP scale a single transaction is the simpler
- * invariant, and whether a step added later gets a transaction of its own is that step's call.
+ * resolved → settling (ADR-0093 decision 1 item 1: the payout starts at once, by the worker),
+ * in a transaction of its own committed BEFORE the steps run, so the market reads 지급 중 while
+ * they do and stays there when one fails (item 14) — a failed step's rollback cannot take the
+ * status back with it. Under the market lock with the status read FOR UPDATE after it, like
+ * every status writer (`transitionMarket`); `actorId` is null (the worker acted) and the payload
+ * says `source: 'job'`, as the close does. The result is not checked here: a `resolved` market
+ * with no result or a VOID one still starts its payout, and the step transaction's invariants
+ * fail it loudly in `settling`, recorded on the step like any other failure.
+ *
+ * Returns the `market:status` to publish after COMMIT, or undefined when the market was not
+ * `resolved` (already `settling`, or any status the step transaction skips). An unknown id
+ * throws, as the step transaction would.
+ */
+async function startSettling(db: Db, marketId: string): Promise<MarketStatusEvent | undefined> {
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const [current] = await tx
+      .select({ status: schema.markets.status, resolvedResult: schema.markets.resolvedResult })
+      .from(schema.markets)
+      .where(eq(schema.markets.id, marketId))
+      .limit(1)
+      .for('update');
+    if (!current) throw new Error(`Market ${marketId} not found`);
+    if (current.status !== 'resolved') return undefined;
+    const at = await clockTimestamp(tx);
+    const statusEventId = await transitionMarket(tx, {
+      marketId,
+      from: current.status,
+      to: 'settling',
+      type: 'settling',
+      actorId: null,
+      payload: { source: 'job' },
+      at,
+    });
+    return {
+      type: 'market:status',
+      marketId,
+      status: 'settling',
+      resolvedResult: current.resolvedResult,
+      statusEventId: String(statusEventId),
+      ts: at.toISOString(),
+    };
+  });
+}
+
+/**
+ * resolved → settling → settled for one market (ADR-0046, ADR-0093 decision 1 items 1 and 14;
+ * PLAN 5.5 정산): the admin's judgement made the result final and wrote one `pending` row per
+ * SETTLEMENT_STEPS step. A `resolved` market first goes to `settling` in a committed
+ * transaction of its own (`startSettling`, published at once); then one transaction runs every
+ * step that is not `done` yet on the `settling` market and, once all of them are, settles it
+ * (O-6: settled means every step finished — `coin`, the only one). The step transaction is all
+ * rows or nothing: PLAN 5.5 allows committing per hundred accounts, but at MVP scale a single
+ * transaction is the simpler invariant, and whether a step added later gets a transaction of
+ * its own is that step's call.
  *
  *  - market advisory lock, then the row FOR UPDATE, then the status re-check under the lock:
- *    only `resolved` is settled, so a duplicate job, the scan after the immediate job, or a run
+ *    only `settling` is settled, so a duplicate job, the scan after the immediate job, or a run
  *    after a manual fix all find `settled` and skip;
  *  - the step rows FOR UPDATE, then each step not `done` in SETTLEMENT_STEPS order, each
  *    marked `done` in the same transaction (`completeStep`). A missing row counts as pending;
- *  - the `settled` transition only when every step is `done` — the one place that condition
- *    lives, so a step added later widens it here and nowhere else.
+ *  - settling → settled only when every step is `done` — the one place that condition lives,
+ *    so a step added later widens it here and nowhere else.
  *
  * Idempotent (M5 AC 3): a second run finds `status = 'settled'` and skips before touching a
  * position or a step, and the coin step's `settled = false` filter pays a row at most once
- * regardless. A throw anywhere rolls the whole run back; the attempt is then recorded on the
- * step (`recordStepFailure`) and the error rethrown, so the job fails and the next run (the
- * job's retry, or the per-minute scan) does it all again from the start. A `resolved` market
- * with no result is an invariant the API guarantees (`resolve` writes both columns in one
- * UPDATE); it throws so the job fails loudly instead of settling every holder as a loser.
+ * regardless. A throw in the step transaction rolls it back — the market stays `settling`
+ * (item 14) — and the attempt is then recorded on the step (`recordStepFailure`) and the error
+ * rethrown, so the job fails and the next run (the job's retry, or the per-minute scan) does the
+ * steps again from the start. Two results throw before any step runs, so the job fails loudly
+ * instead of settling every holder as a loser: none (the API's judgement writes the result with
+ * the status), and VOID — its 50/50 payout (ADR-0093 decision 1 item 9) is not `settle(won)`'s
+ * and belongs to #126; the interim judgement takes YES or NO only.
  *
- * The `finalized` event row is inserted before the market UPDATE so the row can carry its id as
- * `statusEventId` (A-M3-19). `actorId` is null: the worker acted. Everything is published after
- * COMMIT — the status to the market's room, then per account its last balance (a holder of both
- * outcomes is credited once per winning row; the later ledger row is the greater key) and every
- * closed-out row.
+ * Every transition goes through `transitionMarket`, whose event row carries its id to the
+ * market row as `statusEventId` (A-M3-19); `actorId` is null: the worker acted. Everything is
+ * published after COMMIT — `settling` after its own transaction, then once settled the status
+ * to the market's room, then per account its last balance (a holder of both outcomes is
+ * credited once per winning row; the later ledger row is the greater key) and every closed-out
+ * row.
  */
 export async function finalizeMarket(
   db: Db,
@@ -337,6 +396,9 @@ export async function finalizeMarket(
   const progress: { running?: SettlementStep } = {};
   let finalized;
   try {
+    const settling = await startSettling(db, marketId);
+    // Before the steps, so a client sees 지급 중 whether or not they succeed.
+    if (settling) await publish(marketChannel(marketId), settling);
     finalized = await db.transaction(async (tx) => {
       await lockMarket(tx, marketId);
       const [current] = await tx
@@ -346,12 +408,18 @@ export async function finalizeMarket(
         .limit(1)
         .for('update');
       if (!current) throw new Error(`Market ${marketId} not found`);
-      if (current.status !== 'resolved') {
-        return { outcome: 'skipped', marketId, reason: 'not_resolved' } as const;
+      if (current.status !== 'settling') {
+        return { outcome: 'skipped', marketId, reason: 'not_settling' } as const;
       }
       const result = current.resolvedResult;
       if (result === null) {
-        throw new Error(`Market ${marketId} is resolved without a result`);
+        throw new Error(`Market ${marketId} is settling without a result`);
+      }
+      // VOID pays every contract 50/50 (ADR-0093 decision 1 item 9): `settle(won)` pays winners
+      // only and would close every holder out as a loser. #126 adds that payout; until then a
+      // VOID result must stop here, before anything is paid.
+      if (result === 'VOID') {
+        throw new Error(`Market ${marketId} is settling a VOID result, which only #126 can pay`);
       }
 
       const stepRows = await tx
@@ -396,41 +464,34 @@ export async function finalizeMarket(
 
       const pendingSteps = SETTLEMENT_STEPS.filter((step) => !done.has(step));
       if (pendingSteps.length > 0) {
-        // What a run that leaves the market `resolved` publishes is that later step's call.
-        return { outcome: 'resolved', marketId, pendingSteps } as const;
+        // What a run that leaves the market `settling` publishes is that later step's call.
+        return { outcome: 'settling', marketId, pendingSteps } as const;
       }
       // Every step was done before this run (a row written by hand): nothing locked after the
       // step rows, so the clock is read now.
       const now = at ?? (await clockTimestamp(tx));
 
-      const [event] = await tx
-        .insert(schema.marketEvents)
-        .values({
-          marketId,
-          type: 'finalized',
-          actorId: null,
-          payload: {
-            result,
-            settledAccounts: coin.settledAccounts,
-            paidAccounts: coin.paidAccounts,
-            paidCoin: serializeCoinAmount(coin.paidCoin),
-            positions: coin.positions,
-          },
-          createdAt: now,
-        })
-        .returning({ id: schema.marketEvents.id });
-      if (!event) throw new Error('Market event insert failed');
-      const [row] = await tx
-        .update(schema.markets)
-        .set({ status: 'settled', settledAt: now, statusEventId: event.id, updatedAt: now })
-        .where(eq(schema.markets.id, marketId))
-        .returning({ id: schema.markets.id });
-      if (!row) throw new Error('Market update failed');
+      const statusEventId = await transitionMarket(tx, {
+        marketId,
+        from: current.status,
+        to: 'settled',
+        type: 'finalized',
+        actorId: null,
+        payload: {
+          result,
+          settledAccounts: coin.settledAccounts,
+          paidAccounts: coin.paidAccounts,
+          paidCoin: serializeCoinAmount(coin.paidCoin),
+          positions: coin.positions,
+        },
+        at: now,
+        set: { settledAt: now },
+      });
 
       return {
         outcome: 'settled',
         marketId,
-        statusEventId: event.id,
+        statusEventId,
         settledAt: now,
         positions: coin.positions,
         settledAccounts: coin.settledAccounts,
@@ -510,14 +571,15 @@ export async function finalizeMarket(
 }
 
 /**
- * The per-minute safety net for settlement (ADR-0046: every `resolved` market, judged longest
- * ago first): the API runs the job the moment it judges, so this picks up a market whose job
- * was lost or failed. One transaction per market and each rejection caught (`runScan`), so a
- * settlement that fails — the "no balance row" and "no result" throws above, a transient DB
- * error — rolls back that market alone (its step recorded `failed`) and the markets after it
- * are still settled this run. Without the catch the failing market, first by judgement time,
- * would stop every later scan at itself. See `closeDueMarkets` for the batch bound and the
- * re-check.
+ * The per-minute safety net for settlement (ADR-0046: every `resolved` or `settling` market,
+ * judged longest ago first): the API runs the job the moment it judges, so this picks up a
+ * market whose job was lost or failed — one still `resolved` (its resolved → settling never
+ * committed) as well as one left `settling` by a failed step (ADR-0093 decision 1 item 14).
+ * One market at a time and each rejection caught (`runScan`), so a settlement that fails — the
+ * "no balance row", "no result" and VOID throws above, a transient DB error — rolls back that
+ * market's steps alone (its step recorded `failed`) and the markets after it are still settled
+ * this run. Without the catch the failing market, first by judgement time, would stop every
+ * later scan at itself. See `closeDueMarkets` for the batch bound and the re-check.
  */
 export async function finalizeDueMarkets(
   db: Db,
@@ -527,7 +589,7 @@ export async function finalizeDueMarkets(
   const due = await db
     .select({ id: schema.markets.id })
     .from(schema.markets)
-    .where(eq(schema.markets.status, 'resolved'))
+    .where(inArray(schema.markets.status, ['resolved', 'settling']))
     .orderBy(asc(schema.markets.resolvedAt), asc(schema.markets.id))
     .limit(MARKET_SCAN_BATCH_MAX);
 

@@ -32,9 +32,9 @@ import {
  * answer 2 and 2026-10-22 answer 1, ADR-0078 7-24), with the 소개 typed and the categories picked
  * put back (2026-10-22 answer 3, 7-25), and the nickname typed (2026-10-22 (2nd) answer 2); the
  * step links to MY 설정 (answer 2, 7-26), and signing out drops what was kept. The field allow-list, the
- * counts' rules (deleted, hidden and voided content), the restriction hook and the refusals are the
- * API's tests (profiles.controller.test.ts, public-items*.test.ts, private-data.test.ts); this
- * walks the screens.
+ * counts' rules (deleted and hidden content, and what sits on an ended market), the restriction
+ * hook and the refusals are the API's tests (profiles.controller.test.ts, public-items*.test.ts,
+ * private-data.test.ts); this walks the screens.
  */
 
 /** A post straight at the API with the context's cookie: this spec's subject is its author. */

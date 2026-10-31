@@ -25,6 +25,7 @@ import {
 } from '@buddha/db/test';
 import {
   COMMENT_REPLIES_PAGE_SIZE,
+  PUBLIC_MARKET_STATUSES,
   commentThreadSchema,
   likeStateSchema,
   myPostLikesSchema,
@@ -596,7 +597,8 @@ describe.skipIf(!hasTestInfra)('/api/v1 likes (integration)', () => {
   // ---- what takes likes ------------------------------------------------------------------------
 
   it('takes likes on a post of a market in every public status, ended ones too (#49)', async () => {
-    for (const status of ['closed', 'resolved', 'settled', 'voided'] as const) {
+    // Not yet open, paused, ended, cancelled (ADR-0093 decision 3): the post's state decides.
+    for (const status of PUBLIC_MARKET_STATUSES) {
       const ended = await createMarket(t.db, { status });
       const there = await createPost(t.db, { marketId: ended.id, authorId: author.id });
       expect(stateOf(await likePost(true, reader, there.id)), status).toEqual({

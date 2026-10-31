@@ -90,7 +90,10 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
     return row!;
   }
 
-  /** A market judged YES a minute ago, with the pending step row the judgement writes. */
+  /**
+   * A market judged YES a minute ago, as the judgement leaves it: `resolved`, with the pending
+   * step row it writes. The finalize takes it to `settling`, then `settled`.
+   */
   async function judged() {
     const resolvedAt = new Date(Date.now() - MINUTE_MS);
     return createMarket(t.db, {
@@ -201,17 +204,23 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       settledAt: row.settledAt!.toISOString(),
       statusEventId: row.statusEventId,
     });
+    // settling, then settled, on the market's channel; the balance and the position on alice's.
     expect(published.map((p) => p.channel)).toEqual([
+      marketChannel(market.id),
       marketChannel(market.id),
       userChannel(alice),
       userChannel(alice),
+    ]);
+    expect(published.slice(0, 2).map((p) => (p.event as { status?: string }).status)).toEqual([
+      'settling',
+      'settled',
     ]);
     // The log line went through the same conversion: pino would have thrown on the bigint.
     expect(logs.find((line) => line.msg === 'market finalize')).toMatchObject({ paidCoin: '300' });
 
     // A second run is the skip, and the skip is JSON as it stands.
     const again = await run({ name: JOB_NAMES.marketFinalize, data: { marketId: market.id } });
-    expect(again).toEqual({ outcome: 'skipped', marketId: market.id, reason: 'not_resolved' });
+    expect(again).toEqual({ outcome: 'skipped', marketId: market.id, reason: 'not_settling' });
     expect(() => JSON.stringify(again)).not.toThrow();
   });
 
@@ -235,7 +244,8 @@ describe.skipIf(!hasTestDb())('job handlers (integration)', () => {
       ],
     });
     expect(() => JSON.stringify(result)).not.toThrow();
-    expect((await marketRow(poisoned.id)).status).toBe('resolved');
+    // Its payout started and stays started (ADR-0093 decision 1 item 14).
+    expect((await marketRow(poisoned.id)).status).toBe('settling');
     expect((await marketRow(healthy.id)).status).toBe('settled');
     // The handler hands its logger down, and the failure record went in without needing it:
     // the step says why, and the only error line is the scan's own (below).

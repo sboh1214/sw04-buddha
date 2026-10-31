@@ -15,7 +15,7 @@ import {
   usePositions,
 } from '@/hooks/use-portfolio';
 import { type Position } from '@/lib/api';
-import { formatContracts } from '@/lib/market-admin';
+import { MARKET_RESULT_LABEL, formatContracts } from '@/lib/market-admin';
 import { sessionListSection } from '@/lib/query-client';
 
 /**
@@ -215,9 +215,9 @@ function SettledPositionRows({ position }: { position: Position }) {
         {yes ? copy.yes : copy.no}
       </Badge>
       <DataList.Root orientation="horizontal" size="sm">
-        {/* A voided market resolved to nothing at all, so it has no result to name. */}
+        {/* YES·NO·무효; a cancelled market ended with no result at all, so it has none to name. */}
         <Item label={copy.marketResolvedResult}>
-          {result === null ? EMPTY : result === 'YES' ? copy.yes : copy.no}
+          {result === null ? EMPTY : MARKET_RESULT_LABEL[result]}
         </Item>
         <Item label={copy.positionQty}>{formatContracts(position.qty)}</Item>
         <Item label={copy.positionRealizedPnl}>

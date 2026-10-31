@@ -76,7 +76,8 @@ export const themes = pgTable(
 /**
  * The markets in a theme, one row per (theme, market). No cap, and a market may be in several
  * themes (the owner's '편성 규칙' row); a market in any status may be put in — the public answers
- * leave out a draft. `created_by` and `created_at` say who put it in, for the admin's list.
+ * leave out a DRAFT or REVIEW one. `created_by` and `created_at` say who put it in, for the admin's
+ * list.
  */
 export const themeMarkets = pgTable(
   'theme_markets',

@@ -1,7 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { schema, type Db } from '@buddha/db';
 import {
-  PUBLIC_MARKET_STATUSES,
   THEME_REFUSALS,
   decodeKeyset,
   encodeKeyset,
@@ -17,13 +16,13 @@ import {
   type UpdateThemeNoticeBody,
   type WithoutExpectedAccount,
 } from '@buddha/shared';
-import { and, count, desc, eq, inArray } from 'drizzle-orm';
+import { and, count, desc, eq } from 'drizzle-orm';
 import { keysetPredicate } from '../common/keyset.js';
 import { AppError } from '../common/errors/app-error.js';
 import { PG_UNIQUE_VIOLATION, isPgError } from '../common/errors/pg-error.js';
 import { clockTimestamp } from '../infra/db/clock.js';
 import { DB } from '../infra/db/db.provider.js';
-import { marketWithCategory, toMarketSummary } from '../markets/market.service.js';
+import { isPublicMarket, marketWithCategory, toMarketSummary } from '../markets/market.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { toThemeSummary, type ThemeRow } from './theme-rows.js';
 
@@ -65,8 +64,8 @@ function refusal(
  * never deleted; every change records the admin and the time and nothing else. And of 2026-10-19
  * (ADR-0088): a notice is hidden and never deleted; the slug is the operator's at creation and
  * fixed once the theme has been published — through an unpublish too (second round); a theme is
- * published only with a public market in it — a draft does not count (second round) — and every
- * market may be taken out afterwards.
+ * published only with a public market in it — a draft does not count (second round), nor since
+ * #174 a REVIEW one — and every market may be taken out afterwards.
  *
  * Each write that changes something writes one `admin_actions` row (a `theme_*` type, target
  * `theme` / the theme's id) in the same transaction, at the same clock reading as the change; a
@@ -203,9 +202,9 @@ export class ThemeAdminService {
   /**
    * `POST /admin/themes/:id/publish`: public from now; a published theme stays as it is. A theme
    * with no public market in it is VALIDATION_ERROR naming `markets` (owner decisions 2026-10-19:
-   * a market at least, and of the second round, one that is not a draft — a draft is on no public
-   * page, so a theme of drafts alone would go public as an empty page). The first publish fixes
-   * the slug (`first_published_at`).
+   * a market at least, and of the second round, one that is not a draft — a DRAFT or REVIEW market
+   * is on no public page, so a theme of those alone would go public as an empty page). The first
+   * publish fixes the slug (`first_published_at`).
    */
   async publish(adminId: string, themeId: string): Promise<AdminTheme> {
     return this.setPublished(adminId, themeId, true);
@@ -220,8 +219,8 @@ export class ThemeAdminService {
   }
 
   /**
-   * `GET /admin/themes/:id/markets`: every market in the theme, any status (drafts included —
-   * the public answers leave them out), the latest put in first, with who put it in.
+   * `GET /admin/themes/:id/markets`: every market in the theme, any status (DRAFT and REVIEW
+   * included — the public answers leave them out), the latest put in first, with who put it in.
    */
   async listMarkets(themeId: string): Promise<AdminThemeMarket[]> {
     await this.requireTheme(this.db, themeId);
@@ -354,12 +353,12 @@ export class ThemeAdminService {
       if ((current.publishedAt !== null) !== published) {
         // Counted under the theme's row lock: a link or unlink of this theme takes no such lock,
         // so a market taken out in the same instant may leave a theme just published empty — as
-        // taking every market out after publishing may, which the owner allows. A market counted
-        // stays public: no path takes a market back to draft.
+        // taking every market out after publishing may, which the owner allows. So may a market
+        // counted that goes back to DRAFT (SCHEDULED → DRAFT, #21): the page then shows the rest.
         if (published && (await this.publicMarketCount(tx, themeId)) === 0) {
           throw refusal(
             THEME_REFUSALS.noPublicMarket,
-            'A theme is published with a market that is not a draft in it',
+            'A theme is published with a public market in it',
           );
         }
         await tx
@@ -444,8 +443,9 @@ export class ThemeAdminService {
   }
 
   /**
-   * How many of the theme's markets the public pages show: every status but a draft, the set the
-   * theme's public cards are (`ThemesService.listMarkets`, `PUBLIC_MARKET_STATUSES`).
+   * How many of the theme's markets the public pages show: every public status (CANCELLED
+   * included, DRAFT and REVIEW not), the set the theme's public cards are
+   * (`ThemesService.listMarkets`, `isPublicMarket`).
    */
   private async publicMarketCount(executor: Executor, themeId: string): Promise<number> {
     const { themeMarkets, markets } = schema;
@@ -453,12 +453,7 @@ export class ThemeAdminService {
       .select({ n: count() })
       .from(themeMarkets)
       .innerJoin(markets, eq(markets.id, themeMarkets.marketId))
-      .where(
-        and(
-          eq(themeMarkets.themeId, themeId),
-          inArray(markets.status, [...PUBLIC_MARKET_STATUSES]),
-        ),
-      );
+      .where(and(eq(themeMarkets.themeId, themeId), isPublicMarket()));
     return row?.n ?? 0;
   }
 

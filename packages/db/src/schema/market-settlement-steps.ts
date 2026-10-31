@@ -4,19 +4,21 @@ import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { markets } from './markets.js';
 
 /**
- * The settlement steps of a judged market (O-6, ADR-0046): a `resolved` market becomes
- * `settled` only once every step of SETTLEMENT_STEPS (@buddha/shared) is `done`.
+ * The settlement steps of a market whose result is confirmed (O-6, ADR-0046; ADR-0093 decision 1
+ * items 1·14): a `settling` market becomes `settled` only once every step of SETTLEMENT_STEPS
+ * (@buddha/shared) is `done`.
  *
- * The admin's judgement inserts one `pending` row per step in its own transaction; the worker's
- * `finalizeMarket` runs the steps that are not `done` under the market lock and marks each
- * `done` with `completed_at`. A step that throws rolls its transaction back, and the worker then
- * records the attempt in a separate one — `attempts` + 1, `failed`, `last_error` — so the reason
- * a market stays `resolved` is readable without the worker's logs; the per-minute scan retries
- * it with no cap. `last_error` is kept after a later success.
+ * The transition to `resolved` inserts one `pending` row per step in its own transaction; the
+ * worker moves the market on to `settling` and `finalizeMarket` runs the steps that are not
+ * `done` under the market lock and marks each `done` with `completed_at`. A step that throws
+ * rolls its transaction back, and the worker then records the attempt in a separate one —
+ * `attempts` + 1, `failed`, `last_error` — so the reason a market stays `settling` is readable
+ * without the worker's logs; the per-minute scan retries it with no cap. `last_error` is kept
+ * after a later success.
  *
  * `step` and `status` are varchar validated by zod (the `market_events.type` convention), so a
  * step added later needs no enum migration. Not append-only: the worker updates rows.
- * No row for a voided market or one never judged.
+ * No row for a market whose result was never confirmed, nor for a CANCELLED one.
  */
 export const marketSettlementSteps = pgTable(
   'market_settlement_steps',

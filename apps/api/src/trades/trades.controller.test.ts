@@ -223,6 +223,40 @@ describe.skipIf(!hasTestInfra)('positions and orders (integration)', () => {
     expect(anonymous.statusCode).toBe(401);
   });
 
+  it('GET /me/positions carries the market’s status and result as stored, a VOID result included (#174)', async () => {
+    // The result is not a contract side: a NO position on a market judged VOID says so.
+    const provisional = await createMarket(t.db, { status: 'provisional', resolvedResult: 'VOID' });
+    const cancelled = await createMarket(t.db, { status: 'cancelled' });
+    await insertPosition({
+      userId: user.id,
+      marketId: provisional.id,
+      outcome: 'NO',
+      qty: 4,
+      updatedAt: at(1),
+    });
+    await insertPosition({
+      userId: user.id,
+      marketId: cancelled.id,
+      outcome: 'YES',
+      qty: 2,
+      updatedAt: at(2),
+    });
+    const res = await t.app.inject({
+      method: 'GET',
+      url: '/api/v1/me/positions?status=open',
+      headers: { cookie: user.cookie },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      res
+        .json<{ data: Position[] }>()
+        .data.map((row) => [row.marketId, row.outcome, row.marketStatus, row.resolvedResult]),
+    ).toEqual([
+      [cancelled.id, 'YES', 'cancelled', null],
+      [provisional.id, 'NO', 'provisional', 'VOID'],
+    ]);
+  });
+
   it('GET /me/orders pages newest first with the fill joined in', async () => {
     const second = await createMarket(t.db);
     const maker = await insertMakerOrder(market.id);

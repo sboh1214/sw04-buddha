@@ -37,6 +37,7 @@ describe('watchlistQuerySchema', () => {
 
   it('takes a public status only and the category slug GET /markets takes', () => {
     expect(watchlistQuerySchema.safeParse({ status: 'draft' }).success).toBe(false);
+    expect(watchlistQuerySchema.safeParse({ status: 'review' }).success).toBe(false);
     expect(watchlistQuerySchema.safeParse({ category: '' }).success).toBe(false);
     expect(watchlistQuerySchema.safeParse({ category: 'x'.repeat(51) }).success).toBe(false);
     expect(watchlistQuerySchema.shape.category.unwrap()).toBe(

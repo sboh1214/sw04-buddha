@@ -1,7 +1,12 @@
-import { RELATED_MARKET_STATUSES, marketSearchTermSchema } from '@buddha/shared';
+import {
+  MARKET_STATUSES,
+  type MarketStatus,
+  RELATED_MARKET_STATUSES,
+  marketSearchTermSchema,
+} from '@buddha/shared';
 import { copy } from '@/copy';
 import { isApiError, isForAnotherAccount, validationField } from './api';
-import { MARKET_STATUS_LABEL } from './market-admin';
+import { MARKET_RESULT_LABEL, MARKET_STATUS_LABEL } from './market-admin';
 import { listSection } from './query-client';
 
 /**
@@ -12,15 +17,16 @@ import { listSection } from './query-client';
  *
  * Owner decisions (ADR-0061 decision 1, item 19; decision 3, the #65 rows): a link is two-way and
  * made or removed by an admin in any status of either market, with no reason asked and no second
- * admin; the detail shows the open, closed, resolved and settled ones.
+ * admin; the detail shows every public status but 취소, and never a market whose result is 무효
+ * (ADR-0093 decision 3, the #174 row).
  */
 
 /**
  * What the picker offers for one market it found: `self` for the market on screen (the API
  * refuses linking a market to itself), `linked` for one that is linked already, from either side —
- * the API would change nothing — and `linkable` for the rest. Every status is linkable, a draft
- * and a voided market included (ADR-0061 decision 3, #65): the admin keeps links, and the
- * detail's statuses decide what a reader sees.
+ * the API would change nothing — and `linkable` for the rest. Every status and result is
+ * linkable, a draft, a cancelled and a 무효 market included (ADR-0061 decision 3, #65): the admin
+ * keeps links, and the detail's rule decides what a reader sees.
  */
 export type RelatedPickState = 'self' | 'linked' | 'linkable';
 
@@ -101,17 +107,26 @@ export function relatedSearchQuery(q: string, cursor?: string): { q: string; cur
 }
 
 /**
- * The panel's hint: the two markets see each other, which statuses a detail shows, and that a
- * link changes neither market. The statuses are named by their labels — the ones the same panel
- * badges each linked and found market with (`MARKET_STATUS_LABEL`), so an open market reads
- * '진행 중' in both places — and come from `RELATED_MARKET_STATUSES`, the API's own filter, so the
- * hint follows #173's labels and #174's statuses rather than a list written out in the copy.
+ * The panel's hint: the two markets see each other, which markets a detail does NOT show, and that
+ * a link changes neither market. Since #174 the rule is two halves (ADR-0093 decision 3, the #174
+ * row; `isRelatedMarketShown`): a status — every one `RELATED_MARKET_STATUSES` leaves out, the
+ * admin's 초안·검수 중 and 취소 — and a result, 무효, in whatever status the market holds it. A
+ * list of shown statuses cannot say the second half, and would be eight labels long; the hidden
+ * ones are three and a result. Both are named by their labels — the ones the same panel badges
+ * each linked and found market with (`MARKET_STATUS_LABEL`), and the result's own word
+ * (`MARKET_RESULT_LABEL`) — and the statuses come from the API's own filter rather than a list
+ * written out in the copy, so the hint follows the statuses.
  */
 export function relatedHint(): string {
-  const shown = RELATED_MARKET_STATUSES.map((status) => MARKET_STATUS_LABEL[status]).join('·');
+  const hidden = MARKET_STATUSES.filter(
+    (status) => !(RELATED_MARKET_STATUSES as readonly MarketStatus[]).includes(status),
+  )
+    .map((status) => MARKET_STATUS_LABEL[status])
+    .join('·');
   return [
     copy.adminRelatedHint,
-    `${copy.adminRelatedHintShownLead} ${shown}${copy.adminRelatedHintShownTail}`,
+    `${hidden}${copy.adminRelatedHintHiddenStatusTail} ${MARKET_RESULT_LABEL.VOID}` +
+      copy.adminRelatedHintHiddenResultTail,
     copy.adminRelatedHintNoEffect,
   ].join(' ');
 }

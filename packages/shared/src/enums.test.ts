@@ -49,18 +49,22 @@ describe('enums', () => {
     }
   });
 
-  it('orders MARKET_STATUSES so a client can rank two market:status events (A-M3-19)', () => {
-    // Until an event carries a strict key, a client keeps the higher rank in this order —
-    // which is only a total order because the tuple is written in transition order and no
-    // status repeats. Reordering it (which also reorders the Postgres enum type) or letting
-    // M5 move a settled market back would break that rule silently; this fails first.
+  it("orders MARKET_STATUSES along the plan's lifecycle, the rank fallback (#174)", () => {
+    // A client ranks two market:status events by this order only when a row carries no
+    // transition key (statusSupersedes); it is N03 §3's forward order, PAUSED beside OPEN and
+    // CANCELLED last.
     const rank = (status: enums.MarketStatus) => enums.MARKET_STATUSES.indexOf(status);
     for (const [earlier, later] of [
-      ['draft', 'open'],
-      ['open', 'closed'],
-      ['closed', 'resolved'],
-      ['resolved', 'settled'],
-      ['settled', 'voided'],
+      ['draft', 'review'],
+      ['review', 'scheduled'],
+      ['scheduled', 'open'],
+      ['open', 'paused'],
+      ['paused', 'closed'],
+      ['closed', 'provisional'],
+      ['provisional', 'resolved'],
+      ['resolved', 'settling'],
+      ['settling', 'settled'],
+      ['settled', 'cancelled'],
     ] as const) {
       expect(rank(earlier)).toBeLessThan(rank(later));
     }
@@ -112,19 +116,34 @@ describe('enums', () => {
     for (const type of enums.ADMIN_ACTION_TYPES) expect(type.length).toBeLessThanOrEqual(40);
   });
 
-  it('names the market statuses after the plan, with no dispute stage (O-5, O-7, ADR-0046)', () => {
+  it('names the eleven market statuses of the plan, VOID a result and not a status (#174)', () => {
     expect(enums.MARKET_STATUSES).toEqual([
       'draft',
+      'review',
+      'scheduled',
       'open',
+      'paused',
       'closed',
+      'provisional',
       'resolved',
+      'settling',
       'settled',
-      'voided',
+      'cancelled',
     ]);
+    expect(enums.marketStatusSchema.safeParse('voided').success).toBe(false);
+    // The result type is its own tuple; a contract side is never VOID.
+    expect(enums.MARKET_RESULTS).toEqual(['YES', 'NO', 'VOID']);
+    expect(enums.marketResultSchema.parse('VOID')).toBe('VOID');
+    expect(enums.marketResultSchema.safeParse('MAYBE').success).toBe(false);
+    expect(enums.OUTCOMES).toEqual(['YES', 'NO']);
+    expect(enums.outcomeSchema.safeParse('VOID').success).toBe(false);
     expect(enums.marketEventTypeSchema.parse('resolved')).toBe('resolved');
-    // The M5 events stay readable: market_events is append-only and old rows carry them.
-    expect(enums.marketEventTypeSchema.parse('resolve_proposed')).toBe('resolve_proposed');
-    expect(enums.marketEventTypeSchema.parse('result_changed')).toBe('result_changed');
+    expect(enums.marketEventTypeSchema.parse('settling')).toBe('settling');
+    // The M5 dispute events and the voiding are gone: the database was emptied (#174), so no
+    // old row carries them.
+    for (const gone of ['resolve_proposed', 'result_changed', 'voided']) {
+      expect(enums.marketEventTypeSchema.safeParse(gone).success).toBe(false);
+    }
     expect(enums.ADMIN_ACTION_TYPES).not.toContain('dispute_review');
     for (const type of enums.MARKET_EVENT_TYPES) expect(type.length).toBeLessThanOrEqual(40);
   });

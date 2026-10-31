@@ -302,7 +302,7 @@ const REALTIME_EVENTS = {
   },
   'market:status': {
     room: '`market:<id>`',
-    note: '상태 전이(개장·마감·판정·정산 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다',
+    note: '상태 전이(개장·마감·결과 확정·지급 시작·지급 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다',
     key: '`statusEventId`',
   },
   'user:balance': {
@@ -350,9 +350,10 @@ const ERROR_NOTES = {
   UNAUTHENTICATED: '세션 쿠키가 없거나 만료되었다. 로그인이 필요하다.',
   FORBIDDEN:
     '로그인은 했지만 권한이 없다. 관리자 전용 라우트, 교차 출처 요청 거부, 남의 계정을 지목한 본문이 여기에 들어간다.',
-  NOT_FOUND: '대상이 없다. 공개에 보이지 않는 초안(draft) 시장도 여기로 답한다.',
+  NOT_FOUND: '대상이 없다. 공개에 보이지 않는 초안(draft)·검수 중(review) 시장도 여기로 답한다.',
   VALIDATION_ERROR: '요청이 스키마에 맞지 않는다. `details` 에 `{ path, message }` 배열이 붙는다.',
-  MARKET_NOT_OPEN: '시장이 `open` 이 아니라 그 동작을 할 수 없다.',
+  MARKET_NOT_OPEN:
+    '시장이 거래 중(`open`)이 아니라 그 동작을 할 수 없다(거래 일시 중단 `paused` 도 여기로 답한다).',
   INSUFFICIENT_BALANCE: '잔고가 모자란다.',
   PRICE_MOVED:
     '화면이 보여 준 충전 상품의 조건(`expectedAmountCoin`·`expectedPriceKrw`)이 지금 판매하는 조건과 다르다.',

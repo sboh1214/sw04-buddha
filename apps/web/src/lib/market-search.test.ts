@@ -82,6 +82,11 @@ describe('searchFiltersFromSearchParams', () => {
       ...DEFAULT_SEARCH_FILTERS,
       q: 'x',
     });
+    // Nor is one in review (ADR-0093 decision 1, item 12), and a bookmarked `voided` names a
+    // status #174 removed (VOID is a result now): both fall back to every status.
+    for (const status of ['review', 'voided']) {
+      expect(searchFiltersFromSearchParams({ q: 'x', status }).status, status).toBe('all');
+    }
     expect(searchFiltersFromSearchParams({ q: 'x', sort: 'watched' }).sort).toBe('recommended');
     // A blank, over-long or NUL term is no term: the screen shows what it shows with none.
     for (const q of ['', '   ', 'y'.repeat(101), 'a\u0000b']) {
@@ -117,11 +122,11 @@ describe('searchFiltersFromSearchParams', () => {
     expect(
       searchFiltersFromSearchParams({
         q: ['비', '눈'],
-        status: ['voided', 'open'],
+        status: ['cancelled', 'open'],
         sort: ['newest', 'closing'],
         category: ['weather', 'economy'],
       }),
-    ).toEqual({ q: '비', status: 'voided', sort: 'newest', category: 'weather' });
+    ).toEqual({ q: '비', status: 'cancelled', sort: 'newest', category: 'weather' });
   });
 
   it('keys one search once, however its URL was spelled', () => {
@@ -183,24 +188,35 @@ describe('searchPath and searchQuery', () => {
 
 describe('searchStatusOptions', () => {
   it('is 모든 상태, then one per public status, labelled as the badge is (ADR-0061 decision 1)', () => {
+    // ADR-0093 decision 3, the #174 row: every public status, 취소 included, in lifecycle order.
     const options = searchStatusOptions();
     expect(options.map((option) => option.value)).toEqual([
       'all',
+      'scheduled',
       'open',
+      'paused',
       'closed',
+      'provisional',
       'resolved',
+      'settling',
       'settled',
-      'voided',
+      'cancelled',
     ]);
     expect(options.map((option) => option.label)).toEqual([
       copy.searchStatusAll,
-      '진행 중',
+      '개장 예정',
+      '거래 중',
+      '거래 일시 중단',
       '거래 마감',
-      '판정 완료',
-      '정산 완료',
-      '무효',
+      '잠정 결과',
+      '결과 확정',
+      '지급 중',
+      '지급 완료',
+      '취소',
     ]);
-    // One per label today: no two statuses share one (#173 may change that, and these follow).
+    // A result is no status: no 무효 choice (nor '판정 지연', a display #22·#142 bring).
+    expect(options.map((option) => option.label)).not.toContain(copy.marketResultVoid);
+    // One per label: no two statuses share one.
     for (const status of PUBLIC_MARKET_STATUSES) {
       expect(options.find((option) => option.value === status)?.label).toBe(
         MARKET_STATUS_LABEL[status],
@@ -208,6 +224,7 @@ describe('searchStatusOptions', () => {
     }
     expect(new Set(options.map((option) => option.label)).size).toBe(options.length);
     expect(options.map((option) => option.value)).not.toContain('draft');
+    expect(options.map((option) => option.value)).not.toContain('review');
   });
 });
 

@@ -18,7 +18,13 @@ import {
   Text,
   Textarea,
 } from '@chakra-ui/react';
-import { type MarketEventType, OUTCOMES, formatCoin, parseCoinAmount } from '@buddha/shared';
+import {
+  type MarketEventType,
+  OUTCOMES,
+  formatCoin,
+  isPublicMarketStatus,
+  parseCoinAmount,
+} from '@buddha/shared';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import NextLink from 'next/link';
@@ -57,6 +63,7 @@ import {
 import { formatKst } from '@/lib/datetime';
 import {
   MARKET_EVENT_LABEL,
+  MARKET_RESULT_LABEL,
   MARKET_STATUS_LABEL,
   MARKET_STATUS_PALETTE,
   canResolve,
@@ -194,12 +201,10 @@ export function AdminMarketDetail({ id }: { id: string }) {
             <Item label={copy.adminMarketImageUrl}>{data.imageUrl ?? '—'}</Item>
             <Item label={copy.adminMarketCloseAt}>{formatKst(data.closeAt)}</Item>
             <Item label={copy.marketOpenAt}>{data.openAt ? formatKst(data.openAt) : '—'}</Item>
+            {/* YES·NO·무효, or '—' before a judgement and on a cancelled market (ADR-0093 decision 1,
+                item 10: a cancelled market has no result, never VOID). */}
             <Item label={copy.marketResolvedResult}>
-              {data.resolvedResult === null
-                ? '—'
-                : data.resolvedResult === 'YES'
-                  ? copy.yes
-                  : copy.no}
+              {data.resolvedResult === null ? '—' : MARKET_RESULT_LABEL[data.resolvedResult]}
             </Item>
             {data.resolvedAt && (
               <Item label={copy.marketResolvedAt}>{formatKst(data.resolvedAt)}</Item>
@@ -207,7 +212,6 @@ export function AdminMarketDetail({ id }: { id: string }) {
             {data.settledAt && (
               <Item label={copy.marketSettledAt}>{formatKst(data.settledAt)}</Item>
             )}
-            {data.voidedAt && <Item label={copy.marketVoidedAt}>{formatKst(data.voidedAt)}</Item>}
             <Item label={copy.marketCreatedAt}>{formatKst(data.createdAt)}</Item>
             <Item label={copy.marketUpdatedAt}>{formatKst(data.updatedAt)}</Item>
             <Item label={copy.marketCreatedBy}>
@@ -271,7 +275,10 @@ function Item({ label, children }: { label: string; children: ReactNode }) {
  * detail says 거래 준비 중 in place of the order panel. There is no 무효: the admin void and its
  * cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives in its own
  * component, mounted only while its dialog is open, so every opening starts from an empty form.
- * A judged market offers none of these: the 판정 is final (#26 decides what may undo one).
+ * A judged market offers none of these: the 판정 is final. All three are the interim actions
+ * #174 keeps on the new statuses (ADR-0047 result 3, ADR-0093 result 2) — 열기 until #21, 마감
+ * until #114, 판정 until #152 — so a market in any other status (검수 중, 개장 예정, 거래 일시 중단,
+ * 잠정 결과, 지급 중, 취소, …) offers none.
  *
  * Each names the admin on screen (`useOperatorId`, ADR-0092), so 열기, the buttons that open the
  * two dialogs and their confirmations wait for `GET /me`; the cookie of another account is refused
@@ -389,10 +396,11 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
 /**
  * 판정 (PLAN 12 정산 화면, ADR-0046): result by radio, note, evidence URL, and the confirmation
  * that says what the click does — the result is final at once, settlement starts right away,
- * and neither a change nor a void is possible afterwards. A stale screen (another admin judged
- * it first) meets the API's `status` refusal, which `transitionErrorMessage` names. The answer
- * is applied like every other transition (`useApplyMarket`), so the status, the result and the
- * 정산 단계 rows above are the server's the moment the toast shows, whatever the refetch does.
+ * and no change is possible afterwards (VOID is #152's judgement, not this dialog's). A stale
+ * screen (another admin judged it first) meets the API's `status` refusal, which
+ * `transitionErrorMessage` names. The answer is applied like every other transition
+ * (`useApplyMarket`), so the status, the result and the 정산 단계 rows above are the server's the
+ * moment the toast shows, whatever the refetch does.
  */
 function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
   const apply = useApplyMarket(market.id);
@@ -642,8 +650,8 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
               form={form}
               categories={categories}
               disabled={!editable}
-              // The row itself, so the 미리보기 of a market past draft shows the price and volume it
-              // TRADES at rather than an untraded card.
+              // The row itself, so the 미리보기 of a market that has opened shows the price and volume
+              // it TRADES at rather than an untraded card (market-preview.ts).
               base={market}
             />
             <Button
@@ -682,8 +690,9 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
 
 /**
  * 정산 단계 (ADR-0046, D7): what the worker has done with a judged market, read-only. One row
- * per settlement step, in the order the worker runs them; nothing at all before the 판정 or for
- * a voided market (the API answers an empty list then, and an empty table would only say so).
+ * per settlement step, in the order the worker runs them; nothing at all before the result is
+ * confirmed or for a cancelled market (the API answers an empty list then, and an empty table
+ * would only say so).
  *
  * A failed step is the one state that needs the admin, so it is the one drawn as a SOLID badge
  * (`no`, measured AA in theme/contrast.test.ts) — and it is never colour alone: the badge says
@@ -759,13 +768,14 @@ function SettlementStepsPanel({ market }: { market: AdminMarket }) {
  * 관련 시장 (#65, ADR-0068): the markets linked to this one, and a title search to link another.
  * Only an admin links (N03 §1), in any status of either market, with no reason and no second admin
  * (ADR-0061 decision 1, item 19; decision 3, the #65 rows). A link is two-way: the other market's
- * detail shows this one too, which the hint says, with what a reader sees — the open, closed,
- * resolved and settled ones — and that a link changes neither market.
+ * detail shows this one too, which the hint says, with what a reader does not see — a cancelled
+ * market and one whose result is 무효, besides the drafts and reviews no public page shows
+ * (ADR-0093 decision 3, the #174 row) — and that a link changes neither market.
  *
- * The list is every link whatever the other market's status (a draft or a voided market
- * included, each with its badge), the latest first, each with when and by whom — the linking
- * admin's nickname, not the account id (owner decision 2026-10-17). Each row unlinks behind a
- * confirmation: unlinking takes the market off two public details at once. Linking is one press:
+ * The list is every link whatever the other market's status or result (a draft, a cancelled
+ * or a 무효 market included, each with its badge), the latest first, each with when and by whom — the
+ * linking admin's nickname, not the account id (owner decision 2026-10-17). Each row unlinks behind
+ * a confirmation: unlinking takes the market off two public details at once. Linking is one press:
  * it is undone by the unlink beside it. Both writes answer the links as they now stand, which go on screen at once
  * (`applyRelatedMarkets`); a repeated link or an unlink of nothing changes nothing on the server.
  * The search is the admin list's (`GET /admin/markets?q=`, every status), so the market on screen
@@ -1162,6 +1172,8 @@ function EventLog({ market }: { market: AdminMarket }) {
 function EventPayload({ type, payload }: { type: MarketEventType; payload: unknown }) {
   if (payload === null || payload === undefined) return null;
   const rows = marketEventRows(type, payload);
+  // A payload read whole with nothing worth a row (the payout's start, `{source: 'job'}`).
+  if (rows?.length === 0) return null;
   if (rows === undefined) {
     return (
       <Text fontSize="xs" fontFamily="mono" color="fg.muted" wordBreak="break-all">
@@ -1183,9 +1195,14 @@ function EventPayload({ type, payload }: { type: MarketEventType; payload: unkno
   );
 }
 
-/** Newest fills, anonymous (PLAN 7.1). Waits for the market to leave draft (public 404). */
+/**
+ * Newest fills, anonymous (PLAN 7.1). Read from the public route, which answers NOT_FOUND for a
+ * draft and a market in review (ADR-0093 decision 1, item 12), so it waits for the market to be
+ * public; neither has traded.
+ */
 function RecentFills({ market }: { market: AdminMarket }) {
-  const fills = useMarketFills(market.id, market.status !== 'draft');
+  const hidden = !isPublicMarketStatus(market.status);
+  const fills = useMarketFills(market.id, !hidden);
   // The public twin's ladder, and the same fourth state: a refetch that fails keeps the rows and
   // reports `isRefetchError`, which `isLoadingError` alone folds into an ordinary list. Here as
   // there, the refetch is the only path a new fill arrives by — and the card above already draws
@@ -1198,7 +1215,7 @@ function RecentFills({ market }: { market: AdminMarket }) {
         <Text fontWeight="semibold">{copy.adminMarketFills}</Text>
       </Card.Header>
       <Card.Body>
-        {view === 'stale' && market.status !== 'draft' && (
+        {view === 'stale' && !hidden && (
           <Alert.Root status="warning" role="status" data-testid="admin-market-fills-stale" mb="3">
             <Alert.Indicator />
             <Alert.Content>
@@ -1209,7 +1226,7 @@ function RecentFills({ market }: { market: AdminMarket }) {
             </Button>
           </Alert.Root>
         )}
-        {market.status === 'draft' ? (
+        {hidden ? (
           <Text color="fg.muted">{copy.adminNoFills}</Text>
         ) : view === 'pending' ? (
           <Skeleton height="12" />
