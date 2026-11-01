@@ -12,7 +12,7 @@ import { markets } from './markets.js';
  * (`actor_id`, null for the worker), when (`created_at`, the DB clock after the market lock) and
  * the change itself (`from_status` → `to_status`), in the transaction that changes
  * `markets.status`. The `created` row has a `to_status` alone (the draft it wrote); a row that
- * changes no status (`rules_edited`, `open_rescheduled`) has neither.
+ * changes no status (`rules_edited`, `open_rescheduled`, `rules_supplemented`) has neither.
  */
 export const marketEvents = pgTable(
   'market_events',

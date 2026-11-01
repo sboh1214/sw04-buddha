@@ -10,8 +10,13 @@ import { MarketSourcesField } from './market-sources-field';
 
 interface MarketRuleFieldsProps {
   form: UseFormReturn<MarketFormValues>;
-  /** Every input; true unless the market is draft or open (design 3.4). */
+  /** Every input; true unless a draft's edit or a supplement's form (design 3.4, #80). */
   disabled: boolean;
+  /**
+   * The group's hint: by default the draft's (blank items save, 검수 제출 needs them all); the 규칙
+   * 보충 form passes its own, and an open market's edit, whose items are off, none (`null`).
+   */
+  hint?: string | null;
 }
 
 /** The same for every market: computed once, not per keystroke. */
@@ -23,15 +28,20 @@ const VOID_PAYOUT = voidPayoutText();
  * and NO conditions, the event deadline (KST, whole minutes, as 마감), the primary source's name
  * and address, the fallbacks (`MarketSourcesField`), the switch condition, the long-delay deadline
  * in days and the delay handling. A draft saves with any of them blank; the draft's notice names
- * what 검수 제출 still needs, and on an open market an item it had may not be emptied
- * (`marketFormSchema`'s `openMarket`, the API's RULES_REQUIRED).
+ * what 검수 제출 still needs. After the open they change by a supplement alone (#80, ADR-0101): the
+ * edit form draws them off, and the 규칙 보충 form draws them again, where an item the market had
+ * may not be emptied (`supplementFormSchema`, the API's RULES_REQUIRED).
  *
  * The switch condition shows only while there is a fallback to switch to (#172 item 9) — and while
  * it still holds text another writer left with no fallback, so the refusal of that has an input to
  * be fixed in. Under 지연·취소·무효 처리 stands the VOID payout, read-only: one rule for every market,
  * never written per market (#173 item 9, ADR-0093 result 1).
  */
-export function MarketRuleFields({ form, disabled }: MarketRuleFieldsProps) {
+export function MarketRuleFields({
+  form,
+  disabled,
+  hint = copy.adminMarketRuleItemsHint,
+}: MarketRuleFieldsProps) {
   const {
     register,
     watch,
@@ -43,7 +53,9 @@ export function MarketRuleFields({ form, disabled }: MarketRuleFieldsProps) {
   return (
     <Fieldset.Root disabled={disabled} data-testid="market-rule-items">
       <Fieldset.Legend fontWeight="semibold">{copy.adminMarketRuleItems}</Fieldset.Legend>
-      <Fieldset.HelperText>{copy.adminMarketRuleItemsHint}</Fieldset.HelperText>
+      {hint !== null && (
+        <Fieldset.HelperText data-testid="market-rule-items-hint">{hint}</Fieldset.HelperText>
+      )}
       <Fieldset.Content gap="3" mt="2">
         <Field.Root invalid={!!errors.description}>
           <Field.Label>{copy.adminMarketDescription}</Field.Label>
@@ -75,7 +87,9 @@ export function MarketRuleFields({ form, disabled }: MarketRuleFieldsProps) {
           <Field.ErrorText>{errors.eventDeadline?.message}</Field.ErrorText>
         </Field.Root>
 
-        <Fieldset.Root>
+        {/* A nested Fieldset.Root resets Chakra's disabled context: pass it on, or the inputs
+            stay natively disabled by the outer fieldset but are drawn as if editable. */}
+        <Fieldset.Root disabled={disabled}>
           <Fieldset.Legend fontSize="sm" fontWeight="medium">
             {copy.adminMarketPrimarySource}
           </Fieldset.Legend>

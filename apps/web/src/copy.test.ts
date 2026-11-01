@@ -91,6 +91,19 @@ describe('copy', () => {
     }
   });
 
+  it('keeps the public rule history to versions, texts and reasons (#80, #172 item 15)', () => {
+    // The public 규칙 버전 card names no operator and no 정산 영향 검토 (#173 item 13's analogue):
+    // those are the admin panel's words alone.
+    const publicKeys = Object.entries(copy).filter(([key]) => key.startsWith('ruleVersion'));
+    expect(publicKeys.length).toBeGreaterThan(0);
+    for (const [key, text] of publicKeys) {
+      expect(text, key).not.toMatch(/관리자|운영자|정산|환불|원금/);
+    }
+    // The request screen says the boundary (#80 AC 8): a change of meaning goes to the pause.
+    expect(copy.adminMarketSupplementBoundary).toContain('거래를 멈추고 검토');
+    expect(copy.supplementRejectMeaningChange).toContain('거래를 멈추고 검토');
+  });
+
   it('has no empty strings (every key renders something)', () => {
     for (const [key, text] of Object.entries(copy)) {
       expect(text.trim(), key).not.toBe('');

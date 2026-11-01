@@ -10,6 +10,7 @@ import {
 import {
   type AdminMarket,
   type AdminMarketReviewItem,
+  type AdminMarketSupplementItem,
   type AdminRelatedMarket,
   type Category,
   type Fill,
@@ -45,6 +46,14 @@ export const adminMarketKey = (id: string) => [...ADMIN_MARKET_KEY, id] as const
  * again (`invalidateMarket`) — a submission adds a row, an approval, a 반려 and a 되돌리기 take one.
  */
 export const ADMIN_MARKET_REVIEWS_KEY = ['admin', 'market-reviews'] as const;
+
+/**
+ * 규칙 보충 대기 (#80, ADR-0101): `GET /admin/market-supplements`, the supplement requests waiting
+ * for another admin, under the private `['admin']` root and a segment of its own, as the review
+ * queue's: every admin write to a market asks it again (`invalidateMarket`) — a request adds a row,
+ * an approval, a 반려 and a 철회 take one.
+ */
+export const ADMIN_MARKET_SUPPLEMENTS_KEY = ['admin', 'market-supplements'] as const;
 
 /**
  * 관련 시장 (#65, ADR-0068) on the admin detail: one market's links, every status, under the
@@ -201,6 +210,40 @@ export function useAdminMarketReviews() {
   return useInfiniteQuery(adminMarketReviewsQueryOptions());
 }
 
+/** One page of the 규칙 보충 대기 queue. */
+export interface AdminMarketSupplementPage {
+  items: AdminMarketSupplementItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * The 규칙 보충 대기 queue (#80): the oldest request first, 20 per page with 더 보기 (the API's
+ * default page), as the 검수 대기 queue pages. No filter.
+ */
+export function adminMarketSupplementsQueryOptions() {
+  return {
+    queryKey: ADMIN_MARKET_SUPPLEMENTS_KEY,
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminMarketSupplementPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/market-supplements', {
+          params: { query: pageParam === undefined ? {} : { cursor: pageParam } },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminMarketSupplementPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminMarketSupplements() {
+  return useInfiniteQuery(adminMarketSupplementsQueryOptions());
+}
+
 /**
  * After a link or an unlink: the answer is the market's links as the write committed them, so it
  * goes on screen now — a refetch that fails cannot leave the old list under a toast that says
@@ -239,7 +282,9 @@ export function useMarketFills(id: string, enabled: boolean) {
 
 /**
  * After any admin write: the detail, the fills, every filtered list page, the 검수 대기 queue (#78:
- * a submission, an approval, a 반려 and a 되돌리기 each change it), every other market's 관련 시장
+ * a submission, an approval, a 반려 and a 되돌리기 each change it), the 규칙 보충 대기 queue (#80: a
+ * request, an approval, a 반려 and a 철회 each change it, and a market's title or status shows in
+ * its rows), every other market's 관련 시장
  * list, and every public 관련 시장 list. Each row of an admin list badges the market at
  * its other end with its status and title, so a market linked to this one would otherwise go on
  * showing it as it was — a market just approved still '검수 중' under the hint that says one in
@@ -270,6 +315,7 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: marketFillsKey(id) }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKETS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_REVIEWS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_SUPPLEMENTS_KEY }),
     queryClient.invalidateQueries({
       queryKey: ADMIN_RELATED_MARKETS_KEY,
       predicate: (query) => query.queryHash !== ownLinks,

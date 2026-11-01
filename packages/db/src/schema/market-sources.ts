@@ -9,7 +9,9 @@ import { markets } from './markets.js';
  * (`fallbackSources`, MARKET_FALLBACK_SOURCES_MAX). No row at 0 is a market with no primary
  * source; none above it is '없음'. The column is `priority`, not "rank": a rank names the scoring
  * the plan leaves out (#113, storage-names.test.ts). #152 picks a source by it — above 0 needs a
- * reason the primary could not be used — and #80's versions copy the sources in its order.
+ * reason the primary could not be used — and a rule version copies the sources in its order
+ * (#80, `readRuleContent`). A market with a rule version (`markets.rule_version`) changes its
+ * sources only with a supplement, as its version items (migration 0053's trigger).
  *
  * A source is a name and an http(s) address, each at most 500 characters and stored as entered
  * (ADR-0093 decision 3 '#23 출처 주소'); a blank one is '' and is a missing item of the open-items

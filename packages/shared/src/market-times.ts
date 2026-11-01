@@ -13,7 +13,8 @@ import { TIME_ZONE_MAX_LENGTH } from './time-zone.js';
  *   개장') — the worker opens a SCHEDULED market at it, or its approval does when that comes later
  *   (#21); `openAt` stays the actual open (ADR-0065).
  * - `closeAt` 거래 마감 시각: the worker closes the market at it. After the open it only moves later,
- *   and never past the scheduled judgement (#172 item 14, owner answer 2026-10-31 A2).
+ *   by a supplement (#80), and never past the scheduled judgement (#172 item 14, owner answer
+ *   2026-10-31 A2).
  * - `scheduledAnnouncementAt` 발표 예정 시각 (#172 item 13): when the source is to publish; null is
  *   '없음', an event with no scheduled release. The close must lead it by the release setting
  *   `market.lead_close_gap` (선행 마감).
@@ -118,10 +119,10 @@ export function ceilToMinute(ms: number): number {
  *   setting `market.lead_close_gap` in minutes.
  *
  * The first three are the open-items check's `timeOrder` (TIME_ORDER_RULES) and the database holds
- * them too; the lead close depends on a setting, so only the open-items check (`leadClose`) and an
- * open market's close or announcement edit check it. Nothing orders the announcement against the
- * judgement or the open, and there is no minimum trading period: #78's reviewer looks (#172 item
- * 12).
+ * them too; the lead close depends on a setting, so only the open-items check (`leadClose`) and a
+ * supplement that changes an open market's close or announcement (#80) check it. Nothing orders
+ * the announcement against the judgement or the open, and there is no minimum trading period:
+ * #78's reviewer looks (#172 item 12).
  */
 export const TIME_RULES = [
   'openBeforeClose',
@@ -189,7 +190,8 @@ export const LEAD_CLOSE_GAP_UNDECIDED = 'gap undecided';
 
 /**
  * The detail of a write the lead close could not be checked for, on the lead field it sent: the
- * gap is undecided and the market has none of its own (an open market's close extension, ADR-0098).
+ * gap is undecided and the market has none of its own (a supplement's close or announcement
+ * change, ADR-0098, #80).
  */
 export const LEAD_CLOSE_GAP_UNDECIDED_MESSAGE = 'lead-close gap undecided';
 
@@ -321,7 +323,8 @@ export function sameTimeItem<K extends TimeItem>(
 
 /**
  * The time items whose value an edit changed, in TIME_ITEMS order (#22): an instant by its moment
- * (`…00Z` and `…00.000Z` are one), the zone by its name. #80's versions can list them.
+ * (`…00Z` and `…00.000Z` are one), the zone by its name. A rule version lists them among its
+ * changed items (`changedRuleVersionItems`, #80).
  */
 export function changedTimeItems(before: MarketTimeItems, after: MarketTimeItems): TimeItem[] {
   return TIME_ITEMS.filter((item) => !sameTimeItem(item, before[item], after[item]));

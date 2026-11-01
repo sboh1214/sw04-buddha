@@ -181,6 +181,31 @@ describe('enums', () => {
     expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
   });
 
+  it('records a rule supplement as one market event and four admin actions (#80)', () => {
+    // Appended: the first types stay where #78 pinned them, and a supplement changes no status.
+    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('rules_supplemented');
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type.startsWith('rules_'))).toEqual([
+      'rules_edited',
+      'rules_supplemented',
+    ]);
+    // Its request, 반려 and 철회 write no market event; each of the four is an admin action.
+    const supplement = enums.ADMIN_ACTION_TYPES.filter((type) =>
+      type.startsWith('market_supplement_'),
+    );
+    expect(supplement).toEqual([
+      'market_supplement_request',
+      'market_supplement_approve',
+      'market_supplement_reject',
+      'market_supplement_retract',
+    ]);
+    // admin_actions.type and market_events.type are varchar(40).
+    for (const type of [...supplement, 'rules_supplemented']) {
+      expect(type.length).toBeLessThanOrEqual(40);
+    }
+    expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
+  });
+
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {
     // Coin settlement is the only step: Forecast scoring left with Forecast (N02 §1, N04 §4).
     expect(enums.SETTLEMENT_STEPS).toEqual(['coin']);

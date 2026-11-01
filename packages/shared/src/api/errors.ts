@@ -12,10 +12,11 @@ export const ERROR_CODES = [
   'DUPLICATE_REQUEST',
   'RATE_LIMITED',
   /**
-   * An edit of an open market would leave a rule item missing that was filled before it, as the
-   * open-items check counts one (#23), or clear its judgement time zone, a judgement item too
-   * (#22). Details carry one issue per such item, its path naming the item as a field. Items
-   * already missing block no other edit.
+   * A supplement of an open market would leave a rule item missing that was filled before it, as
+   * the open-items check counts one (#23), or clear its judgement time zone, a judgement item too
+   * (#22); since #80 an open market's rules change by a supplement alone. Details carry one issue
+   * per such item, its path naming the item as a field. Items already missing block no other
+   * change.
    */
   'RULES_REQUIRED',
   // No brackets or quotes in the comments of this list: scripts/generate-api-doc.mjs reads it
@@ -42,8 +43,9 @@ export const ERROR_CODES = [
   /**
    * A decision on a two-person request the rule refuses: the decider requested it, it is decided
    * already, or its requester retracted it; or a retraction by anyone but the requester, or of one
-   * no longer pending; or, for a market review (#78), the decider created or edited the market.
-   * The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
+   * no longer pending; or, for a market review (#78), the decider created or edited the market; or
+   * a market supplement (#80) asked for while no admin but the requester could decide it. The
+   * first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
    */
   'APPROVAL_NOT_ALLOWED',
   /**

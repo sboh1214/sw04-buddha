@@ -1329,8 +1329,10 @@ export function accountRequestMootNotice(
 
 /**
  * The two-person rule's refusals as the moderation screens say them. `creator` and `editor` are the
- * market review's (#78), which no account restriction request meets; the review screen says them in
- * its own words (lib/market-review.ts).
+ * market review's (#78), and `no_decider` a rule supplement request's (#80), which no account
+ * restriction request meets as an approval refusal (#139 names its own `no_decider` a moderation
+ * one); the market screens say them in their own words (lib/market-review.ts,
+ * lib/market-supplement.ts).
  */
 const APPROVAL_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
   requester: copy.errApprovalRequester,
@@ -1339,6 +1341,7 @@ const APPROVAL_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
   not_requester: copy.errApprovalNotRequester,
   creator: copy.errApprovalCreator,
   editor: copy.errApprovalEditor,
+  no_decider: copy.errApprovalNoDecider,
 };
 
 const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> = {

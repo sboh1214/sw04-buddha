@@ -13,8 +13,9 @@ import { type DetailWidth, backgroundText, copyTestId } from '@/lib/market-detai
  * HTML-injection surface. A market without a description has no 배경 section at all
  * (`backgroundText`).
  *
- * Live for the reason `LiveRulesSection` is: the description is editable while a market is open,
- * and the rest of the screen follows the `['market', id]` row. The server's row is the fallback,
+ * Live for the reason `LiveRulesSection` is: the description changes while a market is open — by
+ * an approved supplement since #80 (ADR-0101) — and the rest of the screen follows the
+ * `['market', id]` row. The server's row is the fallback,
  * and this renders inside the page's `HydrationBoundary`, so the text is in the server's HTML.
  *
  * The detail draws 배경 in a different place at each width, so it renders one copy per width

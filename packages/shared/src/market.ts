@@ -5,31 +5,29 @@ import { uuidParamSchema } from './api/path-param.js';
 import {
   BP_MAX,
   INT4_MAX,
-  MARKET_FALLBACK_SOURCES_MAX,
   MARKET_IMAGE_URL_MAX,
   MARKET_RESOLVE_EVIDENCE_URL_MAX,
   MARKET_RESOLVE_NOTE_MAX,
   MARKET_SEARCH_TERM_MAX,
   MARKET_SLUG_PATTERN,
   MARKET_SLUG_STEM_MAX,
-  MARKET_TEXT_MAX,
-  MARKET_TITLE_MAX,
   PRICE_MAX,
   PRICE_MIN,
   TICKS_MAX_POINTS,
 } from './constants.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
+import { marketTitleSchema, ruleItemFields, timeItemFields } from './market-fields.js';
 import { openItemSchema } from './market-open-items.js';
 import { adminMarketReviewSchema } from './market-review.js';
+import { marketRuleItemsSchema } from './market-rules.js';
 import {
-  marketLongDelayDaysSchema,
-  marketRuleItemsSchema,
-  marketSourceSchema,
-  storableInstantSchema,
-} from './market-rules.js';
+  adminMarketSupplementSchema,
+  adminRuleVersionSchema,
+  marketRuleVersionSchema,
+  ruleVersionNumberSchema,
+} from './market-supplement.js';
 import { marketTimesSchema } from './market-times.js';
 import { marketTagsSchema } from './tags.js';
-import { timeZoneSchema } from './time-zone.js';
 import {
   type MarketStatus,
   marketEventTypeSchema,
@@ -160,6 +158,18 @@ export const marketSchema = z
     tags: z.array(z.string()),
     resolvedAt: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime().nullable(),
+    /**
+     * The current rule version (#80, ADR-0101; ADR-0093 decision 2 #172 items 6·7): 1 from the
+     * open, one more per approved supplement, and the version the judgement follows. Null before
+     * the open and on a market opened before #80 (D4: no versions were made for those).
+     */
+    ruleVersion: ruleVersionNumberSchema.nullable(),
+    /**
+     * Every rule version, the newest (the current one) first (decision 3 '#80 보충의 형태'): each
+     * with its full text, the items it changed, the reason and the time, and nobody's name. Read in
+     * the same snapshot as the rest of the detail; empty while `ruleVersion` is null.
+     */
+    ruleVersions: z.array(marketRuleVersionSchema),
   })
   .meta({ id: 'Market' });
 export type Market = z.infer<typeof marketSchema>;
@@ -463,7 +473,7 @@ export const marketEventSchema = z
     /**
      * The status change the event made (#174): both set on a transition, only `toStatus` on
      * `created`, both null on an event that changes no status (`rules_edited`,
-     * `open_rescheduled`).
+     * `open_rescheduled`, `rules_supplemented`).
      */
     fromStatus: marketStatusSchema.nullable(),
     toStatus: marketStatusSchema.nullable(),
@@ -530,6 +540,17 @@ export const adminMarketSchema = marketSchema
      * the exclusions name, the same-condition markets and the 검수 기록.
      */
     review: adminMarketReviewSchema,
+    /**
+     * The rule versions as the public detail lists them (newest first), each with who asked for it,
+     * who made it, its approval request and its 정산 영향 검토 (#80, ADR-0101): the admin's form of
+     * `Market.ruleVersions`, in its place.
+     */
+    ruleVersions: z.array(adminRuleVersionSchema),
+    /**
+     * 규칙 보충 (#80, ADR-0101), in every status: the waiting request and every request with how it
+     * ended — one still waiting at the close is shown for its 반려 or 철회.
+     */
+    supplement: adminMarketSupplementSchema,
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;
@@ -545,49 +566,31 @@ export const marketSlugSchema = z
   .regex(MARKET_SLUG_PATTERN, 'only a-z, 0-9, Korean syllables and -, 3..80 characters')
   .refine((slug) => !uuidParamSchema.safeParse(slug).success, 'slug must not look like a uuid');
 
-/** A rule text (#23): trimmed, at most MARKET_TEXT_MAX; blank while not filled in. */
-const ruleTextSchema = z.string().trim().max(MARKET_TEXT_MAX);
-
 /**
+ * The fields of a create and an edit: the version items as market-fields.ts declares them (the
+ * title, the rule items and the times, #80), then the category, the tags, the image and the slug.
+ *
  * The rule items (market-rules.ts, #23) are each optional and may be blank, null or empty: a draft
  * saves half-done and the open-items check names what is missing. A create without one starts it
  * blank (null for a nullable one); an edit without one keeps the stored value; null clears a
- * nullable one. On an open market an edit that newly leaves one missing is RULES_REQUIRED, and a
- * switch condition while the result has no fallback is refused ('no fallback source') — both the
- * service's, on the stored values merged with the body.
+ * nullable one. A switch condition while the result has no fallback is refused ('no fallback
+ * source'), the service's, on the stored values merged with the body.
  *
  * The time items (market-times.ts, #22, ADR-0098) are the same but the close, which a create
  * requires: each instant from STORABLE_INSTANT_MIN on, stored as entered. The service refuses a
  * write whose result breaks an order rule (`timeRuleViolations`, whole minutes) naming both ends;
- * the lead close (선행 마감) is the open-items check's, never refused on a draft. On an open market
- * the close only moves later, never past the scheduled judgement, with the lead close checked
- * again; the scheduled open and judgement are fixed; clearing the zone is RULES_REQUIRED.
+ * the lead close (선행 마감) is the open-items check's, never refused on a draft.
+ *
+ * After the open the version items change by a supplement alone (#80, ADR-0101; ADR-0093 decision
+ * 2 #172 item 14): an edit of an OPEN market that changes one is refused, one detail per item
+ * (SUPPLEMENT_ONLY_WHILE_OPEN), while its category, tags and image stay editable. A supplement
+ * holds the open market's rules (market-supplement.ts): RULES_REQUIRED for an item it newly leaves
+ * missing, the close later only and never past the scheduled judgement, with the lead close
+ * checked again, and the scheduled open and judgement fixed.
  */
 const marketFields = {
-  title: z.string().trim().min(1).max(MARKET_TITLE_MAX),
-  /** 배경. */
-  description: ruleTextSchema.nullish(),
-  yesCondition: ruleTextSchema.optional(),
-  noCondition: ruleTextSchema.optional(),
-  /**
-   * 사건 기한 (#172 item 8); the admin enters it in KST. From STORABLE_INSTANT_MIN on: an earlier one
-   * Postgres refuses or drizzle reads back as another year (ADR-0097). At or before the scheduled
-   * judgement (owner answer 2026-10-31 A1, whole minutes); no order against the close.
-   */
-  eventDeadline: storableInstantSchema.nullish(),
-  /** 1차 출처: `market_sources` priority 0. */
-  primarySource: marketSourceSchema.nullish(),
-  /**
-   * 대체 출처, the whole ordered list (priorities 1..3), as `tags`: an edit with it replaces them, `[]`
-   * removes them all.
-   */
-  fallbackSources: z.array(marketSourceSchema).max(MARKET_FALLBACK_SOURCES_MAX).optional(),
-  /** 전환 조건: blank unless there is a fallback. */
-  fallbackCondition: ruleTextSchema.optional(),
-  /** 장기 지연 기한 in days after the scheduled judgement. */
-  longDelayDays: marketLongDelayDaysSchema.nullish(),
-  /** 지연·취소·무효 처리. */
-  delayHandling: ruleTextSchema.optional(),
+  title: marketTitleSchema,
+  ...ruleItemFields,
   /**
    * int4 column: an unbounded id would reach Postgres as an out-of-range parameter (500). One a new
    * market may be filed under (`categoryUnselectableReason`), refused naming the field otherwise.
@@ -603,26 +606,7 @@ const marketFields = {
     .url({ protocol: /^https?$/ })
     .max(MARKET_IMAGE_URL_MAX)
     .nullish(),
-  /**
-   * 예정 개장 시각 (#22): the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before
-   * the close, in whole minutes. Once SCHEDULED it moves by its own write, with a reason (#78),
-   * and the market opens at it (#21).
-   */
-  scheduledOpenAt: storableInstantSchema.nullish(),
-  /**
-   * 거래 마감 시각: from STORABLE_INSTANT_MIN on (#22), and in the future (the service's). At or
-   * before the scheduled judgement, in whole minutes (#172 item 12).
-   */
-  closeAt: storableInstantSchema,
-  /**
-   * 발표 예정 시각 (#172 item 13); null is '없음'. The close leads it by the release setting
-   * `market.lead_close_gap` (the open-items check's `leadClose`).
-   */
-  scheduledAnnouncementAt: storableInstantSchema.nullish(),
-  /** 예정 판정 시각: at or after the close and 사건 기한, in whole minutes (#172 item 12, A1). */
-  scheduledJudgementAt: storableInstantSchema.nullish(),
-  /** 판정 기준 시간대 (#172 item 11): an IANA name (`timeZoneSchema`), trimmed, stored as given. */
-  judgementTimeZone: timeZoneSchema.nullish(),
+  ...timeItemFields,
   /** Omitted: the server derives one from the title (`slugify` + a random tag). */
   slug: marketSlugSchema.optional(),
 };
@@ -639,9 +623,11 @@ export type CreateMarketBody = z.infer<typeof createMarketBodySchema>;
 
 /**
  * `PATCH /admin/markets/:id`: which fields a status admits is the service's decision — a draft's
- * or an open market's; a market in REVIEW or SCHEDULED is locked (#78, #172 item 6: sent back to a
- * draft to edit, its scheduled open moved by `rescheduleMarketOpenBodySchema`). At least one field
- * beside the account.
+ * every field, an OPEN market's category, tags and image (its version items by a supplement alone,
+ * `requestMarketSupplementBodySchema`, #80); a market in REVIEW or SCHEDULED is locked (#78, #172
+ * item 6: sent back to a draft to edit, its scheduled open moved by
+ * `rescheduleMarketOpenBodySchema`), and so is a PAUSED one (#114's). At least one field beside the
+ * account.
  */
 export const updateMarketBodySchema = z
   .object(marketFields)

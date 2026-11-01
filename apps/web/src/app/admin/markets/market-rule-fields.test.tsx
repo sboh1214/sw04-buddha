@@ -7,9 +7,17 @@ import { byTestId, renderWithQueries, testIdsStartingWith } from '@/test/render'
 import { MarketRuleFields } from './market-rule-fields';
 
 /** The group inside a form holding `values`, as the market form mounts it. */
-function Fields({ values, disabled = false }: { values: MarketFormValues; disabled?: boolean }) {
+function Fields({
+  values,
+  disabled = false,
+  hint,
+}: {
+  values: MarketFormValues;
+  disabled?: boolean;
+  hint?: string | null;
+}) {
   const form = useForm<MarketFormValues>({ defaultValues: values });
-  return <MarketRuleFields form={form} disabled={disabled} />;
+  return <MarketRuleFields form={form} disabled={disabled} hint={hint} />;
 }
 
 const draw = (values: Partial<MarketFormValues>, disabled = false) =>
@@ -98,8 +106,30 @@ describe('MarketRuleFields', () => {
     expect(copy.adminMarketDelayHandlingHint).toContain('늦어진 것만으로 NO로 판정하지 않습니다');
   });
 
+  it("says the draft's hint by default, the supplement's when given one, and none when told", () => {
+    const at = (hint?: string | null) =>
+      byTestId(
+        renderWithQueries(<Fields values={EMPTY_MARKET_FORM} hint={hint} />),
+        'market-rule-items-hint',
+      )?.text;
+    expect(at()).toBe(copy.adminMarketRuleItemsHint);
+    expect(at(copy.adminMarketSupplementRuleItemsHint)).toBe(
+      copy.adminMarketSupplementRuleItemsHint,
+    );
+    expect(at(null)).toBeUndefined();
+  });
+
   it('is off as a whole when the market is locked', () => {
     const html = draw({}, true);
     expect(byTestId(html, 'market-rule-items')?.attributes).toHaveProperty('disabled');
+    // Each input is drawn off too — the 1차 출처 sits in a fieldset of its own, which would
+    // otherwise draw its inputs as editable inside the disabled one.
+    for (const id of [
+      'market-description',
+      'market-primary-source-name',
+      'market-primary-source-url',
+    ]) {
+      expect(byTestId(html, id)?.attributes, id).toHaveProperty('disabled');
+    }
   });
 });

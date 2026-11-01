@@ -524,6 +524,8 @@ describe('excluded features on screens (#113)', () => {
       at('lib', 'admin-accounts.ts'),
       at('hooks', 'use-admin-payments.ts'),
       at('lib', 'market-form.ts'),
+      // 규칙 보충's (#80): the 정산 영향 검토 and the operators are an admin's alone.
+      at('lib', 'market-supplement.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }
@@ -535,6 +537,9 @@ describe('excluded features on screens (#113)', () => {
       at('hooks', 'use-wallet.ts'),
       at('hooks', 'use-admin-markets.ts'),
       at('proxy.ts'),
+      // 규칙 버전 on the public detail (#80), whose names the admin's 이벤트 로그 says too.
+      at('lib', 'rule-versions.ts'),
+      at('components', 'market', 'rule-versions-section.tsx'),
     ]) {
       expect(ADMIN.has(file), file).toBe(false);
     }

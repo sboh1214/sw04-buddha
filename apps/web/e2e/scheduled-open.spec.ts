@@ -32,6 +32,8 @@ import {
  * market whose close passes before it opens never opens: its admin detail warns, and an admin
  * sends it back to a draft to fix its times (#172 item 6). Moving the scheduled open earlier to a
  * time already come opens it at once too — market-times.spec.ts walks that through the dialog.
+ * Every open records the content the review locked as rule v1 at its instant, made by its opener —
+ * nobody for the worker's (#80, ADR-0101; rule-versions.spec.ts reads it on the detail).
  *
  * The scheduled open must come before the close (#172 item 12, whole minutes), so with the worker
  * running a market opens before its close; only a worker down from its scheduled open to its close
@@ -182,6 +184,22 @@ test.describe('예정 개장', () => {
       const openAt = present(opened.openAt);
       expect(Date.parse(openAt)).toBe(Date.parse(openedEvent.createdAt));
       expect(Date.parse(openAt)).toBeGreaterThanOrEqual(Date.parse(scheduledOpenAt));
+      // The open recorded the content it locked as rule v1 (#80, ADR-0101; #172 item 6): admin 2's,
+      // at the open's instant, no request, no reason — and no market event of its own.
+      expect(opened.ruleVersion).toBe(1);
+      expect(opened.ruleVersions).toMatchObject([
+        {
+          version: 1,
+          changedItems: [],
+          reason: null,
+          approvalId: null,
+          requestedBy: null,
+          createdBy: { id: second.id },
+          settlementImpact: null,
+          content: { title: market.title, yesCondition: market.yesCondition },
+        },
+      ]);
+      expect(Date.parse(opened.ruleVersions[0]?.createdAt ?? '')).toBe(Date.parse(openAt));
 
       // --- on screen: 연 시각, and the event log's 열림 row with admin 2 as its actor. The 검수 기록
       // ends at the approval — the open is no review record — and nothing is left to decide.
@@ -275,6 +293,12 @@ test.describe('예정 개장', () => {
       });
       const openAt = present(opened.openAt);
       expect(Date.parse(openAt)).toBeGreaterThanOrEqual(Date.parse(scheduledOpenAt));
+      // Rule v1 by the worker (#80, ADR-0101): no admin made it, at the open's instant.
+      expect(opened.ruleVersion).toBe(1);
+      expect(opened.ruleVersions).toMatchObject([
+        { version: 1, changedItems: [], requestedBy: null, createdBy: null },
+      ]);
+      expect(Date.parse(opened.ruleVersions[0]?.createdAt ?? '')).toBe(Date.parse(openAt));
 
       // --- the visitor's detail took the `market:status` the worker published: 거래 중 and no
       // 개장 예정 notice, without a reload.

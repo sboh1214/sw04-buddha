@@ -37,9 +37,11 @@ export type DetailWidth = 'base' | 'md';
  * The sections the two widths draw in different places — 배경, 규칙 and 공개 판정 기록: from md up
  * they come before the chart (N02 §4's list), below md after the 호가·거래 내역 switch (N02 §4's
  * first screen). Each is in the DOM twice, once in each place (`DETAIL_SLOTS`). They are the ones
- * that can be: they hold no state, start no request of their own (배경 and 규칙 read the cached
- * `['market', id]` row) and have no focus stop, so a second copy costs a few nodes and can never
- * disagree with the first.
+ * that can be: they start no request of their own (배경 and 규칙 read the cached `['market', id]`
+ * row) and hold no state that matters, so a second copy costs a few nodes and its content can never
+ * disagree with the first. The one state either holds is the 규칙 copy's 규칙 버전 card (#80): each
+ * earlier version's 전문 is a native disclosure, open or shut per copy — harmless, since only one
+ * copy is shown at a width and both read the same row.
  */
 export type CopiedSection = 'background' | 'rules' | 'judging';
 
@@ -63,6 +65,8 @@ export type SharedSection =
  *   조건, 장기 지연 기한, 지연·취소·무효 처리), the fixed VOID payout line, then the market's times
  *   (#22: 예정 개장 시각 before the open, 거래 마감·발표 예정·예정 판정 시각) and its 판정 기준 시간대.
  *   The times are rules too (ADR-0093 decision 2 #172 item 7), so they need no slot of their own.
+ *   Under them, once the market has opened, the 규칙 버전 card (#80, ADR-0101): the current version
+ *   and every earlier one, its reason, its changes and its 전문.
  * - `judging`: 공개 판정 기록 (#24), right after the rules it applies, on every public status
  *   (owner decision 2026-10-17).
  * - `chart`: 가격 차트.

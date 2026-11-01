@@ -16,11 +16,17 @@ interface MarketFormFieldsProps {
   categories: Category[];
   /** Every input; false unless the market is draft or open (design 3.4). */
   disabled?: boolean;
+  /**
+   * The open market's edit form (#80, ADR-0101; ADR-0093 decision 2 #172 item 14): the version
+   * items — the question, the rule items and the times — are drawn but off, since after the open
+   * they change by a supplement alone; the category, the tags and the image stay live.
+   */
+  versionItemsLocked?: boolean;
   /** The slug is chosen at creation only. */
   showSlug?: boolean;
   /**
-   * The open market's edit form: its scheduled open and scheduled judgement are fixed (#172 item
-   * 14), so their inputs are locked (`MarketTimeFields`).
+   * A market past its open: its scheduled open and scheduled judgement are fixed (#172 item 14), so
+   * their inputs say so (`MarketTimeFields`).
    */
   timesFixed?: boolean;
   /**
@@ -46,11 +52,16 @@ interface MarketFormFieldsProps {
  *
  * The 미리보기 beneath them (Q-M3-6) is fed from the same `watch()`, so both screens got it at
  * once and neither can show a stale card.
+ *
+ * On an open market (`versionItemsLocked`, #80) the question, the rule items and the times stay on
+ * screen but off — the e2e and the admin read them there — and the 규칙 보충 panel above is where
+ * they change.
  */
 export function MarketFormFields({
   form,
   categories,
   disabled = false,
+  versionItemsLocked = false,
   showSlug = false,
   timesFixed = false,
   leadCloseGapMinutes,
@@ -68,10 +79,11 @@ export function MarketFormFields({
   // here on every render rather than memoised: it is a few dozen rows, and `watch()` above
   // already re-renders this component per keystroke for the preview's sake.
   const tree = groupCategories(categories);
+  const versionItemsOff = disabled || versionItemsLocked;
 
   return (
     <Stack gap="3">
-      <Field.Root invalid={!!errors.title} required disabled={disabled}>
+      <Field.Root invalid={!!errors.title} required disabled={versionItemsOff}>
         <Field.Label>{copy.adminMarketTitle}</Field.Label>
         <Input autoComplete="off" data-testid="market-title" {...register('title')} />
         <Field.ErrorText>{errors.title?.message}</Field.ErrorText>
@@ -85,11 +97,15 @@ export function MarketFormFields({
         </Field.Root>
       )}
 
-      <MarketRuleFields form={form} disabled={disabled} />
+      <MarketRuleFields
+        form={form}
+        disabled={versionItemsOff}
+        hint={versionItemsLocked ? null : undefined}
+      />
 
       <MarketTimeFields
         form={form}
-        disabled={disabled}
+        disabled={versionItemsOff}
         fixed={timesFixed}
         leadCloseGapMinutes={leadCloseGapMinutes}
       />

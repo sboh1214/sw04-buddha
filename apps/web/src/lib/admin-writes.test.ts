@@ -48,6 +48,16 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     'body: { reason, expectedAccountId: by },',
     'body: { scheduledOpenAt, reason, expectedAccountId: by },',
   ],
+  // 규칙 보충 (#80, ADR-0101), new since and written the same way: 보충 요청 from its form, then
+  // 승인 · 반려 · 철회 from their dialogs (each naming the request in its path)
+  '../app/admin/markets/[id]/market-supplement-panel.tsx': [
+    'body: { baseVersion, changes, reason, settlementImpact, expectedAccountId: by },',
+  ],
+  '../app/admin/markets/[id]/market-supplement-dialogs.tsx': [
+    'body: { reason, expectedAccountId: by },',
+    'body: { rejectReason, reason, expectedAccountId: by },',
+    'body: { expectedAccountId: by },',
+  ],
   '../app/admin/themes/admin-themes.tsx': [
     '.mutateAsync({ ...toCreateThemeBody(values), expectedAccountId: operatorId })',
   ],
@@ -147,6 +157,10 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-review-panel.tsx': 5,
       // the confirms of 승인, 반려, 초안으로 되돌리기 and 예정 개장 시각 변경
       '../app/admin/markets/[id]/market-review-dialogs.tsx': 4,
+      // the buttons opening 보충 요청, 승인, 반려 and 철회, the form's fields and its 보충 요청 (#80)
+      '../app/admin/markets/[id]/market-supplement-panel.tsx': 6,
+      // the confirms of 승인, 반려 and 철회 (#80)
+      '../app/admin/markets/[id]/market-supplement-dialogs.tsx': 3,
       // 만들기, and the form's fields
       '../app/admin/themes/admin-themes.tsx': 2,
       // 공개, 비공개의 confirm, 저장, 넣기, 빼기의 confirm, 공지 쓰기·고치기, 보이기, 숨기기의 confirm;
@@ -238,6 +252,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     '../app/admin/markets/[id]/market-review-panel.tsx': [
       'const [dialog, setDialog] = useHeldForOperator<ReviewDialogKind>();',
     ],
+    // 규칙 보충 (#80): the request form and the three dialogs, with what was typed and picked
+    '../app/admin/markets/[id]/market-supplement-panel.tsx': [
+      'const [action, setAction] = useHeldForOperator<SupplementAction>();',
+    ],
     // 비공개로 돌리기, a market's 빼기, the notice opened for editing and a notice's 숨기기
     '../app/admin/themes/[id]/admin-theme-detail.tsx': [
       "const [confirming, setConfirming] = useHeldForOperator<'unpublish'>();",
@@ -276,6 +294,11 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       keys: [
         "<EditMarketForm key={operatorId ?? ''} market={market} categories={categories.data} />",
       ],
+      fieldsets: 1,
+    },
+    // 보충 요청's form (#80), with the reason and the 정산 영향 검토 typed in it
+    '../app/admin/markets/[id]/market-supplement-panel.tsx': {
+      keys: ["<SupplementRequestForm\n              key={operatorId ?? ''}\n"],
       fieldsets: 1,
     },
     '../app/admin/themes/admin-themes.tsx': {
@@ -343,6 +366,12 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     expect(source('../app/admin/markets/[id]/market-review-panel.tsx')).toContain(
       '{dialog !== null && (\n        <ReviewDialog kind={dialog} market={market} onClose={() => setDialog(null)} />',
     );
+    // And each supplement dialog (#80), and the request form only while held for its admin.
+    const supplement = source('../app/admin/markets/[id]/market-supplement-panel.tsx');
+    expect(supplement).toContain(
+      "{action !== null && action !== 'request' && (\n        <SupplementDialog kind={action} market={market} onClose={close} />",
+    );
+    expect(supplement).toContain("action === 'request' ? (");
     expect(source('../app/admin/settings/admin-release-settings.tsx')).toContain(
       '{editing !== null && <ChangeDialog item={editing} onClose={() => setEditing(null)} />}',
     );
@@ -414,6 +443,14 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
         "disabled={operatorId === undefined}\n                  onClick={() => onOpen('reschedule')}",
         "disabled={operatorId === undefined}\n                onClick={() => onOpen('revert')}",
         '<ReviewPanelBody market={market} readAt={readAt} operatorId={operatorId} onOpen={setDialog} />',
+      ],
+      // The supplement panel likewise (#80): 승인 and 반려 off for the requester, 철회 its alone.
+      '../app/admin/markets/[id]/market-supplement-panel.tsx': [
+        "disabled={operatorId === undefined}\n                onClick={() => onOpen('request')}",
+        "disabled={operatorId === undefined || requester !== false || !approvable}\n          onClick={() => onOpen('approve')}",
+        "disabled={operatorId === undefined || requester !== false}\n          onClick={() => onOpen('reject')}",
+        "disabled={operatorId === undefined}\n            onClick={() => onOpen('retract')}",
+        '<SupplementPanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={setAction}',
       ],
     };
     for (const [file, buttons] of Object.entries(opens)) {

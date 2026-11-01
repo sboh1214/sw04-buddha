@@ -682,10 +682,11 @@ type SeedMarketOutcome =
  *   deploy's seed. This is the fill an environment #23 reached gets: its drafts have their tags
  *   and rule items and no time.
  *
- * A market past the draft is left alone: after the open a change is on the record (#172 item 14),
- * and the seed writes none. The market row is taken FOR UPDATE before its status, its title, its
- * close, its tags, its rule items and its times are read again, the lock the admin PATCH takes,
- * so an admin who writes it meanwhile wins. No record is written: what is filled is what a fresh
+ * A market past the draft is left alone: after the open its tags change with a record and its
+ * rule items and times by a supplement (#172 item 14, #80), and the seed writes none. The market
+ * row is taken FOR UPDATE before its status, its title, its close, its tags, its rule items and
+ * its times are read again, the lock the admin PATCH takes, so an admin who writes it meanwhile
+ * wins. No record is written: what is filled is what a fresh
  * seed would have inserted with the market. The rule and time fills move `updated_at`, on the
  * database clock.
  *
@@ -754,8 +755,8 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           ruled: false,
           timed: false,
         } as const;
-        // Only a draft is filled: a market that opened changes its tags, rule items and times on
-        // the record alone (#172 item 14), and the seed writes none.
+        // Only a draft is filled: a market that opened changes its tags with a record and its rule
+        // items and times by a supplement (#172 item 14, #80), and the seed writes none.
         if (existing.status !== 'draft') return unchanged;
         if (
           (await hasTags(tx, existing.id)) &&

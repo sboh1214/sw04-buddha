@@ -16,6 +16,7 @@ import {
   type Market,
   type MarketListQuery,
   type MarketRuleItems,
+  type MarketRuleVersion,
   type MarketSummary,
   type MarketTimes,
   type PriceSeries,
@@ -42,6 +43,7 @@ import { DB } from '../infra/db/db.provider.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { marketOrder } from './market-order.js';
 import { readMarketSources, type MarketSources } from './market-sources.js';
+import { readPublicRuleVersions } from './market-supplement.js';
 
 export type MarketRow = typeof schema.markets.$inferSelect;
 type FillRow = typeof schema.fills.$inferSelect;
@@ -153,13 +155,16 @@ export function timesOf(row: MarketRow): MarketTimes {
  * Public detail (PLAN 7.1): no author, exposure or settlement steps. `tags` are the market's
  * (`marketTagNames`) and `sources` its sources (`readMarketSources`) — the detail's alone, never a
  * card's (#17, #23): the rule items and the times (`timesOf`, #22) are public in every public
- * status, signed in or not (N02 §2, N03 §4).
+ * status, signed in or not (N02 §2, N03 §4). So are its current rule version and `ruleVersions`,
+ * the history (#80, ADR-0101; `readPublicRuleVersions`, which names nobody), read by the caller in
+ * the same snapshot as the row.
  */
 export function toMarket(
   row: MarketRow,
   category: CategoryRef,
   tags: string[],
   sources: MarketSources,
+  ruleVersions: MarketRuleVersion[],
 ): Market {
   return {
     ...toMarketSummary(row, category),
@@ -168,6 +173,8 @@ export function toMarket(
     tags,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     settledAt: row.settledAt?.toISOString() ?? null,
+    ruleVersion: row.ruleVersion,
+    ruleVersions,
   };
 }
 
@@ -320,7 +327,8 @@ export class MarketService {
    * `GET /markets/:idOrSlug`: a uuid-shaped parameter is an id, anything else a slug (which
    * `marketSlugSchema` keeps from ever looking like a uuid). The slug is NFC-normalised like
    * the stored one, so a decomposed Korean URL still finds the market. The tags and the sources
-   * are a statement each (#17, #23): the detail alone carries them.
+   * are a statement each (#17, #23), and so are the rule versions (#80): the detail alone carries
+   * them.
    */
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
@@ -332,7 +340,8 @@ export class MarketService {
     // One read-only REPEATABLE READ snapshot (Codex review of #78): a SCHEDULED market can go back
     // to a draft (#78's 되돌리기), so the public check and the tags and sources read after it must
     // describe one version — else a revert and a draft edit committing between them would answer
-    // 200 with the draft's new tags and sources.
+    // 200 with the draft's new tags and sources. The rule versions too (#80): a supplement
+    // approved between the reads would otherwise pair the old text with the new history.
     return this.db.transaction(
       async (tx) => {
         const [row] = await tx
@@ -351,7 +360,8 @@ export class MarketService {
         if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
         const tags = await marketTagNames(tx, row.market.id);
         const sources = await readMarketSources(tx, row.market.id);
-        return toMarket(row.market, row.category, tags, sources);
+        const ruleVersions = await readPublicRuleVersions(tx, row.market.id);
+        return toMarket(row.market, row.category, tags, sources, ruleVersions);
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );

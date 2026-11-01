@@ -372,6 +372,13 @@
       "when": 1793474800350,
       "tag": "0052_market_review",
       "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1793562720595,
+      "tag": "0053_market_rule_versions",
+      "breakpoints": true
     }
   ]
 }

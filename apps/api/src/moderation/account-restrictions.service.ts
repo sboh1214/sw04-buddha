@@ -15,7 +15,7 @@ import {
   type ParsedAccountRestrictionBody,
   type WarningSubject,
 } from '@buddha/shared';
-import { and, eq, notInArray, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import * as z from 'zod';
 import {
   type ApprovalRequest,
@@ -493,21 +493,14 @@ export class AccountRestrictionService {
    * (ADR-0056 decision 4) and the member nothing about themselves (`own`). MODERATION_NOT_ALLOWED
    * `no_decider` when there is none, so no request waits for a decider who does not exist. Read
    * under the admin-roles lock the caller took first (shared), so a grant or a revoke in flight is
-   * waited for. A decider revoked after the request leaves it to wait, for the one who asked to
-   * retract or for an admin granted since.
+   * waited for (`ApprovalService.hasDecider`, which #80's rule supplements ask too). A decider
+   * revoked after the request leaves it to wait, for the one who asked to retract or for an admin
+   * granted since.
    */
   private async assertDecider(tx: Tx, requesterId: string, memberId: string): Promise<void> {
-    const [decider] = await tx
-      .select({ userId: schema.profiles.userId })
-      .from(schema.profiles)
-      .where(
-        and(
-          eq(schema.profiles.role, 'admin'),
-          notInArray(schema.profiles.userId, [requesterId, memberId]),
-        ),
-      )
-      .limit(1);
-    if (!decider) throw refused('no_decider');
+    if (!(await this.approvals.hasDecider([requesterId, memberId], tx))) {
+      throw refused('no_decider');
+    }
   }
 
   /**

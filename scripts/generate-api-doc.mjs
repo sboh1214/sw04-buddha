@@ -302,7 +302,7 @@ const REALTIME_EVENTS = {
   },
   'market:status': {
     room: '`market:<id>`',
-    note: '상태 전이(검수 승인으로 개장 예정·개장·마감·결과 확정·지급 시작·지급 완료). 개장은 워커가 예정 개장 시각에, 또는 그 시각이 지난 뒤의 승인·예정 개장 시각 변경이 그 자리에서 하고 `open` 을 `opened` 사건의 키로 한 번 발행한다 — 승인이 바로 연 시장은 개장 예정을 먼저 보내지 않는다(#21). 설명만 고친 편집과 개장 예정 시장의 예정 개장 시각 변경도 같은 상태·같은 키로 다시 발행된다. 개장 예정에서 초안으로 되돌리면 `draft` 를 새 키로 발행한다 — 회원 화면은 공개되지 않는 상태를 적용하지 않고, 다시 읽으면 NOT_FOUND 다(#78)',
+    note: '상태 전이(검수 승인으로 개장 예정·개장·마감·결과 확정·지급 시작·지급 완료). 개장은 워커가 예정 개장 시각에, 또는 그 시각이 지난 뒤의 승인·예정 개장 시각 변경이 그 자리에서 하고 `open` 을 `opened` 사건의 키로 한 번 발행한다 — 승인이 바로 연 시장은 개장 예정을 먼저 보내지 않는다(#21). 거래 중 시장의 카테고리·태그·이미지를 바꾼 편집, 개장 예정 시장의 예정 개장 시각 변경, 거래 중·일시 중단 시장의 규칙 보충 승인(새 규칙 버전, #80)도 같은 상태·같은 키로 다시 발행된다 — 받은 화면은 상세를 다시 읽어 새 글과 버전 이력을 얻는다. 개장 예정에서 초안으로 되돌리면 `draft` 를 새 키로 발행한다 — 회원 화면은 공개되지 않는 상태를 적용하지 않고, 다시 읽으면 NOT_FOUND 다(#78)',
     key: '`statusEventId`',
   },
   'user:balance': {
@@ -361,7 +361,7 @@ const ERROR_NOTES = {
     '이미 쓴 멱등 키를 다른 조건으로 다시 썼거나(키는 소모된다), 한 번만 할 수 있는 일을 두 번 했다(쿠폰 재사용). 환불 재시도는 앞선 시도가 아직 PG 의 답을 기다리는 동안 이것으로 답한다(`details[0].message` 가 `in progress`).',
   RATE_LIMITED: '레이트 리밋 초과. `details.retryAfterSeconds` 와 `Retry-After` 헤더에 대기 초.',
   RULES_REQUIRED:
-    '거래 중(`open`)인 시장을 고쳐, 채워 두었던 규칙 항목(#23)이나 판정 기준 시간대(#22, 판정 항목)를 빠진 것으로 만들 수 없다. `details` 가 그렇게 빠질 항목마다 하나씩 규칙 항목의 순서로, 시간대는 맨 뒤에 온다 — `path` 가 그 항목 하나(`yesCondition`·`judgementTimeZone` 처럼), `message` 가 `required while open`. 빠졌다고 보는 기준은 `OPEN_ITEMS_MISSING` 과 같고, 이미 빠져 있던 항목(#23 전에 연 시장의 규칙 항목, #22 전에 연 시장의 시간대)은 다른 수정을 막지 않으며 다시 비워 보내도 바뀐 것이 아니다. 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
+    '거래 중(`open`)·일시 중단(`paused`)인 시장의 규칙 보충(#80)이, 채워 두었던 규칙 항목(#23)이나 판정 기준 시간대(#22, 판정 항목)를 빠진 것으로 만들 수 없다 — 보충 요청과 그 승인이 저마다 따진다. `details` 가 그렇게 빠질 항목마다 하나씩 규칙 항목의 순서로, 시간대는 맨 뒤에 온다 — `path` 가 그 항목 하나(`yesCondition`·`judgementTimeZone` 처럼), `message` 가 `required while open`. 빠졌다고 보는 기준은 `OPEN_ITEMS_MISSING` 과 같고, 이미 빠져 있던 항목(#23 전에 연 시장의 규칙 항목, #22 전에 연 시장의 시간대)은 다른 보충을 막지 않으며 다시 비워 보내도 바뀐 것이 아니다. 개장 뒤의 수정(PATCH)은 규칙 버전의 항목을 받지 않고(`supplement only while open`), 초안을 여는 때의 검사는 `OPEN_ITEMS_MISSING` 이다.',
   VERIFICATION_REQUIRED:
     '본인확인(휴대전화 SMS 인증번호)을 마치지 않은 계정이다. `POST /api/v1/me/phone-verification/code` 로 인증번호를 받아 `POST /api/v1/me/phone-verification/confirm` 으로 확인한 뒤 다시 시도한다(ADR-0070).',
   REFUND_NOT_ALLOWED:
@@ -373,7 +373,7 @@ const ERROR_NOTES = {
   ROLE_CHANGE_NOT_ALLOWED:
     '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `phone_not_verified`(휴대전화 본인확인을 마치지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
   APPROVAL_NOT_ALLOWED:
-    '2인 통제 요청의 결정(승인·거절)이나 철회를 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다), `retracted`(요청한 운영자가 철회한 요청이다 — 아무도 결정하지 않는다), `not_requester`(요청한 운영자만 철회한다), 시장 검수(#78)에서만 `creator`(그 시장을 만든 운영자 — 제안을 채택해 만든 시장은 채택한 운영자)·`editor`(그 시장의 내용을 수정한 적이 있는 운영자). 시장 검수의 승인·반려는 `creator`·`editor`·`requester` 가운데 먼저 걸리는 것 하나를 이 순서로 답하고, 본문의 `requestId` 가 더는 기다리는 요청이 아니면(그 사이 초안으로 되돌려 다시 제출한 시장) 그 요청이 끝난 대로 `retracted`·`decided` 를 먼저 답한다. `editor` 는 `market_update` 나 `market_reschedule` 기록이 있는 운영자다. 이 규칙을 쓰는 라우트가 이 코드를 문서화한다 — 계정 제한(#139)의 요청 승인·거절·철회, 시장 검수(#78)의 승인·반려.',
+    '2인 통제 요청의 결정(승인·거절)이나 철회를 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다), `retracted`(요청한 운영자가 철회한 요청이다 — 아무도 결정하지 않는다), `not_requester`(요청한 운영자만 철회한다), 시장 검수(#78)에서만 `creator`(그 시장을 만든 운영자 — 제안을 채택해 만든 시장은 채택한 운영자)·`editor`(그 시장의 내용을 수정한 적이 있는 운영자), 규칙 보충(#80)의 요청에서 `no_decider`(요청한 운영자 말고는 결정할 관리자가 없다 — 요청을 받지 않는다). 시장 검수의 승인·반려는 `creator`·`editor`·`requester` 가운데 먼저 걸리는 것 하나를 이 순서로 답하고, 본문의 `requestId` 가 더는 기다리는 요청이 아니면(그 사이 초안으로 되돌려 다시 제출한 시장) 그 요청이 끝난 대로 `retracted`·`decided` 를 먼저 답한다. `editor` 는 `market_update` 나 `market_reschedule` 기록이 있는 운영자다. 규칙 보충의 승인·반려는 경로의 요청이 더는 기다리지 않으면 `retracted`·`decided` 를, 그다음 `requester` 를 답한다. 이 규칙을 쓰는 라우트가 이 코드를 문서화한다 — 계정 제한(#139)의 요청 승인·거절·철회, 시장 검수(#78)의 승인·반려, 규칙 보충(#80)의 요청·승인·반려·철회.',
   PHONE_VERIFICATION_NOT_ALLOWED:
     '본인확인을 받지 않는다. `details.reason` 이 까닭을 말한다 — `already_verified`(이미 본인확인을 마쳤다), `phone_in_use`(그 번호는 다른 계정이 본인확인한 번호다. 한 번호에 한 계정, 맞는 인증번호를 확인한 뒤에만 알린다).',
   PHONE_VERIFICATION_LIMITED:
@@ -478,12 +478,15 @@ function read(file) {
 /**
  * `export const NAME = [ 'a', 'b' ] as const;` 의 문자열 원소들. 첫 \`]\` 까지만 본다 — 이 저장소의
  * 해당 선언들은 모두 평평한 문자열 배열이라 그 이상이 필요 없고, 중첩이 생기면 결과가 이상해지는
- * 대신 아래 교차 검증에서 걸린다.
+ * 대신 아래 교차 검증에서 걸린다. 원소 사이의 주석은 지우고 읽는다(#80: 주석의 따옴표가 값이 되지
+ * 않게) — 괄호는 여전히 주석에 쓰지 않는다.
  */
 function stringArrayConst(source, name, file) {
   const block = new RegExp(`export const ${name}[^=]*=\\s*\\[([^\\]]*)\\]`).exec(source);
   if (!block) fail(`${name} not found in ${file}`);
-  const values = [...block[1].matchAll(/'([^']+)'/g)].map((match) => match[1]);
+  // 목록 안의 주석은 값이 아니다 — 주석의 따옴표(an open market's 처럼)를 값으로 읽지 않게 먼저 지운다.
+  const listed = block[1].replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  const values = [...listed.matchAll(/'([^']+)'/g)].map((match) => match[1]);
   if (values.length === 0) fail(`${name} in ${file} listed no values`);
   return values;
 }

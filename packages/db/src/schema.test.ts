@@ -15,6 +15,7 @@ import {
   MARKET_SOURCE_MAX,
   MARKET_SOURCE_URL_MAX,
   MARKET_STATUSES,
+  MARKET_SUPPLEMENT_APPROVAL_KIND,
   OUTCOMES,
   MODERATION_REASONS,
   PRICE_TICK_TRIGGERS,
@@ -24,6 +25,7 @@ import {
   REPORT_REASONS,
   REPORT_STATUSES,
   REPORT_TARGET_TYPES,
+  RULE_VERSION_ITEMS,
   DEFAULT_JUDGEMENT_TIME_ZONE,
   closedAccountEmail,
   currentConsentVersion,
@@ -56,6 +58,7 @@ import {
   marketEvents,
   marketLinks,
   marketProposals,
+  marketRuleVersions,
   marketSearchTerms,
   marketSearches,
   marketSettlementSteps,
@@ -104,6 +107,8 @@ import {
   writeLimitEvents,
 } from './schema/index.js';
 import { closeDb, createDb } from './client.js';
+import { openScheduledMarket } from './market-open.js';
+import { allowRuleSupplement } from './market-rules-content.js';
 import { storedReleaseSettingValue } from './release-settings.js';
 import {
   closeAccount,
@@ -114,6 +119,7 @@ import {
   createMarket,
   createMarketInReview,
   createMarketLink,
+  createOpenedMarket,
   createComment,
   createCommentLike,
   createLinkFlag,
@@ -157,7 +163,7 @@ import {
   recordStartGrant,
   startGrantHoldsNumber,
 } from './start-grants.js';
-import { lockAdminRoles } from './tx-helpers.js';
+import { clockTimestamp, lockAdminRoles, lockMarket } from './tx-helpers.js';
 
 /**
  * Postgres SQLSTATE. drizzle-orm 0.45 wraps driver errors in DrizzleQueryError and keeps the
@@ -1783,6 +1789,508 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(plain.market.status).toBe('scheduled');
       expect(plain.request.decidedBy).not.toBe(plain.request.requestedBy);
       expect(plain.request.decidedAt!.getTime() - plain.request.requestedAt.getTime()).toBe(1);
+    });
+  });
+
+  describe('rule versions and the guard of a versioned market (migration 0053, #80)', () => {
+    /** A full text with every version item, as the open records one (the content is not read). */
+    const content = (title = '규칙 버전') => ({
+      ...Object.fromEntries(RULE_VERSION_ITEMS.map((item) => [item, null])),
+      title,
+      fallbackSources: [],
+      closeAt: '2026-12-01T00:00:00.000Z',
+    });
+
+    /**
+     * Two admins and a `market_supplement` request of one approved by the other, about `marketId`,
+     * as the supplement approval leaves it.
+     */
+    async function approvedSupplement(marketId: string) {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const request = await createApprovalRequest(t.db, {
+        kind: MARKET_SUPPLEMENT_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: marketId,
+        payload: { baseVersion: 1, changes: { title: '보충한 제목' }, settlementImpact: '없음' },
+        requestedBy: requester.id,
+        decision: { status: 'approved', by: approver.id },
+      });
+      return { requester, approver, request };
+    }
+
+    /** The UPDATE of one column of a market, in its own statement. */
+    const setMarket = (marketId: string, set: Partial<typeof markets.$inferInsert>) =>
+      t.db.update(markets).set(set).where(eq(markets.id, marketId));
+
+    /** The refusal the guard raises: 23000 with its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), message: errorMessage(error) };
+    }
+    const RULES_HELD = {
+      state: '23000',
+      message: expect.stringContaining(
+        'its rules change by an approved supplement only',
+      ) as unknown,
+    };
+    const SOURCES_HELD = {
+      state: '23000',
+      message: expect.stringContaining(
+        'its sources change by an approved supplement only',
+      ) as unknown,
+    };
+
+    it('adds market_rule_versions and markets.rule_version, with their keys and CHECKs', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND (table_name = 'market_rule_versions'
+          OR (table_name = 'markets' AND column_name = 'rule_version'))
+        ORDER BY table_name DESC, ordinal_position`);
+      expect(columns).toEqual([
+        { column: 'rule_version', type: 'integer', nullable: 'YES', default: null },
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'version', type: 'integer', nullable: 'NO', default: null },
+        { column: 'content', type: 'jsonb', nullable: 'NO', default: null },
+        { column: 'changed_items', type: 'ARRAY', nullable: 'NO', default: "'{}'::text[]" },
+        { column: 'reason', type: 'text', nullable: 'YES', default: null },
+        { column: 'settlement_impact', type: 'text', nullable: 'YES', default: null },
+        { column: 'approval_id', type: 'uuid', nullable: 'YES', default: null },
+        { column: 'requested_by', type: 'text', nullable: 'YES', default: null },
+        { column: 'created_by', type: 'text', nullable: 'YES', default: null },
+        {
+          column: 'created_at',
+          type: 'timestamp with time zone',
+          nullable: 'NO',
+          default: null,
+        },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_rule_versions'::regclass
+          OR (conrelid = 'markets'::regclass AND conname = 'markets_rule_version_check')
+        ORDER BY conname`);
+      // Every reference RESTRICTs (`r`): a market, a request and an account outlive no version.
+      expect(constraints).toEqual([
+        {
+          name: 'market_rule_versions_approval_id_approval_requests_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_rule_versions_approval_id_unique', type: 'u', action: ' ' },
+        { name: 'market_rule_versions_changed_items_check', type: 'c', action: ' ' },
+        { name: 'market_rule_versions_content_check', type: 'c', action: ' ' },
+        { name: 'market_rule_versions_created_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_rule_versions_market_id_markets_id_fk', type: 'f', action: 'r' },
+        { name: 'market_rule_versions_market_id_version_pk', type: 'p', action: ' ' },
+        { name: 'market_rule_versions_reasons_check', type: 'c', action: ' ' },
+        { name: 'market_rule_versions_requested_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_rule_versions_supplement_check', type: 'c', action: ' ' },
+        { name: 'market_rule_versions_version_check', type: 'c', action: ' ' },
+        { name: 'markets_rule_version_check', type: 'c', action: ' ' },
+      ]);
+      // The current version is 1 or more, or none (D4: a market opened before #80 has none).
+      const market = await createMarket(t.db);
+      expect(market.ruleVersion).toBeNull();
+      for (const ruleVersion of [0, -1]) {
+        expect(await refusal(setMarket(market.id, { ruleVersion })), String(ruleVersion)).toEqual({
+          state: '23514',
+          constraint: 'markets_rule_version_check',
+        });
+      }
+    });
+
+    it('holds v1 to the open and a later version to its approved supplement, by another admin', async () => {
+      const market = await createMarket(t.db, { status: 'draft' });
+      const { requester, approver, request } = await approvedSupplement(market.id);
+      const insert = (values: Partial<typeof marketRuleVersions.$inferInsert>) =>
+        t.db.insert(marketRuleVersions).values({
+          marketId: market.id,
+          version: 1,
+          content: content(),
+          createdAt: new Date(),
+          ...values,
+        } as typeof marketRuleVersions.$inferInsert);
+      const v2 = {
+        version: 2,
+        changedItems: ['title'],
+        reason: '오탈자 수정',
+        settlementImpact: '정산 영향 없음',
+        approvalId: request.id,
+        requestedBy: requester.id,
+        createdBy: approver.id,
+      };
+      const supplementCheck = {
+        state: '23514',
+        constraint: 'market_rule_versions_supplement_check',
+      };
+      // v1 has none of a supplement's parts, made by the worker (null) or an admin.
+      for (const part of [
+        { changedItems: ['title'] },
+        { reason: '사유' },
+        { settlementImpact: '검토' },
+        { approvalId: request.id },
+        { requestedBy: requester.id },
+      ]) {
+        expect(await refusal(insert(part)), JSON.stringify(part)).toEqual(supplementCheck);
+      }
+      // A later one has every part, and its maker is an admin other than its requester.
+      for (const part of [
+        { changedItems: [] },
+        { reason: null },
+        { settlementImpact: null },
+        { approvalId: null },
+        { requestedBy: null },
+        { createdBy: null },
+        { createdBy: requester.id },
+      ]) {
+        expect(await refusal(insert({ ...v2, ...part })), JSON.stringify(part)).toEqual(
+          supplementCheck,
+        );
+      }
+      for (const part of [{ reason: ' ' }, { settlementImpact: '' }]) {
+        expect(await refusal(insert({ ...v2, ...part })), JSON.stringify(part)).toEqual({
+          state: '23514',
+          constraint: 'market_rule_versions_reasons_check',
+        });
+      }
+      // The changed items are keys of RULE_VERSION_ITEMS — not the category, the tags or a null.
+      const itemsCheck = { state: '23514', constraint: 'market_rule_versions_changed_items_check' };
+      for (const changedItems of [['category'], ['title', 'tags']]) {
+        expect(await refusal(insert({ ...v2, changedItems })), changedItems.join()).toEqual(
+          itemsCheck,
+        );
+      }
+      expect(
+        await refusal(
+          t.db.execute(sql`
+            INSERT INTO market_rule_versions (market_id, version, content, changed_items, reason,
+              settlement_impact, approval_id, requested_by, created_by, created_at)
+            VALUES (${market.id}, 2, ${JSON.stringify(content())}::jsonb,
+              ARRAY['title', NULL]::text[], '사유', '검토', ${request.id}, ${requester.id},
+              ${approver.id}, now())`),
+        ),
+      ).toEqual(itemsCheck);
+      // The content is an object holding every version item.
+      const missing = Object.fromEntries(
+        Object.entries(content()).filter(([item]) => item !== 'judgementTimeZone'),
+      );
+      for (const value of [missing, [content()], 'text']) {
+        expect(await refusal(insert({ content: value as never })), JSON.stringify(value)).toEqual({
+          state: '23514',
+          constraint: 'market_rule_versions_content_check',
+        });
+      }
+      expect(await refusal(insert({ ...v2, version: 0 }))).toEqual({
+        state: '23514',
+        constraint: 'market_rule_versions_version_check',
+      });
+
+      await insert({});
+      await insert(v2);
+      // One row per number; one version per request; a market and a request that exist.
+      expect(await refusal(insert({ createdBy: approver.id }))).toEqual({
+        state: '23505',
+        constraint: 'market_rule_versions_market_id_version_pk',
+      });
+      expect(await refusal(insert({ ...v2, version: 4 }))).toEqual({
+        state: '23505',
+        constraint: 'market_rule_versions_approval_id_unique',
+      });
+      expect(await refusal(insert({ marketId: randomUUID() }))).toEqual({
+        state: '23503',
+        constraint: 'market_rule_versions_market_id_markets_id_fk',
+      });
+      expect(await refusal(insert({ ...v2, version: 4, approvalId: randomUUID() }))).toEqual({
+        state: '23503',
+        constraint: 'market_rule_versions_approval_id_approval_requests_id_fk',
+      });
+      // Relations: a market's versions, a version's market, request and people.
+      const read = await t.db.query.marketRuleVersions.findFirst({
+        where: and(eq(marketRuleVersions.marketId, market.id), eq(marketRuleVersions.version, 2)),
+        with: { market: true, approval: true, requester: true, creator: true },
+      });
+      expect(read).toMatchObject({
+        market: { id: market.id },
+        approval: { id: request.id, kind: MARKET_SUPPLEMENT_APPROVAL_KIND },
+        requester: { id: requester.id },
+        creator: { id: approver.id },
+      });
+      const withVersions = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { ruleVersions: { orderBy: (row, { asc }) => [asc(row.version)] } },
+      });
+      expect(withVersions?.ruleVersions.map((row) => row.version)).toEqual([1, 2]);
+    });
+
+    it('keeps every version as it was made: no UPDATE or DELETE, by buddha_app or the owner', async () => {
+      const { market } = await createOpenedMarket(t.db);
+      const where = and(
+        eq(marketRuleVersions.marketId, market.id),
+        eq(marketRuleVersions.version, 1),
+      );
+      const [v1] = await t.db.select().from(marketRuleVersions).where(where);
+      expect(
+        (await refusal(t.db.update(marketRuleVersions).set({ reason: '고침' }).where(where))).state,
+      ).toBe('42501');
+      expect((await refusal(t.db.delete(marketRuleVersions).where(where))).state).toBe('42501');
+      // The owner too: a trigger refuses it whoever writes (N04 §5: permanent facts).
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        for (const [op, write] of [
+          ['UPDATE', owner.update(marketRuleVersions).set({ createdAt: new Date() }).where(where)],
+          ['DELETE', owner.delete(marketRuleVersions).where(where)],
+        ] as const) {
+          expect(await guarded(write)).toEqual({
+            state: '23000',
+            message: expect.stringContaining(`is a permanent record and takes no ${op}`) as unknown,
+          });
+        }
+        expect(await t.db.select().from(marketRuleVersions).where(where)).toEqual([v1]);
+      } finally {
+        await closeDb(owner);
+      }
+    });
+
+    it('refuses a change of a versioned market’s rules outside a supplement, whoever writes', async () => {
+      const { market } = await createOpenedMarket(t.db);
+      expect(market.ruleVersion).toBe(1);
+      const minute = 60_000;
+      const later = (date: Date, ms: number) => new Date(date.getTime() + ms);
+      // Every version column, each a value its CHECKs take: only the guard refuses it.
+      const changes: Partial<typeof markets.$inferInsert>[] = [
+        { title: '고친 제목' },
+        { description: '고친 배경' },
+        { description: null },
+        { yesCondition: '고친 YES 조건' },
+        { noCondition: '고친 NO 조건' },
+        { eventDeadline: later(market.eventDeadline!, minute) },
+        { fallbackCondition: '고친 전환 조건' },
+        { longDelayDays: 30 },
+        { delayHandling: '고친 처리' },
+        { scheduledOpenAt: later(market.scheduledOpenAt!, -minute) },
+        { closeAt: later(market.closeAt, minute) },
+        { scheduledAnnouncementAt: later(market.closeAt, 60 * minute) },
+        { scheduledJudgementAt: later(market.scheduledJudgementAt!, minute) },
+        { judgementTimeZone: 'UTC' },
+        { ruleVersion: 2 },
+        { ruleVersion: null },
+      ];
+      for (const change of changes) {
+        expect(await guarded(setMarket(market.id, change)), JSON.stringify(change)).toEqual(
+          RULES_HELD,
+        );
+      }
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        expect(
+          await guarded(
+            owner.update(markets).set({ title: '주인' }).where(eq(markets.id, market.id)),
+          ),
+        ).toEqual(RULES_HELD);
+      } finally {
+        await closeDb(owner);
+      }
+      expect(await t.db.select().from(markets).where(eq(markets.id, market.id))).toEqual([market]);
+
+      // The same value again is no change, and the other columns are not held: the category, the
+      // image, a fill's statistics, a transition's status and key.
+      await setMarket(market.id, {
+        title: market.title,
+        closeAt: market.closeAt,
+        ruleVersion: 1,
+        description: market.description,
+      });
+      const category = await createCategory(t.db);
+      await setMarket(market.id, {
+        categoryId: category.id,
+        imageUrl: 'https://example.com/image.png',
+        lastPrice: 55,
+        tradeCount: 1,
+        status: 'closed',
+        statusEventId: 1,
+      });
+
+      // In a transaction that names the market in `buddha.rule_supplement`, every one passes —
+      // for that transaction alone, and that market alone.
+      const other = await createOpenedMarket(t.db);
+      await t.db.transaction(async (tx) => {
+        await allowRuleSupplement(tx, market.id);
+        await tx
+          .update(markets)
+          .set({ title: '보충한 제목', closeAt: later(market.closeAt, minute), ruleVersion: 2 })
+          .where(eq(markets.id, market.id));
+        // In a savepoint, so the refusal leaves the write above to commit.
+        expect(
+          await guarded(
+            tx.transaction((savepoint) =>
+              savepoint
+                .update(markets)
+                .set({ title: '다른 시장' })
+                .where(eq(markets.id, other.market.id)),
+            ),
+          ),
+        ).toEqual(RULES_HELD);
+      });
+      expect(await guarded(setMarket(market.id, { title: '보충 뒤' }))).toEqual(RULES_HELD);
+      await t.db.transaction(async (tx) => {
+        await allowRuleSupplement(tx, other.market.id);
+        await allowRuleSupplement(tx, market.id); // a later call names another market instead
+        expect(
+          await guarded(
+            tx.update(markets).set({ title: '다른 시장' }).where(eq(markets.id, other.market.id)),
+          ),
+        ).toEqual(RULES_HELD);
+      });
+      expect(await t.db.select().from(markets).where(eq(markets.id, market.id))).toMatchObject([
+        { title: '보충한 제목', ruleVersion: 2 },
+      ]);
+
+      // A market with no version is not held (a draft up to SCHEDULED, or one opened before #80),
+      // and its first version (null → 1, the open's) is no change of a held one.
+      const unversioned = await createMarket(t.db);
+      await setMarket(unversioned.id, {
+        title: '#80 전의 시장',
+        closeAt: later(unversioned.closeAt, minute),
+      });
+      await setMarket(unversioned.id, { ruleVersion: 1 });
+      expect(await guarded(setMarket(unversioned.id, { title: '이제 고정' }))).toEqual(RULES_HELD);
+    });
+
+    it('refuses a change of a versioned market’s sources outside a supplement', async () => {
+      const { market } = await createOpenedMarket(t.db);
+      const unversioned = await createMarket(t.db, {
+        fallbackSources: [{ name: '대체', url: 'https://example.org' }],
+      });
+      const sourceOf = (marketId: string, priority: number) =>
+        and(eq(marketSources.marketId, marketId), eq(marketSources.priority, priority));
+      const before = await t.db
+        .select()
+        .from(marketSources)
+        .where(eq(marketSources.marketId, market.id));
+      expect(before).toHaveLength(1);
+      // An insert, an update, a delete — and a row moved in from a market with no version.
+      for (const write of [
+        t.db
+          .insert(marketSources)
+          .values({ marketId: market.id, priority: 1, name: '대체', url: 'https://example.org' }),
+        t.db.update(marketSources).set({ name: '고친 출처' }).where(sourceOf(market.id, 0)),
+        t.db.delete(marketSources).where(sourceOf(market.id, 0)),
+        t.db.update(marketSources).set({ marketId: market.id }).where(sourceOf(unversioned.id, 1)),
+      ]) {
+        expect(await guarded(write)).toEqual(SOURCES_HELD);
+      }
+      // …and out of it to one with no version.
+      expect(
+        await guarded(
+          t.db
+            .update(marketSources)
+            .set({ marketId: unversioned.id, priority: 2 })
+            .where(sourceOf(market.id, 0)),
+        ),
+      ).toEqual(SOURCES_HELD);
+      // An update that changes nothing is no change.
+      await t.db.update(marketSources).set({ name: before[0]!.name }).where(sourceOf(market.id, 0));
+      expect(
+        await t.db.select().from(marketSources).where(eq(marketSources.marketId, market.id)),
+      ).toEqual(before);
+      // With the setting naming the market, the set is replaced as an edit replaces it.
+      await t.db.transaction(async (tx) => {
+        await allowRuleSupplement(tx, market.id);
+        await tx.delete(marketSources).where(eq(marketSources.marketId, market.id));
+        await tx.insert(marketSources).values([
+          { marketId: market.id, priority: 0, name: '보충한 1차', url: 'https://example.com/1' },
+          { marketId: market.id, priority: 1, name: '보충한 대체', url: 'https://example.com/2' },
+        ]);
+      });
+      expect(
+        (await t.db.select().from(marketSources).where(eq(marketSources.marketId, market.id)))
+          .map((row) => row.name)
+          .sort(),
+      ).toEqual(['보충한 1차', '보충한 대체']);
+      // A market with no version keeps every write.
+      await t.db
+        .update(marketSources)
+        .set({ name: '고친 대체' })
+        .where(sourceOf(unversioned.id, 1));
+      await t.db.delete(marketSources).where(eq(marketSources.marketId, unversioned.id));
+    });
+
+    it('makes a source write racing the open wait for it, then refuses it', async () => {
+      // The open holds the market row; a write of its sources reads the market FOR SHARE, so it
+      // waits for the open's COMMIT and reads the version the open wrote — not the null before,
+      // which would let a source in after v1 recorded the set.
+      const { market } = await createScheduledMarket(t.db);
+      let opened!: () => void;
+      const opening = new Promise<void>((resolve) => (opened = resolve));
+      let commit!: () => void;
+      const committing = new Promise<void>((resolve) => (commit = resolve));
+      const open = t.db.transaction(async (tx) => {
+        await lockMarket(tx, market.id);
+        const [current] = await tx
+          .select()
+          .from(markets)
+          .where(eq(markets.id, market.id))
+          .for('update');
+        const now = await clockTimestamp(tx);
+        const result = await openScheduledMarket(tx, {
+          market: current!,
+          now,
+          actorId: null,
+          source: 'job',
+        });
+        opened();
+        await committing;
+        return result;
+      });
+      await opening;
+      let settled = false;
+      const writing = guarded(
+        t.db.insert(marketSources).values({
+          marketId: market.id,
+          priority: 1,
+          name: '늦은 대체',
+          url: 'https://example.org',
+        }),
+      ).finally(() => (settled = true));
+      try {
+        let waiting = false;
+        for (let attempt = 0; attempt < 250 && !waiting && !settled; attempt++) {
+          const { rows } = await t.db.execute<{ waiting: number }>(sql`
+            SELECT count(*)::int AS waiting FROM pg_stat_activity
+            WHERE datname = current_database() AND pid <> pg_backend_pid()
+              AND wait_event_type = 'Lock' AND query ILIKE '%market_sources%'`);
+          waiting = (rows[0]?.waiting ?? 0) > 0;
+          if (!waiting) await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(waiting).toBe(true);
+      } finally {
+        commit();
+      }
+      expect(await open).toMatchObject({ opened: true, ruleVersion: 1 });
+      expect(await writing).toEqual(SOURCES_HELD);
+      const [v1] = await t.db
+        .select()
+        .from(marketRuleVersions)
+        .where(eq(marketRuleVersions.marketId, market.id));
+      expect(v1?.content.fallbackSources).toEqual([]);
+      expect(
+        await t.db.select().from(marketSources).where(eq(marketSources.marketId, market.id)),
+      ).toHaveLength(1);
     });
   });
 
@@ -7833,7 +8341,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'profile_interest_categories', 'post_likes', 'comment_likes',
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
-            'market_sources')
+            'market_sources', 'market_rule_versions')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -7909,6 +8417,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('categories')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0050 (#23): an edit of a market's sources deletes and inserts them, as its tags.
       expect(privs('market_sources')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
+      // Migration 0053 (#80): a rule version is a permanent fact, written once and kept.
+      expect(privs('market_rule_versions')).toEqual(['INSERT', 'SELECT']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

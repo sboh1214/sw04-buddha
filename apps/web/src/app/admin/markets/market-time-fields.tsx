@@ -18,14 +18,19 @@ import { type TimeZoneOption, supportedTimeZones, timeZoneLabel } from '@/lib/ti
 
 interface MarketTimeFieldsProps {
   form: UseFormReturn<MarketFormValues>;
-  /** Every input; true unless the market is draft or open (design 3.4). */
+  /** Every input; true unless a draft's edit or a supplement's form (design 3.4, #80). */
   disabled: boolean;
   /**
-   * The open market's edit form: the scheduled open and the scheduled judgement are fixed once the
-   * market has opened (#172 item 14; ADR-0093 decision 3 '#21 앞당긴 개장'), set or not — the API
-   * refuses any change ('immutable while open', ADR-0098).
+   * A market past its open — the 규칙 보충 form (#80): the scheduled open and the scheduled judgement
+   * are fixed once the market has opened (#172 item 14; ADR-0093 decision 3 '#21 앞당긴 개장'), set
+   * or not — no supplement may change them (the API refuses either as 'not a supplement item').
    */
   fixed?: boolean;
+  /**
+   * The 규칙 보충 form of a PAUSED market (#80, #172 item 14): the close is fixed while trading is
+   * paused (SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED), so its input is locked with a hint that says so.
+   */
+  closeLocked?: boolean;
   /**
    * The 선행 마감 gap the market is held to (`AdminMarket.leadCloseGapMinutes`): its minutes, or null
    * while the release setting is undecided. The edit form shows it under the announcement time;
@@ -50,15 +55,17 @@ const TIME_INPUT: InputProps = { type: 'datetime-local', maxW: '56' };
  * market is held to ('선행 마감 간격: 60분', or 미정). The hints carry the owner's rules the form
  * cannot check: a match closes before kick-off, an election before the polls close (#172 item 13).
  *
- * On an open market (`fixed`) the scheduled open and judgement are locked, as the API holds them,
- * and the close only moves later, up to the scheduled judgement (owner answer 2026-10-31 A2) —
- * `marketFormSchema` says so under the input. A broken rule's message stands under both of its
- * inputs; after a submit a change to either re-checks both (`timeRuleDeps`).
+ * Past the open (`fixed`, the 규칙 보충 form since #80) the scheduled open and judgement are locked,
+ * as the API holds them, and the close only moves later, up to the scheduled judgement (owner
+ * answer 2026-10-31 A2) — `supplementFormSchema` says so under the input — and not at all while
+ * PAUSED (`closeLocked`). A broken rule's message stands under both of its inputs; after a submit
+ * a change to either re-checks both (`timeRuleDeps`).
  */
 export function MarketTimeFields({
   form,
   disabled,
   fixed = false,
+  closeLocked = false,
   leadCloseGapMinutes,
 }: MarketTimeFieldsProps) {
   const {
@@ -75,11 +82,13 @@ export function MarketTimeFields({
         }`;
 
   return (
+    // A Field.Root's own `disabled` overrides the fieldset's in Chakra: each one below that sets
+    // it (`fixed`, `closeLocked`) keeps `disabled` too, or a locked input is drawn as editable.
     <Fieldset.Root disabled={disabled} data-testid="market-times">
       <Fieldset.Legend fontWeight="semibold">{copy.adminMarketTimes}</Fieldset.Legend>
       <Fieldset.HelperText>{copy.adminMarketTimesHint}</Fieldset.HelperText>
       <Fieldset.Content gap="3" mt="2">
-        <Field.Root invalid={!!errors.scheduledOpenAt} disabled={fixed}>
+        <Field.Root invalid={!!errors.scheduledOpenAt} disabled={disabled || fixed}>
           <Field.Label>{copy.adminMarketScheduledOpenAt}</Field.Label>
           <Input
             {...TIME_INPUT}
@@ -92,14 +101,16 @@ export function MarketTimeFields({
           <Field.ErrorText>{errors.scheduledOpenAt?.message}</Field.ErrorText>
         </Field.Root>
 
-        <Field.Root invalid={!!errors.closeAt} required>
+        <Field.Root invalid={!!errors.closeAt} required disabled={disabled || closeLocked}>
           <Field.Label>{copy.adminMarketCloseAt}</Field.Label>
           <Input
             {...TIME_INPUT}
             data-testid="market-close-at"
             {...register('closeAt', { deps: timeRuleDeps('closeAt') })}
           />
-          <Field.HelperText>{copy.adminMarketCloseAtHint}</Field.HelperText>
+          <Field.HelperText>
+            {closeLocked ? copy.adminMarketCloseLockedPausedHint : copy.adminMarketCloseAtHint}
+          </Field.HelperText>
           <Field.ErrorText>{errors.closeAt?.message}</Field.ErrorText>
         </Field.Root>
 
@@ -119,7 +130,7 @@ export function MarketTimeFields({
           <Field.ErrorText>{errors.scheduledAnnouncementAt?.message}</Field.ErrorText>
         </Field.Root>
 
-        <Field.Root invalid={!!errors.scheduledJudgementAt} disabled={fixed}>
+        <Field.Root invalid={!!errors.scheduledJudgementAt} disabled={disabled || fixed}>
           <Field.Label>{copy.adminMarketScheduledJudgementAt}</Field.Label>
           <Input
             {...TIME_INPUT}

@@ -5,26 +5,20 @@
  * whole minutes, the sent end first; the lead close never refused on a draft, named by the
  * open-items check at the gap in force (the release setting `market.lead_close_gap`, undecided
  * until a test enters it through /admin/release-settings) and stored by the review submission (the
- * open keeps it, #21); an open market's fixed times, its close moved later only and up to the
- * scheduled judgement, the lead close checked again at the gap it was last checked against;
- * `rules_edited` for the announcement and the zone alone; the republished status. Skips when
- * TEST_* are unset.
+ * open keeps it, #21); an open market's times refused on the PATCH, its rule version's items, and
+ * the scheduled open and judgement taken by no supplement (#80: the close moved later only and up
+ * to the scheduled judgement, and the lead close checked again, are the supplement's —
+ * admin-markets-supplement.controller.test.ts); `rules_edited` for the announcement and the zone
+ * alone. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import { completeOnboarding, createCategory, createMarket } from '@buddha/db/test';
-import {
-  STORABLE_INSTANT_TOO_EARLY,
-  floorToMinute,
-  marketChannel,
-  type AdminMarket,
-} from '@buddha/shared';
+import { STORABLE_INSTANT_TOO_EARLY, floorToMinute, type AdminMarket } from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
-import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
 import { hasTestInfra } from '../test/setup-env.js';
-import { sleep, waitForMessages } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const MINUTE_MS = 60_000;
@@ -156,13 +150,6 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       .where(eq(schema.adminActions.targetId, targetId))
       .orderBy(asc(schema.adminActions.createdAt));
   }
-  async function eventsFor(marketId: string) {
-    return t.db
-      .select()
-      .from(schema.marketEvents)
-      .where(eq(schema.marketEvents.marketId, marketId))
-      .orderBy(asc(schema.marketEvents.id));
-  }
 
   /** The refusal of times out of order: the broken rules, then each end with its message. */
   function expectOutOfOrder(
@@ -183,8 +170,6 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
   const CLOSE_BY_JUDGEMENT = 'must be at or before scheduledJudgementAt';
   const JUDGEMENT_AFTER_CLOSE = 'must be at or after closeAt';
   const JUDGEMENT_AFTER_DEADLINE = 'must be at or after eventDeadline';
-  const LEAD_CLOSE = 'must be at least the lead-close gap before scheduledAnnouncementAt';
-  const LEAD_ANNOUNCEMENT = 'must be at least the lead-close gap after closeAt';
 
   // --- entry ------------------------------------------------------------------------------
   it('writes every time as entered and reads it back; null clears one on a draft; the zone as given', async () => {
@@ -498,8 +483,8 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     expect(detail(await get(marketUrl(announced.id))).missingOpenItems).toEqual(['leadClose']);
   });
 
-  // --- an open market (until #80's supplement) ---------------------------------------------
-  it('keeps an open market’s scheduled open and judgement fixed, set or not, and its zone filled', async () => {
+  // --- an open market (#80: its times are its rule version's) --------------------------------
+  it('keeps an open market’s times: the PATCH refuses each one changed (on a market opened before rule versions, until the close), and no supplement moves the scheduled open or judgement', async () => {
     const c = week();
     const live = await openMarket(c);
     const url = marketUrl(live.id);
@@ -507,88 +492,90 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       scheduledOpenAt: live.scheduledOpenAt!.toISOString(),
       scheduledJudgementAt: live.scheduledJudgementAt!.toISOString(),
     };
-    // #172 item 14: the judgement is never edited after the open; the scheduled open has passed.
-    // A millisecond is a change: an instant, as stored.
+    // #172 item 14: after the open the times change by a supplement alone; a millisecond is a
+    // change (an instant, as stored), and so is a time cleared. This market was made open with no
+    // rule version (`createMarket`, as one opened before #80 — D4), which takes no supplement
+    // either: the same details, and a message that says the items hold until the close.
     for (const [body, items] of [
       [{ scheduledJudgementAt: iso(c + 3 * DAY_MS) }, ['scheduledJudgementAt']],
       [{ scheduledJudgementAt: iso(c + 2 * DAY_MS + 1) }, ['scheduledJudgementAt']],
       [{ scheduledJudgementAt: null }, ['scheduledJudgementAt']],
-      [{ scheduledOpenAt: iso(c - DAY_MS) }, ['scheduledOpenAt']],
       [{ scheduledOpenAt: null }, ['scheduledOpenAt']],
+      [{ closeAt: iso(c + HOUR_MS) }, ['closeAt']],
+      [{ scheduledAnnouncementAt: iso(c + 3 * HOUR_MS) }, ['scheduledAnnouncementAt']],
+      [{ judgementTimeZone: null }, ['judgementTimeZone']],
       [
-        { scheduledOpenAt: iso(c - DAY_MS), scheduledJudgementAt: iso(c + 3 * DAY_MS) },
-        ['scheduledOpenAt', 'scheduledJudgementAt'],
+        { judgementTimeZone: 'America/New_York', scheduledOpenAt: iso(c - DAY_MS) },
+        ['scheduledOpenAt', 'judgementTimeZone'],
       ],
     ] as const) {
       const res = await patch(url, body);
       expect({ body, status: res.statusCode }).toEqual({ body, status: 400 });
       expect(errorOf(res)).toEqual({
         code: 'VALIDATION_ERROR',
-        message: `${items.join(', ')} cannot change while the market is open`,
-        details: items.map((item) => ({ path: [item], message: 'immutable while open' })),
+        message: `${items.join(', ')} cannot change until the close: the market opened before rule versions`,
+        details: items.map((item) => ({ path: [item], message: 'supplement only while open' })),
       });
     }
-    // After the slug, and before the close time's own refusals.
+    // After the slug.
     const slugged = await patch(url, { slug: 'new-slug', scheduledJudgementAt: iso(c) });
     expect(detailPath(slugged)).toEqual(['slug']);
-    const both = await patch(url, {
-      scheduledJudgementAt: iso(c + 3 * DAY_MS),
-      closeAt: iso(Date.now() - 1_000),
-    });
-    expect(detailPath(both)).toEqual(['scheduledJudgementAt']);
     expect(await actionsFor(live.id)).toHaveLength(0);
     // The stored instant again, however spelled, is no change.
     const resent = await patch(url, {
       scheduledOpenAt: stored.scheduledOpenAt.replace('.000Z', 'Z'),
       scheduledJudgementAt: stored.scheduledJudgementAt,
-      title: '같은 시각을 다시 보낸 수정',
+      closeAt: iso(c),
+      judgementTimeZone: 'Asia/Seoul',
+      tags: ['같은 시각을 다시 보낸 수정'],
     });
     expect(resent.statusCode).toBe(200);
     expect(detail(resent)).toMatchObject(stored);
 
-    // The zone stays editable until #80 (ADR-0097 7-12) but cannot be cleared: RULES_REQUIRED,
-    // after the rule items it would leave missing too.
-    expect(detail(await patch(url, { judgementTimeZone: 'America/New_York' }))).toMatchObject({
-      judgementTimeZone: 'America/New_York',
+    // Nor does a supplement move the scheduled open or judgement: its body takes neither.
+    const supplement = await post(`${url}/supplements`, {
+      baseVersion: 1,
+      changes: { scheduledJudgementAt: iso(c + 3 * DAY_MS), scheduledOpenAt: null },
+      reason: '판정 일정을 미룬다',
+      settlementImpact: '없음',
     });
-    for (const [body, items] of [
-      [{ judgementTimeZone: null }, ['judgementTimeZone']],
-      [{ judgementTimeZone: null, yesCondition: '' }, ['yesCondition', 'judgementTimeZone']],
-    ] as const) {
-      const res = await patch(url, body);
-      expect({ body, status: res.statusCode }).toEqual({ body, status: 422 });
-      expect(errorOf(res)).toEqual({
-        code: 'RULES_REQUIRED',
-        message: `Rule items cannot be left missing while the market is open: ${items.join(', ')}`,
-        details: items.map((item) => ({ path: [item], message: 'required while open' })),
-      });
-    }
-    expect((await marketRow(live.id)).judgementTimeZone).toBe('America/New_York');
+    expect(supplement.statusCode).toBe(400);
+    expect(errorOf(supplement).details).toEqual([
+      {
+        path: ['changes'],
+        message: 'not a supplement item: scheduledJudgementAt, scheduledOpenAt',
+      },
+    ]);
 
-    // A market opened before #22 keeps its blank times (D4): neither fixed time may be filled in,
-    // a null zone sent again is no change, and once its zone is filled it may not be cleared.
+    // A market opened before #22 keeps its blank times (D4): none may be filled in, and a null
+    // sent again is no change.
     const legacy = await openMarket(c, { blankTimes: true, scheduledJudgementAt: null });
     const legacyUrl = marketUrl(legacy.id);
     const blank = ['scheduledOpenAt', 'scheduledJudgementAt', 'judgementTimeZone'];
     expect(detail(await get(legacyUrl)).missingOpenItems).toEqual(blank);
-    for (const item of ['scheduledOpenAt', 'scheduledJudgementAt'] as const) {
-      const value = item === 'scheduledOpenAt' ? passed() : iso(c + 2 * DAY_MS);
+    for (const item of ['scheduledOpenAt', 'scheduledJudgementAt', 'judgementTimeZone'] as const) {
+      const value =
+        item === 'scheduledOpenAt'
+          ? passed()
+          : item === 'judgementTimeZone'
+            ? 'Asia/Seoul'
+            : iso(c + 2 * DAY_MS);
       const res = await patch(legacyUrl, { [item]: value });
       expect({ item, status: res.statusCode }).toEqual({ item, status: 400 });
-      expect(errorOf(res).details).toEqual([{ path: [item], message: 'immutable while open' }]);
+      expect(errorOf(res).details).toEqual([
+        { path: [item], message: 'supplement only while open' },
+      ]);
     }
     const nothing = await patch(legacyUrl, {
       scheduledOpenAt: null,
       scheduledJudgementAt: null,
       judgementTimeZone: null,
-      title: '옛 시장의 새 제목',
+      tags: ['옛 시장의 새 태그'],
     });
     expect(nothing.statusCode).toBe(200);
     expect(detail(nothing).missingOpenItems).toEqual(blank);
-    expect((await patch(legacyUrl, { judgementTimeZone: 'Asia/Seoul' })).statusCode).toBe(200);
-    expect((await patch(legacyUrl, { judgementTimeZone: null })).statusCode).toBe(422);
 
-    // Any other status refuses everything naming `status`: no extension while paused (#172 14).
+    // Any other status refuses everything naming `status`: a paused market's PATCH is #114's.
     const paused = await openMarket(c, { status: 'paused' });
     const refused = await patch(marketUrl(paused.id), { closeAt: iso(c + DAY_MS) });
     expect(refused.statusCode).toBe(400);
@@ -596,143 +583,8 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     expect(detailPath(refused)).toEqual(['status']);
   });
 
-  it('moves an open market’s close later only, as an instant, and never past its scheduled judgement (A2)', async () => {
-    const c = week();
-    const live = await openMarket(c, { closeAt: new Date(c + 30_000) });
-    const url = marketUrl(live.id);
-    const judgement = iso(c + 2 * DAY_MS);
-    // A millisecond earlier is an early close (#173 item 4): `close` until #114, never this edit.
-    const earlier = await patch(url, { closeAt: iso(c + 29_999) });
-    expect(earlier.statusCode).toBe(400);
-    expect(errorOf(earlier)).toEqual({
-      code: 'VALIDATION_ERROR',
-      message: 'The close time cannot move earlier while the market is open: close it instead',
-      details: [{ path: ['closeAt'], message: 'cannot move earlier while open' }],
-    });
-    // The same instant is no move.
-    expect((await patch(url, { closeAt: iso(c + 30_000) })).statusCode).toBe(200);
-    // Later, up to the scheduled judgement by the minute: within its minute is fine, the next
-    // minute is not — and the judgement stays as it is (#22 AC 2).
-    const extended = await patch(url, { closeAt: iso(c + 2 * DAY_MS + 59_999) });
-    expect(extended.statusCode).toBe(200);
-    expect(detail(extended)).toMatchObject({
-      closeAt: iso(c + 2 * DAY_MS + 59_999),
-      scheduledJudgementAt: judgement,
-    });
-    expectOutOfOrder(
-      await patch(url, { closeAt: iso(c + 2 * DAY_MS + MINUTE_MS) }),
-      ['closeByJudgement'],
-      [
-        ['closeAt', CLOSE_BY_JUDGEMENT],
-        ['scheduledJudgementAt', JUDGEMENT_AFTER_CLOSE],
-      ],
-    );
-    // A past close is named as one before it is an earlier one.
-    const stale = await patch(url, { closeAt: iso(Date.now() - 1_000) });
-    expect(errorOf(stale).details).toEqual([
-      { path: ['closeAt'], message: 'must be in the future' },
-    ]);
-    // And the slug before any time.
-    expect(detailPath(await patch(url, { slug: 'other-slug', closeAt: iso(c) }))).toEqual(['slug']);
-    const row = await marketRow(live.id);
-    expect(row.closeAt.toISOString()).toBe(iso(c + 2 * DAY_MS + 59_999));
-    expect(row.scheduledJudgementAt?.toISOString()).toBe(judgement);
-    expect(row.status).toBe('open');
-  });
-
-  it('checks an open market’s lead close again at the gap it was last checked against, storing the first one it uses', async () => {
-    const c = week();
-    // Its own gap holds whatever the setting says, undecided included (docs/SETTINGS.md).
-    const own = await openMarket(c, {
-      scheduledAnnouncementAt: new Date(c + 3 * HOUR_MS),
-      leadCloseGapMinutes: 60,
-    });
-    const ownUrl = marketUrl(own.id);
-    expect(detail(await get(ownUrl))).toMatchObject({
-      leadCloseGapMinutes: 60,
-      missingOpenItems: [],
-    });
-    const short = await patch(ownUrl, { closeAt: iso(c + 2 * HOUR_MS + 30 * MINUTE_MS) });
-    expect(short.statusCode).toBe(400);
-    expect(errorOf(short)).toEqual({
-      code: 'VALIDATION_ERROR',
-      message: 'The close must be at least 60 minutes before the announcement time',
-      details: [
-        { path: ['closeAt'], message: LEAD_CLOSE },
-        { path: ['scheduledAnnouncementAt'], message: LEAD_ANNOUNCEMENT },
-      ],
-    });
-    // At the gap, to the minute, it passes; an announcement moved earlier is checked and named
-    // first; a later one passes.
-    expect((await patch(ownUrl, { closeAt: iso(c + 2 * HOUR_MS + 59_999) })).statusCode).toBe(200);
-    expect(
-      errorOf(await patch(ownUrl, { scheduledAnnouncementAt: iso(c + 3 * HOUR_MS - MINUTE_MS) }))
-        .details,
-    ).toEqual([
-      { path: ['scheduledAnnouncementAt'], message: LEAD_ANNOUNCEMENT },
-      { path: ['closeAt'], message: LEAD_CLOSE },
-    ]);
-    expect(
-      (await patch(ownUrl, { scheduledAnnouncementAt: iso(c + 5 * HOUR_MS) })).statusCode,
-    ).toBe(200);
-    // An edit sending neither is not checked; clearing the announcement ('없음') turns it off —
-    // whether a supplement may is #80's.
-    expect((await patch(ownUrl, { title: '발표와 상관없는 수정' })).statusCode).toBe(200);
-    expect((await patch(ownUrl, { scheduledAnnouncementAt: null })).statusCode).toBe(200);
-    expect((await patch(ownUrl, { closeAt: iso(c + 2 * DAY_MS) })).statusCode).toBe(200);
-    expect((await marketRow(own.id)).leadCloseGapMinutes).toBe(60);
-
-    // A market with no gap of its own — opened while the setting was undecided, or before #22 —
-    // closes later freely with no announcement, and cannot take one while the setting is
-    // undecided: the lead close could not be checked ('lead-close gap undecided', on what it sent).
-    const bare = await openMarket(c);
-    const bareUrl = marketUrl(bare.id);
-    expect((await patch(bareUrl, { closeAt: iso(c + HOUR_MS) })).statusCode).toBe(200);
-    const undecided = await patch(bareUrl, { scheduledAnnouncementAt: iso(c + 3 * HOUR_MS) });
-    expect(undecided.statusCode).toBe(400);
-    expect(errorOf(undecided)).toEqual({
-      code: 'VALIDATION_ERROR',
-      message:
-        'The lead-close gap is undecided: the release setting market.lead_close_gap has no value',
-      details: [{ path: ['scheduledAnnouncementAt'], message: 'lead-close gap undecided' }],
-    });
-    expect(
-      errorOf(
-        await patch(bareUrl, {
-          closeAt: iso(c + 2 * HOUR_MS),
-          scheduledAnnouncementAt: iso(c + 4 * HOUR_MS),
-        }),
-      ).details,
-    ).toEqual([
-      { path: ['closeAt'], message: 'lead-close gap undecided' },
-      { path: ['scheduledAnnouncementAt'], message: 'lead-close gap undecided' },
-    ]);
-    expect((await marketRow(bare.id)).scheduledAnnouncementAt).toBeNull();
-
-    // Once decided, its first check takes the setting's reading and keeps it (C13).
-    await setGap(60);
-    expect(
-      (await patch(bareUrl, { scheduledAnnouncementAt: iso(c + HOUR_MS + 30 * MINUTE_MS) }))
-        .statusCode,
-    ).toBe(400);
-    expect((await marketRow(bare.id)).leadCloseGapMinutes).toBeNull();
-    const announced = await patch(bareUrl, { scheduledAnnouncementAt: iso(c + 2 * HOUR_MS) });
-    expect(announced.statusCode).toBe(200);
-    expect(detail(announced).leadCloseGapMinutes).toBe(60);
-    expect((await marketRow(bare.id)).leadCloseGapMinutes).toBe(60);
-    // A later setting changes neither market's gap; a draft follows it.
-    await setGap(10);
-    const kept = await patch(bareUrl, { closeAt: iso(c + HOUR_MS + 30 * MINUTE_MS) });
-    expect(kept.statusCode).toBe(400);
-    expect(errorOf(kept).message).toBe(
-      'The close must be at least 60 minutes before the announcement time',
-    );
-    expect(detail(await get(bareUrl)).leadCloseGapMinutes).toBe(60);
-    expect(detail(await create(c)).leadCloseGapMinutes).toBe(10);
-  });
-
   // --- records ----------------------------------------------------------------------------
-  it('records the announcement and the zone as rules_edited, the other times in market_update only, and republishes an open market’s edit', async () => {
+  it('records a draft’s announcement and zone as rules_edited and the other times in market_update only', async () => {
     const c = week();
     const draft = detail(await create(c));
     const url = marketUrl(draft.id);
@@ -784,32 +636,7 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
       }),
     );
     expect(resaved.events.filter((event) => event.type === 'rules_edited')).toHaveLength(2);
-
-    // An open market's time edit moves its snapshot, so its status is republished for the
-    // viewers to refetch (A-M4-36); a resave is not.
-    const live = await openMarket(c);
-    const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
-    const received: string[] = [];
-    subscriber.on('message', (_channel, message) => received.push(message));
-    await subscriber.subscribe(marketChannel(live.id));
-    try {
-      const liveUrl = marketUrl(live.id);
-      expect((await patch(liveUrl, { closeAt: iso(c + HOUR_MS) })).statusCode).toBe(200);
-      await waitForMessages(received, 1, 'market:status of the close extension');
-      expect((await patch(liveUrl, { judgementTimeZone: 'Asia/Tokyo' })).statusCode).toBe(200);
-      await waitForMessages(received, 2, 'market:status of the zone edit');
-      expect((await patch(liveUrl, { closeAt: iso(c + HOUR_MS) })).statusCode).toBe(200);
-      await sleep(100);
-      expect(received).toHaveLength(2);
-      expect(received.map((message) => (JSON.parse(message) as { status: string }).status)).toEqual(
-        ['open', 'open'],
-      );
-    } finally {
-      await subscriber.quit();
-    }
-    // The extension is no `rules_edited`; the zone is.
-    const events = await eventsFor(live.id);
-    expect(events.map((event) => event.type)).toEqual(['rules_edited']);
-    expect(events[0]!.payload).toMatchObject({ items: ['judgementTimeZone'] });
+    // An open market's times are its rule version's: a supplement's approval moves them and
+    // republishes its status (#80, admin-markets-supplement.controller.test.ts).
   });
 });

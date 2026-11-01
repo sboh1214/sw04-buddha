@@ -1,10 +1,17 @@
 /**
  * Public market reads (PLAN 7.1, M3 design 3.2) against the docker `test` profile: list
- * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories, and the
- * market times and '판정 지연' (#22). Skips when TEST_* are unset.
+ * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories, the
+ * market times and '판정 지연' (#22), and the rule versions (#80). Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
-import { createCategory, createFill, createMarket, createUser } from '@buddha/db/test';
+import {
+  createCategory,
+  createFill,
+  createMarket,
+  createOpenedMarket,
+  createSupplementedMarket,
+  createUser,
+} from '@buddha/db/test';
 import {
   CURSOR_NULL,
   FILLS_RECENT_LIMIT,
@@ -1133,6 +1140,97 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     const closed = (await get('/api/v1/markets?status=closed')).json<ListPage>().data;
     expect(closed.map((row) => row.id).sort()).toEqual([late.id, due.id, undated.id].sort());
     expect(closed.every((row) => row.status === 'closed')).toBe(true);
+  });
+
+  it('shows the current rule version and every version, the newest first, naming nobody; none before the open or for a market opened before #80', async () => {
+    // #80, ADR-0101 (ADR-0093 decision 3 '#80 보충의 형태'): v1 from the open, one more per
+    // approved supplement; each with its full text, the items it changed, the reason and the time.
+    const detailOf = async (idOrSlug: string) => {
+      const res = await get(`/api/v1/markets/${idOrSlug}`);
+      expect(res.statusCode).toBe(200);
+      return { body: res.body, market: res.json<{ data: Market }>().data };
+    };
+    // Never opened, or opened before #80 (D4): no version, an empty history.
+    const scheduled = await market({ status: 'scheduled' });
+    const legacy = await market({ status: 'open' });
+    for (const id of [scheduled.id, legacy.id]) {
+      expect((await detailOf(id)).market).toMatchObject({ ruleVersion: null, ruleVersions: [] });
+    }
+    // v1 at the open: the text the review locked, no reason, nothing changed.
+    const { market: opened } = await createOpenedMarket(t.db, {
+      createdBy: creatorId,
+      categoryId: category.id,
+    });
+    const [v1] = await t.db
+      .select()
+      .from(schema.marketRuleVersions)
+      .where(eq(schema.marketRuleVersions.marketId, opened.id));
+    expect((await detailOf(opened.slug)).market).toMatchObject({
+      ruleVersion: 1,
+      ruleVersions: [
+        {
+          version: 1,
+          createdAt: opened.openAt!.toISOString(),
+          changedItems: [],
+          reason: null,
+          content: v1!.content,
+        },
+      ],
+    });
+    // v2 and v3 by supplements: the current one first, each the full text then.
+    const { market: supplemented, versions } = await createSupplementedMarket(t.db, {
+      createdBy: creatorId,
+      categoryId: category.id,
+      supplements: [
+        { changes: { description: '보충한 배경' }, reason: '오탈자 수정' },
+        {
+          changes: { title: '보충한 제목', yesCondition: '보충한 YES 조건' },
+          reason: '뜻을 바꾸지 않고 문장을 다듬는다',
+          settlementImpact: '정산 영향 검토는 운영자만 본다',
+        },
+      ],
+    });
+    const { body, market: shown } = await detailOf(supplemented.id);
+    expect(shown).toMatchObject({
+      title: '보충한 제목',
+      description: '보충한 배경',
+      yesCondition: '보충한 YES 조건',
+      ruleVersion: 3,
+    });
+    expect(shown.ruleVersions.map((version) => [version.version, version.changedItems])).toEqual([
+      [3, ['title', 'yesCondition']],
+      [2, ['description']],
+      [1, []],
+    ]);
+    expect(shown.ruleVersions[0]).toEqual({
+      version: 3,
+      createdAt: versions[2]!.createdAt.toISOString(),
+      changedItems: ['title', 'yesCondition'],
+      reason: '뜻을 바꾸지 않고 문장을 다듬는다',
+      content: versions[2]!.content,
+    });
+    expect(shown.ruleVersions[2]!.content).toEqual(versions[0]!.content);
+    // Nobody's name and no settlement impact review: neither key nor value.
+    for (const version of shown.ruleVersions) {
+      expect(Object.keys(version).sort()).toEqual([
+        'changedItems',
+        'content',
+        'createdAt',
+        'reason',
+        'version',
+      ]);
+    }
+    for (const version of versions.slice(1)) {
+      expect(body).not.toContain(version.requestedBy!);
+      expect(body).not.toContain(version.createdBy!);
+    }
+    expect(body).not.toContain('정산 영향 검토는 운영자만 본다');
+    // After the close the history stays public.
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'closed' })
+      .where(eq(schema.markets.id, supplemented.id));
+    expect((await detailOf(supplemented.id)).market.ruleVersions).toEqual(shown.ruleVersions);
   });
 
   it('refuses NUL in a path or query parameter as bad input, never as a 500', async () => {

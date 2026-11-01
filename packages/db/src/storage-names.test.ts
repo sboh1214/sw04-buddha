@@ -9,6 +9,7 @@ import {
   LINK_FLAG_REASONS,
   MARKET_EVENT_TYPES,
   MARKET_REVIEW_APPROVAL_KIND,
+  MARKET_SUPPLEMENT_APPROVAL_KIND,
   MEDIA_KINDS,
   MODERATION_ACTION_TYPES,
   PAYMENT_EVENT_TYPES,
@@ -18,6 +19,7 @@ import {
   RESTRICTION_END_CHANGE_KINDS,
   RETENTION_PURGE_KINDS,
   RETENTION_PURGE_OUTCOMES,
+  RULE_VERSION_ITEMS,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
   START_GRANT_NUMBER_SOURCES,
@@ -100,11 +102,15 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'write_limit_events.action': WRITE_LIMIT_ACTIONS,
   'link_flags.reason': LINK_FLAG_REASONS,
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
-  // first, the market review (#78); #130's bot control and the rest add theirs here.
+  // first, the market review (#78), the rule supplement (#80); #130's bot control and the rest add
+  // theirs here.
   'approval_requests.kind': [
     ...Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
     MARKET_REVIEW_APPROVAL_KIND,
+    MARKET_SUPPLEMENT_APPROVAL_KIND,
   ],
+  // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
+  'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
   // #184's purge records: the kinds a run counts (no personal content), and whether a kind was
   // done or failed (owner decision 2026-10-24 14).
   'retention_purges.kind': RETENTION_PURGE_KINDS,
@@ -299,6 +305,56 @@ describe('excluded features in stored data (#113)', () => {
           'market_revert',
           'market_reschedule',
         ].map((name) => ({ where: 'admin_actions.type value', name })),
+      ]),
+    );
+  });
+
+  it('names the rule versions, their CHECKs and the supplement’s stored values, each read above (#80)', () => {
+    // ADR-0101, migration 0053: the table of a market's rule versions, the current version on the
+    // market, their CHECKs under the names the schema test spells, and the supplement's approval
+    // kind, market event type and admin action types, which the test above reads for an excluded
+    // feature ('version', 'supplement', 'impact' name none).
+    const versions = TABLES.find((table) => table.name === 'market_rule_versions');
+    expect(versions?.columns.map((column) => column.name)).toEqual([
+      'marketId',
+      'version',
+      'content',
+      'changedItems',
+      'reason',
+      'settlementImpact',
+      'approvalId',
+      'requestedBy',
+      'createdBy',
+      'createdAt',
+    ]);
+    expect(TABLES.find((table) => table.name === 'markets')?.columns.map((c) => c.name)).toContain(
+      'ruleVersion',
+    );
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_rule_versions' },
+        ...[
+          // The primary key as the schema object names it (the migration's is snake_case).
+          'market_rule_versions_marketId_version_pk',
+          'market_rule_versions_version_check',
+          'market_rule_versions_supplement_check',
+          'market_rule_versions_reasons_check',
+          'market_rule_versions_changed_items_check',
+          'market_rule_versions_content_check',
+        ].map((name) => ({ where: 'market_rule_versions constraint', name })),
+        { where: 'markets constraint', name: 'markets_rule_version_check' },
+        { where: 'approval_requests.kind value', name: 'market_supplement' },
+        { where: 'market_events.type value', name: 'rules_supplemented' },
+        ...[
+          'market_supplement_request',
+          'market_supplement_approve',
+          'market_supplement_reject',
+          'market_supplement_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+        ...RULE_VERSION_ITEMS.map((name) => ({
+          where: 'market_rule_versions.changed_items value',
+          name,
+        })),
       ]),
     );
   });

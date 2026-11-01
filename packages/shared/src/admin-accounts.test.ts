@@ -75,7 +75,7 @@ describe('two-person rule (#171)', () => {
   it('names kinds like the other varchar types, and the refusals', () => {
     expect(APPROVAL_KIND_PATTERN.test('market_open')).toBe(true);
     expect(APPROVAL_KIND_PATTERN.test('Market Open')).toBe(false);
-    // #78 added the market review's own exclusions.
+    // #78 added the market review's own exclusions, #80 the supplement's refusal when asked.
     expect(APPROVAL_REFUSALS).toEqual([
       'requester',
       'decided',
@@ -83,6 +83,7 @@ describe('two-person rule (#171)', () => {
       'not_requester',
       'creator',
       'editor',
+      'no_decider',
     ]);
   });
 });

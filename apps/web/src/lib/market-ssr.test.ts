@@ -54,6 +54,9 @@ const market: Market = {
   resolvedAt: null,
   settledAt: null,
   tags: [],
+  // No rule version (#80): not opened yet, or opened before #80 (D4).
+  ruleVersion: null,
+  ruleVersions: [],
 };
 
 const series: PriceSeries = {

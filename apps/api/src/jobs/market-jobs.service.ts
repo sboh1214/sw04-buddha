@@ -79,13 +79,15 @@ function bounded<T>(promise: Promise<T>, what: string): Promise<T> {
 
 /**
  * PLAN 9's producer side (M5, ADR-0046; #21, ADR-0100): the `market.open`, `market.close` and
- * `market.finalize` jobs the worker consumes, registered by MarketAdminService AFTER its
- * transaction commits. An open job is delayed to `scheduledOpenAt` — registered by an approval
- * or a reschedule that leaves the market SCHEDULED, moved by a reschedule, cancelled by a
- * 되돌리기 from SCHEDULED. A close job is delayed to `closeAt` — registered at the approval (the
- * close is locked from then on, and the worker's close only acts on an open market) and cancelled
- * the same way when that instant stops being true (a PATCHed `closeAt`, a manual close, a
- * 되돌리기 from SCHEDULED); a finalize job is due at once after the judgement and never cancelled.
+ * `market.finalize` jobs the worker consumes, registered by MarketAdminService (and
+ * MarketSupplementService, #80) AFTER its transaction commits. An open job is delayed to
+ * `scheduledOpenAt` — registered by an approval or a reschedule that leaves the market SCHEDULED,
+ * moved by a reschedule, cancelled by a 되돌리기 from SCHEDULED. A close job is delayed to
+ * `closeAt` — registered at the approval (the close is locked from then on but for a supplement,
+ * and the worker's close only acts on an open market) and cancelled the same way when that
+ * instant stops being true (an approved supplement's later close, which registers the new one, a
+ * manual close, a 되돌리기 from SCHEDULED); a finalize job is due at once after the judgement and
+ * never cancelled.
  *
  * Best effort by design, like MarketPublisher: the transition has COMMITted when this runs,
  * so a failure here is logged and swallowed, never turned into an error response — and never

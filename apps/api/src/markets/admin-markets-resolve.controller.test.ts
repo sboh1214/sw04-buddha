@@ -134,6 +134,40 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     });
   };
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
+  /** Another onboarded admin, past the guard's role cache. */
+  async function anotherAdmin(): Promise<TestUser> {
+    const other = await signUpTestUser(t);
+    await t.db
+      .update(schema.profiles)
+      .set({ role: 'admin' })
+      .where(eq(schema.profiles.userId, other.id));
+    await completeOnboarding(t.db, { userId: other.id });
+    await t.app.get(AdminGuard).invalidate(other.id);
+    return other;
+  }
+  /**
+   * A rule supplement of an open market (#80): `changes` requested by another admin against the
+   * current version and approved by the test admin. Answers the approval.
+   */
+  async function supplement(marketId: string, changes: Record<string, unknown>) {
+    const requester = await anotherAdmin();
+    const url = `/api/v1/admin/markets/${marketId}/supplements`;
+    const requested = await post(
+      url,
+      {
+        baseVersion: (await marketRow(marketId)).ruleVersion,
+        changes,
+        reason: '오탈자 수정',
+        settlementImpact: '판정 기준이 바뀌지 않는다',
+      },
+      requester,
+    );
+    expect(requested.statusCode).toBe(200);
+    const requestId = detail(requested).supplement.pending!.requestId;
+    const approved = await post(`${url}/${requestId}/approve`, { reason: '뜻이 그대로다' });
+    expect(approved.statusCode).toBe(200);
+    return approved;
+  }
   const resolve = (id: string, body: Record<string, unknown>, who?: TestUser) =>
     post(`/api/v1/admin/markets/${id}/resolve`, body, who);
 
@@ -450,21 +484,26 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   it('moves the close job with closeAt, and drops it on close', async () => {
     // PLAN 5.5: delayed `market.close` for `close_at`, registered at the approval (#21, ADR-0100:
     // admin-markets-review.controller.test.ts); registered here as the approval left it.
-    const row = await market({ status: 'open', closeAt: new Date(Date.now() + 7 * DAY_MS) });
+    const { market: row } = await createOpenedMarket(t.db, {
+      createdBy: admin.id,
+      categoryId: category.id,
+      closeAt: new Date(Date.now() + 7 * DAY_MS),
+    });
     await t.app.get(MarketJobs).scheduleClose(row.id, row.closeAt, new Date());
     const firstId = marketCloseJobId(row.id, row.closeAt);
     expect(await jobIds()).toEqual([firstId]);
 
-    // An edit that keeps the close time leaves the registration alone.
-    const retitled = await patch(`/api/v1/admin/markets/${row.id}`, { title: '제목만 수정' });
-    expect(retitled.statusCode).toBe(200);
+    // An edit or a supplement that keeps the close time leaves the registration alone.
+    const tagged = await patch(`/api/v1/admin/markets/${row.id}`, { tags: ['태그만 수정'] });
+    expect(tagged.statusCode).toBe(200);
+    await supplement(row.id, { title: '제목만 보충' });
     expect(await jobIds()).toEqual([firstId]);
 
     // A moved close time is a new job (the instant is part of the id) and the old one is gone. On
-    // an open market it only moves later, up to the scheduled judgement (#22, owner answer
-    // 2026-10-31 A2): a day later stays before it.
+    // an open market it moves by a supplement alone, later only, up to the scheduled judgement
+    // (#80; #22, owner answer 2026-10-31 A2): a day later stays before it.
     const laterCloseAt = new Date(row.closeAt.getTime() + DAY_MS).toISOString();
-    const moved = detail(await patch(`/api/v1/admin/markets/${row.id}`, { closeAt: laterCloseAt }));
+    const moved = detail(await supplement(row.id, { closeAt: laterCloseAt }));
     expect(moved.closeAt).toBe(laterCloseAt);
     const secondId = marketCloseJobId(row.id, new Date(laterCloseAt));
     expect(await queue.getJob(firstId)).toBeUndefined();
@@ -506,13 +545,11 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     let edited!: AdminMarket;
     let closed!: AdminMarket;
     try {
-      // A rule-item edit is not a transition: it republishes the UNCHANGED key (A-M4-36), which
-      // is what lets a client drop the repeat and still refetch the row.
-      edited = detail(
-        await patch(`/api/v1/admin/markets/${opened.id}`, { yesCondition: '고친 YES 조건' }),
-      );
+      // A rule supplement is not a transition (#80): its approval republishes the UNCHANGED key
+      // (A-M4-36), which is what lets a client drop the repeat and still refetch the row.
+      edited = detail(await supplement(opened.id, { yesCondition: '고친 YES 조건' }));
       closed = detail(await close(opened.id));
-      await waitForMessages(received, 2, 'market:status of edit and close');
+      await waitForMessages(received, 2, 'market:status of supplement and close');
       await sleep(100);
       expect(received).toHaveLength(2);
     } finally {
@@ -524,7 +561,7 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
       'submitted',
       'approved',
       'opened',
-      'rules_edited',
+      'rules_supplemented',
       'closed',
     ]);
     const [, , openedEvent, rulesEvent, closedEvent] = events;

@@ -3,8 +3,10 @@
  * `test` profile: create/update per status, the close with its audit row, list/detail, and
  * the guard surface (401/403/CSRF). The rule items (#23, ADR-0097): every one written trimmed and
  * read back, the sources replaced in order, the entry refusals with their paths, the open-items
- * check naming each at the submission, RULES_REQUIRED on an open market and the `rules_edited`
- * record. The market times' own cases (#22) are admin-markets-times.controller.test.ts's; here a
+ * check naming each at the submission and the `rules_edited` record; an open market's version
+ * items refused as a supplement's (#80, ADR-0101: the supplement itself is
+ * admin-markets-supplement.controller.test.ts's). The market times' own cases (#22) are
+ * admin-markets-times.controller.test.ts's; here a
  * complete draft sends them (`timesFor`). The review and the open it leads to (#78, #21) are
  * admin-markets-review.controller.test.ts's. Skips when TEST_* are unset.
  */
@@ -13,6 +15,7 @@ import {
   completeOnboarding,
   createCategory,
   createMarket,
+  createOpenedMarket,
   createPosition,
   createUser,
 } from '@buddha/db/test';
@@ -455,11 +458,11 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     for (const id of [draft.id, live.id]) {
       const res = await patch(`/api/v1/admin/markets/${id}`, {
         categoryId: category.id,
-        title: '카테고리를 그대로 둔 수정',
+        imageUrl: 'https://example.com/kept-category.png',
       });
       expect({ id, status: res.statusCode }).toEqual({ id, status: 200 });
       expect(detail(res)).toMatchObject({
-        title: '카테고리를 그대로 둔 수정',
+        imageUrl: 'https://example.com/kept-category.png',
         category: { slug: 'economy' },
       });
       expect(detail(res).missingOpenItems).toContain('category');
@@ -711,39 +714,127 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(missing.statusCode).toBe(404);
   });
 
-  it('lets an open market change its text, close time and category, but not its slug', async () => {
-    const row = await market({ status: 'open' });
-    const ok = await patch(`/api/v1/admin/markets/${row.id}`, {
-      title: '제목 수정',
-      closeAt: future(),
-      primarySource: { name: '새 1차 출처', url: 'https://example.com/new' },
+  it('lets an open market change its category, tags and image, not its slug, and its rule version’s items by a supplement alone', async () => {
+    // #80, ADR-0093 decision 2 #172 item 14: after the open the title, the rule items and the
+    // times change by an approved supplement (admin-markets-supplement.controller.test.ts); the
+    // category and the tags change here, recorded with their before and after.
+    const row = await market({
+      status: 'open',
+      scheduledAnnouncementAt: new Date(Date.now() + 8 * DAY_MS),
+    });
+    const url = `/api/v1/admin/markets/${row.id}`;
+    const other = await createCategory(t.db, { slug: 'society', nameKo: '사회' });
+    const ok = await patch(url, {
+      categoryId: other.id,
+      tags: ['새 태그'],
       imageUrl: 'https://example.com/cover.png',
     });
     expect(ok.statusCode).toBe(200);
     expect(detail(ok)).toMatchObject({
-      title: '제목 수정',
-      primarySource: { name: '새 1차 출처', url: 'https://example.com/new' },
+      category: { slug: 'society' },
+      tags: ['새 태그'],
       imageUrl: 'https://example.com/cover.png',
       status: 'open',
     });
 
-    const renamed = await patch(`/api/v1/admin/markets/${row.id}`, { slug: 'new-slug' });
+    // Each version item changed is refused naming it, set or cleared, whatever else is sent. This
+    // market opened before rule versions (`createMarket`: `rule_version` null, D4) and takes no
+    // supplement, so the message says the item cannot change until the close; the detail is the
+    // one a versioned market's refusal carries (below).
+    expect(row.ruleVersion).toBeNull();
+    const later = (ms: number) => new Date(row.closeAt.getTime() + ms).toISOString();
+    for (const [item, value] of [
+      ['title', '제목 수정'],
+      ['description', null],
+      ['yesCondition', '고친 YES 조건'],
+      ['noCondition', '고친 NO 조건'],
+      ['eventDeadline', later(DAY_MS / 2)],
+      ['primarySource', { name: '새 1차 출처', url: 'https://example.com/new' }],
+      ['fallbackSources', [{ name: '대체 출처', url: 'https://example.com/fallback' }]],
+      ['fallbackCondition', '대체 출처로 넘어간다'],
+      ['longDelayDays', 30],
+      ['delayHandling', '고친 처리'],
+      ['scheduledOpenAt', null],
+      ['closeAt', later(MINUTE_MS)],
+      ['scheduledAnnouncementAt', null],
+      ['scheduledJudgementAt', later(3 * DAY_MS)],
+      ['judgementTimeZone', 'Asia/Tokyo'],
+    ] as const) {
+      const res = await patch(url, { [item]: value, tags: ['다른 태그'] });
+      expect({ item, status: res.statusCode }).toEqual({ item, status: 400 });
+      expect(errorOf(res)).toEqual({
+        code: 'VALIDATION_ERROR',
+        message: `${item} cannot change until the close: the market opened before rule versions`,
+        details: [{ path: [item], message: 'supplement only while open' }],
+      });
+    }
+    // Several at once, in RULE_VERSION_ITEMS order.
+    const several = await patch(url, {
+      judgementTimeZone: 'Asia/Tokyo',
+      closeAt: later(MINUTE_MS),
+      title: '제목 수정',
+      primarySource: null,
+    });
+    expect(errorOf(several).details).toEqual(
+      ['title', 'primarySource', 'closeAt', 'judgementTimeZone'].map((item) => ({
+        path: [item],
+        message: 'supplement only while open',
+      })),
+    );
+    // The form sends every field back: the stored value again — padded text, an instant however
+    // spelled — is no change, so only what changed counts.
+    const resent = await patch(url, {
+      title: ` ${row.title} `,
+      description: row.description,
+      yesCondition: `${row.yesCondition} `,
+      eventDeadline: row.eventDeadline!.toISOString().replace('.000Z', 'Z'),
+      fallbackSources: [],
+      fallbackCondition: '',
+      scheduledOpenAt: row.scheduledOpenAt!.toISOString(),
+      closeAt: row.closeAt.toISOString(),
+      scheduledAnnouncementAt: row.scheduledAnnouncementAt!.toISOString(),
+      judgementTimeZone: row.judgementTimeZone,
+      imageUrl: 'https://example.com/cover-2.png',
+    });
+    expect(resent.statusCode).toBe(200);
+    expect(detail(resent)).toMatchObject({
+      title: row.title,
+      closeAt: row.closeAt.toISOString(),
+      imageUrl: 'https://example.com/cover-2.png',
+    });
+
+    const renamed = await patch(url, { slug: 'new-slug' });
     expect(renamed.statusCode).toBe(400);
     expect(errorOf(renamed)).toMatchObject({
       code: 'VALIDATION_ERROR',
       message: 'slug cannot change while the market is open',
     });
     expect(detailPath(renamed)).toEqual(['slug']);
-    // The slug comes first: before a rule item the edit would leave missing (RULES_REQUIRED).
-    const both = await patch(`/api/v1/admin/markets/${row.id}`, {
-      slug: 'new-slug',
-      yesCondition: '',
-    });
-    expect(both.statusCode).toBe(400);
-    expect(detailPath(both)).toEqual(['slug']);
-    // Refused before anything is written: one audit row, the successful edit's.
-    expect((await actionsFor(row.id)).map((action) => action.type)).toEqual(['market_update']);
+    // The slug comes first, then the version items, then the tags.
+    expect(detailPath(await patch(url, { slug: 'new-slug', yesCondition: '' }))).toEqual(['slug']);
+    expect(detailPath(await patch(url, { tags: [], yesCondition: '' }))).toEqual(['yesCondition']);
+    // Refused before anything is written: the two edits' audit rows, no rule event.
+    expect((await actionsFor(row.id)).map((action) => action.type)).toEqual([
+      'market_update',
+      'market_update',
+    ]);
+    expect(await eventsFor(row.id)).toEqual([]);
     expect((await marketRow(row.id)).slug).toBe(row.slug);
+
+    // A market opened through the review (rule v1, migration 0053's guard on its rules): the
+    // refusal is the API's, never the database's, and says a supplement changes the item; its tags
+    // still change.
+    const { market: versioned } = await createOpenedMarket(t.db, {
+      createdBy: admin.id,
+      categoryId: category.id,
+    });
+    const versionedUrl = `/api/v1/admin/markets/${versioned.id}`;
+    expect(errorOf(await patch(versionedUrl, { yesCondition: '고친 YES 조건' }))).toEqual({
+      code: 'VALIDATION_ERROR',
+      message: 'yesCondition change by a supplement alone while the market is open',
+      details: [{ path: ['yesCondition'], message: 'supplement only while open' }],
+    });
+    expect((await patch(versionedUrl, { tags: ['버전', '태그'] })).statusCode).toBe(200);
 
     const closed = await market({ status: 'closed' });
     const refused = await patch(`/api/v1/admin/markets/${closed.id}`, { title: '늦은 수정' });
@@ -753,28 +844,25 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
   });
 
   it('publishes the unchanged status after an edit that moves an open market, and only then', async () => {
-    // The ONLY delivery a descriptive edit has: no event carries `closeAt`, and the web takes it
-    // from a REST answer alone, so `update` republishes `market:status` and the client's handler
-    // turns that into the refetch (A-M4-36). Three assertions on one subscription: an edit that
-    // MOVED an open row publishes exactly one, a resave of the same text publishes none, and a
-    // draft — which no public route shows — publishes none either.
-    // A scheduled judgement far enough out for the extension below (#22, A2).
-    const row = await market({
-      status: 'open',
-      scheduledJudgementAt: new Date(Date.now() + 60 * DAY_MS),
-    });
+    // The ONLY delivery a descriptive edit has: no event carries the image or the category, and
+    // the web takes them from a REST answer alone, so `update` republishes `market:status` and the
+    // client's handler turns that into the refetch (A-M4-36). Three assertions on one
+    // subscription: an edit that MOVED an open row publishes exactly one, a resave of the same
+    // values publishes none, and a draft — which no public route shows — publishes none either.
+    // (A supplement's approval republishes the same way, #80.)
+    const row = await market({ status: 'open' });
     const draft = await market({ status: 'draft' });
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
     const received: [string, string][] = [];
     subscriber.on('message', (channel, message) => received.push([channel, message]));
     await subscriber.subscribe(marketChannel(row.id), marketChannel(draft.id));
     try {
-      const extended = new Date(Date.now() + 30 * DAY_MS).toISOString();
-      const res = await patch(`/api/v1/admin/markets/${row.id}`, { closeAt: extended });
+      const image = 'https://example.com/new-cover.png';
+      const res = await patch(`/api/v1/admin/markets/${row.id}`, { imageUrl: image });
       expect(res.statusCode).toBe(200);
       const edited = detail(res);
-      expect(edited.closeAt).toBe(extended);
-      await waitForMessages(received, 1, 'market:status of the close-time edit');
+      expect(edited.imageUrl).toBe(image);
+      await waitForMessages(received, 1, 'market:status of the image edit');
       await sleep(100);
       expect(received).toHaveLength(1);
       expect(received[0]![0]).toBe(marketChannel(row.id));
@@ -787,10 +875,13 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
         ts: edited.updatedAt,
       });
 
-      // A PATCH that writes the same text moves `updated_at` and the audit row and nothing on
+      // A PATCH that writes the same values moves `updated_at` and the audit row and nothing on
       // the wire: the gate is the audit projection, not "the body was non-empty". A draft edit
       // publishes nothing either — there is no room anyone could have joined.
-      const resaved = await patch(`/api/v1/admin/markets/${row.id}`, { title: row.title });
+      const resaved = await patch(`/api/v1/admin/markets/${row.id}`, {
+        title: row.title,
+        imageUrl: 'https://example.com/new-cover.png',
+      });
       expect(resaved.statusCode).toBe(200);
       const drafted = await patch(`/api/v1/admin/markets/${draft.id}`, { title: '초안 제목' });
       expect(drafted.statusCode).toBe(200);
@@ -801,94 +892,10 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     }
   });
 
-  it('keeps an open market from leaving a rule item missing that it had filled (RULES_REQUIRED)', async () => {
-    // #23: what the review required holds for as long as the market trades — one detail per item
-    // the edit would newly leave missing, in RULE_ITEMS order, as the open-items check counts one;
-    // a draft may still be saved with them missing (it cannot be submitted that way).
-    const fallback = { name: '대체 출처', url: 'https://example.com/fallback' };
-    const row = await market({ status: 'open', fallbackSources: [fallback] });
-    const url = `/api/v1/admin/markets/${row.id}`;
-    expect(detail(await get(url)).missingOpenItems).toEqual([]);
-    for (const [body, items] of [
-      [{ yesCondition: '' }, ['yesCondition']],
-      [{ yesCondition: '   ' }, ['yesCondition']],
-      [{ description: null }, ['description']],
-      [{ description: ' ' }, ['description']],
-      [{ eventDeadline: null }, ['eventDeadline']],
-      [{ primarySource: null }, ['primarySource']],
-      [{ primarySource: { name: '이름만', url: '' } }, ['primarySource']],
-      [
-        { fallbackSources: [fallback, { name: '', url: 'https://example.com/x' }] },
-        ['fallbackSources'],
-      ],
-      [{ fallbackCondition: '' }, ['fallbackCondition']],
-      [{ longDelayDays: null }, ['longDelayDays']],
-      [{ delayHandling: '', noCondition: '', title: '새 제목' }, ['noCondition', 'delayHandling']],
-      // Before the tags' own refusal.
-      [{ yesCondition: '', tags: [] }, ['yesCondition']],
-    ] as const) {
-      const res = await patch(url, body);
-      expect({ body, status: res.statusCode }).toEqual({ body, status: 422 });
-      expect(errorOf(res)).toEqual({
-        code: 'RULES_REQUIRED',
-        message: `Rule items cannot be left missing while the market is open: ${items.join(', ')}`,
-        details: items.map((item) => ({ path: [item], message: 'required while open' })),
-      });
-    }
-    // Refused before anything is written, whatever else the body carries.
-    expect((await marketRow(row.id)).title).toBe(row.title);
-    expect((await marketRow(row.id)).yesCondition).toBe(row.yesCondition);
-    expect(await sourcesOf(row.id)).toHaveLength(2);
-    expect(await actionsFor(row.id)).toHaveLength(0);
-    expect(detail(await get(url)).events).toHaveLength(0);
-
-    // Every fallback removed with its switch condition leaves nothing missing ('없음' is no gap);
-    // a fallback added without one leaves the condition missing, which it was not.
-    const removed = await patch(url, { fallbackSources: [], fallbackCondition: '' });
-    expect(removed.statusCode).toBe(200);
-    expect(detail(removed)).toMatchObject({
-      fallbackSources: [],
-      fallbackCondition: '',
-      missingOpenItems: [],
-    });
-    const added = await patch(url, { fallbackSources: [fallback] });
-    expect(added.statusCode).toBe(422);
-    expect(errorOf(added).details).toEqual([
-      { path: ['fallbackCondition'], message: 'required while open' },
-    ]);
-    const switched = await patch(url, {
-      fallbackSources: [fallback],
-      fallbackCondition: '1차 출처에 발표가 없으면 대체 출처를 본다.',
-    });
-    expect(switched.statusCode).toBe(200);
-
-    // A market opened before #23 has every rule item blank (migration 0050): those block no other
-    // edit, one may be filled in, and once filled it may not be blanked again.
-    const legacy = await market({ status: 'open', blankRuleItems: true });
-    const legacyUrl = `/api/v1/admin/markets/${legacy.id}`;
-    const blankItems = [
-      'description',
-      'yesCondition',
-      'noCondition',
-      'eventDeadline',
-      'primarySource',
-      'longDelayDays',
-      'delayHandling',
-    ];
-    expect(detail(await get(legacyUrl)).missingOpenItems).toEqual(blankItems);
-    const retitled = await patch(legacyUrl, { title: '옛 시장의 새 제목', delayHandling: '' });
-    expect(retitled.statusCode).toBe(200);
-    expect(detail(retitled).missingOpenItems).toEqual(blankItems);
-    const filled = await patch(legacyUrl, { yesCondition: '이제 채운 YES 조건' });
-    expect(filled.statusCode).toBe(200);
-    expect(detail(filled).missingOpenItems).toEqual(
-      blankItems.filter((item) => item !== 'yesCondition'),
-    );
-    const reblanked = await patch(legacyUrl, { yesCondition: '' });
-    expect(reblanked.statusCode).toBe(422);
-    expect(detailPath(reblanked)).toEqual(['yesCondition']);
-
-    // A draft may be edited down to them.
+  it('lets a draft be edited down to missing rule items, which the submission names', async () => {
+    // #23: a draft may be saved with them missing (it cannot be submitted that way). An open
+    // market keeps what it had filled through the supplement's RULES_REQUIRED (#80,
+    // admin-markets-supplement.controller.test.ts): its PATCH changes no rule item at all.
     const draft = await market({ status: 'draft' });
     const blanked = await patch(`/api/v1/admin/markets/${draft.id}`, {
       yesCondition: '',
@@ -927,9 +934,10 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
 
   it('keeps a transition above an edit that commits while it waits on the market lock', async () => {
     // The close begins (its transaction-start `now()` is fixed) and queues on the market
-    // lock; a rule-item PATCH, which takes only the market row, commits meanwhile. The close then
-    // commits with the later instant and must be shown as the later event: the log is ordered
-    // by market_events.id, which is drawn under the market row lock, so it is insert order.
+    // lock; a tag PATCH, which takes only the market row, commits meanwhile. The close then
+    // commits with the later instant and must be recorded as the later write: its event and its
+    // record carry the post-lock clock, after the edit's record. (An open market's rule items
+    // change by a supplement alone since #80, which queues on the market lock itself.)
     const row = await market({ status: 'open' });
     const holder = await t.db.$client.connect();
     let pending: ReturnType<typeof close> | undefined;
@@ -938,9 +946,7 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       await holder.query('SELECT pg_advisory_lock(hashtext($1))', [row.id]);
       pending = close(row.id);
       await waitForLockWaiter(holder, 'the close on the market lock');
-      const edited = await patch(`/api/v1/admin/markets/${row.id}`, {
-        yesCondition: '고친 YES 조건',
-      });
+      const edited = await patch(`/api/v1/admin/markets/${row.id}`, { tags: ['마감 전 태그'] });
       expect(edited.statusCode).toBe(200);
       await holder.query('SELECT pg_advisory_unlock(hashtext($1))', [row.id]);
       released = true;
@@ -951,14 +957,15 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       await pending?.catch(() => undefined);
     }
 
-    const events = await eventsFor(row.id);
-    const closeEvent = events.find((event) => event.type === 'closed')!;
-    const editEvent = events.find((event) => event.type === 'rules_edited')!;
-    expect(closeEvent.id).toBeGreaterThan(editEvent.id);
-    expect(closeEvent.createdAt.getTime()).toBeGreaterThanOrEqual(editEvent.createdAt.getTime());
-    // What the admin screen renders, newest first.
+    const [editAction, closeAction] = await actionsFor(row.id);
+    expect([editAction!.type, closeAction!.type]).toEqual(['market_update', 'market_close']);
+    const closeEvent = (await eventsFor(row.id)).find((event) => event.type === 'closed')!;
+    expect(closeEvent.createdAt.getTime()).toBeGreaterThanOrEqual(editAction!.createdAt.getTime());
+    expect(closeAction!.createdAt).toEqual(closeEvent.createdAt);
+    // What the admin screen renders: the close, with the tags the edit left.
     const shown = detail(await get(`/api/v1/admin/markets/${row.id}`));
-    expect(shown.events.map((event) => event.type)).toEqual(['closed', 'rules_edited']);
+    expect(shown.events.map((event) => event.type)).toEqual(['closed']);
+    expect(shown.tags).toEqual(['마감 전 태그']);
   });
 
   // --- the rule items (#23) ----------------------------------------------------------------
@@ -1203,47 +1210,41 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
     expect(unrelated.statusCode).toBe(200);
   });
 
-  it('records a source edit of an open market and republishes its status; a draft or a resave publishes nothing', async () => {
+  it('records a draft’s source edit as rules_edited with its before and after, publishing nothing; an open market’s is a supplement’s', async () => {
     const old = { name: '옛 1차 출처', url: 'https://example.com/old' };
-    const row = await market({ status: 'open', primarySource: old });
     const draft = await market({ status: 'draft', primarySource: old });
+    const live = await market({ status: 'open', primarySource: old });
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
     const received: [string, string][] = [];
     subscriber.on('message', (channel, message) => received.push([channel, message]));
-    await subscriber.subscribe(marketChannel(row.id), marketChannel(draft.id));
+    await subscriber.subscribe(marketChannel(draft.id), marketChannel(live.id));
     const fresh = { name: '새 1차 출처', url: 'https://example.com/new' };
     try {
-      const res = await patch(`/api/v1/admin/markets/${row.id}`, { primarySource: fresh });
+      const res = await patch(`/api/v1/admin/markets/${draft.id}`, { primarySource: fresh });
       expect(res.statusCode).toBe(200);
-      const edited = detail(res);
-      await waitForMessages(received, 1, 'market:status of the source edit');
-      expect(received[0]![0]).toBe(marketChannel(row.id));
-      expect(JSON.parse(received[0]![1])).toMatchObject({
-        type: 'market:status',
-        marketId: row.id,
-        status: 'open',
-        ts: edited.updatedAt,
-      });
-      // The same sources again, and a draft's edit, publish nothing.
-      const resaved = await patch(`/api/v1/admin/markets/${row.id}`, {
+      // The same sources again change nothing.
+      const resaved = await patch(`/api/v1/admin/markets/${draft.id}`, {
         primarySource: fresh,
         fallbackSources: [],
       });
       expect(resaved.statusCode).toBe(200);
-      const drafted = await patch(`/api/v1/admin/markets/${draft.id}`, { primarySource: fresh });
-      expect(drafted.statusCode).toBe(200);
+      // An open market's sources are its rule version's (#80): refused, nothing written.
+      const refused = await patch(`/api/v1/admin/markets/${live.id}`, { primarySource: fresh });
+      expect(errorOf(refused).details).toEqual([
+        { path: ['primarySource'], message: 'supplement only while open' },
+      ]);
       await sleep(100);
-      expect(received).toHaveLength(1);
+      expect(received).toEqual([]);
     } finally {
       await subscriber.quit();
     }
     // The record keeps the sources before and after; the event names the item.
-    const [action] = await actionsFor(row.id);
+    const [action] = await actionsFor(draft.id);
     expect(action!.payload).toMatchObject({
       before: { primarySource: old, fallbackSources: [] },
       after: { primarySource: fresh, fallbackSources: [] },
     });
-    const events = await eventsFor(row.id);
+    const events = (await eventsFor(draft.id)).filter((event) => event.type === 'rules_edited');
     expect(events.map((event) => [event.type, event.fromStatus, event.toStatus])).toEqual([
       ['rules_edited', null, null],
     ]);
@@ -1252,9 +1253,8 @@ describe.skipIf(!hasTestInfra)('admin markets (integration)', () => {
       before: { primarySource: old },
       after: { primarySource: fresh },
     });
-    // The public detail shows the new source.
-    const pub = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${row.id}` });
-    expect(data<Market>(pub).primarySource).toEqual(fresh);
+    expect(await sourcesOf(live.id)).toEqual([{ priority: 0, ...old }]);
+    expect(await actionsFor(live.id)).toEqual([]);
   });
 
   // --- the open-items check at the submission (#17, #78) -------------------------------------

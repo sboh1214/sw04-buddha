@@ -34,7 +34,8 @@ import {
  * and a client kept the higher status rank in `MARKET_STATUSES` order, which was a total order
  * only while no transition repeated a status or went back. Neither holds: PAUSED → OPEN goes
  * back (#174), a correction in PROVISIONAL republishes its status with a new result (#176), and
- * an admin edit republishes an unchanged status (A-M4-36), so the key is the rule. The rank stays
+ * an admin edit or a supplement's approval (#80) republishes an unchanged status (A-M4-36), so
+ * the key is the rule. The rank stays
  * as the FALLBACK for a row with no key (`statusSupersedes`): a row written outside the transition
  * paths — a test factory — has none, and rank is still the one order such a row can join.
  *
@@ -152,10 +153,11 @@ export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
  * edge allow, published by the API's admin actions and the worker's jobs; an approval or a
  * reschedule that opens the market at once publishes once, the OPEN market with the `opened`
  * event's key, #21), or the same status republished so subscribers refetch a descriptive edit
- * (A-M4-36, `MarketAdminService` `update`). `statusEventId` is the transition's
- * `market_events.id` — the key `statusSupersedes` orders by — and the repeat carries the
- * UNCHANGED one, which is what makes it safe: a client drops it as not newer, and only the REST
- * snapshot it triggers carries `closeAt`, `title` or `rules`. Required (nullable, never absent)
+ * (A-M4-36, `MarketAdminService` `update`) or a supplement's new rule version (#80, ADR-0101: the
+ * approval). `statusEventId` is the transition's `market_events.id` — the key `statusSupersedes`
+ * orders by — and the repeat carries the UNCHANGED one, which is what makes it safe: a client
+ * drops it as not newer, and only the REST snapshot it triggers carries `closeAt`, `title`, the
+ * rules or their versions. Required (nullable, never absent)
  * so every publisher states it; null only from a row that has no transition event.
  */
 export const marketStatusEventSchema = z

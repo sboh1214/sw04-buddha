@@ -69,6 +69,21 @@ export type AdminRelatedMarket = components['schemas']['AdminRelatedMarket'];
 export type AdminMarketReview = components['schemas']['AdminMarketReview'];
 export type MarketReviewLogEntry = components['schemas']['MarketReviewLogEntry'];
 export type AdminMarketReviewItem = components['schemas']['AdminMarketReviewItem'];
+/**
+ * 규칙 버전과 보충 (#80, ADR-0101): one rule version as the public detail lists it
+ * (`Market.ruleVersions`: its full text, changed items, reason and time) and as the admin's
+ * (`AdminMarket.ruleVersions`, with who asked for it and made it and the 정산 영향 검토), a version's
+ * full text, `AdminMarket.supplement` — the waiting request and one entry of its log — a row of the
+ * 규칙 보충 대기 queue (`GET /admin/market-supplements`) and a request's 보충 문구.
+ */
+export type MarketRuleVersion = components['schemas']['MarketRuleVersion'];
+export type AdminRuleVersion = components['schemas']['AdminRuleVersion'];
+export type MarketRuleContent = components['schemas']['MarketRuleContent'];
+export type AdminMarketSupplement = components['schemas']['AdminMarketSupplement'];
+export type MarketSupplementPending = components['schemas']['MarketSupplementPending'];
+export type MarketSupplementLogEntry = components['schemas']['MarketSupplementLogEntry'];
+export type AdminMarketSupplementItem = components['schemas']['AdminMarketSupplementItem'];
+export type MarketSupplementChanges = components['schemas']['MarketSupplementChanges'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];

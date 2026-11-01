@@ -72,7 +72,9 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * market's scheduled open moved with a reason (reschedule). The queue of pending reviews is
  * AdminMarketReviewsController's. No route opens a market directly (#21, ADR-0100): the worker
  * opens a SCHEDULED one at its scheduled open, and an approval or a reschedule that finds that
- * instant come opens it at once — the interim draft → open route is gone.
+ * instant come opens it at once — the interim draft → open route is gone. After the open the
+ * PATCH changes an open market's category, tags and image only: its rule version's items change
+ * by a supplement (#80, ADR-0101, AdminMarketSupplementsController).
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)
@@ -169,8 +171,9 @@ export class AdminMarketsController {
     operationId: 'adminGetMarket',
     summary:
       'One market with its tags, exposure, settlement steps, event log, what the open-items ' +
-      'check finds missing and its review (the pending request, the creator, the editors, the ' +
-      'unfinished markets with the same conditions and the review log)',
+      'check finds missing, its review (the pending request, the creator, the editors, the ' +
+      'unfinished markets with the same conditions and the review log), its rule versions with ' +
+      'who asked for and made each and its supplement requests (the waiting one and the log)',
   })
   @ApiData(adminMarketSchema)
   @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
@@ -212,39 +215,26 @@ export class AdminMarketsController {
   @ApiOperation({
     operationId: 'adminUpdateMarket',
     summary:
-      'Edit a draft (any field) or an open market (text, rule items, times, category, tags; ' +
-      'slug refused naming the field, a rule item it had filled or its judgement time zone left ' +
-      'missing refused with RULES_REQUIRED naming each, no tags refused naming tags, the ' +
-      'scheduled open and judgement fixed, the close moved later only, up to the scheduled ' +
-      'judgement, with the lead close checked again); tags and fallbackSources replace the whole ' +
-      'ordered list; other statuses refuse naming status — review and scheduled are locked (send ' +
-      'back to a draft to edit; reschedule moves a scheduled open)',
+      'Edit a draft (any field) or an open market (its category, tags and image only: slug ' +
+      'refused naming the field, no tags refused naming tags, and its title, rule items and ' +
+      'times — its rule version’s items — change by a supplement alone, each one changed ' +
+      'refused naming it); tags and fallbackSources replace the whole ordered list; other ' +
+      'statuses refuse naming status — review and scheduled are locked (send back to a draft to ' +
+      'edit; reschedule moves a scheduled open)',
   })
   @ApiData(adminMarketSchema)
   // VALIDATION_ERROR names `categoryId` as on create unless it is the market's current one (no
   // change, not checked: a market keeps a category hidden after it was filed), and
-  // `fallbackCondition` when an edit of the sources or the condition leaves a switch condition
-  // with no fallback source. RULES_REQUIRED (#23, #22) has one detail per rule item an edit of an
-  // open market would leave missing that it had filled, then `judgementTimeZone` when it clears a
-  // set zone, `[item]` 'required while open'; an item missing already blocks nothing. The times
-  // (#22): an open market's `scheduledOpenAt` or `scheduledJudgementAt` set, moved or cleared is
-  // 'immutable while open' (the stored instant again is no change); `closeAt` 'must be in the
-  // future', and on an open market 'cannot move earlier while open' (an instant); a result out of
-  // order names both ends of each broken rule, the ends the body sent first (on an open market
-  // that keeps the close at or before the scheduled judgement); and on an open market with an
-  // announcement time an edit sending `closeAt` or `scheduledAnnouncementAt` has the lead close
-  // checked against the gap it was last checked against, else the setting — both ends named when
-  // broken, the sent one 'lead-close gap undecided' while the setting is undecided. Order:
-  // status, slug, fallbackCondition, RULES_REQUIRED, tags, category, a fixed time, closeAt in the
-  // future, closeAt earlier, the order, the lead close.
-  @ApiErrors(
-    'UNAUTHENTICATED',
-    'FORBIDDEN',
-    'ONBOARDING_REQUIRED',
-    'NOT_FOUND',
-    'VALIDATION_ERROR',
-    'RULES_REQUIRED',
-  )
+  // `fallbackCondition` when a draft's edit of the sources or the condition leaves a switch
+  // condition with no fallback source. An open market's edit that changes a version item (#80:
+  // the title, a rule item or a time) names each, in RULE_VERSION_ITEMS order, 'supplement only
+  // while open' — the stored value again (an instant however spelled, a text however padded) is
+  // no change; `POST /admin/markets/{id}/supplements` changes them. A draft's times (#22):
+  // `closeAt` 'must be in the future'; a result out of order names both ends of each broken
+  // rule, the ends the body sent first; the lead close is never refused on a draft. Order:
+  // status, slug, a version item on an open market, tags, fallbackCondition, category, closeAt
+  // in the future, the order.
+  @ApiErrors('UNAUTHENTICATED', 'FORBIDDEN', 'ONBOARDING_REQUIRED', 'NOT_FOUND', 'VALIDATION_ERROR')
   adminUpdateMarket(
     @CurrentUser() admin: SessionUser,
     @Param('id', { schema: uuidParamSchema }) id: string,

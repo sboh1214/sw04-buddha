@@ -31,11 +31,12 @@ export interface CloseScanResult {
  * Every caller reaches this through the same transaction — the delayed job the API registered
  * at the approval (#21, ADR-0100: before the open, the close locked while SCHEDULED), the
  * per-minute scan, a manual script — and the transaction re-verifies BOTH the status and the
- * instant under the market lock. That is what makes a stale job harmless: a `closeAt` PATCHed
- * later leaves the old delayed job in the queue (jobs.ts), and here it finds `closeAt > now` and
- * skips; a job that fires while the market is still SCHEDULED (its close came before its open,
- * market-open.ts) or after the admin closed by hand finds it not `open` and skips; two workers
- * racing on one market serialise on `lockMarket` and the second sees the first's status. Never
+ * instant under the market lock. That is what makes a stale job harmless: a close a supplement
+ * extended (#80, ADR-0101) can leave the old delayed job in the queue, since the approval's
+ * cancel of it is best effort (jobs.ts), and here it finds `closeAt > now` and skips; a job that
+ * fires while the market is still SCHEDULED (its close came before its open, market-open.ts) or
+ * after the admin closed by hand finds it not `open` and skips; two workers racing on one market
+ * serialise on `lockMarket` and the second sees the first's status. Never
  * 'not_found': no path deletes one market (every FK is RESTRICT); only a whole-database wipe does
  * (migrations 0017 and 0048, deploy/reset-db.sh). An unknown id is therefore a job left over from
  * before such a wipe — expected, it runs out of attempts (docs/RESET.md) — or a broken producer,

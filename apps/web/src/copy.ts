@@ -449,7 +449,8 @@ export const copy = {
   // 시간이고(결정 3 '#22 시간대'), 판정 기준 시간대는 Asia/Seoul을 미리 채워 운영자가 확인한다(저장이
   // 확인이다). 순서(개장 < 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정)는 분 단위로 본다(#172 12항, 오너 답
   // 2026-10-31 A1). 선행 마감 간격은 출시 설정 market.lead_close_gap의 값이고 미정일 수 있다. 개장 뒤에는
-  // 마감을 늦추기만 하고 예정 판정 시각을 넘지 않으며(오너 답 A2), 예정 개장·예정 판정 시각은 바꾸지 않는다.
+  // 보충으로만 마감을 늦추고 예정 판정 시각을 넘지 않으며(오너 답 A2, #80), 거래 일시 중단 중에는 마감을
+  // 바꾸지 않고, 예정 개장·예정 판정 시각은 바꾸지 않는다(#172 14항).
   adminMarketTimes: '시각',
   adminMarketTimesHint:
     '시각은 한국 시간으로 입력합니다. 예정 개장 시각은 거래 마감 시각보다 앞서고, 거래 마감 시각과 사건 기한은 예정 판정 시각과 같거나 앞서야 합니다.',
@@ -460,7 +461,9 @@ export const copy = {
     '승인된 시장은 이 시각에 자동으로 열립니다(이미 지났으면 승인하는 즉시). 일찍 열려면 앞당기세요.',
   adminMarketCloseAt: '거래 마감 시각 (KST)',
   adminMarketCloseAtHint:
-    '경기는 시작 전, 선거는 투표 종료 전에 마감합니다. 개장 뒤에는 늦추기만 할 수 있고 예정 판정 시각을 넘지 않습니다.',
+    '경기는 시작 전, 선거는 투표 종료 전에 마감합니다. 개장 뒤에는 보충으로 늦추기만 할 수 있고 예정 판정 시각을 넘지 않습니다.',
+  // 거래 일시 중단 중인 시장의 보충에서 잠긴 거래 마감 칸의 안내(#172 14항, #80).
+  adminMarketCloseLockedPausedHint: '거래 일시 중단 중에는 거래 마감 시각을 바꾸지 않습니다.',
   adminMarketScheduledAnnouncementAt: '발표 예정 시각 (KST)',
   adminMarketScheduledAnnouncementAtHint:
     '발표 일정이 없는 사건이면 비워 두세요(없음). 거래 마감 시각은 이 시각보다 선행 마감 간격(출시 설정) 이상 앞서야 합니다.',
@@ -542,9 +545,17 @@ export const copy = {
   adminMarketSaved: '시장을 저장했습니다.',
   adminMarketNoChanges: '바뀐 내용이 없습니다.',
   adminMarketEditLocked: '이 상태에서는 수정할 수 없습니다.',
-  adminMarketEditOpenTitle: '열린 시장을 수정합니다',
+  // 거래 중인 시장의 수정 칸 (#80, ADR-0101; ADR-0093 결정 2 #172 14항): 규칙 버전에 드는 항목(질문·규칙
+  // 항목·시각)은 칸이 그대로 보이되 꺼지고, 다른 관리자가 승인한 보충으로만 바뀐다. 카테고리·태그·이미지는
+  // 기록과 함께 바로 고친다.
+  adminMarketEditSupplementOnly: '개장 뒤 질문·배경·규칙 항목·시각은 보충으로만 바꿉니다.',
+  // 규칙 버전 없이 열린 시장(#80 전에 연 시장, ADR-0101 9-2)의 같은 자리: 보충할 기준 버전이 없어 그 칸들은
+  // 거래 마감까지 그대로다. 보충으로 보내지 않는다.
+  adminMarketEditNoVersion:
+    '규칙 버전 없이 열린 시장이라 질문·배경·규칙 항목·시각은 거래 마감까지 바꿀 수 없습니다.',
+  adminMarketEditOpenTitle: '거래 중인 시장을 수정합니다',
   adminMarketEditOpenBody:
-    '이미 거래가 진행 중인 시장입니다. 규칙이나 거래 마감 시각을 바꾸면 참여자에게 영향을 줍니다. 거래 마감 시각은 늦추기만 할 수 있고 예정 판정 시각을 넘을 수 없습니다. 계속할까요?',
+    '이미 거래가 진행 중인 시장입니다. 카테고리·태그·이미지를 바꾸면 공개 화면에 바로 보입니다. 규칙은 바뀌지 않습니다. 계속할까요?',
   adminMarketClose: '마감',
   adminMarketCloseTitle: '시장을 마감합니다',
   adminMarketCloseBody: '마감하면 더 이상 거래할 수 없습니다. 계속할까요?',
@@ -693,6 +704,145 @@ export const copy = {
     '이 창을 연 뒤 검수 제출이 바뀌었습니다. 창을 닫고 새 제출을 다시 확인해 주세요.',
   errMarketReviewRescheduleTime: '날짜와 시각을 입력해 주세요.',
   errMarketReviewRescheduleUnchanged: '지금의 예정 개장 시각과 같습니다.',
+  // 규칙 보충 (#80, ADR-0101; ADR-0093 결정 2 #172 14·15항, 결정 3 '#80 보충의 형태'): 거래 중·거래 일시
+  // 중단인 시장의 거래 마감 전에, 관리자가 바꿀 항목의 새 문구와 사유·정산 영향 검토를 적어 요청하고, 요청하지
+  // 않은 다른 관리자가 승인하면 바꾼 항목을 고쳐 쓴 전문이 새 규칙 버전이 된다. 보충 문구와 사유는 공개 상세의
+  // 규칙 버전 이력에 보이고, 요청·승인한 관리자와 정산 영향 검토는 관리자만 본다. 의미가 바뀌는 변경은
+  // 보충으로 받지 않고(반려 사유 '의미 변경') 거래를 멈추고 검토한다(#114). 한 시장에 기다리는 보충은
+  // 하나이고, 반려·철회는 거래 마감 뒤에도 할 수 있다.
+  adminMarketSupplement: '규칙 보충',
+  adminMarketSupplementIntro:
+    '개장 뒤 질문·규칙 항목·시각은 보충으로만 바뀝니다. 요청하지 않은 다른 관리자가 승인하면 새 규칙 버전이 되고, 이전 버전은 그대로 남습니다.',
+  adminMarketSupplementVersion: '현재 규칙 버전',
+  adminMarketSupplementNoVersion: '규칙 버전 없음',
+  // 이슈의 수용 기준 8: 보충 화면은 의미를 바꾸는 변경을 거래 중단 검토로 넘긴다고 밝힌다.
+  adminMarketSupplementBoundary:
+    '의미를 바꾸는 변경은 보충으로 받지 않습니다. 거래를 멈추고 검토합니다.',
+  // 보충을 요청할 수 없는 까닭(요청 버튼 대신 보인다). 기다리는 보충이 있으면 그 요청이 보인다.
+  adminMarketSupplementUnavailableStatus:
+    '거래 중이거나 거래 일시 중단인 시장만 보충할 수 있습니다.',
+  adminMarketSupplementUnavailableClosed: '거래 마감 시각이 지나 보충할 수 없습니다.',
+  adminMarketSupplementUnavailableNone:
+    '규칙 버전 없이 열린 시장이라 보충할 수 없습니다. 개장 때 규칙 버전이 생긴 시장만 보충합니다.',
+  adminMarketSupplementRequest: '보충 요청',
+  adminMarketSupplementFormTitle: '규칙 보충 요청',
+  adminMarketSupplementFormHint:
+    '바꿀 항목만 고치세요. 고치지 않은 항목은 지금 버전 그대로입니다. 예정 개장·예정 판정 시각은 바꾸지 않고, 거래 마감 시각은 늦추기만 합니다.',
+  adminMarketSupplementBase: '기준 버전',
+  adminMarketSupplementReason: '보충 사유',
+  adminMarketSupplementReasonHint:
+    '승인되면 공개 상세의 규칙 버전 이력에 바뀐 문구와 함께 보입니다. 500자까지 쓸 수 있습니다.',
+  adminMarketSupplementImpact: '정산 영향 검토',
+  // 보충 양식의 규칙 항목 안내(초안의 adminMarketRuleItemsHint 대신): 시장에 있던 항목은 비울 수 없다
+  // (RULES_REQUIRED). 비어 있던 항목은 그대로 두어도 된다.
+  adminMarketSupplementRuleItemsHint:
+    '채워져 있던 항목은 비울 수 없습니다. 비어 있던 항목은 그대로 두어도 됩니다. 대체 출처는 없어도 됩니다.',
+  adminMarketSupplementImpactHint:
+    '이 보충이 판정과 Coin 지급에 영향을 주지 않는 근거를 적어 주세요. 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+  adminMarketSupplementRequested: '보충을 요청했습니다. 다른 관리자가 승인하거나 반려합니다.',
+  // 양식을 연 뒤 규칙 버전이 바뀌면(다른 보충의 승인) 양식의 기준 버전은 지난 것이다: 요청이 꺼지고 이 말이
+  // 보인다. 서버도 지난 버전의 요청을 거절한다(errMarketSupplementStale).
+  adminMarketSupplementFormStale:
+    '이 양식을 연 뒤 규칙 버전이 바뀌었습니다. 닫고 다시 열어 새 버전으로 작성해 주세요.',
+  // 양식을 연 뒤 다른 보충이 승인을 기다리게 되면 양식은 쓴 글과 함께 남고 요청이 꺼진다. 거래 마감이 지났거나
+  // 거래 중·거래 일시 중단이 아니게 된 때는 요청 버튼 대신 보이는 말(adminMarketSupplementUnavailable…)을 쓴다.
+  adminMarketSupplementFormPending:
+    '승인을 기다리는 다른 보충이 생겨 지금은 요청할 수 없습니다. 그 보충이 끝난 뒤 다시 요청해 주세요.',
+  // 기다리는 보충: 요청한 관리자·요청 시각·기준 버전, 바꾸는 항목마다 지금 문구와 새 문구, 사유와 정산 영향
+  // 검토. 요청한 관리자는 승인·반려하지 않고 철회만 한다(APPROVAL_REFUSALS).
+  adminMarketSupplementPending: '승인을 기다리는 보충',
+  adminMarketSupplementRequestedBy: '요청한 관리자',
+  adminMarketSupplementRequestedAt: '요청 시각',
+  adminMarketSupplementItems: '바꾸는 항목',
+  adminMarketSupplementBefore: '지금',
+  adminMarketSupplementAfter: '보충 뒤',
+  adminMarketSupplementExcludedRequester:
+    '보충을 요청한 관리자는 승인·반려할 수 없습니다. 다른 관리자가 결정합니다. 거두려면 철회하세요.',
+  adminMarketSupplementPendingClosed:
+    '거래 마감 시각이 지났거나 거래 중·거래 일시 중단이 아니라 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  // 거래 일시 중단 중에는 거래 마감 시각을 바꾸지 않으니(PAUSED_SUPPLEMENT_ITEMS, #172 14항) 그것을 바꾸는
+  // 보충은 승인할 수 없다(서버도 'fixed while paused'로 거절한다). 거래가 다시 열리면 승인할 수 있다.
+  adminMarketSupplementPendingPaused:
+    '거래 일시 중단 중에는 거래 마감 시각을 바꾸는 보충을 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketSupplementApprove: '승인',
+  adminMarketSupplementReject: '반려',
+  adminMarketSupplementRetract: '철회',
+  adminMarketSupplementApproveTitle: '보충을 승인합니다',
+  adminMarketSupplementApproveBody:
+    '승인하면 바꾼 항목을 고쳐 쓴 전문이 새 규칙 버전이 되고 공개 상세에 바로 보입니다. 보충 문구와 사유는 공개되고, 승인 사유와 정산 영향 검토는 관리자만 봅니다.',
+  adminMarketSupplementApproveReason: '승인 사유',
+  // 승인 사유와 반려의 설명: 1~500자이고 보충 기록에 남는다(관리자만 본다).
+  adminMarketSupplementDecisionHint:
+    '보충 기록에 관리자·시각과 함께 남습니다. 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+  adminMarketSupplementApproved: '보충을 승인했습니다. 새 규칙 버전이 공개되었습니다.',
+  adminMarketSupplementRejectTitle: '보충을 반려합니다',
+  // 반려는 시장을 멈추지 않는다: 의미 변경은 그 변경이 거래 중단 검토의 일이라는 사유이고, 거래를 멈추는 길은
+  // #114가 만든다.
+  adminMarketSupplementRejectBody:
+    '반려하면 규칙은 그대로입니다. 의미가 바뀌는 변경이면 의미 변경을 고르세요. 반려는 거래를 멈추지 않으니, 거래를 멈추고 검토하는 일은 따로 합니다.',
+  adminMarketSupplementRejected: '보충을 반려했습니다.',
+  adminMarketSupplementRetractTitle: '보충 요청을 철회합니다',
+  adminMarketSupplementRetractBody: '철회하면 요청이 끝나고 규칙은 그대로입니다. 계속할까요?',
+  adminMarketSupplementRetracted: '보충 요청을 철회했습니다.',
+  // 반려 사유의 목록(MARKET_SUPPLEMENT_REJECT_REASONS): 의미 변경은 #172 15항의 거래 중단 검토로 넘긴다.
+  supplementRejectMeaningChange: '의미가 바뀌는 변경 — 거래를 멈추고 검토',
+  supplementRejectOther: '기타',
+  adminMarketSupplementRequestChanged:
+    '이 창을 연 뒤 보충 요청이 바뀌었습니다. 창을 닫고 다시 확인해 주세요.',
+  // 보충 기록 (AdminMarket.supplement.log, 최근 것부터): 요청마다 상태와 누가·언제, 결정한 관리자·시각·사유,
+  // 반려 사유, 철회 시각, 승인이 만든 버전.
+  adminMarketSupplementLog: '보충 기록',
+  adminMarketSupplementLogEmpty: '보충 기록이 없습니다.',
+  supplementStatusPending: '대기',
+  supplementStatusApproved: '승인',
+  supplementStatusRejected: '반려',
+  supplementStatusRetracted: '철회',
+  supplementLogDecidedBy: '결정한 관리자',
+  supplementLogDecidedAt: '결정 시각',
+  supplementLogDecisionReason: '결정 사유',
+  supplementLogRejectReason: '반려 사유',
+  supplementLogRetractedAt: '철회 시각',
+  supplementLogVersion: '만든 버전',
+  // 관리자의 규칙 버전 목록(AdminMarket.ruleVersions, 최근 것부터): 공개 이력에 더해 요청·승인한 관리자와
+  // 정산 영향 검토. v1은 개장이 만들고, 워커가 연 시장의 v1은 '시스템'이다.
+  adminMarketRuleVersions: '규칙 버전 기록',
+  adminRuleVersionCreatedAt: '시각',
+  adminRuleVersionOpenedBy: '연 관리자',
+  adminRuleVersionApprovedBy: '승인한 관리자',
+  // 보충의 거절(VALIDATION_ERROR가 짚는 곳마다). 항목의 규칙(늦추기만, 선행 마감, 비우기 등)은 그 칸 아래의
+  // 시장 수정 문장(errMarket…)이다.
+  errMarketSupplementStatus:
+    '거래 중이거나 거래 일시 중단인 시장만 보충할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketSupplementClosed: '거래 마감 시각이 지나 보충할 수 없습니다.',
+  errMarketSupplementNoVersion: '규칙 버전 없이 열린 시장이라 보충할 수 없습니다.',
+  errMarketSupplementStale:
+    '그 사이 규칙 버전이 바뀌었습니다. 새 버전을 확인하고 다시 작성해 주세요.',
+  errMarketSupplementPending: '승인을 기다리는 보충이 이미 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketSupplementUnchanged: '지금 규칙과 달라진 항목이 없습니다.',
+  errMarketSupplementUnknown: '이 시장의 보충 요청이 아닙니다. 화면을 새로 고쳐 주세요.',
+  errMarketSupplementImpact: '정산 영향 검토를 1~500자로 입력해 주세요.',
+  errMarketSupplementClosePaused: '거래 일시 중단 중에는 거래 마감 시각을 바꿀 수 없습니다.',
+  // 보충 요청 양식의 선행 마감 간격 미정(errMarketLeadCloseUndecided의 보충판): 이 양식의 일은 '보충 요청'이다.
+  errMarketSupplementLeadCloseUndecided:
+    '선행 마감 간격(출시 설정)이 미정이라 발표 예정 시각에 맞춘 마감을 검사할 수 없습니다. 간격을 정한 뒤 다시 요청해 주세요.',
+  // 같은 거절이 승인 창에 오면(승인도 선행 마감을 다시 본다): 그 창의 일은 '승인'이다.
+  errMarketSupplementApproveLeadCloseUndecided:
+    '선행 마감 간격(출시 설정)이 미정이라 발표 예정 시각에 맞춘 마감을 검사할 수 없습니다. 간격을 정한 뒤 다시 승인해 주세요.',
+  // 거래 중인 시장의 수정이 규칙 버전 항목을 바꾸려 하면(서버의 'supplement only while open').
+  errMarketSupplementOnly: '개장 뒤에는 보충으로만 바꿀 수 있습니다.',
+  // 규칙 보충 대기 (GET /admin/market-supplements): 기다리는 보충 요청, 오래 기다린 것부터. 검수 대기 화면의
+  // 아래 묶음이다.
+  adminMarketSupplements: '규칙 보충 대기',
+  adminMarketSupplementsIntro:
+    '승인을 기다리는 규칙 보충입니다. 오래 기다린 것부터 보입니다. 요청한 관리자가 아닌 관리자가 시장 상세에서 승인하거나 반려합니다.',
+  adminMarketSupplementsEmpty: '승인을 기다리는 보충이 없습니다.',
+  adminMarketSupplementsColTitle: '질문',
+  adminMarketSupplementsColStatus: '상태',
+  adminMarketSupplementsColRequestedBy: '요청한 관리자',
+  adminMarketSupplementsColRequestedAt: '요청 시각',
+  adminMarketSupplementsColBase: '기준 버전',
+  adminMarketSupplementsColItems: '바꾸는 항목',
+  adminMarketSupplementsColCloseAt: '거래 마감',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
@@ -719,7 +869,11 @@ export const copy = {
   // 상태의 라벨을 따른다(ADR-0093 결정 1의 12, #174).
   eventSettling: '지급 시작',
   eventFinalized: '지급 완료',
+  // 초안의 규칙 수정(#23). 개장 뒤의 규칙은 보충(#80)으로만 바뀌고, 그 승인이 '규칙 보충' 하나를 남긴다:
+  // 만든 버전, 바뀐 항목, 사유. 행위자는 승인한 관리자고, 요청한 관리자는 보충 기록이 보인다.
   eventRulesEdited: '규칙 수정',
+  eventRulesSupplemented: '규칙 보충',
+  eventRulesVersion: '규칙 버전',
   // 개설 검수의 기록(#78): 검수 제출(초안 → 검수 중), 승인(→ 개장 예정), 반려(→ 초안), 되돌리기(검수 중·개장
   // 예정 → 초안), 예정 개장 시각 변경(상태는 그대로). 검수 기록과 이벤트 로그가 같은 이름을 쓴다.
   eventSubmitted: '검수 제출',
@@ -1496,6 +1650,24 @@ export const copy = {
   rulesJudgementAt: '예정 판정 시각',
   rulesJudgementTimeZone: '판정 기준 시간대',
   rulesJudgementZoneLine: '판정 기준 시간대',
+  // 규칙 버전 (#80, ADR-0101; ADR-0093 결정 2 #172 6·7·15항, 결정 3 '#80 보충의 형태'): 규칙 다음의 따로 된
+  // 카드. 개장 때 고정된 v1부터, 다른 관리자가 승인한 보충마다 바뀐 항목을 고쳐 쓴 전문이 새 버전이 된다.
+  // 최근 버전부터 버전마다 등록 시각, 보충의 사유와 바뀐 항목의 이전·새 문구를 보이고, 지난 버전의 전문은
+  // 펼쳐 읽는다(지금 버전의 전문은 위의 규칙 영역이고, 그곳은 접지 않는다). 버전 이름은 'v'와 번호다. 요청·
+  // 승인한 관리자와 정산 영향 검토는 보이지 않는다(#173 13항과 같은 결).
+  ruleVersionsTitle: '규칙 버전',
+  ruleVersionsCurrent: '현재',
+  ruleVersionName: 'v',
+  ruleVersionsIntro:
+    '시장을 연 뒤의 규칙은 의미를 바꾸지 않는 보충으로만 새 버전이 됩니다. 이전 버전은 그대로 남습니다.',
+  ruleVersionsCreatedAt: '등록 시각',
+  ruleVersionsFixedAtOpen: '개장 때 고정',
+  ruleVersionsReason: '사유',
+  ruleVersionsChanges: '바뀐 항목',
+  ruleVersionsBefore: '이전',
+  ruleVersionsAfter: '새 문구',
+  ruleVersionsFullText: '이 버전의 전문 보기',
+  ruleVersionsItemTitle: '질문',
 
   // 시장가격 추이 차트. 값의 이름은 '확률'이 아니라 시장가격이다(N02 §5). 표기 단위 %는 #60.
   chartLabel: '시장가격 추이',
@@ -2423,6 +2595,9 @@ export const copy = {
   errApprovalDecided: '이미 결정된 요청입니다. 화면을 새로 고쳐 주세요.',
   errApprovalRetracted: '요청한 운영자가 철회한 요청입니다. 화면을 새로 고쳐 주세요.',
   errApprovalNotRequester: '요청한 운영자만 철회할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  // 규칙 보충(#80)이 더한 거절: 요청한 운영자 말고 결정할 운영자가 없다(#139의 no_decider와 같은 규칙).
+  errApprovalNoDecider:
+    '이 요청을 결정할 운영자가 없습니다. 요청한 운영자가 아닌 운영자가 있어야 요청할 수 있습니다.',
   // 시장 검수(#78)가 더한 거절: 대상을 만든 운영자, 대상을 수정한 적이 있는 운영자. 검수 화면은 제 문장
   // (adminMarketReviewExcluded…)을 쓴다.
   errApprovalCreator:
