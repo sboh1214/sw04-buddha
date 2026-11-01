@@ -12,7 +12,14 @@ import {
   type Response,
   type Route,
 } from '@playwright/test';
-import type { AdminMarket, Category, MarketRuleItems, MarketTimes, Me } from '@buddha/shared';
+import type {
+  AdminMarket,
+  Category,
+  MarketReviewChecklistItem,
+  MarketRuleItems,
+  MarketTimes,
+  Me,
+} from '@buddha/shared';
 import { copy } from '../src/copy';
 import { E2E_CONSENT_VERSIONS } from './consent-versions';
 
@@ -28,7 +35,8 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * route makes categories since #17, but the specs file their markets under the seed's own tree
  * (`createDraftMarket`) and leave it as it is for the other workers. Both are named in the error a
  * helper throws, so a missing seed reads as "run pnpm db:seed" rather than as a 401 or a 404 in
- * the middle of a flow.
+ * the middle of a flow. Both admins take part in every open market since #21: the first submits
+ * it for review and the second approves it (`openThroughReview`).
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -274,19 +282,33 @@ async function chooseSeedAdminNickname(
   }
 }
 
+/** The reviewer each `admin` context goes with (`test`'s fixtures), for `approveAsReviewer`. */
+const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
+
 /**
  * `admin` is an API context signed in as the first seed admin and `secondAdmin` as the second
  * (#171), each isolated from every browser context in the test: the specs' own `request`
  * fixture stays cookie-less, which is what lets AC 2 read the detail page's HTML as an
  * anonymous visitor would.
+ *
+ * `reviewer` is the second seed admin too, once per worker process: the admin who approves what
+ * `admin` submits, so `createOpenMarket(admin)` can open a market without every test that wants
+ * one asking for a second admin (#21 — a market opens only through the review, which its creator
+ * and its submitter never decide, #172 item 5). `admin` depends on it and is paired with it here
+ * (`reviewers`); a spec that acts as the second admin itself asks for `secondAdmin`. Worker-scoped
+ * fixtures see no test-scoped `baseURL`, so it reads the project's.
  */
-export const test = base.extend<{ admin: APIRequestContext; secondAdmin: APIRequestContext }>({
+export const test = base.extend<
+  { admin: APIRequestContext; secondAdmin: APIRequestContext },
+  { reviewer: APIRequestContext }
+>({
   // The second argument is Playwright's `use`, renamed: this package lints with
   // eslint-plugin-react-hooks, which reads a call to `use(…)` outside a component as React's
   // own `use` hook and fails `rules-of-hooks`. Playwright passes it positionally.
-  admin: async ({ playwright, baseURL }, provide) => {
+  admin: async ({ playwright, baseURL, reviewer }, provide) => {
     const context = await playwright.request.newContext({ baseURL });
     await signInSeedAdmin(context, FIRST_ADMIN);
+    reviewers.set(context, reviewer);
     await provide(context);
     await context.dispose();
   },
@@ -296,6 +318,17 @@ export const test = base.extend<{ admin: APIRequestContext; secondAdmin: APIRequ
     await provide(context);
     await context.dispose();
   },
+  reviewer: [
+    async ({ playwright }, provide, workerInfo) => {
+      const context = await playwright.request.newContext({
+        baseURL: workerInfo.project.use.baseURL,
+      });
+      await signInSeedAdmin(context, SECOND_ADMIN);
+      await provide(context);
+      await context.dispose();
+    },
+    { scope: 'worker' },
+  ],
 });
 
 export { expect };
@@ -1171,10 +1204,11 @@ export interface CreateOpenMarketOptions {
    */
   closeAt?: string;
   /**
-   * Times over `timesFor`'s (#22, ADR-0098): a scheduled open still ahead, say, which the interim
-   * open refuses, another 판정 기준 시간대, or a blank (`null`) for a draft the open-items check
-   * finds incomplete — which `createOpenMarket` cannot open. An announcement time makes a market
-   * that cannot open while the release setting `market.lead_close_gap` is 미정 (ADR-0098).
+   * Times over `timesFor`'s (#22, ADR-0098): another 판정 기준 시간대, say, or a blank (`null`) for
+   * a draft the open-items check finds incomplete — which `createOpenMarket` cannot open. A
+   * scheduled open still ahead is a draft's: approved, it would wait for it as 개장 예정 (#21), so
+   * `createOpenMarket` refuses it. An announcement time makes a market that cannot be submitted
+   * for review while the release setting `market.lead_close_gap` is 미정 (ADR-0098).
    */
   times?: Partial<MarketTimes>;
 }
@@ -1254,12 +1288,12 @@ function ceilMinute(ms: number): number {
  * A complete set of times for a market that closes at `closeAt` with the 사건 기한 `eventDeadline`
  * (#22, ADR-0098), as the create body and the public `Market` carry them:
  *
- * - 예정 개장 시각: a minute before this minute, so the interim open — which refuses a market
- *   before its scheduled open (ADR-0093 decision 3 '#21 앞당긴 개장') — opens it at once, on any
- *   clock the database's is a few seconds off from.
+ * - 예정 개장 시각: a minute before this minute, so the approval opens the market at once (#21,
+ *   ADR-0100; ADR-0093 decision 2 #172 item 6 — it waits for no job), on any clock the database's
+ *   is a few seconds off from.
  * - 발표 예정 시각: none ('없음'), so the lead close the open-items check holds a market to
  *   (`market.lead_close_gap`, a release setting no spec writes — docs/SETTINGS.md) never blocks
- *   one; while that setting is 미정 a market with an announcement time cannot open.
+ *   one; while that setting is 미정 a market with an announcement time cannot be submitted.
  * - 예정 판정 시각: a day after the later of the close and the 사건 기한, on a whole minute — derived
  *   from the final items, so an override of either still keeps close ≤ judgement (#172 item 12)
  *   and 사건 기한 ≤ judgement (owner answer 2026-10-31 A1), which the API and the database check
@@ -1325,23 +1359,158 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
 }
 
 /**
- * Creates a draft through `POST /admin/markets` and opens it, so the spec owns a market that is
- * `open` and closes a day from now whatever the calendar says. Its scheduled open has passed, so
- * the interim open takes it at once (`timesFor`, #22). It has no fill — there is no way to trade
- * until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty (N02 §5):
- * opening writes no price tick.
+ * Creates a draft through `POST /admin/markets` and opens it through the review
+ * (`openThroughReview`), so the spec owns a market that is `open` and closes a day from now
+ * whatever the calendar says. Its scheduled open has passed (`timesFor`, #22), so the approval
+ * opens it at once (#21, ADR-0100). It has no fill — there is no way to trade until the CLOB
+ * lands (#119) — so its price reads 체결 없음 and its chart is empty (N02 §5): opening writes no
+ * price tick.
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
   options: CreateOpenMarketOptions = {},
 ): Promise<TestMarket> {
   const draft = await createDraftMarket(admin, options);
-  const open = await unwrap<AdminMarket>(
-    await admin.post(`/api/v1/admin/markets/${draft.id}/open`, {
-      data: { expectedAccountId: await accountIdOf(admin) },
+  const open = await openThroughReview(admin, draft.id);
+  return { ...draft, id: open.id, slug: open.slug };
+}
+
+/**
+ * The checklist of an approval (#172 item 4), every item confirmed, in MARKET_REVIEW_CHECKLIST
+ * order — restated, as this file takes only types from @buddha/shared; the record's type makes it
+ * whole.
+ */
+const CHECKLIST_ITEMS: Readonly<Record<MarketReviewChecklistItem, true>> = {
+  knownResult: true,
+  ambiguity: true,
+  duplicate: true,
+  requiredItems: true,
+  timeOrder: true,
+  leadClose: true,
+  independence: true,
+};
+export const REVIEW_CHECKLIST = Object.keys(CHECKLIST_ITEMS) as MarketReviewChecklistItem[];
+
+/** The reason every helper approval gives (1..500 characters, #172 item 4). */
+const HELPER_APPROVAL_REASON = '자동화 테스트의 시장입니다. 체크리스트를 모두 확인했습니다.';
+
+/** `POST /admin/markets/:id/<write>` as the admin `context` is signed in as (ADR-0092). */
+async function marketWrite(
+  context: APIRequestContext,
+  marketId: string,
+  write: 'submit' | 'approve' | 'revert',
+  body: Record<string, unknown> = {},
+): Promise<AdminMarket> {
+  return unwrap<AdminMarket>(
+    await context.post(`/api/v1/admin/markets/${marketId}/${write}`, {
+      data: { ...body, expectedAccountId: await accountIdOf(context) },
     }),
   );
-  return { ...draft, id: open.id, slug: open.slug };
+}
+
+/**
+ * 검수 제출 (#78) of a complete draft through the API, as `admin`: the answer, in review — its
+ * `review.pending.requestId` is what an approval names.
+ */
+export async function submitForReview(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<AdminMarket> {
+  const submitted = await marketWrite(admin, marketId, 'submit');
+  expect(submitted.status).toBe('review');
+  return submitted;
+}
+
+/**
+ * 승인 (#78) of a market in review, as the second seed admin `admin` was handed with (`test`'s
+ * `reviewer`), who neither made nor submitted it: every checklist item and a reason, naming the
+ * pending request (`requestId`, read when not given). The answer is OPEN when the scheduled open
+ * had passed at the approval, which opens it at once (#21, ADR-0100), and 개장 예정 otherwise —
+ * the worker opens it at that time.
+ */
+export async function approveAsReviewer(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const reviewer = reviewers.get(admin);
+  if (reviewer === undefined) {
+    throw new Error('no reviewer goes with this context: pass the `admin` fixture of `test`');
+  }
+  const pending =
+    requestId ??
+    (await unwrap<AdminMarket>(await reviewer.get(`/api/v1/admin/markets/${marketId}`))).review
+      .pending?.requestId;
+  if (pending === undefined) throw new Error(`market ${marketId} is not in review`);
+  return marketWrite(reviewer, marketId, 'approve', {
+    requestId: pending,
+    checklist: REVIEW_CHECKLIST,
+    reason: HELPER_APPROVAL_REASON,
+  });
+}
+
+/**
+ * Sends a market in review or 개장 예정 back to a draft as `context`'s admin, so a run that failed
+ * halfway leaves neither the 검수 대기 list of a persistent database longer nor a stray market
+ * public: a submitter's own 되돌리기 retracts its request. Best effort, for a failure's cleanup.
+ */
+export async function sendBackToDraft(context: APIRequestContext, marketId: string): Promise<void> {
+  const market = await context
+    .get(`/api/v1/admin/markets/${marketId}`)
+    .then((response) => unwrap<AdminMarket>(response))
+    .catch(() => null);
+  if (market?.status !== 'review' && market?.status !== 'scheduled') return;
+  await marketWrite(context, marketId, 'revert', { reason: '시험 정리' }).catch(() => undefined);
+}
+
+/**
+ * A 검수 제출 through the API that the open-items check refuses (#78; #17, #23, #22): 422
+ * OPEN_ITEMS_MISSING, and the items its details name, in the check's order — the items the draft's
+ * notice names (`missingOpenItems`), while its 검수 제출 is off.
+ */
+export async function submitRefusedItems(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<string[]> {
+  const response = await admin.post(`/api/v1/admin/markets/${marketId}/submit`, {
+    data: { expectedAccountId: await accountIdOf(admin) },
+  });
+  const body = await response.text();
+  expect(response.status(), body).toBe(422);
+  const { error } = JSON.parse(body) as {
+    error: { code: string; details: { path: (string | number)[] }[] };
+  };
+  expect(error.code).toBe('OPEN_ITEMS_MISSING');
+  return error.details.map((detail) => detail.path.join('.'));
+}
+
+/**
+ * Opens a complete draft the only way there is since #21 (ADR-0100): `admin` submits it for
+ * review and the second seed admin approves it (`approveAsReviewer`) — its scheduled open has
+ * passed, so the approval opens it at once (ADR-0093 decision 2 #172 item 6). For a market a spec
+ * made on screen: the screen still shows the draft until it is read again. Throws, after sending
+ * the market back to a draft, when it does not open — a scheduled open still ahead, say.
+ */
+export async function openThroughReview(
+  admin: APIRequestContext,
+  marketId: string,
+): Promise<AdminMarket> {
+  const submitted = await submitForReview(admin, marketId);
+  let approved: AdminMarket;
+  try {
+    approved = await approveAsReviewer(admin, marketId, submitted.review.pending?.requestId);
+  } catch (error) {
+    await sendBackToDraft(admin, marketId);
+    throw error;
+  }
+  if (approved.status !== 'open') {
+    await sendBackToDraft(admin, marketId);
+    throw new Error(
+      `market ${marketId} was approved as ${approved.status}, not opened: its scheduled open ` +
+        `(${String(approved.scheduledOpenAt)}) has to have passed`,
+    );
+  }
+  return approved;
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   meOf,
   nextMeRead,
   openClosure,
+  openThroughReview,
   openSetPassword,
   ruleItemsFor,
   setFirstPassword,
@@ -330,7 +331,7 @@ test.describe('시장 제안', () => {
       // its own and the 예상 출처 as its 1차 출처's name with no address (#23, ADR-0097), and the
       // proposal's date as its close (00:00 KST that day) and as nothing else — no 사건 기한, no
       // other time and no 판정 기준 시간대 (#22, ADR-0098); the rest of the rule items, that
-      // address, the tags (#17) and the times are those steps, before 열기.
+      // address, the tags (#17) and the times are those steps, before the review (#78).
       const adopted = await dataOf<AdminMarket>(
         await admin.get(`/api/v1/admin/markets/${marketId}`),
       );
@@ -381,7 +382,8 @@ test.describe('시장 제안', () => {
 
       // --- the times, on the draft's own screen: the zone shows Asia/Seoul pre-filled (#172 item
       // 11), and the operator fills only the scheduled open and judgement — the save sends the
-      // zone with them, which confirms it — and opens it there.
+      // zone with them, which confirms it. 검수 제출 is on then, and the review opens it: the
+      // operator who adopted it submits, the second admin approves past its scheduled open (#21).
       await adminPage.goto(`/admin/markets/${marketId}`);
       await expect(adminPage.getByTestId('market-judgement-time-zone')).toHaveValue(
         DEFAULT_JUDGEMENT_TIME_ZONE,
@@ -402,16 +404,10 @@ test.describe('시장 제안', () => {
       });
       await expect(adminPage.getByText(copy.adminMarketSaved)).toBeVisible();
       await expect(adminPage.getByTestId('market-open-items')).toHaveCount(0);
-      // The toast gone first: it pauses under the pointer, and on a phone it covers the buttons.
-      await adminPage.mouse.move(0, 0);
-      await expect(adminPage.locator('[data-scope="toast"][data-part="root"]')).toHaveCount(0);
-      await adminPage.getByTestId('market-open').click();
-      await expect(adminPage.getByText(copy.adminMarketOpened)).toBeVisible();
+      await expect(adminPage.getByTestId('market-review-submit')).toBeEnabled();
+      const opened = await openThroughReview(admin, marketId);
+      await adminPage.reload();
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
-      const opened = await dataOf<AdminMarket>(
-        await admin.get(`/api/v1/admin/markets/${marketId}`),
-      );
-      expect(opened.status).toBe('open');
       await page.reload();
       const link = page.getByTestId(`my-proposal-market-${proposal.id}`);
       await expect(link).toHaveText(question);
@@ -574,13 +570,8 @@ test.describe('시장 제안', () => {
     await expect(statusOf(page, proposal.id)).toHaveText(copy.proposalStatusAdopted);
     await expect(page.getByTestId(`my-proposal-market-${proposal.id}`)).toHaveCount(0);
 
-    // --- once the operators open it, its link.
-    const opened = await dataOf<{ slug: string; status: string }>(
-      await admin.post(`/api/v1/admin/markets/${draft.id}/open`, {
-        data: { expectedAccountId: await accountIdOf(admin) },
-      }),
-    );
-    expect(opened.status).toBe('open');
+    // --- once the operators open it through the review (#21), its link.
+    const opened = await openThroughReview(admin, draft.id);
     await page.reload();
     const link = page.getByTestId(`my-proposal-market-${proposal.id}`);
     await expect(link).toHaveText(draft.title);

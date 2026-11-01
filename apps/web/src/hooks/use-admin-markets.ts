@@ -17,7 +17,7 @@ import {
   api,
   unwrap,
 } from '@/lib/api';
-import { type MarketFormField, marketIdParam, settlementPollInterval } from '@/lib/market-admin';
+import { type MarketFormField, adminMarketPollInterval, marketIdParam } from '@/lib/market-admin';
 import {
   CATEGORIES_QUERY_KEY,
   MARKET_FILLS_KEY,
@@ -109,12 +109,15 @@ export function adminMarketQueryOptions(routeId: string) {
 
 /**
  * The admin detail, re-read every few seconds while the market is `resolved` or `settling` so the
- * 정산 단계 panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046).
+ * 정산 단계 panel and the 정산 대기 badge follow the worker (`settlementPollInterval`, ADR-0046),
+ * and while it is 개장 예정 at its scheduled open, every few seconds after it until the worker
+ * opens it, and at its close (`scheduledMarketPollDelay`, #21, ADR-0100) — both in
+ * `adminMarketPollInterval`.
  */
 export function useAdminMarket(routeId: string) {
   return useQuery({
     ...adminMarketQueryOptions(routeId),
-    refetchInterval: (query) => settlementPollInterval(query.state.data),
+    refetchInterval: (query) => adminMarketPollInterval(query.state),
   });
 }
 
@@ -239,11 +242,11 @@ export function useMarketFills(id: string, enabled: boolean) {
  * a submission, an approval, a 반려 and a 되돌리기 each change it), every other market's 관련 시장
  * list, and every public 관련 시장 list. Each row of an admin list badges the market at
  * its other end with its status and title, so a market linked to this one would otherwise go on
- * showing it as it was — a draft just opened still '초안' under the hint that says a draft is not
- * shown, for as long as `staleTime` keeps that list fresh (review on #65). Which lists hold this
- * market is the server's to say, so every one but this market's own is asked; its own holds only
- * other markets, and on this market's screen it is mounted, so including it would be one request
- * per write for nothing.
+ * showing it as it was — a market just approved still '검수 중' under the hint that says one in
+ * review is not shown, for as long as `staleTime` keeps that list fresh (review on #65). Which
+ * lists hold this market is the server's to say, so every one but this market's own is asked; its
+ * own holds only other markets, and on this market's screen it is mounted, so including it would
+ * be one request per write for nothing.
  *
  * The public lists (`['markets', 'related', id]`) are the same hazard on the reader's side: which
  * markets a detail shows is decided by their statuses, and each card carries the title. A detail
@@ -284,8 +287,8 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
  *
  * The seed is what makes the detail screen honest when the refetch that follows fails. That
  * screen keeps rendering cached data on a refetch error and says so in a notice, so without
- * the seed a market that just opened stays `draft` on screen — under a toast saying it
- * opened, with the open button still live — until something refetches it. Invalidating still
+ * the seed a market just approved and opened (#21) stays `review` on screen — under a toast
+ * saying it opened, with 승인 still live — until something refetches it. Invalidating still
  * happens: the response is the row as of its own transaction, and a refetch that lands after
  * it wins.
  *

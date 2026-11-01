@@ -38,6 +38,7 @@ import {
   rescheduleDraft,
   revertDraft,
   reviewFailure,
+  reviewWriteSuccess,
 } from '@/lib/market-review';
 
 /**
@@ -52,7 +53,8 @@ import {
  * field it is about or above the buttons (`reviewFailure`); another account's cookie closes it with
  * a toast.
  * Sent, it closes with a toast and the market as the write committed it goes on screen
- * (`useApplyMarket`).
+ * (`useApplyMarket`). An approval or a reschedule that found the scheduled open come opened the
+ * market in the same write (#21, ADR-0100): its toast says so (`reviewWriteSuccess`).
  */
 
 export type ReviewDialogKind = 'approve' | 'reject' | 'revert' | 'reschedule';
@@ -123,11 +125,12 @@ interface RescheduleVariables {
  * One review write: sent as the admin on screen, its refusal said where `reviewFailure` puts it —
  * the detail read again when the screen behind is out of date (a status another admin moved, an
  * exclusion, the open-items check, a scheduled open another admin set) — and its answer applied.
+ * `success` is the toast, or how to say it from the market the write answered with (#21).
  */
 function useReviewWrite<V>(
   market: AdminMarket,
   onClose: () => void,
-  success: string,
+  success: string | ((fresh: AdminMarket) => string),
   send: (variables: V) => Promise<AdminMarket>,
 ) {
   const apply = useApplyMarket(market.id);
@@ -142,7 +145,10 @@ function useReviewWrite<V>(
       setRefusal(null);
     },
     onSuccess: async (fresh) => {
-      toaster.create({ type: 'success', title: success });
+      toaster.create({
+        type: 'success',
+        title: typeof success === 'string' ? success : success(fresh),
+      });
       onClose();
       await apply(fresh);
     },
@@ -366,7 +372,10 @@ export function ApproveFields({
   );
 }
 
-/** 승인 (REVIEW → SCHEDULED): the confirm waits for every item and a reason (`approveDraft`). */
+/**
+ * 승인 (REVIEW → SCHEDULED, and on to OPEN at once when the scheduled open has passed — #21,
+ * ADR-0100): the confirm waits for every item and a reason (`approveDraft`).
+ */
 function ApproveDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
   const operatorId = useOperatorId();
   const [checked, setChecked] = useState<MarketReviewChecklistItem[]>([]);
@@ -376,7 +385,7 @@ function ApproveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
   const { mutation, errorOf, refusal } = useReviewWrite(
     market,
     onClose,
-    copy.adminMarketReviewApproved,
+    (approved) => reviewWriteSuccess('approve', approved.status),
     async ({ requestId, checklist, reason, by }: ApproveVariables) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/approve', {
@@ -639,7 +648,8 @@ export function RescheduleFields({
  * opens on the time the market holds, and the confirm waits until it moves to an ordered instant
  * and a reason is typed (`rescheduleDraft`). A refusal of the time — the order, or 'unchanged'
  * after another admin's change — goes under the field while the field holds the time it was sent
- * with.
+ * with. A time at or before now opens the market in the same write (#21, ADR-0100), and the toast
+ * says so.
  */
 function RescheduleDialog({ market, onClose }: { market: AdminMarket; onClose: () => void }) {
   const operatorId = useOperatorId();
@@ -652,7 +662,7 @@ function RescheduleDialog({ market, onClose }: { market: AdminMarket; onClose: (
   const { mutation, errorOf, refusal } = useReviewWrite(
     market,
     onClose,
-    copy.adminMarketReviewRescheduled,
+    (moved) => reviewWriteSuccess('reschedule', moved.status),
     async ({ scheduledOpenAt, reason, by }: RescheduleVariables) =>
       unwrap(
         await api.POST('/api/v1/admin/markets/{id}/reschedule', {

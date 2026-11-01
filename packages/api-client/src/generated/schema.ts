@@ -342,7 +342,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** review → scheduled (승인) by an admin who neither created, edited nor submitted the market, every checklist item confirmed, with a reason; the open-items check and the close are checked again. The market becomes public as scheduled */
+        /** review → scheduled (승인) by an admin who neither created, edited nor submitted the market, every checklist item confirmed, with a reason; the open-items check and the close are checked again. The market becomes public as scheduled — and opens at once (status open) when its scheduled open has passed; otherwise it opens at its scheduled open */
         post: operations["adminApproveMarket"];
         delete?: never;
         options?: never;
@@ -361,23 +361,6 @@ export type paths = {
         put?: never;
         /** open → closed by one admin (interim); any other status is MARKET_NOT_OPEN */
         post: operations["adminCloseMarket"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/admin/markets/{id}/open": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** draft → open (interim, until the scheduled open; beside the review); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the time order, the lead close, the category or the tags missing, then with a past closeAt, then before the scheduled open; stores the lead-close gap it checked against */
-        post: operations["adminOpenMarket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -445,7 +428,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** Move a scheduled market’s scheduled open without a new review, with a reason; it stays before the close in whole minutes, a past instant is allowed (#21’s scheduled-open job opens the market; until #21 a scheduled market does not open), and once the close has passed it is refused (closeAt) — send the market back to a draft (revert) to fix its times */
+        /** Move a scheduled market’s scheduled open without a new review, with a reason; it stays before the close in whole minutes, and an instant already passed opens the market at once (status open: there is no early open, move the scheduled open earlier instead); once the close has passed it is refused (closeAt) — send the market back to a draft (revert) to fix its times */
         post: operations["adminRescheduleMarketOpen"];
         delete?: never;
         options?: never;
@@ -496,7 +479,7 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** draft → review (검수 제출): refused with OPEN_ITEMS_MISSING as the interim open is, then with a past closeAt; opens the review request another admin decides, stores the lead-close gap it checked against and locks the content (no edit in review or scheduled) */
+        /** draft → review (검수 제출): refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the time order, the lead close, the category or the tags missing, then with a past closeAt; opens the review request another admin decides, stores the lead-close gap it checked against and locks the content (no edit in review or scheduled) */
         post: operations["adminSubmitMarket"];
         delete?: never;
         options?: never;
@@ -7109,96 +7092,6 @@ export interface operations {
             };
             /** @description ONBOARDING_REQUIRED | MARKET_NOT_OPEN */
             409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description RATE_LIMITED */
-            429: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-        };
-    };
-    adminOpenMarket: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExpectedAccountBody"];
-            };
-        };
-        responses: {
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        data: components["schemas"]["AdminMarket"];
-                    };
-                };
-            };
-            /** @description VALIDATION_ERROR */
-            400: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description UNAUTHENTICATED */
-            401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description FORBIDDEN */
-            403: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description NOT_FOUND */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description ONBOARDING_REQUIRED */
-            409: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorEnvelope"];
-                };
-            };
-            /** @description OPEN_ITEMS_MISSING */
-            422: {
                 headers: {
                     [name: string]: unknown;
                 };

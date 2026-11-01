@@ -25,8 +25,8 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     '.mutateAsync({ ...toCreateMarketBody(values), expectedAccountId: operatorId })',
   ],
   '../app/admin/markets/[id]/admin-market-detail.tsx': [
-    // 공개 and 마감
-    "await api.POST('/api/v1/admin/markets/{id}/open', {\n          params: { path: { id: market.id } },\n          body: { expectedAccountId },",
+    // 마감 (the interim 공개 went with #21, ADR-0100: a market opens from 개장 예정 by itself, or by
+    // the approval or the reschedule below)
     "await api.POST('/api/v1/admin/markets/{id}/close', {\n          params: { path: { id: market.id } },\n          body: { expectedAccountId },",
     // 판정
     'body: toResolveMarketBody(values, by),',
@@ -140,9 +140,9 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/moderation/link-flags/admin-link-flags.tsx': 2,
       // 만들기, and the form's fields
       '../app/admin/markets/admin-markets.tsx': 2,
-      // 공개, 마감's confirm, 판정's confirm, 저장 and its confirm, 연결, 해제's confirm; the buttons
-      // opening 마감, 판정 and 해제, and the edit form's fields
-      '../app/admin/markets/[id]/admin-market-detail.tsx': 11,
+      // 마감's confirm, 판정's confirm, 저장 and its confirm, 연결, 해제's confirm; the buttons
+      // opening 마감, 판정 and 해제, and the edit form's fields (공개 went with #21)
+      '../app/admin/markets/[id]/admin-market-detail.tsx': 10,
       // 검수 제출, and the buttons opening 승인, 반려, 예정 개장 시각 변경 and 초안으로 되돌리기 (#78)
       '../app/admin/markets/[id]/market-review-panel.tsx': 5,
       // the confirms of 승인, 반려, 초안으로 되돌리기 and 예정 개장 시각 변경
@@ -413,7 +413,7 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
         "disabled={operatorId === undefined || exclusion !== null}\n                    onClick={() => onOpen('reject')}",
         "disabled={operatorId === undefined}\n                  onClick={() => onOpen('reschedule')}",
         "disabled={operatorId === undefined}\n                onClick={() => onOpen('revert')}",
-        '<ReviewPanelBody market={market} operatorId={operatorId} onOpen={setDialog} />',
+        '<ReviewPanelBody market={market} readAt={readAt} operatorId={operatorId} onOpen={setDialog} />',
       ],
     };
     for (const [file, buttons] of Object.entries(opens)) {

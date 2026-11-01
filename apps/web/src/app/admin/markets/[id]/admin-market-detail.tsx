@@ -41,7 +41,6 @@ import { nicknameShown } from '@/lib/account-closure';
 import { SEARCH_INPUT_MAX_LENGTH } from '@/lib/market-search';
 import { listSection, listView } from '@/lib/query-client';
 import {
-  adminMarketKey,
   applyRelatedMarkets,
   refreshAfterMarketFormRefusal,
   useAdminMarket,
@@ -205,8 +204,9 @@ export function AdminMarketDetail({ id }: { id: string }) {
       {/* 검수 (#78, ADR-0099): keyed by the market, so a dialog held on one market's detail never
           names the next one a same-condition link opens on this route. Prefixed: a sibling below
           (RelatedMarketsPanel) is keyed by the id too, and two equal keys in one list leave the
-          stale card in the page on every render. */}
-      <MarketReviewPanel key={`review-${data.id}`} market={data} />
+          stale card in the page on every render. `readAt` is when this row was read: the
+          close-passed warning judges the row read after the close, not a stale one (#21). */}
+      <MarketReviewPanel key={`review-${data.id}`} market={data} readAt={market.dataUpdatedAt} />
 
       <Card.Root>
         <Card.Body>
@@ -221,7 +221,11 @@ export function AdminMarketDetail({ id }: { id: string }) {
             <RuleItemRows market={data} />
             <Item label={copy.adminMarketImageUrl}>{data.imageUrl ?? '—'}</Item>
             <TimeRows market={data} />
-            <Item label={copy.marketOpenAt}>{data.openAt ? formatKst(data.openAt) : '—'}</Item>
+            {/* When it actually opened (#21 AC 6: beside 예정 개장 시각 above) — the worker at the
+                scheduled open, or the approval or reschedule that found it come (ADR-0100). */}
+            <Item label={copy.marketOpenAt} testId="market-detail-open-at">
+              {data.openAt ? formatKst(data.openAt) : '—'}
+            </Item>
             {/* YES·NO·무효, or '—' before a judgement and on a cancelled market (ADR-0093 decision 1,
                 item 10: a cancelled market has no result, never VOID). */}
             <Item label={copy.marketResolvedResult}>
@@ -269,13 +273,13 @@ export function AdminMarketDetail({ id }: { id: string }) {
 }
 
 /**
- * What the draft still needs before 검수 제출 (#78) or the interim 열기 (#17, the open-items check):
- * '검수 제출·열기 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그 1~5개', from the server's
- * `missingOpenItems` (`openItemsNotice`) — so a category hidden after it was picked shows here
- * too — with a line under it per time rule the market breaks (#22: '시각 순서: …', '선행 마감:
- * …'). Nothing once nothing is missing, and nothing on any other status. Beside the two buttons
- * rather than in the form: it is what both refuse — 검수 제출 is off while it shows — and the
- * form below is where each item is filled in.
+ * What the draft still needs before 검수 제출 (#78; #17, the open-items check): '검수 제출 전에
+ * 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그 1~5개', from the server's `missingOpenItems`
+ * (`openItemsNotice`) — so a category hidden after it was picked shows here too — with a line
+ * under it per time rule the market breaks (#22: '시각 순서: …', '선행 마감: …'). Nothing once
+ * nothing is missing, and nothing on any other status. Beside the button rather than in the form:
+ * it is what the submission refuses — 검수 제출 is off while it shows — and the form below is where
+ * each item is filled in.
  */
 function OpenItemsNotice({ market }: { market: AdminMarket }) {
   const notice = openItemsNotice(market);
@@ -397,9 +401,9 @@ const kstOr = (iso: string | null, none = '—') => (iso === null ? none : forma
  * scheduled release) and 예정 판정 시각, then 판정 기준 시간대 by its IANA and Korean names, '—' for
  * any not filled in — a draft's, or a market's opened before #22. Then the 선행 마감 gap the market
  * is held to (`leadCloseGapMinutes`: the one its lead close was last checked against, which the
- * open stores, else the release setting's reading), or 미정; and, once its scheduled judgement has
- * passed while it is closed, 판정 지연 — what visitors read in place of 거래 마감 (#173 item 11),
- * while the badge above keeps the admin's status label.
+ * review's submission stores and the open keeps, else the release setting's reading), or 미정; and,
+ * once its scheduled judgement has passed while it is closed, 판정 지연 — what visitors read in place
+ * of 거래 마감 (#173 item 11), while the badge above keeps the admin's status label.
  */
 function TimeRows({ market }: { market: AdminMarket }) {
   const gap = market.leadCloseGapMinutes;
@@ -475,25 +479,20 @@ function SourceLine({ source }: { source: MarketSource }) {
 
 /**
  * 검수 제출 (#78, ADR-0099: `SubmitReviewButton`, the way a draft leaves for review and then, approved
- * by another admin, for 개장 예정) beside the interim 열기, which stays until #21.
- * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose refusal —
- * the open-items check (#17, #23, #22: 질문, the rule items, the times, 시각 순서, 선행 마감, 카테고리,
- * 태그 1~5개), which the draft's notice says beforehand — is reversible from the form below and is
- * named in its toast; the detail is read again then, so the notice names what the server found, a
- * category hidden meanwhile included. So is 열기 before the scheduled open (#22, ADR-0093 decision 3
- * '#21 앞당긴 개장': no early open), whose toast says to move it earlier. 열기 stays while there is
- * no way to trade (owner decision #125 (a)): the market is listed, and its detail says 거래 준비 중
- * in place of the order panel. There is no 무효: the admin
- * void and its cost refund went with #125 (N03 §6); VOID as a 판정 is #152's. The 판정 form lives
- * in its own component, mounted only while its dialog is open, so every opening starts from an
- * empty form.
- * A judged market offers none of these: the 판정 is final. All three are the interim actions
- * #174 keeps on the new statuses (ADR-0047 result 3, ADR-0093 result 2) — 열기 until #21, 마감
- * until #114, 판정 until #152 — so a market in any other status (검수 중, 개장 예정, 거래 일시 중단,
- * 잠정 결과, 지급 중, 취소, …) offers none.
+ * by another admin, for 개장 예정), then 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). There is no
+ * 열기: a market opens only from 개장 예정, by itself at its scheduled open, or at once when its
+ * approval or a reschedule finds that time come (#21, ADR-0100; ADR-0093 decision 1 #173 item 1,
+ * decision 2 #172 item 6) — to open sooner an admin moves the scheduled open earlier (decision 3
+ * '#21 앞당긴 개장'). There is no 무효: the admin void and its cost refund went with #125 (N03 §6);
+ * VOID as a 판정 is #152's. Both are Dialogs; the 판정 form lives in its own component, mounted
+ * only while its dialog is open, so every opening starts from an empty form.
+ * A judged market offers none of these: the 판정 is final. Both are the interim actions #174 keeps
+ * on the new statuses (ADR-0047 result 3, ADR-0093 result 2) — 마감 until #114, 판정 until #152 —
+ * so a market in any other status (검수 중, 개장 예정, 거래 일시 중단, 잠정 결과, 지급 중, 취소, …)
+ * offers none.
  *
- * Each names the admin on screen (`useOperatorId`, ADR-0092), so 열기, the buttons that open the
- * two dialogs and their confirmations wait for `GET /me`; the cookie of another account is refused
+ * Each names the admin on screen (`useOperatorId`, ADR-0092), so the buttons that open the two
+ * dialogs and their confirmations wait for `GET /me`; the cookie of another account is refused
  * (`copy.sessionChanged`), the dialog closes and the session is asked again (`useSessionChanged`).
  * The open dialog is held for the admin who opened it (`useHeldForOperator`, ADR-0091 결정 3): once
  * `['me']` turns from A to B in place, before the session does (ADR-0090 결정 4-2), it closes with
@@ -502,7 +501,6 @@ function SourceLine({ source }: { source: MarketSource }) {
  */
 function TransitionButtons({ market }: { market: AdminMarket }) {
   const apply = useApplyMarket(market.id);
-  const queryClient = useQueryClient();
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
   const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();
@@ -513,29 +511,7 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
   const onError = (error: unknown) => {
     if (sessionChanged(error)) setConfirm(null);
     toaster.create({ type: 'error', title: transitionErrorMessage(error) });
-    // The screen's notice was the last read's: what the server refused for goes on it now.
-    if (isApiError(error, 'OPEN_ITEMS_MISSING')) {
-      void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
-    }
   };
-
-  const open = useMutation({
-    mutationFn: async (expectedAccountId: string) =>
-      unwrap(
-        await api.POST('/api/v1/admin/markets/{id}/open', {
-          params: { path: { id: market.id } },
-          body: { expectedAccountId },
-        }),
-      ).data,
-    // The answer is the market as the transition committed it (the same shape GET returns):
-    // it goes on the screen now, so a refetch that fails cannot leave the old status under a
-    // toast that says otherwise.
-    onSuccess: async (opened) => {
-      toaster.create({ type: 'success', title: copy.adminMarketOpened });
-      await apply(opened);
-    },
-    onError,
-  });
 
   const close = useMutation({
     mutationFn: async (expectedAccountId: string) =>
@@ -545,6 +521,9 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
           body: { expectedAccountId },
         }),
       ).data,
+    // The answer is the market as the transition committed it (the same shape GET returns):
+    // it goes on the screen now, so a refetch that fails cannot leave the old status under a
+    // toast that says otherwise.
     onSuccess: async (closed) => {
       toaster.create({ type: 'success', title: copy.adminMarketClosed });
       setConfirm(null);
@@ -556,19 +535,6 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
   return (
     <HStack gap="2" flexWrap="wrap">
       <SubmitReviewButton market={market} />
-      {market.status === 'draft' && (
-        <Button
-          size="sm"
-          loading={open.isPending}
-          disabled={operatorId === undefined}
-          onClick={() => {
-            if (operatorId !== undefined) open.mutate(operatorId);
-          }}
-          data-testid="market-open"
-        >
-          {copy.adminMarketOpen}
-        </Button>
-      )}
       {market.status === 'open' && (
         <Button
           size="sm"

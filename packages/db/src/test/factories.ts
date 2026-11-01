@@ -47,6 +47,7 @@ import {
 } from '@buddha/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
+import { openScheduledMarket } from '../market-open.js';
 import { transitionMarket } from '../market-transitions.js';
 import {
   account,
@@ -99,6 +100,7 @@ import {
 } from '../schema/index.js';
 import { storedReleaseSettingValue } from '../release-settings.js';
 import { payStartGrant, recordStartGrant } from '../start-grants.js';
+import { clockTimestamp, lockMarket } from '../tx-helpers.js';
 
 /** Short unique tag for generated emails/slugs/nicknames. */
 const tag = () => randomUUID().replaceAll('-', '').slice(0, 8);
@@ -199,11 +201,11 @@ export interface CreateMarketInput {
    * The rule items (#23, ADR-0097), RULE_ITEMS of @buddha/shared. By default every one is filled
    * in — texts naming the market, an event deadline a day after `closeAt`, a 1차 출처 at
    * https://example.com/source, no 대체 출처 ('없음') and a 14-day long delay — so a market made here
-   * misses no rule item of the open-items check, and a draft opens through the route once it has
-   * tags. A test of a missing item blanks it: '' for a text (or `null` for 배경), `null` for the
-   * deadline, the primary source or the days, or a source with a blank name or address. A switch
-   * condition is written by default only when fallbacks are given. Stored as given: untrimmed,
-   * and checked by the database alone.
+   * misses no rule item of the open-items check, and a draft is submitted for review through the
+   * route once it has tags. A test of a missing item blanks it: '' for a text (or `null` for 배경),
+   * `null` for the deadline, the primary source or the days, or a source with a blank name or
+   * address. A switch condition is written by default only when fallbacks are given. Stored as
+   * given: untrimmed, and checked by the database alone.
    */
   description?: string | null;
   yesCondition?: string;
@@ -223,7 +225,8 @@ export interface CreateMarketInput {
   blankRuleItems?: boolean;
   /**
    * Default `open`. A `review` or `scheduled` market made here has no review request and no event:
-   * `createMarketInReview` and `createScheduledMarket` make one as the review's routes leave it.
+   * `createMarketInReview` and `createScheduledMarket` make one as the review's routes leave it,
+   * and `createOpenedMarket` an `open` one with that history and its `opened` event (#21).
    */
   status?: MarketStatus;
   /**
@@ -245,15 +248,16 @@ export interface CreateMarketInput {
   /**
    * The market times beside `closeAt` (#22, ADR-0098), TIME_ITEMS of @buddha/shared. By default
    * every required one is filled in and in order with the close and 사건 기한 as they end up, so a
-   * market made here misses no time item, passes every order CHECK of migration 0051 and opens
-   * through the route at once with its tags:
+   * market made here misses no time item, passes every order CHECK of migration 0051 and is
+   * submitted for review through the route at once with its tags:
    *
    * - the scheduled open one minute before the earlier of now and the close, floored to the minute
-   *   — passed, so the interim open takes it, and before the close even when that is past;
+   *   — passed, so an approval opens the market at once and the worker's open job opens a
+   *   `createScheduledMarket` one (#21), and before the close even when that is past;
    * - the scheduled judgement 24 hours after the later of the close and 사건 기한, raised to the
    *   minute first;
    * - the judgement zone DEFAULT_JUDGEMENT_TIME_ZONE;
-   * - no announcement ('없음'), so the undecided `market.lead_close_gap` never blocks the open.
+   * - no announcement ('없음'), so the undecided `market.lead_close_gap` never blocks the submission.
    *
    * A test of a missing time gives `null`, or `blankTimes` for all of them; a given value is stored
    * as given, held by the CHECKs alone.
@@ -269,7 +273,7 @@ export interface CreateMarketInput {
   blankTimes?: boolean;
   /**
    * The 선행 마감 gap the market's lead close was last checked against (`lead_close_gap_minutes`).
-   * Default null: not opened through the route, or opened with the setting undecided.
+   * Default null: never submitted for review, or submitted with the setting undecided.
    */
   leadCloseGapMinutes?: number | null;
   /**
@@ -293,7 +297,7 @@ export interface CreateMarketInput {
   /**
    * Tag names (#17), linked in this order as `market_tags` positions 1..n; a name no tag has makes
    * the tag, one differing from an existing tag only in case links that tag (as the API does).
-   * Default none — which the interim open refuses (the open-items check): a draft a test opens
+   * Default none — which the submission refuses (the open-items check): a draft a test submits
    * through the route gives some.
    */
   tags?: string[];
@@ -1469,7 +1473,7 @@ export interface CreateMarketInReviewInput extends ReviewedMarketFields {
   editedBy?: string[];
 }
 
-/** A market under review or scheduled, with its `market_review` request (#78). */
+/** A market under review, scheduled or opened from it, with its `market_review` request (#78). */
 export interface ReviewedMarket {
   market: typeof markets.$inferSelect;
   request: typeof approvalRequests.$inferSelect;
@@ -1559,9 +1563,14 @@ export interface CreateScheduledMarketInput extends CreateMarketInReviewInput {
  * A market approved for opening (#78, ADR-0099) as `POST /admin/markets/:id/approve` leaves it:
  * `createMarketInReview`'s market, its request approved by another admin with a reason, and the
  * `approved` transition — the `market_events` row (payload `{approvalId, checklist, reason}`, every
- * MARKET_REVIEW_CHECKLIST item) and the market in `scheduled` — in one transaction. The scheduled
- * open is createMarket's (a minute before now, which #21's job would open at once) unless given.
- * Writes no `market_approve` record.
+ * MARKET_REVIEW_CHECKLIST item) and the market in `scheduled` — in one transaction. Writes no
+ * `market_approve` record.
+ *
+ * The scheduled open is createMarket's (a minute before now) unless given: due, as a SCHEDULED
+ * market is once its time comes and before the worker's `market.open` job runs, which opens it
+ * (`createOpenedMarket`). The route itself opens a market approved past its scheduled open in the
+ * same transaction (#21, ADR-0100), so a test of a market as the approval left it gives a later
+ * scheduled open.
  */
 export async function createScheduledMarket(
   db: Db,
@@ -1601,6 +1610,43 @@ export async function createScheduledMarket(
     });
     const [market] = await tx.select().from(markets).where(eq(markets.id, review.id));
     return { market: market!, request: approved! };
+  });
+}
+
+/**
+ * A market opened at its scheduled open (#21, ADR-0100) as the worker's `market.open` job leaves
+ * it: `createScheduledMarket`'s market, then `openScheduledMarket` in one transaction under the
+ * market lock, with the row read FOR UPDATE and the database clock after it, as the worker (actor
+ * null, `source: 'job'`) — the `opened` event, and the market `open` with `open_at` and
+ * `updated_at` at that instant and `status_event_id` that event's. The returned `market` is the
+ * row read back after the open, `request` the approved review. The scheduled open is
+ * createScheduledMarket's (a minute before now) unless given: one still ahead, or a close that has
+ * come, opens nothing and the factory throws with the skip reason. A test that needs an open
+ * market and none of its history uses `createMarket`.
+ */
+export async function createOpenedMarket(
+  db: Db,
+  input: CreateScheduledMarketInput = {},
+): Promise<ReviewedMarket> {
+  const { market: scheduled, request } = await createScheduledMarket(db, input);
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, scheduled.id);
+    const [current] = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, scheduled.id))
+      .for('update');
+    const now = await clockTimestamp(tx);
+    const result = await openScheduledMarket(tx, {
+      market: current!,
+      now,
+      actorId: null,
+      source: 'job',
+    });
+    if (!result.opened) {
+      throw new Error(`createOpenedMarket: the market did not open (${result.reason})`);
+    }
+    return { market: result.row, request };
   });
 }
 

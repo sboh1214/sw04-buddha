@@ -654,16 +654,16 @@ type SeedMarketOutcome =
  *
  * One deliberate divergence from that path: `close_at` is an absolute instant (ADR-0027), and
  * `assertFutureCloseAt` refuses a past one on create while this writes it anyway, so a late-run
- * seed still gets its 14 drafts. Opening such a draft is refused until an admin moves its close
- * time; the loop below says so on every run. The times keep the database's order (migration
- * 0051) all the same: the scheduled open is the run's database clock, floored to the minute and
- * kept before the close (`seedScheduledOpenAt`) — the one seed time relative to the run — and the
- * announcement, the scheduled judgement and the zone are the seed's (#22, ADR-0098).
+ * seed still gets its 14 drafts. Submitting such a draft for review is refused until an admin
+ * moves its close time; the loop below says so on every run. The times keep the database's order
+ * (migration 0051) all the same: the scheduled open is the run's database clock, floored to the
+ * minute and kept before the close (`seedScheduledOpenAt`) — the one seed time relative to the run
+ * — and the announcement, the scheduled judgement and the zone are the seed's (#22, ADR-0098).
  *
  * A market whose slug exists is never updated, with three exceptions, each on its own and on a
  * DRAFT only. An environment seeded by an older seed — a database #174's migration 0048 wiped and
  * seeded before #17, #23 and #22 deployed — would otherwise keep its 14 drafts without what the
- * open-items check asks for, and none could open:
+ * open-items check asks for, and none could be submitted for review:
  * - Tags (#17 AC 9): a draft with no `market_tags` row whose tags no admin has set since #17
  *   (`adminSetTags`) gets the seed's tags. A market with any tag keeps its set, and a draft an
  *   admin cleared on purpose stays clear.
@@ -765,7 +765,7 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
           return unchanged;
         }
         // A draft seeded before #17 (no tag at all), #23 (no rule item) or #22 (no time). Locked,
-        // then read again, title and close included — an admin's PATCH or open that committed
+        // then read again, title and close included — an admin's PATCH or submission that committed
         // while this waited is the market's — and each filled on its own unless an admin has set
         // it since (cleared it on purpose, say): a draft seeded before all three needs all three.
         const [locked] = await tx
@@ -893,24 +893,32 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     // Every run, not only the one that inserts: the cutoffs are absolute, so an environment
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
-    // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed. Only
-    // a draft or an open market has a close time still ahead of it to care about: a market in
-    // review or scheduled whose close has passed is sent back to a draft to move it (#78: the
-    // approval refuses a passed close), and #114 says what a paused one does.
-    if (outcome.status !== 'draft' && outcome.status !== 'open') continue;
+    // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed. A
+    // market not yet open — a draft, or one in review or scheduled (#78, #21) — or an open one has
+    // a close time still ahead of it to care about; #114 says what a paused one does.
+    if (!['draft', 'review', 'scheduled', 'open'].includes(outcome.status)) continue;
     const remainingMs = outcome.closeAt.getTime() - reportedAt.getTime();
     if (remainingMs <= 0 && outcome.status === 'draft') {
       // Seeded as written rather than skipped: skipping would make the fixture's size a
       // function of the calendar (every cutoff is in 2026, so a fresh seed would insert
-      // nothing at all from 2027). Submitting it for review (#78) and opening it are refused until
-      // an admin moves the close time (관리자 → 시장 상세 → 수정). The real fix is fresh copy
-      // (Q-M3-4), under a new slug.
+      // nothing at all from 2027). Submitting it for review (#78) is refused until an admin
+      // moves the close time (관리자 → 시장 상세 → 수정). The real fix is fresh copy (Q-M3-4),
+      // under a new slug.
       console.warn(
-        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it cannot be submitted for review or opened until its close time is moved forward (관리자 → 시장 상세 → 수정); refresh the seed copy`,
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it cannot be submitted for review until its close time is moved forward (관리자 → 시장 상세 → 수정); refresh the seed copy`,
+      );
+    } else if (remainingMs <= 0 && outcome.status !== 'open') {
+      // Submitted, or approved, before its cutoff passed. The approval refuses a passed close
+      // (#78) and the open never opens one (#21, ADR-0100), so it stays where it is — a
+      // scheduled one public as 개장 예정 — until an admin sends it back to a draft and moves the
+      // close there (ADR-0093 decision 2 #172 item 6).
+      console.warn(
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — send it back to a draft and move its close (관리자 → 시장 상세 → 초안으로 되돌리기); refresh the seed copy`,
       );
     } else if (remainingMs <= 0) {
-      // An admin opened the draft and its cutoff has since passed: the worker's per-minute
-      // `market.close` scan closes it (PLAN 5.5, M5), or an admin does.
+      // It opened — approved, then opened at its scheduled open (#21) — and its cutoff has since
+      // passed: the worker's per-minute `market.close` scan closes it (PLAN 5.5, M5), or an admin
+      // does.
       console.warn(
         `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — the worker's market.close scan will close it within a minute (or 관리자 → 시장 상세 → 마감); refresh the seed copy`,
       );

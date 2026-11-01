@@ -10,6 +10,7 @@ import { runLedgerAudit } from './ledger-audit.js';
 import { purgeCommunityRecords } from './community-records-purge.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
+import { openDueMarkets, openMarket } from './market-open.js';
 import { removeOrphanMedia } from './media-orphan-cleanup.js';
 import { purgeExpiredRecords } from './retention-purge.js';
 import { type ScanFailure } from './scan.js';
@@ -32,10 +33,10 @@ type JobResult = Record<string, unknown>;
 type Handler = (job: Job, context: JobContext) => Promise<JobResult>;
 
 /**
- * `market.close` / `market.finalize` payload (jobs.ts in @buddha/shared). A payload the schema
- * refuses is a producer bug, not a transient failure: retrying it three times with backoff
- * would only delay the failed-set entry, so it is UnrecoverableError. A scheduler job carries
- * `{}` (BullMQ stores an absent template `data` as an empty object) — the scan.
+ * `market.open` / `market.close` / `market.finalize` payload (jobs.ts in @buddha/shared). A
+ * payload the schema refuses is a producer bug, not a transient failure: retrying it three times
+ * with backoff would only delay the failed-set entry, so it is UnrecoverableError. A scheduler job
+ * carries `{}` (BullMQ stores an absent template `data` as an empty object) — the scan.
  */
 function parseMarketJob(job: Job): MarketJobData {
   const parsed = marketJobDataSchema.safeParse(job.data ?? {});
@@ -52,6 +53,17 @@ function parseMarketJob(job: Job): MarketJobData {
  * it with UnrecoverableError. `market.trader_count` (stats) is not scheduled by anything yet.
  */
 const HANDLERS: Partial<Record<string, Handler>> = {
+  // #21 (ADR-0100): the delayed job the API registers at a market's scheduled open, or the scan.
+  [JOB_NAMES.marketOpen]: async (job, { db, publish, logger }) => {
+    const { marketId } = parseMarketJob(job);
+    if (marketId) {
+      const result = await openMarket(db, marketId, publish);
+      logger.info(result, 'market open');
+      return result;
+    }
+    const { opened, skipped, failed, failures } = await openDueMarkets(db, publish);
+    return reportScan({ opened, skipped, failed }, failures, 'market open', opened, logger);
+  },
   [JOB_NAMES.marketClose]: async (job, { db, publish, logger }) => {
     const { marketId } = parseMarketJob(job);
     if (marketId) {

@@ -91,15 +91,20 @@ const draft: AdminMarket = {
   },
 };
 
+const inReview: AdminMarket = { ...draft, status: 'review' };
 const opened: AdminMarket = { ...draft, status: 'open', openAt: '2026-09-07T00:00:00.000Z' };
 
 /**
  * The detail screen as it stands after one good load with the API gone: an observer is
  * mounted (so an invalidation actually refetches — with none, `refetchType: 'active'` matches
  * nothing and any assertion here would pass against the unfixed code too), the first fetch
- * answers the draft, every later one fails.
+ * answers `first` (the draft unless given), every later one fails.
  */
-async function loadedDetail(id = ID, queryKey: readonly unknown[] = adminMarketKey(id)) {
+async function loadedDetail(
+  id = ID,
+  queryKey: readonly unknown[] = adminMarketKey(id),
+  first: AdminMarket = draft,
+) {
   let fetches = 0;
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
@@ -108,7 +113,7 @@ async function loadedDetail(id = ID, queryKey: readonly unknown[] = adminMarketK
     queryKey,
     queryFn: () => {
       fetches += 1;
-      return fetches === 1 ? Promise.resolve(draft) : Promise.reject(new Error('API is down'));
+      return fetches === 1 ? Promise.resolve(first) : Promise.reject(new Error('API is down'));
     },
     retry: false,
   });
@@ -119,12 +124,16 @@ async function loadedDetail(id = ID, queryKey: readonly unknown[] = adminMarketK
 
 describe('applyMarket', () => {
   it('keeps the transitioned row on screen when the invalidation refetch fails', async () => {
-    // The bug this pins: the POST succeeded, so the admin was told the market opened. With the
-    // response discarded and the refetch failing, react-query keeps the row it had — `draft`,
-    // with a live open button, under a success toast.
-    const { queryClient, observer, unsubscribe, fetches } = await loadedDetail();
+    // The bug this pins: the approval succeeded and opened the market at once (#21, ADR-0100),
+    // so the admin was told it opened. With the response discarded and the refetch failing,
+    // react-query keeps the row it had — `review`, with a live 승인, under a success toast.
+    const { queryClient, observer, unsubscribe, fetches } = await loadedDetail(
+      ID,
+      adminMarketKey(ID),
+      inReview,
+    );
     try {
-      expect(observer.getCurrentResult().data?.status).toBe('draft');
+      expect(observer.getCurrentResult().data?.status).toBe('review');
 
       await applyMarket(queryClient, ID, opened);
 
@@ -471,11 +480,12 @@ describe('applyRelatedMarkets (#65, ADR-0068)', () => {
   it('asks again for every public 관련 시장 list on a transition or an edit, and writes none', async () => {
     // Codex review on #214: which markets a public 관련 시장 list shows is decided by their
     // statuses, and each card carries the title. B's public list was read while A was a draft,
-    // so it held no A; the admin opens A (every transition and the edit come here, through
-    // `applyMarket`) and goes back to B's detail inside `staleTime` — the cached page would come
-    // back with A still missing. Those lists are not on screen during the admin write and no
-    // socket room repairs them, so the whole family is marked: A's own and B's, not mounted, are
-    // asked on their next mount; one that is mounted asks now. Nothing is written into them.
+    // so it held no A; the admin approves A and it opens (every transition and the edit come
+    // here, through `applyMarket`) and goes back to B's detail inside `staleTime` — the cached
+    // page would come back with A still missing. Those lists are not on screen during the admin
+    // write and no socket room repairs them, so the whole family is marked: A's own and B's, not
+    // mounted, are asked on their next mount; one that is mounted asks now. Nothing is written
+    // into them.
     const { queryClient, unsubscribe } = await loadedDetail();
     const THIRD_ID = 'c3d4e5f6-0000-4000-8000-000000000003';
     let fetches = 0;

@@ -4,7 +4,7 @@
  * it — job id, name, data, delay and options — and the best-effort contract (never throws,
  * bounded on a Redis that never answers) is pinned. Skips when TEST_* are unset.
  */
-import { JOB_NAMES, marketCloseJobId, marketFinalizeJobId } from '@buddha/shared';
+import { JOB_NAMES, marketCloseJobId, marketFinalizeJobId, marketOpenJobId } from '@buddha/shared';
 import { Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
@@ -116,6 +116,49 @@ describe.skipIf(!hasTestInfra)('MarketJobs (integration)', () => {
     const later = new Date(closeAt.getTime() + HOUR_MS);
     await jobs.scheduleClose(MARKET_ID, later, now);
     expect(await queue.getJobCountByTypes('delayed', 'waiting')).toBe(2);
+  });
+
+  it('registers market.open at the scheduled open, delayed from the DB instant, and cancels it by (market, instant) (#21)', async () => {
+    const now = new Date('2026-11-02T00:00:00.000Z');
+    const scheduledOpenAt = new Date(now.getTime() + 2 * HOUR_MS);
+    const closeAt = new Date(now.getTime() + 5 * HOUR_MS);
+    await jobs.scheduleOpen(MARKET_ID, scheduledOpenAt, now);
+    await jobs.scheduleClose(MARKET_ID, closeAt, now);
+    await jobs.scheduleOpen(OTHER_ID, scheduledOpenAt, now);
+
+    const job = await queue.getJob(marketOpenJobId(MARKET_ID, scheduledOpenAt));
+    expect(job).toMatchObject({
+      id: `market.open.${MARKET_ID}.${String(scheduledOpenAt.getTime())}`,
+      name: JOB_NAMES.marketOpen,
+      data: { marketId: MARKET_ID },
+      // `scheduledOpenAt - now` on the clock the caller passed, as the close's.
+      delay: 2 * HOUR_MS,
+    });
+    expect(job!.opts).toMatchObject({
+      jobId: marketOpenJobId(MARKET_ID, scheduledOpenAt),
+      attempts: 3,
+      backoff: { type: 'exponential', delay: 1_000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 1_000 },
+    });
+    // A repeat registration of the same instant keeps the one job; another instant is another.
+    await jobs.scheduleOpen(MARKET_ID, scheduledOpenAt, new Date(now.getTime() + 1_000));
+    expect(await queue.getDelayedCount()).toBe(3);
+    const earlier = new Date(scheduledOpenAt.getTime() - HOUR_MS);
+    await jobs.scheduleOpen(MARKET_ID, earlier, now);
+    expect(await queue.getDelayedCount()).toBe(4);
+
+    // A reschedule removes the job of the instant it moved from; only that one.
+    await jobs.cancelOpen(MARKET_ID, scheduledOpenAt);
+    expect(await queue.getJob(marketOpenJobId(MARKET_ID, scheduledOpenAt))).toBeUndefined();
+    expect(await queue.getJob(marketOpenJobId(MARKET_ID, earlier))).toBeDefined();
+    expect(await queue.getJob(marketOpenJobId(OTHER_ID, scheduledOpenAt))).toBeDefined();
+    expect(await queue.getJob(marketCloseJobId(MARKET_ID, closeAt))).toBeDefined();
+    // Already gone: no throw, no warning.
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    await expect(jobs.cancelOpen(MARKET_ID, scheduledOpenAt)).resolves.toBeUndefined();
+    expect(warn).not.toHaveBeenCalled();
+    expect(await queue.getDelayedCount()).toBe(3);
   });
 
   it('cancels the registered job by (market, instant) and tolerates one that is not there', async () => {

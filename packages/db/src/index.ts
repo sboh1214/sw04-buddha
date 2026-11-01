@@ -1,5 +1,12 @@
 export { closeDb, createDb, type CreateDbOptions, type Db } from './client.js';
 export {
+  openScheduledMarket,
+  type OpenScheduledMarketInput,
+  type OpenScheduledMarketResult,
+  type OpenSkipReason,
+  type OpenSource,
+} from './market-open.js';
+export {
   MarketTransitionError,
   transitionMarket,
   type MarketTransition,

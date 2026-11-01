@@ -35,9 +35,10 @@ import {
  * session naming B and SessionCacheGuard's reset — held here by `switchAccountUnderScreen`: B's
  * cookie in the tab and the session read again, while `GET /me` still answers as A — A's screen is
  * drawn again from A's `Me`, and a press on it goes with B's cookie. Before this, the server took
- * it from the cookie alone and the write was B's: B opened the market, marked the link, published
- * the theme. Now it is refused as another account's (403 naming `expectedAccountId`), the screen
- * says `copy.sessionChanged`, and nothing is written. A is the first seed admin, B the second.
+ * it from the cookie alone and the write was B's: B submitted the market for review, marked the
+ * link, published the theme. Now it is refused as another account's (403 naming
+ * `expectedAccountId`), the screen says `copy.sessionChanged`, and nothing is written. A is the
+ * first seed admin, B the second.
  */
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
@@ -268,7 +269,7 @@ async function linkFlagRow(page: Page, url: string) {
 }
 
 test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', () => {
-  test('시장 상세의 공개는 그 화면의 관리자를 대어 거절되고, 시장은 초안 그대로다', async ({
+  test('시장 상세의 검수 제출은 그 화면의 관리자를 대어 거절되고, 시장은 초안 그대로다', async ({
     browser,
     page,
     admin,
@@ -280,24 +281,26 @@ test.describe('탭의 계정이 바뀌는 틈의 관리자 쓰기 (ADR-0092)', (
       page,
       secondAdmin,
       `/admin/markets/${draft.id}`,
-      () => expect(page.getByTestId('market-open')).toBeEnabled(),
+      () => expect(page.getByTestId('market-review-submit')).toBeEnabled(),
     );
     try {
+      // 검수 제출, the one way out of a draft since #21 (ADR-0100), in place of the interim 열기.
       const writes = adminWrites(page);
-      const path = `/api/v1/admin/markets/${draft.id}/open`;
+      const path = `/api/v1/admin/markets/${draft.id}/submit`;
       const answered = answerOf(page, 'POST', path);
-      await page.getByTestId('market-open').click();
+      await page.getByTestId('market-review-submit').click();
       expect(await answered).toBe(403);
       await expect(sessionChangedToast(page)).toBeVisible();
       expect(writes).toEqual([
         { method: 'POST', path, query: '', body: { expectedAccountId: a.id } },
       ]);
-      // Nobody opened it: still a draft, with no `opened` event.
+      // Nobody submitted it: still a draft, with no `submitted` event and no review request.
       const market = await dataOf<AdminMarket>(
         await admin.get(`/api/v1/admin/markets/${draft.id}`),
       );
       expect(market.status).toBe('draft');
       expect(market.events.map((event) => event.type)).toEqual(['created']);
+      expect(market.review.pending).toBeNull();
     } finally {
       await close();
     }

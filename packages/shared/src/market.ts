@@ -509,17 +509,18 @@ export const adminMarketSchema = marketSchema
     events: z.array(marketEventSchema),
     /**
      * What the open-items check finds missing (`missingOpenItems`, #17, #23, #22), in OPEN_ITEMS
-     * order — on a draft, what the review submission (#78) and the interim open refuse it for; in
-     * REVIEW, what the approval refuses it for; empty once it may go on. Every status reports it,
-     * so a market whose category was hidden after it opened shows that too, and so does one opened
-     * before #23 or #22 with its rule items or times blank.
+     * order — on a draft, what the review submission (#78) refuses it for; in REVIEW, what the
+     * approval refuses it for; empty once it may go on. The open (#21) does not check it again: the
+     * approval was the last gate. Every status reports it, so a market whose category was hidden
+     * after its approval shows that too, and so does one opened before #23 or #22 with its rule
+     * items or times blank.
      */
     missingOpenItems: z.array(openItemSchema),
     /**
      * The 선행 마감 gap in minutes the check above holds the market to (#22, ADR-0098; #78,
      * ADR-0099): the one its lead close was last checked against (`markets.lead_close_gap_minutes`,
-     * which the review submission and the interim open store, a 반려 or a 되돌리기 clears, or an
-     * open market's first lead check) once there is one, else the release setting
+     * which the review submission stores, a 반려 or a 되돌리기 clears, or an open market's first
+     * lead check; the open (#21) keeps it as it is) once there is one, else the release setting
      * `market.lead_close_gap`'s current reading; null while that is undecided and the market has
      * none. The admin screen recomputes which time rule is broken from it (`timeRuleViolations`).
      */
@@ -604,7 +605,8 @@ const marketFields = {
     .nullish(),
   /**
    * 예정 개장 시각 (#22): the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before
-   * the close, in whole minutes. Once SCHEDULED it moves by its own write, with a reason (#78).
+   * the close, in whole minutes. Once SCHEDULED it moves by its own write, with a reason (#78),
+   * and the market opens at it (#21).
    */
   scheduledOpenAt: storableInstantSchema.nullish(),
   /**

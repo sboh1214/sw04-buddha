@@ -1,5 +1,5 @@
 import { MARKET_REJECT_REASONS, MARKET_REVIEW_CHECKLIST } from '@buddha/shared';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { copy } from '@/copy';
 import { ME_QUERY_KEY } from '@/hooks/use-me';
 import { type AdminMarket, type Me } from '@/lib/api';
@@ -87,8 +87,11 @@ const inReview: AdminMarket = {
   },
 };
 
-const draw = (market: AdminMarket, operatorId: string | undefined) =>
-  renderWithQueries(<ReviewPanelBody market={market} operatorId={operatorId} onOpen={() => {}} />);
+/** The panel for `market` as read at `readAt` (0 unless given: before any close). */
+const draw = (market: AdminMarket, operatorId: string | undefined, readAt = 0) =>
+  renderWithQueries(
+    <ReviewPanelBody market={market} readAt={readAt} operatorId={operatorId} onOpen={() => {}} />,
+  );
 
 const isOff = (html: string, testId: string) => {
   const element = byTestId(html, testId);
@@ -187,24 +190,68 @@ describe('ReviewPanelBody', () => {
     expect(byTestId(draft, 'market-review-pending')).toBeUndefined();
   });
 
-  it('offers a scheduled market’s reschedule and 되돌리기, and no decision', () => {
+  describe('a scheduled market', () => {
+    // Opens 2026-11-10, closes 2026-11-20 (base). The panel judges the row as read at `readAt`.
     const scheduled: AdminMarket = {
       ...inReview,
       status: 'scheduled',
       review: { ...inReview.review, pending: null },
     };
-    const html = draw(scheduled, CREATOR.id);
-    expect(byTestId(html, 'market-review-scheduled')?.text).toContain(
-      copy.adminMarketReviewScheduledNote,
-    );
-    expect(byTestId(html, 'market-review-approve')).toBeUndefined();
-    expect(byTestId(html, 'market-review-reject')).toBeUndefined();
-    expect(byTestId(html, 'market-review-exclusion')).toBeUndefined();
-    // The creator may change the time and send it back (#172 item 6).
-    expect(isOff(html, 'market-review-reschedule')).toBe(false);
-    expect(isOff(html, 'market-review-revert')).toBe(false);
-    expect(byTestId(html, 'market-review-excluded')).toBeUndefined();
-    expect(byTestId(html, 'market-review-same-condition')).toBeUndefined();
+    const drawAt = (readAt: string) => draw(scheduled, CREATOR.id, new Date(readAt).getTime());
+
+    it('says it opens by itself at its scheduled open (#21), until its close passes', () => {
+      // Before its scheduled open, and past it while the worker has not run yet.
+      for (const now of ['2026-11-05T00:00:00.000Z', '2026-11-15T00:00:00.000Z']) {
+        const html = drawAt(now);
+        expect(byTestId(html, 'market-review-scheduled')?.text, now).toContain(
+          copy.adminMarketReviewScheduledNote,
+        );
+        expect(byTestId(html, 'market-review-close-passed'), now).toBeUndefined();
+      }
+    });
+
+    it('keeps the note for a row read before its close, whatever the clock says now', () => {
+      // Codex review on #21: a page left open across the close holds a row the worker may have
+      // opened since; the detail re-reads it at the close, and only that read may warn.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        vi.setSystemTime(new Date('2026-11-21T00:00:00.000Z'));
+        const html = drawAt('2026-11-19T23:59:59.999Z');
+        expect(byTestId(html, 'market-review-scheduled')).toBeDefined();
+        expect(byTestId(html, 'market-review-close-passed')).toBeUndefined();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('warns in place of the note when read after its close: it never opens (#172 item 6)', () => {
+      // Read at the close itself the open is refused already (`close_at > now`).
+      for (const now of ['2026-11-20T00:00:00.000Z', '2026-11-21T00:00:00.000Z']) {
+        const html = drawAt(now);
+        const warning = byTestId(html, 'market-review-close-passed');
+        expect(warning?.text, now).toContain(copy.adminMarketReviewCloseLapsed);
+        expect(warning?.attributes.role, now).toBe('status');
+        expect(byTestId(html, 'market-review-scheduled'), now).toBeUndefined();
+        // 초안으로 되돌리기 is the way out; the reschedule stays for the server to refuse.
+        expect(isOff(html, 'market-review-revert'), now).toBe(false);
+        expect(isOff(html, 'market-review-reschedule'), now).toBe(false);
+      }
+      // It says the market will not open, and to send it back to a draft to fix its times.
+      expect(copy.adminMarketReviewCloseLapsed).toContain('열리지 않습니다');
+      expect(copy.adminMarketReviewCloseLapsed).toContain('초안으로 되돌려');
+    });
+
+    it('offers its reschedule and 되돌리기, and no decision', () => {
+      const html = drawAt('2026-11-05T00:00:00.000Z');
+      expect(byTestId(html, 'market-review-approve')).toBeUndefined();
+      expect(byTestId(html, 'market-review-reject')).toBeUndefined();
+      expect(byTestId(html, 'market-review-exclusion')).toBeUndefined();
+      // The creator may change the time and send it back (#172 item 6).
+      expect(isOff(html, 'market-review-reschedule')).toBe(false);
+      expect(isOff(html, 'market-review-revert')).toBe(false);
+      expect(byTestId(html, 'market-review-excluded')).toBeUndefined();
+      expect(byTestId(html, 'market-review-same-condition')).toBeUndefined();
+    });
   });
 
   it('draws only the 검수 기록 past the review', () => {

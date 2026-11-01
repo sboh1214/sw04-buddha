@@ -94,8 +94,10 @@ export const markets = pgTable(
     settlementFeeBps: smallint().notNull().default(0),
     // schedule / resolution
     /**
-     * The ACTUAL open, stamped by the open path: the 신규 order and its index below read it
-     * (ADR-0065). The planned one is `scheduled_open_at`.
+     * The ACTUAL open: the instant of the SCHEDULED → OPEN transition (`openScheduledMarket`, #21,
+     * ADR-0100) — the worker's at the scheduled open, or the approval's or the reschedule's that
+     * found that time already come. The 신규 order and its index below read it (ADR-0065). The
+     * planned one is `scheduled_open_at`.
      */
     openAt: timestampTz(),
     /**
@@ -106,9 +108,12 @@ export const markets = pgTable(
      * order between them compares whole UTC minutes (#172 item 12), in the API and in the CHECKs
      * below, which the API's refusals precede.
      *
-     * 예정 개장 시각: the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before the
-     * close (`markets_open_before_close_check`). The one item a SCHEDULED market changes without a
-     * new review, with a reason (#78, ADR-0099; #172 item 6): nothing else of a market in REVIEW or
+     * 예정 개장 시각: the market opens at it and no earlier (ADR-0093 decision 1 #173 item 1,
+     * decision 3 '#21 앞당긴 개장'; #21, ADR-0100): a SCHEDULED market's delayed `market.open` job
+     * fires at it and the per-minute open scan reads it, and an approval or a reschedule that finds
+     * it already come opens the market at once. Before the close
+     * (`markets_open_before_close_check`). The one item a SCHEDULED market changes without a new
+     * review, with a reason (#78, ADR-0099; #172 item 6): nothing else of a market in REVIEW or
      * SCHEDULED is edited.
      */
     scheduledOpenAt: timestampTz(),
@@ -137,17 +142,18 @@ export const markets = pgTable(
     judgementTimeZone: varchar({ length: 64 }),
     /**
      * The 선행 마감 gap in minutes this market's lead close was last checked against: the release
-     * setting's reading the open stored, or that an open market's first lead re-check (a close or
-     * announcement edit) stored; later re-checks use it (docs/SETTINGS.md: a long-lived piece of
-     * work keeps the value it started with). Null until one of those happens — before the open,
-     * or after an open with the setting undecided and no edit since (#22, ADR-0098).
+     * setting's reading its submission stored, or that an open market's first lead re-check (a
+     * close or announcement edit) stored; later re-checks use it (docs/SETTINGS.md: a long-lived
+     * piece of work keeps the value it started with). Null until one of those stores a reading —
+     * before the submission, or after one with the setting undecided and no edit since (#22,
+     * ADR-0098). A market opened before #21 holds what the interim open stored.
      *
-     * The review (#78, ADR-0099; ADR-0098 결정 7-6 left it to #78) uses it too: the submission
-     * stores the gap it checked (null with the setting undecided and no announcement needing one),
-     * the approval checks again with it (a SCHEDULED market's open-time change asks only the open
-     * before the close, which no gap touches), and a 반려 or a 되돌리기 clears it, so a draft is
-     * checked against the setting in force at its next submission or interim open. No CHECK ties
-     * it to a status.
+     * The review (#78, ADR-0099; ADR-0098 결정 7-6 left it to #78): the submission stores the gap
+     * it checked (null with the setting undecided and no announcement needing one), the approval
+     * checks again with it (a SCHEDULED market's open-time change asks only the open before the
+     * close, which no gap touches), and a 반려 or a 되돌리기 clears it, so a draft is checked
+     * against the setting in force at its next submission. The open neither checks it again nor
+     * writes it (#21, ADR-0100; ADR-0098 7-6). No CHECK ties it to a status.
      */
     leadCloseGapMinutes: integer(),
     /**

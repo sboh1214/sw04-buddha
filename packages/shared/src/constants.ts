@@ -119,8 +119,9 @@ export const MARKET_RESOLVE_NOTE_MAX = 1_000;
 /** `POST /admin/markets/:id/resolve` evidenceUrl, likewise. */
 export const MARKET_RESOLVE_EVIDENCE_URL_MAX = 500;
 /**
- * Markets one scan job closes or finalizes per run (PLAN 9: `market.close` / `market.finalize`
- * without a market id scan everything due). The scans repeat every minute, so a backlog wider
- * than this is drained over several runs instead of holding one job for as long as it takes.
+ * Markets one scan job opens, closes or finalizes per run (PLAN 9: `market.open` (#21),
+ * `market.close` and `market.finalize` without a market id scan everything due). The scans repeat
+ * every minute, so a backlog wider than this is drained over several runs instead of holding one
+ * job for as long as it takes.
  */
 export const MARKET_SCAN_BATCH_MAX = 500;

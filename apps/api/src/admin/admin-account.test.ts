@@ -3,7 +3,7 @@
  * (`expectedAccountId`) and checks it against the cookie's account before anything is read
  * (`assertExpectedAccount`). A tab whose session switched to another admin before
  * SessionCacheGuard reset its cache still draws the first admin's screen; a write from it would
- * otherwise be recorded as the second admin — a market opened, a notice pinned, a setting
+ * otherwise be recorded as the second admin — a market approved, a notice pinned, a setting
  * changed by an admin the user was not looking at. The single suites prove the refusal route by
  * route; this one proves COMPLETENESS, as admin-audit.test.ts does for the audit rows: an admin
  * write added tomorrow without the account fails here until it takes one. There is no exception
@@ -23,7 +23,7 @@ describe('the admin on screen (ADR-0092)', () => {
   it('finds the admin writes at all', () => {
     // A guard on the discovery: a walk that found nothing would pass everything below.
     expect(writes.length).toBeGreaterThanOrEqual(40);
-    expect(writes.map((route) => route.key)).toContain('POST /admin/markets/:id/open');
+    expect(writes.map((route) => route.key)).toContain('POST /admin/markets/:id/approve');
   });
 
   it('names the account in the body — or, for a DELETE, the query — of every admin write', () => {

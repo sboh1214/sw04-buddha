@@ -188,7 +188,8 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review, below; #21 scheduled open, #114 pause, #152 judgement, #20 cancel).
+ * makes (#78 review, below; #114 pause, #152 judgement, #20 cancel) — #21's scheduled open writes
+ * the `opened` the interim open wrote before it.
  */
 export const MARKET_EVENT_TYPES = [
   /** → draft: the row is written (`to_status` only). */
@@ -223,7 +224,13 @@ export const MARKET_EVENT_TYPES = [
    * 개장'). Payload `{before, after, reason}`, the times as ISO instants.
    */
   'open_rescheduled',
-  /** draft → open: the admin's direct open (ADR-0027, until #21). */
+  /**
+   * scheduled → open (#21, ADR-0100; ADR-0093 decision 1 #173 item 1, decision 2 #172 item 6):
+   * the worker at `scheduled_open_at` (actor NULL), or the approval or the reschedule that found
+   * the scheduled open already come (actor that admin). Payload `{openAt, closeAt, source}`: the
+   * instants as ISO and `source` 'job', 'approval' or 'reschedule'. Rows from before #21 are draft
+   * → open, the admin's direct open (ADR-0027, the interim open), payload `{openAt, closeAt}`.
+   */
   'opened',
   /** open → closed: the admin's close (until #114) or the worker at `close_at`. */
   'closed',
@@ -341,6 +348,11 @@ export const ADMIN_ACTION_TYPES = [
   'market_revert',
   /** A SCHEDULED market's 예정 개장 시각 moved: payload `{before, after, reason}`, ISO instants. */
   'market_reschedule',
+  /**
+   * Retired (#21, ADR-0100): the interim open (ADR-0027, draft → open) wrote it until #21 removed
+   * that action. Kept so the rows it wrote still parse and render; nothing writes it now — an open
+   * is recorded by its `opened` market event (the actor and `source`).
+   */
   'market_open',
   'market_close',
   'market_resolve',

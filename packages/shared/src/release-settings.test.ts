@@ -206,10 +206,12 @@ describe('release settings registry', () => {
     const { description } = LEAD_CLOSE_GAP_SETTING;
     expect(description).toContain('설계 제안 60분');
     expect(description).toContain(
-      '미정이면 발표 예정 시각이 있는 시장은 선행 마감을 통과하지 못해 열 수 없다',
+      '미정이면 발표 예정 시각이 있는 시장은 선행 마감을 통과하지 못해 검수 제출할 수 없다',
     );
     expect(description).toContain('초안을 만들거나 고칠 때는 거절하지 않는다');
-    expect(description).toContain('시장은 열 때 읽은 값을 저장해');
+    expect(description).toContain('시장은 검수 제출할 때 읽은 값을 저장해');
+    // Only a submission stores the gap: the open neither checks nor stores it (#21, ADR-0100).
+    expect(description).not.toContain('열 수 없다');
     // The reading is what the time rules take: undecided is null, which a market with an
     // announcement cannot pass.
     const times = {

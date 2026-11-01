@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import {
   AUDIT_FAILURE_KINDS,
   CATEGORY_UNSELECTABLE_REASONS,
   MARKET_EVENT_TYPES,
   MARKET_RESULTS,
   MARKET_STATUSES,
+  type MarketStatus,
   MINUS_SIGN,
   OPEN_ITEMS,
   type OpenItem,
@@ -47,7 +49,11 @@ import {
   marketEventRows,
   marketFormError,
   openItemsNotice,
+  MAX_TIMEOUT_MS,
+  SCHEDULED_OPEN_POLL_MS,
   SETTLEMENT_POLL_INTERVAL_MS,
+  adminMarketPollInterval,
+  scheduledMarketPollDelay,
   settlementPollInterval,
   settlementStepViews,
   transitionErrorMessage,
@@ -674,13 +680,14 @@ describe('openItemsNotice', () => {
   });
 
   it("says what a draft still lacks, joined with ' · ' in OPEN_ITEMS order", () => {
-    // The review's submission (#78) and the interim open take the same check.
+    // The review's submission (#78) takes the check; the interim open that took it too went with
+    // #21 (ADR-0100), and the open checks nothing of it again.
     expect(draft([...OPEN_ITEMS])).toBe(
-      '검수 제출·열기 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
+      '검수 제출 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
         '대체 출처 · 전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 예정 개장 시각 · ' +
         '거래 마감 시각 · 예정 판정 시각 · 판정 기준 시간대 · 시각 순서 · 선행 마감 · 카테고리 · 태그 1~5개',
     );
-    expect(draft(['tags'])).toBe('검수 제출·열기 전에 채우거나 고칠 항목: 태그 1~5개');
+    expect(draft(['tags'])).toBe('검수 제출 전에 채우거나 고칠 항목: 태그 1~5개');
     expect(draft(['tags', 'primarySource', 'yesCondition'])).toBe(
       `${copy.adminMarketOpenItems}: ` +
         [copy.openItemYesCondition, copy.openItemPrimarySource, copy.openItemTags].join(' · '),
@@ -857,7 +864,7 @@ describe('transitionErrorMessage', () => {
     expect(transitionErrorMessage(apiError(403, 'FORBIDDEN'))).toBe(copy.errUnknown);
   });
 
-  it('names the specific refusals of open / close / void', () => {
+  it('names the specific refusals of the submission and of close', () => {
     expect(transitionErrorMessage(apiError(409, 'MARKET_NOT_OPEN'))).toBe(copy.errMarketNotOpen);
     expect(
       transitionErrorMessage(
@@ -869,14 +876,17 @@ describe('transitionErrorMessage', () => {
         apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['closeAt'], message: 'past' }]),
       ),
     ).toBe(copy.errMarketCloseAt);
-    // 열기 before the scheduled open (#22, ADR-0093 decision 3 '#21 앞당긴 개장'): move it earlier.
+    // The interim open's 'not reached yet' went with it (#21, ADR-0100): no transition here names
+    // the scheduled open any more — a reschedule's refusals are the review's (`reviewFailure`) — so
+    // one would be an ordinary invalid body.
     expect(
       transitionErrorMessage(
         apiError(422, 'VALIDATION_ERROR', 'x', [
           { path: ['scheduledOpenAt'], message: 'not reached yet' },
         ]),
       ),
-    ).toBe(copy.errMarketScheduledOpenNotReached);
+    ).toBe(copy.errMarketInvalid);
+    expect(Object.keys(copy)).not.toContain('errMarketScheduledOpenNotReached');
   });
 
   it('names the refusal of a second 판정 as a stale screen', () => {
@@ -919,7 +929,7 @@ describe('transitionErrorMessage', () => {
         { path: ['tags'], message: 'required' },
       ]),
     ).toBe(
-      '검수 제출·열기 전에 채우거나 고칠 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개',
+      '검수 제출 전에 채우거나 고칠 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개',
     );
     expect(refused([{ path: ['tags'], message: 'required' }])).toBe(
       `${copy.errMarketOpenItemsMissing}: ${copy.openItemTags}`,
@@ -941,7 +951,7 @@ describe('transitionErrorMessage', () => {
       `${copy.errMarketOpenItemsMissing}.`,
     );
     // No details, or none this screen knows: the line alone.
-    expect(refused()).toBe('검수 제출·열기 전에 채우거나 고칠 항목이 있습니다.');
+    expect(refused()).toBe('검수 제출 전에 채우거나 고칠 항목이 있습니다.');
     // The times and the relations between them (#22), with their messages.
     expect(
       refused([
@@ -972,8 +982,9 @@ describe('transitionErrorMessage', () => {
   });
 
   it('no longer reads RULES_REQUIRED as a refused open: only an open market PATCH answers it', () => {
-    // Open answers OPEN_ITEMS_MISSING since #17; the PATCH's RULES_REQUIRED lands on the rule
-    // item it names (`marketFormError`), so a stray one here is the generic toast.
+    // The interim open answered OPEN_ITEMS_MISSING from #17 until it went with #21; the PATCH's
+    // RULES_REQUIRED lands on the rule item it names (`marketFormError`), so a stray one here is
+    // the generic toast.
     expect(transitionErrorMessage(apiError(422, 'RULES_REQUIRED'))).toBe(copy.errUnknown);
   });
 
@@ -1242,5 +1253,116 @@ describe('deltaMoveKey', () => {
     // badge, dismissed after the first, would stay dark for the second (`recentMove`, ticks.ts).
     const label = deltaLabel(0.1);
     expect(deltaMoveKey(50, label)).toBe(deltaMoveKey(50, label));
+  });
+});
+
+describe('scheduledMarketPollDelay (#21, ADR-0100)', () => {
+  const scheduledOpenAt = '2026-11-10T00:00:00.000Z';
+  const closeAt = '2026-11-20T00:00:00.000Z';
+  const at = (iso: string) => new Date(iso).getTime();
+  const scheduled = { status: 'scheduled' as const, scheduledOpenAt, closeAt };
+  /** The delay as the hook asks it: right after a read, so read and now are one instant. */
+  const delayAt = (market: Parameters<typeof scheduledMarketPollDelay>[0], iso: string) =>
+    scheduledMarketPollDelay(market, at(iso), at(iso));
+
+  it('reads it again at its scheduled open', () => {
+    expect(delayAt(scheduled, '2026-11-09T23:59:00.000Z')).toBe(60_000);
+    expect(delayAt(scheduled, '2026-11-09T23:59:59.999Z')).toBe(1);
+  });
+
+  it('then every few seconds until it is no longer 개장 예정, the worker having opened it', () => {
+    expect(SCHEDULED_OPEN_POLL_MS).toBe(5_000);
+    expect(delayAt(scheduled, scheduledOpenAt)).toBe(SCHEDULED_OPEN_POLL_MS);
+    expect(delayAt(scheduled, '2026-11-15T00:00:00.000Z')).toBe(SCHEDULED_OPEN_POLL_MS);
+    for (const status of MARKET_STATUSES.filter((value) => value !== 'scheduled')) {
+      expect(delayAt({ ...scheduled, status }, '2026-11-15T00:00:00.000Z'), status).toBe(false);
+    }
+    expect(scheduledMarketPollDelay(undefined, 0)).toBe(false);
+  });
+
+  it('and once at its close, for the answer the warning judges; after that read, no more', () => {
+    // Under the poll interval to go: the read lands on the close itself.
+    expect(delayAt(scheduled, '2026-11-19T23:59:58.000Z')).toBe(2_000);
+    // The row read at or after the close stands: nothing opens the market any more.
+    expect(delayAt(scheduled, closeAt)).toBe(false);
+    expect(delayAt(scheduled, '2026-11-21T00:00:00.000Z')).toBe(false);
+  });
+
+  it('re-reads a row read before the close but asked after it at the poll, never at once', () => {
+    // A failed read leaves `dataUpdatedAt` before the close (query-core moves only
+    // `errorUpdatedAt`): an immediate delay would refire on every failure — on a 401 after a
+    // sign-out, a request loop (verification of the Codex fix on #21).
+    const before = at('2026-11-19T23:59:59.000Z');
+    for (const now of [
+      '2026-11-20T00:00:00.000Z',
+      '2026-11-20T00:00:00.001Z',
+      '2026-11-21T00:00:00Z',
+    ]) {
+      expect(scheduledMarketPollDelay(scheduled, before, at(now)), now).toBe(
+        SCHEDULED_OPEN_POLL_MS,
+      );
+    }
+  });
+
+  it('reads at the close when the scheduled open is the later, or missing', () => {
+    // A scheduled open at or past the close cannot be stored (#22), but the earlier one wins.
+    expect(delayAt({ ...scheduled, scheduledOpenAt: null }, '2026-11-19T23:00:00.000Z')).toBe(
+      3_600_000,
+    );
+    expect(
+      delayAt(
+        { ...scheduled, scheduledOpenAt: '2026-11-21T00:00:00.000Z' },
+        '2026-11-19T23:00:00Z',
+      ),
+    ).toBe(3_600_000);
+  });
+
+  it('caps a far scheduled open at the longest timer, and gives up on an unreadable close', () => {
+    expect(MAX_TIMEOUT_MS).toBe(2_147_483_647);
+    const far = {
+      ...scheduled,
+      scheduledOpenAt: '2027-06-01T00:00:00.000Z',
+      closeAt: '2027-07-01T00:00:00.000Z',
+    };
+    expect(delayAt(far, '2026-11-01T00:00:00.000Z')).toBe(MAX_TIMEOUT_MS);
+    expect(delayAt({ ...scheduled, closeAt: 'nope' }, '2026-11-01T00:00:00.000Z')).toBe(false);
+  });
+});
+
+describe('adminMarketPollInterval', () => {
+  const market = (status: MarketStatus) => ({
+    status,
+    scheduledOpenAt: '2000-01-01T00:00:00.000Z',
+    closeAt: '2999-01-01T00:00:00.000Z',
+  });
+
+  it('is the settlement poll for a judged market, the 개장 예정 re-read for a scheduled one', () => {
+    const readAt = Date.now();
+    for (const status of MARKET_STATUSES) {
+      const interval = adminMarketPollInterval({ data: market(status), dataUpdatedAt: readAt });
+      const expected =
+        status === 'resolved' || status === 'settling'
+          ? SETTLEMENT_POLL_INTERVAL_MS
+          : status === 'scheduled'
+            ? SCHEDULED_OPEN_POLL_MS
+            : false;
+      expect(interval, status).toBe(expected);
+    }
+    expect(adminMarketPollInterval({ data: undefined, dataUpdatedAt: 0 })).toBe(false);
+  });
+
+  it('is what the admin detail polls by, and the review panel judges the row it read', () => {
+    // The fix lives at two call sites the unit tests above cannot reach (components and hooks
+    // are not run here): pin them.
+    const source = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(source('../hooks/use-admin-markets.ts')).toContain(
+      'refetchInterval: (query) => adminMarketPollInterval(query.state),',
+    );
+    expect(source('../app/admin/markets/[id]/admin-market-detail.tsx')).toContain(
+      'readAt={market.dataUpdatedAt}',
+    );
+    expect(source('../app/admin/markets/[id]/market-review-panel.tsx')).toContain(
+      'const closeLapsed = scheduledCloseLapsed(market, readAt);',
+    );
   });
 });

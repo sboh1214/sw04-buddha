@@ -623,7 +623,7 @@ M2를 마친 뒤 오너가 세 가지를 정했다(PLAN §17 Q2/Q3): ① 충전�
 ## ADR-0027 — 시장 · LMSR · 거래 · 관리자 시장 CRUD (M3)
 
 - 날짜: 2026-09-06
-- 상태: 채택, 일부 대체됨(ADR-0048: 직접 AMM 체결 `POST /quotes`·`POST /trades`와 슬리피지 가드, `MarketMechanism`, 시장의 LMSR 상태 열과 준비금 `maxLossP`, 관리자 무효와 원가 환불 `MARKET_VOID_REFUND`, 개장 'open' 틱과 LMSR 확률 `pYesBp`, 시드가 검수 없이 연 시장, 결과의 `lmsr.test.ts` 다섯 불변식 — 관리자 시장 생성·수정·열기·마감, 공개 읽기, `GET /me/positions`·`GET /me/orders`, 포지션 회계는 유효), 일부 대체됨(ADR-0050: `realized_pnl_p`와 `volume` 정렬 키 `(volume_p, id)`는 `realized_pnl_coin`·`(volume_coin, id)`이다 — 정렬과 포지션 회계는 유효), 일부 대체됨(ADR-0059: LMSR 엔진의 상태 `{ qYes, qNo, b }`·`cost`·개장 확률 p0로 시작하는 `initState`·틱의 `probabilityBp` — 곡선은 N01 §6 꼴의 `lmsrCost`·`probabilityYes(d, b)`·`referencePriceCoin`·`yesUnitCostCoin`이고 개장 기준은 모든 시장 50%다), 일부 대체됨(ADR-0065: 공개 목록 정렬의 `newest` = (created_at, id) desc와 `volume` = (volume_p, id) desc, 그리고 거래량 기본 정렬 — 정렬은 `recommended`(최근 24시간 거래량 → 실제 개장 시각, 기본)·`newest`(실제 개장 시각 `open_at`, 없으면 끝)·`closing`이고, 거래량 순은 #132가 다시 넣는다. `closing`의 키셋, 정렬별 키셋이라는 결정, 초안 404와 나머지 공개 읽기는 유효), 일부 대체됨(ADR-0092: 관리자 시장의 생성(`POST /admin/markets`)·수정(`PATCH /admin/markets/:id`)·열기·마감(`POST /admin/markets/:id/open`·`/close` — 전에는 본문이 없었다)은 본문에 화면의 관리자 `expectedAccountId`를 받아 무엇을 읽거나 잠그기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이다. 수정의 '한 필드 이상'은 그 칸을 세지 않고, 계정은 저장하지 않는다(`created` 사건의 본문에도 없다). 관리자 시장 화면은 그려진 `Me`의 관리자를 대고, 시장 만들기·고치기의 양식은 그 관리자마다 다시 그리며(그것을 알 때까지 칸이 꺼져 있다) 마감의 확인 창은 연 관리자와 함께 쥐어, 화면의 관리자가 그 자리에서 바뀌면 적던 것이 비고 창이 닫힌다(ADR-0092 결정 1·2·5, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효), 일부 대체됨(ADR-0095: 상태 draft/open/closed/voided — 상태는 열한 값이고(ADR-0093 #173 12항), 무효는 결과 유형 VOID다. 초안에서 바로 여는 열기와 관리자 한 명의 마감은 #21·#114까지 임시 전이로 남는다. 공개 읽기는 초안과 검수 중을 404로 숨긴다. 나머지 결정은 유효), 일부 대체됨(ADR-0096: 열기의 '정산 규칙이 없으면 `RULES_REQUIRED`' — 열기는 개설 항목 검사(정산 규칙·고를 수 있는 카테고리·태그 1\~5개)를 통과해야 하고 빠지면 `OPEN_ITEMS_MISSING`이다. `RULES_REQUIRED`는 거래 중 시장의 규칙을 비우는 수정에만 남는다. 나머지는 유효), 일부 대체됨(ADR-0097: 시장의 `rules`·`resolution_source` 한 칸씩 — 규칙은 항목들(배경·YES·NO 조건·사건 기한·장기 지연 기한·지연·취소·무효 처리·전환 조건)과 `market_sources`의 1차·대체 출처이고, `rules_edited`는 규칙 항목 무엇이든 바뀔 때 `{items, before, after}`이며, `RULES_REQUIRED`는 거래 중 시장에서 새로 빠지는 규칙 항목마다다. 거래 중 수정의 범위는 #80의 것이고 나머지는 유효), 일부 대체됨(ADR-0098: 열린 시장의 마감 수정 — 늦추기만, 예정 판정 시각까지(오너 답 A2), 선행 마감을 다시 보고, 예정 개장·예정 판정 시각은 바꾸지 않는다. 관리자 열기는 예정 개장 시각이 된 뒤에만이다(ADR-0093 결정 3 '#21 앞당긴 개장'). 보충 절차는 #80의 것이고 나머지는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0048: 직접 AMM 체결 `POST /quotes`·`POST /trades`와 슬리피지 가드, `MarketMechanism`, 시장의 LMSR 상태 열과 준비금 `maxLossP`, 관리자 무효와 원가 환불 `MARKET_VOID_REFUND`, 개장 'open' 틱과 LMSR 확률 `pYesBp`, 시드가 검수 없이 연 시장, 결과의 `lmsr.test.ts` 다섯 불변식 — 관리자 시장 생성·수정·열기·마감, 공개 읽기, `GET /me/positions`·`GET /me/orders`, 포지션 회계는 유효), 일부 대체됨(ADR-0050: `realized_pnl_p`와 `volume` 정렬 키 `(volume_p, id)`는 `realized_pnl_coin`·`(volume_coin, id)`이다 — 정렬과 포지션 회계는 유효), 일부 대체됨(ADR-0059: LMSR 엔진의 상태 `{ qYes, qNo, b }`·`cost`·개장 확률 p0로 시작하는 `initState`·틱의 `probabilityBp` — 곡선은 N01 §6 꼴의 `lmsrCost`·`probabilityYes(d, b)`·`referencePriceCoin`·`yesUnitCostCoin`이고 개장 기준은 모든 시장 50%다), 일부 대체됨(ADR-0065: 공개 목록 정렬의 `newest` = (created_at, id) desc와 `volume` = (volume_p, id) desc, 그리고 거래량 기본 정렬 — 정렬은 `recommended`(최근 24시간 거래량 → 실제 개장 시각, 기본)·`newest`(실제 개장 시각 `open_at`, 없으면 끝)·`closing`이고, 거래량 순은 #132가 다시 넣는다. `closing`의 키셋, 정렬별 키셋이라는 결정, 초안 404와 나머지 공개 읽기는 유효), 일부 대체됨(ADR-0092: 관리자 시장의 생성(`POST /admin/markets`)·수정(`PATCH /admin/markets/:id`)·열기·마감(`POST /admin/markets/:id/open`·`/close` — 전에는 본문이 없었다)은 본문에 화면의 관리자 `expectedAccountId`를 받아 무엇을 읽거나 잠그기 전에 쿠키의 계정과 견준다. 다르면 그 칸을 지목한 403 `FORBIDDEN`, 없으면 400이다. 수정의 '한 필드 이상'은 그 칸을 세지 않고, 계정은 저장하지 않는다(`created` 사건의 본문에도 없다). 관리자 시장 화면은 그려진 `Me`의 관리자를 대고, 시장 만들기·고치기의 양식은 그 관리자마다 다시 그리며(그것을 알 때까지 칸이 꺼져 있다) 마감의 확인 창은 연 관리자와 함께 쥐어, 화면의 관리자가 그 자리에서 바뀌면 적던 것이 비고 창이 닫힌다(ADR-0092 결정 1·2·5, 오너 결정 2026-10-26 17:21 답 1). 나머지 결정은 유효), 일부 대체됨(ADR-0095: 상태 draft/open/closed/voided — 상태는 열한 값이고(ADR-0093 #173 12항), 무효는 결과 유형 VOID다. 초안에서 바로 여는 열기와 관리자 한 명의 마감은 #21·#114까지 임시 전이로 남는다. 공개 읽기는 초안과 검수 중을 404로 숨긴다. 나머지 결정은 유효), 일부 대체됨(ADR-0096: 열기의 '정산 규칙이 없으면 `RULES_REQUIRED`' — 열기는 개설 항목 검사(정산 규칙·고를 수 있는 카테고리·태그 1\~5개)를 통과해야 하고 빠지면 `OPEN_ITEMS_MISSING`이다. `RULES_REQUIRED`는 거래 중 시장의 규칙을 비우는 수정에만 남는다. 나머지는 유효), 일부 대체됨(ADR-0097: 시장의 `rules`·`resolution_source` 한 칸씩 — 규칙은 항목들(배경·YES·NO 조건·사건 기한·장기 지연 기한·지연·취소·무효 처리·전환 조건)과 `market_sources`의 1차·대체 출처이고, `rules_edited`는 규칙 항목 무엇이든 바뀔 때 `{items, before, after}`이며, `RULES_REQUIRED`는 거래 중 시장에서 새로 빠지는 규칙 항목마다다. 거래 중 수정의 범위는 #80의 것이고 나머지는 유효), 일부 대체됨(ADR-0098: 열린 시장의 마감 수정 — 늦추기만, 예정 판정 시각까지(오너 답 A2), 선행 마감을 다시 보고, 예정 개장·예정 판정 시각은 바꾸지 않는다. 관리자 열기는 예정 개장 시각이 된 뒤에만이다(ADR-0093 결정 3 '#21 앞당긴 개장'). 보충 절차는 #80의 것이고 나머지는 유효), 일부 대체됨(ADR-0100: 초안에서 바로 여는 관리자 열기 — 없다. 시장은 개장 예정에서 예정 개장 시각에 열린다(워커, 또는 그 시각이 온 뒤의 승인·예정 개장 시각 변경). 나머지는 유효)
 
 ### 맥락
 
@@ -851,7 +851,7 @@ PLAN §5.3은 거래 본문에 슬리피지 가드를 필수로 요구하고, PL
 ## ADR-0033 — 마감 · 정산 · 이의 (M5)
 
 - 날짜: 2026-09-09
-- 상태: 채택, 일부 대체됨(ADR-0046: 판정·이의·확정 — `statusEventId` 순서 키, 공유 트랜잭션 헬퍼, `market.close`는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0046: 판정·이의·확정 — `statusEventId` 순서 키, 공유 트랜잭션 헬퍼, `market.close`는 유효), 일부 대체됨(ADR-0100: `market.close`를 'open 시' 등록 — 승인이 등록하고 개장 예정에서 되돌리면 지운다. 워커에 `market.open`(지연 잡 + 매 분 스캔 `market-open-scan`)이 더해졌다. 나머지는 유효)
 
 ### 맥락
 
@@ -10224,7 +10224,7 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 ## ADR-0095 — 시장 생애주기 열한 상태와 결과 유형(#174): `MARKET_STATUSES`를 DRAFT·REVIEW·SCHEDULED·OPEN·PAUSED·CLOSED·PROVISIONAL·RESOLVED·SETTLING·SETTLED·CANCELLED로 바꾸고 결과 유형 YES/NO/VOID(`MARKET_RESULTS`, Postgres `market_result`)를 상태와 계약의 `OUTCOMES`에서 떼며, 허용 전이 표(`MARKET_LIFECYCLE_TRANSITIONS`)와 지금 관리자 동작이 쓰는 임시 전이 둘을 상태를 바꾸는 한 곳(`transitionMarket`)이 강제하고 전이마다 누가·언제·어디서·어디로를 `market_events`에 남기며, 워커가 RESOLVED → SETTLING → SETTLED로 지급하고, 마이그레이션 0048이 계정까지 모든 표를 비운다 (#174, 오너 결정 ADR-0093)
 
 - 날짜: 2026-10-31
-- 상태: 채택, 일부 대체됨(ADR-0098: 결과 5의 '#22·#142·#175: '판정 지연'… 표시' — 예정 판정 시각이 지난 거래 마감 시장의 '판정 지연'은 #22가 붙였다(`judgementDelayed`). 사유와 다음 검토 시각은 #142, 이의 검토가 늦은 PROVISIONAL은 #175의 것이고 필터는 두지 않는다(결정 8-6). 나머지는 유효), 일부 대체됨(ADR-0099: 결과 5의 '#78·#21: SCHEDULED → DRAFT가 생기면 … 그 전이를 만드는 PR에서 묻는다' — #78의 되돌리기가 그 전이이고, 오너 답(2026-11-01)대로 그 시장의 글과 댓글은 남되 시장이 다시 공개될 때까지 글의 시장(`PostMarket`)은 null이고 화면은 '공개되지 않은 시장'이다. 관심 등록은 남고 목록에서 빠진다. 결정 4 표의 관리자 열기 '#21(#78)'은 #21만이다 — 임시 열기는 검수 옆에 남는다. 나머지는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0098: 결과 5의 '#22·#142·#175: '판정 지연'… 표시' — 예정 판정 시각이 지난 거래 마감 시장의 '판정 지연'은 #22가 붙였다(`judgementDelayed`). 사유와 다음 검토 시각은 #142, 이의 검토가 늦은 PROVISIONAL은 #175의 것이고 필터는 두지 않는다(결정 8-6). 나머지는 유효), 일부 대체됨(ADR-0099: 결과 5의 '#78·#21: SCHEDULED → DRAFT가 생기면 … 그 전이를 만드는 PR에서 묻는다' — #78의 되돌리기가 그 전이이고, 오너 답(2026-11-01)대로 그 시장의 글과 댓글은 남되 시장이 다시 공개될 때까지 글의 시장(`PostMarket`)은 null이고 화면은 '공개되지 않은 시장'이다. 관심 등록은 남고 목록에서 빠진다. 결정 4 표의 관리자 열기 '#21(#78)'은 #21만이다 — 임시 열기는 검수 옆에 남는다. 나머지는 유효), 일부 대체됨(ADR-0100: 결정 4 표의 관리자 열기와 임시 전이 draft → open — 없어졌다. 거래 중으로 가는 전이는 scheduled → open(워커, 행위자 NULL, 또는 승인·예정 개장 시각 변경의 관리자)과 paused → open이다. `opened` 사건의 payload에 `source`가 있다. 결과 5 #114 행의 '시드의 마감 경고는 초안과 거래 중만 본다' — 검수 중·개장 예정도 본다(일시 중단은 #114). 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #174를 기록한다. 오너 결정은 모두 ADR-0093(결정 1의 #173 1·4·8·10·11·12항, 결정 2의 #172 6항, 결정 3의 #174 세 행)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 8 '구현의 선택'에 있다. 이 PR은 상태 값과 허용 전이, 결과 유형, 전이 기록을 바꾼다. 각 전이를 일으키는 동작(검수 #78, 예약 개장 #21, 일시 중단 #114, 마감 #120, 판정 #152, 이의 #175, 정정 #176, 지급 #126, 거래 없는 취소 #20)은 그 이슈가 만든다.
 
@@ -10367,7 +10367,7 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 ## ADR-0096 — 카테고리와 태그(#17): 운영자가 관리자 화면에서 두 단계 카테고리를 추가·이름 바꾸기·순서 정하기·숨기기·다시 보이기 하고 그때마다 담당자·시각·전후 값을 남기며, 시장마다 전체 공용 태그 1~5개(대소문자·공백을 무시한 같은 이름은 하나)를 붙여 상세에 보이고 태그의 정확 일치로 검색하며, 시장이 초안을 벗어나기 전의 개설 항목 검사(정산 규칙·카테고리·태그, `OPEN_ITEMS_MISSING`)를 두고, 스포츠·정치를 막는 검사를 없앤다(D10)
 
 - 날짜: 2026-10-31
-- 상태: 채택, 일부 대체됨(ADR-0097: 개설 항목의 '정산 규칙' — 개설 항목은 제목·규칙 항목 아홉·카테고리·태그이고 '정산 규칙'이라는 이름은 없다. 결정 5의 '`RULES_REQUIRED`는 거래 중 시장의 규칙을 비우는 수정에만'은 거래 중 시장에서 새로 빠지는 규칙 항목마다다. 나머지는 유효), 일부 대체됨(ADR-0098: 개설 항목 — 제목·규칙 항목 아홉·예정 개장·거래 마감·예정 판정 시각·판정 기준 시간대·시각 순서·선행 마감·카테고리·태그. 결과 5의 거래 중 PATCH는 시각에서 좁아졌다(예정 개장·예정 판정 고정, 마감은 늦추기만). 나머지는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0097: 개설 항목의 '정산 규칙' — 개설 항목은 제목·규칙 항목 아홉·카테고리·태그이고 '정산 규칙'이라는 이름은 없다. 결정 5의 '`RULES_REQUIRED`는 거래 중 시장의 규칙을 비우는 수정에만'은 거래 중 시장에서 새로 빠지는 규칙 항목마다다. 나머지는 유효), 일부 대체됨(ADR-0098: 개설 항목 — 제목·규칙 항목 아홉·예정 개장·거래 마감·예정 판정 시각·판정 기준 시간대·시각 순서·선행 마감·카테고리·태그. 결과 5의 거래 중 PATCH는 시각에서 좁아졌다(예정 개장·예정 판정 고정, 마감은 늦추기만). 나머지는 유효), 일부 대체됨(ADR-0100: 결과 5의 '예정 개장 시각에 자동으로 열 때(#21)의 검사' — 여는 때는 개설 항목을 다시 보지 않는다(승인이 마지막 관문, 숨긴 카테고리의 시장도 연다 — ADR-0093 #172 1항). 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #17을 기록한다. 오너 결정은 ADR-0093(결정 2의 #172 1·2·7·14항, 결정 3의 #17 두 행)과 D10에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 7 '구현의 선택'에 있다. 이 PR은 #174(ADR-0095, PR #246) 위에 쌓았다.
 
@@ -10641,7 +10641,7 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 ## ADR-0098 — 시장 시간 구조(#22): 예정 개장·발표 예정·예정 판정 시각과 판정 기준 시간대를 거래 마감 시각 옆에 따로 저장하고(UTC, `markets`의 열), 서버와 DB가 분 단위로 예정 개장 < 거래 마감 ≤ 예정 판정과 사건 기한 ≤ 예정 판정(오너 답 2026-10-31 A1)을, 서버가 출시 설정 `market.lead_close_gap`으로 선행 마감을 검사하며, 개장 뒤의 거래 마감은 예정 판정 시각까지 늦추기만 하고(오너 답 A2), 공개 상세가 시각을 판정 기준 시간대로도 보이고 예정 판정 시각이 지난 거래 마감 시장을 '판정 지연'으로 보인다
 
 - 날짜: 2026-11-01
-- 상태: 채택, 일부 대체됨(ADR-0099: 결과 5의 #21 행 '사유를 남긴 예정 개장 변경과 순서 검사(#172 6항)' — #78이 만들었다(개장 예정 시장만, 사유 필수, 예정 개장 < 거래 마감만 다시 보고 지난 시각도 받으며, 거래 마감이 지난 시장은 거절). 7-6과 결과 5 #78 행의 '간격 저장을 검수 제출과 승인 가운데 어디서 할지' — 검수 제출이 저장하고 승인은 그 값으로 다시 보며 반려·되돌리기가 지운다. 결정 4의 '열기(#78·#21 전의 임시 열기)'는 #21 전의 임시 열기로 검수 옆에 남는다. 나머지는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0099: 결과 5의 #21 행 '사유를 남긴 예정 개장 변경과 순서 검사(#172 6항)' — #78이 만들었다(개장 예정 시장만, 사유 필수, 예정 개장 < 거래 마감만 다시 보고 지난 시각도 받으며, 거래 마감이 지난 시장은 거절). 7-6과 결과 5 #78 행의 '간격 저장을 검수 제출과 승인 가운데 어디서 할지' — 검수 제출이 저장하고 승인은 그 값으로 다시 보며 반려·되돌리기가 지운다. 결정 4의 '열기(#78·#21 전의 임시 열기)'는 #21 전의 임시 열기로 검수 옆에 남는다. 나머지는 유효), 일부 대체됨(ADR-0100: 결과 5의 #21 행 '예정 개장 시각의 개장 잡, 임시 열기와 'not reached yet'을 없애는 것' — #21이 했다. 7-7의 열기 거절은 열기와 함께 없어졌다. 결정 4의 '열기(#78·#21 전의 임시 열기)'와 7-6의 '열기가 쓴 값을 저장' — 간격은 검수 제출만 저장하고 여는 때는 보지도 쓰지도 않는다. 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #22를 기록한다. 오너 결정은 ADR-0093(결정 2의 #172 4·6·7·11\~14항과 #173 11항, 결정 3의 '#22 시간대'·'#21 앞당긴 개장' 행, 결정 5, 결과 3)과 이 PR에서 받은 답(2026-10-31 — A1 사건 기한의 순서, A2 개장 뒤 연장한 마감의 한도)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 7 '구현의 선택'에 있다. 이 PR은 #23(ADR-0097, PR #248) 위에, #23은 #17(ADR-0096, PR #247) 위에, #17은 #174(ADR-0095, PR #246) 위에 쌓았다.
 
@@ -10789,7 +10789,7 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 ## ADR-0099 — 개설 검수(#78): 초안을 검수 제출하면(DRAFT → REVIEW) 개설 항목 검사를 통과한 내용이 잠기고, 만든 관리자·내용을 수정한 관리자·제출한 관리자가 아닌 다른 관리자가 체크리스트 일곱 항목을 모두 확인하고 사유를 적어 승인하거나(→ SCHEDULED) 사유 목록의 하나와 설명으로 반려하며(→ DRAFT), 어느 관리자나 사유와 함께 초안으로 되돌리고, 개장 예정 시장의 예정 개장 시각만 새 검수 없이 사유와 함께 바꾸며(ADR-0098 결과 5의 #21에서 옮김), 두 사람 통제는 `approval_requests`(`market_review`)로, 기다리는 시장은 '검수 대기'에서 보고, 초안으로 되돌린 시장의 글은 남되 시장 칸을 가린다(오너 답 2026-11-01)
 
 - 날짜: 2026-11-01
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0100: 7-9 '승인 때 예정 개장 시각이 이미 지났어도 개장 예정이다' — 승인하는 즉시 연다. 7-3의 '임시 열기는 전처럼 저장한다'와 결과 3의 임시 열기 — 없다. 결과 5의 #21 행 — 했다. 지난 시각으로의 예정 개장 시각 변경도 바로 연다. 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #78을 기록한다. 오너 결정은 ADR-0093(결정 1의 #173 1·12항, 결정 2의 #172 3·4·5·6·7·12·13항, 결정 3의 '#78 수정 기록의 사유'·'#21 앞당긴 개장' 행)과 이 PR에서 받은 답(2026-11-01 — 개장 예정에서 초안으로 되돌린 시장의 글, ADR-0095 결과 5가 이 전이를 만드는 PR에서 묻기로 한 것)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 7 '구현의 선택'에 있다. 이 PR은 #22(ADR-0098, 아직 PR을 열지 않았다 — 쌓인 PR이 셋이라) 위에, #22는 #23(ADR-0097, PR #248) 위에, #23은 #17(ADR-0096, PR #247) 위에, #17은 #174(ADR-0095, PR #246) 위에 쌓았다.
 
@@ -10923,3 +10923,117 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 - api: `src/markets/market-review.ts`·`admin-market-reviews.controller.ts`(새), `src/markets/{market-admin.service,admin-markets.controller,markets.module}.ts`, `src/approvals/approval.service.ts`, `src/posts/posts.service.ts`, 주석(`proposals/admin-proposals.service.ts`·`themes/theme-admin.service.ts`·`watchlist/watchlist.service.ts`), 시험(`admin-markets-review`(새)·`posts`·`authored` 컨트롤러, `admin-audit`, `account-restrictions`·`watchlist` 주석), `openapi.json`.
 - web: `src/app/admin/markets/[id]/{market-review-panel,market-review-dialogs}.tsx`(새)와 시험, `src/app/admin/markets/reviews/`(새, 시험 포함), `src/app/admin/{layout,markets/[id]/admin-market-detail}.tsx`, `src/app/markets/[slug]/market-detail.tsx`, `src/app/community/posts/[postId]/{post-screen,edit/edit-screen}.tsx`, `src/components/{post/post-card,authored/authored-comment-card}.tsx`(시험 새), `src/components/realtime/realtime-provider.tsx`, `src/hooks/use-admin-markets.ts`, `src/lib/market-review.ts`(새)와 시험, `src/lib/{market-admin,moderation,market-live,market-detail,api}.ts`, `src/copy.ts`, 시험(`hooks`·`lib`의 관리자 시장·실시간·상세·폼·쓰기 목록·토론·신고 처리(`moderation`), `load-more-failed`), e2e(`market-review.spec.ts` 새).
 - 그 밖: `packages/api-client/src/generated/schema.ts`, `docs/API.md`, `scripts/generate-api-doc.mjs`, `docs/{GUARDS,QUESTIONS,RESET,SETTINGS}.md`, `README.md`.
+
+---
+
+## ADR-0100 — 예약 개장(#21): 개장 예정(SCHEDULED) 시장은 예정 개장 시각이 되면 운영자 조작 없이 워커가 열고(지연 잡 `market.open`과 매 분 스캔, 행위자 NULL), 승인이나 예정 개장 시각 변경이 그 시각이 이미 온 것을 보면 같은 트랜잭션에서 바로 열며, 여는 길은 모두 한 곳(`openScheduledMarket`)이 상태·예정 개장 시각·거래 마감만 보고, 거래 마감이 지난 개장 예정 시장은 열지 않고 관리자 화면이 경고하며, 임시 열기(초안 → 거래 중)를 없앤다
+
+- 날짜: 2026-11-02
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #21을 기록한다. 오너 결정은 모두 ADR-0093(결정 1의 #173 1·12항, 결정 2의 #172 1·6항, 결정 3의 '#21 앞당긴 개장' 행)에 있고 결정 1의 표에 그 행을 옮겼다. 이 PR에서 새로 물은 것은 없다. 그 밖에 이 PR이 정한 것은 결정 7 '구현의 선택'에 있다. 이 PR은 #78(ADR-0099) 위에, #78은 #22(ADR-0098) 위에 쌓았다(둘 다 아직 PR을 열지 않았다 — 쌓인 PR이 셋이라). #22는 #23(ADR-0097, PR #248) 위에, #23은 #17(ADR-0096, PR #247) 위에, #17은 #174(ADR-0095, PR #246) 위에 있다.
+
+### 맥락
+
+- 기획: N03 §3 "DRAFT → REVIEW → SCHEDULED → OPEN". N03 §8 "수정·중단·판정·지급 작업의 담당자·시각·사유를 보존한다." #21 본문: 승인된 시장은 예정 개장 시각 전에는 열리지 않고, 그 시각이 되면 운영자 조작 없이 열리며, 연 시각과 주체가 남고, 늦거나 여러 번 돌아도 한 번만 열리고, 관리자 화면이 개장 예정 시장의 예정 개장 시각과 거래 중 시장의 실제 개장 시각을 보인다.
+- 이 PR 전: 시장이 거래를 시작하는 길은 관리자 한 명의 임시 열기(`POST /admin/markets/:id/open`, draft → open, `INTERIM_MARKET_TRANSITIONS`의 `until: '#21'`, 예정 개장 시각 전이면 'not reached yet' — ADR-0098 7-7) 하나였다. #78(ADR-0099)이 검수 제출·승인으로 시장을 개장 예정까지 보냈지만 개장 예정 시장은 어떤 길로도 열리지 않았다(ADR-0099 7-9). 워커는 `market.close`·`market.finalize`만 돌렸고, 거래 마감 잡은 임시 열기가 등록했다(ADR-0033).
+- 범위: #21 본문의 포함과 제외를 따른다. 본문이 #78에 둔 '예정 개장 시각 변경'은 #78이 만들었고(ADR-0099 7-12) 이 PR은 그 변경이 이미 온 시각을 받으면 바로 여는 것만 더한다. 개장 때의 규칙 v1 기록(#80), 유동성 설정 고정(#72), 봇 시작(#129), 주문(#119), 결과가 알려진 개장 예정 시장을 개장 없이 끝내는 SCHEDULED → CANCELLED(#173·#20 — #21 본문의 제외), 알림은 하지 않는다.
+
+### 결정
+
+**1. 오너 결정 (다시 정하지 않는다).**
+
+| 근거                              | 주제                 | 결정                                                                                                                                                                                         |
+| --------------------------------- | -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-0093 #173 1항                 | 전이의 계기          | 시각 조건이 정해진 전이는 자동이다. 예정 개장 시각의 SCHEDULED → OPEN이 그 하나다.                                                                                                           |
+| ADR-0093 #173 12항                | 공개 범위            | SCHEDULED 시장은 개장 전에도 상세를 공개한다.                                                                                                                                                |
+| ADR-0093 #172 6항                 | 승인 뒤 개장 전 예외 | 승인할 때 예정 개장 시각이 이미 지났으면 승인하는 즉시 연다. 거래 마감 시각이 지났으면 초안으로 되돌려 시각을 고치고 다시 검수한다. 결과가 알려지면 개장 없이 끝낸다(SCHEDULED → CANCELLED). |
+| ADR-0093 #172 1항                 | 숨긴 카테고리        | 숨기면 새 시장 입력·탐색 분류·관심 카테고리 선택에서 빠지고, 기존 시장은 그 분류를 그대로 가진다.                                                                                            |
+| ADR-0093 결정 3 '#21 앞당긴 개장' | 이른 개장            | 두지 않는다. 시장은 예정 개장 시각에 자동으로만 열린다. 일찍 열려면 예정 개장 시각을 앞당긴다(#172 6항).                                                                                     |
+
+**2. 여는 곳은 하나다(`@buddha/db`의 `market-open.ts`, `openScheduledMarket`).** 시장 잠금(`lockMarket`)을 쥐고 행을 `FOR UPDATE`로 읽은 호출자가 그 행과 잠금 뒤의 DB 시계(`now`)를 넘긴다. 이 순서로 본다 — 상태가 `scheduled`가 아니면 `not_scheduled`, 예정 개장 시각이 없거나 `now`보다 늦으면 `not_due`, 거래 마감 시각이 `now`와 같거나 이르면 `close_passed`. 그 밖에는 아무것도 보지 않는다(7-1). 열면 `transitionMarket`으로 scheduled → open(유형 `opened`, payload `{openAt, closeAt, source}`, `open_at` = `updated_at` = 사건 시각 = `now`)을 쓰고 다시 읽은 행과 사건 id를 돌려준다. 저장한 선행 마감 간격(`lead_close_gap_minutes`)은 검수 제출이 저장한 그대로다. 마이그레이션은 없다.
+
+**3. 세 호출자.**
+
+- **워커**(`apps/worker/src/jobs/market-open.ts`): 시장마다 `market.open` 지연 잡(예정 개장 시각에)과 매 분의 `market-open-scan`(안전망, 거래 마감의 꼴 그대로). 행위자 NULL(ADR-0095: NULL은 워커), `source: 'job'`. 스캔은 `status = 'scheduled' AND scheduled_open_at <= now() AND close_at > now()`를 예정 개장 시각·id 순으로 한 번에 500개(`MARKET_SCAN_BATCH_MAX`)까지 줍는다. COMMIT 뒤 `market:status` `open`을 `opened` 사건의 키로 발행한다. 워커는 잡을 등록하지 않는다.
+- **승인**(`MarketAdminService.approve`): review → scheduled와 `market_approve` 기록 뒤, 결정 시각에 예정 개장 시각이 이미 왔으면 같은 트랜잭션에서 연다(#172 6항). 행위자는 승인한 관리자, `source: 'approval'`. 답과 발행은 거래 중 시장 하나다(개장 예정을 먼저 보내지 않는다).
+- **예정 개장 시각 변경**(`MarketAdminService.reschedule`): 새 시각이 지금이거나 지났으면 같은 트랜잭션에서 연다(결정 3 '#21 앞당긴 개장' — 일찍 여는 유일한 길). 행위자는 바꾼 관리자, `source: 'reschedule'`.
+
+**4. 잡의 등록(API, `MarketJobs`).** 모두 COMMIT 뒤, 거래 마감 잡처럼 시간 제한을 둔 best effort다(ADR-0033).
+
+- 승인: 거래 마감 잡(`scheduleClose`)을 언제나, 열지 않았으면 개장 잡(`scheduleOpen`, 지연 = 예정 개장 시각 − 결정 시각)을.
+- 예정 개장 시각 변경: 옛 시각의 개장 잡을 지우고(`cancelOpen`), 열지 않았으면 새 시각의 것을 등록한다.
+- 개장 예정에서 초안으로 되돌리기: 잠금 아래에서 읽은 시각으로 개장 잡과 거래 마감 잡을 모두 지운다.
+- 잡 id는 `market.open.<id>.<ms>`(`marketOpenJobId`, 거래 마감 잡과 같은 꼴 — 시각을 담아 옮긴 잡과 겹치지 않는다).
+
+**5. 임시 열기를 없앤다.** `POST /admin/markets/:id/open`(404), `MarketAdminService.open`, 그 'not reached yet', `INTERIM_MARKET_TRANSITIONS`의 draft → open 줄(그래서 `transitionMarket`이 draft → open을 거절한다 — 거래 중으로 가는 전이는 scheduled → open과 #114의 paused → open뿐이다), 웹의 열기 단추와 그 알림, `errMarketScheduledOpenNotReached`. 관리자 작업 유형 `market_open`은 **은퇴한** 유형으로 남는다 — #174 뒤 배포 환경의 임시 열기가 쓴 행을 읽고 보여야 한다. `opened` 사건 유형도 남는다(이제 scheduled → open, 옛 행은 draft → open).
+
+**6. 웹.**
+
+- 관리자 시장 상세: 열기 단추가 없다. 개장 예정의 검수 칸은 '예정 개장 시각에 자동으로 열립니다'를, 거래 마감 시각이 지난 개장 예정 시장이면 그 대신 '거래 마감 시각이 지나 이 시장은 열리지 않습니다. 초안으로 되돌려 시각을 고친 뒤 다시 검수 제출하세요.'(`market-review-close-passed`)를 보인다. 상세는 개장 예정 시장을 스스로 다시 읽어 워커의 개장을 따르고, 경고는 거래 마감 뒤에 읽은 행에만 보인다(7-13). 실제 개장 시각 줄(연 시각)에 `market-detail-open-at`.
+- 승인·예정 개장 시각 변경의 알림은 답의 상태를 따른다 — 거래 중이면 '승인해 거래를 열었습니다.'·'예정 개장 시각을 바꿔 거래를 열었습니다.'. 승인 창의 본문과 예정 개장 시각 변경의 안내가 이미 지난 시각이면 바로 열린다고 말한다.
+- '열기'·'열 수'로 관리자의 열기를 말하던 문구(규칙 항목·태그·개설 항목·선행 마감 미정·예정 개장 시각의 안내, `errMarketOpenItemsMissing`)는 '검수 제출'을 말한다. 사용자의 '개장 예정' 안내는 그대로다.
+
+**7. 구현의 선택.** 오너가 정하지 않은 것을 이 PR이 정했다. 되돌리기 쉬운 쪽을 골랐다.
+
+1. **여는 때는 개설 항목도 선행 마감도 다시 보지 않는다.** 승인이 마지막 관문이고 그 뒤 내용은 잠긴다(#172 6항 (a)). 그 사이 숨긴 카테고리의 시장도 연다 — 기존 시장은 그 분류를 그대로 가진다(#172 1항). 선행 마감은 ADR-0098 7-6대로 다시 보지 않는다. ADR-0096 결과 5가 '예정 개장 시각에 자동으로 열 때의 검사'를 묻게 둔 것의 답이다. #80의 규칙 v1과 #72의 설정 고정이 붙을 자리도 이 한 곳이다.
+2. **거래 마감 시각이 지난 개장 예정 시장은 열지 않고 그대로 둔다**(#172 6항의 '초안으로 되돌려 시각을 고친다'). 잡은 실패하지 않고 끝나며(다시 해도 바뀌지 않는다), 스캔은 그런 시장을 읽지도 않아 매 분 묶음의 자리를 차지하지 않는다. 시장은 공개된 개장 예정으로 남고, 관리자 화면이 거래 마감 뒤에 다시 읽은 행으로 경고하며(7-13), 예정 개장 시각 변경은 전처럼 거절된다(ADR-0099 7-10). 결과가 알려진 시장을 끝내는 SCHEDULED → CANCELLED는 #20(M9)이 운영자의 취소를 만들 때다 — 그때까지는 초안으로 되돌린다.
+3. **거래 마감 잡은 승인이 등록한다.** 개장 예정의 거래 마감은 잠겨 있고(#172 6항 (a)), 거래 마감 잡은 거래 중이 아닌 시장을 건너뛰므로(`not_open`) 개장 전에 등록해도 해가 없다. 그래서 바로 연 예정 개장 시각 변경은 거래 마감 잡을 다시 등록하지 않는다.
+4. **행위자와 출처가 어긋나면 던진다.** `source: 'job'`은 행위자 NULL, 승인·변경은 관리자가 있어야 한다 — 아무것도 보기 전에. 'NULL은 워커'(ADR-0095)가 이벤트 로그에서 늘 참이다. 열기에는 관리자 작업 기록이 없다 — 승인·변경의 기록과 `opened` 사건의 행위자·출처가 말한다.
+5. **승인이 연 시장의 두 사건은 한 시각이다.** `approved`와 `opened`가 결정 시각을 함께 쓰고 id로 순서가 정해진다. 승인·변경이 `not_due` 말고 다른 이유로 열지 못하면 `INTERNAL`이다 — 상태와 지난 거래 마감은 그 앞에서 이미 거절했다.
+6. **DB 시계는 잠금 뒤에 늘 읽는다**(거래 마감 잡은 상태를 먼저 본다). 워커의 by-id 건너뛰기는 거래 마감 잡처럼 info로 남긴다.
+7. **색인을 더하지 않는다.** 개장 예정 시장은 적고 `markets_status_close_at_idx`가 상태·거래 마감의 앞부분을 받는다(ADR-0098이 시각 열에 색인을 두지 않은 것이 그대로 맞다).
+8. **배포 순서.** API·워커·웹은 한 `docker compose up`으로 바뀐다. 옛 워커가 `market.open`을 만나 실패해도 새 워커의 스캔이 1분 안에 연다. #21 전에 승인한 개장 예정 시장(잡이 없다)도 스캔이 연다.
+9. **화면.** 거래 마감 시각이 '지났다'는 그 시각과 같을 때부터다(여는 규칙이 `close_at > now`). 경고 아래에서도 예정 개장 시각 변경은 켜 두고 서버가 거절한다. 이벤트 로그는 `source`를 따로 보이지 않는다 — 행위자 칸(시스템 또는 관리자)이 말한다. 'not reached yet' 같은 옛 거절은 일반 문구가 된다.
+10. **시험 공장.** `createOpenedMarket`(`@buddha/db/test`)은 검수 제출 → 승인 → 워커가 하듯 연 시장(사건 셋)을 만든다. `createScheduledMarket`의 기본 예정 개장 시각(1분 전)은 이미 온 시각이다 — 워커가 돌기 전의 상태다. 시드의 마감 경고는 검수 중·개장 예정 시장도 본다(ADR-0095 결과 5 — 일시 중단은 #114).
+11. **e2e.** `createOpenMarket(admin, …)`은 시그니처 그대로 초안 → 검수 제출(첫째 시드 관리자) → 승인(둘째 시드 관리자, 워커 단위의 `reviewer` 맥락)이고, 승인이 바로 연다. 화면에서 만든 시장은 `openThroughReview`로 연다. 거래 마감이 지난 개장 예정 시장의 경고(새 spec의 (d))는 브라우저 시계를 거래 마감 뒤로 고정해 본다 — 예정 개장 < 거래 마감이고 워커가 도는 동안에는 개장 예정인 채로 거래 마감이 지날 수 없다. 서버 쪽의 건너뛰기는 워커 시험이 본다.
+12. **`docs/PLAN.md`는 고치지 않았다.** ADR-0047로 얼어 있다(잡 표에 `market.open`이 없다 — 이 ADR과 README가 말한다).
+13. **관리자 상세는 개장 예정 시장을 스스로 다시 읽는다**(Codex 리뷰). 관리자 조회는 실시간 방에 들지 않아, 열어 둔 상세는 워커가 연 시장을 개장 예정으로 붙들고 있다가 거래 마감 시각이 지나면 그 사이 열렸다 닫힌 시장에 '열리지 않습니다'를 보일 수 있었다. 그래서 정산 대기의 5초 읽기(ADR-0046) 옆에서, 개장 예정 시장을 예정 개장 시각에, 그 뒤 5초마다 열릴 때까지, 그리고 거래 마감 시각에 한 번 다시 읽고(`scheduledMarketPollDelay`), 경고는 그 행을 읽은 시각(`dataUpdatedAt`)이 거래 마감 뒤일 때만 보인다. 거래 마감 뒤에 읽은 개장 예정은 더 바뀌지 않으므로 읽기는 거기서 멈춘다. 거래 마감 전에 읽은 행을 거래 마감 뒤에 다시 읽을 때는 곧바로가 아니라 5초마다다 — 실패한 읽기는 `dataUpdatedAt`을 옮기지 않아, 곧바로 읽으면 로그아웃 뒤의 401 같은 실패마다 다시 쏘는 요청 고리가 된다(이 고침을 검증한 리뷰가 찾았다). 두 읽기 규칙은 `settlementPollInterval` 옆(`market-admin.ts`의 `adminMarketPollInterval`)에 둔다 — 회원 화면도 쓰는 훅이 검수 모듈을 들이면 검수 체크리스트의 문구가 회원 화면의 것으로 검사된다(`excluded-features.test.ts`). 탭이 숨으면 쉬는 것은 정산 대기의 것과 같다. 읽은 시각은 브라우저가 답을 받은 때를 브라우저 시계로 잰 것이라, 브라우저 시계가 DB보다 빠르거나 답이 거래 마감을 끼고 오가면 서버가 거래 마감 직전에 읽은 행을 지난 것으로 볼 수 있다 — 워커가 바로 그 몇 초 안에 늦게 여는 때에만 틀리고, 다시 읽기(새로 고침·포커스)로 바로잡힌다.
+
+**8. 시험.**
+
+- shared: `jobs`(잡 이름 순서, 개장 잡 id의 꼴), `market-lifecycle`(draft → open 거절, 거래 중으로는 scheduled·paused에서만), `enums`(은퇴한 `market_open`도 읽는다), `release-settings`(간격 설명).
+- db: `market-open.test.ts`(새 — 워커·승인·변경의 사건과 행, 행위자와 출처의 어긋남, 세 건너뛰기와 그때 아무것도 쓰지 않음, 열 상태 모두의 `not_scheduled`, 1ms 단위의 두 경계, 숨긴 카테고리·빈 규칙 항목·선행 마감 안의 시장도 연다, 공장), `seed`(검수 중·개장 예정의 지난 마감 경고).
+- worker: `market-open.test.ts`(새 — 열기와 발행, 건너뛰기, 모르는 id, 두 번 돌기, 스캔의 순서와 고르지 않는 시장, 죽은 발행), `index`(스캔·by-id·잘못된 payload), `queues`(`market-open-scan`).
+- API 통합: `admin-markets-review`(지난 예정 개장의 승인이 바로 연다 — 사건 둘과 행위자·출처, 결정 시각의 `open_at`, 발행 하나, 거래 마감 잡만; 앞으로의 예정 개장은 개장 예정과 두 잡의 지연; 되돌리기가 두 잡을 지우고 다시 승인하면 다시 등록; 지난 시각으로의 변경이 바로 연다; 다른 앞 시각으로의 변경이 잡을 옮긴다; `POST /open`이 404), `market-jobs.service`(개장 잡), `admin-audit`(은퇴한 유형과 그 라우트가 없음), 임시 열기로 시장을 열던 시험(`admin-markets`·`-times`·`-resolve`·`admin-proposals`·`admin-account`)은 검수 제출·승인이나 공장으로.
+- web: `lib/market-review`(알림의 선택, 읽은 시각으로 보는 `scheduledCloseLapsed`), `lib/market-admin`(다시 읽을 때 `scheduledMarketPollDelay` — 예정 개장 시각, 5초마다, 거래 마감 시각, 거래 마감 뒤에 읽으면 멈춤, 거래 마감 전에 읽은 행은 거래 마감 뒤에도 곧바로가 아니라 5초마다; `adminMarketPollInterval`의 정산 대기와 개장 예정; 두 호출 자리 — `useAdminMarket`의 `refetchInterval`과 상세의 `readAt` — 를 소스에서 고정), 검수 칸(개장 예정의 안내, 거래 마감 뒤에 읽은 행의 경고, 거래 마감 전에 읽은 행은 지금 시계가 지났어도 안내), `market-admin`(옛 'not reached yet'), 쓰기 목록.
+- e2e: `scheduled-open.spec.ts`(새 — (a) 화면의 승인이 지난 예정 개장의 시장을 바로 열고 연 시각·승인한 관리자의 열림 줄, (b) 예정 개장 시각 70초 앞으로 승인한 시장을 아무도 누르지 않아도 워커가 열고 열어 둔 방문자의 상세와 관리자 상세가 새로 고침 없이 거래 중, 열림 줄은 시스템, (c) 어느 상태에도 열기가 없고 `POST …/open`이 404, (d) 거래 마감이 지난 개장 예정의 경고와 초안으로 되돌리기), 임시 열기를 쓰던 여섯 spec(`admin-writes`·`market-review`·`market-times`·`market-rules`·`market-tags`·`proposals`).
+- 돌린 것: 2026-11-02: `pnpm check`(`CI=true`, docker test 프로필, 캐시 없이) — shared 1,195, storage 24, web 2,357, db 394, worker 188, api 1,375(건너뜀 2 — 리눅스에서만 도는 메모리 시험). `api:openapi`를 다시 돌려도 생성 파일이 같다. e2e는 CI처럼 세 샤드로, 샤드마다 마이그레이션을 적용한 틀 DB에서 복사한 DB와 제 Redis, 워커와 함께 돌려 637건 통과, 3건은 설계대로 건너뜀, 실패와 재시도 없음(샤드마다 인증번호 154·192·191건). 구현은 여섯 에이전트(공유 → DB → 워커 ∥ API → 웹 → e2e·문서)와 통합 뒤 다섯 관점 리뷰(워커·API·웹·e2e·수용 기준)와 발견마다 두 반박 검증으로 했다. P1·P2는 없었다(README의 선행 마감 간격 문장 하나는 두 검증이 갈렸지만 고쳤다). P3들(주석과 문서, 열어 둔 상세의 경고, e2e (b)의 시간)을 고쳤다. 로컬 `codex review --uncommitted`는 두 번 돌렸다. 첫째가 열어 둔 관리자 상세의 낡은 행에 '열리지 않습니다'가 보이는 것을 찾았다(7-13). 그 고침을 세 관점(query-core·경계·시험)의 검증 워크플로가 반박 검증해 실패한 읽기 뒤의 1 ms 요청 고리, 검수 모듈을 들인 훅 때문에 깨진 `excluded-features` 시험, 낡은 소스 고정을 찾았고 고쳤다. 둘째는 고칠 것이 없었다. 화면은 e2e 샤드 3의 DB를 복사한 DB에서 워커와 함께 찍었고, 열어 둔 관리자 상세가 워커의 개장을 새로 고침 없이 따르는 것을 브라우저에서 보았다.
+
+### 결과
+
+**1. 상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1).
+
+- ADR-0027: 일부 대체됨(ADR-0100: 초안에서 바로 여는 관리자 열기 — 없다. 시장은 개장 예정에서 예정 개장 시각에 열린다(워커, 또는 그 시각이 온 뒤의 승인·예정 개장 시각 변경). 나머지는 유효).
+- ADR-0033: 일부 대체됨(ADR-0100: `market.close`를 'open 시' 등록 — 승인이 등록하고 개장 예정에서 되돌리면 지운다. 워커에 `market.open`(지연 잡 + 매 분 스캔 `market-open-scan`)이 더해졌다. 나머지는 유효).
+- ADR-0095: 일부 대체됨(ADR-0100: 결정 4 표의 관리자 열기와 임시 전이 draft → open — 없어졌다. 거래 중으로 가는 전이는 scheduled → open(워커, 행위자 NULL, 또는 승인·예정 개장 시각 변경의 관리자)과 paused → open이다. `opened` 사건의 payload에 `source`가 있다. 결과 5 #114 행의 '시드의 마감 경고는 초안과 거래 중만 본다' — 검수 중·개장 예정도 본다(일시 중단은 #114). 나머지는 유효).
+- ADR-0096: 일부 대체됨(ADR-0100: 결과 5의 '예정 개장 시각에 자동으로 열 때(#21)의 검사' — 여는 때는 개설 항목을 다시 보지 않는다(승인이 마지막 관문, 숨긴 카테고리의 시장도 연다 — ADR-0093 #172 1항). 나머지는 유효).
+- ADR-0098: 일부 대체됨(ADR-0100: 결과 5의 #21 행 '예정 개장 시각의 개장 잡, 임시 열기와 'not reached yet'을 없애는 것' — #21이 했다. 7-7의 열기 거절은 열기와 함께 없어졌다. 결정 4의 '열기(#78·#21 전의 임시 열기)'와 7-6의 '열기가 쓴 값을 저장' — 간격은 검수 제출만 저장하고 여는 때는 보지도 쓰지도 않는다. 나머지는 유효).
+- ADR-0099: 일부 대체됨(ADR-0100: 7-9 '승인 때 예정 개장 시각이 이미 지났어도 개장 예정이다' — 승인하는 즉시 연다. 7-3의 '임시 열기는 전처럼 저장한다'와 결과 3의 임시 열기 — 없다. 결과 5의 #21 행 — 했다. 지난 시각으로의 예정 개장 시각 변경도 바로 연다. 나머지는 유효).
+- 고치지 않은 상태 줄: ADR-0093(결정만 적은 ADR), ADR-0097(규칙 항목은 그대로 — 개장 때의 규칙 v1은 #80).
+
+**2. 문서.** `docs/API.md`·`apps/api/openapi.json`·api-client는 생성했다(열기 라우트가 빠지고 승인·예정 개장 시각 변경·검수 제출의 요약이 바뀌었다 — 178개 작업). 생성기(`scripts/generate-api-doc.mjs`)의 `OPEN_ITEMS_MISSING`과 `market:status` 설명, README(관리자 시장의 흐름, 워커 잡, 시드 문제 해결, e2e에 두 관리자와 워커), `docs/GUARDS.md`(#21의 서버 검사), `docs/RESET.md`(거래 중 시장까지의 길), `docs/SETTINGS.md`·`release-settings.ts`(선행 마감 간격은 검수 제출이 저장하고 여는 때는 보지 않는다), `docs/QUESTIONS.md`(Q-M3-4·A-M3-4·A-M4-36 추기), `deploy/reset-db.sh`·CI 설정의 주석을 고쳤다.
+
+**3. 오너가 할 일.**
+
+- #246, #247, #248, #22의 PR, #78의 PR, 이 PR의 순서로 머지한다. 앞의 것이 머지되면 main 위로 다시 쌓는다.
+- 배포 뒤 거래를 시험하려면 첫 시드 관리자가 초안을 검수 제출하고 다른 관리자가 승인한다 — 시드 초안의 예정 개장 시각은 이미 지났으니 승인하는 즉시 연다. #78만 배포된 동안 승인한 개장 예정 시장은 이 PR의 배포 뒤 1분 안에 스캔이 연다.
+
+**4. 오너에게 (결정을 막지 않는다).** 오너가 바꿀 수 있는 구현의 선택: 여는 때 다시 보지 않는 것(7-1), 거래 마감이 지난 개장 예정 시장을 #20까지 초안으로 되돌리게 둔 것(7-2).
+
+**5. 알려진 한계와 다른 이슈에 넘긴 것.**
+
+- #20(M9): 결과가 알려진 개장 예정 시장을 개장 없이 끝내는 SCHEDULED → CANCELLED(#173 2·10항의 승인). 그때까지는 초안으로 되돌린다.
+- #80: 여는 때 잠긴 내용을 규칙 v1로 기록한다 — `openScheduledMarket`에 붙인다.
+- #72: 여는 때 유동성 설정을 고정한다. #129: 봇 시작.
+- #114: PAUSED → OPEN(재개)는 표에 있고 이 PR은 쓰지 않는다.
+- 워커가 오래 멈추면 예정 개장 시각이 지난 시장이 그동안 개장 예정으로 남는다. 다시 돌면 스캔이 연다(연 시각은 그때다).
+
+**6. 파일.**
+
+- shared: `src/{jobs,constants,market-lifecycle,enums,market,market-open-items,market-review,market-times,realtime,expected-account,release-settings}.ts`, 시험(`jobs`·`market-lifecycle`·`enums`·`market-review`·`release-settings`).
+- db: `src/market-open.ts`(새)와 시험, `src/index.ts`, `src/test/factories.ts`, `src/{seed,seed-markets,tx-helpers}.ts`, `src/schema/markets.ts`(주석), 시험(`seed`·`schema`·`storage-names`).
+- worker: `src/jobs/market-open.ts`(새)와 시험, `src/jobs/{index,market-close}.ts`, `src/queues.ts`, 시험(`index`·`queues`), `package.json`(설명).
+- api: `src/jobs/{market-jobs.service,jobs.module}.ts`, `src/markets/{market-admin.service,admin-markets.controller,market-lock,markets.module}.ts`, 시험(`market-jobs.service`, `admin-markets`·`-review`·`-times`·`-resolve` 컨트롤러, `admin-proposals`, `admin-audit`, `admin-account`, `test/routes.ts`), `openapi.json`.
+- web: `src/app/admin/markets/[id]/{admin-market-detail,market-review-panel,market-review-dialogs}.tsx`와 검수 칸 시험, `src/app/admin/markets/{admin-markets,market-rule-fields,market-time-fields}.tsx`(주석), `src/components/realtime/realtime-provider.tsx`(주석), `src/hooks/use-admin-markets.ts`와 시험, `src/lib/{market-review,market-admin,market-detail}.ts`와 시험, `src/lib/admin-writes.test.ts`, `src/copy.ts`, `playwright.config.ts`(주석), e2e(`scheduled-open.spec.ts` 새, `helpers.ts`, `admin-writes`·`market-review`·`market-times`·`market-rules`·`market-tags`·`proposals` spec).
+- 그 밖: `packages/api-client/src/generated/schema.ts`, `docs/API.md`, `scripts/generate-api-doc.mjs`, `docs/{GUARDS,QUESTIONS,RESET,SETTINGS}.md`, `README.md`, `deploy/reset-db.sh`, `.github/workflows/ci.yml`.

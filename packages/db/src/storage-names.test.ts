@@ -254,8 +254,8 @@ describe('excluded features in stored data (#113)', () => {
 
   it('names the market times and their CHECKs explicitly, each read by the test above (#22)', () => {
     // ADR-0098, migration 0051: the scheduled times, the judgement zone and the lead-close gap
-    // the open stored beside the close, and the order CHECKs and the gap's own, under the names
-    // the API's tests and the migration spell.
+    // the submission stored beside the close, and the order CHECKs and the gap's own, under the
+    // names the API's tests and the migration spell.
     const marketsTable = TABLES.find((table) => table.name === 'markets');
     expect(marketsTable?.columns.map((column) => column.name)).toEqual(
       expect.arrayContaining([

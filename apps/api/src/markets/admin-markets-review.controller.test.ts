@@ -7,7 +7,11 @@
  * close checked again; the 되돌리기 from REVIEW (retracted by the submitter, rejected by anyone
  * else) and from SCHEDULED; the scheduled open moved with a reason; the 검수 대기 queue; the content
  * locked in REVIEW and SCHEDULED; `AdminMarket.review`; the admin on screen (ADR-0092); an approval
- * and a 되돌리기 at once; and what is published. Skips when TEST_* are unset.
+ * and a 되돌리기 at once; and what is published. The open (#21, ADR-0100): an approval or a
+ * reschedule that finds the scheduled open come opens the market at once, and the `market.open`
+ * and `market.close` jobs the approval, the reschedule and the 되돌리기 register or cancel
+ * (inspected with a BullMQ Queue on the test Redis, as the worker sees them); no route opens a
+ * market otherwise. Skips when TEST_* are unset.
  */
 import { schema } from '@buddha/db';
 import {
@@ -18,23 +22,30 @@ import {
   createScheduledMarket,
 } from '@buddha/db/test';
 import {
+  JOB_NAMES,
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_REVIEW_CHECKLIST,
   MARKET_REVIEW_REQUEST_REASON,
   REVIEW_CHECKLIST_INCOMPLETE,
   floorToMinute,
   marketChannel,
+  marketCloseJobId,
+  marketOpenJobId,
   type AdminMarket,
   type AdminMarketReviewItem,
   type Market,
   type MarketStatus,
+  type PriceSeries,
 } from '@buddha/shared';
+import { Queue } from 'bullmq';
 import { randomUUID } from 'node:crypto';
 import { asc, eq } from 'drizzle-orm';
 import { Redis } from 'ioredis';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { AdminGuard } from '../auth/admin.guard.js';
+import { MARKETS_QUEUE } from '../jobs/market-jobs.service.js';
 import { createTestApp, signUpTestUser, type TestApp, type TestUser } from '../test/app.js';
+import { discoverRoutes } from '../test/routes.js';
 import { hasTestInfra } from '../test/setup-env.js';
 import { sleep, waitForLockWaiter, waitForMessages } from '../test/wait.js';
 
@@ -62,6 +73,9 @@ const week = () => floorToMinute(Date.now()) + 7 * DAY_MS;
 
 describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
   let t: TestApp;
+  /** The worker's view of the `markets` queue: a plain Queue on its own client. */
+  let inspector: Redis;
+  let jobQueue: Queue;
   /** Creates the drafts and, unless a test says otherwise, submits them. */
   let creator: TestUser;
   let second: TestUser;
@@ -72,8 +86,12 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
 
   beforeAll(async () => {
     t = await createTestApp();
+    inspector = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: null });
+    jobQueue = new Queue(MARKETS_QUEUE, { connection: inspector });
   });
   afterAll(async () => {
+    await jobQueue?.close();
+    await inspector?.quit();
     await t?.close(); // undefined when beforeAll timed out waiting for the file lock
   });
 
@@ -91,6 +109,9 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
 
   beforeEach(async () => {
     await t.reset();
+    // Jobs are keyed by market and instant, so nothing of an earlier test can collide; the queue
+    // is still emptied so what a test finds there is what it registered.
+    await jobQueue.obliterate({ force: true });
     creator = await makeAdmin();
     second = await makeAdmin();
     third = await makeAdmin();
@@ -273,6 +294,12 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     expect(errorOf(res).details).toEqual([{ path: ['request'], message: reason }]);
   }
 
+  /** The ids of the jobs waiting in the `markets` queue, sorted. */
+  async function jobIds() {
+    const jobs = await jobQueue.getJobs(['delayed', 'waiting', 'active']);
+    return jobs.map((job) => job.id).sort();
+  }
+
   /** Subscribes to the market's channel for the length of `body`. */
   async function listening(marketId: string, body: (received: string[]) => Promise<void>) {
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
@@ -378,9 +405,8 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
       expect(received).toEqual([]);
     });
 
-    // Locked (#172 item 6 (a)): no edit, no interim open, no second submission.
+    // Locked (#172 item 6 (a)): no edit, no second submission.
     expectWrongStatus(await patch(marketUrl(draft.id), creator, { title: '바꾼 질문' }), 'review');
-    expectWrongStatus(await post(`${marketUrl(draft.id)}/open`, creator), 'review');
     expectWrongStatus(await submit(draft.id, second), 'review');
     expect(await requestsFor(draft.id)).toHaveLength(1);
   });
@@ -856,7 +882,7 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
   });
 
   // --- the scheduled open ---------------------------------------------------------------------
-  it('moves a scheduled market’s open with a reason, checks the order again and takes a past instant', async () => {
+  it('moves a scheduled market’s open with a reason, checks the order again and moves its open job', async () => {
     const market = await scheduled();
     const close = Date.parse(market.closeAt);
     const before = market.scheduledOpenAt!;
@@ -892,8 +918,11 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     );
     expect(await reviewActionsFor(market.id)).toHaveLength(2);
 
-    // Earlier, and past: the market opens when #21's job next runs.
-    const earlier = iso(floorToMinute(Date.now()) - HOUR_MS);
+    // The approval registered the open job under the stored instant (#21).
+    expect(await jobQueue.getJob(marketOpenJobId(market.id, new Date(before)))).toBeDefined();
+    // Earlier, still ahead: the market stays SCHEDULED and its open job moves (a past instant opens
+    // it at once, below).
+    const earlier = iso(close - 3 * DAY_MS);
     await listening(market.id, async (received) => {
       const res = await reschedule(market.id, second, { scheduledOpenAt: earlier });
       expect(res.statusCode).toBe(200);
@@ -941,6 +970,12 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         ts: shown.updatedAt,
       });
       expect(data<Market>(await publicDetail(market.id)).scheduledOpenAt).toBe(earlier);
+      // The job of the instant it moved from is gone; one waits for the new instant, delayed from
+      // the change's own instant on the database clock (#21, ADR-0100).
+      expect(await jobQueue.getJob(marketOpenJobId(market.id, new Date(before)))).toBeUndefined();
+      const moved = await jobQueue.getJob(marketOpenJobId(market.id, new Date(earlier)));
+      expect(moved).toMatchObject({ name: JOB_NAMES.marketOpen, data: { marketId: market.id } });
+      expect(moved!.delay).toBe(Date.parse(earlier) - event.createdAt.getTime());
     });
 
     // SCHEDULED only.
@@ -983,8 +1018,240 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
     expectNotAllowed(await approve(market.id, second), 'editor');
   });
 
+  // --- the open (#21) -------------------------------------------------------------------------
+  it('opens a market approved past its scheduled open at once: its approver opens it, one status is published, the close job and no open job', async () => {
+    await setGap(30);
+    const close = week();
+    const passed = iso(floorToMinute(Date.now()) - MINUTE_MS);
+    // The submission does not ask the scheduled open: one already passed is submitted as any.
+    const review = await submitted(
+      { scheduledOpenAt: passed, scheduledAnnouncementAt: iso(close + HOUR_MS) },
+      creator,
+      close,
+    );
+    // The open checks neither the lead close again nor stores another gap (ADR-0098 7-6).
+    await setGap(120);
+    await listening(review.id, async (received) => {
+      const res = await approve(review.id, third);
+      expect(res.statusCode).toBe(200);
+      const shown = detail(res);
+      const [request] = await requestsFor(review.id);
+      const decidedAt = request!.decidedAt!;
+      const events = await eventsFor(review.id);
+      expect(
+        events.map((event) => [event.type, event.actorId, event.fromStatus, event.toStatus]),
+      ).toEqual([
+        ['created', creator.id, null, 'draft'],
+        ['submitted', creator.id, 'draft', 'review'],
+        ['approved', third.id, 'review', 'scheduled'],
+        ['opened', third.id, 'scheduled', 'open'],
+      ]);
+      // ADR-0093 decision 2 #172 item 6 '승인하는 즉시 연다': at the decision instant, by its admin.
+      const opened = events.at(-1)!;
+      expect(opened.payload).toEqual({
+        openAt: decidedAt.toISOString(),
+        closeAt: iso(close),
+        source: 'approval',
+      });
+      expect(opened.createdAt).toEqual(decidedAt);
+      expect(events.at(-2)!.createdAt).toEqual(decidedAt);
+      expect(shown).toMatchObject({
+        status: 'open',
+        openAt: decidedAt.toISOString(),
+        scheduledOpenAt: passed,
+        updatedAt: decidedAt.toISOString(),
+        statusEventId: String(opened.id),
+        leadCloseGapMinutes: 30,
+        missingOpenItems: [],
+        review: { pending: null },
+      });
+      expect(shown.events[0]).toMatchObject({
+        type: 'opened',
+        actorId: third.id,
+        fromStatus: 'scheduled',
+        toStatus: 'open',
+      });
+      expect(await marketRow(review.id)).toMatchObject({
+        status: 'open',
+        openAt: decidedAt,
+        updatedAt: decidedAt,
+        statusEventId: opened.id,
+        leadCloseGapMinutes: 30,
+      });
+      // The approval's record and the event say who opened it: no record of its own.
+      expect(
+        (await reviewActionsFor(review.id)).map((action) => [action.type, action.adminId]),
+      ).toEqual([
+        ['market_submit', creator.id],
+        ['market_approve', third.id],
+      ]);
+      expect(shown.review.log.map((entry) => entry.type)).toEqual(['approved', 'submitted']);
+      // One `market:status`: the OPEN status with the `opened` event's key, never SCHEDULED first.
+      await waitForMessages(received, 1, 'market:status of the approval that opened');
+      await sleep(100);
+      expect(received).toHaveLength(1);
+      expect(JSON.parse(received[0]!)).toMatchObject({
+        type: 'market:status',
+        marketId: review.id,
+        status: 'open',
+        statusEventId: String(opened.id),
+        ts: decidedAt.toISOString(),
+      });
+      // The close job at the close, delayed from the decision; no open job — it opened.
+      const closeJob = await jobQueue.getJob(marketCloseJobId(review.id, new Date(close)));
+      expect(closeJob).toMatchObject({
+        name: JOB_NAMES.marketClose,
+        data: { marketId: review.id },
+        delay: close - decidedAt.getTime(),
+      });
+      expect(await jobIds()).toEqual([marketCloseJobId(review.id, new Date(close))]);
+    });
+    // Public now, still without a price or a chart point: an open is not a price (N02 §5).
+    const pub = await publicDetail(review.id);
+    expect(pub.statusCode).toBe(200);
+    expect(data<Market>(pub)).toMatchObject({ status: 'open', lastPrice: null, tradeCount: 0 });
+    const chart = await t.app.inject({ method: 'GET', url: `/api/v1/markets/${review.id}/ticks` });
+    expect(data<PriceSeries>(chart).points).toEqual([]);
+    expect(
+      await t.db.select().from(schema.priceTicks).where(eq(schema.priceTicks.marketId, review.id)),
+    ).toEqual([]);
+    // Open: nothing approves, reschedules or sends it back any more.
+    expectWrongStatus(await approve(review.id, second), 'open');
+    expectWrongStatus(
+      await reschedule(review.id, second, { scheduledOpenAt: iso(close - DAY_MS) }),
+      'open',
+    );
+    expectWrongStatus(await revert(review.id, second), 'open');
+  });
+
+  it('approves a market whose scheduled open is ahead as SCHEDULED with its open and close jobs; a 되돌리기 cancels both', async () => {
+    const review = await submitted();
+    const res = await approve(review.id, third);
+    expect(res.statusCode).toBe(200);
+    const shown = detail(res);
+    expect(shown).toMatchObject({ status: 'scheduled', openAt: null });
+    expect((await eventsFor(review.id)).map((event) => event.type)).toEqual([
+      'created',
+      'submitted',
+      'approved',
+    ]);
+    const [request] = await requestsFor(review.id);
+    const decidedAt = request!.decidedAt!.getTime();
+    const scheduledOpenAt = new Date(shown.scheduledOpenAt!);
+    const closeAt = new Date(shown.closeAt);
+    const openId = marketOpenJobId(review.id, scheduledOpenAt);
+    const closeId = marketCloseJobId(review.id, closeAt);
+    // Each delayed from the decision instant on the database clock, as the worker re-checks it.
+    const openJob = await jobQueue.getJob(openId);
+    expect(openJob).toMatchObject({
+      name: JOB_NAMES.marketOpen,
+      data: { marketId: review.id },
+      delay: scheduledOpenAt.getTime() - decidedAt,
+    });
+    expect(openJob!.opts).toMatchObject({
+      jobId: openId,
+      attempts: 3,
+      removeOnComplete: true,
+    });
+    const closeJob = await jobQueue.getJob(closeId);
+    expect(closeJob).toMatchObject({
+      name: JOB_NAMES.marketClose,
+      data: { marketId: review.id },
+      delay: closeAt.getTime() - decidedAt,
+    });
+    expect(await jobIds()).toEqual([closeId, openId].sort());
+
+    // Sent back to a draft: neither job is left behind.
+    expect((await revert(review.id, creator)).statusCode).toBe(200);
+    expect(await jobIds()).toEqual([]);
+    // Submitted and approved again at the same instants: the same jobs again.
+    expect((await submit(review.id)).statusCode).toBe(200);
+    expect(await jobIds()).toEqual([]);
+    expect((await approve(review.id, third)).statusCode).toBe(200);
+    expect(await jobIds()).toEqual([closeId, openId].sort());
+  });
+
+  it('opens a scheduled market at once when its open moves to an instant already passed: its mover opens it, the old open job is cancelled', async () => {
+    const market = await scheduled();
+    const before = market.scheduledOpenAt!;
+    const closeId = marketCloseJobId(market.id, new Date(market.closeAt));
+    expect(await jobIds()).toEqual([closeId, marketOpenJobId(market.id, new Date(before))].sort());
+    // No early-open action (decision 3 '#21 앞당긴 개장'): the scheduled open moves earlier instead.
+    const past = iso(floorToMinute(Date.now()) - HOUR_MS);
+    await listening(market.id, async (received) => {
+      const res = await reschedule(market.id, second, { scheduledOpenAt: past });
+      expect(res.statusCode).toBe(200);
+      const shown = detail(res);
+      const [rescheduled, opened] = (await eventsFor(market.id)).slice(-2);
+      expect(rescheduled).toMatchObject({
+        type: 'open_rescheduled',
+        actorId: second.id,
+        fromStatus: null,
+        toStatus: null,
+        payload: { before, after: past, reason: '발표 일정이 당겨졌다' },
+      });
+      const at = rescheduled!.createdAt;
+      expect(opened).toMatchObject({
+        type: 'opened',
+        actorId: second.id,
+        fromStatus: 'scheduled',
+        toStatus: 'open',
+        payload: { openAt: at.toISOString(), closeAt: market.closeAt, source: 'reschedule' },
+      });
+      expect(opened!.createdAt).toEqual(at);
+      expect(shown).toMatchObject({
+        status: 'open',
+        scheduledOpenAt: past,
+        openAt: at.toISOString(),
+        updatedAt: at.toISOString(),
+        statusEventId: String(opened!.id),
+      });
+      expect((await reviewActionsFor(market.id)).map((action) => action.type)).toEqual([
+        'market_submit',
+        'market_approve',
+        'market_reschedule',
+      ]);
+      // One `market:status`, the OPEN status with its new key.
+      await waitForMessages(received, 1, 'market:status of the reschedule that opened');
+      await sleep(100);
+      expect(received).toHaveLength(1);
+      expect(JSON.parse(received[0]!)).toMatchObject({
+        type: 'market:status',
+        status: 'open',
+        statusEventId: String(opened!.id),
+      });
+    });
+    // The open job of the old instant is gone and none was added; the approval's close job stays.
+    expect(await jobIds()).toEqual([closeId]);
+    expect(data<Market>(await publicDetail(market.id)).status).toBe('open');
+  });
+
+  it('serves no route that opens a market: the interim open is gone (#21)', async () => {
+    expect(discoverRoutes().map((route) => route.key)).not.toContain(
+      'POST /admin/markets/:id/open',
+    );
+    // A draft, and a SCHEDULED market whose scheduled open has come (the factory's, a minute ago):
+    // neither is opened by an admin — the worker's job opens the second.
+    const draft = await createDraft();
+    const { market: due } = await createScheduledMarket(t.db, {
+      createdBy: creator.id,
+      categoryId: category.id,
+      approvedBy: third.id,
+    });
+    for (const id of [draft.id, due.id]) {
+      const res = await post(`${marketUrl(id)}/open`, second);
+      expect({ status: res.statusCode, code: errorOf(res).code }).toEqual({
+        status: 404,
+        code: 'NOT_FOUND',
+      });
+    }
+    expect((await marketRow(draft.id)).status).toBe('draft');
+    expect((await marketRow(due.id)).status).toBe('scheduled');
+    expect((await eventsFor(due.id)).map((event) => event.type)).toEqual(['submitted', 'approved']);
+  });
+
   // --- the lock -------------------------------------------------------------------------------
-  it('keeps a market in review or scheduled locked: no edit and no interim open', async () => {
+  it('keeps a market in review or scheduled locked: no edit', async () => {
     const { market: review } = await createMarketInReview(t.db, {
       createdBy: creator.id,
       categoryId: category.id,
@@ -1003,7 +1270,6 @@ describe.skipIf(!hasTestInfra)('admin market review (integration)', () => {
         await patch(marketUrl(market.id), second, { scheduledOpenAt: iso(week() - DAY_MS) }),
         status,
       );
-      expectWrongStatus(await post(`${marketUrl(market.id)}/open`, second), status);
       expect((await marketRow(market.id)).title).toBe(market.title);
       expect(await reviewActionsFor(market.id)).toEqual([]);
     }

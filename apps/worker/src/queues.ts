@@ -11,8 +11,9 @@ import { type RedisOptions } from 'ioredis';
 
 /**
  * Queue and job names live in @buddha/shared (jobs.ts) since M5: the API is the producer of
- * `market.close` / `market.finalize` and one module keeps a renamed job from leaving it adding
- * work no worker handles. Re-exported so the worker's own modules keep one import site.
+ * `market.open` (#21) / `market.close` / `market.finalize` and one module keeps a renamed job from
+ * leaving it adding work no worker handles. Re-exported so the worker's own modules keep one import
+ * site.
  */
 export { JOB_NAMES, QUEUE_NAMES, type JobName, type QueueName };
 
@@ -40,7 +41,7 @@ export const BULLMQ_REDIS_OPTIONS = {
 
 /** Which jobs belong to which queue. */
 export const QUEUE_JOBS: Record<QueueName, readonly JobName[]> = {
-  markets: [JOB_NAMES.marketClose, JOB_NAMES.marketFinalize],
+  markets: [JOB_NAMES.marketOpen, JOB_NAMES.marketClose, JOB_NAMES.marketFinalize],
   audit: [JOB_NAMES.ledgerAudit],
   stats: [JOB_NAMES.marketTraderCount],
   wallet: [JOB_NAMES.startGrantPay],
@@ -62,12 +63,12 @@ export const DEFAULT_JOB_OPTIONS = {
 } as const satisfies JobsOptions;
 
 /**
- * The per-minute safety-net scans of PLAN 5.5: the job the API registers per market (delayed
- * to `close_at`, or immediate after the judgement — ADR-0046) is the fast path, and a market
- * whose job was lost (Redis restarted, the API's best-effort add failed after COMMIT) is still
- * closed or settled within a minute. Both run the same per-market transaction as that job, so a
- * scan and the job for one market are one close or settlement, never two (market-close.ts,
- * market-finalize.ts).
+ * The per-minute safety-net scans of PLAN 5.5 and #21: the job the API registers per market
+ * (delayed to `scheduled_open_at` or `close_at`, or immediate after the judgement — ADR-0046) is
+ * the fast path, and a market whose job was lost (Redis restarted, the API's best-effort add
+ * failed after COMMIT) is still opened, closed or settled within a minute. Each runs the same
+ * per-market transaction as that job, so a scan and the job for one market are one open, close or
+ * settlement, never two (market-open.ts, market-close.ts, market-finalize.ts).
  */
 const EVERY_MINUTE = { pattern: '* * * * *', tz: 'Asia/Seoul' } as const;
 
@@ -84,6 +85,9 @@ export const JOB_SCHEDULES = [
     repeat: { pattern: '0 4 * * *', tz: 'Asia/Seoul' },
   },
   // No `data`: a scan is the job without a market id (marketJobDataSchema).
+  // #21 (ADR-0100): the SCHEDULED markets whose scheduled open has come. Never rename this id or
+  // the job: the scheduler persists in Redis under it, and the old one would be left running.
+  { id: 'market-open-scan', queue: 'markets', name: JOB_NAMES.marketOpen, repeat: EVERY_MINUTE },
   { id: 'market-close-scan', queue: 'markets', name: JOB_NAMES.marketClose, repeat: EVERY_MINUTE },
   {
     id: 'market-finalize-scan',

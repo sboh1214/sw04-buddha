@@ -149,13 +149,14 @@ export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
 /**
  * Room `market:<id>`: a status transition (every one `MARKET_LIFECYCLE_TRANSITIONS` and the interim
- * edges allow, published by the API's admin actions and the worker's jobs), or the same status
- * republished so subscribers refetch a descriptive edit (A-M4-36,
- * `MarketAdminService` `update`). `statusEventId` is the transition's `market_events.id` — the
- * key `statusSupersedes` orders by — and the repeat carries the UNCHANGED one, which is what
- * makes it safe: a client drops it as not newer, and only the REST snapshot it triggers
- * carries `closeAt`, `title` or `rules`. Required (nullable, never absent) so every publisher
- * states it; null only from a row that has no transition event.
+ * edge allow, published by the API's admin actions and the worker's jobs; an approval or a
+ * reschedule that opens the market at once publishes once, the OPEN market with the `opened`
+ * event's key, #21), or the same status republished so subscribers refetch a descriptive edit
+ * (A-M4-36, `MarketAdminService` `update`). `statusEventId` is the transition's
+ * `market_events.id` — the key `statusSupersedes` orders by — and the repeat carries the
+ * UNCHANGED one, which is what makes it safe: a client drops it as not newer, and only the REST
+ * snapshot it triggers carries `closeAt`, `title` or `rules`. Required (nullable, never absent)
+ * so every publisher states it; null only from a row that has no transition event.
  */
 export const marketStatusEventSchema = z
   .object({

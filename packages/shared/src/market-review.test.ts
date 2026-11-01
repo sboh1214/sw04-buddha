@@ -287,7 +287,7 @@ describe('rescheduleMarketOpenBodySchema', () => {
 
   it('takes an instant, a past one included, and a trimmed reason', () => {
     expect(rescheduleMarketOpenBodySchema.parse(body)).toEqual({ ...body, reason: '일찍 연다' });
-    // The service checks the order against the close; a past instant opens at #21's next run.
+    // The service checks the order against the close; a past instant opens the market at once.
     expect(
       rescheduleMarketOpenBodySchema.parse({ ...body, scheduledOpenAt: '2020-01-01T00:00:00Z' })
         .scheduledOpenAt,

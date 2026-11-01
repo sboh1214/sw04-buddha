@@ -24,7 +24,8 @@
  * maintained here — and requires each state-changing one to name the `ADMIN_ACTION_TYPES` value
  * it writes. A new admin mutation fails this test until someone writes down what it records,
  * and a `ADMIN_ACTION_TYPES` value that no route produces fails it too, so the enum cannot
- * drift into fiction either.
+ * drift into fiction either — unless it is RETIRED: written by a route that is gone, and kept so
+ * the rows it left still parse and render.
  *
  * Static, and deliberately: it reads route metadata, so it needs no Postgres, no Redis and no
  * file lock, and it runs in every environment.
@@ -56,7 +57,6 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/reject': 'market_reject',
   'POST /admin/markets/:id/revert': 'market_revert',
   'POST /admin/markets/:id/reschedule': 'market_reschedule',
-  'POST /admin/markets/:id/open': 'market_open',
   'POST /admin/markets/:id/close': 'market_close',
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/markets/:id/related': 'market_link',
@@ -118,6 +118,17 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/proposals/:id/reject': 'proposal_reject',
 };
 
+/**
+ * ADMIN_ACTION_TYPES no route writes any more, each with the route that did. The type stays in
+ * the enum because deployed `admin_actions` rows carry it and the audit log must still read them;
+ * no route may name it again (the AUDITED map above refuses it below).
+ */
+const RETIRED: Readonly<Partial<Record<AdminActionType, string>>> = {
+  // The interim draft → open, `POST /admin/markets/:id/open`, gone with #21 (ADR-0100): a market
+  // opens from SCHEDULED alone, recorded by its `opened` event.
+  market_open: 'POST /admin/markets/:id/open',
+};
+
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
@@ -148,12 +159,20 @@ describe('admin audit log completeness', () => {
     expect(audited).toEqual([]);
   });
 
-  it('uses every ADMIN_ACTION_TYPES value exactly once', () => {
+  it('uses every ADMIN_ACTION_TYPES value exactly once, but the retired ones', () => {
     const used = Object.values(AUDITED);
+    const retired = Object.keys(RETIRED) as AdminActionType[];
     // Every type is produced by some route: a value nothing writes is a value a reader of the
-    // enum would look for in the audit log and never find.
-    expect([...used].sort()).toEqual([...ADMIN_ACTION_TYPES].sort());
+    // enum would look for in the audit log and never find — unless it is retired, which only
+    // history carries.
+    expect([...used, ...retired].sort()).toEqual([...ADMIN_ACTION_TYPES].sort());
     expect(new Set(used).size).toBe(used.length);
+    expect(used.filter((type) => retired.includes(type))).toEqual([]);
+  });
+
+  it('serves no route a retired type was written by', () => {
+    const keys = new Set(adminRoutes.map((route) => route.key));
+    expect(Object.values(RETIRED).filter((key) => keys.has(key))).toEqual([]);
   });
 
   it('audits nothing outside /admin', () => {

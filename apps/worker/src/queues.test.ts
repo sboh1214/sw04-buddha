@@ -59,6 +59,7 @@ describe('queues', () => {
   it('schedules the daily audit, the per-minute scans and payment, the hourly clean-ups and the daily retention purge', () => {
     expect(JOB_SCHEDULES.map((schedule) => schedule.id)).toEqual([
       'ledger-audit-daily',
+      'market-open-scan',
       'market-close-scan',
       'market-finalize-scan',
       'start-grant-pay',
@@ -67,6 +68,12 @@ describe('queues', () => {
       'retention-purge-daily',
     ]);
     const byId = Object.fromEntries(JOB_SCHEDULES.map((schedule) => [schedule.id, schedule]));
+    // #21 (ADR-0100): the scheduled markets are opened within a minute of their scheduled open.
+    expect(byId['market-open-scan']).toMatchObject({
+      queue: 'markets',
+      name: JOB_NAMES.marketOpen,
+      repeat: { pattern: '* * * * *', tz: 'Asia/Seoul' },
+    });
     expect(byId['market-close-scan']).toMatchObject({
       queue: 'markets',
       name: JOB_NAMES.marketClose,

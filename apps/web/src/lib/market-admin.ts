@@ -250,6 +250,59 @@ export function settlementPollInterval(
     : false;
 }
 
+/** The longest delay a timer holds (2^31 − 1 ms, about 24.8 days); a longer one fires at once. */
+export const MAX_TIMEOUT_MS = 2 ** 31 - 1;
+
+/** How often the admin detail re-reads a 개장 예정 market past its scheduled open, until it opens. */
+export const SCHEDULED_OPEN_POLL_MS = 5_000;
+
+/**
+ * The admin detail's re-read of a 개장 예정 market (#21, ADR-0100), from the row read at `readAt`
+ * (`dataUpdatedAt`) and the clock `now`. Nothing else tells this screen that the worker opened it —
+ * the admin query joins no realtime room — so the detail reads it again:
+ * - at its scheduled open, while that is ahead;
+ * - every SCHEDULED_OPEN_POLL_MS from then on, until it is no longer 개장 예정 (the job opens it at
+ *   once, the per-minute scan within a minute, a stopped worker when it is back);
+ * - at its close, for the answer `scheduledCloseLapsed` (market-review.ts) judges — and no more
+ *   once a read from at or after the close has come back: nothing opens the market any more.
+ * A row read before the close and asked after it is read again every SCHEDULED_OPEN_POLL_MS, not
+ * at once: a failed read leaves `readAt` where it was (query-core moves only `errorUpdatedAt`), so
+ * an immediate delay would refire on every failure — a request loop on a 401 (verification of the
+ * Codex fix). False for any other status, a row read after its close, or an unreadable close. A
+ * null scheduled open never comes (the open waits for one), so only the close is read. Capped at
+ * MAX_TIMEOUT_MS, the next read waiting again; never 0, which query-core takes for no interval.
+ */
+export function scheduledMarketPollDelay(
+  market: { status: MarketStatus; scheduledOpenAt: string | null; closeAt: string } | undefined,
+  readAt: number,
+  now: number = Date.now(),
+): number | false {
+  if (market?.status !== 'scheduled') return false;
+  const closeAt = new Date(market.closeAt).getTime();
+  if (Number.isNaN(closeAt) || closeAt <= readAt) return false;
+  const untilClose = closeAt - now;
+  if (untilClose <= 0) return SCHEDULED_OPEN_POLL_MS;
+  const openAt =
+    market.scheduledOpenAt === null ? Number.NaN : new Date(market.scheduledOpenAt).getTime();
+  const untilOpen = Number.isNaN(openAt) ? untilClose : openAt - now;
+  const next = untilOpen > 0 ? untilOpen : SCHEDULED_OPEN_POLL_MS;
+  return Math.max(1, Math.min(next, untilClose, MAX_TIMEOUT_MS));
+}
+
+/**
+ * `refetchInterval` of the admin detail (`useAdminMarket`), from the query's state: the settlement
+ * poll for a judged market (`settlementPollInterval`), else the 개장 예정 re-reads
+ * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`).
+ */
+export function adminMarketPollInterval(state: {
+  data?: { status: MarketStatus; scheduledOpenAt: string | null; closeAt: string };
+  dataUpdatedAt: number;
+}): number | false {
+  return (
+    settlementPollInterval(state.data) || scheduledMarketPollDelay(state.data, state.dataUpdatedAt)
+  );
+}
+
 /** Which form fields a status admits (design 3.4): draft everything, open the text fields. */
 export function isEditable(status: MarketStatus): boolean {
   return status === 'draft' || status === 'open';
@@ -463,6 +516,12 @@ const RULES_EDITED_PAYLOAD = z
         RULES_EDITED_VALUE[item].safeParse(after[item]).success,
     ),
   );
+/**
+ * The open (#21, ADR-0100: scheduled → open; rows before it are the interim open's draft → open):
+ * `{openAt, closeAt}`, and since #21 the `source` — `job`, `approval` or `reschedule` — which no
+ * row repeats: the actor beside it says it (시스템 for the worker), and an admin's open follows the
+ * 승인 or the 예정 개장 시각 변경 that made it, at the same instant.
+ */
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
 /** The worker's resolved → settling (#174): `{source: 'job'}`, which the 시스템 actor already says. */
@@ -694,7 +753,7 @@ function reviewPayloadRows(
 
 /**
  * The open-items check's names (#17), in OPEN_ITEMS order: the draft's notice and the toast of a
- * refused 열기 say the same words — 질문, the rule items' names (#23, ADR-0097), the time items and
+ * refused 검수 제출 say the same words — 질문, the rule items' names (#23, ADR-0097), the time items and
  * the two relations between them, 시각 순서 and 선행 마감 (#22, ADR-0098), 카테고리 and 태그 1~5개. A
  * rule item's name is also its name in the `rules_edited` rows, and so is the zone's.
  */
@@ -850,11 +909,12 @@ function timeRuleLine(violation: TimeRuleViolation, gapMinutes: number | null): 
 }
 
 /**
- * The admin draft's notice (#17): '검수 제출·열기 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그
+ * The admin draft's notice (#17): '검수 제출 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그
  * 1~5개' while the open-items check finds something missing (`AdminMarket.missingOpenItems`),
  * `undefined` when nothing is. A draft only — the check is what leaving the draft takes, by the
- * review's submission (#78) or the interim open (until #21); a market past it whose category was
- * hidden later keeps it (#172 item 1) and gets no notice — an approval meets it as a refusal.
+ * review's submission (#78; the interim open went with #21, ADR-0100); a market past it whose
+ * category was hidden later keeps it (#172 item 1) and gets no notice — an approval meets it as a
+ * refusal, and the open does not check it again.
  *
  * 시각 순서 and 선행 마감 (#22, ADR-0098) name a relation, not a field, so each adds a line per rule
  * it breaks, one under another — '시각 순서: 거래 마감 시각이 예정 판정 시각보다 늦습니다', '선행
@@ -903,17 +963,16 @@ export function openItemsRefused(error: ApiError): string {
 }
 
 /**
- * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on open and on the
- * review's submission (#17, #78 — '검수 제출·열기 전에 채우거나 고칠 항목이 있습니다: …' naming what
- * the refusal names, or the line alone when it names nothing this screen knows), a close already
- * passed on either naming `closeAt`, the open before its scheduled open naming `scheduledOpenAt`
- * (#22, ADR-0093 decision 3 '#21 앞당긴 개장': no early open; move it earlier), MARKET_NOT_OPEN on
- * close, VALIDATION_ERROR naming `status`
- * for any other state-machine violation — the two "refresh the screen" messages, since the state
- * on screen is what is stale (a second 판정 of a market another admin has already judged lands
- * here). RULES_REQUIRED is no transition's any more (open answers OPEN_ITEMS_MISSING instead): it
- * is the PATCH that leaves an open market without a rule item it had (#23), which
- * `marketFormError` puts on that item's field.
+ * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on the review's
+ * submission (#17, #78 — '검수 제출 전에 채우거나 고칠 항목이 있습니다: …' naming what the refusal
+ * names, or the line alone when it names nothing this screen knows), a close already passed naming
+ * `closeAt`, MARKET_NOT_OPEN on close, VALIDATION_ERROR naming `status` for any other state-machine
+ * violation — the two "refresh the screen" messages, since the state on screen is what is stale (a
+ * second 판정 of a market another admin has already judged lands here). There is no admin open to
+ * refuse since #21 (ADR-0100): a market opens from 개장 예정 by itself, or by its approval or a
+ * reschedule, whose refusals are the review's (`reviewFailure`, lib/market-review.ts).
+ * RULES_REQUIRED is no transition's: it is the PATCH that leaves an open market without a rule item
+ * it had (#23), which `marketFormError` puts on that item's field.
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
  * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
  * `marketFormError` first. The cookie of another account (`isForAnotherAccount` — every market
@@ -934,7 +993,6 @@ export function transitionErrorMessage(error: unknown): string {
     const field = validationField(error);
     if (field === 'status') return copy.errMarketStatus;
     if (field === 'closeAt') return copy.errMarketCloseAt;
-    if (field === 'scheduledOpenAt') return copy.errMarketScheduledOpenNotReached;
     if (field === 'note') return copy.errMarketResolveNote;
     if (field === 'evidenceUrl') return copy.errMarketResolveEvidence;
     return copy.errMarketInvalid;
