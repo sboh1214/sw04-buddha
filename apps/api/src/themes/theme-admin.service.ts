@@ -354,7 +354,7 @@ export class ThemeAdminService {
         // Counted under the theme's row lock: a link or unlink of this theme takes no such lock,
         // so a market taken out in the same instant may leave a theme just published empty — as
         // taking every market out after publishing may, which the owner allows. So may a market
-        // counted that goes back to DRAFT (SCHEDULED → DRAFT, #21): the page then shows the rest.
+        // counted that goes back to DRAFT (SCHEDULED → DRAFT, #78): the page then shows the rest.
         if (published && (await this.publicMarketCount(tx, themeId)) === 0) {
           throw refusal(
             THEME_REFUSALS.noPublicMarket,

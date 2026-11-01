@@ -37,6 +37,17 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     'body: { marketId: relatedId, expectedAccountId: by },',
     'query: { expectedAccountId: by },',
   ],
+  // 개설 검수 (#78, ADR-0099), new since and written the same way: 검수 제출, then 승인 · 반려 ·
+  // 초안으로 되돌리기 · 예정 개장 시각 변경 from their dialogs
+  '../app/admin/markets/[id]/market-review-panel.tsx': [
+    "await api.POST('/api/v1/admin/markets/{id}/submit', {\n          params: { path: { id: market.id } },\n          body: { expectedAccountId },",
+  ],
+  '../app/admin/markets/[id]/market-review-dialogs.tsx': [
+    'body: { requestId, checklist, reason, expectedAccountId: by },',
+    'body: { requestId, rejectReason, reason, expectedAccountId: by },',
+    'body: { reason, expectedAccountId: by },',
+    'body: { scheduledOpenAt, reason, expectedAccountId: by },',
+  ],
   '../app/admin/themes/admin-themes.tsx': [
     '.mutateAsync({ ...toCreateThemeBody(values), expectedAccountId: operatorId })',
   ],
@@ -132,6 +143,10 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       // 공개, 마감's confirm, 판정's confirm, 저장 and its confirm, 연결, 해제's confirm; the buttons
       // opening 마감, 판정 and 해제, and the edit form's fields
       '../app/admin/markets/[id]/admin-market-detail.tsx': 11,
+      // 검수 제출, and the buttons opening 승인, 반려, 예정 개장 시각 변경 and 초안으로 되돌리기 (#78)
+      '../app/admin/markets/[id]/market-review-panel.tsx': 5,
+      // the confirms of 승인, 반려, 초안으로 되돌리기 and 예정 개장 시각 변경
+      '../app/admin/markets/[id]/market-review-dialogs.tsx': 4,
       // 만들기, and the form's fields
       '../app/admin/themes/admin-themes.tsx': 2,
       // 공개, 비공개의 confirm, 저장, 넣기, 빼기의 confirm, 공지 쓰기·고치기, 보이기, 숨기기의 confirm;
@@ -218,6 +233,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     '../app/admin/markets/[id]/admin-market-detail.tsx': [
       "const [confirm, setConfirm] = useHeldForOperator<'close' | 'resolve'>();",
       'const [unlinking, setUnlinking] = useHeldForOperator<AdminRelatedMarket>();',
+    ],
+    // 개설 검수's four dialogs (#78), with what was checked, picked and typed in them
+    '../app/admin/markets/[id]/market-review-panel.tsx': [
+      'const [dialog, setDialog] = useHeldForOperator<ReviewDialogKind>();',
     ],
     // 비공개로 돌리기, a market's 빼기, the notice opened for editing and a notice's 숨기기
     '../app/admin/themes/[id]/admin-theme-detail.tsx': [
@@ -320,6 +339,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     expect(source('../app/admin/markets/[id]/admin-market-detail.tsx')).toContain(
       "{confirm === 'resolve' && <ResolveDialog market={market} onClose={closeDialog} />}",
     );
+    // So is each review dialog (#78), with its checklist, reason and time.
+    expect(source('../app/admin/markets/[id]/market-review-panel.tsx')).toContain(
+      '{dialog !== null && (\n        <ReviewDialog kind={dialog} market={market} onClose={() => setDialog(null)} />',
+    );
     expect(source('../app/admin/settings/admin-release-settings.tsx')).toContain(
       '{editing !== null && <ChangeDialog item={editing} onClose={() => setEditing(null)} />}',
     );
@@ -383,6 +406,14 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
       ],
       '../app/admin/payments/admin-payments.tsx': [
         'disabled={operatorId === undefined}\n            onClick={() => setRefunding(action)}',
+      ],
+      // The panel is drawn for the admin `MarketReviewPanel` passes in (`useOperatorId`).
+      '../app/admin/markets/[id]/market-review-panel.tsx': [
+        "disabled={operatorId === undefined || exclusion !== null}\n                    onClick={() => onOpen('approve')}",
+        "disabled={operatorId === undefined || exclusion !== null}\n                    onClick={() => onOpen('reject')}",
+        "disabled={operatorId === undefined}\n                  onClick={() => onOpen('reschedule')}",
+        "disabled={operatorId === undefined}\n                onClick={() => onOpen('revert')}",
+        '<ReviewPanelBody market={market} operatorId={operatorId} onOpen={setDialog} />',
       ],
     };
     for (const [file, buttons] of Object.entries(opens)) {

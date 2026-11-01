@@ -107,7 +107,9 @@ export const markets = pgTable(
      * below, which the API's refusals precede.
      *
      * 예정 개장 시각: the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before the
-     * close (`markets_open_before_close_check`).
+     * close (`markets_open_before_close_check`). The one item a SCHEDULED market changes without a
+     * new review, with a reason (#78, ADR-0099; #172 item 6): nothing else of a market in REVIEW or
+     * SCHEDULED is edited.
      */
     scheduledOpenAt: timestampTz(),
     /**
@@ -139,6 +141,13 @@ export const markets = pgTable(
      * announcement edit) stored; later re-checks use it (docs/SETTINGS.md: a long-lived piece of
      * work keeps the value it started with). Null until one of those happens — before the open,
      * or after an open with the setting undecided and no edit since (#22, ADR-0098).
+     *
+     * The review (#78, ADR-0099; ADR-0098 결정 7-6 left it to #78) uses it too: the submission
+     * stores the gap it checked (null with the setting undecided and no announcement needing one),
+     * the approval checks again with it (a SCHEDULED market's open-time change asks only the open
+     * before the close, which no gap touches), and a 반려 or a 되돌리기 clears it, so a draft is
+     * checked against the setting in force at its next submission or interim open. No CHECK ties
+     * it to a status.
      */
     leadCloseGapMinutes: integer(),
     /**
@@ -159,6 +168,10 @@ export const markets = pgTable(
      * backfills every existing market from its newest transition event).
      */
     statusEventId: bigint({ mode: 'number' }),
+    /**
+     * The creator: the admin who made the draft, or adopted the proposal it came from (ADR-0089).
+     * Never approves or rejects its review (#78, ADR-0093 decision 2 #172 item 5).
+     */
     createdBy: text()
       .notNull()
       .references(() => user.id, { onDelete: 'restrict' }),

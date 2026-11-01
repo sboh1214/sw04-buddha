@@ -8,6 +8,7 @@ import {
   LEDGER_REF_TYPES,
   LINK_FLAG_REASONS,
   MARKET_EVENT_TYPES,
+  MARKET_REVIEW_APPROVAL_KIND,
   MEDIA_KINDS,
   MODERATION_ACTION_TYPES,
   PAYMENT_EVENT_TYPES,
@@ -99,8 +100,11 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'write_limit_events.action': WRITE_LIMIT_ACTIONS,
   'link_flags.reason': LINK_FLAG_REASONS,
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
-  // first; #130's bot control and the rest add theirs here.
-  'approval_requests.kind': Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
+  // first, the market review (#78); #130's bot control and the rest add theirs here.
+  'approval_requests.kind': [
+    ...Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
+    MARKET_REVIEW_APPROVAL_KIND,
+  ],
   // #184's purge records: the kinds a run counts (no personal content), and whether a kind was
   // done or failed (owner decision 2026-10-24 14).
   'retention_purges.kind': RETENTION_PURGE_KINDS,
@@ -273,6 +277,29 @@ describe('excluded features in stored data (#113)', () => {
           'markets_lead_close_gap_minutes_check',
         ].map((name) => ({ where: 'markets constraint', name })),
       ),
+    );
+  });
+
+  it('names the market records’ index and the review’s stored values, each read above (#78)', () => {
+    // ADR-0099, migration 0052: one market's admin records (the review's editors) under the name
+    // the migration and the schema test spell; the review's approval kind, market event types and
+    // admin action types, which the test above reads for an excluded feature.
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'admin_actions constraint', name: 'admin_actions_market_target_idx' },
+        { where: 'approval_requests.kind value', name: 'market_review' },
+        ...['submitted', 'approved', 'rejected', 'reverted', 'open_rescheduled'].map((name) => ({
+          where: 'market_events.type value',
+          name,
+        })),
+        ...[
+          'market_submit',
+          'market_approve',
+          'market_reject',
+          'market_revert',
+          'market_reschedule',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+      ]),
     );
   });
 

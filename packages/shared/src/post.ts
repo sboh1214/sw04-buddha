@@ -75,9 +75,15 @@ export type PostAuthor = z.infer<typeof postAuthorSchema>;
 
 /**
  * The market a post belongs to, as a card and the post page link to it: its detail opens in every
- * status, closed and settled ones too (#46's acceptance criteria). Its status badge reads as the
- * market's own cards do: '판정 지연' for a CLOSED market past its scheduled judgement
+ * public status, closed and settled ones too (#46's acceptance criteria). Its status badge reads as
+ * the market's own cards do: '판정 지연' for a CLOSED market past its scheduled judgement
  * (`judgementDelayed`, `isJudgementDelayed` at the read; #22, ADR-0098).
+ *
+ * Every field that carries it is null while the market is not public (`isPublicMarketStatus`): a
+ * post is written on a public market only, but a SCHEDULED one goes back to a draft by #78's
+ * 되돌리기 (ADR-0099; owner answer 2026-11-01: the post stays, its market shown as '공개되지 않은
+ * 시장' with no title, badge or link until the market is public again), and the draft being fixed
+ * is the admin's alone — its title among it — as the market's own routes keep it (NOT_FOUND).
  */
 export const postMarketSchema = z
   .object({
@@ -113,7 +119,7 @@ export const postSummarySchema = z
     /** The first image (`GET /media/:mediaId`, root-relative), or null. */
     thumbnailUrl: z.string().nullable(),
     author: postAuthorSchema,
-    market: postMarketSchema,
+    market: postMarketSchema.nullable(),
     createdAt: z.iso.datetime(),
     /** The last edit ('수정됨'), or null while the post was never edited. */
     editedAt: z.iso.datetime().nullable(),
@@ -146,7 +152,7 @@ export const postSchema = z
         title: z.string().nullable(),
         body: postDocumentSchema,
         author: postAuthorSchema,
-        market: postMarketSchema,
+        market: postMarketSchema.nullable(),
         createdAt: z.iso.datetime(),
         editedAt: z.iso.datetime().nullable(),
         commentCount: commentCountSchema,
@@ -157,7 +163,7 @@ export const postSchema = z
       .object({
         state: z.literal('deleted'),
         id: z.uuid(),
-        market: postMarketSchema,
+        market: postMarketSchema.nullable(),
         commentCount: commentCountSchema,
       })
       .meta({ id: 'DeletedPost' }),
@@ -165,7 +171,7 @@ export const postSchema = z
       .object({
         state: z.literal('hidden'),
         id: z.uuid(),
-        market: postMarketSchema,
+        market: postMarketSchema.nullable(),
         commentCount: commentCountSchema,
       })
       .meta({ id: 'HiddenPost' }),

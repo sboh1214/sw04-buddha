@@ -6,6 +6,7 @@ import {
   type PositionStatus,
   type UserBalanceEvent,
   type UserPositionEvent,
+  isPublicMarketStatus,
   statusSupersedes,
   supersedes,
 } from '@buddha/shared';
@@ -172,12 +173,18 @@ export function tickRestartsMarket(
  * already holds. Both must write nothing — the event carries no `closeAt`, `title` or rule item
  * (#23), so applying it could only restate what is held; the refetch the handler fires beside it
  * is what delivers the edit.
+ *
+ * Nor does a status no member sees (#78, ADR-0099): a scheduled market sent back to a draft
+ * publishes `draft`, and the card or the detail would otherwise call it 초안 — an admin's label —
+ * on a member's screen. The row stays as it was; the handler's refetch beside it answers NOT_FOUND,
+ * which the detail says (`marketRefreshNotice`), and a list drops it at its next read.
  */
 export function applyStatus<T extends LiveMarket>(
   held: T | undefined,
   event: MarketStatusEvent,
 ): T | undefined {
   if (held === undefined || held.id !== event.marketId) return undefined;
+  if (!isPublicMarketStatus(event.status)) return undefined;
   if (!statusSupersedes(event, held)) return undefined;
   return {
     ...held,

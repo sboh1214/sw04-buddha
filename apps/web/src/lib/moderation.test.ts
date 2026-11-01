@@ -1806,6 +1806,15 @@ describe('operators', () => {
         kind: 'alert',
         message: copy.errApprovalNotRequester,
       });
+      // The market review's (#78), which no account restriction request meets: said all the same.
+      expect(moderationFailure(approval('creator'))).toEqual({
+        kind: 'alert',
+        message: copy.errApprovalCreator,
+      });
+      expect(moderationFailure(approval('editor'))).toEqual({
+        kind: 'alert',
+        message: copy.errApprovalEditor,
+      });
       expect(moderationFailure(approval('something new'))).toEqual({
         kind: 'alert',
         message: copy.errUnknown,

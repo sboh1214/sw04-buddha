@@ -365,6 +365,13 @@
       "when": 1793451366724,
       "tag": "0051_market_times",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1793474800350,
+      "tag": "0052_market_review",
+      "breakpoints": true
     }
   ]
 }

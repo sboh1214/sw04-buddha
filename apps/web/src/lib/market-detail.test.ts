@@ -9,6 +9,7 @@ import {
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
 import { SRC } from '../test/screen-text';
+import { ApiError } from './api';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 import {
   DEFAULT_DETAIL_VIEW,
@@ -29,6 +30,7 @@ import {
   drawnOrder,
   LONG_DELAY_SEPARATOR,
   longDelayText,
+  marketRefreshNotice,
   openOrderSheet,
   orderEntryLabel,
   orderSheetBody,
@@ -255,6 +257,18 @@ describe('showsOrderArea (ADR-0048)', () => {
     }
     // The row not loaded yet: no order area to promise.
     expect(showsOrderArea(undefined)).toBe(false);
+  });
+});
+
+describe('marketRefreshNotice (#78)', () => {
+  it('says the market is not public any more when its refresh answers NOT_FOUND', () => {
+    // A scheduled market sent back to a draft (ADR-0099): the refetch after its `market:status`.
+    expect(
+      marketRefreshNotice(new ApiError(404, { code: 'NOT_FOUND', message: 'x' } as never)),
+    ).toBe(copy.marketNoLongerPublic);
+    expect(marketRefreshNotice(new ApiError(503, undefined))).toBe(copy.marketRefreshFailed);
+    expect(marketRefreshNotice(new TypeError('fetch failed'))).toBe(copy.marketRefreshFailed);
+    expect(copy.marketNoLongerPublic).not.toContain(copy.marketStatusDraft);
   });
 });
 

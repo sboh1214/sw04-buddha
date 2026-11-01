@@ -10224,7 +10224,7 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 ## ADR-0095 — 시장 생애주기 열한 상태와 결과 유형(#174): `MARKET_STATUSES`를 DRAFT·REVIEW·SCHEDULED·OPEN·PAUSED·CLOSED·PROVISIONAL·RESOLVED·SETTLING·SETTLED·CANCELLED로 바꾸고 결과 유형 YES/NO/VOID(`MARKET_RESULTS`, Postgres `market_result`)를 상태와 계약의 `OUTCOMES`에서 떼며, 허용 전이 표(`MARKET_LIFECYCLE_TRANSITIONS`)와 지금 관리자 동작이 쓰는 임시 전이 둘을 상태를 바꾸는 한 곳(`transitionMarket`)이 강제하고 전이마다 누가·언제·어디서·어디로를 `market_events`에 남기며, 워커가 RESOLVED → SETTLING → SETTLED로 지급하고, 마이그레이션 0048이 계정까지 모든 표를 비운다 (#174, 오너 결정 ADR-0093)
 
 - 날짜: 2026-10-31
-- 상태: 채택, 일부 대체됨(ADR-0098: 결과 5의 '#22·#142·#175: '판정 지연'… 표시' — 예정 판정 시각이 지난 거래 마감 시장의 '판정 지연'은 #22가 붙였다(`judgementDelayed`). 사유와 다음 검토 시각은 #142, 이의 검토가 늦은 PROVISIONAL은 #175의 것이고 필터는 두지 않는다(결정 8-6). 나머지는 유효)
+- 상태: 채택, 일부 대체됨(ADR-0098: 결과 5의 '#22·#142·#175: '판정 지연'… 표시' — 예정 판정 시각이 지난 거래 마감 시장의 '판정 지연'은 #22가 붙였다(`judgementDelayed`). 사유와 다음 검토 시각은 #142, 이의 검토가 늦은 PROVISIONAL은 #175의 것이고 필터는 두지 않는다(결정 8-6). 나머지는 유효), 일부 대체됨(ADR-0099: 결과 5의 '#78·#21: SCHEDULED → DRAFT가 생기면 … 그 전이를 만드는 PR에서 묻는다' — #78의 되돌리기가 그 전이이고, 오너 답(2026-11-01)대로 그 시장의 글과 댓글은 남되 시장이 다시 공개될 때까지 글의 시장(`PostMarket`)은 null이고 화면은 '공개되지 않은 시장'이다. 관심 등록은 남고 목록에서 빠진다. 결정 4 표의 관리자 열기 '#21(#78)'은 #21만이다 — 임시 열기는 검수 옆에 남는다. 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #174를 기록한다. 오너 결정은 모두 ADR-0093(결정 1의 #173 1·4·8·10·11·12항, 결정 2의 #172 6항, 결정 3의 #174 세 행)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 8 '구현의 선택'에 있다. 이 PR은 상태 값과 허용 전이, 결과 유형, 전이 기록을 바꾼다. 각 전이를 일으키는 동작(검수 #78, 예약 개장 #21, 일시 중단 #114, 마감 #120, 판정 #152, 이의 #175, 정정 #176, 지급 #126, 거래 없는 취소 #20)은 그 이슈가 만든다.
 
@@ -10641,7 +10641,7 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 ## ADR-0098 — 시장 시간 구조(#22): 예정 개장·발표 예정·예정 판정 시각과 판정 기준 시간대를 거래 마감 시각 옆에 따로 저장하고(UTC, `markets`의 열), 서버와 DB가 분 단위로 예정 개장 < 거래 마감 ≤ 예정 판정과 사건 기한 ≤ 예정 판정(오너 답 2026-10-31 A1)을, 서버가 출시 설정 `market.lead_close_gap`으로 선행 마감을 검사하며, 개장 뒤의 거래 마감은 예정 판정 시각까지 늦추기만 하고(오너 답 A2), 공개 상세가 시각을 판정 기준 시간대로도 보이고 예정 판정 시각이 지난 거래 마감 시장을 '판정 지연'으로 보인다
 
 - 날짜: 2026-11-01
-- 상태: 채택
+- 상태: 채택, 일부 대체됨(ADR-0099: 결과 5의 #21 행 '사유를 남긴 예정 개장 변경과 순서 검사(#172 6항)' — #78이 만들었다(개장 예정 시장만, 사유 필수, 예정 개장 < 거래 마감만 다시 보고 지난 시각도 받으며, 거래 마감이 지난 시장은 거절). 7-6과 결과 5 #78 행의 '간격 저장을 검수 제출과 승인 가운데 어디서 할지' — 검수 제출이 저장하고 승인은 그 값으로 다시 보며 반려·되돌리기가 지운다. 결정 4의 '열기(#78·#21 전의 임시 열기)'는 #21 전의 임시 열기로 검수 옆에 남는다. 나머지는 유효)
 
 이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #22를 기록한다. 오너 결정은 ADR-0093(결정 2의 #172 4·6·7·11\~14항과 #173 11항, 결정 3의 '#22 시간대'·'#21 앞당긴 개장' 행, 결정 5, 결과 3)과 이 PR에서 받은 답(2026-10-31 — A1 사건 기한의 순서, A2 개장 뒤 연장한 마감의 한도)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 7 '구현의 선택'에 있다. 이 PR은 #23(ADR-0097, PR #248) 위에, #23은 #17(ADR-0096, PR #247) 위에, #17은 #174(ADR-0095, PR #246) 위에 쌓았다.
 
@@ -10783,3 +10783,143 @@ Dependabot PR #244가 better-auth를 1.7.2에서 1.7.7로 올렸다. 1.7.7은 Ma
 - api: `src/markets/{market-admin,market}.service.ts`·`admin-markets.controller.ts`·`markets.module.ts`, `src/posts/posts.service.ts`, `src/authored/authored.service.ts`, `src/proposals/admin-proposals.service.ts`(주석), 시험(`admin-markets-times`(새)·`admin-markets`·`admin-markets-resolve`·`markets` 컨트롤러, `posts`·`authored`·`admin-proposals`·`release-settings` 컨트롤러), `openapi.json`.
 - web: `src/app/admin/markets/`(`market-time-fields.tsx` 새와 시험, `market-form-fields.tsx`·`market-rule-fields.tsx`·`market-preview.tsx`·`admin-markets.tsx`·`[id]/admin-market-detail.tsx`), `src/components/market/{rules-section,live-rules-section,market-card}.tsx`(`market-card.test.tsx` 새, `rules-section.test.tsx`), `src/components/time-zone/time-zone-provider.tsx`(`time-zone-provider.test.tsx` 새), `src/components/post/{post-card,market-picker}.tsx`, `src/components/authored/authored-comment-card.tsx`, `src/app/markets/[slug]/{page,market-detail}.tsx`, `src/app/community/{posts/[postId]/post-screen,write/write-screen}.tsx`, `src/app/my/portfolio.tsx`, `src/lib/market-status.ts`(새)와 시험, `src/lib/{market-form,market-admin,market-detail,market-preview,posts,time-zone}.ts`, `src/copy.ts`, 시험(`hooks`·`lib`의 시장·글 시험들, `copy.test.ts`), e2e(`market-times.spec.ts` 새, `helpers.ts`·`market-rules`·`market-tags`·`proposals`·`release-settings`·`time-zone` 명세).
 - 그 밖: `packages/api-client/src/generated/schema.ts`, `docs/API.md`, `scripts/generate-api-doc.mjs`, `docs/{RESET,GUARDS,QUESTIONS,SETTINGS}.md`, `README.md`.
+
+---
+
+## ADR-0099 — 개설 검수(#78): 초안을 검수 제출하면(DRAFT → REVIEW) 개설 항목 검사를 통과한 내용이 잠기고, 만든 관리자·내용을 수정한 관리자·제출한 관리자가 아닌 다른 관리자가 체크리스트 일곱 항목을 모두 확인하고 사유를 적어 승인하거나(→ SCHEDULED) 사유 목록의 하나와 설명으로 반려하며(→ DRAFT), 어느 관리자나 사유와 함께 초안으로 되돌리고, 개장 예정 시장의 예정 개장 시각만 새 검수 없이 사유와 함께 바꾸며(ADR-0098 결과 5의 #21에서 옮김), 두 사람 통제는 `approval_requests`(`market_review`)로, 기다리는 시장은 '검수 대기'에서 보고, 초안으로 되돌린 시장의 글은 남되 시장 칸을 가린다(오너 답 2026-11-01)
+
+- 날짜: 2026-11-01
+- 상태: 채택
+
+이슈 번호와 기획 인용 표기는 ADR-0047과 같다(`#N`, NR·N00\~N06). 이 ADR은 #78을 기록한다. 오너 결정은 ADR-0093(결정 1의 #173 1·12항, 결정 2의 #172 3·4·5·6·7·12·13항, 결정 3의 '#78 수정 기록의 사유'·'#21 앞당긴 개장' 행)과 이 PR에서 받은 답(2026-11-01 — 개장 예정에서 초안으로 되돌린 시장의 글, ADR-0095 결과 5가 이 전이를 만드는 PR에서 묻기로 한 것)에 있고 결정 1의 표에 그 행을 옮겼다. 그 밖에 이 PR이 정한 것은 결정 7 '구현의 선택'에 있다. 이 PR은 #22(ADR-0098, 아직 PR을 열지 않았다 — 쌓인 PR이 셋이라) 위에, #22는 #23(ADR-0097, PR #248) 위에, #23은 #17(ADR-0096, PR #247) 위에, #17은 #174(ADR-0095, PR #246) 위에 쌓았다.
+
+### 맥락
+
+- 기획: N03 §2 "운영자가 개설하고 다른 검수자가 규칙을 확인하는 방식을 기본안으로 한다", "이미 결과가 알려진 질문, 모호한 기준, 동일 조건의 중복 시장은 개설하지 않는다", "같은 사건의 다른 질문도 독립 판정 조건이 있어야 한다", 사용자는 질문을 제안할 뿐 직접 상장하지 않는다. N03 §3 "DRAFT → REVIEW → SCHEDULED → OPEN". N03 §8 운영 화면의 "개설 검수 목록"과 "수정·중단·판정·지급 작업의 담당자·시각·사유" 보존. N00 §3-13 공개 전 검수는 "중복·모호함·선공개 검사"다.
+- 이 PR 전: 초안은 관리자 한 명의 임시 열기(draft → open, ADR-0027, `INTERIM_MARKET_TRANSITIONS`의 `until: '#21'`, 예정 개장 시각 전이면 거절 — ADR-0098 7-7)로만 거래를 시작했다. REVIEW·SCHEDULED 상태와 그 전이는 #174가 표에 두었지만(ADR-0095) 그 전이를 일으키는 동작이 없었다. 수정(PATCH)은 초안과 거래 중만 받았다. 개설 항목 검사(#17·#23·#22, `missingOpenItems`)는 임시 열기의 관문이었고, 시장이 지는 선행 마감 간격(`lead_close_gap_minutes`)은 열기가 저장했다(ADR-0098 7-6 — 검수 제출과 승인 가운데 어디서 저장할지는 #78). 두 사람 통제의 `approval_requests`(#171, ADR-0056)는 계정 제한(#139, ADR-0085)의 네 종류만 썼다.
+- 범위: #78 본문의 포함과 제외를 따르되 둘을 더한다. 하나는 ADR-0098 결과 5가 #21에 둔 '사유를 남긴 예정 개장 시각 변경과 순서 검사(#172 6항)'다 — 그 변경은 검수 제출 때의 잠금(#172 6항 (a))의 유일한 예외이고, 그 잠금이 이 PR에서 생긴다(7-12). 다른 하나는 ADR-0095 결과 5가 'SCHEDULED → DRAFT를 만드는 PR'에서 묻기로 한 그 시장의 글과 관심 등록이다(결정 1의 오너 답, 7-14). 예정 개장 시각의 자동 개장과 승인 때 이미 지난 예정 개장의 즉시 개장, 임시 열기를 없애는 것(#21), 개장 때의 규칙 버전(#80), 봇 예산·설정 버전의 관문과 체크리스트(#72), 개장 없이 끝내는 SCHEDULED → CANCELLED(#173 2·10항의 승인), 유사 시장 자동 탐지(기획에 없다), 검수 반려 알림(M13 #52)은 하지 않는다.
+
+### 결정
+
+**1. 오너 결정 (다시 정하지 않는다).**
+
+| 근거                                       | 주제                | 결정                                                                                                                                                                                                              |
+| ------------------------------------------ | ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ADR-0093 #172 5항                          | 검수자              | 예외 없이 다른 관리자가 승인한다(ADR-0056 결정 1-4·1-5). 처음 만든 사람, 제출 전에 내용을 고친 사람, 검수를 제출한 사람은 승인할 수 없다. 시장 제안을 채택해 초안을 만든 관리자(ADR-0089)도 만든 사람이다.        |
+| ADR-0093 #172 4항                          | 체크리스트          | 기획의 금지 조건(결과가 알려진 질문·모호한 기준·동일 조건의 중복)에 필수 항목·시각 순서·선행 마감·독립 판정·봇 예산·설정 버전을 더하고, 모두 확인해야 승인한다(봇 예산·설정 버전은 #72가 더한다 — #78 본문).      |
+| ADR-0093 #172 4항                          | 중복                | YES 조건과 사건 기한이 같은 시장이 끝나지 않은 채(검수 중부터 판정 확정 전까지) 있으면 중복이다.                                                                                                                  |
+| ADR-0093 #172 4항                          | 반려                | 사유 목록 하나와 설명을 남긴다. 개설자는 관리자 화면의 검수 기록에서 본다.                                                                                                                                        |
+| ADR-0093 #173 1항                          | 반려 뒤 상태        | REVIEW → DRAFT. 따로 끝나는 상태를 두지 않는다.                                                                                                                                                                   |
+| ADR-0093 #172 6항                          | 내용 고정           | 검수를 제출할 때 잠근다((a)). 고치려면 관리자 누구나 사유를 남겨 초안으로 되돌리고 다시 검수한다. 예정 개장 시각만은 재검수 없이 사유를 남기고 바꾼다(12항의 순서 검사는 다시 한다).                              |
+| ADR-0093 #172 6항                          | 승인 뒤 개장 전     | 거래 마감 시각이 지났으면 초안으로 되돌려 시각을 고치고 다시 검수한다. 승인할 때 예정 개장 시각이 이미 지났으면 승인하는 즉시 연다(여는 것은 #21 — 7-9). 결과가 알려지면 개장 없이 끝낸다(SCHEDULED → CANCELLED). |
+| ADR-0093 #172 3항                          | 독립 판정 조건      | 다른 시장의 결과를 판정 조건으로 쓰지 않는다는 뜻이다. 체크리스트에서 확인한다.                                                                                                                                   |
+| ADR-0093 #172 12·13항                      | 시각 순서·선행 마감 | 서버 검사는 #22의 것이고(ADR-0098), 최소 거래 기간과 간격, 발표 일정이 없는 사건의 '없음', 경기는 시작 전·선거는 투표 종료 전 마감은 검수자가 본다.                                                               |
+| ADR-0093 #173 12항                         | 공개 범위           | DRAFT·REVIEW는 사용자에게 보이지 않는다. SCHEDULED 시장은 개장 전에도 상세를 공개한다.                                                                                                                            |
+| ADR-0093 결정 3 '#78 수정 기록의 사유'     | 기록                | 초안을 고칠 때는 담당자·시각·바뀐 항목만 남긴다. 검수 제출 뒤의 변경(초안으로 되돌리기, 승인 뒤 예정 개장 시각 변경)에는 사유가 필수다.                                                                           |
+| ADR-0093 결정 3 '#21 앞당긴 개장'          | 이른 개장           | 두지 않는다. 일찍 열려면 예정 개장 시각을 앞당긴다.                                                                                                                                                               |
+| 오너 답 2026-11-01(ADR-0095 결과 5의 물음) | 되돌린 시장의 글    | 글과 댓글은 남는다. 시장이 다시 공개될 때까지 글의 시장 칸은 제목·상태·링크 없이 '공개되지 않은 시장'이다(고치는 중인 초안의 내용이 새지 않게). 관심 등록은 남고 관심 목록에서만 빠진다(지금 그대로).             |
+
+**2. 저장(마이그레이션 0052, `0052_market_review`).** `drizzle-kit generate`의 출력에 머리 주석을 손으로 더했다.
+
+- 열은 없다. 상태와 전이와 `market_events`는 #174(0048)의 것이다. 새 시장 사건 다섯(`submitted`·`approved`·`rejected`·`reverted`·`open_rescheduled`)과 관리자 작업 다섯(`market_submit`·`market_approve`·`market_reject`·`market_revert`·`market_reschedule`)은 varchar라 CHECK가 없다.
+- 색인 하나: `admin_actions_market_target_idx` — `admin_actions (target_id, created_at) WHERE target_type = 'market'`. 검수의 수정한 관리자 찾기(7-5)와 시드가 관리자의 수정을 찾는 검사가 읽는다. 검수 기록은 `market_events`를 읽는다.
+- `markets.lead_close_gap_minutes`(0051)는 이제 검수 제출이 검사한 간격도 담는다. 승인이 그 값으로 다시 보고 반려와 되돌리기가 지운다. 상태와 묶는 CHECK는 없다(전에도 없었다).
+- 검수 요청은 `approval_requests`의 한 종류(`kind` `market_review`, 대상 `market`/시장 id, payload `{title}`, 요청 사유 '시장 개설 검수')다. 0021의 트리거와 CHECK가 요청자의 결정을 DB에서도 막는다.
+
+**3. 공유(`@buddha/shared`).**
+
+- `market-review.ts`(새): `MARKET_REVIEW_APPROVAL_KIND`(`market_review`), `MARKET_REVIEW_REQUEST_REASON`, 체크리스트 `MARKET_REVIEW_CHECKLIST` = `knownResult`·`ambiguity`·`duplicate`·`requiredItems`·`timeOrder`·`leadClose`·`independence`, 반려 사유 `MARKET_REJECT_REASONS` = 체크리스트 + `other`, 중복의 창 `MARKET_REVIEW_UNFINISHED_STATUSES`(검수 중·개장 예정·거래 중·거래 일시 중단·거래 마감·잠정 결과), 결정에서 빠지는 사람 `MARKET_REVIEW_EXCLUSIONS` = `creator`·`editor`·`requester`(이 순서로 처음 맞는 하나, `marketReviewExclusion`), `isCompleteReviewChecklist`, 사건 유형 `MARKET_REVIEW_EVENT_TYPES`와 각 payload의 타입. 본문: 검수 제출은 열기·마감과 같은 `expectedAccountBodySchema`, 승인 `{requestId, checklist, reason}`(모든 항목이 한 번씩 — 아니면 `checklist`를 지목한 'every item must be confirmed'), 반려 `{requestId, rejectReason, reason}`(`requestId`는 결정하는 관리자가 본 검수 요청 — 7-21), 되돌리기 `{reason}`, 예정 개장 시각 변경 `{scheduledOpenAt, reason}`. 모두 `expectedAccountId`(ADR-0092)를 받고 사유는 `approvalReasonSchema`(앞뒤 공백을 지우고 1\~500자)다. 읽기: `AdminMarket.review` = `{pending, createdBy, editors, sameCondition, log}`, 검수 대기의 줄 `AdminMarketReviewItem`.
+- `enums.ts`: 사건 다섯과 관리자 작업 다섯(payload의 설명과 함께). `approvals.ts`: `APPROVAL_REFUSALS`에 `creator`·`editor`, 소비자가 결정하는 사람을 더 뺄 수 있다는 문단. `market-lifecycle.ts`: REVIEW·SCHEDULED와 임시 전이의 주석(임시 열기는 `until: '#21'` 그대로). `market.ts`·`market-open-items.ts`·`api/errors.ts`·`proposals.ts`: 개설 항목 검사가 검수 제출과 승인의 관문이라는 설명, 수정이 검수 중·개장 예정을 거절하는 까닭.
+- `post.ts`·`authored.ts`: 글 카드(`PostSummary`)·글 화면(`Post`의 세 상태)·댓글 탭의 줄(`AuthoredComment`)의 `market`이 nullable이다 — 시장이 공개 상태가 아닌 동안 null(결정 1의 오너 답).
+
+**4. API(`apps/api/src/markets`, `posts`).**
+
+- `POST /admin/markets/:id/submit`(검수 제출): 초안이 아니면 `status`. 임시 열기와 같은 관문 — 개설 항목 검사를 시장이 지는 간격(저장한 값, 없으면 출시 설정의 지금 값)으로 보고(`OPEN_ITEMS_MISSING`, 422, 열기와 같은 details), 거래 마감 시각이 미래여야 한다(`closeAt`). 예정 개장 시각은 보지 않는다. 검수 요청을 열고, draft → review(`submitted`, `{approvalId, leadCloseGapMinutes}`)로 옮기며 검사한 간격을 시장에 저장하고, `market_submit`(시장 스냅숏)을 남긴다. 검수 중은 공개하지 않으니 발행하지 않는다.
+- `POST …/approve`(승인): 검수 중이 아니면 `status`. 본문의 `requestId`가 기다리는 요청이 아니면 그 요청이 끝난 대로 `APPROVAL_NOT_ALLOWED` `retracted`·`decided`(이 시장의 검수 요청이 아니면 `requestId` 'unknown' — 7-21). 결정하는 관리자가 만든 관리자·수정한 관리자·제출한 관리자이면 `APPROVAL_NOT_ALLOWED`(details의 `request`가 `creator`·`editor`·`requester`, 이 순서로 처음 맞는 하나). 개설 항목 검사를 제출이 저장한 간격으로 다시 보고(그 사이 숨긴 카테고리면 `category` 'inactive'), 거래 마감 시각이 지났으면 거절한다. 요청을 승인하고 review → scheduled(`approved`, `{approvalId, checklist, reason}`), `market_approve`. COMMIT 뒤 `market:status`(개장 예정은 공개다).
+- `POST …/reject`(반려): 검수 중이 아니면 `status`, 승인과 같은 `requestId` 검사와 제외. 요청을 그 설명으로 거절하고 review → draft(`rejected`, `{approvalId, rejectReason, reason}`), 저장한 간격을 지우고 `market_reject`. 발행하지 않는다.
+- `POST …/revert`(되돌리기): 검수 중이나 개장 예정이 아니면 `status`. 어느 관리자나(만든 관리자도) 사유와 함께. 검수 중이면 제출한 관리자의 되돌리기는 요청을 철회하고(`retracted`) 다른 관리자의 것은 그 사유로 거절한다. 개장 예정이면 승인한 요청은 그대로다. → draft(`reverted`, `{approvalId, reason}`), 저장한 간격을 지우고 `market_revert`(`from`을 더한다). 개장 예정에서 왔으면 COMMIT 뒤 `draft`의 `market:status`를 새 키로 발행한다.
+- `POST …/reschedule`(예정 개장 시각 변경): 개장 예정이 아니면 `status`, 거래 마감 시각이 지났으면 `closeAt`(초안으로 되돌린다 — #172 6항), 저장된 시각 그대로면 `scheduledOpenAt` 'unchanged', 거래 마감 시각과 분 단위로 같거나 늦으면 PATCH와 같은 순서 거절(두 끝). 지난 시각은 받는다. `scheduled_open_at`을 바꾸고 상태는 그대로인 `open_rescheduled`(`{before, after, reason}`)와 `market_reschedule`을 남기며, 상태와 키가 그대로인 `market:status`를 다시 보낸다(거래 중 시장의 수정과 같다, A-M4-36).
+- `GET /admin/market-reviews`(검수 대기): 검수 중인 시장과 그 기다리는 요청, 요청이 오래된 것부터, `(requested_at, id)` 키셋.
+- 관리자 상세 `AdminMarket.review`: 기다리는 요청(제출한 관리자와 시각 — 검수 중일 때만), 만든 관리자, 수정한 관리자(처음 고친 때 순), 중복의 도움(검수 중부터 판정 확정 전까지의 다른 시장 가운데 YES 조건과 사건 기한이 똑같은 것, 오래된 것부터), 검수 기록(다섯 사건, 최근 것부터 100개).
+- 관리자 상세(`get`)와 공개 상세(`getPublic`)는 한 읽기 전용 REPEATABLE READ 트랜잭션에서 읽는다(7-23).
+- 모든 쓰기는 시장 잠금 → 시장 행 → (관문의) 카테고리 행 → `ApprovalService`의 관리자 권한 공유 잠금 → 요청 행의 순서이고, 한 트랜잭션에서 사건·관리자 작업·요청을 함께 쓴다. 다섯 쓰기가 모두 화면의 관리자(`expectedAccountId`)를 쿠키의 계정과 견준다(ADR-0092). 수정(PATCH)은 전처럼 초안과 거래 중만 받는다 — 검수 중·개장 예정의 잠금이다.
+- 글(`posts.service.ts`의 `postMarketOf`)은 시장이 공개 상태가 아니면 `market: null`이다 — 커뮤니티 목록·글 화면·프로필과 MY의 글과 댓글 탭(`authored.service.ts`). 커뮤니티 목록의 시장·카테고리 필터는 공개 시장만 거른다 — 그런 글은 필터 없는 목록과 검색에만 나온다.
+
+**5. 웹.**
+
+- 관리자 시장 상세(`[id]/market-review-panel.tsx`·`market-review-dialogs.tsx`): 초안은 열기 앞에 '검수 제출'(확인 창 없이, 빠진 항목이 있으면 꺼진다). '검수' 칸은 상태마다 — 검수 중이면 제출한 관리자와 시각, 승인·반려·초안으로 되돌리기, 중복의 도움(같은 조건의 시장 링크), 개장 예정이면 예정 개장 시각 변경과 초안으로 되돌리기 — 이고, 초안·검수 중에는 승인·반려할 수 없는 관리자 목록(역할과 '(나)'), 모든 상태에서 검수 기록을 보인다. 결정에서 빠지는 관리자에게는 승인·반려가 꺼지고 그 까닭이 보인다. 창은 연 관리자의 것으로 묶인다(ADR-0092). 승인 창은 일곱 항목(이름과 확인할 것 한 줄)을 모두 체크하고 사유를 적어야 켜지고(승인·반려 창은 연 때의 검수 요청을 보내고, 그 요청이 바뀌면 그렇게 말하며 확인이 꺼진다 — 7-21), 반려 창은 사유 목록(체크리스트 + 기타)과 설명, 예정 개장 시각 변경 창은 지금 시각을 채워 열고 바뀌어야 켜지며 순서 규칙을 칸 아래에 보인다.
+- 검수 대기(`/admin/markets/reviews`, 메뉴 '검수 대기'는 '시장' 다음): 질문(상세 링크)·카테고리·제출한 관리자·제출 시각·만든 관리자·예정 개장·거래 마감, 20개씩 더 보기. 모든 관리자 시장 쓰기가 이 목록을 다시 읽게 한다.
+- 사용자 화면: 개장 예정에서 되돌린 시장의 `draft` 발행은 적용하지 않고(`applyStatus` — '초안'은 관리자의 말이다) 재조회가 404를 받아 상세가 '이 시장은 지금 공개되어 있지 않습니다'를 보인다. 글 카드·글 화면·글 수정 화면·댓글 탭은 `market`이 null이면 '공개되지 않은 시장'(`copy.postMarketNotPublic`)만 보인다.
+
+**6. 문서와 시드.** README(관리자 시장의 검수 흐름, 2인 통제, 시드 문제 해결), `docs/GUARDS.md`(검수의 서버 검사, `approval_requests.kind`의 목록), `docs/SETTINGS.md`(간격을 검수 제출이 저장한다), `docs/RESET.md`(시드 초안이 개장 예정이 되는 길), `docs/QUESTIONS.md`(A-M4-36 추기)를 고쳤다. 생성한 API 문서의 `APPROVAL_NOT_ALLOWED`·`OPEN_ITEMS_MISSING` 설명(`scripts/generate-api-doc.mjs`)도 고쳤다. 시드는 바꾸지 않았다(초안만 쓴다). 주석만 고쳤다.
+
+**7. 구현의 선택.** 오너가 정하지 않은 것을 이 PR이 정했다. 되돌리기 쉬운 쪽을 골랐다.
+
+1. **반려도 승인과 같은 사람이 빠진다.** #172 5항은 승인만 말하지만 #78 본문은 개설자가 승인·반려 모두 못 한다고 적었다. 되돌리기는 어느 관리자나 한다(#172 6항) — 그래서 만든 관리자도 자기 시장을 검수에서 빼낼 수는 있다.
+2. **반려 사유 목록은 체크리스트 일곱 항목 + 기타다.** #172 4항의 '사유 목록 하나'를 체크리스트의 말로 맞췄다.
+3. **간격은 검수 제출이 저장한다**(ADR-0098 7-6의 물음). 제출이 검사한 간격(미정이고 발표 예정 시각이 없으면 null)을 저장하고, 승인은 저장한 값만으로 다시 보며(지금 설정으로 되돌아가지 않는다), 반려와 되돌리기가 지운다 — 다음 제출이 그때의 출시 설정으로 다시 본다. 임시 열기는 전처럼 저장한다.
+4. **결정하는 관리자의 제외는 서버가 `ApprovalService`보다 먼저 본다.** 그래서 만든 관리자가 제출한 관리자이기도 하면 `creator`다(`marketReviewExclusion`의 순서). 화면도 같은 함수로 단추를 끈다.
+5. **수정한 관리자는 그 시장에 `market_update`나 `market_reschedule` 기록이 있는 관리자다**(언제든, 앞선 검수 회차의 것도). 예정 개장 시각은 내용이다(#172 7항의 세 시각) — 그것을 바꾼 관리자는 되돌린 뒤의 다음 검수를 결정하지 못한다(리뷰에서 더했다). 아무것도 바꾸지 않은 수정 기록도 센다. 만든 관리자가 고쳤으면 그도 목록에 있다.
+6. **한 쓰기의 시각은 하나다.** 사건·관리자 작업·`updated_at`·지난 마감의 검사가 `ApprovalService`가 남긴 시각(제출은 요청의, 승인·반려는 결정의, 검수 중의 되돌리기는 철회나 결정의)을 쓴다(#139와 같다). 검사에 걸리면 요청 쓰기도 함께 되돌아간다. 개장 예정의 되돌리기와 예정 개장 시각 변경은 시장 잠금 뒤의 DB 시계를 읽는다.
+7. **검수 중의 되돌리기는 요청을 끝낸다.** 제출한 관리자의 것은 철회(사유를 받지 않는 `retract`라 사유는 시장 사건과 관리자 작업에만 남는다), 다른 관리자의 것은 그 사유의 거절 — 요청의 기록이 누가 왜 끝냈는지 말한다. 개장 예정의 되돌리기는 마지막으로 승인한 요청을 가리킨다(없으면 `INTERNAL`). 검수 중인 시장에 기다리는 요청이 꼭 하나가 아니면 `INTERNAL`이다.
+8. **체크리스트는 보낸 순서와 상관없이 `MARKET_REVIEW_CHECKLIST`의 순서로 남긴다.**
+9. **승인 때 예정 개장 시각이 이미 지났어도 개장 예정이다.** 그 시장을 바로 여는 것은 예정 개장 시각의 자동 개장을 만드는 #21이다(#172 6항의 '승인하는 즉시 연다'는 #21에서). #21 전에는 개장 예정 시장이 어떤 길로도 열리지 않는다 — 임시 열기는 초안만 받는다.
+10. **거래 마감 시각이 지난 개장 예정 시장은 예정 개장 시각을 바꾸지 않는다**(`closeAt`). #172 6항이 그런 시장을 초안으로 되돌려 시각을 고치게 하므로 승인과 같은 거절이다(리뷰에서 더했다).
+11. **예정 개장 시각 변경은 예정 개장 < 거래 마감만 다시 본다.** 그 시각이 끝인 규칙은 그것뿐이고 선행 마감은 예정 개장과 상관없다. 지난 시각도 받는다 — 일찍 열려면 앞당긴다(결정 3 '#21 앞당긴 개장'). 시각을 '바꾸지 않은' 요청은 거절해 사유만 남는 기록을 만들지 않는다.
+12. **예정 개장 시각 변경을 #21에서 #78로 옮겼다**(ADR-0098 결과 5). 그 변경은 검수 제출 때의 잠금의 예외이고, 잠금이 없던 #22까지는 초안의 PATCH가 같은 일을 했다.
+13. **중복의 도움은 같은 글자의 YES 조건과 같은 시각의 사건 기한이다.** 모든 쓰기가 규칙 항목을 앞뒤 공백 없이 저장하므로 저장된 글을 그대로 견준다. 시장 자신은 빼고 오래된 것부터, 개수 제한 없이. 둘 가운데 하나가 비면 없다. 서버는 모든 상태에서 계산하고 화면은 검수 중에만 보인다. 판단은 검수자가 한다(자동 탐지는 기획에 없다).
+14. **되돌린 시장의 글(결정 1의 오너 답).** API가 `market: null`을 보낸다 — 화면이 가리는 것이 아니라 서버가 보내지 않으니 고치는 중인 초안의 제목·주소·상태가 공개 응답에 없다. 제안 화면의 채택한 시장이 공개 뒤에만 링크를 보이는 것(`proposal-rows.ts`의 `publicMarket`)과 같은 꼴이다. 글 쓰기는 전처럼 공개 시장만 받는다. 다시 공개되면(다시 승인되면) 그때의 시장으로 보인다. 커뮤니티 목록의 시장·카테고리 필터도 공개 시장만 거른다 — 고치는 중인 초안의 카테고리나 그 시장이 있다는 것이 필터로 새지 않게(리뷰에서 더했다). 댓글과 좋아요는 그런 글에도 그대로 받는다.
+15. **개장 예정에서 되돌린 시장은 `draft`를 새 키로 발행한다.** 실시간 스키마는 열한 상태를 모두 받는다. 회원 화면의 `applyStatus`는 공개되지 않는 상태(초안·검수 중)를 적용하지 않고, 재조회가 404를 받아 상세가 공개되어 있지 않다고 말하며 목록은 다음 조회에서 뺀다. 검수 제출·반려·검수 중의 되돌리기는 회원이 보지 않는 상태 사이라 발행하지 않는다.
+16. **검수 대기는 요청의 `(requested_at, id)`로 줄 세운다.** 요청의 색인(`approval_requests_pending_requested_at_idx`)을 걷고, 시장은 `markets.id::text = target_id`로 잇되 상태가 검수 중인 것만이다. 카테고리 이름은 null이 아니다(`category_id`는 NOT NULL에 삭제를 막는 FK).
+17. **검수 기록은 다섯 사건만 따로 읽는다**(최근 것부터, 이벤트 로그와 같은 100개). 행위자의 계정이나 프로필이 없으면 null('탈퇴한 사용자').
+18. **화면.** 검수 제출은 열기처럼 확인 창이 없고 거절도 열기와 같은 알림이다. 열기만 말하던 문구(빠진 항목 안내, 규칙 항목·태그·선행 마감 간격의 안내, 채택한 제안의 마감 안내)는 '검수 제출·열기'를 말한다. 체크리스트의 이름은 기획의 말이고 항목마다 확인할 것 한 줄이 있다. 검수 기록의 줄은 순번으로 이름 붙인다(사건에 id가 없다). 예정 개장 시각 변경이 'unchanged'로 거절되면 화면의 시각이 낡은 것이라 상세를 다시 읽는다(리뷰에서 더했다).
+19. **상세의 두 칸 열쇠.** 검수 칸은 `review-<id>`, 관련 시장 칸은 `related-<id>`다. 둘 다 시장 id였더니 같은 목록의 같은 열쇠라 React가 낡은 검수 칸을 지우지 못하고 쓰기마다 하나씩 더 쌓았다(리뷰의 e2e가 찾았다).
+20. **시험용 공장.** `createMarketInReview`·`createScheduledMarket`(`@buddha/db/test`)는 `transitionMarket`으로 상태를 옮겨 사건과 `status_event_id`가 있고, 관리자 작업은 수정한 관리자의 `market_update`만 쓴다. 승인자가 제외되는 사람이면 아무것도 쓰기 전에 던진다.
+21. **승인·반려는 결정하는 관리자가 본 검수 요청을 가리킨다**(`requestId`, Codex 리뷰). 승인 창을 연 채로 다른 관리자가 시장을 되돌려 고치고 다시 제출하면 새 요청이 생기는데, 시장 id만 보내는 창은 그 새 내용을 확인 없이 승인할 수 있었다. 서버는 시장 잠금 아래에서 기다리는 요청과 견주어, 다르면 그 요청이 끝난 대로 `retracted`(제출한 관리자의 되돌리기)·`decided`(다른 관리자의 되돌리기·반려)로 거절하고, 이 시장의 검수 요청이 아닌 id는 `requestId` 'unknown'이다. 창은 처음 그릴 때의 요청을 지니고(다시 읽어도 바뀌지 않는다), 시장의 기다리는 요청이 바뀌면 그렇게 말하며 확인을 끈다. 상태와 제외보다 먼저 보지 않고 상태 다음에 본다 — 검수 중이 아니면 `status`가 먼저다.
+22. **검수 대기의 줄은 요청(시장과 제출 시각)으로 열쇠를 붙인다.** 목록을 연 채 되돌려 다시 제출한 시장은 뒤 페이지의 새 줄이라 시장 id만으로는 겹칠 수 있다.
+23. **관리자 상세와 공개 상세는 한 스냅숏에서 읽는다**(읽기 전용 REPEATABLE READ, Codex 리뷰). 관리자 상세는 시장 행과 기다리는 검수 요청을 따로 읽어, 그 사이 되돌리고 고쳐 다시 제출하면 옛 내용과 새 요청이 한 응답에 섞여 7-21의 `requestId`가 보지 못한 내용을 승인할 수 있었다. 공개 상세는 공개 상태를 본 뒤 태그와 출처를 따로 읽어, 그 사이 개장 예정에서 되돌리고 고치면 초안의 새 태그와 출처를 200으로 답할 수 있었다 — 개장 예정이 초안으로 돌아갈 수 있게 된 이 PR에서 생긴 틈이다.
+
+**8. 시험.**
+
+- shared: `market-review.test.ts`(새 — 체크리스트의 완전함과 순서 무관, 결정이 가리키는 요청, 사유의 공백·길이, 반려 사유, 예정 개장 시각, 제외의 순서), `enums`·`approvals`(`admin-accounts`·`moderation`)·`market`·`post`·`authored`의 목록과 nullable 시장.
+- db: 0052의 색인(정의, 수정한 관리자 찾기의 EXPLAIN), 간격 열의 CHECK, 공장의 행과 제외, 요청자의 결정을 DB가 거절, `storage-names`.
+- API 통합: `admin-markets-review.controller.test.ts`(새 — 다섯 쓰기의 행과 기록, 되돌려 다시 제출한 시장의 지난 요청을 가리키는 승인·반려(`retracted`·`decided`)와 이 시장의 것이 아닌 요청, 세 제외(앞선 회차의 수정한 관리자와 예정 개장 시각을 바꾼 관리자 포함), 초안에서도 먼저 거절하는 빠진 체크리스트, 제출과 승인의 관문과 지난 마감, 검수 중 되돌리기의 철회와 거절, 개장 예정 되돌리기와 발행, 예정 개장 시각 변경(그대로·순서·지난 시각·지난 마감·상태), 검수 대기(순서·커서·기다리는 것만·회원과 비로그인 거절), 잠금, `review`의 내용, 계정 불일치, 시장 잠금을 쥔 채의 승인과 되돌리기 두 순서), `posts`·`authored`(되돌린 시장의 글·댓글은 `market: null` — `posts`는 다시 공개되면 돌아오는 것도 본다), `admin-audit`(라우트의 작업 유형).
+- web: `lib/market-review`(결정할 수 있는 사람, 제외 목록, 기록의 줄, 창이 보낼 것, 거절의 자리), 검수 칸, 검수 대기, 관리자 시장의 사건 라벨, 실시간의 공개되지 않는 상태, 글 카드·댓글 탭의 가린 시장 칸, 쓰기 목록.
+- e2e: `market-review.spec.ts`(새 — 화면의 검수 제출과 잠금(제출한 관리자와 시각), 승인 창을 연 뒤 되돌려 다시 제출한 시장의 승인 거절, 만든 관리자에게 꺼진 결정과 API 거절, 두 번째 관리자가 검수 대기에서 찾아 승인, 공개 상세의 개장 예정, 반려 사유와 설명, 개장 예정 되돌리기와 열어 둔 방문자의 상세·404·그 시장의 글이 '공개되지 않은 시장', 예정 개장 시각 변경과 순서 거절, 수정한 관리자·제출한 관리자의 거절과 다음 회차, 빠진 항목의 검수 제출).
+- 돌린 것: 2026-11-01: `pnpm check`(`CI=true`, docker test 프로필, 캐시 없이) — shared 1,193, storage 24, web 2,340, db 372, worker 167, api 1,372(건너뜀 2 — 리눅스에서만 도는 메모리 시험). `api:openapi`를 다시 돌려도 생성 파일이 같다. e2e는 CI처럼 세 샤드로, 샤드마다 마이그레이션을 적용한 틀 DB에서 복사한 DB와 제 Redis로 돌려 629건 통과, 3건은 설계대로 건너뜀, 실패와 재시도 없음(샤드마다 인증번호 158·197·182건). 구현은 다섯 에이전트(공유 → DB → API → 웹 → e2e·문서)와 통합 뒤 다섯 관점 리뷰(API·DB·웹·e2e·수용 기준)와 발견마다 두 반박 검증으로 했다. 확인된 것(상세의 두 칸 열쇠 — 7-19, 리뷰가 e2e를 돌려 찾았다)과 P3들(거래 마감이 지난 시장의 예정 개장 시각 변경 7-10, 예정 개장 시각을 바꾼 관리자 7-5, 'unchanged' 뒤의 다시 읽기, 문서와 문구)을 고쳤다. 오너 답(되돌린 시장의 글)을 넣은 뒤 다섯 관점(글의 시장·서버 규칙·ADR 주장·웹·완전성)의 둘째 리뷰가 예정 개장 시각 변경 요약의 틀린 문장과 P3들(수정한 관리자의 설명, 반려와 거절의 말, 커뮤니티 필터 7-14, 글자 대비, 검수 대기의 열쇠 7-22, 시드 문구, 이 ADR의 사실 몇)을 찾아 고쳤다. 로컬 `codex review --uncommitted`는 네 번 돌렸다 — 첫째가 지난 검수 요청의 승인(7-21), 둘째가 따로 읽는 상세(7-23), 셋째가 요청 id의 대소문자(`uuidSchema`)를 찾았고, 넷째는 고칠 것이 없었다.
+
+### 결과
+
+**1. 상태 줄.** 이어 썼다(덮어쓰지 않는다, ADR-0047 결과 1).
+
+- ADR-0095: 일부 대체됨(ADR-0099: 결과 5의 '#78·#21: SCHEDULED → DRAFT가 생기면 … 그 전이를 만드는 PR에서 묻는다' — #78의 되돌리기가 그 전이이고, 오너 답(2026-11-01)대로 그 시장의 글과 댓글은 남되 시장이 다시 공개될 때까지 글의 시장(`PostMarket`)은 null이고 화면은 '공개되지 않은 시장'이다. 관심 등록은 남고 목록에서 빠진다. 결정 4 표의 관리자 열기 '#21(#78)'은 #21만이다 — 임시 열기는 검수 옆에 남는다. 나머지는 유효).
+- ADR-0098: 일부 대체됨(ADR-0099: 결과 5의 #21 행 '사유를 남긴 예정 개장 변경과 순서 검사(#172 6항)' — #78이 만들었다(개장 예정 시장만, 사유 필수, 예정 개장 < 거래 마감만 다시 보고 지난 시각도 받으며, 거래 마감이 지난 시장은 거절). 7-6과 결과 5 #78 행의 '간격 저장을 검수 제출과 승인 가운데 어디서 할지' — 검수 제출이 저장하고 승인은 그 값으로 다시 보며 반려·되돌리기가 지운다. 결정 4의 '열기(#78·#21 전의 임시 열기)'는 #21 전의 임시 열기로 검수 옆에 남는다. 나머지는 유효).
+- 고치지 않은 상태 줄: ADR-0027(초안에서 바로 여는 것은 #21이 임시 열기를 없앨 때 바뀐다), ADR-0056(결정 5가 소비 이슈에 맡긴 대로 개설 검수에 다른 관리자의 승인을 붙였다), ADR-0085(`approval_requests`의 요청·결정·철회는 그대로이고 소비자가 늘었다), ADR-0089(채택한 관리자가 `created_by`이고 #172 5항대로 만든 사람으로 빠진다 — 결과 5의 #78 행을 했다), ADR-0092(새 쓰기도 `expectedAccountId`), ADR-0093(결정만 적은 ADR), ADR-0058(결과 4의 봇 예산·설정 버전을 잠그는 때는 ADR-0093 결정 5대로 #72에서 묻는다).
+
+**2. 문서.** `docs/API.md`·`apps/api/openapi.json`·api-client는 생성했다(다섯 쓰기와 검수 대기, `AdminMarket.review`, nullable 글 시장, 거절의 설명). README, `docs/GUARDS.md`·`SETTINGS.md`·`RESET.md`·`QUESTIONS.md`는 결정 6. 생성한 API 문서의 실시간 표(`market:status` — 승인, 예정 개장 시각 변경, 되돌리기의 `draft`)와 공개 라우트 목록(`apps/api/src/surface/registry.ts`)의 글·댓글 시장 설명(공개되지 않은 시장이면 null)도 고쳤다.
+
+**3. 오너가 할 일.**
+
+- #246, #247, #248, #22의 PR, 이 PR의 순서로 머지한다. 이 PR은 #22 위에 쌓였고, 앞의 것이 머지되면 main 위로 다시 쌓는다.
+- 배포 뒤 시드 초안을 개장 예정으로 보내려면 첫 시드 관리자가 검수 제출하고 다른 관리자가 승인한다(시드 시장을 만든 관리자는 첫째 시드 관리자 `SEED_ADMIN_EMAIL`이다). 두 번째 관리자가 시드 초안을 고쳤으면 세 번째 관리자가 승인해야 한다. #21 전에는 개장 예정 시장이 열리지 않으니, 거래를 시험하려면 임시 열기(초안)를 쓴다.
+
+**4. 오너에게 (결정을 막지 않는다).** 오너가 바꿀 수 있는 구현의 선택: 반려도 같은 사람이 빠지는 것(7-1), 예정 개장 시각을 바꾼 관리자도 수정한 관리자인 것(7-5), 승인 때 지난 예정 개장의 개장을 #21에 둔 것(7-9), 거래 마감이 지난 개장 예정 시장의 예정 개장 시각 변경을 거절하는 것(7-10).
+
+**5. 알려진 한계와 다른 이슈에 넘긴 것.**
+
+- #21: 예정 개장 시각의 자동 개장과 승인 때 이미 지난 예정 개장의 즉시 개장(7-9), 임시 열기와 그 'not reached yet'을 없애는 것. 자동 개장은 선행 마감을 다시 보지 않는다(ADR-0098 7-6) — 거래 마감이 지난 개장 예정 시장을 열지 않는 것은 #21이 정한다.
+- #72: 체크리스트와 관문의 봇 예산·설정 버전, 그리고 그것을 잠그는 때(ADR-0093 결정 5).
+- #80: 개장 때 잠긴 내용을 규칙 v1로 기록한다(#172 6항).
+- 개장 없이 끝내는 SCHEDULED → CANCELLED(#173 2·10항의 승인)를 만드는 이슈.
+- M13(#52): 검수 반려 알림. 지금은 만든 관리자가 검수 기록에서 읽는다.
+- 시드의 마감 경고는 초안과 거래 중만 본다. 검수 중·개장 예정 시장의 지난 마감은 승인과 예정 개장 시각 변경이 거절하고 초안으로 되돌려 고친다.
+- 관리자 신고 처리 화면의 글 시장 링크(`moderation.ts`의 자체 스키마)는 관리자의 것이라 그대로다 — 초안이 된 시장의 공개 주소는 404다.
+- 한글이 든 slug의 공개 상세 404(ADR-0096 결과 5)는 그대로다.
+
+**6. 파일.**
+
+- db: `drizzle/0052_market_review.sql`·`meta/0052_snapshot.json`·`_journal.json`, `src/schema/{admin-actions,approval-requests,market-events,markets,watchlist}.ts`, `src/seed.ts`·`seed-markets.ts`(주석), `src/test/factories.ts`, 시험(`schema`·`storage-names`).
+- shared: `src/market-review.ts`(새)와 시험, `src/{market,enums,approvals,market-lifecycle,market-open-items,proposals,post,authored,index}.ts`, `src/api/errors.ts`, 시험(`market`·`enums`·`admin-accounts`·`moderation`·`post`·`authored`).
+- api: `src/markets/market-review.ts`·`admin-market-reviews.controller.ts`(새), `src/markets/{market-admin.service,admin-markets.controller,markets.module}.ts`, `src/approvals/approval.service.ts`, `src/posts/posts.service.ts`, 주석(`proposals/admin-proposals.service.ts`·`themes/theme-admin.service.ts`·`watchlist/watchlist.service.ts`), 시험(`admin-markets-review`(새)·`posts`·`authored` 컨트롤러, `admin-audit`, `account-restrictions`·`watchlist` 주석), `openapi.json`.
+- web: `src/app/admin/markets/[id]/{market-review-panel,market-review-dialogs}.tsx`(새)와 시험, `src/app/admin/markets/reviews/`(새, 시험 포함), `src/app/admin/{layout,markets/[id]/admin-market-detail}.tsx`, `src/app/markets/[slug]/market-detail.tsx`, `src/app/community/posts/[postId]/{post-screen,edit/edit-screen}.tsx`, `src/components/{post/post-card,authored/authored-comment-card}.tsx`(시험 새), `src/components/realtime/realtime-provider.tsx`, `src/hooks/use-admin-markets.ts`, `src/lib/market-review.ts`(새)와 시험, `src/lib/{market-admin,moderation,market-live,market-detail,api}.ts`, `src/copy.ts`, 시험(`hooks`·`lib`의 관리자 시장·실시간·상세·폼·쓰기 목록·토론·신고 처리(`moderation`), `load-more-failed`), e2e(`market-review.spec.ts` 새).
+- 그 밖: `packages/api-client/src/generated/schema.ts`, `docs/API.md`, `scripts/generate-api-doc.mjs`, `docs/{GUARDS,QUESTIONS,RESET,SETTINGS}.md`, `README.md`.

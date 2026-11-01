@@ -50,6 +50,9 @@ export function approvalNotAllowed(reason: ApprovalRefusal): AppError {
     decided: 'The request was decided already',
     retracted: 'The request was retracted by its requester',
     not_requester: 'Only the requester can retract the request',
+    // A market review's own exclusions (#78, ADR-0099), refused by MarketAdminService first.
+    creator: 'The creator of the market cannot decide its review',
+    editor: 'An admin who edited the market cannot decide its review',
   };
   return new AppError('APPROVAL_NOT_ALLOWED', {
     message: messages[reason],
@@ -76,8 +79,9 @@ function parseReason(reason: string): string {
  * What the shared rule leaves to each consumer (#78, #152, #144, #130, #139, …): the kinds, what
  * runs on approval, and the rest of a request's life — expiry, retraction, a requester who lost
  * the admin role. A consumer that lets its requests be retracted calls `retract` (#139 does,
- * ADR-0085); the others never do. A consumer passes its own transaction (`executor`) so the
- * approved work and the decision commit together; the methods then run in a savepoint of it.
+ * ADR-0085; #78's market review does on its submitter's own 되돌리기, ADR-0099); the others never
+ * do. A consumer passes its own transaction (`executor`) so the approved work and the decision
+ * commit together; the methods then run in a savepoint of it.
  */
 @Injectable()
 export class ApprovalService {

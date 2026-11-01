@@ -20,13 +20,16 @@ import type { MarketStatus } from './enums.js';
  */
 export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonly MarketStatus[]>> =
   {
-    // #78: submitted for review (the content locks, #172 item 6).
+    // #78: submitted for review once the open-items check passes (the content locks, #172 item 6).
     draft: ['review'],
-    // #78: approved by another admin, or sent back to a draft. Approved after its scheduled
-    // open time, it opens at once (#172 item 6): scheduled, then open, two transitions.
+    // #78: approved by an admin other than the creator, the editors and the submitter; rejected
+    // (반려) by such an admin, or sent back (되돌리기) by any admin with a reason (#172 items 5·6,
+    // #173 item 1). Approved after its scheduled open time, it is scheduled all the same and #21's
+    // job opens it at once (#172 item 6): scheduled, then open, two transitions.
     review: ['scheduled', 'draft'],
-    // #21: opens at its scheduled time; back to a draft to edit before opening; ended without
-    // opening with another admin's approval (#172 item 6, #173 item 10).
+    // #21: opens at its scheduled time, which #78 may move with a reason and no new review. #78:
+    // sent back to a draft by any admin with a reason, to edit and review again (#172 item 6).
+    // #173·#20: ended without opening with another admin's approval (#173 item 10).
     scheduled: ['open', 'draft', 'cancelled'],
     // #114: paused. At `close_at`: closed, or cancelled when no user fill happened (#120, #20).
     open: ['paused', 'closed', 'cancelled'],
@@ -56,7 +59,8 @@ export const INTERIM_MARKET_TRANSITIONS: readonly {
   /** The issue whose PR removes the edge. */
   until: string;
 }[] = [
-  // ADR-0027's direct open from a draft, without review or a scheduled time (#78·#21).
+  // ADR-0027's direct open from a draft, without review or a scheduled time (#21; #78 keeps it
+  // beside the review, ADR-0099).
   { from: 'draft', to: 'open', until: '#21' },
   // ADR-0046's immediate judgement by one admin, skipping PROVISIONAL and the dispute window.
   { from: 'closed', to: 'resolved', until: '#152' },

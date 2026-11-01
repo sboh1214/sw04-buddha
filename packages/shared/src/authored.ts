@@ -69,7 +69,8 @@ export const authoredCommentSchema = z
     editedAt: z.iso.datetime().nullable(),
     likeCount: likeCountSchema,
     post: commentedPostSchema,
-    market: postMarketSchema,
+    /** Null while the market is not public, as on the post (`postMarketSchema`). */
+    market: postMarketSchema.nullable(),
   })
   .meta({ id: 'AuthoredComment' });
 export type AuthoredComment = z.infer<typeof authoredCommentSchema>;

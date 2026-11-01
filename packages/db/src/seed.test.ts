@@ -800,7 +800,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     }
 
     it('creates the 14 markets as drafts with a created event, and no price or tick', async () => {
-      // Drafts for a reviewer to check and open (N03 §2, #125), and no price before a fill
+      // Drafts for a reviewer to check and approve (N03 §2, #125; #78), and no price before a fill
       // (N02 §5): the direct AMM's initial probability and opening tick are gone.
       const startedAt = await dbNow();
       runSeed();
@@ -847,8 +847,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         const own = sourcesBySlug[row.slug] ?? [];
         expect(own, row.slug).toEqual(storedSources(seed));
         // Read back as the API reads them, none is missing and the times keep their order and
-        // the 선행 마감 at the proposed gap of 60 minutes (#22): the reviewer can open the draft
-        // — a stale one aside, whose close has passed — once the owner enters the gap.
+        // the 선행 마감 at the proposed gap of 60 minutes (#22): the draft can be submitted and
+        // approved (#78) — a stale one aside, whose close has passed — once the owner enters the
+        // gap.
         const iso = (instant: Date | null) => instant?.toISOString() ?? null;
         expect(
           missingOpenItems({
@@ -952,8 +953,9 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       const mine = stderr.split(NEWLINE).filter((line) => line.includes(slug));
       expect(mine).toHaveLength(1);
       expect(mine[0]).toContain('is already past');
-      // A draft cannot be opened past its cutoff: the admin has to move it first.
-      expect(mine[0]).toContain('cannot be opened');
+      // A draft can be neither submitted for review (#78) nor opened past its cutoff: the admin
+      // has to move it first.
+      expect(mine[0]).toContain('cannot be submitted for review or opened');
       expect(mine[0]).toContain('수정');
       // An open one is the worker's to close.
       const openLine = stderr.split(NEWLINE).filter((line) => line.includes(opened));

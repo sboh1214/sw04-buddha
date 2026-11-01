@@ -1,0 +1,22 @@
+-- #78 개설 검수 (ADR-0093 decision 1 #173 items 1 and 12, decision 2 #172 items 4–6, ADR-0099): a
+-- draft is submitted for review (REVIEW), and another admin approves it (SCHEDULED) or rejects it
+-- (반려, back to DRAFT); any admin may send it back to a draft (되돌리기). Statuses, transitions and
+-- `market_events` came with #174 (0048), so the one addition is an index:
+--
+-- - admin_actions_market_target_idx: one market's admin records, oldest first, by `target_id` among
+--   the rows whose target is a market. The approval and the 반려 exclude every admin who edited the
+--   market (a `market_update` or `market_reschedule` record on it, at any time: #172 items 5 and
+--   7), and the admin detail lists them; the seed's check for an admin edit of a seed draft reads
+--   it too. The 검수 기록 reads `market_events`. Partial: the other targets' records are never read
+--   by market.
+-- - No column. The review is a `market_review` approval request (#171, 0021's triggers and
+--   CHECKs, target `market`); each of its writes records a `market_events` row and an
+--   `admin_actions` row of a type of its own (varchar, no CHECK). `markets.lead_close_gap_minutes`
+--   (0051) now also holds the gap the submission checked the lead close against, which the
+--   approval checks again and a 반려 or a 되돌리기 clears; no CHECK ties it to a status, as none
+--   did.
+-- - No wipe and no backfill: no market is in REVIEW or SCHEDULED before #78 (no path took the
+--   edge, and the seed writes drafts).
+--
+-- As generated; the snapshot is as generated.
+CREATE INDEX "admin_actions_market_target_idx" ON "admin_actions" USING btree ("target_id","created_at") WHERE "admin_actions"."target_type" = 'market';

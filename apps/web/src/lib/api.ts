@@ -61,6 +61,14 @@ export type MarketSummary = components['schemas']['MarketSummary'];
 export type AdminMarket = components['schemas']['AdminMarket'];
 /** One of a market's 관련 시장 on the admin detail (#65): the list row, who linked it and when. */
 export type AdminRelatedMarket = components['schemas']['AdminRelatedMarket'];
+/**
+ * 개설 검수 (#78, ADR-0099): `AdminMarket.review` — the pending request, the creator, the editors, the
+ * markets with the same conditions and the 검수 기록 — one entry of that record, and a row of the
+ * 검수 대기 queue (`GET /admin/market-reviews`).
+ */
+export type AdminMarketReview = components['schemas']['AdminMarketReview'];
+export type MarketReviewLogEntry = components['schemas']['MarketReviewLogEntry'];
+export type AdminMarketReviewItem = components['schemas']['AdminMarketReviewItem'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];

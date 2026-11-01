@@ -20,9 +20,8 @@ export type TimeRelationItem = (typeof TIME_RELATION_ITEMS)[number];
 
 /**
  * 개설 항목 검사 (#17): what a market must have before it may leave the draft — N03 §2's required
- * items, as far as the market stores them. Today the interim open (draft → open, until #78 and
- * #21) refuses a market missing any with OPEN_ITEMS_MISSING; #78's review submission takes the
- * same check unchanged.
+ * items, as far as the market stores them. The review submission (#78) and its approval, and the
+ * interim open (draft → open, until #21), refuse a market missing any with OPEN_ITEMS_MISSING.
  *
  * - `title`: not blank. The API never stores a blank one; it is listed so the check is N03 §2's
  *   list (#23 AC 2).

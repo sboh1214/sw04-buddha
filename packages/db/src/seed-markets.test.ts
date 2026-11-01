@@ -355,7 +355,7 @@ describe('seed market times (#22, ADR-0098)', () => {
   it("opens at the run's clock floored to the minute, or the minute before a close it reached", () => {
     const open = (closeAt: string, now: string) =>
       seedScheduledOpenAt(new Date(closeAt), new Date(now)).toISOString();
-    // Passed already, so a reviewer may open it at once (ADR-0093 decision 2 #172 item 6).
+    // Passed already, so it opens as soon as it is approved (ADR-0093 decision 2 #172 item 6; #21).
     expect(open('2026-12-31T14:59:59Z', '2026-10-31T13:00:30.500Z')).toBe(
       '2026-10-31T13:00:00.000Z',
     );

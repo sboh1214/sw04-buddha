@@ -597,8 +597,8 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
     });
 
     it('retracts, approves and rejects only a request of #139: another consumer’s is not found and stays pending', async () => {
-      // Requests of another two-person consumer (#78, #144, #152, #130 — none lets its requests be
-      // retracted), asked by the admin: one naming a real moderation action and one naming the
+      // Requests of another two-person consumer (#78, #144, #152, #130 — kinds this route never
+      // reads), asked by the admin: one naming a real moderation action and one naming the
       // member, so neither a missing target nor the action's lookup refuses them — only the kind.
       const warning = await createModerationAction(t.db, {
         userId: member.id,

@@ -34,8 +34,8 @@ import {
  *   and never reaches the proposer.
  * - A 채택 may make a market draft filled from the proposal, or link an existing market; the
  *   proposer sees the market's link once it is public (not DRAFT or REVIEW). It grants no Coin and
- * opens   nothing: the market opens through the operators' own steps (#78 adds the second
- * reviewer). A   proposal adopted with no market may have one linked later, once, the same two ways
+ *   opens nothing: the market opens through the operators' own steps (#78's review by a second
+ *   admin). A proposal adopted with no market may have one linked later, once, the same two ways
  *   (`canLinkProposalMarket`, owner decision 2026-10-19); it stays 채택.
  * - Only the proposer and the operators see a proposal. A market never shows who proposed it, and
  *   a proposal is not something to report.

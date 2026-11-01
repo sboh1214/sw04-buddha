@@ -45,6 +45,7 @@ import {
   copyDisplay,
   copyTestId,
   detailViewOf,
+  marketRefreshNotice,
   perWidth,
   personalAreaView,
   showsOrderArea,
@@ -181,12 +182,13 @@ export function MarketDetail({
     summary: (
       <Stack gap="4" data-testid="market-summary">
         {/* A failed REFETCH keeps the row that is already drawn — the numbers on screen are
-            simply the last ones that arrived, which is what the notice says. */}
+            simply the last ones that arrived, which is what the notice says; a NOT_FOUND says the
+            market is not public any more (#78: sent back to a draft). */}
         {data !== undefined && market.isRefetchError && (
           <Alert.Root status="warning" role="status" data-testid="market-detail-refresh-failed">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{copy.marketRefreshFailed}</Alert.Description>
+              <Alert.Description>{marketRefreshNotice(market.error)}</Alert.Description>
             </Alert.Content>
           </Alert.Root>
         )}

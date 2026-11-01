@@ -8,7 +8,7 @@ import {
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
-import { type Market } from './api';
+import { type Market, isApiError } from './api';
 import { formatNoPrice } from './market-admin';
 import { readsJudgementDelayed } from './market-status';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
@@ -218,6 +218,16 @@ export function personalAreaView(session: {
 }): PersonalAreaView {
   if (session.isPending) return 'unknown';
   return session.signedIn ? 'member' : 'visitor';
+}
+
+/**
+ * The notice over a detail whose refresh failed while a row is drawn: the market is not public any
+ * more when the API answers NOT_FOUND — sent back to a draft from 개장 예정 (#78, ADR-0099), whose
+ * `market:status` the screen does not apply (`applyStatus`) and which its refetch then meets — and
+ * otherwise the row is simply the last one read.
+ */
+export function marketRefreshNotice(error: unknown): string {
+  return isApiError(error, 'NOT_FOUND') ? copy.marketNoLongerPublic : copy.marketRefreshFailed;
 }
 
 /**

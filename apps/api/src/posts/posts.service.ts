@@ -147,6 +147,9 @@ export function postAuthorOf(row: AuthorRow): PostAuthor {
  * The market a post belongs to, as a card and the post page link to it. Its status badge reads as
  * the market's own cards do (`toMarketSummary`): '판정 지연' for a CLOSED market past its scheduled
  * judgement by `nowMs`, the API host's clock at the read (`isJudgementDelayed`, #22, ADR-0098).
+ * Null while the market is not public (`isPublicMarketStatus`): a SCHEDULED market sent back to a
+ * draft by #78's 되돌리기 keeps its posts, but its title, slug and status are the admin's alone
+ * until it is public again (ADR-0099, owner answer 2026-11-01; `postMarketSchema`).
  */
 export function postMarketOf(
   row: {
@@ -159,7 +162,8 @@ export function postMarketOf(
     categoryNameKo: string;
   },
   nowMs: number = Date.now(),
-): PostMarket {
+): PostMarket | null {
+  if (!isPublicMarketStatus(row.status)) return null;
   return {
     id: row.id,
     slug: row.slug,
@@ -247,8 +251,14 @@ export class PostsService {
     return this.cards(
       this.db,
       and(
-        query.marketId === undefined ? undefined : eq(posts.marketId, query.marketId),
-        query.category === undefined ? undefined : inCategory(this.db, query.category),
+        // Through a public market only: a draft's market and category are the admin's (#78's
+        // 되돌리기, ADR-0099) — its posts stay on the unfiltered list, their market null.
+        query.marketId === undefined
+          ? undefined
+          : and(eq(posts.marketId, query.marketId), isPublicMarket()),
+        query.category === undefined
+          ? undefined
+          : and(inCategory(this.db, query.category), isPublicMarket()),
         query.q === undefined ? undefined : ilike(posts.searchText, likePattern(query.q)),
       ),
       query,

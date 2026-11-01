@@ -205,8 +205,19 @@ describe('read DTOs', () => {
       events: [event],
       missingOpenItems: [],
       leadCloseGapMinutes: 60,
+      review: {
+        pending: null,
+        createdBy: { id: 'admin-1', nickname: '운영자1' },
+        editors: [],
+        sameCondition: [],
+        log: [],
+      },
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
+    // The review (#78) is the admin's, in every status, and never optional.
+    expect(marketSchema.parse(admin)).not.toHaveProperty('review');
+    const { review: _review, ...withoutReview } = admin;
+    expect(adminMarketSchema.safeParse(withoutReview).success).toBe(false);
     expect(
       adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['tags', 'deadline'] }).success,
     ).toBe(false);

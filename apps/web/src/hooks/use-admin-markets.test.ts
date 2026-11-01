@@ -11,6 +11,7 @@ import {
   type AdminRelatedMarket,
   type Category,
   type MarketSummary,
+  api,
 } from '@/lib/api';
 import {
   CATEGORIES_QUERY_KEY,
@@ -23,8 +24,10 @@ import { relatedSearchSection } from '@/lib/related-markets';
 import { relatedMarketsInfiniteQueryOptions } from './use-markets';
 import {
   ADMIN_MARKETS_KEY,
+  ADMIN_MARKET_REVIEWS_KEY,
   ADMIN_RELATED_MARKETS_KEY,
   adminMarketKey,
+  adminMarketReviewsQueryOptions,
   adminMarketQueryOptions,
   adminRelatedMarketsKey,
   adminRelatedSearchKey,
@@ -78,6 +81,14 @@ const draft: AdminMarket = {
   tags: [],
   missingOpenItems: [],
   leadCloseGapMinutes: null,
+  // Never submitted (#78): no request, no editor, no record.
+  review: {
+    pending: null,
+    createdBy: { id: 'admin', nickname: '운영자' },
+    editors: [],
+    sameCondition: [],
+    log: [],
+  },
 };
 
 const opened: AdminMarket = { ...draft, status: 'open', openAt: '2026-09-07T00:00:00.000Z' };
@@ -596,5 +607,51 @@ describe('the 관련 시장 picker’s search (#65, ADR-0068)', () => {
     expect(adminRelatedSearchQueryOptions(undefined).enabled).toBe(false);
     // A new term is a new search with its own loading state, as the public search's is.
     expect(adminRelatedSearchQueryOptions('첫눈')).not.toHaveProperty('placeholderData');
+  });
+});
+
+describe('the 검수 대기 queue (#78, ADR-0099)', () => {
+  it('asks `GET /admin/market-reviews` a page per cursor, under the private admin root', async () => {
+    const get = vi.spyOn(api, 'GET').mockResolvedValue({
+      data: { data: [], meta: { nextCursor: 'c2' } },
+      response: new Response(null, { status: 200 }),
+    } as never);
+    try {
+      const options = adminMarketReviewsQueryOptions();
+      expect(options.queryKey).toEqual(['admin', 'market-reviews']);
+      expect(await options.queryFn({ pageParam: undefined })).toEqual({
+        items: [],
+        nextCursor: 'c2',
+      });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-reviews', {
+        params: { query: {} },
+      });
+      await options.queryFn({ pageParam: 'c2' });
+      expect(get).toHaveBeenLastCalledWith('/api/v1/admin/market-reviews', {
+        params: { query: { cursor: 'c2' } },
+      });
+      expect(options.getNextPageParam({ items: [], nextCursor: null })).toBeUndefined();
+      // Its own root segment: no status filter of the admin list is it.
+      expect(partialMatchKey(ADMIN_MARKET_REVIEWS_KEY, ADMIN_MARKETS_KEY)).toBe(false);
+    } finally {
+      get.mockRestore();
+    }
+  });
+
+  it('is asked again by every admin write to a market: a submission adds a row, a decision takes one', async () => {
+    const { queryClient, unsubscribe } = await loadedDetail();
+    try {
+      queryClient.setQueryData(ADMIN_MARKET_REVIEWS_KEY, { pages: [], pageParams: [] });
+      await applyMarket(queryClient, ID, { ...draft, status: 'review' });
+      expect(queryClient.getQueryState(ADMIN_MARKET_REVIEWS_KEY)?.isInvalidated).toBe(true);
+      // Nothing is written into it: the seed is the detail's alone.
+      expect(queryClient.getQueryData(ADMIN_MARKET_REVIEWS_KEY)).toEqual({
+        pages: [],
+        pageParams: [],
+      });
+    } finally {
+      unsubscribe();
+      queryClient.clear();
+    }
   });
 });

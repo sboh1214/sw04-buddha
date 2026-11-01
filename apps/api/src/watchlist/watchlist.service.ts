@@ -61,7 +61,7 @@ function watchedOrder(cursor: string | undefined): MarketOrder<WatchRow> {
  * A market no public route serves — an unknown id, or a DRAFT or REVIEW one — is NOT_FOUND on both
  * routes that name one market (the state read and the write), as on the public detail; every
  * public status is watchable, SCHEDULED, PAUSED and CANCELLED included (ADR-0093 decision 3).
- * A market can go back to DRAFT (SCHEDULED → DRAFT, #21), so the list filters by the public
+ * A market can go back to DRAFT (SCHEDULED → DRAFT, #78's 되돌리기), so the list filters by the public
  * statuses too (`isPublicMarket`): the watch stays, off the list until the market is public again.
  */
 @Injectable()

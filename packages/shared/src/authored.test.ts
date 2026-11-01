@@ -84,6 +84,8 @@ describe('authoredCommentSchema', () => {
       'market',
     ]);
     expect(authoredCommentSchema.parse({ ...COMMENT, parentId: OTHER }).parentId).toBe(OTHER);
+    // A market sent back to a draft (#78 되돌리기, ADR-0099): none, as on the post.
+    expect(authoredCommentSchema.parse({ ...COMMENT, market: null }).market).toBeNull();
   });
 });
 

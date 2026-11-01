@@ -131,6 +131,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/coupons/admin-coupons.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/admin-markets.tsx',
+        // 검수 대기 (#78, ADR-0099)
+        'app/admin/markets/reviews/admin-market-reviews.tsx',
         'app/admin/moderation/account-restriction-requests/admin-account-requests.tsx',
         'app/admin/moderation/actions/admin-moderation-actions.tsx',
         'app/admin/moderation/link-flags/admin-link-flags.tsx',
@@ -228,6 +230,7 @@ describe('the notice above a 더 보기 that failed', () => {
       [
         'useAdminAccountRequests',
         'useAdminGrantCandidates',
+        'useAdminMarketReviews',
         'useAdminModerationActions',
         'useAdminNoticeActions',
         'useAdminNoticeRevisions',

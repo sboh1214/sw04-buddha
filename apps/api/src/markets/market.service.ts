@@ -329,23 +329,32 @@ export class MarketService {
     // slug arrives NFC from the route schema already and is normalised again below, so the
     // invariant holds for a caller that bypasses the pipe (an M4 subscription, say).
     const parsedId = uuidParamSchema.safeParse(idOrSlug);
-    const [row] = await this.db
-      .select(marketWithCategory)
-      .from(markets)
-      .innerJoin(categories, eq(categories.id, markets.categoryId))
-      .where(
-        and(
-          parsedId.success
-            ? eq(markets.id, parsedId.data)
-            : eq(markets.slug, idOrSlug.normalize('NFC')),
-          isPublicMarket(),
-        ),
-      )
-      .limit(1);
-    if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    const tags = await marketTagNames(this.db, row.market.id);
-    const sources = await readMarketSources(this.db, row.market.id);
-    return toMarket(row.market, row.category, tags, sources);
+    // One read-only REPEATABLE READ snapshot (Codex review of #78): a SCHEDULED market can go back
+    // to a draft (#78's 되돌리기), so the public check and the tags and sources read after it must
+    // describe one version — else a revert and a draft edit committing between them would answer
+    // 200 with the draft's new tags and sources.
+    return this.db.transaction(
+      async (tx) => {
+        const [row] = await tx
+          .select(marketWithCategory)
+          .from(markets)
+          .innerJoin(categories, eq(categories.id, markets.categoryId))
+          .where(
+            and(
+              parsedId.success
+                ? eq(markets.id, parsedId.data)
+                : eq(markets.slug, idOrSlug.normalize('NFC')),
+              isPublicMarket(),
+            ),
+          )
+          .limit(1);
+        if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
+        const tags = await marketTagNames(tx, row.market.id);
+        const sources = await readMarketSources(tx, row.market.id);
+        return toMarket(row.market, row.category, tags, sources);
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
   }
 
   /**

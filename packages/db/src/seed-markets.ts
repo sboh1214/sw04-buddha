@@ -17,8 +17,8 @@ export interface SeedMarket {
   /**
    * The rule items (#23, ADR-0097; RULE_ITEMS of @buddha/shared, in its order), each written the
    * way the admin entry would store it (trimmed, within its limits) and together passing the
-   * open-items check: a reviewer checks them and opens the draft (N03 §2). 배경: two or three
-   * sentences on what the question is about.
+   * open-items check: a reviewer checks them and approves the draft (N03 §2; #78, ADR-0099).
+   * 배경: two or three sentences on what the question is about.
    */
   description: string;
   /** YES 조건: the YES criterion and its boundary. */
@@ -87,8 +87,9 @@ const MINUTE_MS = 60_000;
 /**
  * A seed market's 예정 개장 시각 (#22, ADR-0098): the one seed time relative to the run, so not a
  * `SeedMarket` literal. `now` — the run's database clock (`seedMarkets` in seed.ts, ADR-0027) —
- * floored to the minute: a scheduled open already passed, so the draft opens as soon as a reviewer
- * opens it (ADR-0093 decision 2 #172 item 6: past at the approval, it opens at once). For a stale
+ * floored to the minute: a scheduled open already passed, so the draft opens as soon as it is
+ * approved (ADR-0093 decision 2 #172 item 6: past at the approval, it opens at once — #21's; until
+ * #21 the approved market waits in SCHEDULED, and the interim 열기 opens a draft). For a stale
  * seed whose close is not after that minute, the minute before the close instead, so it stays
  * before the close (`markets_open_before_close_check`): such a draft cannot open anyway — its
  * close has passed, and the seed's staleness report says so. The close stays absolute (Q-M3-4).
@@ -113,11 +114,11 @@ export const SEED_RULE_NO_DELAY_NO = '늦어진 것만으로 NO로 판정하지 
  * side against the event deadline, one official source (and a fallback only where the rule names
  * one), the long-delay deadline and what a delay, a VOID and a cancelled event mean — and its
  * times (#22, ADR-0098): the publisher's scheduled release or '없음', the scheduled judgement and
- * the judgement zone. The seed inserts them as drafts for a reviewer to check and open (N03 §2,
- * #125). The slug is the idempotency key of the seed: a market whose slug exists is left exactly
- * as it is, copy and tags included — an admin may have edited it, and the seed never overwrites
- * (Q-M3: copy refresh cadence) — except for the items it never had (`seedMarkets` in seed.ts:
- * tags, #17; the rule items, #23; the times, #22).
+ * the judgement zone. The seed inserts them as drafts for a reviewer to check and approve (N03
+ * §2, #125; #78). The slug is the idempotency key of the seed: a market whose slug exists is left
+ * exactly as it is, copy and tags included — an admin may have edited it, and the seed never
+ * overwrites (Q-M3: copy refresh cadence) — except for the items it never had (`seedMarkets` in
+ * seed.ts: tags, #17; the rule items, #23; the times, #22).
  *
  * Four of them are stale (bok, cpi, unemployment, rain: their close has passed or ends on
  * 2026-10-31, Q-M3-4): their times are still the true schedule of the event they ask about.

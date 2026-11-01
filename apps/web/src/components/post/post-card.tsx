@@ -82,7 +82,13 @@ export function PostCard({
     >
       <HStack align="flex-start" gap="4">
         <Stack gap="1.5" flex="1" minW="0">
-          {showMarket && (
+          {/* A market sent back to a draft (#78 되돌리기, ADR-0099): the API names none of it. */}
+          {showMarket && post.market === null && (
+            <Text textStyle="overline" color="fg.muted" data-testid="post-card-market-hidden">
+              {copy.postMarketNotPublic}
+            </Text>
+          )}
+          {showMarket && post.market !== null && (
             <HStack gap="2" minW="0">
               <ChakraLink
                 asChild
