@@ -313,6 +313,10 @@ export const PRIVATE_QUERY_ROOTS: ReadonlySet<string> = new Set([
   // 내 제안 (#77, ADR-0089): only the proposer and the operators see a proposal (ADR-0069
   // decision 4), read with the member's cookie (lib/proposals.ts `PROPOSALS_KEY`).
   'proposals',
+  // 판정 이의 (#175, ADR-0104): the member's own disputes and standing on a market — the links and
+  // the reason are the submitter's and the operators' alone (#173 item 13, PRIVATE_DATA `dispute`),
+  // read with the member's cookie (lib/disputes.ts `DISPUTES_KEY`). The operators' under `admin`.
+  'disputes',
 ]);
 
 export function isPrivateQueryKey(queryKey: readonly unknown[]): boolean {

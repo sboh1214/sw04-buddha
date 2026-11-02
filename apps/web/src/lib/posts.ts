@@ -69,19 +69,44 @@ export function writePath(marketId?: string): string {
 
 /**
  * The market a new post goes to, as the write screen shows it: its title and its status badge,
- * which reads '판정 지연' for a closed market past its scheduled judgement (`judgementDelayed`,
- * `marketStatusLabel`; #22, ADR-0098).
+ * which reads '판정 지연' for a closed market past its scheduled judgement or a held 잠정 결과 past
+ * its 이의 기한 (`judgementDelayed`) and '이의 검토 중' for a held 잠정 결과 before it
+ * (`disputeUnderReview`, `marketStatusLabel`; #22, ADR-0098, #175, ADR-0104) — and, while 판정 이의
+ * are taken (`disputeOpen`, until `disputeDeadline`), the note that a post is no 판정 이의 with the
+ * link to the market's submission screen (`slug`; decision 3 '#175 토론의 이의 안내').
  */
 export interface WriteMarket {
   id: string;
+  slug: string;
   title: string;
   status: MarketStatus;
   judgementDelayed: boolean;
+  disputeUnderReview: boolean;
+  disputeOpen: boolean;
+  disputeDeadline: string | null;
 }
 
 /** The write screen's share of a market read or picked (`Market`, `MarketSummary`). */
-function writeMarketOf({ id, title, status, judgementDelayed }: WriteMarket): WriteMarket {
-  return { id, title, status, judgementDelayed };
+function writeMarketOf({
+  id,
+  slug,
+  title,
+  status,
+  judgementDelayed,
+  disputeUnderReview,
+  disputeOpen,
+  disputeDeadline,
+}: WriteMarket): WriteMarket {
+  return {
+    id,
+    slug,
+    title,
+    status,
+    judgementDelayed,
+    disputeUnderReview,
+    disputeOpen,
+    disputeDeadline,
+  };
 }
 
 /**

@@ -177,9 +177,10 @@ describe('the detail sections (#122, ADR-0061 decision 1, item 16)', () => {
 
   it('draws 토론 as its posts now, no longer a 준비 중 slot (#47, ADR-0075)', () => {
     // ADR-0067 left 토론 its title and 준비 중; #47 fills the slot with the section of this market's
-    // posts, which reads them by the market's id. The other 준비 중 slots are untouched.
+    // posts, which reads them by the market's id — and the server's `now`, which its 판정 이의 note
+    // times the deadline from (#175). The other 준비 중 slots are untouched.
     const source = readFileSync(path.join(SRC, 'app/markets/[slug]/market-detail.tsx'), 'utf8');
-    expect(source).toContain('discussion: <MarketDiscussion marketId={marketId} />');
+    expect(source).toContain('discussion: <MarketDiscussion marketId={marketId} now={now} />');
     expect(source).not.toContain('copy.marketDiscussion');
     for (const slot of ['market-order-book', 'market-my-trades', 'market-my-open-orders']) {
       expect(source, slot).toContain(`testId="${slot}"`);
@@ -276,41 +277,77 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
   it('says something for every public status but 거래 중, and nothing for the admin-only two', () => {
     // An open market's state is its countdown; a draft or one in review never reaches the route.
     for (const status of MARKET_STATUSES) {
-      const notice = statusNotice({ status, judgementDelayed: false, resolvedResult: null });
+      const notice = statusNotice({
+        status,
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult: null,
+      });
       const expected =
         (PUBLIC_MARKET_STATUSES as readonly string[]).includes(status) && status !== 'open';
       expect(notice !== undefined, status).toBe(expected);
     }
     // One sentence per status: no two read alike.
     const messages = PUBLIC_MARKET_STATUSES.filter((status) => status !== 'open').map(
-      (status) => statusNotice({ status, judgementDelayed: false, resolvedResult: null })?.message,
+      (status) =>
+        statusNotice({
+          status,
+          judgementDelayed: false,
+          disputeUnderReview: false,
+          resolvedResult: null,
+        })?.message,
     );
     expect(new Set(messages).size).toBe(messages.length);
   });
 
   it('warns where trading is stopped before the end, and says where the payout went once settled', () => {
     expect(
-      statusNotice({ status: 'paused', judgementDelayed: false, resolvedResult: null }),
+      statusNotice({
+        status: 'paused',
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult: null,
+      }),
     ).toEqual({
       tone: 'warning',
       message: copy.marketPausedNotice,
     });
     expect(
-      statusNotice({ status: 'closed', judgementDelayed: false, resolvedResult: null })?.tone,
+      statusNotice({
+        status: 'closed',
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult: null,
+      })?.tone,
     ).toBe('warning');
     // The 정산 sentence the old `resolved` notice carried is the payout's, now `settling`'s.
     expect(
-      statusNotice({ status: 'settling', judgementDelayed: false, resolvedResult: 'YES' })?.message,
+      statusNotice({
+        status: 'settling',
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult: 'YES',
+      })?.message,
     ).toBe(copy.marketSettlingNotice);
     expect(
-      statusNotice({ status: 'settled', judgementDelayed: false, resolvedResult: 'YES' }),
+      statusNotice({
+        status: 'settled',
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult: 'YES',
+      }),
     ).toEqual({
       tone: 'success',
       message: copy.marketSettledNotice,
       detail: copy.marketSettledPayout,
     });
     expect(
-      statusNotice({ status: 'settled', judgementDelayed: false, resolvedResult: 'NO' })?.detail,
+      statusNotice({
+        status: 'settled',
+        judgementDelayed: false,
+        disputeUnderReview: false,
+        resolvedResult: 'NO',
+      })?.detail,
     ).toBe(copy.marketSettledPayout);
   });
 
@@ -318,6 +355,7 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
     const notice = statusNotice({
       status: 'settled',
       judgementDelayed: false,
+      disputeUnderReview: false,
       resolvedResult: 'VOID',
     });
     expect(notice?.detail).toBe(copy.marketSettledPayoutVoid);
@@ -325,30 +363,89 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
     // Only a settled market carries the second line, whatever its result.
     for (const status of MARKET_STATUSES.filter((s) => s !== 'settled')) {
       expect(
-        statusNotice({ status, judgementDelayed: false, resolvedResult: 'VOID' })?.detail,
+        statusNotice({
+          status,
+          judgementDelayed: false,
+          disputeUnderReview: false,
+          resolvedResult: 'VOID',
+        })?.detail,
         status,
       ).toBeUndefined();
     }
   });
 
   it("says '판정 지연' for a closed market past its scheduled judgement, never that it means NO (#22)", () => {
-    const notice = statusNotice({ status: 'closed', judgementDelayed: true, resolvedResult: null });
+    const notice = statusNotice({
+      status: 'closed',
+      judgementDelayed: true,
+      disputeUnderReview: false,
+      resolvedResult: null,
+    });
     expect(notice).toEqual({ tone: 'warning', message: copy.marketJudgementDelayedNotice });
     expect(notice?.message).not.toBe(copy.marketClosedNotice);
     for (const word of ['NO', '환불', '원금']) expect(notice?.message).not.toContain(word);
-    // Only a closed market: a flag read before a later status moved the row says nothing then.
-    for (const status of MARKET_STATUSES.filter((s) => s !== 'closed')) {
+    // Only a closed market: a flag read before a later status moved the row says nothing then
+    // (a 잠정 결과's delay is its own line, below).
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'closed' && s !== 'provisional')) {
       expect(
-        statusNotice({ status, judgementDelayed: true, resolvedResult: null }),
+        statusNotice({
+          status,
+          judgementDelayed: true,
+          disputeUnderReview: false,
+          resolvedResult: null,
+        }),
         status,
-      ).toEqual(statusNotice({ status, judgementDelayed: false, resolvedResult: null }));
+      ).toEqual(
+        statusNotice({
+          status,
+          judgementDelayed: false,
+          disputeUnderReview: false,
+          resolvedResult: null,
+        }),
+      );
     }
+  });
+
+  it('keeps the 잠정 결과 sentence and adds why it waits while a 판정 이의 holds it (#175)', () => {
+    const base = { status: 'provisional' as const, resolvedResult: 'NO' as const };
+    expect(statusNotice({ ...base, judgementDelayed: false, disputeUnderReview: false })).toEqual({
+      tone: 'info',
+      message: copy.marketProvisionalNotice,
+    });
+    // '이의 검토 중' before the deadline.
+    expect(statusNotice({ ...base, judgementDelayed: false, disputeUnderReview: true })).toEqual({
+      tone: 'info',
+      message: copy.marketProvisionalNotice,
+      detail: copy.marketProvisionalUnderReview,
+    });
+    // '판정 지연' past it (owner answer 2026-11-03): still the 잠정 결과, now a warning.
+    const late = statusNotice({ ...base, judgementDelayed: true, disputeUnderReview: true });
+    expect(late).toEqual({
+      tone: 'warning',
+      message: copy.marketProvisionalNotice,
+      detail: copy.marketProvisionalDelayed,
+    });
+    // Never the CLOSED market's delay sentence, nor a promise of a result, a refund or a payout.
+    expect(late?.message).not.toBe(copy.marketJudgementDelayedNotice);
+    for (const text of [copy.marketProvisionalUnderReview, copy.marketProvisionalDelayed]) {
+      expect(text).not.toMatch(/NO|YES|환불|원금|지급/);
+    }
+    // A cached flag says nothing once the market moved on: a confirmed market reads its own.
+    expect(
+      statusNotice({
+        ...base,
+        status: 'resolved',
+        judgementDelayed: true,
+        disputeUnderReview: true,
+      }),
+    ).toEqual({ tone: 'info', message: copy.marketResolvedNotice });
   });
 
   it('names a cancelled market as one with no result, and promises nothing about a refund', () => {
     const notice = statusNotice({
       status: 'cancelled',
       judgementDelayed: false,
+      disputeUnderReview: false,
       resolvedResult: null,
     });
     expect(notice?.message).toBe(copy.marketCancelledNotice);

@@ -154,11 +154,12 @@ export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
  * worker's jobs, its confirmation at the dispute deadline among them; an approval or a
  * reschedule that opens the market at once publishes once, the OPEN market with the `opened`
  * event's key, #21), or the same status republished so subscribers refetch a descriptive edit
- * (A-M4-36, `MarketAdminService` `update`) or a supplement's new rule version (#80, ADR-0101: the
- * approval). `statusEventId` is the transition's `market_events.id` — the key `statusSupersedes`
+ * (A-M4-36, `MarketAdminService` `update`), a supplement's new rule version (#80, ADR-0101: the
+ * approval) or a 판정 이의's submission, retraction or decision (#175, ADR-0104: the labels'
+ * flags). `statusEventId` is the transition's `market_events.id` — the key `statusSupersedes`
  * orders by — and the repeat carries the UNCHANGED one, which is what makes it safe: a client
  * drops it as not newer, and only the REST snapshot it triggers carries `closeAt`, `title`, the
- * rules or their versions. Required (nullable, never absent)
+ * rules, their versions or the dispute flags. Required (nullable, never absent)
  * so every publisher states it; null only from a row that has no transition event.
  */
 export const marketStatusEventSchema = z

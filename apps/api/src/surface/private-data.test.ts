@@ -22,9 +22,13 @@
  * first — each with its note, review and reasons; and a market judged at A's registration (#152):
  * one VOID registration of A's an admin rejected, then a judgement on a fallback source another
  * admin approved — its description, evidence links, collection instant, fallback reason, the
- * reasons, the publication and the dispute deadline all operators' until #24 (the publication's
- * instant reaches a watcher only as the `ts` of the live `market:status` it sent, as every status
- * change's does; no REST read may carry it) — and confirmed at its deadline. Then:
+ * reasons and the publication all operators' until #24 (the publication's instant reaches a
+ * watcher only as the `ts` of the live `market:status` it sent, as every status change's does; no
+ * REST read may carry it), its version and dispute deadline public since #175 — a 판정 이의 A
+ * submitted on it with a fill, which the admin dismissed with a reason, and the market confirmed
+ * at its deadline; and a PROVISIONAL market in the same theme, its deadline ahead, where A has a
+ * fill and a pending 판정 이의 (#175: the submitter and the body — the links and the reason — are
+ * A's and the operators' alone, the decider the operators' alone, #173 item 13). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -45,8 +49,9 @@
  *   is called anonymously and as B, aimed at A, and neither answer may hold A's values; A's own
  *   answer shows A's values and none of `NEVER_SHOWN`;
  * - the market room is listened to, anonymously and as B, while A's own events are published and
- *   smuggled onto the market channel and the API publishes real market events: a pause (#114)
- *   and the approval of a judgement A registered, which publishes its provisional result (#152).
+ *   smuggled onto the market channel and the API publishes real market events: a pause (#114),
+ *   the approval of a judgement A registered, which publishes its provisional result (#152), and
+ *   the dismissal of A's pending 판정 이의, which republishes the market's unchanged status (#175).
  *
  * The routes come from the registry, which registry.test.ts holds to the module graph; this file
  * only knows how to call them. A route whose parameters, query keys or body it does not know
@@ -59,6 +64,7 @@ import {
   createApprovalRequest,
   createCategory,
   createConsents,
+  createDispute,
   createMarket,
   createMarketLink,
   createMarketPause,
@@ -199,6 +205,14 @@ interface Fixture {
    */
   judgedMarket: MarketRow;
   /**
+   * PROVISIONAL (#175), its 이의 기한 a day ahead, in `theme` too — so the theme's market cards
+   * carry its public deadline, version and '이의 검토 중' — where A has a fill and a pending 판정
+   * 이의 (`dispute`): what the dispute routes are called with.
+   */
+  disputedMarket: MarketRow;
+  /** A's pending 판정 이의 on `disputedMarket`: the id B's retract names. */
+  disputeId: string;
+  /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
    * with `market` — and so its id or slug in an answer can only come from A's watch: a public
@@ -229,6 +243,8 @@ interface Fixture {
     /** The action an operator took on A (#50). */
     actions: string;
     proposals: string;
+    /** A's newer 판정 이의 (#175), so the page holds both of A's. */
+    disputes: string;
   };
   sentinels: readonly Sentinel[];
 }
@@ -829,6 +845,45 @@ const OWNER_CASES: Readonly<Record<string, OwnerCase>> = {
   // B's cookie naming A's account and A's proposal: refused, and A's proposal stays 접수 (below).
   'POST /me/proposals/:id/retract': {
     params: { id: (fixture) => fixture.proposalId },
+    body: (fixture) => ({ expectedAccountId: fixture.a.id }),
+    status: 403,
+  },
+  // B's cookie naming A's account on the market A disputed (#175): refused before anything is
+  // read or written — no dispute of anybody's, and nothing counted on the market (below).
+  'POST /markets/:id/disputes': {
+    params: { id: (fixture) => fixture.disputedMarket.id },
+    body: (fixture) => ({
+      judgementVersion: 1,
+      links: ['https://example.com/b-dispute'],
+      reason: 'B의 판정 이의',
+      expectedAccountId: fixture.a.id,
+    }),
+    status: 403,
+  },
+  // B's disputes, paged from A's newest: B disputed nothing, so nothing of A's may come back —
+  // what A submitted (the links and the reasons) or how A's was decided (#173 items 7·13).
+  'GET /me/disputes': {
+    query: { cursor: (fixture) => fixture.cursors.disputes, limit: LIMIT },
+    status: 200,
+    own: [
+      'dispute id',
+      'dispute reason',
+      'dispute link',
+      'decided dispute id',
+      'decided dispute reason',
+      'decided dispute link',
+      'dispute decision reason',
+    ],
+  },
+  // B's standing on the market A disputed: B's own (no fill), never A's dispute (below).
+  'GET /me/disputes/markets/:marketId': {
+    params: { marketId: (fixture) => fixture.disputedMarket.id },
+    status: 200,
+    own: ['dispute id', 'dispute reason', 'dispute link'],
+  },
+  // B's cookie naming A's account and A's dispute: refused, and A's dispute stays pending (below).
+  'POST /me/disputes/:disputeId/retract': {
+    params: { disputeId: (fixture) => fixture.disputeId },
     body: (fixture) => ({ expectedAccountId: fixture.a.id }),
     status: 403,
   },
@@ -1685,8 +1740,41 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       publishedAt: judgementPublishedAt,
       disputeWindowMinutes: 60,
     });
+    // 판정 이의 (#175): A, with a fill on the judged market, disputed its result within the hour
+    // and the admin dismissed it with a reason — then the worker confirmed it. What A submitted is
+    // A's and the operators' (#173 item 13); the decision's reason A reads (#173 item 7) and #24
+    // will publish naming nobody — no public answer carries it yet; the decider is the operators'
+    // alone ('moderator id', NEVER_SHOWN). Odd milliseconds, as above.
+    const disputeText = {
+      link: `https://example.com/leak-dispute-evidence-${tag}`,
+      reason: `leak-dispute-reason-${tag}`,
+      decidedLink: `https://example.com/leak-decided-dispute-evidence-${tag}`,
+      decidedReason: `leak-decided-dispute-reason-${tag}`,
+      decision: `leak-dispute-decision-${tag}`,
+    };
+    const decidedDisputeAt = new Date(judgementPublishedAt.getTime() + 10 * 60 * 1000 + 555);
+    const { dispute: decidedDispute } = await createDispute(t.db, {
+      marketId: judgedClosed.id,
+      userId: a.id,
+      links: [disputeText.decidedLink],
+      reason: disputeText.decidedReason,
+      status: 'dismissed',
+      submittedAt: decidedDisputeAt,
+      decidedBy: admin.id,
+      decidedAt: new Date(decidedDisputeAt.getTime() + 10 * 60 * 1000 + 666),
+      decisionReason: disputeText.decision,
+    });
     const { market: judged } = await resolveMarketNow(t.db, judgedClosed.id);
-    for (const linked of [market, judged]) {
+    // And a PROVISIONAL market, its deadline a day ahead (the factory's window), judged by two
+    // other admins, where A has a fill and a pending 판정 이의 — it holds the market, which reads
+    // '이의 검토 중' on the theme's cards.
+    const { dispute, market: disputed } = await createDispute(t.db, {
+      market: { market: { createdBy: admin.id } },
+      userId: a.id,
+      links: [disputeText.link],
+      reason: disputeText.reason,
+    });
+    for (const linked of [market, judged, disputed]) {
       await createThemeMarket(t.db, {
         themeId: theme.id,
         marketId: linked.id,
@@ -1769,6 +1857,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       profileImageId: profileImage.id,
       theme,
       judgedMarket: judged,
+      disputedMarket: disputed,
+      disputeId: dispute.id,
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       proposalId: proposal.id,
@@ -1786,6 +1876,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         reports: cursorAfter(report),
         actions: cursorAfter(hiding),
         proposals: cursorAfter(proposal),
+        disputes: cursorAfter({ createdAt: dispute.submittedAt, id: dispute.id }),
       },
       sentinels: [
         text('user id', a.id),
@@ -1831,8 +1922,14 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('judgement approval reason', judgementText.approval),
         text('judgement collected at', judgementCollectedAt.toISOString()),
         text('judgement published at', judgement.publishedAt.toISOString()),
-        text('judgement dispute deadline', judgement.disputeDeadline.toISOString()),
         text('judgement approval id', judgement.approvalId),
+        text('dispute id', dispute.id),
+        text('dispute link', disputeText.link),
+        text('dispute reason', disputeText.reason),
+        text('decided dispute id', decidedDispute.id),
+        text('decided dispute link', disputeText.decidedLink),
+        text('decided dispute reason', disputeText.decidedReason),
+        text('dispute decision reason', disputeText.decision),
         text('rejected judgement description', judgementText.rejectedDescription),
         text('rejected judgement void reason', judgementText.rejectedVoidReason),
         text('judgement rejection', judgementText.rejection),
@@ -2128,7 +2225,22 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       (parse(bodies.get(key)!) as { data: Record<string, string>[] }).data.map((row) => row[field]);
     expect(ids('GET /themes')).toEqual([f.theme.id]);
     expect(ids('GET /markets/:id/themes')).toEqual([f.theme.id]);
-    expect(ids('GET /themes/:id/markets').sort()).toEqual([f.market.id, f.judgedMarket.id].sort());
+    expect(ids('GET /themes/:id/markets').sort()).toEqual(
+      [f.market.id, f.judgedMarket.id, f.disputedMarket.id].sort(),
+    );
+    // The disputed market's card carried its public deadline, its version and '이의 검토 중' (#175,
+    // #173 items 6·12) — and none of A's dispute, which the check above found in no answer.
+    const disputedCard = (
+      parse(bodies.get('GET /themes/:id/markets')!) as { data: Record<string, unknown>[] }
+    ).data.find((row) => row.id === f.disputedMarket.id);
+    expect(disputedCard).toMatchObject({
+      status: 'provisional',
+      judgementVersion: 1,
+      disputeDeadline: f.disputedMarket.disputeDeadline!.toISOString(),
+      disputeOpen: true,
+      disputeUnderReview: true,
+      judgementDelayed: false,
+    });
     expect(ids('GET /themes/:id/results', 'marketId')).toEqual([f.judgedMarket.id]);
     const page = parse(bodies.get('GET /themes/:idOrSlug')!) as { data: { notices: object[] } };
     expect(page.data.notices).toHaveLength(1);
@@ -2481,6 +2593,58 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     });
     expect(retractAsB.statusCode).toBe(404);
     expect(await proposals()).toEqual(aProposals);
+
+    // B's refused dispute and retract left A's disputes as they were — and the market's hold — and
+    // wrote nothing for B (#175). B retracting A's dispute as B itself is NOT_FOUND: it is looked
+    // up among B's own. B's standing on the market is B's (no fill), never A's dispute; A's is
+    // A's, its dispute with it.
+    const disputes = () =>
+      t.db
+        .select({
+          id: schema.marketDisputes.id,
+          userId: schema.marketDisputes.userId,
+          status: schema.marketDisputes.status,
+        })
+        .from(schema.marketDisputes)
+        .orderBy(schema.marketDisputes.submittedAt);
+    const aDisputes = [
+      { id: sentinel('decided dispute id'), userId: f.a.id, status: 'dismissed' },
+      { id: f.disputeId, userId: f.a.id, status: 'pending' },
+    ];
+    const holdCount = async () =>
+      (
+        await t.db
+          .select({ count: schema.markets.disputeHoldCount })
+          .from(schema.markets)
+          .where(eq(schema.markets.id, f.disputedMarket.id))
+      )[0]?.count;
+    expect(await disputes()).toEqual(aDisputes);
+    expect(await holdCount()).toBe(1);
+    const disputeRetractAsB = await call(routeOf('POST /me/disputes/:disputeId/retract'), {
+      params: { disputeId: f.disputeId },
+      body: { expectedAccountId: f.b.id },
+      cookie: f.b.cookie,
+    });
+    expect({ status: disputeRetractAsB.statusCode, leaks: leaked(disputeRetractAsB.body) }).toEqual(
+      { status: 404, leaks: [] },
+    );
+    expect(await disputes()).toEqual(aDisputes);
+    expect(await holdCount()).toBe(1);
+    const standing = routeOf('GET /me/disputes/markets/:marketId');
+    const standingOf = async (cookie: string) =>
+      (await call(standing, { params: { marketId: f.disputedMarket.id }, cookie })).json<{
+        data: { eligibility: string; dispute: { id: string } | null };
+      }>().data;
+    expect(await standingOf(f.b.cookie)).toEqual({
+      eligibility: 'no_fill',
+      judgementVersion: 1,
+      dispute: null,
+    });
+    expect(await standingOf(f.a.cookie)).toMatchObject({
+      eligibility: 'duplicate',
+      judgementVersion: 1,
+      dispute: { id: f.disputeId, status: 'pending', retractable: true },
+    });
   });
 
   // ---- the market room --------------------------------------------------------------------
@@ -2529,7 +2693,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const watchers = { anonymous: await openSocket(), B: await openSocket(f.b.cookie) };
     const received: { watcher: string; event: string; payload: unknown }[] = [];
     for (const [watcher, socket] of Object.entries(watchers)) {
-      for (const marketId of [f.market.id, closed.id]) {
+      for (const marketId of [f.market.id, closed.id, f.disputedMarket.id]) {
         const refusal = JSON.stringify(await subscribe(socket, marketId));
         // The refusal envelope a socket is sent directly carries nothing of A's either.
         expect({
@@ -2611,8 +2775,21 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       },
     });
     expect(approved.statusCode, approved.body).toBe(200);
+    // And a 판정 이의's decision (#175): the admin dismisses A's pending dispute with a reason, and
+    // the market's unchanged status is published again so open details refetch their labels —
+    // never the dispute, its submitter, its body or the decision's reason.
+    const dismissed = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${f.disputedMarket.id}/disputes/${f.disputeId}/dismiss`,
+      headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
+      payload: {
+        reason: f.sentinels.find((s) => s.label === 'dispute decision reason')!.value,
+        expectedAccountId: f.admin.id,
+      },
+    });
+    expect(dismissed.statusCode, dismissed.body).toBe(200);
     const started = Date.now();
-    while (received.filter((entry) => entry.event === 'market:status').length < 4) {
+    while (received.filter((entry) => entry.event === 'market:status').length < 6) {
       if (Date.now() - started > 5_000) throw new Error('market:status did not reach both');
       await sleep(20);
     }
@@ -2622,15 +2799,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(received.map(({ watcher, event }) => `${watcher} ${event}`).sort()).toEqual([
       'B market:status',
       'B market:status',
+      'B market:status',
+      'anonymous market:status',
       'anonymous market:status',
       'anonymous market:status',
     ]);
-    expect(
+    const statusesOf = (marketId: string) =>
       received
         .map(({ payload }) => payload as { marketId: string; status: string })
-        .filter((payload) => payload.marketId === closed.id)
-        .map((payload) => payload.status),
-    ).toEqual(['provisional', 'provisional']);
+        .filter((payload) => payload.marketId === marketId)
+        .map((payload) => payload.status);
+    expect(statusesOf(closed.id)).toEqual(['provisional', 'provisional']);
+    expect(statusesOf(f.disputedMarket.id)).toEqual(['provisional', 'provisional']);
     for (const { event, payload } of received) {
       const registered = REALTIME_EVENT_REGISTRY[event as keyof typeof REALTIME_EVENT_REGISTRY];
       expect({ event, channel: registered?.channel }).toEqual({ event, channel: 'market' });

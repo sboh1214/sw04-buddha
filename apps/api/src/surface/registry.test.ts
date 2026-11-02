@@ -601,7 +601,9 @@ describe('the public API document (static)', () => {
     // What a writing restriction leaves open (#45-12: deleting one's own, likes, reports and
     // reading; decision 7 and #37-9: clearing a public item and the private settings) and what is
     // not writing at all — the account's own steps, the 관심 등록, payments — and the 철회 of one's own
-    // 접수 proposal (#77: it takes one's own back, as deleting one's own post does, #45-12).
+    // 접수 proposal (#77: it takes one's own back, as deleting one's own post does, #45-12). And
+    // 판정 이의 and its 철회 (#175, ADR-0104): ADR-0093 decision 1 #173 item 6 «계정 제한 중에도 낼 수
+    // 있다», N02 §9 «이의제기 경로는 유지한다», and no writing restriction (#45-12 names none).
     const OPEN = [
       'POST /me/consents',
       'POST /me/onboarding/nickname',
@@ -623,6 +625,8 @@ describe('the public API document (static)', () => {
       'POST /me/search-history/:id/delete',
       'POST /me/search-history/clear',
       'POST /me/proposals/:id/retract',
+      'POST /markets/:id/disputes',
+      'POST /me/disputes/:disputeId/retract',
       'POST /payments/charge',
       'POST /coupons/redeem',
     ];

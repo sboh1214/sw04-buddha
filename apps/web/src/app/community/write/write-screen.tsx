@@ -4,6 +4,7 @@ import { Alert, Badge, Box, Button, HStack, Heading, Stack, Text } from '@chakra
 import type { Route } from 'next';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import { DisputeDiscussionNote } from '@/components/market/dispute-discussion-note';
 import { SanctionBanner } from '@/components/moderation/sanction-banner';
 import { MarketPicker } from '@/components/post/market-picker';
 import { PostForm } from '@/components/post/post-form';
@@ -38,6 +39,11 @@ import { useSession } from '@/lib/use-session';
  * (`postWriteErrorMessage`, `isRestricted`). An account restriction (#139, ADR-0085) is not on it:
  * it refuses no post (ADR-0069 decision 1 #57-12), and its banner is MY 요약's and MY 설정's only
  * (owner decision 2026-10-23, WRITE_PAGE_RESTRICTION_KINDS).
+ *
+ * Under the market chosen, on a 잠정 결과 while its 이의 기한 is ahead, the line that a post is no
+ * 판정 이의 with the link to the submission screen (`DisputeDiscussionNote`, decision 3 '#175 토론의 이의
+ * 안내', ADR-0104) — outside the sanction banner; gone at the deadline by its timer, as this
+ * screen joins no socket room.
  *
  * The market the form shows is the screen's own (`writeScreenMarket`, lib/posts.ts, where every
  * step of it is tested): the page's read (`lookup`) settles it as it comes, and a market picked
@@ -213,6 +219,8 @@ function WriteForm({
           )}
         </Stack>
       </Box>
+      {/* Under the market, while its 판정 이의 are taken (decision 3 '#175 토론의 이의 안내'). */}
+      <DisputeDiscussionNote market={market} testId="post-write-dispute-note" />
       <PostForm
         // The market on screen: a draft the onboarding gate keeps comes back on this market's
         // write screen, the address the onboarding returns to — and so does one kept as the

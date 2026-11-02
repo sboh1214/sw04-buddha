@@ -77,8 +77,9 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * a paused market's next path another admin approves (AdminMarketPausesController) — the interim
  * one-admin `POST …/close` is gone. Nor does any route judge a market at once (#152, ADR-0103): one
  * admin registers a CLOSED market's judgement and another approves it, publishing the provisional
- * result (AdminMarketJudgementsController), and the worker confirms it at its dispute deadline —
- * the interim one-admin `POST …/resolve` is gone.
+ * result (AdminMarketJudgementsController), and the worker confirms it once its dispute deadline
+ * has passed with no 판정 이의 pending or accepted holding it (#175, ADR-0104) — the interim
+ * one-admin `POST …/resolve` is gone.
  */
 @ApiTags('admin')
 @ApiCookieAuth(SESSION_SECURITY_SCHEME)

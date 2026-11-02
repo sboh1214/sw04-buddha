@@ -171,7 +171,10 @@ export class MarketJobs implements OnApplicationShutdown {
    * at its instant `now` plus the release setting `market.dispute_window`, so the worker confirms
    * the result (PROVISIONAL → RESOLVED) once the deadline has passed with nothing held. Nothing
    * cancels it: a run before the deadline, or on a market confirmed already, skips under the market
-   * lock, and the worker's per-minute scan confirms a market whose job never reached Redis.
+   * lock, and the worker's per-minute scan confirms a market whose job never reached Redis. A run
+   * that finds a 판정 이의 holding the market skips too (`held`, #175) and is removed on completion,
+   * so the dismissal that leaves nothing holding past the deadline registers it again under the
+   * same id, due at once (MarketDisputeService; `now` past `disputeDeadline`: no delay).
    */
   scheduleResolve(marketId: string, disputeDeadline: Date, now: Date): Promise<void> {
     return this.schedule(

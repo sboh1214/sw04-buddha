@@ -202,9 +202,23 @@ export const markets = pgTable(
      */
     disputeDeadline: timestampTz(),
     /**
+     * 판정 이의 holding the confirmation (#175, ADR-0104; ADR-0093 decision 1 #173 items 11·12):
+     * how many of the current judgement version's `market_disputes` are `pending` or `accepted`
+     * (HOLDING_DISPUTE_STATUSES of @buddha/shared), mirrored here so every market read labels the
+     * market '이의 검토 중' or '판정 지연' from the row alone, with no join. Written under the market
+     * lock by the @buddha/db dispute writers only — one more for a submission, one fewer for a
+     * retraction or a dismissal, none for an acceptance (it still holds) — and 0 on every market
+     * but a PROVISIONAL one (the CHECK). For the labels alone: the confirmation and the worker's
+     * scan read the disputes themselves (`confirmationHold`), so a mirror that drifted could only
+     * mislabel a market, never confirm a held one. #176 recounts it when a correction moves the
+     * version.
+     */
+    disputeHoldCount: integer().notNull().default(0),
+    /**
      * When the result was confirmed (→ `resolved`): since #152 the worker's confirmation once the
-     * dispute deadline passed (`resolveProvisionalMarket`), never the provisional publication —
-     * theme results read it as 확정 시각 (ADR-0095 결과 5). Before #152, the interim judgement's.
+     * dispute deadline passed with no 판정 이의 holding it — after the last dismissal, for a held
+     * market (#175) — (`resolveProvisionalMarket`), never the provisional publication — theme
+     * results read it as 확정 시각 (ADR-0095 결과 5). Before #152, the interim judgement's.
      */
     resolvedAt: timestampTz(),
     /** When the settlement steps all finished (→ `settled`). */
@@ -263,9 +277,10 @@ export const markets = pgTable(
      */
     index('markets_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
     /**
-     * The worker's confirmation scan (`market.resolve`, #152): the PROVISIONAL markets whose
-     * dispute deadline has passed, the earliest first. Partial: a market keeps its deadline after
-     * the confirmation, and the PROVISIONAL set is the few awaiting one.
+     * The worker's confirmation scan (`market.resolve`, #152; `dueProvisionalMarkets`): the
+     * PROVISIONAL markets whose dispute deadline has passed, the earliest first — less those a
+     * dispute holds (#175), each looked up in `market_disputes_holding_idx`. Partial: a market
+     * keeps its deadline after the confirmation, and the PROVISIONAL set is the few awaiting one.
      */
     index('markets_provisional_dispute_deadline_idx')
       .on(t.disputeDeadline, t.id)
@@ -306,6 +321,15 @@ export const markets = pgTable(
     check(
       'markets_provisional_check',
       sql`${t.status} <> 'provisional' OR (${t.judgementVersion} IS NOT NULL AND ${t.disputeDeadline} IS NOT NULL AND ${t.resolvedResult} IS NOT NULL)`,
+    ),
+    /**
+     * The dispute mirror (#175): never below 0, and 0 on a market that is not PROVISIONAL — a
+     * confirmation of a market a dispute still holds fails here too, after `confirmationHold`.
+     */
+    check('markets_dispute_hold_count_check', sql`${t.disputeHoldCount} >= 0`),
+    check(
+      'markets_dispute_hold_status_check',
+      sql`${t.disputeHoldCount} = 0 OR ${t.status} = 'provisional'`,
     ),
     check(
       'markets_fee_bps_check',

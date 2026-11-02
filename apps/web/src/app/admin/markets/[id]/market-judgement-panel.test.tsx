@@ -60,6 +60,7 @@ const closed: AdminMarket = {
   imageUrl: null,
   status: 'closed',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: 63,
   volumeCoin: '123456',
   tradeCount: 789,
@@ -92,6 +93,8 @@ const closed: AdminMarket = {
   pause: { history: [], pending: null, log: [] },
   judgementVersion: null,
   disputeDeadline: null,
+  disputeOpen: false,
+  disputes: { holding: 0, items: [] },
   judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
 };
 

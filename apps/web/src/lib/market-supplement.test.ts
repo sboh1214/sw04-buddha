@@ -109,6 +109,7 @@ const market: AdminMarket = {
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: null,
   volumeCoin: '0',
   tradeCount: 0,
@@ -142,6 +143,8 @@ const market: AdminMarket = {
   // Not judged (#152): no judgement, none waiting, the dispute window decided.
   judgementVersion: null,
   disputeDeadline: null,
+  disputeOpen: false,
+  disputes: { holding: 0, items: [] },
   judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
 };
 

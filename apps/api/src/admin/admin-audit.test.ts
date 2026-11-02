@@ -80,6 +80,10 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/judgements/:requestId/approve': 'market_judgement_approve',
   'POST /admin/markets/:id/judgements/:requestId/reject': 'market_judgement_reject',
   'POST /admin/markets/:id/judgements/:requestId/retract': 'market_judgement_retract',
+  // #175: a 판정 이의 is decided by one admin, not an approval request; neither decision writes a
+  // market event (the member's submission and 철회 are no admin route and write none).
+  'POST /admin/markets/:id/disputes/:disputeId/dismiss': 'market_dispute_dismiss',
+  'POST /admin/markets/:id/disputes/:disputeId/accept': 'market_dispute_accept',
   'POST /admin/markets/:id/related': 'market_link',
   'DELETE /admin/markets/:id/related/:relatedMarketId': 'market_unlink',
   'POST /admin/themes': 'theme_create',

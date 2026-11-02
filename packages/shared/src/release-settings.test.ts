@@ -144,6 +144,17 @@ describe('release settings registry', () => {
       "반복 링크 검토 목록의 항목은 작성자의 탈퇴와 상관없이 탐지된 시각과 '확인함'으로 표시된 시각 가운데 늦은 쪽부터",
     );
     expect(moderation.description).toContain("('확인함' 운영 기록과 그 주소는 남는다)");
+    // #175 (ADR-0087 (6), ADR-0069 #57-18): a withdrawn account's 판정 이의, once decided or
+    // retracted, emptied in place from the later of the two instants; a pending one is kept, and
+    // an accepted one awaiting its correction counts as under review (the worker keeps it).
+    expect(moderation.description).toContain(
+      '탈퇴한 계정이 낸 판정 이의(#175)는 기각·수용되거나 철회된 것의 근거 링크와 사유를',
+    );
+    expect(moderation.description).toContain('탈퇴 시각과 처리·철회 시각 가운데 늦은 쪽부터');
+    expect(moderation.description).toContain('(이의 건수와 처리 상태는 남는다)');
+    expect(moderation.description).toContain(
+      '검토 중이거나 수용해 정정을 기다리는 판정 이의는 지우지 않는다',
+    );
     // 14: a kind that failed is recorded as such.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(definition.description, definition.key).toContain(

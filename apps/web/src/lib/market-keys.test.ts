@@ -10,6 +10,7 @@ import {
   PAYMENTS_QUERY_KEY,
 } from '@/hooks/use-wallet';
 import { AUTHORED_KEY, MY_AUTHORED_KEY, myAuthoredKey, profileAuthoredKey } from './authored';
+import { MY_DISPUTES_KEY, myDisputesKey, myMarketDisputeKey } from './disputes';
 import { LIKES_KEY, myPostLikesKey } from './likes';
 import {
   CATEGORIES_QUERY_KEY,
@@ -283,6 +284,10 @@ describe('isPrivateQueryKey', () => {
       ['MY_AUTHORED_KEY', MY_AUTHORED_KEY],
       ['myAuthoredKey', myAuthoredKey('posts')],
       ['myAuthoredKey', myAuthoredKey('comments')],
+      // 판정 이의 (#175): the member's disputes and standing.
+      ['MY_DISPUTES_KEY', MY_DISPUTES_KEY],
+      ['myDisputesKey', myDisputesKey('user-1')],
+      ['myMarketDisputeKey', myMarketDisputeKey(ID, 'user-1')],
     ];
     for (const [name, key] of sessionKeys) expect(isPrivateQueryKey(key), name).toBe(true);
   });
@@ -301,7 +306,9 @@ describe('isPrivateQueryKey', () => {
     // 'my-moderation' came with #50 (ADR-0081): the member's own reports and the actions taken on
     // them (PRIVATE_DATA `reports`, `moderation`); the operators' reads live under 'admin'.
     // 'proposals' came with #77 (ADR-0089): a proposal is the proposer's and the operators' alone
-    // (ADR-0069 decision 4) — that PR changed the list too.
+    // (ADR-0069 decision 4) — that PR changed the list too. 'disputes' came back with #175
+    // (ADR-0104): a 판정 이의's links and reason are the submitter's and the operators' alone (#173
+    // item 13), read with the member's cookie — the root M5's dispute stage held, with new keys.
     expect([...PRIVATE_QUERY_ROOTS].sort()).toEqual(
       [
         'admin',
@@ -317,9 +324,9 @@ describe('isPrivateQueryKey', () => {
         'my-authored',
         'my-moderation',
         'proposals',
+        'disputes',
       ].sort(),
     );
-    expect(PRIVATE_QUERY_ROOTS.has('disputes')).toBe(false);
   });
 
   it('leaves every public market key dehydratable', () => {

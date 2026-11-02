@@ -1,5 +1,6 @@
 import {
   MARKET_JUDGEMENT_APPROVAL_KIND,
+  MARKET_SCAN_BATCH_MAX,
   SETTLEMENT_STEPS,
   disputeDeadlineOf,
   disputeWindowMinutesSchema,
@@ -9,8 +10,9 @@ import {
   type MarketResolvedByDeadlinePayload,
   type MarketResult,
 } from '@buddha/shared';
-import { and, desc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, lte, not, sql } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { confirmationHold, marketConfirmationHeld } from './market-dispute.js';
 import { transitionMarket } from './market-transitions.js';
 import type * as schema from './schema/index.js';
 import {
@@ -37,7 +39,8 @@ type Reader = Pick<NodePgDatabase<typeof schema>, 'select'>;
  * `pauseMarket`'s — `approveMarketJudgement` (CLOSED → PROVISIONAL, an admin other than the
  * registrant approving a `market_judgement` request; the API's) and `resolveProvisionalMarket`
  * (PROVISIONAL → RESOLVED once the dispute deadline has passed with nothing held; the worker's
- * `market.resolve`, and #175's 'all dismissed → confirm at once'). Each is called under
+ * `market.resolve` alone — after #175's last dismissal past the deadline too, which the API
+ * registers at once: ADR-0103 9-12, ADR-0104). Each is called under
  * `lockMarket`, with `now` the DB clock read after the last lock, in the caller's transaction;
  * each writes no admin action (the API's) and publishes nothing (the caller publishes
  * `market:status` after COMMIT). The registration, its 반려 and its 철회 change no market and live
@@ -204,10 +207,13 @@ export async function approveMarketJudgement(
  * - `not_provisional`: it is not PROVISIONAL — confirmed already (a duplicate job, the scan after
  *   the delayed job), or not published yet;
  * - `not_due`: its dispute deadline is still ahead (a stale job, or a deadline a correction moved
- *   later, #176).
- * #175's undecided disputes and #176's pending correction add `held` (#173 item 1).
+ *   later, #176) — asked before the hold, so a market whose deadline is ahead stays `not_due`;
+ * - `held`: its deadline has passed and something holds it (`confirmationHold`, #173 items 1·7):
+ *   a 판정 이의 of its current version pending or accepted (#175, ADR-0104) — #176 adds its
+ *   pending correction. The last dismissal lifts it, and the job the API registers then, or the
+ *   per-minute scan, confirms the market.
  */
-export type ResolveSkipReason = 'not_found' | 'not_provisional' | 'not_due';
+export type ResolveSkipReason = 'not_found' | 'not_provisional' | 'not_due' | 'held';
 
 export interface ResolveProvisionalMarketInput {
   marketId: string;
@@ -232,12 +238,13 @@ export type ResolveProvisionalMarketResult =
  * PROVISIONAL → RESOLVED (#152; ADR-0093 decision 1 #173 item 1, an automatic edge: actor NULL,
  * the worker): the confirmation of a published result once its dispute deadline has passed with
  * nothing held. Called under `lockMarket`; it reads the market `FOR UPDATE` itself and confirms one
- * that is PROVISIONAL and whose `dispute_deadline` is at or before `now`, checked in that order
- * (ResolveSkipReason); otherwise it writes nothing and says why. The holds come here: #175's
- * undecided disputes and #176's pending correction each add a predicate and the skip `held`, and
- * #175 calls this as soon as the last dispute is dismissed, past the deadline or not — so the
- * worker's per-minute scan, not only the delayed job, confirms a market whose hold cleared later.
- * #152 has none.
+ * that is PROVISIONAL, whose `dispute_deadline` is at or before `now` and that nothing holds
+ * (`confirmationHold`: no 판정 이의 of its current version pending or accepted, #175), checked in
+ * that order (ResolveSkipReason); otherwise it writes nothing and says why. Only the worker calls
+ * it (ADR-0103 9-12): when the last holding dispute is dismissed after the deadline, the API
+ * registers `market.resolve` at once, and the per-minute scan (`dueProvisionalMarkets`) confirms a
+ * market whose hold cleared and whose job was lost. #176's pending correction adds its hold to
+ * `confirmationHold`.
  *
  * `transitionMarket`'s `resolved` event — from `provisional`, to `resolved`, no actor, payload
  * `{version, result, source: 'deadline'}` (MarketResolvedByDeadlinePayload: the judgement version
@@ -261,6 +268,8 @@ export async function resolveProvisionalMarket(
     throw new Error(`Market ${marketId} is provisional without its judgement`);
   }
   if (disputeDeadline.getTime() > now.getTime()) return { resolved: false, reason: 'not_due' };
+  // Under the market lock every dispute writer takes, so no dispute lands or ends meanwhile.
+  if (await confirmationHold(tx, market)) return { resolved: false, reason: 'held' };
 
   const payload: MarketResolvedByDeadlinePayload = {
     version: judgementVersion,
@@ -298,6 +307,32 @@ export async function resolveProvisionalMarket(
     version: judgementVersion,
     result: resolvedResult,
   };
+}
+
+/**
+ * The worker's confirmation scan (`market-resolve-scan`, #152): the PROVISIONAL markets whose
+ * dispute deadline has passed on the database clock and that nothing holds — no 판정 이의 of
+ * their current version pending or accepted (`marketConfirmationHeld`, #175) — the earliest
+ * deadline first, at most `limit` (MARKET_SCAN_BATCH_MAX by default): so a held market takes no
+ * slot of a batch, and one whose hold cleared after its deadline is confirmed within the minute.
+ * Served by `markets_provisional_dispute_deadline_idx` (migration 0055), each market's hold one
+ * lookup in `market_disputes_holding_idx` (0056). A plain read: `resolveProvisionalMarket`
+ * re-checks everything under the lock. The query itself, not run, so the schema test reads its
+ * plan.
+ */
+export function dueProvisionalMarkets(executor: Reader, limit: number = MARKET_SCAN_BATCH_MAX) {
+  return executor
+    .select({ id: markets.id })
+    .from(markets)
+    .where(
+      and(
+        eq(markets.status, 'provisional'),
+        lte(markets.disputeDeadline, sql`now()`),
+        not(marketConfirmationHeld()),
+      ),
+    )
+    .orderBy(asc(markets.disputeDeadline), asc(markets.id))
+    .limit(limit);
 }
 
 /**

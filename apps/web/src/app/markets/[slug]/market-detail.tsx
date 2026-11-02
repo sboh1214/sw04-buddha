@@ -9,6 +9,7 @@ import {
   DataList,
   Grid,
   HStack,
+  Link as ChakraLink,
   SegmentGroup,
   Skeleton,
   Stack,
@@ -16,6 +17,8 @@ import {
   Text,
 } from '@chakra-ui/react';
 import { formatCoin, isPreCloseMarketStatus, parseCoinAmount } from '@buddha/shared';
+import { useQueryClient } from '@tanstack/react-query';
+import type { Route } from 'next';
 import NextLink from 'next/link';
 import { Fragment, type ReactNode, useState } from 'react';
 import { ComingSoonSection } from '@/components/market/coming-soon-section';
@@ -27,11 +30,14 @@ import { ProbabilityDisplay } from '@/components/market/probability-display';
 import { RecentFills } from '@/components/market/recent-fills';
 import { SignInPrompt } from '@/components/market/sign-in-prompt';
 import { WatchButton } from '@/components/market/watch-button';
+import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
+import { useDisputeOpen } from '@/hooks/use-disputes';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
+import { disputePath } from '@/lib/disputes';
 import { MARKET_RESULT_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import {
   type CopiedSection,
@@ -52,6 +58,7 @@ import {
   statusNotice,
   viewDisplay,
 } from '@/lib/market-detail';
+import { marketKey } from '@/lib/market-keys';
 import { marketStatusLabel } from '@/lib/market-status';
 import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import { type RecentMove, recentMove } from '@/lib/ticks';
@@ -223,7 +230,7 @@ export function MarketDetail({
         ) : (
           <>
             <MarketSummary market={data} move={recentMove(series.data?.points)} />
-            <StatusNotice market={data} />
+            <StatusNotice market={data} now={now} />
             {/* The '#이름' chips (#17), each its tag's search: the first of the two lines of links
                 out at the end of 요약, the themes' after it (market-tags.tsx). */}
             <MarketTags tags={data.tags} />
@@ -265,7 +272,7 @@ export function MarketDetail({
     // market line), newest first, every one of them a 더 보기 at a time, the count beside the
     // heading and 글쓰기 always there. Public, but read in the browser only — no post in the
     // server's HTML (market-discussion.tsx). One slot at both widths: it holds a query.
-    discussion: <MarketDiscussion marketId={marketId} />,
+    discussion: <MarketDiscussion marketId={marketId} now={now} />,
     // 관련 시장 (#65, ADR-0068), after 토론: the last of N02 §4's list, at both widths. Public, so
     // the page renders it with the first page it read (related-markets.tsx).
     related,
@@ -462,7 +469,8 @@ function MarketHeaderRow({ market, now }: { market: Market; now?: number }) {
         variant="subtle"
         data-testid="market-status-badge"
       >
-        {/* '판정 지연' in place of '거래 마감' once the scheduled judgement has passed (#22). */}
+        {/* '판정 지연' in place of '거래 마감' once the scheduled judgement has passed (#22), and
+            '이의 검토 중' or '판정 지연' in place of '잠정 결과' while a 판정 이의 holds it (#175). */}
         {marketStatusLabel(market)}
       </Badge>
       {/* Until the market has closed — 개장 예정, 거래 중 and 거래 일시 중단, which closes on schedule
@@ -518,9 +526,16 @@ function MarketSummary({
 /**
  * 상태별 안내 (PLAN 11.3), plus the one read-only fact a decided market carries: the 결과 —
  * YES·NO·무효 (`MARKET_RESULT_LABEL`), and no row while there is none (before a judgement, and on a
- * cancelled market). A settled market adds the line that says the payout has landed
- * (`statusNotice`). The dispute deadline of a provisional result is #175's, and the 판정 record
- * itself (note, evidence, instant) is #24's.
+ * cancelled market). A settled market adds the line that says the payout has landed, a 잠정 결과 a
+ * 판정 이의 holds why it waits (`statusNotice`). The 판정 record itself (note, evidence, instant,
+ * the disputes' count and statuses) is #24's.
+ *
+ * A 잠정 결과 (#175, ADR-0104; #173 item 6: 기한과 접수 링크는 비로그인에게도 보인다) adds its 이의
+ * 기한 row — the viewer's zone and the market's 판정 기준 시간대 (`DateTimeText`) — for as long as it
+ * is PROVISIONAL: past the deadline it says when the period ended. While disputes are taken, the
+ * link to the submission screen under it, which goes at the deadline without a reload
+ * (`useDisputeOpen`, a one-shot timer from the server's `now`). Both are public data, in the
+ * server's HTML and the same for every visitor; who may dispute is the submission screen's.
  *
  * `role="status"` rather than `role="alert"`: a market closing while someone reads it is worth
  * announcing, but it is not an emergency that should interrupt them mid-sentence.
@@ -528,9 +543,17 @@ function MarketSummary({
  * The 결과 row is deliberately NOT gated on the status: it is the market's answer and PLAN 11.3
  * asks for it on a settled screen as much as on a resolved one.
  */
-function StatusNotice({ market }: { market: Market }) {
+export function StatusNotice({ market, now }: { market: Market; now?: number }) {
+  const queryClient = useQueryClient();
+  // At the deadline a held market publishes nothing: its label turns 판정 지연 on a fresh read.
+  const open = useDisputeOpen(market, now, () => {
+    if (market.disputeUnderReview) {
+      void queryClient.invalidateQueries({ queryKey: marketKey(market.id) });
+    }
+  });
   const notice = statusNotice(market);
   if (notice === undefined) return null;
+  const deadline = market.status === 'provisional' ? market.disputeDeadline : null;
   return (
     <Alert.Root status={notice.tone} role="status" data-testid="market-status-notice">
       <Alert.Indicator />
@@ -541,15 +564,44 @@ function StatusNotice({ market }: { market: Market }) {
             {notice.detail}
           </Alert.Description>
         )}
-        {market.resolvedResult !== null && (
+        {(market.resolvedResult !== null || deadline !== null) && (
           <DataList.Root orientation="horizontal" size="sm">
-            <DataList.Item>
-              <DataList.ItemLabel>{copy.marketResolvedResult}</DataList.ItemLabel>
-              <DataList.ItemValue data-testid="market-detail-result">
-                {MARKET_RESULT_LABEL[market.resolvedResult]}
-              </DataList.ItemValue>
-            </DataList.Item>
+            {market.resolvedResult !== null && (
+              <DataList.Item>
+                <DataList.ItemLabel>{copy.marketResolvedResult}</DataList.ItemLabel>
+                <DataList.ItemValue data-testid="market-detail-result">
+                  {MARKET_RESULT_LABEL[market.resolvedResult]}
+                </DataList.ItemValue>
+              </DataList.Item>
+            )}
+            {deadline !== null && (
+              // Top-aligned with a block value, as the rules' times: the judgement zone's line goes
+              // under the time (`RuleRow`).
+              <DataList.Item alignItems="flex-start" data-testid="market-detail-dispute-deadline">
+                <DataList.ItemLabel>{copy.marketDisputeDeadline}</DataList.ItemLabel>
+                <DataList.ItemValue display="block">
+                  <DateTimeText
+                    iso={deadline}
+                    judgementTimeZone={market.judgementTimeZone}
+                    testId="market-detail-dispute-deadline"
+                  />
+                </DataList.ItemValue>
+              </DataList.Item>
+            )}
           </DataList.Root>
+        )}
+        {open && (
+          <ChakraLink
+            asChild
+            colorPalette="brand"
+            color="colorPalette.fg"
+            fontWeight="medium"
+            fontSize="sm"
+          >
+            <NextLink href={disputePath(market.slug) as Route} data-testid="market-dispute-link">
+              {copy.marketDisputeSubmit}
+            </NextLink>
+          </ChakraLink>
         )}
       </Alert.Content>
     </Alert.Root>

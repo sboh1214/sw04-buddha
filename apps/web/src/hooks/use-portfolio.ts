@@ -8,7 +8,7 @@ import {
   parseCoinAmount,
 } from '@buddha/shared';
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query';
-import { type Order, type Position, api, unwrap } from '@/lib/api';
+import { type Market, type Order, type Position, api, unwrap } from '@/lib/api';
 import { useSession } from '@/lib/use-session';
 import { ORDERS_KEY, POSITIONS_KEY } from '@/lib/market-keys';
 import { statusRank } from '@/lib/market-live';
@@ -413,6 +413,24 @@ export function markToLiveMarket(
     return position;
   }
   return { ...position, marketLastPrice, marketStatus };
+}
+
+/**
+ * A holding's status badge flags — '판정 지연' (`judgementDelayed`) and '이의 검토 중'
+ * (`disputeUnderReview`, #175) — from its market's live row, only when that row was read for the
+ * status the holding shows (`markToLiveMarket`'s). A live row a lifecycle step behind the
+ * position (`liveMarketStatus` keeps the position's then) read its flags for another status: a
+ * CLOSED row past its scheduled judgement says `judgementDelayed`, which on a fresh 잠정 결과 would
+ * read '판정 지연'. With no live row, or one of another status, the holding reads its status alone.
+ */
+export function holdingDisplay(
+  live: Pick<Market, 'status' | 'judgementDelayed' | 'disputeUnderReview'> | undefined,
+  status: MarketStatus,
+): Pick<Market, 'judgementDelayed' | 'disputeUnderReview'> {
+  if (live === undefined || live.status !== status) {
+    return { judgementDelayed: false, disputeUnderReview: false };
+  }
+  return { judgementDelayed: live.judgementDelayed, disputeUnderReview: live.disputeUnderReview };
 }
 
 /**

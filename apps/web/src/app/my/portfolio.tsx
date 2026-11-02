@@ -32,6 +32,7 @@ import {
   type ListState,
   averageCostCoin,
   combinedListState,
+  holdingDisplay,
   listState,
   markPriceCoin,
   markToLiveMarket,
@@ -169,12 +170,17 @@ export function useHoldings() {
     open,
     positions,
     /**
-     * The markets whose live row reads '판정 지연' (`judgementDelayed`, #22, ADR-0098): a holding
-     * row has no such flag of its own, so its status badge takes it from the same live row its
-     * status is marked from. A market with no live row yet reads its status alone.
+     * Each market's display flags as its live row reads them — '판정 지연' (`judgementDelayed`, #22,
+     * ADR-0098; a held 잠정 결과 past its deadline too, #175) and '이의 검토 중' (`disputeUnderReview`,
+     * #175, ADR-0104): a holding row has no such flag of its own, so its status badge takes them
+     * from the same live row its status is marked from — only when that row is of the status the
+     * holding shows. A market with no live row yet reads its status alone (`holdingDisplay`).
      */
-    judgementDelayed: new Set(
-      [...live.values()].filter((market) => market.judgementDelayed).map((market) => market.id),
+    display: new Map(
+      positions.map((row) => [
+        row.marketId,
+        holdingDisplay(live.get(row.marketId), row.marketStatus),
+      ]),
     ),
     /**
      * Whether any market price behind these holdings has stopped being refreshed. The reading
@@ -374,7 +380,7 @@ export function PositionsBody({ holdings, limit }: { holdings: Holdings; limit?:
             <OpenPositionRow
               key={`${row.marketId}-${row.outcome}`}
               position={row}
-              judgementDelayed={holdings.judgementDelayed.has(row.marketId)}
+              display={holdings.display.get(row.marketId) ?? NO_HOLDING_DISPLAY}
             />
           ))}
         </Stack>
@@ -528,6 +534,12 @@ function OrderHistoryEmpty({ pendingOnly }: { pendingOnly: boolean }) {
   );
 }
 
+/** A holding's status displays, from its market's live row (`useHoldings`). */
+type HoldingDisplay = Pick<Market, 'judgementDelayed' | 'disputeUnderReview'>;
+
+/** A market with no live row yet: its holding reads its status alone. */
+const NO_HOLDING_DISPLAY: HoldingDisplay = { judgementDelayed: false, disputeUnderReview: false };
+
 /**
  * 보유 계약 한 줄. Every figure is the shared arithmetic, and the market's own status rides
  * along whenever it is no longer `open`: a holding in a 마감 or 결과 확인 중 market cannot be
@@ -535,11 +547,11 @@ function OrderHistoryEmpty({ pendingOnly }: { pendingOnly: boolean }) {
  */
 function OpenPositionRow({
   position,
-  judgementDelayed,
+  display,
 }: {
   position: Position;
-  /** The live market row's '판정 지연' (`useHoldings`), for the status badge. */
-  judgementDelayed: boolean;
+  /** The live market row's '판정 지연' and '이의 검토 중' (`useHoldings`), for the status badge. */
+  display: HoldingDisplay;
 }) {
   const yes = position.outcome === 'YES';
   const average = averageCostCoin(position);
@@ -562,7 +574,7 @@ function OpenPositionRow({
         </Badge>
         {position.marketStatus !== 'open' && (
           <Badge colorPalette={MARKET_STATUS_PALETTE[position.marketStatus]} variant="subtle">
-            {marketStatusLabel({ status: position.marketStatus, judgementDelayed })}
+            {marketStatusLabel({ status: position.marketStatus, ...display })}
           </Badge>
         )}
       </HStack>

@@ -6,6 +6,8 @@ import {
   PUBLIC_MARKET_STATUSES,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
+  isDisputeOpen,
+  isDisputeUnderReview,
   isJudgementDelayed,
   serializeCoinAmount,
   tagKey,
@@ -14,6 +16,7 @@ import {
   type Category,
   type Fill,
   type Market,
+  type MarketDisplayState,
   type MarketListQuery,
   type MarketRuleItems,
   type MarketRuleVersion,
@@ -79,17 +82,41 @@ export const marketWithCategory = {
 };
 
 /**
- * A market's card (PLAN 7.1). `judgementDelayed` is '판정 지연' (#22, ADR-0098; ADR-0093 decision 1
- * #173 item 11): a CLOSED market whose scheduled judgement has passed, by `nowMs` — the API host's
- * clock when the answer is built, so no client clock decides it and the server-rendered page and
- * the browser read the same answer. A display, not a status: nothing is written at that instant, so
- * unlike the instants a write orders its rows by it needs no database clock (clock.ts).
+ * What a market's status displays read of its row (`MarketDisplayState`, market-times.ts): the
+ * status, the scheduled judgement, the current judgement's 이의 기한 and the 판정 이의 holding it
+ * (`dispute_hold_count`, the mirror the @buddha/db dispute helpers keep under the market lock;
+ * #175, ADR-0104) — every list's row carries them, so no list joins the disputes.
+ */
+export function displayStateOf(
+  row: Pick<MarketRow, 'status' | 'scheduledJudgementAt' | 'disputeDeadline' | 'disputeHoldCount'>,
+): MarketDisplayState {
+  return {
+    status: row.status,
+    scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
+    disputeDeadline: row.disputeDeadline?.toISOString() ?? null,
+    disputeHoldCount: row.disputeHoldCount,
+  };
+}
+
+/**
+ * A market's card (PLAN 7.1). Its displays are read by `nowMs` — the API host's clock when the
+ * answer is built, so no client clock decides them and the server-rendered page and the browser
+ * read the same answer. Displays, not statuses: nothing is written at those instants, so unlike the
+ * instants a write orders its rows by they need no database clock (clock.ts):
+ * - `judgementDelayed` '판정 지연' (#22, ADR-0098; ADR-0093 decision 1 #173 items 11·12): a CLOSED
+ *   market whose scheduled judgement has passed, or a PROVISIONAL one a 판정 이의 still holds once
+ *   its 이의 기한 has come (#175, ADR-0104, owner answer 2026-11-03);
+ * - `disputeUnderReview` '이의 검토 중' (#173 item 12): PROVISIONAL with a 판정 이의 holding it;
+ * - `disputeOpen`: PROVISIONAL before its 이의 기한 — 판정 이의 are taken (#173 items 5·6);
+ * - `judgementVersion` and `disputeDeadline`, the current judgement's, public since #175 (#173
+ *   items 6·13: the deadline and the submission link are shown to anonymous visitors).
  */
 export function toMarketSummary(
   row: MarketRow,
   category: CategoryRef,
   nowMs: number = Date.now(),
 ): MarketSummary {
+  const display = displayStateOf(row);
   return {
     id: row.id,
     slug: row.slug,
@@ -97,13 +124,8 @@ export function toMarketSummary(
     category,
     imageUrl: row.imageUrl,
     status: row.status,
-    judgementDelayed: isJudgementDelayed(
-      {
-        status: row.status,
-        scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
-      },
-      nowMs,
-    ),
+    judgementDelayed: isJudgementDelayed(display, nowMs),
+    disputeUnderReview: isDisputeUnderReview(display),
     lastPrice: row.lastPrice,
     volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
@@ -111,6 +133,9 @@ export function toMarketSummary(
     closeAt: row.closeAt.toISOString(),
     openAt: row.openAt?.toISOString() ?? null,
     resolvedResult: row.resolvedResult,
+    judgementVersion: row.judgementVersion,
+    disputeDeadline: display.disputeDeadline,
+    disputeOpen: isDisputeOpen(display, nowMs),
     // bigint column read in number mode; on the wire it is a decimal string like every other
     // serial key an event is ordered by (`supersedes`, realtime.ts).
     statusEventId: row.statusEventId === null ? null : String(row.statusEventId),

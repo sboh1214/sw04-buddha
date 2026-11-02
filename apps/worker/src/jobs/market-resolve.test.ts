@@ -5,12 +5,22 @@
  * confirmation judges and writes is `resolveProvisionalMarket`'s, tested in packages/db
  * (market-judgement.test.ts); this covers the worker's transaction around it, the publish, the
  * finalize it registers (a recording stub here; market-jobs.test.ts the queue), and the scan's
- * selection and order. Skips when either is unset, exactly like ledger-audit.test.ts.
+ * selection and order — with #175's hold (ADR-0104): a market a 판정 이의 holds is skipped as `held`
+ * and left out of the scan, and the job registered after the last dismissal confirms it. Skips when
+ * either is unset, exactly like ledger-audit.test.ts.
  */
 import { randomUUID } from 'node:crypto';
-import { schema } from '@buddha/db';
+import {
+  clockTimestamp,
+  decideMarketDispute,
+  lockAdminRoles,
+  lockMarket,
+  retractMarketDispute,
+  schema,
+} from '@buddha/db';
 import {
   connectTestDb,
+  createDispute,
   createMarket,
   createPosition,
   createProvisionalMarket,
@@ -317,6 +327,166 @@ describe.skipIf(!hasTestInfra)('market.resolve (integration)', () => {
     } finally {
       await Promise.all(subscribers.map((s) => s.quit()));
     }
+  });
+
+  /** A 판정 이의 on `market`, submitted a millisecond after its publication (inside the window). */
+  async function disputeOn(
+    market: { id: string },
+    publishedAt: Date,
+    status: 'pending' | 'accepted' = 'pending',
+  ) {
+    return (
+      await createDispute(t.db, {
+        marketId: market.id,
+        status,
+        submittedAt: new Date(publishedAt.getTime() + 1),
+      })
+    ).dispute;
+  }
+
+  /** As the API dismisses one (#175): the market lock, its row, the admin lock, the dispute. */
+  async function dismiss(disputeId: string, marketId: string) {
+    const adminId = (await createUser(t.db, { role: 'admin' })).user.id;
+    return t.db.transaction(async (tx) => {
+      await lockMarket(tx, marketId);
+      const [market] = await tx
+        .select()
+        .from(schema.markets)
+        .where(eq(schema.markets.id, marketId))
+        .for('update');
+      await lockAdminRoles(tx, 'shared');
+      const [dispute] = await tx
+        .select()
+        .from(schema.marketDisputes)
+        .where(eq(schema.marketDisputes.id, disputeId))
+        .for('update');
+      const now = await clockTimestamp(tx);
+      return decideMarketDispute(tx, {
+        market: market!,
+        dispute: dispute!,
+        adminId,
+        decision: 'dismiss',
+        reason: '바꿀 것이 없다.',
+        now,
+      });
+    });
+  }
+
+  it.each(['pending', 'accepted'] as const)(
+    'skips a due market a %s 판정 이의 holds as held, writing and publishing nothing (#175)',
+    async (status) => {
+      const { market: judged, judgement } = await provisional();
+      await disputeOn(judged, judgement.publishedAt, status);
+      const market = await marketRow(judged.id);
+      expect(market.disputeHoldCount).toBe(1);
+      const { received, quit } = await subscribeTo(market.id);
+      try {
+        await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toEqual({
+          outcome: 'skipped',
+          marketId: market.id,
+          reason: 'held',
+        });
+        expect(await marketRow(market.id)).toEqual(market);
+        expect((await eventsOf(market.id)).map((event) => event.type)).toEqual(['provisional']);
+        expect(await stepsOf(market.id)).toEqual([]);
+        await sleep(100);
+        expect(received).toEqual([]);
+        expect(enqueued).toEqual([]);
+      } finally {
+        await quit();
+      }
+    },
+  );
+
+  it('confirms by the job registered after the last holding dispute’s dismissal past the deadline, as at the deadline (#173 item 7)', async () => {
+    const { market, judgement } = await provisional(2 * MINUTE_MS, 'NO');
+    const first = await disputeOn(market, judgement.publishedAt);
+    const second = await disputeOn(market, judgement.publishedAt);
+    expect((await resolveMarket(t.db, market.id, publish, enqueueFinalize)).outcome).toBe(
+      'skipped',
+    );
+    // One dismissed: the other still holds it.
+    expect(await dismiss(first.id, market.id)).toMatchObject({ decided: true, held: true });
+    await expect(resolveMarket(t.db, market.id, publish, enqueueFinalize)).resolves.toMatchObject({
+      outcome: 'skipped',
+      reason: 'held',
+    });
+    // The last one dismissed: the API registers `market.resolve` with no delay, and its run
+    // confirms the market as the deadline's would — the worker, no actor, `source: 'deadline'`.
+    expect(await dismiss(second.id, market.id)).toMatchObject({
+      decided: true,
+      held: false,
+      market: { disputeHoldCount: 0 },
+    });
+    const { received, quit } = await subscribeTo(market.id);
+    try {
+      const result = await resolveMarket(t.db, market.id, publish, enqueueFinalize);
+      expect(result).toMatchObject({ outcome: 'resolved', resolvedResult: 'NO' });
+      if (result.outcome !== 'resolved') return;
+      expect((await eventsOf(market.id)).at(-1)).toMatchObject({
+        id: result.statusEventId,
+        type: 'resolved',
+        actorId: null,
+        payload: { version: 1, result: 'NO', source: 'deadline' },
+      });
+      expect(await marketRow(market.id)).toMatchObject({
+        status: 'resolved',
+        disputeHoldCount: 0,
+        resolvedAt: result.resolvedAt,
+      });
+      await waitForMessages(received, 1, 'market:status');
+      expect(enqueued).toEqual([{ marketId: market.id, resolvedAt: result.resolvedAt }]);
+    } finally {
+      await quit();
+    }
+  });
+
+  it('scan leaves a held market out — it takes no slot and is not examined — and confirms it once its hold cleared (#175)', async () => {
+    const free = await provisional(3 * MINUTE_MS);
+    const held = await provisional(4 * MINUTE_MS);
+    const accepted = await provisional(5 * MINUTE_MS);
+    const retracted = await provisional(6 * MINUTE_MS);
+    const pending = await disputeOn(held.market, held.judgement.publishedAt);
+    await disputeOn(accepted.market, accepted.judgement.publishedAt, 'accepted');
+    // A dispute retracted inside the window holds nothing.
+    const gone = await disputeOn(retracted.market, retracted.judgement.publishedAt);
+    await t.db.transaction(async (tx) => {
+      await lockMarket(tx, retracted.market.id);
+      const [market] = await tx
+        .select()
+        .from(schema.markets)
+        .where(eq(schema.markets.id, retracted.market.id))
+        .for('update');
+      const result = await retractMarketDispute(tx, {
+        dispute: gone,
+        market: market!,
+        now: new Date(retracted.judgement.publishedAt.getTime() + 2),
+      });
+      expect(result.retracted).toBe(true);
+    });
+
+    // `skipped: 0`: the held markets were not examined at all.
+    await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toEqual({
+      resolved: 2,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect(enqueued.map((entry) => entry.marketId)).toEqual([retracted.market.id, free.market.id]);
+    expect((await marketRow(held.market.id)).status).toBe('provisional');
+    expect((await marketRow(accepted.market.id)).status).toBe('provisional');
+
+    // The pending one dismissed and its job lost: the next minute's scan confirms the market; the
+    // accepted one waits for its correction (#176).
+    await dismiss(pending.id, held.market.id);
+    await expect(resolveDueMarkets(t.db, publish, enqueueFinalize)).resolves.toEqual({
+      resolved: 1,
+      skipped: 0,
+      failed: 0,
+      failures: [],
+    });
+    expect((await marketRow(held.market.id)).status).toBe('resolved');
+    expect((await marketRow(accepted.market.id)).status).toBe('provisional');
   });
 
   it('leaves the finalize what it needs: the steps it wrote take the market to settled', async () => {

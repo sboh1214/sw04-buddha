@@ -1,5 +1,6 @@
 'use client';
 
+import { type AdminDisputeListStatus } from '@buddha/shared';
 import {
   type QueryClient,
   hashKey,
@@ -8,6 +9,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query';
 import {
+  type AdminDisputeQueueItem,
   type AdminMarket,
   type AdminMarketJudgementQueueItem,
   type AdminMarketPauseDecisionItem,
@@ -74,6 +76,17 @@ export const ADMIN_MARKET_PAUSE_DECISIONS_KEY = ['admin', 'market-pause-decision
  * market.
  */
 export const ADMIN_MARKET_JUDGEMENTS_KEY = ['admin', 'market-judgements'] as const;
+
+/**
+ * 이의 접수 (#175, ADR-0104): `GET /admin/market-disputes?status=`, the members' 판정 이의 in two
+ * halves — 검토 대기 (`pending`) and 처리됨 (`decided`) — under the private `['admin']` root and a
+ * segment of its own, each half under it so one invalidation refreshes both: every admin write to a
+ * market asks them again (`invalidateMarket`) — a 기각 or a 수용 moves a row from one half to the
+ * other, and a write changes what a row shows of its market.
+ */
+export const ADMIN_MARKET_DISPUTES_KEY = ['admin', 'market-disputes'] as const;
+export const adminMarketDisputesKey = (status: AdminDisputeListStatus) =>
+  [...ADMIN_MARKET_DISPUTES_KEY, status] as const;
 
 /**
  * 관련 시장 (#65, ADR-0068) on the admin detail: one market's links, every status, under the
@@ -144,7 +157,8 @@ export function adminMarketQueryOptions(routeId: string) {
  * close and every few seconds after it until the worker closes it (`tradingMarketPollDelay`, #114,
  * ADR-0102: a next-path request then turns moot), and while it is 잠정 결과 at its dispute deadline
  * and every few seconds after it until the worker confirms it (`provisionalMarketPollDelay`, #152,
- * ADR-0103) — all in `adminMarketPollInterval`.
+ * ADR-0103) — no longer once a 판정 이의 holds it past the deadline (#175, ADR-0104: nothing confirms
+ * it then; the last 기각's answer starts the poll again) — all in `adminMarketPollInterval`.
  */
 export function useAdminMarket(routeId: string) {
   return useQuery({
@@ -335,6 +349,43 @@ export function useAdminMarketJudgements() {
   return useInfiniteQuery(adminMarketJudgementsQueryOptions());
 }
 
+/** One page of an 이의 접수 half. */
+export interface AdminMarketDisputePage {
+  items: AdminDisputeQueueItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * One half of 이의 접수 (#175): `pending` the oldest submission first, `decided` the latest decision
+ * or 철회 first, 20 per page with 더 보기 (the API's default page) — the cursor paging of the other
+ * queues, per half.
+ */
+export function adminMarketDisputesQueryOptions(status: AdminDisputeListStatus) {
+  return {
+    queryKey: adminMarketDisputesKey(status),
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminMarketDisputePage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/market-disputes', {
+          params: {
+            query: pageParam === undefined ? { status } : { status, cursor: pageParam },
+          },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminMarketDisputePage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminMarketDisputes(status: AdminDisputeListStatus) {
+  return useInfiniteQuery(adminMarketDisputesQueryOptions(status));
+}
+
 /**
  * After a link or an unlink: the answer is the market's links as the write committed them, so it
  * goes on screen now — a refetch that fails cannot leave the old list under a toast that says
@@ -376,7 +427,8 @@ export function useMarketFills(id: string, enabled: boolean) {
  * a submission, an approval, a 반려 and a 되돌리기 each change it), the 규칙 보충 대기 queue (#80: a
  * request, an approval, a 반려 and a 철회 each change it, and a market's title or status shows in
  * its rows), the 일시 중단 결정 대기 queue (#114, alike), the 판정 승인 대기 queue (#152: a
- * registration, an approval, a 반려 and a 철회 each change it), every other market's 관련 시장
+ * registration, an approval, a 반려 and a 철회 each change it), both halves of 이의 접수 (#175: a 기각
+ * and a 수용 move a dispute from one to the other), every other market's 관련 시장
  * list, and every public 관련 시장 list. Each row of an admin list badges the market at
  * its other end with its status and title, so a market linked to this one would otherwise go on
  * showing it as it was — a market just approved still '검수 중' under the hint that says one in
@@ -410,6 +462,7 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_SUPPLEMENTS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_PAUSE_DECISIONS_KEY }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_JUDGEMENTS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_DISPUTES_KEY }),
     queryClient.invalidateQueries({
       queryKey: ADMIN_RELATED_MARKETS_KEY,
       predicate: (query) => query.queryHash !== ownLinks,

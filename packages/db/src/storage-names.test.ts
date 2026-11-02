@@ -7,6 +7,7 @@ import {
   IMAGE_CONTENT_TYPES,
   LEDGER_REF_TYPES,
   LINK_FLAG_REASONS,
+  MARKET_DISPUTE_STATUSES,
   MARKET_EVENT_TYPES,
   MARKET_JUDGEMENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
@@ -123,6 +124,9 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'market_pauses.reason': MARKET_PAUSE_REASONS,
   'market_pauses.review_result': MARKET_PAUSE_REVIEW_RESULTS,
   'market_pauses.end_kind': MARKET_PAUSE_END_KINDS,
+  // #175: a 판정 이의's status, held by a CHECK so #176 adds its own ('retracted', never the
+  // cash-out's `withdraw*`; 'dismissed', never 'review' or 'appeal').
+  'market_disputes.status': MARKET_DISPUTE_STATUSES,
   // #184's purge records: the kinds a run counts (no personal content), and whether a kind was
   // done or failed (owner decision 2026-10-24 14).
   'retention_purges.kind': RETENTION_PURGE_KINDS,
@@ -492,6 +496,65 @@ describe('excluded features in stored data (#113)', () => {
         { where: 'release_settings.key value', name: 'market.dispute_window' },
       ]),
     );
+  });
+
+  it('names the disputes, their CHECKs and the dispute’s stored values, each read above (#175)', () => {
+    // ADR-0104, migration 0056: the table of the 판정 이의, the hold mirror on the market, the
+    // CHECKs and indexes under the names the schema test spells, the dispute's admin action types
+    // and the purge kind, which the test above reads for an excluded feature ('dispute', 'retract',
+    // 'dismiss', 'hold', 'purge' name none). Not `disputes` nor `dispute_status`: those M5 names
+    // stay dropped (schema.test.ts).
+    const disputes = TABLES.find((table) => table.name === 'market_disputes');
+    expect(disputes?.columns.map((column) => column.name)).toEqual([
+      'id',
+      'marketId',
+      'judgementVersion',
+      'userId',
+      'links',
+      'reason',
+      'status',
+      'submittedAt',
+      'decidedBy',
+      'decidedAt',
+      'decisionReason',
+      'retractedAt',
+      'purgedAt',
+    ]);
+    expect(TABLES.map((table) => table.name)).not.toContain('disputes');
+    expect(ENUMS.map((pgEnum) => pgEnum.enumName)).not.toContain('dispute_status');
+    expect(TABLES.find((table) => table.name === 'markets')?.columns.map((c) => c.name)).toContain(
+      'disputeHoldCount',
+    );
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_disputes' },
+        ...[
+          'market_disputes_judgement_fk',
+          'market_disputes_market_id_judgement_version_user_id_unique',
+          'market_disputes_status_check',
+          'market_disputes_links_check',
+          'market_disputes_reason_check',
+          'market_disputes_decision_check',
+          'market_disputes_retracted_check',
+          'market_disputes_purged_check',
+          'market_disputes_holding_idx',
+          'market_disputes_pending_submitted_at_idx',
+          'market_disputes_ended_at_idx',
+          'market_disputes_user_id_submitted_at_idx',
+        ].map((name) => ({ where: 'market_disputes constraint', name })),
+        ...['markets_dispute_hold_count_check', 'markets_dispute_hold_status_check'].map(
+          (name) => ({ where: 'markets constraint', name }),
+        ),
+        ...MARKET_DISPUTE_STATUSES.map((name) => ({ where: 'market_disputes.status value', name })),
+        ...['market_dispute_dismiss', 'market_dispute_accept'].map((name) => ({
+          where: 'admin_actions.type value',
+          name,
+        })),
+        { where: 'retention_purges.kind value', name: 'market_disputes' },
+      ]),
+    );
+    // The personal table it is (a submitter's), holding no personal probability (the test below).
+    expect(personalTables().map((table) => table.name)).toContain('market_disputes');
   });
 
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {

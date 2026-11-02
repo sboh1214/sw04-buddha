@@ -34,7 +34,9 @@ export const JOB_NAMES = {
    * with the settlement steps, then `market.finalize` at once. The delayed job the API registers
    * when an approval publishes the provisional result, and the worker's per-minute scan
    * (`market-resolve-scan`) as the backstop — which also confirms a market whose hold (#175's
-   * disputes, #176's corrections) cleared after its deadline.
+   * 판정 이의, #176's corrections) cleared after its deadline. A held market's run completes
+   * `held`; the dismissal that leaves nothing holding past the deadline enqueues it again under
+   * the same id, delay 0 (#175, ADR-0104), so the worker stays the only confirmer.
    */
   marketResolve: 'market.resolve',
   marketFinalize: 'market.finalize',

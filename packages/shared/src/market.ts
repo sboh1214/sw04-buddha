@@ -15,6 +15,7 @@ import {
 } from './constants.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { marketTitleSchema, ruleItemFields, timeItemFields } from './market-fields.js';
+import { adminMarketDisputesSchema } from './market-dispute.js';
 import { adminMarketJudgementStateSchema, judgementVersionSchema } from './market-judgement.js';
 import { openItemSchema } from './market-open-items.js';
 import { adminMarketPauseStateSchema } from './market-pause.js';
@@ -88,13 +89,21 @@ const marketSummaryFields = {
   imageUrl: z.string().nullable(),
   status: marketStatusSchema,
   /**
-   * Whether the market reads '판정 지연' in place of its status label '거래 마감' (ADR-0093 decision
-   * 1 #173 items 11–12, #22, ADR-0098): CLOSED with its scheduled judgement passed
-   * (`isJudgementDelayed`), on the server's clock at the read — so the card needs no time of its
-   * own. A display, not a status: nothing changes at that time, and no list filters by it (ADR-0095
-   * 8-6).
+   * Whether the market reads '판정 지연' in place of its status label (ADR-0093 decision 1 #173
+   * items 11–12, #22, ADR-0098, ADR-0104; `isJudgementDelayed`): CLOSED with its scheduled
+   * judgement passed — in place of '거래 마감' — or PROVISIONAL with a 판정 이의 still holding it
+   * once its 이의 기한 has come (#175, owner answer 2026-11-03) — in place of '잠정 결과' and '이의
+   * 검토 중'. On the server's clock at the read, so the card needs no time of its own. A display,
+   * not a status: nothing changes at that time, and no list filters by it (ADR-0095 8-6).
    */
   judgementDelayed: z.boolean(),
+  /**
+   * Whether the market reads '이의 검토 중' in place of '잠정 결과' (#173 item 12, #175, ADR-0104;
+   * `isDisputeUnderReview`): PROVISIONAL with a 판정 이의 of its current version pending or accepted
+   * (`markets.dispute_hold_count`). `judgementDelayed`'s '판정 지연' comes first once the deadline
+   * has passed. Never how many, nor whose (#24 publishes the count, #173 item 13).
+   */
+  disputeUnderReview: z.boolean(),
   /**
    * YES price 1..99 of the last fill (PLAN 5.3); null until the market's first fill, which a
    * client shows as '체결 없음' (N02 §5). #121 and #64 define the market's price fields.
@@ -116,6 +125,31 @@ const marketSummaryFields = {
    * (ADR-0095 8-2) — and kept through its confirmation.
    */
   resolvedResult: marketResultSchema.nullable(),
+  /**
+   * The current judgement's version (#152, ADR-0103; `markets.judgement_version`): 1 from the
+   * first approved judgement, one more per correction (#176) — the one the settlement follows
+   * (#126) and the one a 판정 이의 names (#175: refused as `stale_version` otherwise). Public since
+   * #175 (#173 item 13 makes the versions public). Null until a judgement is approved, and on a
+   * market the interim one-admin judgement resolved before #152 (D4: none was recorded for those).
+   */
+  judgementVersion: judgementVersionSchema.nullable(),
+  /**
+   * 이의 기한 of the current judgement (#152; ADR-0093 decision 1 #173 items 5·6): fixed when the
+   * approval published the provisional result — its instant plus the release setting
+   * `market.dispute_window` read then — and never moved by a later change of the value; kept after
+   * the confirmation. 판정 이의 are taken before it (`disputeOpen`), and the worker confirms the
+   * result once it has passed with none holding (#175). Public, to anonymous visitors too (#173
+   * item 6, ADR-0104). Null until a judgement is approved.
+   */
+  disputeDeadline: z.iso.datetime().nullable(),
+  /**
+   * Whether 판정 이의 are taken now (#175, ADR-0104; `isDisputeOpen`): PROVISIONAL and before
+   * `disputeDeadline`, on the server's clock at the read. The detail shows the submission link
+   * while it holds, and so do the discussion and the write screen (ADR-0093 decision 3 '#175
+   * 토론의 이의 안내'); a screen's timer at the deadline takes them away, as nothing is published
+   * then.
+   */
+  disputeOpen: z.boolean(),
   /**
    * `market_events.id` of the transition that produced the current status, as a decimal string
    * — the ordering key of `market:status` (A-M3-19, Q-M3-8 (3)). Drawn while the writer holds
@@ -160,7 +194,8 @@ export const marketSchema = z
     tags: z.array(z.string()),
     /**
      * When the result was confirmed (→ RESOLVED): the worker's, once the dispute deadline passed
-     * (#152) — not the provisional result's publication. Null before it.
+     * with no 판정 이의 holding it (#152, #175) — not the provisional result's publication. Null
+     * before it.
      */
     resolvedAt: z.iso.datetime().nullable(),
     settledAt: z.iso.datetime().nullable(),
@@ -565,29 +600,22 @@ export const adminMarketSchema = marketSchema
      */
     pause: adminMarketPauseStateSchema,
     /**
-     * The current judgement's version (#152, ADR-0103; `markets.judgement_version`): 1 from the
-     * first approved judgement, one more per correction (#176) — the one the settlement follows
-     * (#126). Null until a judgement is approved, and on a market the interim one-admin judgement
-     * resolved before #152 (D4: no judgement was recorded for those).
-     */
-    judgementVersion: judgementVersionSchema.nullable(),
-    /**
-     * 이의 기한 of the current judgement (#152; ADR-0093 decision 1 #173 item 5): fixed when the
-     * approval published the provisional result — its instant plus the release setting
-     * `market.dispute_window` read then — and never moved by a later change of the value. The
-     * worker confirms the result (PROVISIONAL → RESOLVED) once it has passed with nothing held
-     * (#175, #176). Null until a judgement is approved. Admins only: the public deadline and its
-     * link are #24's and #175's.
-     */
-    disputeDeadline: z.iso.datetime().nullable(),
-    /**
      * 판정 (#152, ADR-0103), in every status: the current judgement, the registration waiting for
      * another admin's approval and every registration with how it ended — one still waiting once
      * the market left CLOSED is shown for its 반려 or 철회 — and whether the dispute window is
-     * undecided. The public `Market` carries none of it (#24 shows the record without the names,
-     * #173 item 13).
+     * undecided. The public `Market` carries none of it but the version and its deadline
+     * (`judgementVersion`, `disputeDeadline`; #24 shows the record without the names, #173 item
+     * 13).
      */
     judgement: adminMarketJudgementStateSchema,
+    /**
+     * 판정 이의 (#175, ADR-0104), in every status: the current judgement version's disputes, the
+     * oldest first, with who submitted and who decided them, and how many hold the confirmation.
+     * The public `Market` carries none of it but `disputeUnderReview` (#24 publishes the count,
+     * the statuses and the reasons without the names; the submitter and the body stay private,
+     * #173 item 13).
+     */
+    disputes: adminMarketDisputesSchema,
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;

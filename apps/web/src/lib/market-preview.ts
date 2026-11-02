@@ -26,7 +26,8 @@ export const PREVIEW_SLUG = 'preview';
  * (#125) — and the status is `open`, the card it is being made into, never the admin's 초안 or 검수
  * 중 on a card meant as the one visitors see. A public market has the card visitors see — a
  * SCHEDULED one its 개장 예정 badge before any fill, one that has traded its price and 참여자, a
- * CLOSED one whose scheduled judgement has passed its 판정 지연 (`judgementDelayed`, #22) — and the
+ * CLOSED one whose scheduled judgement has passed its 판정 지연 (`judgementDelayed`, #22), a held 잠정
+ * 결과 its 이의 검토 중 (`disputeUnderReview`, #175) with its judgement and 이의 기한 — and the
  * 수정 card must preview that card, not one with 체결 없음 and '참여자 0'. Of that history the card
  * draws the price, the status, the countdown and the 참여자; `volumeCoin` and `tradeCount` come along
  * only because a `MarketSummary` carries them.
@@ -54,23 +55,31 @@ export function toPreviewMarket(
           lastPrice: base.lastPrice,
           status: base.status,
           judgementDelayed: base.judgementDelayed,
+          disputeUnderReview: base.disputeUnderReview,
           volumeCoin: base.volumeCoin,
           tradeCount: base.tradeCount,
           traderCount: base.traderCount,
           openAt: base.openAt,
           createdAt: base.createdAt,
           resolvedResult: base.resolvedResult,
+          judgementVersion: base.judgementVersion,
+          disputeDeadline: base.disputeDeadline,
+          disputeOpen: base.disputeOpen,
         }
       : {
           lastPrice: null,
           status: 'open' as const,
           judgementDelayed: false,
+          disputeUnderReview: false,
           volumeCoin: '0',
           tradeCount: 0,
           traderCount: 0,
           openAt: null,
           createdAt: '',
           resolvedResult: null,
+          judgementVersion: null,
+          disputeDeadline: null,
+          disputeOpen: false,
         };
   return {
     id: PREVIEW_ID,

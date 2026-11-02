@@ -38,6 +38,12 @@ describe('retention (#184)', () => {
     expect(RETENTION_PURGE_KIND_PERIODS.hidden_comments).toBe('moderation_records');
     // #187's repeated-link review list follows the 신고·제재 period (owner decision 2026-10-24 13).
     expect(RETENTION_PURGE_KIND_PERIODS.link_flags).toBe('moderation_records');
+    // So do a withdrawn account's 판정 이의 (#175, ADR-0087 (6)), emptied in place after the
+    // review list and before the kinds of their own periods.
+    expect(RETENTION_PURGE_KIND_PERIODS.market_disputes).toBe('moderation_records');
+    expect(RETENTION_PURGE_KINDS.indexOf('market_disputes')).toBe(
+      RETENTION_PURGE_KINDS.indexOf('link_flags') + 1,
+    );
     // A withdrawn account's market proposals (#77): their own period, the last kind of a run.
     expect(RETENTION_PURGE_KIND_PERIODS.market_proposals).toBe('market_proposals');
     expect(RETENTION_PURGE_KINDS.at(-1)).toBe('market_proposals');

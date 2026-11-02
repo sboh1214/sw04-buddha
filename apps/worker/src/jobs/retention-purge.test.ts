@@ -12,7 +12,8 @@
  * (3 — a post and a comment each, under every guard of their steps), what a pending account
  * restriction request cites (12 — each kind of request and both columns a restriction cites) and a
  * failed kind's record (14) — and #187's repeated-link review list and the market proposals of a
- * withdrawn account (#77, ADR-0089), their own period, once processed (13). At the restack onto the
+ * withdrawn account (#77, ADR-0089), their own period, once processed (13); a withdrawn account's
+ * 판정 이의 (#175, ADR-0104), emptied in place once it holds nothing. At the restack onto the
  * full chain (ADR-0087 결과 5): an object the store refuses stays queued for #46's clean-up, #48's
  * comment counts stay exact, #138's notice history is never touched, and another write's foreign
  * key check naming an item (a link flag) neither waits for the run nor is waited for. After PR
@@ -31,6 +32,7 @@ import {
   createComment,
   createCommentLike,
   createConsents,
+  createDispute,
   createLinkFlag,
   createLinkUse,
   createMarket,
@@ -286,6 +288,7 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     expect(byKind.phone_verification_records).toMatchObject({ status: 'proposal', deleted: 0 });
     expect(byKind.reports).toMatchObject({ status: 'test', periodDays: null, deleted: 0 });
     expect(byKind.link_flags).toMatchObject({ status: 'test', periodDays: null, deleted: 0 });
+    expect(byKind.market_disputes).toMatchObject({ status: 'test', periodDays: null, deleted: 0 });
     expect(byKind.deleted_posts).toMatchObject({ status: 'undecided', periodDays: null });
     expect(byKind.removed_profile_items).toMatchObject({ status: 'undecided', periodDays: null });
     expect(byKind.market_proposals).toMatchObject({ status: 'proposal', periodDays: null });
@@ -811,6 +814,110 @@ describe.skipIf(!hasTestDb())('retention.purge (integration)', () => {
     await run(after(closedAt, 3_650));
     expect(await left()).toEqual([waiting.id, livesOwn.id].sort());
     const recorded = (await purgeRecords()).filter((row) => row.kind === 'market_proposals');
+    expect(recorded.map((row) => row.periodDays)).toEqual(recorded.map(() => 30));
+  });
+
+  it('empties a withdrawn account’s 판정 이의 in place once it holds nothing, from the later of the withdrawal and its end; pending, still-accepted and a live account’s stay (#175, ADR-0087 (6))', async () => {
+    const member = (await createUser(t.db)).user.id;
+    const live = (await createUser(t.db)).user.id;
+    const long = before(new Date(), 40);
+    /** One dispute of `member`'s (one per version: each on its own market). */
+    const dispute = async (input: Parameters<typeof createDispute>[1] = {}) =>
+      (
+        await createDispute(t.db, {
+          userId: member,
+          submittedAt: before(long, 1),
+          ...input,
+        })
+      ).dispute;
+    // Ended well before the withdrawal — dismissed, retracted: counted from the withdrawal.
+    const dismissed = await dispute({ status: 'dismissed', decidedAt: long });
+    const retracted = await dispute({ status: 'retracted', retractedAt: long });
+    // Accepted, and its version since replaced by a correction (#176): it holds nothing.
+    const superseded = await dispute({ status: 'accepted', decidedAt: long });
+    await t.db
+      .update(schema.markets)
+      .set({ judgementVersion: 2, disputeHoldCount: 0 })
+      .where(eq(schema.markets.id, superseded.marketId));
+    // Still being processed when the account closes: one dismissed after it, one pending the
+    // operators never decide, one accepted waiting for its correction (it holds its market).
+    const decidedLater = await dispute();
+    const pending = await dispute();
+    const holding = await dispute({ status: 'accepted', decidedAt: long });
+    // A live account's, ended long ago: its own record, never emptied.
+    const livesOwn = (
+      await createDispute(t.db, {
+        userId: live,
+        status: 'dismissed',
+        submittedAt: before(long, 1),
+        decidedAt: long,
+      })
+    ).dispute;
+    const closedAt = await closeAccount(t.db, member);
+    const decidedAt = after(closedAt, 10);
+    await t.db
+      .update(schema.marketDisputes)
+      .set({
+        status: 'dismissed',
+        decidedBy: admin,
+        decidedAt,
+        decisionReason: '바꿀 것이 없다.',
+      })
+      .where(eq(schema.marketDisputes.id, decidedLater.id));
+    await setPeriod(MODERATION_RECORDS_RETENTION_SETTING, 30);
+    const rowOf = async (id: string) =>
+      (await t.db.select().from(schema.marketDisputes).where(eq(schema.marketDisputes.id, id)))[0]!;
+    const emptied = async () =>
+      (
+        await t.db
+          .select({ id: schema.marketDisputes.id })
+          .from(schema.marketDisputes)
+          .where(sql`${schema.marketDisputes.purgedAt} IS NOT NULL`)
+      )
+        .map((row) => row.id)
+        .sort();
+
+    // 40 days since they ended, a millisecond short of 30 since the withdrawal: kept.
+    const early = after(closedAt, 30, -1);
+    await run(early);
+    expect(await emptied()).toEqual([]);
+    expect(await countsAt(early)).toMatchObject({ market_disputes: 0 });
+
+    // 30 days since the withdrawal: the three that ended before it, emptied in place — the links
+    // and the reason gone, the row and its status, decision and times as they were.
+    const first = after(closedAt, 30);
+    await run(first);
+    expect(await emptied()).toEqual([dismissed.id, retracted.id, superseded.id].sort());
+    for (const made of [dismissed, retracted, superseded]) {
+      expect(await rowOf(made.id)).toEqual({ ...made, links: [], reason: '', purgedAt: first });
+    }
+    expect(await countsAt(first)).toMatchObject({ market_disputes: 3 });
+    // Never twice: the next run finds them emptied.
+    const again = after(first, 0, 1);
+    await run(again);
+    expect(await countsAt(again)).toMatchObject({ market_disputes: 0 });
+
+    // 30 days since the later decision: from its own end.
+    await run(after(decidedAt, 30, -1));
+    expect(await emptied()).not.toContain(decidedLater.id);
+    const decisionDue = after(decidedAt, 30);
+    await run(decisionDue);
+    expect(await countsAt(decisionDue)).toMatchObject({ market_disputes: 1 });
+    expect(await rowOf(decidedLater.id)).toMatchObject({
+      status: 'dismissed',
+      links: [],
+      reason: '',
+      purgedAt: decisionDue,
+    });
+
+    // The pending one (still reviewed, decision 4 #140), the accepted one still holding its market
+    // and the live account's stay however long, untouched.
+    await run(after(closedAt, 3_650));
+    expect(await emptied()).toEqual(
+      [dismissed.id, retracted.id, superseded.id, decidedLater.id].sort(),
+    );
+    for (const kept of [pending, holding, livesOwn]) expect(await rowOf(kept.id)).toEqual(kept);
+    const recorded = (await purgeRecords()).filter((row) => row.kind === 'market_disputes');
     expect(recorded.map((row) => row.periodDays)).toEqual(recorded.map(() => 30));
   });
 

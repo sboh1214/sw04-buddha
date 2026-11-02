@@ -45,7 +45,8 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
     // item 1, ADR-0103); a rejected one leaves the market CLOSED to be judged again.
     closed: ['provisional'],
     // #152: confirmed by the worker (actor NULL) once the dispute deadline has passed with nothing
-    // held — #175's disputes and #176's corrections add the holds (#173 item 1).
+    // held — no 판정 이의 pending or accepted (#175), and from #176 no correction waiting (#173
+    // item 1).
     provisional: ['resolved'],
     // #126: the payout starts at once (item 1).
     resolved: ['settling'],
@@ -56,16 +57,16 @@ export const MARKET_LIFECYCLE_TRANSITIONS: Readonly<Record<MarketStatus, readonl
   };
 
 /**
- * Edges that keep today's admin actions working on the new statuses until the issue that
- * replaces each one merges (ADR-0047 result 3). Each is deleted by that issue's PR, which also
- * removes the action that takes it: #21 deleted ADR-0027's direct open from a draft (draft →
- * open, ADR-0093 result 2; ADR-0100), so a market opens only from SCHEDULED or, by #114's approved
- * resume, from PAUSED. #114 deleted the one-admin close (ADR-0102), which took the lasting open →
- * closed edge and so was never listed here: an early end is a pause and an approved early close.
- * #152 deleted ADR-0046's immediate judgement by one admin (closed → resolved, ADR-0103), which
- * skipped PROVISIONAL and the dispute window: a judgement is registered, another admin approves it
- * (CLOSED → PROVISIONAL) and the worker confirms it at its deadline (PROVISIONAL → RESOLVED). None
- * is left; the list stays for the next interim edge, if one is ever needed.
+ * Edges that keep today's admin actions working on the new statuses until the issue that replaces
+ * each one merges (ADR-0047 result 3). Each is deleted by that issue's PR, which also removes the
+ * action that takes it: #21 deleted ADR-0027's direct open from a draft (draft → open, ADR-0093
+ * result 2; ADR-0100), so a market opens only from SCHEDULED or, by #114's approved resume, from
+ * PAUSED. #114 deleted the one-admin close (ADR-0102), which took the lasting open → closed edge
+ * and so was never listed here: an early end is a pause and an approved early close. #152 deleted
+ * ADR-0046's immediate judgement by one admin (closed → resolved, ADR-0103), which skipped
+ * PROVISIONAL and the dispute window: a judgement is registered, another admin approves it (CLOSED
+ * → PROVISIONAL) and the worker confirms it past its deadline, once no 판정 이의 holds it (PROVISIONAL
+ * → RESOLVED, #175). None is left; the list stays for the next interim edge, if one is ever needed.
  */
 export const INTERIM_MARKET_TRANSITIONS: readonly {
   from: MarketStatus;

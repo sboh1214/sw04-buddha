@@ -488,6 +488,9 @@ test.describe('근거 글', () => {
     await pickMarket(page, 'post-write-market-picker', market);
     await expect(page).toHaveURL(`/community/write?market=${market.id}`);
     await expect(page.getByTestId('post-write-market-title')).toHaveText(market.title);
+    // No line about 판정 이의 under it: a 잠정 결과's alone, while its 이의 기한 is ahead (decision 3
+    // '#175 토론의 이의 안내', dispute.spec.ts).
+    await expect(page.getByTestId('post-write-dispute-note')).toHaveCount(0);
     const postId = await postThroughApi(page.request, market.id, `마감 뒤 근거 ${tag}`, tag);
     // An admin's post, without a title: '운영자' on it (#45-9).
     const adminPostId = await postThroughApi(admin, market.id, null, `${tag} 운영`);

@@ -787,8 +787,9 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
     });
 
     // The public detail: the status and the provisional result (labels and notice are the web's),
-    // nothing of the judgement — the record, the deadline and the accounts are #24's and #175's,
-    // the accounts nobody's (#173 item 13).
+    // the version and its dispute deadline, which anonymous visitors see with the submission link
+    // (#175, #173 item 6) — and nothing else of the judgement: the record is #24's, the accounts
+    // nobody's (#173 item 13).
     const pub = await publicDetail(market.slug);
     expect(pub.statusCode).toBe(200);
     expect(data<Market>(pub)).toMatchObject({
@@ -796,17 +797,20 @@ describe.skipIf(!hasTestInfra)('admin market judgements (integration)', () => {
       resolvedResult: 'YES',
       resolvedAt: null,
       statusEventId: answer.statusEventId,
+      judgementVersion: 1,
+      disputeDeadline: answer.disputeDeadline,
+      disputeOpen: true,
+      disputeUnderReview: false,
+      judgementDelayed: false,
     });
-    for (const field of ['judgement', 'judgementVersion', 'disputeDeadline']) {
-      expect(data<Market>(pub)).not.toHaveProperty(field);
-    }
+    expect(data<Market>(pub)).not.toHaveProperty('judgement');
+    expect(data<Market>(pub)).not.toHaveProperty('disputes');
     for (const hidden of [
       DESCRIPTION,
       LINK,
       APPROVAL,
       registrant.id,
       reviewer.id,
-      answer.disputeDeadline!,
       collectedAt.toISOString(),
     ]) {
       expect(pub.body).not.toContain(hidden);

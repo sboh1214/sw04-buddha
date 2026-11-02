@@ -18,6 +18,7 @@ import {
   type OrdersPage,
   averageCostCoin,
   combinedListState,
+  holdingDisplay,
   listState,
   liveMarketStatus,
   markPriceCoin,
@@ -307,6 +308,22 @@ describe('listState / combinedListState', () => {
     expect(combinedListState('pending', 'failed')).toBe('failed');
     expect(combinedListState('ready', 'failed')).toBe('failed');
     expect(combinedListState()).toBe('ready');
+  });
+});
+
+describe('holdingDisplay', () => {
+  it('takes the badge flags from a live row of the status the holding shows, and only then', () => {
+    const flags = { judgementDelayed: true, disputeUnderReview: true };
+    expect(holdingDisplay({ status: 'provisional', ...flags }, 'provisional')).toEqual(flags);
+    // A CLOSED row past its scheduled judgement, a step behind a fresh 잠정 결과: not '판정 지연'.
+    const none = { judgementDelayed: false, disputeUnderReview: false };
+    expect(
+      holdingDisplay(
+        { status: 'closed', judgementDelayed: true, disputeUnderReview: false },
+        'provisional',
+      ),
+    ).toEqual(none);
+    expect(holdingDisplay(undefined, 'provisional')).toEqual(none);
   });
 });
 

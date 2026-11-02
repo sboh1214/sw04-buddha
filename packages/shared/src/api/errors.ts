@@ -210,6 +210,17 @@ export const ERROR_CODES = [
    * run in it as a code.)
    */
   'OPEN_ITEMS_MISSING',
+  /**
+   * A judgement dispute, 판정 이의 #175, the rules refuse: at the submission the market shows no
+   * provisional result, the body names a judgement version a correction replaced, the dispute
+   * deadline has come, the member holds the admin role, has no fill on the market or has a
+   * dispute of that version already, a retracted one included; at the retraction the dispute is
+   * decided or retracted, or its deadline has come; at a dismissal or an acceptance the dispute is
+   * retracted or decided, or the deciding admin registered its judgement version or submitted the
+   * dispute, given the admin role after disputing. Details carry
+   * the reason, disputeNotAllowedDetailsSchema. No restriction refuses it.
+   */
+  'DISPUTE_NOT_ALLOWED',
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];

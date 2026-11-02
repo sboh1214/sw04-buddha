@@ -15,7 +15,8 @@ export const expectedAccountIdSchema = z.string().min(1).max(255);
 /**
  * The body of an admin write that takes nothing else — a transition named by its path (a market's
  * 검수 제출·마감, a theme's 공개·내리기, a theme notice's 숨기기·보이기, a notice's 고정·고정 해제, a
- * proposal's 검토 시작): the admin on screen, and nothing else.
+ * proposal's 검토 시작): the admin on screen, and nothing else. A member's 판정 이의 철회 (#175)
+ * takes it too: the account on screen.
  */
 export const expectedAccountBodySchema = z
   .object({ expectedAccountId: expectedAccountIdSchema })

@@ -28,6 +28,7 @@ import {
   createNotice,
   createPosition,
   createPost,
+  createProvisionalMarket,
   createReport,
 } from '@buddha/db/test';
 import {
@@ -854,6 +855,28 @@ describe.skipIf(!hasTestInfra)('/api/v1 account restriction (integration)', () =
       expect(reported.statusCode, reported.body).toBe(201);
       const watched = await call('PUT', `/me/watchlist/${market.id}`, { watched: true }, member);
       expect(watched.statusCode, watched.body).toBe(200);
+    });
+
+    it('leaves 판정 이의 and its 철회 open, under a writing restriction too (#175, #173 item 6, N02 §9)', async () => {
+      // ADR-0093 decision 1 #173 item 6 «계정 제한 중에도 낼 수 있다»; #45-12 names no dispute.
+      await restrict(null);
+      await createModerationAction(t.db, {
+        userId: member.id,
+        createdBy: admin.id,
+        type: 'writing_restriction',
+        endsAt: null,
+      });
+      const { market: judged } = await createProvisionalMarket(t.db);
+      await createFill(t.db, { marketId: judged.id, userId: member.id, amountCoin: 50n });
+      const submitted = await send(
+        `/markets/${judged.id}/disputes`,
+        { judgementVersion: 1, links: ['https://example.com/evidence'], reason: '결과가 다르다' },
+        member,
+      );
+      const dispute = dataOf<{ id: string; status: string }>(submitted, 201);
+      expect(dispute.status).toBe('pending');
+      const retracted = await send(`/me/disputes/${dispute.id}/retract`, {}, member);
+      expect(dataOf<{ status: string }>(retracted).status).toBe('retracted');
     });
 
     it('leaves what the member wrote where it was: the post, its comments and the profile’s 글·댓글 tabs (#45-12 «이미 쓴 글 (#139와 함께) … 그대로 둔다», ADR-0080 결과 5)', async () => {

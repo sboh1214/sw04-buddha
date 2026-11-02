@@ -300,10 +300,10 @@ jobs:
       # is missing and the start script exits 1 on its BUILD_ID check. `next start` serves the
       # restored `.next` and only warns about output: 'standalone' (only 'export' throws).
       # Logs go to files so the step can exit while all three servers keep running.
-      # The worker too (M5): the settlement spec and the themes spec's confirmation test wait on
-      # its `market.resolve` at the dispute deadline (#152; the e2e global setup sets a 1-minute
-      # window), the settlement spec then on `market.finalize`, and scheduled-open.spec.ts on its
-      # `market.open` (#21).
+      # The worker too (M5): the settlement spec, the themes spec's confirmation test and the
+      # dispute spec's deadline test (#175) wait on its `market.resolve` at the dispute deadline
+      # (#152; the e2e global setup sets a 1-minute window), the settlement spec then on
+      # `market.finalize`, and scheduled-open.spec.ts on its `market.open` (#21).
       - name: Start the API, the worker and the web server
         run: |
           mkdir -p "$RUNNER_TEMP/e2e-logs"

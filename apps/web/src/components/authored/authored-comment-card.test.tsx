@@ -19,6 +19,7 @@ const COMMENT: AuthoredComment = {
     title: '기준금리 인하?',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   },
 };

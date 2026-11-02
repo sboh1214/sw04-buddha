@@ -129,6 +129,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/admin/admins/admin-accounts.tsx',
         'app/admin/audit-failures/admin-audit-failures.tsx',
         'app/admin/coupons/admin-coupons.tsx',
+        // 이의 접수 (#175, ADR-0104), each half
+        'app/admin/disputes/admin-disputes.tsx',
         'app/admin/markets/[id]/admin-market-detail.tsx',
         'app/admin/markets/admin-markets.tsx',
         // 검수 대기 (#78, ADR-0099), 규칙 보충 대기 (#80, ADR-0101), 일시 중단 결정 대기 (#114,
@@ -154,6 +156,8 @@ describe('the notice above a 더 보기 that failed', () => {
         'app/community/community-screen.tsx',
         'app/market-list.tsx',
         'app/markets/[slug]/market-discussion.tsx',
+        // MY '판정 이의' (#175, ADR-0104)
+        'app/my/disputes/my-disputes.tsx',
         'app/my/moderation/my-moderation.tsx',
         'app/my/portfolio.tsx',
         'app/my/proposals/my-proposals.tsx',
@@ -234,6 +238,7 @@ describe('the notice above a 더 보기 that failed', () => {
       [
         'useAdminAccountRequests',
         'useAdminGrantCandidates',
+        'useAdminMarketDisputes',
         'useAdminMarketJudgements',
         'useAdminMarketPauseDecisions',
         'useAdminMarketReviews',
@@ -254,6 +259,7 @@ describe('the notice above a 더 보기 that failed', () => {
         'useMarketPosts',
         'useMarketSearch',
         'useMarkets',
+        'useMyDisputes',
         'useMyModerationActions',
         'useMyProposals',
         'useMyReports',

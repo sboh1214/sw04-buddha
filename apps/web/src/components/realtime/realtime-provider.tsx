@@ -26,6 +26,7 @@ import {
 } from 'react';
 import { type Socket, io } from 'socket.io-client';
 import { type SessionIdentity } from '@/components/auth/session-cache-guard';
+import { refreshMyMarketDisputeOnStatus } from '@/hooks/use-disputes';
 import { ME_QUERY_KEY, storeBalanceEvent } from '@/hooks/use-me';
 import { BALANCE_HISTORY_KEYS } from '@/hooks/use-wallet';
 import { listStatusOf } from '@/hooks/use-portfolio';
@@ -609,6 +610,10 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // again (`refetchType` 'active'), so it costs a request where a theme page is open and
         // nowhere else.
         void refreshThemeResultsOnStatus(queryClient, event.status);
+        // The first kind once more: the member's own 판정 이의 on this market (#175, ADR-0104) — a
+        // 기각 or 수용 republishes this event unchanged, and no event carries the decision or its
+        // reason. Only an open submission screen asks again (`refreshMyMarketDisputeOnStatus`).
+        void refreshMyMarketDisputeOnStatus(queryClient, event.marketId);
       },
 
       'market:trade': (raw: unknown) => {

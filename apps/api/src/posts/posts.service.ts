@@ -7,6 +7,7 @@ import {
   canonicalJson,
   decodeKeyset,
   encodeKeyset,
+  isDisputeUnderReview,
   isJudgementDelayed,
   isPublicMarketStatus,
   mediaPath,
@@ -49,7 +50,12 @@ import { keysetPredicate } from '../common/keyset.js';
 import { DB } from '../infra/db/db.provider.js';
 import { postLikeCountSql } from '../likes/like-queries.js';
 import { LinkReviewService } from '../link-review/link-review.service.js';
-import { inCategory, isPublicMarket, likePattern } from '../markets/market.service.js';
+import {
+  displayStateOf,
+  inCategory,
+  isPublicMarket,
+  likePattern,
+} from '../markets/market.service.js';
 import { assertWriter } from '../moderation/restrictions.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { WriteLimitsService, type Writer } from '../write-limits/write-limits.service.js';
@@ -145,11 +151,13 @@ export function postAuthorOf(row: AuthorRow): PostAuthor {
 
 /**
  * The market a post belongs to, as a card and the post page link to it. Its status badge reads as
- * the market's own cards do (`toMarketSummary`): '판정 지연' for a CLOSED market past its scheduled
- * judgement by `nowMs`, the API host's clock at the read (`isJudgementDelayed`, #22, ADR-0098).
- * Null while the market is not public (`isPublicMarketStatus`): a SCHEDULED market sent back to a
- * draft by #78's 되돌리기 keeps its posts, but its title, slug and status are the admin's alone
- * until it is public again (ADR-0099, owner answer 2026-11-01; `postMarketSchema`).
+ * the market's own cards do (`toMarketSummary`, `displayStateOf`): '판정 지연' for a CLOSED market
+ * past its scheduled judgement or a held PROVISIONAL one past its 이의 기한 by `nowMs`, the API
+ * host's clock at the read (`isJudgementDelayed`, #22, ADR-0098, ADR-0104), and '이의 검토 중' for
+ * a PROVISIONAL one a 판정 이의 holds (`isDisputeUnderReview`, #175). Null while the market is not
+ * public (`isPublicMarketStatus`): a SCHEDULED market sent back to a draft by #78's 되돌리기 keeps
+ * its posts, but its title, slug and status are the admin's alone until it is public again
+ * (ADR-0099, owner answer 2026-11-01; `postMarketSchema`).
  */
 export function postMarketOf(
   row: {
@@ -158,24 +166,22 @@ export function postMarketOf(
     title: string;
     status: MarketStatus;
     scheduledJudgementAt: Date | null;
+    disputeDeadline: Date | null;
+    disputeHoldCount: number;
     categorySlug: string;
     categoryNameKo: string;
   },
   nowMs: number = Date.now(),
 ): PostMarket | null {
   if (!isPublicMarketStatus(row.status)) return null;
+  const display = displayStateOf(row);
   return {
     id: row.id,
     slug: row.slug,
     title: row.title,
     status: row.status,
-    judgementDelayed: isJudgementDelayed(
-      {
-        status: row.status,
-        scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
-      },
-      nowMs,
-    ),
+    judgementDelayed: isJudgementDelayed(display, nowMs),
+    disputeUnderReview: isDisputeUnderReview(display),
     category: { slug: row.categorySlug, nameKo: row.categoryNameKo },
   };
 }
@@ -232,6 +238,8 @@ export class PostsService {
       title: schema.markets.title,
       status: schema.markets.status,
       scheduledJudgementAt: schema.markets.scheduledJudgementAt,
+      disputeDeadline: schema.markets.disputeDeadline,
+      disputeHoldCount: schema.markets.disputeHoldCount,
       categorySlug: schema.categories.slug,
       categoryNameKo: schema.categories.nameKo,
     },

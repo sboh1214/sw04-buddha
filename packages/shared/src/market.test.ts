@@ -53,6 +53,7 @@ const summary = {
   imageUrl: null,
   status: 'open',
   judgementDelayed: false,
+  disputeUnderReview: false,
   lastPrice: 52,
   volumeCoin: '12345',
   tradeCount: 3,
@@ -60,6 +61,9 @@ const summary = {
   closeAt: at,
   openAt: at,
   resolvedResult: null,
+  judgementVersion: null,
+  disputeDeadline: null,
+  disputeOpen: false,
   statusEventId: '2',
   createdAt: at,
 };
@@ -238,17 +242,24 @@ describe('read DTOs', () => {
       ],
       supplement: { pending: null, log: [] },
       pause: { history: [], pending: null, log: [] },
-      judgementVersion: null,
-      disputeDeadline: null,
       judgement: { current: null, pending: null, log: [], disputeWindowUndecided: true },
+      disputes: { holding: 0, items: [] },
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
-    // So is the judgement (#152): the version, the deadline and the registrations are the admin's,
-    // in every status; the public shape keeps the status and the result alone.
-    for (const field of ['judgement', 'judgementVersion', 'disputeDeadline'] as const) {
+    // So are the judgement's registrations (#152) and the 판정 이의 (#175, #173 item 13): the
+    // admin's, in every status; the public shape keeps none of them.
+    for (const field of ['judgement', 'disputes'] as const) {
       expect(marketSchema.parse(admin)).not.toHaveProperty(field);
       const { [field]: _gone, ...without } = admin;
       expect(issuePaths(adminMarketSchema.safeParse(without)), field).toEqual([field]);
+    }
+    // The version and its deadline are public since #175 (#173 items 6·13), required on both.
+    for (const field of ['judgementVersion', 'disputeDeadline'] as const) {
+      expect(marketSchema.parse(admin)).toHaveProperty(field, null);
+      const { [field]: _gone, ...without } = admin;
+      expect(issuePaths(adminMarketSchema.safeParse(without)), field).toEqual([field]);
+      const { [field]: _public, ...publicWithout } = market;
+      expect(issuePaths(marketSchema.safeParse(publicWithout)), field).toEqual([field]);
     }
     const provisional = {
       ...admin,
@@ -256,15 +267,45 @@ describe('read DTOs', () => {
       resolvedResult: 'VOID',
       judgementVersion: 1,
       disputeDeadline: '2026-09-06T00:00:00.000Z',
+      disputeOpen: true,
     };
     expect(adminMarketSchema.parse(provisional)).toEqual(provisional);
-    expect(marketSchema.parse(provisional).resolvedResult).toBe('VOID');
+    expect(marketSchema.parse(provisional)).toMatchObject({
+      resolvedResult: 'VOID',
+      judgementVersion: 1,
+      disputeDeadline: '2026-09-06T00:00:00.000Z',
+      disputeOpen: true,
+    });
     for (const judgementVersion of [0, 1.5, '1']) {
       expect(
         issuePaths(adminMarketSchema.safeParse({ ...provisional, judgementVersion })),
         String(judgementVersion),
       ).toEqual(['judgementVersion']);
     }
+    const dispute = {
+      id: marketId,
+      judgementVersion: 1,
+      links: ['https://example.com/a'],
+      reason: '출처의 발표가 다르다.',
+      status: 'pending',
+      submittedAt: at,
+      decidedAt: null,
+      decisionReason: null,
+      retractedAt: null,
+      submitter: { id: 'user-1', nickname: null },
+      decidedBy: null,
+      purgedAt: null,
+    };
+    const held = {
+      ...provisional,
+      disputeUnderReview: true,
+      disputes: { holding: 1, items: [dispute] },
+    };
+    expect(adminMarketSchema.parse(held)).toEqual(held);
+    expect(marketSchema.parse(held)).not.toHaveProperty('disputes');
+    expect(
+      issuePaths(adminMarketSchema.safeParse({ ...held, disputes: { holding: -1, items: [] } })),
+    ).toEqual(['disputes.holding']);
     // So is the pause (#114): the public shape carries none of it, the admin one always.
     expect(marketSchema.parse(admin)).not.toHaveProperty('pause');
     const { pause: _pause, ...withoutPause } = admin;
@@ -351,8 +392,8 @@ describe('read DTOs', () => {
     expect(
       adminMarketSchema.parse({ ...admin, qYes: '0.0000000000', reserveCoin: '69315' }),
     ).not.toHaveProperty('reserveCoin');
-    // The dispute stage is gone (ADR-0046): no deadline on the public shape, no counts on the
-    // admin one, and a step must be one of SETTLEMENT_STEPS.
+    // The M5 dispute stage is gone (ADR-0046): not its deadline on the public shape (#175's is
+    // `disputeDeadline`), nor its counts on the admin one; a step is one of SETTLEMENT_STEPS.
     expect(marketSchema.parse({ ...market, disputeUntil: at })).not.toHaveProperty('disputeUntil');
     expect(adminMarketSchema.parse(admin)).not.toHaveProperty('disputeCounts');
     const [step] = admin.settlementSteps;
@@ -443,6 +484,43 @@ describe('read DTOs', () => {
       false,
     );
     expect(findExcludedIdentifier('judgementDelayed', 'api')).toEqual([]);
+  });
+
+  it('say on the card whether disputes are taken and under review, and until when (#175)', () => {
+    // Every list carries them as the card's row (#173 items 6·12): the deadline and the link are
+    // public to anonymous visitors, '이의 검토 중' and '판정 지연' are the card's badge.
+    const provisional = {
+      ...summary,
+      status: 'provisional',
+      resolvedResult: 'YES',
+      judgementVersion: 2,
+      disputeDeadline: '2026-09-06T00:00:00.000Z',
+      disputeOpen: true,
+      disputeUnderReview: true,
+    };
+    expect(marketSummarySchema.parse(provisional)).toEqual(provisional);
+    for (const field of [
+      'judgementVersion',
+      'disputeDeadline',
+      'disputeOpen',
+      'disputeUnderReview',
+    ] as const) {
+      const { [field]: _gone, ...without } = provisional;
+      expect(issuePaths(marketSummarySchema.safeParse(without)), field).toEqual([field]);
+      expect(findExcludedIdentifier(field, 'api'), field).toEqual([]);
+    }
+    for (const bad of [
+      { disputeOpen: 'yes' },
+      { disputeUnderReview: 1 },
+      { disputeDeadline: 'tomorrow' },
+      { judgementVersion: 0 },
+    ]) {
+      expect(marketSummarySchema.safeParse({ ...provisional, ...bad }).success).toBe(false);
+    }
+    // Never how many hold it, nor the disputes themselves: #24's record and the operators'.
+    expect(
+      marketSummarySchema.parse({ ...provisional, disputeHoldCount: 1, disputes: [] }),
+    ).toEqual(provisional);
   });
 
   it('carry the current rule version and every version on the detail, nobody on them (#80)', () => {

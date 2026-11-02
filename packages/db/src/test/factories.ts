@@ -26,6 +26,7 @@ import {
   floorToMinute,
   isBeforeScheduledJudgement,
   isFallbackSourcePriority,
+  isHoldingDisputeStatus,
   marketReviewExclusion,
   marketSupplementChangesSchema,
   orphanMediaRetryHours,
@@ -42,6 +43,7 @@ import {
   type MarketPausePath,
   type MarketPauseReason,
   type MarketPauseReviewResult,
+  type MarketDisputeStatus,
   type MarketResult,
   type MarketRulesSupplementedPayload,
   type MarketSource,
@@ -65,6 +67,7 @@ import {
 } from '@buddha/shared';
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
+import { confirmationHold, type MarketDisputeRow } from '../market-dispute.js';
 import {
   approveMarketJudgement,
   resolveProvisionalMarket,
@@ -96,6 +99,7 @@ import {
   ledgerEntries,
   linkFlags,
   linkUses,
+  marketDisputes,
   marketEvents,
   marketLinks,
   marketPauses,
@@ -339,6 +343,14 @@ export interface CreateMarketInput {
   judgementVersion?: number | null;
   disputeDeadline?: Date | null;
   /**
+   * The 판정 이의 mirror (#175, ADR-0104: `markets.dispute_hold_count`), stored as given — a
+   * PROVISIONAL market's label test ('이의 검토 중', '판정 지연') sets it with no dispute row, which a
+   * market made here cannot take (no judgement: `createDispute` writes one on
+   * `createProvisionalMarket`'s market and keeps the count). Default 0; any other status refuses
+   * more (`markets_dispute_hold_status_check`).
+   */
+  disputeHoldCount?: number;
+  /**
    * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved` and
    * `settling`, one `pending` row per SETTLEMENT_STEPS step (the transition to `resolved` writes
    * them); for `settled`, one `done` row each, completed at `settledAt` (or now). Default true;
@@ -487,6 +499,7 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
           : status === 'provisional'
             ? new Date(now.getTime() + DAY_MS)
             : null,
+      disputeHoldCount: input.disputeHoldCount ?? 0,
       createdBy,
     })
     .returning();
@@ -2619,7 +2632,10 @@ export async function createProvisionalMarket(
  * (`markets.dispute_deadline`); the judgement row keeps the one its approval fixed — it takes no
  * UPDATE — so a test that wants the two to agree publishes early enough that the deadline has
  * passed (`createProvisionalMarket`'s `publishedAt`), and then nothing moves. No job, no publish
- * (the worker's): `market.finalize` is the test's to run. A market not PROVISIONAL throws.
+ * (the worker's): `market.finalize` is the test's to run. A market not PROVISIONAL throws, and so
+ * does one a 판정 이의 holds (#175: pending or accepted, `confirmationHold`) — before anything
+ * moves: a test decides or retracts its disputes first (`decideMarketDispute`, `createDispute`'s
+ * `status`).
  */
 export async function resolveMarketNow(
   db: Db,
@@ -2629,6 +2645,13 @@ export async function resolveMarketNow(
   return db.transaction(async (tx) => {
     await lockMarket(tx, marketId);
     const now = input.at ?? (await clockTimestamp(tx));
+    const [current] = await tx.select().from(markets).where(eq(markets.id, marketId));
+    if (current && (await confirmationHold(tx, current))) {
+      throw new Error(
+        `resolveMarketNow: market ${marketId} is held by a 판정 이의 pending or accepted ` +
+          '(decide or retract its disputes first)',
+      );
+    }
     await tx
       .update(markets)
       .set({ disputeDeadline: now })
@@ -2644,6 +2667,116 @@ export async function resolveMarketNow(
       throw new Error(`resolveMarketNow: market ${marketId} was not confirmed (${result.reason})`);
     }
     return { market: result.market, eventId: result.eventId };
+  });
+}
+
+/** createDispute's defaults: one evidence link and a reason, as a member writes them. */
+const DISPUTE_LINK = 'https://example.com/dispute-evidence';
+const DISPUTE_REASON = '발표 원문과 판정 결과가 다르다.';
+const DISPUTE_DECISION_REASON = '판정의 근거를 다시 확인했다.';
+
+export interface CreateDisputeInput {
+  /**
+   * A PROVISIONAL market with its judgement — `createProvisionalMarket`'s (the dispute's foreign
+   * key names the `market_judgements` row, which `createMarket` never writes). Default: a fresh
+   * one made with `market`.
+   */
+  marketId?: string;
+  /** createProvisionalMarket's input for the default market. Ignored with `marketId`. */
+  market?: CreateProvisionalMarketInput;
+  /** The version disputed. Default: the market's current `judgement_version`. */
+  judgementVersion?: number;
+  /** The submitter. Default: a fresh member. */
+  userId?: string;
+  /**
+   * The submitter's fill on the market (`createFill`, as the taker against a fresh account's
+   * resting order), as eligibility asks (`hasMarketFill`). Default true; false writes none — a
+   * submitter who already has one, or a test of the refusal.
+   */
+  fill?: boolean;
+  /** 근거 링크. Default: one (https://example.com/dispute-evidence). */
+  links?: string[];
+  /** Default: a sentence. */
+  reason?: string;
+  /** Default `pending`. */
+  status?: MarketDisputeStatus;
+  /** The submission's instant. Default: the database clock. */
+  submittedAt?: Date;
+  /**
+   * For `dismissed` and `accepted`: the deciding admin (default a fresh one), when (a millisecond
+   * after the submission unless given) and why (default a sentence).
+   */
+  decidedBy?: string;
+  decidedAt?: Date;
+  decisionReason?: string;
+  /** For `retracted`: when. Default a millisecond after the submission. */
+  retractedAt?: Date;
+}
+
+/** A dispute a factory wrote: the row, its market read back, and the submitter's fill. */
+export interface DisputeMade {
+  dispute: MarketDisputeRow;
+  /** The market read back after the write, its `dispute_hold_count` kept. */
+  market: typeof markets.$inferSelect;
+  /** The fill written for the submitter; null with `fill: false`. */
+  fill: typeof fills.$inferSelect | null;
+}
+
+/**
+ * A 판정 이의 (#175, ADR-0104) as the routes leave it, in any status: on a PROVISIONAL market's
+ * judgement (`marketId`, or a fresh `createProvisionalMarket` one), by a member with a fill on it
+ * (`createFill` unless `fill: false`), and in one transaction under the market lock the
+ * `market_disputes` row — pending, or dismissed or accepted by an admin with a reason, or
+ * retracted, as asked — and `markets.dispute_hold_count` one more for a pending or accepted
+ * dispute of the market's current version, as the dispute writers keep it. The routes' checks are
+ * not made (the status, the deadline, the role, the one per version; the decider's not being the
+ * registrant): a test gives what a route would take — a dispute submitted before a deadline that
+ * has since passed included — or tests the helpers' refusals with `submitMarketDispute`. The
+ * database's are (the CHECKs, the keys, the foreign key to the judgement).
+ */
+export async function createDispute(db: Db, input: CreateDisputeInput = {}): Promise<DisputeMade> {
+  const marketId = input.marketId ?? (await createProvisionalMarket(db, input.market)).market.id;
+  const userId = input.userId ?? (await createUser(db)).user.id;
+  const fill =
+    input.fill === false ? null : await createFill(db, { marketId, userId, amountCoin: 50n });
+  const status = input.status ?? 'pending';
+  const decided = status === 'dismissed' || status === 'accepted';
+  const decidedBy = decided
+    ? (input.decidedBy ?? (await createUser(db, { role: 'admin' })).user.id)
+    : null;
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const [market] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
+    if (!market) throw new Error(`createDispute: market ${marketId} not found`);
+    const version = input.judgementVersion ?? market.judgementVersion;
+    if (version === null) throw new Error(`createDispute: market ${marketId} has no judgement`);
+    const submittedAt = input.submittedAt ?? (await clockTimestamp(tx));
+    const later = new Date(submittedAt.getTime() + 1);
+    const [dispute] = await tx
+      .insert(marketDisputes)
+      .values({
+        marketId,
+        judgementVersion: version,
+        userId,
+        links: input.links ?? [DISPUTE_LINK],
+        reason: input.reason ?? DISPUTE_REASON,
+        status,
+        submittedAt,
+        decidedBy,
+        decidedAt: decided ? (input.decidedAt ?? later) : null,
+        decisionReason: decided ? (input.decisionReason ?? DISPUTE_DECISION_REASON) : null,
+        retractedAt: status === 'retracted' ? (input.retractedAt ?? later) : null,
+      })
+      .returning();
+    const holds = isHoldingDisputeStatus(status) && version === market.judgementVersion;
+    const [row] = holds
+      ? await tx
+          .update(markets)
+          .set({ disputeHoldCount: sql`${markets.disputeHoldCount} + 1`, updatedAt: submittedAt })
+          .where(eq(markets.id, marketId))
+          .returning()
+      : [market];
+    return { dispute: dispute!, market: row!, fill };
   });
 }
 

@@ -26,6 +26,7 @@ import {
   createCategory,
   createComment,
   createConsents,
+  createFill,
   createMarket,
   createModerationAction,
   createPhoneVerification,
@@ -34,6 +35,7 @@ import {
   createPostLike,
   createProfileImage,
   createProposal,
+  createProvisionalMarket,
   createReport,
   createSearch,
   createStartGrant,
@@ -58,6 +60,7 @@ import {
   type AdminLinkFlagGroup,
   type AdminNoticeAction,
   type AdminNoticeRevisionSummary,
+  type AdminMarket,
   type AdminNoticeUpdateResult,
   type Me,
   type CommentThread,
@@ -975,6 +978,54 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/closure (integration)', () => {
         .from(schema.marketProposals)
         .where(eq(schema.marketProposals.id, reviewing.id));
       expect(kept).toEqual({ status: 'reviewing', userId: proposer.id });
+    });
+
+    it('closes an account with a pending 판정 이의, which stays pending, holding its market, and is decided as any (#175, ADR-0069 decision 4 #140)', async () => {
+      // «처리 중인 신고·이의·제안 — 그대로 검토하고 결과를 기록한다»: the dispute refuses nothing.
+      // A fill and no position (sold out, or never counted): nothing unsettled refuses the closure.
+      const { market: judged } = await createProvisionalMarket(t.db);
+      await createFill(t.db, { marketId: judged.id, userId: member.id, amountCoin: 50n });
+      const submitted = await post(
+        `/markets/${judged.id}/disputes`,
+        { judgementVersion: 1, links: ['https://example.com/evidence'], reason: '결과가 다르다' },
+        member,
+      );
+      const { id } = dataOf<{ id: string }>(submitted, 201);
+      await closed(member);
+      const held = async () =>
+        (
+          await t.db
+            .select({
+              status: schema.marketDisputes.status,
+              userId: schema.marketDisputes.userId,
+              links: schema.marketDisputes.links,
+              holdCount: schema.markets.disputeHoldCount,
+            })
+            .from(schema.marketDisputes)
+            .innerJoin(schema.markets, eq(schema.markets.id, schema.marketDisputes.marketId))
+            .where(eq(schema.marketDisputes.id, id))
+        )[0];
+      expect(await held()).toEqual({
+        status: 'pending',
+        userId: member.id,
+        links: ['https://example.com/evidence'],
+        holdCount: 1,
+      });
+      // An admin decides it as any: the submitter is the closed account, its nickname gone.
+      const dismissed = await post(
+        `/admin/markets/${judged.id}/disputes/${id}/dismiss`,
+        { reason: '판정의 근거를 다시 확인했다' },
+        admin,
+      );
+      const disputes = dataOf<AdminMarket>(dismissed).disputes;
+      expect(disputes.holding).toBe(0);
+      expect(disputes.items).toEqual([
+        expect.objectContaining({
+          id,
+          status: 'dismissed',
+          submitter: { id: member.id, nickname: null },
+        }),
+      ]);
     });
 
     it('closes an account that never finished the onboarding, with sign-in only', async () => {

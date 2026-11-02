@@ -96,7 +96,8 @@ export const MARKET_STATUS_LABEL: Record<MarketStatus, string> = {
  * 11.2). ADR-0093 sets no colours, so these keep the old meanings (#174's choice):
  * - `brand` while it trades: OPEN alone.
  * - `orange` while it waits for something to happen to it — a time (SCHEDULED opens, PAUSED still
- *   closes on schedule, PROVISIONAL is confirmed at its dispute deadline, #152), the admins (CLOSED
+ *   closes on schedule, PROVISIONAL is confirmed at its dispute deadline, #152, or after the last
+ *   판정 이의 is dismissed past it, #175), the admins (CLOSED
  *   waits for the 판정 and another admin's approval) or the worker (RESOLVED and SETTLING for the
  *   payout).
  * - `gray` when nothing is coming: over (SETTLED, CANCELLED), or not public yet (DRAFT, REVIEW),
@@ -381,21 +382,28 @@ export const PROVISIONAL_DEADLINE_POLL_MS = 5_000;
  * deadline (`AdminMarket.disputeDeadline`, fixed at the approval, ADR-0093 decision 1 #173 items
  * 1·5) — the admin query joins no realtime room, so the detail reads it again at the deadline and
  * every PROVISIONAL_DEADLINE_POLL_MS after it until it is no longer PROVISIONAL (the job confirms
- * it at once, the per-minute scan within a minute, a stopped worker when it is back; #175's
- * disputes and #176's corrections will hold it). Past the deadline the delay is the poll, never 0
- * — which query-core takes for no interval — so a failed read does not refire at once. False for
- * any other status or a missing or unreadable deadline; capped at MAX_TIMEOUT_MS, the next read
- * waiting again.
+ * it at once, the per-minute scan within a minute, a stopped worker when it is back). Past the
+ * deadline the delay is the poll, never 0 — which query-core takes for no interval — so a failed
+ * read does not refire at once.
+ *
+ * A 판정 이의 holding it (`disputes.holding` > 0, #175, ADR-0104 — pending, or accepted and waiting
+ * for its correction, #176) keeps it PROVISIONAL past the deadline: nothing confirms it then, so
+ * the poll stops — one read at the deadline still comes, for its 판정 지연 note. The last 기각's
+ * answer reads 0 again, and the poll resumes: the API's `market.resolve` confirms within seconds
+ * (the per-minute scan the backstop), and the detail shows it. False for any other status or a
+ * missing or unreadable deadline; capped at MAX_TIMEOUT_MS, the next read waiting again.
  */
 export function provisionalMarketPollDelay(
-  market: { status: MarketStatus; disputeDeadline: string | null } | undefined,
+  market:
+    | { status: MarketStatus; disputeDeadline: string | null; disputes: { holding: number } }
+    | undefined,
   now: number = Date.now(),
 ): number | false {
   if (market?.status !== 'provisional' || market.disputeDeadline === null) return false;
   const deadline = new Date(market.disputeDeadline).getTime();
   if (Number.isNaN(deadline)) return false;
   const untilDeadline = deadline - now;
-  if (untilDeadline <= 0) return PROVISIONAL_DEADLINE_POLL_MS;
+  if (untilDeadline <= 0) return market.disputes.holding > 0 ? false : PROVISIONAL_DEADLINE_POLL_MS;
   return Math.max(1, Math.min(untilDeadline, MAX_TIMEOUT_MS));
 }
 
@@ -404,7 +412,7 @@ export function provisionalMarketPollDelay(
  * poll for a market whose result is confirmed (`settlementPollInterval`), the 개장 예정 re-reads
  * (`scheduledMarketPollDelay` at the row's `dataUpdatedAt`), the close's re-read of a market OPEN
  * or PAUSED (`tradingMarketPollDelay`, #114) and the dispute deadline's of a 잠정 결과 market
- * (`provisionalMarketPollDelay`, #152).
+ * (`provisionalMarketPollDelay`, #152; none past it while a 판정 이의 holds it, #175).
  */
 export function adminMarketPollInterval(state: {
   data?: {
@@ -412,6 +420,7 @@ export function adminMarketPollInterval(state: {
     scheduledOpenAt: string | null;
     closeAt: string;
     disputeDeadline: string | null;
+    disputes: { holding: number };
   };
   dataUpdatedAt: number;
 }): number | false {

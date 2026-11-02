@@ -258,8 +258,9 @@ export const MARKET_EVENT_TYPES = [
   'rules_edited',
   /**
    * provisional → resolved: the worker confirmed the result once its 이의 기한 passed with nothing
-   * held (#152, ADR-0103; ADR-0093 decision 1 #173 item 1 — actor NULL), payload `{version,
-   * result, source: 'deadline'}` (`MarketResolvedByDeadlinePayload`, market-judgement.ts): the
+   * held (#152, ADR-0103; ADR-0093 decision 1 #173 item 1 — actor NULL): no 판정 이의 of the
+   * version pending or accepted (#175, ADR-0104). Payload `{version, result, source: 'deadline'}`
+   * (`MarketResolvedByDeadlinePayload`, market-judgement.ts) — after the last dismissal too: the
    * judgement version confirmed and its result. Rows from before #152 are closed → resolved,
    * ADR-0046's interim judgement by one admin (the actor), payload `{result, note, evidenceUrl}`
    * (`MarketInterimResolvedPayload`).
@@ -463,6 +464,19 @@ export const ADMIN_ACTION_TYPES = [
   'market_judgement_reject',
   /** Its registrant retracted it before anyone decided it: payload `{approvalId, result}`. */
   'market_judgement_retract',
+  /**
+   * 판정 이의 (#175, ADR-0104; ADR-0093 decision 1 #173 items 2·7): target `market` / its id. One
+   * admin who is not the registrant of the dispute's judgement version dismissed a pending dispute
+   * (기각): payload `{disputeId, judgementVersion, reason}` (`MarketDisputeDecisionActionPayload`,
+   * market-dispute.ts) — never the submitter's links or reason. No market event: the status stays
+   * PROVISIONAL, and the worker confirms once nothing holds it past the deadline.
+   */
+  'market_dispute_dismiss',
+  /**
+   * Such an admin accepted it (수용, a correction to come, #176): the same payload. The dispute
+   * keeps holding the market until its correction is approved (owner answer 2026-11-02).
+   */
+  'market_dispute_accept',
   /**
    * Retired (#21, ADR-0100): the interim open (ADR-0027, draft → open) wrote it until #21 removed
    * that action. Kept so the rows it wrote still parse and render; nothing writes it now — an open

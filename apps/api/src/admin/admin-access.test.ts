@@ -60,6 +60,8 @@ const OPERATION_RECORDS = [
   // #50: the reports, their processing and the moderation actions (N04 §6, ADR-0056 1-2).
   'GET /admin/reports',
   'GET /admin/moderation/actions',
+  // #175: 이의 접수, the judgement disputes with who submitted and decided them (N03 §8).
+  'GET /admin/market-disputes',
 ];
 
 describe('admin access (static)', () => {

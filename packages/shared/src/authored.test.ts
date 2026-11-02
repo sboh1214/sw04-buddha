@@ -28,6 +28,7 @@ const MARKET = {
   title: '금리 인하',
   status: 'settled',
   judgementDelayed: false,
+  disputeUnderReview: false,
   category: { slug: 'economy', nameKo: '경제' },
 } as const;
 const CARD = {

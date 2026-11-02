@@ -109,6 +109,7 @@ import {
   sameSources,
   type MarketSources,
 } from './market-sources.js';
+import { readAdminMarketDisputes } from './market-dispute.js';
 import { readMarketJudgement } from './market-judgement.js';
 import { readMarketPause } from './market-pause.js';
 import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
@@ -136,6 +137,26 @@ export const MARKET_SLUG_UNIQUE = 'markets_slug_unique';
 
 /** Events the admin detail shows, newest first. */
 const ADMIN_EVENTS_LIMIT = 100;
+
+/**
+ * What `market:status` carries of a market (`publishStatus`): an admin write's answer, or a row a
+ * member's 판정 이의 write left (`publishedStatusOf`, #175).
+ */
+export type PublishedStatus = Pick<
+  AdminMarket,
+  'id' | 'status' | 'resolvedResult' | 'statusEventId' | 'updatedAt'
+>;
+
+/** `PublishedStatus` of a market row, as `toMarketSummary` and `toAdminMarket` spell them. */
+export function publishedStatusOf(row: MarketRow): PublishedStatus {
+  return {
+    id: row.id,
+    status: row.status,
+    resolvedResult: row.resolvedResult,
+    statusEventId: row.statusEventId === null ? null : String(row.statusEventId),
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
 
 /**
  * Lower-case alphanumerics: the slug alphabet without '-', so a suffix never ends a slug in '-'.
@@ -497,8 +518,9 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
  * The interim one-admin judgement (closed → resolved, final at once — ADR-0046) went with #152
  * (ADR-0103): a CLOSED market's judgement is registered by one admin and approved by another
  * (MarketJudgementService), which publishes the provisional result (CLOSED → PROVISIONAL), and the
- * worker confirms it once its dispute deadline has passed (PROVISIONAL → RESOLVED, with the
- * settlement steps), then pays it out. The interim draft → open went with #21 (ADR-0100): a
+ * worker confirms it once its dispute deadline has passed with no 판정 이의 pending or accepted
+ * holding it (PROVISIONAL → RESOLVED, with the settlement steps; #175, ADR-0104), then pays it
+ * out. The interim draft → open went with #21 (ADR-0100): a
  * market opens from SCHEDULED alone, by `openScheduledMarket` (@buddha/db) — the worker's job at
  * its scheduled open, or the approval or the reschedule that finds that instant come, in its own
  * transaction. The interim one-admin open → closed went with #114 (ADR-0102): a market closes at
@@ -1426,13 +1448,15 @@ export class MarketAdminService {
    * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록), and
    * the rule versions with who asked for and made each and the supplement requests (#80,
    * `readAdminRuleVersions`, `readMarketSupplement`: one statement each), the pauses with the
-   * next-path requests (#114, `readMarketPause`: one statement each), and the judgement — the
-   * current one, its version and dispute deadline, the registrations and whether the dispute window
-   * is undecided (#152, `readMarketJudgement`, `disputeWindowSetting`). Reads through `executor` so
+   * next-path requests (#114, `readMarketPause`: one statement each), the judgement — the current
+   * one, the registrations and whether the dispute window is undecided (#152,
+   * `readMarketJudgement`, `disputeWindowSetting`; its version and dispute deadline are the public
+   * shape's since #175) — and the current version's 판정 이의 with how many hold the confirmation
+   * (#175, `readAdminMarketDisputes`: one statement). Reads through `executor` so
    * a transition returns the state it just committed; `tags` are the market's names in order
    * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
-   * already. MarketSupplementService's, MarketPauseService's and MarketJudgementService's writes
-   * answer with it too.
+   * already. MarketSupplementService's, MarketPauseService's, MarketJudgementService's and
+   * MarketDisputeService's admin writes answer with it too.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1539,13 +1563,12 @@ export class MarketAdminService {
       review: await readMarketReview(executor, row),
       supplement: await readMarketSupplement(executor, row.id, ruleVersions),
       pause: await readMarketPause(executor, row.id),
-      judgementVersion: row.judgementVersion,
-      disputeDeadline: row.disputeDeadline?.toISOString() ?? null,
       judgement: await readMarketJudgement(
         executor,
         row,
         (await this.disputeWindowSetting(executor)) === null,
       ),
+      disputes: await readAdminMarketDisputes(executor, row),
     };
   }
 
@@ -1560,13 +1583,15 @@ export class MarketAdminService {
    * status with its result (#152, MarketJudgementService — the worker's confirmation publishes the
    * RESOLVED one itself) — and by an edit that moves an open or
    * paused market's category, tags or image, a SCHEDULED market's open-time change that leaves it
-   * SCHEDULED (#78) and a supplement's approval, which moves an open or paused market's rules to a
-   * new version (#80, MarketSupplementService), where the status is
-   * deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct delivery:
-   * the web answers every `market:status` by restarting `['market', id]` (realtime-provider.tsx)
-   * while `applyStatus` drops an event that does not SUPERSEDE what it holds (market-live.ts) —
-   * so a repeat writes nothing into a cache and still forces the REST snapshot, which is the
-   * only thing that carries `closeAt`.
+   * SCHEDULED (#78), a supplement's approval, which moves an open or paused market's rules to a
+   * new version (#80, MarketSupplementService), and every 판정 이의 write — a member's submission
+   * or retraction, an admin's dismissal or acceptance (#175, MarketDisputeService), which move the
+   * '이의 검토 중' and '판정 지연' labels (`disputeUnderReview`, `judgementDelayed`) — where the
+   * status is deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct
+   * delivery: the web answers every `market:status` by restarting `['market', id]`
+   * (realtime-provider.tsx) while `applyStatus` drops an event that does not SUPERSEDE what it
+   * holds (market-live.ts) — so a repeat writes nothing into a cache and still forces the REST
+   * snapshot, which is the only thing that carries `closeAt` (and the dispute labels).
    *
    * A `market:edit` event carrying the new fields was rejected, and not only for its cost across
    * shared + gateway + client: an event-applied `closeAt` could not defend itself against a REST
@@ -1580,7 +1605,7 @@ export class MarketAdminService {
    * requests per edit — the handler restarts the row AND its ticks series — bounded by editors
    * rather than traders and only for a MOUNTED observer.
    */
-  async publishStatus(market: AdminMarket): Promise<void> {
+  async publishStatus(market: PublishedStatus): Promise<void> {
     await this.publisher.publishMarket(market.id, {
       type: 'market:status',
       marketId: market.id,

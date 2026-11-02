@@ -84,6 +84,7 @@ const published: Post = {
     title: '금리 인하?',
     status: 'open',
     judgementDelayed: false,
+    disputeUnderReview: false,
     category: { slug: 'economy', nameKo: '경제' },
   },
   createdAt: '2026-10-18T00:00:00.000Z',

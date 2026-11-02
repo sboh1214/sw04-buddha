@@ -76,8 +76,10 @@ export type PostAuthor = z.infer<typeof postAuthorSchema>;
 /**
  * The market a post belongs to, as a card and the post page link to it: its detail opens in every
  * public status, closed and settled ones too (#46's acceptance criteria). Its status badge reads as
- * the market's own cards do: '판정 지연' for a CLOSED market past its scheduled judgement
- * (`judgementDelayed`, `isJudgementDelayed` at the read; #22, ADR-0098).
+ * the market's own cards do: '판정 지연' for a CLOSED market past its scheduled judgement or a held
+ * PROVISIONAL one past its 이의 기한 (`judgementDelayed`, `isJudgementDelayed` at the read; #22,
+ * ADR-0098, ADR-0104), and '이의 검토 중' for a PROVISIONAL one a 판정 이의 holds
+ * (`disputeUnderReview`, `isDisputeUnderReview`; #175).
  *
  * Every field that carries it is null while the market is not public (`isPublicMarketStatus`): a
  * post is written on a public market only, but a SCHEDULED one goes back to a draft by #78's
@@ -92,6 +94,7 @@ export const postMarketSchema = z
     title: z.string(),
     status: marketStatusSchema,
     judgementDelayed: z.boolean(),
+    disputeUnderReview: z.boolean(),
     category: z.object({ slug: z.string(), nameKo: z.string() }),
   })
   .meta({ id: 'PostMarket' });

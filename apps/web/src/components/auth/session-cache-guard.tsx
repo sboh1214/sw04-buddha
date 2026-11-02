@@ -40,9 +40,10 @@ export function sessionIdentityChanged(
  * cache would hold `['me', A]` until gcTime, and a TanStack focus refetch racing the session
  * refetch could file B's rows under A's key).
  *
- * The exceptions (ADR-0091): four entries carry the account of the `Me` the screen was drawn
+ * The exceptions (ADR-0091): six entries carry the account of the `Me` the screen was drawn
  * from — the market's watch state (`watchStateKey`), the post page's likes (`myPostLikesKey`),
- * the recent searches (`searchHistoryKey`) and the closure check (`accountClosureKey`). Each
+ * the recent searches (`searchHistoryKey`), the closure check (`accountClosureKey`) and 판정 이의's
+ * standing and MY list (`myMarketDisputeKey`, `myDisputesKey`; #175, ADR-0104). Each
  * answer names no owner, and a press, a delete or the closure acts on what was drawn from it,
  * naming that account; `['me']` can turn from A to B in place before the session does (ADR-0090
  * 결정 4-2), with no reset here, and one entry for both would draw A's under B's name. The guard
