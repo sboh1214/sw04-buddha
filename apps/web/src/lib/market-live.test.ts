@@ -227,7 +227,7 @@ describe('applyTick', () => {
 });
 
 describe('applyStatus', () => {
-  /** The market after the admin judged YES: the `resolved` event is event 4 of this market. */
+  /** The market judged YES: the transition that wrote the result is event 4 of this market. */
   const resolved: Market = {
     ...detail,
     status: 'resolved',
@@ -235,23 +235,29 @@ describe('applyStatus', () => {
     statusEventId: '4',
   };
 
-  it('walks closed → resolved → settled, each event carrying the result its transition wrote', () => {
-    // ADR-0046: the 판정 is final at once (`resolved`, published by the API) and the worker's
-    // settlement follows moments later (`settled`). Every row on screen holds exactly the
-    // status group the latest transition delivered — nothing else (the detail has no dispute
-    // deadline to carry any more).
+  it('walks closed → provisional → resolved → settled, each event carrying the result its transition wrote', () => {
+    // #152 (ADR-0103): the approved judgement publishes 잠정 결과 with its result (`provisional`,
+    // published by the API), the worker confirms it at the dispute deadline (`resolved`) and its
+    // settlement follows moments later (`settled`). Every row on screen holds exactly the status
+    // group the latest transition delivered — nothing else (the public detail carries no dispute
+    // deadline: #175's and #24's).
     const closed = applyStatus(detail, statusEvent({ status: 'closed', statusEventId: '3' }));
     expect(closed).toEqual({ ...detail, status: 'closed', statusEventId: '3' });
-    const judged = applyStatus(
+    const provisional = applyStatus(
       closed,
-      statusEvent({ status: 'resolved', resolvedResult: 'YES', statusEventId: '4' }),
+      statusEvent({ status: 'provisional', resolvedResult: 'YES', statusEventId: '4' }),
     );
-    expect(judged).toEqual(resolved);
+    expect(provisional).toEqual({ ...resolved, status: 'provisional' });
+    const judged = applyStatus(
+      provisional,
+      statusEvent({ status: 'resolved', resolvedResult: 'YES', statusEventId: '5' }),
+    );
+    expect(judged).toEqual({ ...resolved, statusEventId: '5' });
     const settled = applyStatus(
       judged,
-      statusEvent({ status: 'settled', resolvedResult: 'YES', statusEventId: '5' }),
+      statusEvent({ status: 'settled', resolvedResult: 'YES', statusEventId: '6' }),
     );
-    expect(settled).toEqual({ ...resolved, status: 'settled', statusEventId: '5' });
+    expect(settled).toEqual({ ...resolved, status: 'settled', statusEventId: '6' });
     expect(settled).not.toHaveProperty('disputeUntil');
   });
 

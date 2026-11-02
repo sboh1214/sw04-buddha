@@ -1,0 +1,449 @@
+'use client';
+
+import { Checkbox, Stack, Text } from '@chakra-ui/react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { toaster } from '@/components/ui/toaster';
+import { copy } from '@/copy';
+import { adminMarketKey, useApplyMarket } from '@/hooks/use-admin-markets';
+import { useOperatorId } from '@/hooks/use-operator';
+import { useSessionChanged } from '@/hooks/use-session-changed';
+import { type AdminMarket, type MarketJudgementPending, api, unwrap } from '@/lib/api';
+import { formatKst } from '@/lib/datetime';
+import { MARKET_RESULT_LABEL } from '@/lib/market-admin';
+import {
+  type JudgementField,
+  judgementApproveDraft,
+  judgementEarly,
+  judgementFailure,
+  judgementSourceText,
+} from '@/lib/market-judgement';
+import { revertDraft } from '@/lib/market-review';
+import { ReasonField, ReviewDialogShell } from './market-review-dialogs';
+
+/**
+ * The 판정's dialogs (#152, ADR-0103; ADR-0093 decision 1 #173 items 1·5·9, decision 3 the #152
+ * rows '역할'·'등록 시점'): the waiting registration's 승인 (an admin other than its registrant: the
+ * reason and — before the scheduled judgement — the confirmation of the NO condition's event
+ * deadline, with that condition and deadline shown), 반려 (the reason) and 철회 (the registrant's:
+ * nothing to fill in). No market price, volume or count is drawn: the judgement follows the rule's
+ * source alone (#152 AC 8). Drawn in the review's frame (`ReviewDialogShell`), each confirm off
+ * until what it would send is whole and until the admin on screen is known (`useOperatorId`,
+ * ADR-0092): every write names that admin. Mounted only while the panel holds it for the admin
+ * who opened it (`useHeldForOperator`), so what was checked and typed for A goes with it once
+ * `['me']` turns to B (ADR-0092 answer 1). Each decides the registration it was opened on
+ * (`usePinnedJudgement`). A refusal stays in the dialog, under the field it is about or above the
+ * buttons (`judgementFailure`); another account's cookie closes it with a toast. Sent, it closes
+ * with a toast and the market as the write committed it goes on screen (`useApplyMarket`) — after
+ * an approval, 잠정 결과 with its deadline — and the panel puts focus on what took the button's
+ * place (`onClose(true)`).
+ */
+
+export type JudgementDialogKind = 'approve' | 'reject' | 'retract';
+
+export function JudgementDialog({
+  kind,
+  market,
+  onClose,
+}: {
+  kind: JudgementDialogKind;
+  market: AdminMarket;
+  onClose: (sent: boolean) => void;
+}) {
+  switch (kind) {
+    case 'approve':
+      return <ApproveJudgementDialog market={market} onClose={onClose} />;
+    case 'reject':
+      return <RejectJudgementDialog market={market} onClose={onClose} />;
+    case 'retract':
+      return <RetractJudgementDialog market={market} onClose={onClose} />;
+  }
+}
+
+/**
+ * The registration a dialog was opened on: sent as `requestId` and kept from the dialog's first
+ * draw with what it says — so one retracted or rejected and another registered meanwhile is
+ * decided by no confirmation its admin gave the old one. `changed` once the market's waiting
+ * registration is another (or none); the server refuses the old one regardless ('decided',
+ * 'retracted').
+ */
+function usePinnedJudgement(market: AdminMarket) {
+  const [request] = useState(() => market.judgement.pending);
+  return {
+    request,
+    changed: request === null || market.judgement.pending?.requestId !== request.requestId,
+  };
+}
+
+/** What each decision sends, taken from the dialog when its confirm is pressed; `by` the admin. */
+interface ApproveVariables {
+  requestId: string;
+  reason: string;
+  eventDeadlineConfirmed: boolean;
+  by: string;
+}
+interface DecideVariables {
+  requestId: string;
+  reason: string;
+  by: string;
+}
+interface RetractVariables {
+  requestId: string;
+  by: string;
+}
+
+/**
+ * One decision: sent as the admin on screen, its refusal said where `judgementFailure` puts it —
+ * the detail read again when the screen behind is out of date — and its answer applied.
+ */
+function useJudgementWrite<V>(
+  market: AdminMarket,
+  onClose: (sent: boolean) => void,
+  success: string,
+  send: (variables: V) => Promise<AdminMarket>,
+) {
+  const apply = useApplyMarket(market.id);
+  const queryClient = useQueryClient();
+  const sessionChanged = useSessionChanged();
+  const [fieldError, setFieldError] = useState<{
+    field: JudgementField;
+    message: string;
+  } | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const mutation = useMutation({
+    mutationFn: send,
+    onMutate: () => {
+      setFieldError(null);
+      setRefusal(null);
+    },
+    onSuccess: async (fresh) => {
+      toaster.create({ type: 'success', title: success });
+      onClose(true);
+      await apply(fresh);
+    },
+    onError: (error) => {
+      sessionChanged(error);
+      const failure = judgementFailure(error, 'decision');
+      if (failure.kind === 'toast') {
+        // Another account's cookie: the page drops this dialog once the session names the admin
+        // really signed in, so the refusal is a toast that outlives it.
+        toaster.create({ type: 'error', title: failure.message });
+        onClose(false);
+        return;
+      }
+      if (failure.kind === 'field') {
+        setFieldError({ field: failure.field, message: failure.message });
+        return;
+      }
+      setRefusal(failure.message);
+      if (failure.refresh) {
+        void queryClient.invalidateQueries({ queryKey: adminMarketKey(market.id) });
+      }
+    },
+  });
+  const errorOf = (field: JudgementField) =>
+    fieldError?.field === field ? fieldError.message : null;
+  return { mutation, errorOf, refusal };
+}
+
+/** What the registration a dialog decides says: its result and its source. */
+function PinnedJudgementLine({
+  request,
+  testId,
+}: {
+  request: MarketJudgementPending | null;
+  testId: string;
+}) {
+  if (request === null) return null;
+  return (
+    <Text
+      fontSize="sm"
+      color="fg.muted"
+      whiteSpace="pre-wrap"
+      wordBreak="break-word"
+      data-testid={testId}
+    >
+      {copy.adminMarketJudgementResult} {MARKET_RESULT_LABEL[request.result]} ·{' '}
+      {copy.adminMarketJudgementSource} {judgementSourceText(request.source)}
+    </Text>
+  );
+}
+
+/**
+ * 승인's fields: when the dialog asks for it (`asked`: before the scheduled judgement, or the
+ * server said so), the NO condition and its event deadline in KST and the checkbox confirming them
+ * — the test id on the label element, so a click on it is the click that checks — then the reason.
+ * Nothing of the market's trading is drawn (#152 AC 8).
+ */
+export function ApproveJudgementFields({
+  asked,
+  noCondition,
+  eventDeadline,
+  confirmed,
+  onConfirmed,
+  confirmError,
+  reason,
+  onReason,
+  reasonError,
+  disabled,
+}: {
+  asked: boolean;
+  noCondition: string;
+  eventDeadline: string | null;
+  confirmed: boolean;
+  onConfirmed: (value: boolean) => void;
+  confirmError: string | null;
+  reason: string;
+  onReason: (value: string) => void;
+  reasonError: string | null;
+  disabled: boolean;
+}) {
+  return (
+    <Stack gap="4">
+      {asked && (
+        <Stack
+          gap="2"
+          borderWidth="1px"
+          borderRadius="l2"
+          p="3"
+          data-testid="market-judgement-approve-deadline"
+        >
+          <Text fontSize="sm" whiteSpace="pre-wrap" wordBreak="break-word">
+            <Text as="span" fontWeight="medium">
+              {copy.adminMarketNoCondition}
+            </Text>{' '}
+            <Text as="span" data-testid="market-judgement-approve-no-condition">
+              {noCondition.trim() === '' ? '—' : noCondition}
+            </Text>
+          </Text>
+          <Text fontSize="sm">
+            <Text as="span" fontWeight="medium">
+              {copy.adminMarketEventDeadline}
+            </Text>{' '}
+            <Text as="span" data-testid="market-judgement-approve-event-deadline">
+              {eventDeadline === null ? '—' : formatKst(eventDeadline)}
+            </Text>
+          </Text>
+          <Checkbox.Root
+            checked={confirmed}
+            onCheckedChange={(details) => onConfirmed(details.checked === true)}
+            disabled={disabled}
+            colorPalette="brand"
+            alignItems="flex-start"
+            data-testid="market-judgement-approve-confirm-deadline"
+          >
+            <Checkbox.HiddenInput />
+            <Checkbox.Control mt="0.5" />
+            <Stack gap="0">
+              <Checkbox.Label>{copy.adminMarketJudgementConfirmDeadline}</Checkbox.Label>
+              <Text fontSize="sm" color="fg.muted">
+                {copy.adminMarketJudgementConfirmDeadlineHint}
+              </Text>
+            </Stack>
+          </Checkbox.Root>
+          {confirmError !== null && (
+            <Text
+              fontSize="sm"
+              color="fg.error"
+              data-testid="market-judgement-approve-confirm-deadline-error"
+            >
+              {confirmError}
+            </Text>
+          )}
+        </Stack>
+      )}
+      <ReasonField
+        testId="market-judgement-approve-reason"
+        label={copy.adminMarketJudgementApproveReason}
+        hint={copy.adminMarketJudgementDecisionHint}
+        value={reason}
+        onChange={onReason}
+        error={reasonError}
+        disabled={disabled}
+      />
+    </Stack>
+  );
+}
+
+/**
+ * 승인 (CLOSED → PROVISIONAL, an admin other than the registrant, #173 item 1): the result is
+ * published as 잠정 결과 at once and the dispute window runs from then (#173 item 5). Before the
+ * scheduled judgement — as the dialog opened, or as the server said — the approver confirms the
+ * NO condition's event deadline (decision 3 '등록 시점'), which is sent (`eventDeadlineConfirmed`)
+ * and kept on the judgement. The confirm waits for a reason and, when asked, the confirmation.
+ */
+function ApproveJudgementDialog({
+  market,
+  onClose,
+}: {
+  market: AdminMarket;
+  onClose: (sent: boolean) => void;
+}) {
+  const operatorId = useOperatorId();
+  const decided = usePinnedJudgement(market);
+  // Before the scheduled judgement as the dialog opened: asked from its first draw. The server
+  // judges by its own clock at the approval and, refusing 'required', makes the dialog ask too.
+  const [early] = useState(() => judgementEarly(market));
+  const [reasonText, setReasonText] = useState('');
+  const [confirmed, setConfirmed] = useState(false);
+  const { mutation, errorOf, refusal } = useJudgementWrite(
+    market,
+    onClose,
+    copy.adminMarketJudgementApproved,
+    async ({ requestId, reason, eventDeadlineConfirmed, by }: ApproveVariables) =>
+      unwrap(
+        await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/approve', {
+          params: { path: { id: market.id, requestId } },
+          body: { reason, eventDeadlineConfirmed, expectedAccountId: by },
+        }),
+      ).data,
+  );
+  const confirmError = errorOf('eventDeadlineConfirmed');
+  // Once the server asked, the dialog keeps asking: the next send clears the refusal as it goes.
+  const [askedByServer, setAskedByServer] = useState(false);
+  if (confirmError !== null && !askedByServer) setAskedByServer(true);
+  const asked = early || askedByServer;
+  const draft = judgementApproveDraft(reasonText, confirmed, asked);
+  return (
+    <ReviewDialogShell
+      testId="market-judgement-approve-dialog"
+      title={copy.adminMarketJudgementApproveTitle}
+      body={copy.adminMarketJudgementApproveBody}
+      confirmLabel={copy.adminMarketJudgementApprove}
+      pending={mutation.isPending}
+      confirmDisabled={!draft.ready || operatorId === undefined || decided.changed}
+      refusal={refusal ?? (decided.changed ? copy.adminMarketJudgementRequestChanged : null)}
+      onClose={() => onClose(false)}
+      onConfirm={() => {
+        const requestId = decided.request?.requestId;
+        if (operatorId === undefined || requestId === undefined) return;
+        mutation.mutate({
+          requestId,
+          reason: draft.reason,
+          eventDeadlineConfirmed: draft.eventDeadlineConfirmed,
+          by: operatorId,
+        });
+      }}
+    >
+      <Stack gap="4">
+        <PinnedJudgementLine request={decided.request} testId="market-judgement-approve-request" />
+        <ApproveJudgementFields
+          asked={asked}
+          noCondition={market.noCondition}
+          eventDeadline={market.eventDeadline}
+          confirmed={confirmed}
+          onConfirmed={setConfirmed}
+          confirmError={confirmed ? null : confirmError}
+          reason={reasonText}
+          onReason={setReasonText}
+          reasonError={errorOf('reason')}
+          disabled={mutation.isPending}
+        />
+      </Stack>
+    </ReviewDialogShell>
+  );
+}
+
+/**
+ * 반려 (an admin other than the registrant, in any status): the market stays CLOSED and a judgement
+ * is registered again — by any admin, this one included (#173 item 1). The confirm waits for a
+ * reason.
+ */
+function RejectJudgementDialog({
+  market,
+  onClose,
+}: {
+  market: AdminMarket;
+  onClose: (sent: boolean) => void;
+}) {
+  const operatorId = useOperatorId();
+  const [reasonText, setReasonText] = useState('');
+  const draft = revertDraft(reasonText);
+  const decided = usePinnedJudgement(market);
+  const { mutation, errorOf, refusal } = useJudgementWrite(
+    market,
+    onClose,
+    copy.adminMarketJudgementRejected,
+    async ({ requestId, reason, by }: DecideVariables) =>
+      unwrap(
+        await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/reject', {
+          params: { path: { id: market.id, requestId } },
+          body: { reason, expectedAccountId: by },
+        }),
+      ).data,
+  );
+  return (
+    <ReviewDialogShell
+      testId="market-judgement-reject-dialog"
+      title={copy.adminMarketJudgementRejectTitle}
+      body={copy.adminMarketJudgementRejectBody}
+      confirmLabel={copy.adminMarketJudgementReject}
+      pending={mutation.isPending}
+      confirmDisabled={!draft.ready || operatorId === undefined || decided.changed}
+      refusal={refusal ?? (decided.changed ? copy.adminMarketJudgementRequestChanged : null)}
+      onClose={() => onClose(false)}
+      onConfirm={() => {
+        const requestId = decided.request?.requestId;
+        if (operatorId === undefined || requestId === undefined) return;
+        mutation.mutate({ requestId, reason: draft.reason, by: operatorId });
+      }}
+    >
+      <Stack gap="4">
+        <PinnedJudgementLine request={decided.request} testId="market-judgement-reject-request" />
+        <ReasonField
+          testId="market-judgement-reject-reason"
+          label={copy.adminMarketJudgementRejectReason}
+          hint={copy.adminMarketJudgementDecisionHint}
+          value={reasonText}
+          onChange={setReasonText}
+          error={errorOf('reason')}
+          disabled={mutation.isPending}
+        />
+      </Stack>
+    </ReviewDialogShell>
+  );
+}
+
+/** 철회 (the registrant's alone, any status): nothing to fill in, the confirm says what it does. */
+function RetractJudgementDialog({
+  market,
+  onClose,
+}: {
+  market: AdminMarket;
+  onClose: (sent: boolean) => void;
+}) {
+  const operatorId = useOperatorId();
+  const decided = usePinnedJudgement(market);
+  const { mutation, refusal } = useJudgementWrite(
+    market,
+    onClose,
+    copy.adminMarketJudgementRetracted,
+    async ({ requestId, by }: RetractVariables) =>
+      unwrap(
+        await api.POST('/api/v1/admin/markets/{id}/judgements/{requestId}/retract', {
+          params: { path: { id: market.id, requestId } },
+          body: { expectedAccountId: by },
+        }),
+      ).data,
+  );
+  return (
+    <ReviewDialogShell
+      testId="market-judgement-retract-dialog"
+      title={copy.adminMarketJudgementRetractTitle}
+      body={copy.adminMarketJudgementRetractBody}
+      confirmLabel={copy.adminMarketJudgementRetract}
+      pending={mutation.isPending}
+      confirmDisabled={operatorId === undefined || decided.changed}
+      refusal={refusal ?? (decided.changed ? copy.adminMarketJudgementRequestChanged : null)}
+      onClose={() => onClose(false)}
+      onConfirm={() => {
+        const requestId = decided.request?.requestId;
+        if (operatorId !== undefined && requestId !== undefined) {
+          mutation.mutate({ requestId, by: operatorId });
+        }
+      }}
+    >
+      <PinnedJudgementLine request={decided.request} testId="market-judgement-retract-request" />
+    </ReviewDialogShell>
+  );
+}

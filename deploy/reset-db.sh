@@ -14,8 +14,9 @@
 # The wipe is WIPE_PUBLIC_TABLES_SQL (packages/db/src/wipe.ts), the very statement migrations 0017
 # and 0048 ran once each when #125 and #174 deployed, run by packages/db/dist/wipe-cli.js as
 # buddha_migrate inside the deployed api image. Redis is flushed whole: the delayed
-# open/close/finalize jobs of the deleted markets would otherwise fail as "not found", and the
-# worker re-installs its repeatable jobs when it starts. The media bucket is emptied by
+# open/close/resolve jobs and the finalize jobs of the deleted markets would otherwise fail as "not
+# found" (resolve waits out a dispute window, #152), and the worker re-installs its repeatable jobs
+# when it starts. The media bucket is emptied by
 # packages/storage/dist/empty-cli.js in a one-off api container — the api's own MEDIA_S3_* key and
 # bucket, nothing on the host — after the database wipe (never before it: a run that failed earlier
 # leaves rows pointing at their images) and while api and worker are stopped (no upload lands

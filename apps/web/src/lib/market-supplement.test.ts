@@ -139,6 +139,10 @@ const market: AdminMarket = {
   ruleVersions: [v1],
   supplement: { pending: null, log: [] },
   pause: { history: [], pending: null, log: [] },
+  // Not judged (#152): no judgement, none waiting, the dispute window decided.
+  judgementVersion: null,
+  disputeDeadline: null,
+  judgement: { current: null, pending: null, log: [], disputeWindowUndecided: false },
 };
 
 /** Before the close (11-29 15:00 UTC) and after it. */

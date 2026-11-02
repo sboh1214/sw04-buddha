@@ -31,8 +31,9 @@ const baseURL = process.env.E2E_BASE_URL ?? 'http://localhost:3000';
 const apiURL = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:4000').replace(/\/$/, '');
 
 /**
- * The worker's liveness probe (M5). The settlement spec waits on a `market.finalize` job that
- * only the worker runs, so a stack without one fails as "실현 손익 never appeared" rather than as
+ * The worker's liveness probe (M5). The settlement spec waits on the `market.resolve` job that
+ * confirms a 잠정 결과 at its dispute deadline (#152) and the `market.finalize` job after it, which
+ * only the worker runs, so a stack without one fails as "지급 완료 never appeared" rather than as
  * "no worker" — the probe turns that into a startup timeout with the worker's name on it.
  *
  * `WORKER_HEALTH_PORT=0` is the documented "no listener" (worker env.ts), and a port nothing
@@ -55,6 +56,10 @@ const EXPECT_TIMEOUT_MS = 15_000;
 
 export default defineConfig({
   testDir: './e2e',
+  // Once per invocation, after `webServer` answers and before any test: gives the release setting
+  // `market.dispute_window` a short 시험값 while it is 미정, so a judgement can be approved and its
+  // dispute window waited out (#152, ADR-0103). `--list` runs no setup.
+  globalSetup: './e2e/global-setup.ts',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
@@ -85,8 +90,9 @@ export default defineConfig({
   /*
    * All three processes, because the specs depend on all three: the web server for the pages,
    * the API directly for `/ws` (a Next rewrite does not proxy a WebSocket upgrade), and since
-   * M5 the worker for the open, close and finalize jobs — so a run with one of them down fails as
-   * "the probability never moved" or "실현 손익 never appeared" rather than as "X is down".
+   * M5 the worker for the open, close, resolve (#152) and finalize jobs — so a run with one of them
+   * down fails as "the probability never moved" or "지급 완료 never appeared" rather than as "X is
+   * down". The global setup above signs in through the web server, so it runs after these answer.
    * (The worker entry is the one exception, and only when its probe is switched off — above.)
    *
    * `reuseExistingServer` is true even in CI, deliberately. The CI job builds the app and

@@ -5,12 +5,14 @@ import { UnrecoverableError, type Job, type Processor } from 'bullmq';
 import { type Logger } from 'pino';
 import * as z from 'zod';
 import { JOB_NAMES } from '../queues.js';
+import { type EnqueueFinalize } from '../market-jobs.js';
 import { type Publish } from '../realtime.js';
 import { runLedgerAudit } from './ledger-audit.js';
 import { purgeCommunityRecords } from './community-records-purge.js';
 import { closeDueMarkets, closeMarket } from './market-close.js';
 import { finalizeDueMarkets, finalizeMarket } from './market-finalize.js';
 import { openDueMarkets, openMarket } from './market-open.js';
+import { resolveDueMarkets, resolveMarket } from './market-resolve.js';
 import { removeOrphanMedia } from './media-orphan-cleanup.js';
 import { purgeExpiredRecords } from './retention-purge.js';
 import { type ScanFailure } from './scan.js';
@@ -22,6 +24,11 @@ export interface JobContext {
   auditDb: Db;
   /** Realtime events after a market job commits (realtime.ts); best effort, never throws. */
   publish: Publish;
+  /**
+   * `market.finalize` after a confirmation commits (#152, market-jobs.ts); best effort, never
+   * throws — the finalize scan is the safety net.
+   */
+  enqueueFinalize: EnqueueFinalize;
   /** The media store (#46): the orphan clean-up and the retention purge remove objects from it. */
   storage: ObjectStorage;
   logger: Logger;
@@ -33,7 +40,8 @@ type JobResult = Record<string, unknown>;
 type Handler = (job: Job, context: JobContext) => Promise<JobResult>;
 
 /**
- * `market.open` / `market.close` / `market.finalize` payload (jobs.ts in @buddha/shared). A
+ * `market.open` / `market.close` / `market.resolve` / `market.finalize` payload (jobs.ts in
+ * @buddha/shared). A
  * payload the schema refuses is a producer bug, not a transient failure: retrying it three times
  * with backoff would only delay the failed-set entry, so it is UnrecoverableError. A scheduler job
  * carries `{}` (BullMQ stores an absent template `data` as an empty object) — the scan.
@@ -73,6 +81,22 @@ const HANDLERS: Partial<Record<string, Handler>> = {
     }
     const { closed, skipped, failed, failures } = await closeDueMarkets(db, publish);
     return reportScan({ closed, skipped, failed }, failures, 'market close', closed, logger);
+  },
+  // #152 (ADR-0103): the delayed job the API registers at a provisional result's dispute
+  // deadline, or the scan; a confirmation registers its `market.finalize`.
+  [JOB_NAMES.marketResolve]: async (job, { db, publish, enqueueFinalize, logger }) => {
+    const { marketId } = parseMarketJob(job);
+    if (marketId) {
+      const result = await resolveMarket(db, marketId, publish, enqueueFinalize);
+      logger.info(result, 'market resolve');
+      return result;
+    }
+    const { resolved, skipped, failed, failures } = await resolveDueMarkets(
+      db,
+      publish,
+      enqueueFinalize,
+    );
+    return reportScan({ resolved, skipped, failed }, failures, 'market resolve', resolved, logger);
   },
   [JOB_NAMES.marketFinalize]: async (job, { db, publish, logger }) => {
     const { marketId } = parseMarketJob(job);

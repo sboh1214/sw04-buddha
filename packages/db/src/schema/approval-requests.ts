@@ -52,6 +52,16 @@ import { approvalStatusEnum } from './enums.js';
  * (`market_pauses.end_approval_id`, migration 0054) — or rejects it, and its requester may retract
  * it, in any status; once the market left that pause (closed at its close) its approval is refused.
  *
+ * A CLOSED market's judgement (#152, ADR-0103; ADR-0093 decision 1 #173 item 1, decision 3 the
+ * #152 rows) — `kind` `market_judgement` (target `market`, the market's id as text; payload
+ * `{result, source, fallbackReason, voidReason, evidence, ruleVersion}`, the registration with the
+ * source's name and address copied from the rules; the request's reason the description of what
+ * was confirmed): at most one waiting per market, which the API holds under the market lock. An
+ * admin other than its registrant approves it — CLOSED → PROVISIONAL and the market's next
+ * judgement, whose row references it (`market_judgements.approval_id`, migration 0055) — or
+ * rejects it, and its registrant may retract it, in any status; a market no longer CLOSED refuses
+ * its approval.
+ *
  * #184's retention deletes none of the market kinds (migration 0044 names the account
  * restriction's kinds alone).
  */

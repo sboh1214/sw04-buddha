@@ -4,7 +4,7 @@
  * it — job id, name, data, delay and options — and the best-effort contract (never throws,
  * bounded on a Redis that never answers) is pinned. Skips when TEST_* are unset.
  */
-import { JOB_NAMES, marketCloseJobId, marketFinalizeJobId, marketOpenJobId } from '@buddha/shared';
+import { JOB_NAMES, marketCloseJobId, marketOpenJobId, marketResolveJobId } from '@buddha/shared';
 import { Logger } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
@@ -69,37 +69,40 @@ describe.skipIf(!hasTestInfra)('MarketJobs (integration)', () => {
     expect(await queue.getDelayedCount()).toBe(1);
   });
 
-  it('registers market.finalize at the judgement instant with no delay, and a past close is due now', async () => {
-    // ADR-0046: the judgement passes its own instant as both arguments, so the job is waiting
-    // at once under an id that carries that instant.
-    const resolvedAt = new Date('2026-09-09T00:00:00.123Z');
-    await jobs.scheduleFinalize(MARKET_ID, resolvedAt, resolvedAt);
-    const finalize = await queue.getJob(marketFinalizeJobId(MARKET_ID, resolvedAt));
-    expect(finalize).toMatchObject({
-      id: `market.finalize.${MARKET_ID}.${String(resolvedAt.getTime())}`,
-      name: JOB_NAMES.marketFinalize,
+  it('registers market.resolve at the dispute deadline, delayed from the approval’s instant, and a past close is due now (#152)', async () => {
+    // ADR-0103: the approval fixed the deadline at its instant plus the window (a day here), so
+    // the job waits exactly that long under an id that carries the deadline.
+    const publishedAt = new Date('2026-09-09T00:00:00.123Z');
+    const disputeDeadline = new Date(publishedAt.getTime() + 24 * HOUR_MS);
+    await jobs.scheduleResolve(MARKET_ID, disputeDeadline, publishedAt);
+    const resolve = await queue.getJob(marketResolveJobId(MARKET_ID, disputeDeadline));
+    expect(resolve).toMatchObject({
+      id: `market.resolve.${MARKET_ID}.${String(disputeDeadline.getTime())}`,
+      name: JOB_NAMES.marketResolve,
       data: { marketId: MARKET_ID },
-      delay: 0,
+      delay: 24 * HOUR_MS,
     });
-    expect(finalize!.opts).toMatchObject({
+    expect(resolve!.opts).toMatchObject({
       attempts: 3,
       backoff: { type: 'exponential', delay: 1_000 },
       removeOnComplete: true,
       removeOnFail: { count: 1_000 },
     });
-    expect(await queue.getWaitingCount()).toBe(1);
-    expect(await queue.getDelayedCount()).toBe(0);
-    // MarketJobs has no way to take a finalize job back: a judgement is final.
-    expect('cancelFinalize' in jobs).toBe(false);
+    expect(await queue.getDelayedCount()).toBe(1);
+    expect(await queue.getWaitingCount()).toBe(0);
+    // Nothing moves a deadline in #152, so nothing takes the job back; and the finalize is the
+    // worker's own since #152 (it registers it after its confirmation).
+    expect('cancelResolve' in jobs).toBe(false);
+    expect('scheduleFinalize' in jobs).toBe(false);
 
     // A close time that expired before the registration ran: registered without delay rather
     // than refused, so the worker picks it up at once.
-    const past = new Date(resolvedAt.getTime() - HOUR_MS);
-    await jobs.scheduleClose(OTHER_ID, past, resolvedAt);
+    const past = new Date(publishedAt.getTime() - HOUR_MS);
+    await jobs.scheduleClose(OTHER_ID, past, publishedAt);
     const due = await queue.getJob(marketCloseJobId(OTHER_ID, past));
     expect(due).toBeDefined();
     expect(due!.delay).toBe(0);
-    expect(await queue.getWaitingCount()).toBe(2);
+    expect(await queue.getWaitingCount()).toBe(1);
   });
 
   it('keeps one job per (market, instant): a repeat registration neither throws nor duplicates', async () => {
@@ -165,15 +168,15 @@ describe.skipIf(!hasTestInfra)('MarketJobs (integration)', () => {
     const now = new Date();
     const closeAt = new Date(now.getTime() + HOUR_MS);
     await jobs.scheduleClose(MARKET_ID, closeAt, now);
-    await jobs.scheduleFinalize(MARKET_ID, now, now);
+    await jobs.scheduleResolve(MARKET_ID, closeAt, now);
     await jobs.scheduleClose(OTHER_ID, closeAt, now);
 
     await jobs.cancelClose(MARKET_ID, closeAt);
     expect(await queue.getJob(marketCloseJobId(MARKET_ID, closeAt))).toBeUndefined();
-    // Only that one: the other market's job at the same instant and this market's finalize
-    // are untouched.
+    // Only that one: the other market's job at the same instant and this market's resolve at
+    // that instant are untouched.
     expect(await queue.getJob(marketCloseJobId(OTHER_ID, closeAt))).toBeDefined();
-    expect(await queue.getJob(marketFinalizeJobId(MARKET_ID, now))).toBeDefined();
+    expect(await queue.getJob(marketResolveJobId(MARKET_ID, closeAt))).toBeDefined();
 
     // Already gone (the worker ran it, or it was never added): no throw, nothing else removed.
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);

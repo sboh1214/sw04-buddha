@@ -188,8 +188,9 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review and #114 pause, below; #152 judgement, #20 cancel) — #21's scheduled open
- * writes the `opened` the interim open wrote before it.
+ * makes (#78 review, #114 pause and #152 judgement, below; #20 cancel) — #21's scheduled open
+ * writes the `opened` the interim open wrote before it, and #152's confirmation the `resolved`
+ * the interim judgement wrote.
  */
 export const MARKET_EVENT_TYPES = [
   /** → draft: the row is written (`to_status` only). */
@@ -255,7 +256,14 @@ export const MARKET_EVENT_TYPES = [
    * the old rules text.
    */
   'rules_edited',
-  /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}` (until #152). */
+  /**
+   * provisional → resolved: the worker confirmed the result once its 이의 기한 passed with nothing
+   * held (#152, ADR-0103; ADR-0093 decision 1 #173 item 1 — actor NULL), payload `{version,
+   * result, source: 'deadline'}` (`MarketResolvedByDeadlinePayload`, market-judgement.ts): the
+   * judgement version confirmed and its result. Rows from before #152 are closed → resolved,
+   * ADR-0046's interim judgement by one admin (the actor), payload `{result, note, evidenceUrl}`
+   * (`MarketInterimResolvedPayload`).
+   */
   'resolved',
   /** resolved → settling: the worker starts the settlement steps (ADR-0093 decision 1 item 1). */
   'settling',
@@ -282,6 +290,15 @@ export const MARKET_EVENT_TYPES = [
    * other end is `closed` with `source: 'early_close'`.
    */
   'resumed',
+  /**
+   * closed → provisional: 잠정 결과의 공개 (#152, ADR-0103; ADR-0093 decision 1 #173 items 1·5·9)
+   * — an admin other than the registrant approved a `market_judgement` registration (the actor is
+   * the approver), and `markets.resolved_result` holds its result, VOID included. Payload
+   * `{version, result, approvalId, requestedBy, disputeDeadline}` (`MarketProvisionalPayload`,
+   * market-judgement.ts): the judgement version it published, the result, the request, its
+   * registrant and the 이의 기한 (ISO). The registration, 반려 and 철회 are admin actions alone.
+   */
+  'provisional',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -426,6 +443,27 @@ export const ADMIN_ACTION_TYPES = [
   /** Its requester retracted it before anyone decided it: payload `{approvalId, pauseId, path}`. */
   'market_pause_decision_retract',
   /**
+   * 판정 (#152, ADR-0103; ADR-0093 decision 3 the #152 rows): target `market` / its id, as each
+   * judgement record below. An admin registered a CLOSED market's judgement, which opens a
+   * `market_judgement` approval request and changes no status: payload `{approvalId, result,
+   * source, fallbackReason, voidReason, evidence, ruleVersion, description}`
+   * (`MarketJudgementRequestActionPayload`, market-judgement.ts) — the registration as the request
+   * froze it, the source's name and address copied from the rules.
+   */
+  'market_judgement_request',
+  /**
+   * An admin other than the registrant approved it, and the market went CLOSED → PROVISIONAL in
+   * the same transaction (its `provisional` event): payload `{approvalId, version, result, reason,
+   * eventDeadlineConfirmed, disputeWindowMinutes, disputeDeadline, before, after}` — the
+   * approver's reason and event-deadline confirmation, the window read and the deadline it fixed,
+   * and `market_update`'s snapshot before and after.
+   */
+  'market_judgement_approve',
+  /** Another admin rejected it, the market stays CLOSED: payload `{approvalId, result, reason}`. */
+  'market_judgement_reject',
+  /** Its registrant retracted it before anyone decided it: payload `{approvalId, result}`. */
+  'market_judgement_retract',
+  /**
    * Retired (#21, ADR-0100): the interim open (ADR-0027, draft → open) wrote it until #21 removed
    * that action. Kept so the rows it wrote still parse and render; nothing writes it now — an open
    * is recorded by its `opened` market event (the actor and `source`).
@@ -438,6 +476,13 @@ export const ADMIN_ACTION_TYPES = [
    * parse and render; nothing writes it now.
    */
   'market_close',
+  /**
+   * Retired (#152, ADR-0103): ADR-0046's interim judgement by one admin (closed → resolved, final
+   * at once, payload `{result, note, evidenceUrl, before, after}`) wrote it until #152 made the
+   * judgement a registration another admin approves (`market_judgement_*`) and the worker confirms
+   * at its dispute deadline. Kept so the rows it wrote still parse and render; nothing writes it
+   * now.
+   */
   'market_resolve',
   /**
    * Two markets became related (#65, ADR-0068): target `market` / the market the admin linked

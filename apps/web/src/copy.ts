@@ -400,7 +400,8 @@ export const copy = {
   // copy.no인 자리(상세·내 포지션·MY·관리자 상세·테마 결과)에 이것이 선다.
   marketResultVoid: '무효',
   adminMarketClosingSoon: '마감 임박',
-  // 관리자 목록·상세의 보조 배지: 거래 마감은 판정을, 결과 확정·지급 중은 워커의 정산을 기다린다.
+  // 관리자 목록·상세의 보조 배지: 거래 마감은 판정(등록과 승인)을, 결과 확정·지급 중은 워커의 정산을
+  // 기다린다. 잠정 결과는 이의 기한을 기다린다(상세의 판정 칸이 기한을 보인다).
   adminMarketAwaitingResolution: '판정 대기',
   adminMarketAwaitingSettlement: '정산 대기',
   adminNoMarkets: '시장이 없습니다.',
@@ -860,7 +861,8 @@ export const copy = {
   // 설명으로 바로 멈추고(조기 결과면 결과가 공개된 시각도 KST로 적는다), 재개(→ 거래 중)나 조기 마감(→ 거래
   // 마감)은 한 관리자가 요청하고 요청하지 않은 다른 관리자가 승인한다. 거래 마감 시각은 일시 중단 중에도
   // 예정대로 오고 늦추지 않는다. 마감 전에 무효로 정하지 않는다: 판정 불가면 조기 마감한 뒤 판정에서 무효 규칙을
-  // 적용한다(#152). 설명과 결과 공개 시각은 지금 관리자만 본다(공개 판정 기록은 #24).
+  // 적용한다(#152: 그 시장의 판정은 무효로만 등록한다). 설명과 결과 공개 시각은 지금 관리자만 본다(공개 판정
+  // 기록은 #24).
   adminMarketPause: '거래 일시 중단',
   adminMarketPauseIntro:
     '관리자 한 명이 사유와 함께 바로 일시 중단합니다. 재개나 조기 마감은 한 관리자가 요청하고 요청하지 않은 다른 관리자가 승인합니다. 거래 마감 시각은 일시 중단 중에도 예정대로 옵니다.',
@@ -1021,6 +1023,163 @@ export const copy = {
   adminMarketPauseDecisionsColRequestedBy: '요청한 관리자',
   adminMarketPauseDecisionsColRequestedAt: '요청 시각',
   adminMarketPauseDecisionsColCloseAt: '거래 마감',
+  // 판정 등록과 별도 검토자 승인 (#152, ADR-0103; ADR-0093 결정 1 #173 1·4·5·9·11~13항, 결정 3의 #152 행):
+  // 거래 마감한 시장에 관리자 한 명이 결과(YES·NO·무효), 규칙의 출처에서 고른 판정 출처, 증거 링크와 수집
+  // 시각, 확인한 내용을 등록하고, 등록하지 않은 다른 관리자가 승인하면 그 결과가 잠정 결과로 공개되고 이의
+  // 기간(출시 설정, 승인한 순간에 시장마다 고정)이 흐른다. 이의 기한이 지나면 워커가 결과를 확정하고 지급이
+  // 이어진다. 반려하면 거래 마감에 남고 다시 등록한다. 무효도 같은 길을 간다. 시장 가격·거래량은 판정 화면에
+  // 없다(#152 AC 8). 등록·승인한 관리자와 증거는 지금 관리자만 본다(공개 판정 기록은 #24).
+  adminMarketJudgement: '판정',
+  adminMarketJudgementIntro:
+    '거래 마감한 시장의 결과를 한 관리자가 출처·증거와 함께 등록하고, 등록하지 않은 다른 관리자가 승인합니다. 승인하면 잠정 결과가 공개되고, 이의 기한이 지나면 결과가 자동으로 확정됩니다. 반려하면 거래 마감 상태로 남고 다시 등록합니다.',
+  adminMarketJudgementRegister: '판정 등록',
+  // 출시 설정의 이의 기간이 미정이면 등록과 승인을 서버가 거절한다(기한을 정할 값이 없다).
+  adminMarketJudgementWindowUndecided:
+    '이의 기간(출시 설정)이 미정이라 판정을 등록하거나 승인할 수 없습니다. 출시 설정에서 이의 기간을 정해 주세요.',
+  adminMarketJudgementSettingsLink: '출시 설정으로',
+  // 예정 판정 시각 전의 등록·승인(결정 3 '등록 시점'): 막지 않고 경고하며, 승인하는 관리자가 NO 조건의 사건
+  // 기한을 확인한다.
+  adminMarketJudgementEarly:
+    '예정 판정 시각 전입니다. 승인하는 관리자가 NO 조건의 사건 기한을 확인합니다.',
+  // 판정 불가로 조기 마감한 시장(#114, ADR-0102): 판정은 무효 규칙을 따른다.
+  adminMarketJudgementVoidOnly:
+    '판정 불가로 조기 마감한 시장입니다. 판정은 무효 규칙을 따르므로 무효로만 등록할 수 있습니다.',
+  adminMarketJudgementVoidOnlyReview: '일시 중단 검토 결과',
+  // 등록 칸.
+  adminMarketJudgementFormTitle: '판정 등록',
+  adminMarketJudgementFormHint:
+    '규칙의 출처에서 확인한 결과를 적습니다. 등록만으로는 시장 상태가 바뀌지 않고, 다른 관리자가 승인하면 잠정 결과가 공개됩니다. 한 시장에 기다리는 판정은 하나입니다.',
+  adminMarketJudgementResult: '결과',
+  adminMarketJudgementSource: '판정 출처',
+  adminMarketJudgementSourceHint:
+    '규칙의 출처 중에서 고릅니다. 대체 출처를 고르면 1차 출처를 쓰지 못한 사유를 적습니다. 규칙 밖의 출처가 필요하면 무효로 판정합니다.',
+  adminMarketJudgementSourcePrimary: '1차 출처',
+  adminMarketJudgementSourceFallback: '대체 출처',
+  adminMarketJudgementSourceNone: '규칙의 출처 없음',
+  adminMarketJudgementSourceNoneHint: '무효로 판정할 때만 고를 수 있습니다.',
+  adminMarketJudgementNoSources:
+    '이 시장의 규칙에는 출처가 없습니다. 규칙의 출처 없이는 무효로만 판정할 수 있습니다.',
+  adminMarketJudgementFallbackReason: '1차 출처를 쓰지 못한 사유',
+  adminMarketJudgementFallbackReasonHint:
+    '대체 출처를 고른 까닭을 적습니다. 판정 기록에 남습니다. 500자까지 쓸 수 있습니다.',
+  adminMarketJudgementVoidReason: '무효 사유',
+  adminMarketJudgementVoidReasonHint:
+    '무효로 판정하는 까닭을 적습니다. 판정 기록에 남고 공개 판정 기록이 보일 사유입니다. 500자까지 쓸 수 있습니다.',
+  adminMarketJudgementLinks: '증거 링크',
+  adminMarketJudgementLinksHint:
+    '확인한 자료의 주소를 1~5개 적습니다. http 또는 https 주소만 됩니다. 파일은 첨부하지 않습니다.',
+  adminMarketJudgementLinkAdd: '링크 추가',
+  adminMarketJudgementLinkRemove: '빼기',
+  adminMarketJudgementCollectedAt: '수집 시각 (KST)',
+  adminMarketJudgementCollectedAtHint:
+    '증거를 확인한 시각을 KST로 적습니다. 지금보다 늦을 수 없습니다.',
+  adminMarketJudgementDescription: '확인한 내용',
+  adminMarketJudgementDescriptionHint:
+    '출처에서 무엇을 확인했는지 적습니다. 판정 기록에 관리자·시각과 함께 남습니다. 500자까지 쓸 수 있습니다.',
+  adminMarketJudgementRegistered: '판정을 등록했습니다. 다른 관리자가 승인하거나 반려합니다.',
+  // 등록 칸을 연 뒤 시장이 더 등록을 받지 않게 되면(다른 관리자가 먼저 등록했거나 거래 마감이 아니다) 칸은
+  // 쓴 것과 함께 남고 까닭을 말한다.
+  adminMarketJudgementFormStatus:
+    '거래 마감 상태가 아니어서 판정을 등록할 수 없습니다. 쓴 내용을 확인한 뒤 칸을 닫아 주세요.',
+  adminMarketJudgementFormPending:
+    '그 사이 다른 판정이 등록되어 승인을 기다립니다. 한 시장에 기다리는 판정은 하나입니다.',
+  // 승인을 기다리는 판정.
+  adminMarketJudgementPending: '승인을 기다리는 판정',
+  adminMarketJudgementRegisteredBy: '등록한 관리자',
+  adminMarketJudgementRegisteredAt: '등록 시각',
+  adminMarketJudgementRuleVersion: '따른 규칙 버전',
+  adminMarketJudgementNoRuleVersion: '규칙 버전 없음',
+  adminMarketJudgementExcludedRequester:
+    '판정을 등록한 관리자는 그 판정을 승인·반려할 수 없습니다. 다른 관리자가 결정합니다. 거두려면 철회하세요.',
+  adminMarketJudgementPendingStatus:
+    '거래 마감 상태가 아니어서 승인할 수 없습니다. 반려하거나 철회해 끝내세요.',
+  adminMarketJudgementApprove: '승인',
+  adminMarketJudgementReject: '반려',
+  adminMarketJudgementRetract: '철회',
+  // 현재 판정(승인된 판정, 잠정 결과부터): 판정 버전, 등록한 내용, 승인한 관리자, 잠정 결과를 공개한 시각과
+  // 그때 고정한 이의 기간·이의 기한.
+  adminMarketJudgementCurrent: '현재 판정',
+  adminMarketJudgementVersion: '판정 버전',
+  adminMarketJudgementApprovedBy: '승인한 관리자',
+  adminMarketJudgementPublishedAt: '잠정 결과 공개 시각',
+  adminMarketJudgementWindow: '이의 기간',
+  adminMarketJudgementWindowMinutes: '분',
+  adminMarketJudgementDeadline: '이의 기한',
+  adminMarketJudgementDeadlineConfirmed: '사건 기한 확인',
+  adminMarketJudgementDeadlineConfirmedDone: '승인한 관리자가 확인함',
+  adminMarketJudgementProvisionalNote:
+    '이의 기한이 지나면 결과가 자동으로 확정되고 지급이 이어집니다.',
+  // 판정 기록(AdminMarket.judgement.log, 최근 것부터): 등록마다 끝난 방식과 등록한 내용, 결정.
+  adminMarketJudgementLog: '판정 기록',
+  adminMarketJudgementLogEmpty: '판정 기록이 없습니다.',
+  judgementStatusPending: '대기',
+  judgementStatusApproved: '승인',
+  judgementStatusRejected: '반려',
+  judgementStatusRetracted: '철회',
+  judgementLogDecidedBy: '결정한 관리자',
+  judgementLogDecidedAt: '결정 시각',
+  judgementLogDecisionReason: '결정 사유',
+  judgementLogRetractedAt: '철회 시각',
+  // 승인·반려·철회 창.
+  adminMarketJudgementApproveTitle: '판정을 승인합니다',
+  adminMarketJudgementApproveBody:
+    '승인하면 이 결과가 잠정 결과로 바로 공개되고, 이의 기간(출시 설정)이 지금부터 흐릅니다. 이의 기한이 지나면 결과가 자동으로 확정됩니다.',
+  adminMarketJudgementApproveReason: '승인 사유',
+  adminMarketJudgementDecisionHint:
+    '판정 기록에 관리자·시각과 함께 남습니다. 관리자만 봅니다. 500자까지 쓸 수 있습니다.',
+  adminMarketJudgementConfirmDeadline: 'NO 조건의 사건 기한을 확인했습니다',
+  adminMarketJudgementConfirmDeadlineHint:
+    '예정 판정 시각 전의 승인입니다. 위의 NO 조건과 사건 기한을 읽고 결과를 정할 수 있는지 확인해 주세요.',
+  adminMarketJudgementApproved: '판정을 승인했습니다. 잠정 결과가 공개되었습니다.',
+  adminMarketJudgementRejectTitle: '판정을 반려합니다',
+  adminMarketJudgementRejectBody:
+    '반려하면 이 판정이 끝나고 시장은 거래 마감 상태로 남습니다. 판정은 다시 등록합니다.',
+  adminMarketJudgementRejectReason: '반려 사유',
+  adminMarketJudgementRejected: '판정을 반려했습니다.',
+  adminMarketJudgementRetractTitle: '판정을 철회합니다',
+  adminMarketJudgementRetractBody:
+    '철회하면 등록한 판정이 끝나고 시장은 지금 상태 그대로입니다. 계속할까요?',
+  adminMarketJudgementRetracted: '판정을 철회했습니다.',
+  adminMarketJudgementRequestChanged:
+    '이 창을 연 뒤 기다리는 판정이 바뀌었습니다. 창을 닫고 다시 확인해 주세요.',
+  // 판정의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_JUDGEMENT_REFUSALS).
+  errMarketJudgementResult: '결과를 골라 주세요.',
+  errMarketJudgementVoidOnly: '판정 불가로 조기 마감한 시장은 무효로만 판정합니다.',
+  errMarketJudgementSource: '판정 출처를 골라 주세요. 규칙의 출처 없이 판정하려면 무효를 고릅니다.',
+  errMarketJudgementSourceUnknown: '이 시장의 규칙에 없는 출처입니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementFallbackReason: '1차 출처를 쓰지 못한 사유를 1~500자로 입력해 주세요.',
+  errMarketJudgementFallbackOnly: '1차 출처를 쓰지 못한 사유는 대체 출처를 고를 때만 적습니다.',
+  errMarketJudgementVoidReason: '무효 사유를 1~500자로 입력해 주세요.',
+  errMarketJudgementVoidReasonOnly: '무효 사유는 무효로 판정할 때만 적습니다.',
+  errMarketJudgementLinks: '증거 링크를 1~5개 입력해 주세요.',
+  errMarketJudgementLink: 'http 또는 https로 시작하는 500자 이하의 주소를 입력해 주세요.',
+  errMarketJudgementLinkDuplicate: '같은 링크를 두 번 적었습니다.',
+  errMarketJudgementCollectedAtRequired: '수집 시각을 입력해 주세요.',
+  errMarketJudgementCollectedAtTime: '날짜와 시각으로 입력해 주세요.',
+  errMarketJudgementCollectedAtAfter: '수집 시각은 지금보다 늦을 수 없습니다.',
+  errMarketJudgementDescription: '확인한 내용을 1~500자로 입력해 주세요.',
+  errMarketJudgementStatus:
+    '거래 마감 상태의 시장만 판정을 등록할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementDecisionStatus:
+    '거래 마감 상태가 아니어서 승인할 수 없습니다. 화면을 새로 고쳐 주세요. 기다리는 판정은 반려하거나 철회해 끝냅니다.',
+  errMarketJudgementPending: '승인을 기다리는 판정이 이미 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementDeadlineConfirm:
+    '예정 판정 시각 전에는 NO 조건의 사건 기한을 확인해야 승인할 수 있습니다.',
+  errMarketJudgementUnknown: '이 시장의 판정 등록이 아닙니다. 화면을 새로 고쳐 주세요.',
+  // 판정 승인 대기 (GET /admin/market-judgements): 기다리는 판정 등록, 오래 기다린 것부터. 검수 대기 화면의
+  // 넷째 묶음이다. 예정 판정 시각 전의 판정은 그렇다고 표시한다.
+  adminMarketJudgements: '판정 승인 대기',
+  adminMarketJudgementsIntro:
+    '승인을 기다리는 판정입니다. 오래 기다린 것부터 보입니다. 등록한 관리자가 아닌 관리자가 시장 상세에서 승인하거나 반려합니다.',
+  adminMarketJudgementsEmpty: '승인을 기다리는 판정이 없습니다.',
+  adminMarketJudgementsColTitle: '질문',
+  adminMarketJudgementsColStatus: '상태',
+  adminMarketJudgementsColResult: '결과',
+  adminMarketJudgementsColRequestedBy: '등록한 관리자',
+  adminMarketJudgementsColRequestedAt: '등록 시각',
+  adminMarketJudgementsColScheduledJudgementAt: '예정 판정',
+  adminMarketJudgementsColCloseAt: '거래 마감',
+  adminMarketJudgementsEarly: '예정 판정 전',
   // 관리자 상세의 거래 현황: 체결·포지션에서 나온 값만 보인다(직접 AMM 상태는 #125에서 지웠다).
   adminMarketTradeStats: '거래 현황',
   tradeStatsLastPrice: '현재가',
@@ -1032,7 +1191,8 @@ export const copy = {
   marketVolume: '거래량',
   marketOpenAt: '연 시각',
   marketResolvedResult: '결과',
-  marketResolvedAt: '판정 시각',
+  // 결과 확정 시각: 잠정 결과가 이의 기한을 지나 확정된 순간(테마 결과의 확정 시각과 같다, ADR-0095 결과 5).
+  marketResolvedAt: '결과 확정 시각',
   marketSettledAt: '정산 시각',
   marketCreatedAt: '생성',
   marketUpdatedAt: '수정',
@@ -1042,9 +1202,17 @@ export const copy = {
   eventCreated: '생성',
   eventOpened: '열림',
   eventClosed: '마감',
-  eventResolved: '판정',
-  // 워커가 결과 확정 → 지급 중으로 옮기고(settling) 지급 중 → 지급 완료로 끝낸다(finalized). 이름은 그
-  // 상태의 라벨을 따른다(ADR-0093 결정 1의 12, #174).
+  // 판정(#152): 다른 관리자가 승인하면 거래 마감 → 잠정 결과(provisional, 행위자는 승인한 관리자; 판정 버전,
+  // 결과, 이의 기한), 이의 기한이 지나면 워커가 잠정 결과 → 결과 확정(resolved; 판정 버전, 결과). #152 전의
+  // 결과 확정 기록은 관리자 한 명이 바로 확정한 판정이다(결과, 메모, 근거 URL). 워커가 결과 확정 → 지급
+  // 중으로 옮기고(settling) 지급 중 → 지급 완료로 끝낸다(finalized). 이름은 그 상태의 라벨을 따른다
+  // (ADR-0093 결정 1의 12, #174).
+  eventProvisional: '잠정 결과 공개',
+  eventResolved: '결과 확정',
+  eventJudgementVersion: '판정 버전',
+  eventDisputeDeadline: '이의 기한',
+  eventResolveNote: '메모',
+  eventResolveEvidence: '근거 URL',
   eventSettling: '지급 시작',
   eventFinalized: '지급 완료',
   // 초안의 규칙 수정(#23). 개장 뒤의 규칙은 보충(#80)으로만 바뀌고, 그 승인이 '규칙 보충' 하나를 남긴다:
@@ -2845,22 +3013,11 @@ export const copy = {
   // 계약 수 단위. 수량은 호출 쪽에서 붙인다.
   unitContracts: '계약',
 
-  // --- 판정 · 정산 (PLAN 5.5 · 11.3 · 12, ADR-0046) ---
-  // 관리자 판정 대화상자. 판정은 즉시 확정되고 바로 정산이 시작된다(이의 단계 없음).
-  // 결과를 정하는 일은 '판정', Coin 지급은 '정산'이다(N03 §5·§7, #14).
-  adminMarketResolve: '판정',
-  adminMarketResolveTitle: '결과를 판정합니다',
-  adminMarketResolveBody:
-    '선택한 결과로 판정합니다. 판정은 즉시 확정되고 바로 정산이 시작됩니다. 판정한 뒤에는 결과를 바꾸거나 무효로 할 수 없습니다.',
-  adminMarketResolveResult: '결과',
-  adminMarketResolveNote: '메모',
-  adminMarketResolveEvidence: '근거 URL',
-  adminMarketResolveEvidencePlaceholder: 'https://',
-  adminMarketResolved: '판정했습니다. 정산을 시작합니다.',
-  errMarketResultRequired: '결과를 선택해 주세요.',
-  errMarketResolveNote: '메모는 1,000자 이하로 입력해 주세요.',
-  errMarketResolveEvidence: 'http 또는 https로 시작하는 500자 이하의 URL을 입력해 주세요.',
-  // 관리자 시장 상세의 정산 단계 (ADR-0046): 판정한 시장의 단계별 진행. 읽기 전용이다.
+  // --- 정산 (PLAN 5.5 · 11.3 · 12, ADR-0046) ---
+  // 결과를 정하는 일은 '판정', Coin 지급은 '정산'이다(N03 §5·§7, #14). 관리자 한 명이 바로 확정하던 판정
+  // 대화상자는 #152(ADR-0103)가 없앴다: 판정은 등록과 다른 관리자의 승인, 잠정 결과와 이의 기간을 거친다
+  // (위의 '판정 등록과 별도 검토자 승인').
+  // 관리자 시장 상세의 정산 단계 (ADR-0046): 결과가 확정된 시장의 단계별 진행. 읽기 전용이다.
   adminSettlementSteps: '정산 단계',
   adminSettlementStepColumn: '단계',
   adminSettlementStepStatus: '상태',

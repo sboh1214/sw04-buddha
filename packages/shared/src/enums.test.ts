@@ -210,9 +210,9 @@ describe('enums', () => {
   });
 
   it('records a pause and its next path as two market events and five admin actions (#114)', () => {
-    // Appended: a pause (open → paused) and a resume (paused → open); an early close is `closed`
-    // with its own `source`, the worker's close too.
-    expect(enums.MARKET_EVENT_TYPES.slice(-2)).toEqual(['paused', 'resumed']);
+    // Appended: a pause (open → paused) and a resume (paused → open), #152's after them; an early
+    // close is `closed` with its own `source`, the worker's close too.
+    expect(enums.MARKET_EVENT_TYPES.slice(-3, -1)).toEqual(['paused', 'resumed']);
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'closed')).toHaveLength(1);
     // The pause is one admin's; the next path's request, approval, 반려 and 철회 are each an admin
     // action, and only the approval writes a market event.
@@ -228,6 +228,35 @@ describe('enums', () => {
     expect(enums.adminActionTypeSchema.parse('market_close')).toBe('market_close');
     // admin_actions.type and market_events.type are varchar(40).
     for (const type of [...pause, 'paused', 'resumed']) {
+      expect(type.length).toBeLessThanOrEqual(40);
+    }
+    expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
+  });
+
+  it('records a judgement as one market event and four admin actions (#152)', () => {
+    // Appended last: the approval's closed → provisional. The worker's provisional → resolved
+    // keeps the name the interim judgement wrote, so its old rows still read.
+    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('provisional');
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'resolved')).toHaveLength(1);
+    // The registration, 반려 and 철회 write no market event; each of the four is an admin action,
+    // appended after #114's.
+    const judgement = enums.ADMIN_ACTION_TYPES.filter((type) =>
+      type.startsWith('market_judgement_'),
+    );
+    expect(judgement).toEqual([
+      'market_judgement_request',
+      'market_judgement_approve',
+      'market_judgement_reject',
+      'market_judgement_retract',
+    ]);
+    expect(enums.ADMIN_ACTION_TYPES.indexOf('market_judgement_request')).toBe(
+      enums.ADMIN_ACTION_TYPES.indexOf('market_pause_decision_retract') + 1,
+    );
+    // Retired by #152 (nothing writes it), kept so the interim judgement's rows still parse.
+    expect(enums.adminActionTypeSchema.parse('market_resolve')).toBe('market_resolve');
+    // admin_actions.type and market_events.type are varchar(40).
+    for (const type of [...judgement, 'provisional']) {
       expect(type.length).toBeLessThanOrEqual(40);
     }
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);

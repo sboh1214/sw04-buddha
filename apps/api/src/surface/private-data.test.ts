@@ -19,7 +19,12 @@
  * and the approver's reason, one an admin rejected with a reason, and one waiting; and two pauses
  * of that market A made, each resumed at A's request by another admin (#114) — the first for an
  * early result with its publication instant, the second's early close reviewed 판정 불가 rejected
- * first — each with its note, review and reasons. Then:
+ * first — each with its note, review and reasons; and a market judged at A's registration (#152):
+ * one VOID registration of A's an admin rejected, then a judgement on a fallback source another
+ * admin approved — its description, evidence links, collection instant, fallback reason, the
+ * reasons, the publication and the dispute deadline all operators' until #24 (the publication's
+ * instant reaches a watcher only as the `ts` of the live `market:status` it sent, as every status
+ * change's does; no REST read may carry it) — and confirmed at its deadline. Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -40,7 +45,8 @@
  *   is called anonymously and as B, aimed at A, and neither answer may hold A's values; A's own
  *   answer shows A's values and none of `NEVER_SHOWN`;
  * - the market room is listened to, anonymously and as B, while A's own events are published and
- *   smuggled onto the market channel and the API publishes a real market event.
+ *   smuggled onto the market channel and the API publishes real market events: a pause (#114)
+ *   and the approval of a judgement A registered, which publishes its provisional result (#152).
  *
  * The routes come from the registry, which registry.test.ts holds to the module graph; this file
  * only knows how to call them. A route whose parameters, query keys or body it does not know
@@ -66,7 +72,9 @@ import {
   createPost,
   createPostLike,
   createProfileImage,
+  createJudgementRequest,
   createProposal,
+  createProvisionalMarket,
   createReport,
   createSupplementedMarket,
   createSupplementRequest,
@@ -77,10 +85,13 @@ import {
   createThemeNotice,
   createUser,
   createWatch,
+  resolveMarketNow,
   resumeMarket,
+  setReleaseSetting,
 } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
+  DISPUTE_WINDOW_SETTING,
   PAGE_LIMIT_MAX,
   currentConsentVersion,
   REALTIME_EVENT_REGISTRY,
@@ -180,7 +191,12 @@ interface Fixture {
    * routes answer items, a market card, a result and the theme `market`'s detail links to.
    */
   theme: ThemeRow;
-  /** The resolved market in `theme`: the one row of its results list. */
+  /**
+   * The resolved market in `theme`: the one row of its results list. Judged as the routes leave it
+   * (#152): A registered a VOID an admin rejected, then a YES on a fallback source another admin
+   * approved, and the worker confirmed it at its dispute deadline — so a public answer carrying
+   * the registration, the evidence or who registered or approved it would carry A's values.
+   */
   judgedMarket: MarketRow;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
@@ -1623,12 +1639,53 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // market cards, its results, and the link on A's market's detail. Not the watched market: a
     // closed one would be listed, and its id is A's sentinel.
     const theme = await createTheme(t.db, { createdBy: admin.id, publishedAt: new Date() });
-    const judged = await createMarket(t.db, {
+    // 판정 (#152): the resolved market was judged as the routes leave it — A, holding no admin role
+    // (the records are written as the routes write them), registered a VOID the admin rejected,
+    // then a YES on the rules' fallback source the admin approved, which the worker confirmed at
+    // its dispute deadline. Every registration's words, its evidence and instants, the decisions'
+    // reasons and who registered or approved are operators' until #24 shows the record naming
+    // nobody (#173 item 13): the public status and result alone. Odd milliseconds, so no other
+    // instant of an answer holds them.
+    const judgementText = {
+      description: `leak-judgement-description-${tag}`,
+      link: `https://example.com/leak-judgement-evidence-${tag}`,
+      fallbackReason: `leak-judgement-fallback-reason-${tag}`,
+      approval: `leak-judgement-approval-${tag}`,
+      rejectedDescription: `leak-rejected-judgement-description-${tag}`,
+      rejectedVoidReason: `leak-rejected-judgement-void-reason-${tag}`,
+      rejection: `leak-judgement-rejection-${tag}`,
+    };
+    const judgementPublishedAt = new Date(Date.now() - 2 * 60 * 60 * 1000 - 333);
+    const judgementCollectedAt = new Date(judgementPublishedAt.getTime() - 30 * 60 * 1000 - 444);
+    const judgedClosed = await createMarket(t.db, {
       createdBy: admin.id,
-      status: 'resolved',
-      resolvedResult: 'YES',
-      resolvedAt: new Date(),
+      status: 'closed',
+      closeAt: new Date(judgementPublishedAt.getTime() - 60 * 60 * 1000),
+      fallbackSources: [{ name: '대체 출처', url: 'https://example.com/fallback' }],
     });
+    await createJudgementRequest(t.db, {
+      marketId: judgedClosed.id,
+      result: 'VOID',
+      voidReason: judgementText.rejectedVoidReason,
+      description: judgementText.rejectedDescription,
+      by: a.id,
+      requestedAt: new Date(judgementPublishedAt.getTime() - 20 * 60 * 1000),
+      rejected: { by: admin.id, reason: judgementText.rejection },
+    });
+    const { judgement } = await createProvisionalMarket(t.db, {
+      marketId: judgedClosed.id,
+      result: 'YES',
+      source: { priority: 1 },
+      fallbackReason: judgementText.fallbackReason,
+      evidence: { links: [judgementText.link], collectedAt: judgementCollectedAt },
+      description: judgementText.description,
+      registeredBy: a.id,
+      approvedBy: admin.id,
+      approvalReason: judgementText.approval,
+      publishedAt: judgementPublishedAt,
+      disputeWindowMinutes: 60,
+    });
+    const { market: judged } = await resolveMarketNow(t.db, judgedClosed.id);
     for (const linked of [market, judged]) {
       await createThemeMarket(t.db, {
         themeId: theme.id,
@@ -1768,6 +1825,17 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('pause decision rejection', pauseText.rejection),
         text('second resume request reason', pauseText.secondResumeReason),
         text('pause review result', 'not_judgeable'),
+        text('judgement description', judgementText.description),
+        text('judgement evidence link', judgementText.link),
+        text('judgement fallback reason', judgementText.fallbackReason),
+        text('judgement approval reason', judgementText.approval),
+        text('judgement collected at', judgementCollectedAt.toISOString()),
+        text('judgement published at', judgement.publishedAt.toISOString()),
+        text('judgement dispute deadline', judgement.disputeDeadline.toISOString()),
+        text('judgement approval id', judgement.approvalId),
+        text('rejected judgement description', judgementText.rejectedDescription),
+        text('rejected judgement void reason', judgementText.rejectedVoidReason),
+        text('judgement rejection', judgementText.rejection),
         text('account lift reason', accountLiftReason),
         text('pending restriction request', pendingRestriction),
         text('account restriction memo', accountMemo),
@@ -2454,20 +2522,26 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
   }
 
   it('keeps the market room public: none of A’s events, values or fields reach it', async () => {
+    // A CLOSED market whose judgement A registered (#152; the record, as the fixture's, needs no
+    // admin role of A's), for the approval that publishes its provisional result below.
+    const closed = await createMarket(t.db, { createdBy: f.admin.id, status: 'closed' });
+    const registration = await createJudgementRequest(t.db, { marketId: closed.id, by: f.a.id });
     const watchers = { anonymous: await openSocket(), B: await openSocket(f.b.cookie) };
     const received: { watcher: string; event: string; payload: unknown }[] = [];
     for (const [watcher, socket] of Object.entries(watchers)) {
-      const refusal = JSON.stringify(await subscribe(socket, f.market.id));
-      // The refusal envelope a socket is sent directly carries nothing of A's either.
-      expect({
-        watcher,
-        refusal,
-        leaks: [...leaked(refusal), ...forbiddenFields(refusal)],
-      }).toEqual({
-        watcher,
-        refusal: expect.stringContaining('VALIDATION_ERROR') as string,
-        leaks: [],
-      });
+      for (const marketId of [f.market.id, closed.id]) {
+        const refusal = JSON.stringify(await subscribe(socket, marketId));
+        // The refusal envelope a socket is sent directly carries nothing of A's either.
+        expect({
+          watcher,
+          refusal,
+          leaks: [...leaked(refusal), ...forbiddenFields(refusal)],
+        }).toEqual({
+          watcher,
+          refusal: expect.stringContaining('VALIDATION_ERROR') as string,
+          leaks: [],
+        });
+      }
       socket.onAny((event: string, payload: unknown) => {
         received.push({ watcher, event, payload });
       });
@@ -2518,8 +2592,27 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       },
     });
     expect(paused.statusCode).toBe(200);
+    // And the other path that publishes one (#152): the admin approves A's registration, with a
+    // reason only operators read, and the provisional result goes public with its status.
+    await setReleaseSetting(t.db, {
+      adminId: f.admin.id,
+      key: DISPUTE_WINDOW_SETTING.key,
+      status: 'test',
+      value: 60,
+    });
+    const approved = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${closed.id}/judgements/${registration.id}/approve`,
+      headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
+      payload: {
+        reason: f.sentinels.find((s) => s.label === 'judgement approval reason')!.value,
+        eventDeadlineConfirmed: true,
+        expectedAccountId: f.admin.id,
+      },
+    });
+    expect(approved.statusCode, approved.body).toBe(200);
     const started = Date.now();
-    while (received.filter((entry) => entry.event === 'market:status').length < 2) {
+    while (received.filter((entry) => entry.event === 'market:status').length < 4) {
       if (Date.now() - started > 5_000) throw new Error('market:status did not reach both');
       await sleep(20);
     }
@@ -2528,8 +2621,16 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // have caused has arrived by now.
     expect(received.map(({ watcher, event }) => `${watcher} ${event}`).sort()).toEqual([
       'B market:status',
+      'B market:status',
+      'anonymous market:status',
       'anonymous market:status',
     ]);
+    expect(
+      received
+        .map(({ payload }) => payload as { marketId: string; status: string })
+        .filter((payload) => payload.marketId === closed.id)
+        .map((payload) => payload.status),
+    ).toEqual(['provisional', 'provisional']);
     for (const { event, payload } of received) {
       const registered = REALTIME_EVENT_REGISTRY[event as keyof typeof REALTIME_EVENT_REGISTRY];
       expect({ event, channel: registered?.channel }).toEqual({ event, channel: 'market' });

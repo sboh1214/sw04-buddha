@@ -30,6 +30,14 @@ describe('queues', () => {
   });
 
   it('assigns every job to exactly one queue', () => {
+    // The market jobs in their lifecycle order: #152's confirmation between the close and the
+    // payout.
+    expect(QUEUE_JOBS.markets).toEqual([
+      JOB_NAMES.marketOpen,
+      JOB_NAMES.marketClose,
+      JOB_NAMES.marketResolve,
+      JOB_NAMES.marketFinalize,
+    ]);
     const assigned = Object.values(QUEUE_JOBS).flat();
     expect([...assigned].sort()).toEqual([...Object.values(JOB_NAMES)].sort());
     expect(new Set(assigned).size).toBe(assigned.length);
@@ -61,6 +69,7 @@ describe('queues', () => {
       'ledger-audit-daily',
       'market-open-scan',
       'market-close-scan',
+      'market-resolve-scan',
       'market-finalize-scan',
       'start-grant-pay',
       'media-orphan-cleanup',
@@ -77,6 +86,12 @@ describe('queues', () => {
     expect(byId['market-close-scan']).toMatchObject({
       queue: 'markets',
       name: JOB_NAMES.marketClose,
+      repeat: { pattern: '* * * * *', tz: 'Asia/Seoul' },
+    });
+    // #152 (ADR-0103): the provisional results are confirmed within a minute of their deadline.
+    expect(byId['market-resolve-scan']).toMatchObject({
+      queue: 'markets',
+      name: JOB_NAMES.marketResolve,
       repeat: { pattern: '* * * * *', tz: 'Asia/Seoul' },
     });
     expect(byId['market-finalize-scan']).toMatchObject({

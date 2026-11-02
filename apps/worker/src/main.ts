@@ -9,6 +9,7 @@ import { startHealthServer, type HealthServer } from './health.js';
 import { createProcessor } from './jobs/index.js';
 import { LEDGER_AUDIT_QUERY_TIMEOUT_MS } from './jobs/ledger-audit.js';
 import { logger } from './logger.js';
+import { createEnqueueFinalize } from './market-jobs.js';
 import {
   BULLMQ_REDIS_OPTIONS,
   createQueues,
@@ -91,16 +92,18 @@ async function main(): Promise<void> {
   if (storage.driver === 'unconfigured') {
     logger.warn('MEDIA_STORAGE is s3 but MEDIA_S3_BUCKET is not set: orphan uploads stay');
   }
+  const queueByName = createQueues(redis);
+  const queues = Object.values(queueByName);
   const processor = createProcessor({
     db,
     auditDb,
     publish: createPublisher(publishRedis, logger),
+    // #152: a confirmation's `market.finalize`, on the queue the workers below consume.
+    enqueueFinalize: createEnqueueFinalize(queueByName.markets, logger),
     storage,
     logger,
   });
 
-  const queueByName = createQueues(redis);
-  const queues = Object.values(queueByName);
   const workers = QUEUE_NAMES.map((name) => createWorker(name, processor, redis));
 
   // Every Queue/Worker re-emits errors of the shared connection. Connection

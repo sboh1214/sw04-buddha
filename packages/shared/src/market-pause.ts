@@ -74,8 +74,9 @@ export function pauseReasonNeedsReview(reason: MarketPauseReason): boolean {
  * 검토 결과 of a `basis_change` pause (owner answer Q1, 2026-11-02), given with the next-path
  * request and kept on the pause once approved (`market_pauses.review_result`):
  * - `judgeable`: 기존 규칙으로 판정 가능 — the operator picks 재개 or 조기 마감;
- * - `not_judgeable`: 판정 불가 — 조기 마감 only, and the judgement then applies the VOID rule
- *   (#152; #173 item 4: no VOID before the close).
+ * - `not_judgeable`: 판정 불가 — 조기 마감 only, and the judgement then applies the VOID rule: its
+ *   registration takes VOID alone (#152, `judgementVoidOnly`; #173 item 4: no VOID before the
+ *   close).
  */
 export const MARKET_PAUSE_REVIEW_RESULTS = ['judgeable', 'not_judgeable'] as const;
 export type MarketPauseReviewResult = (typeof MARKET_PAUSE_REVIEW_RESULTS)[number];

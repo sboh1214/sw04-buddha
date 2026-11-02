@@ -53,7 +53,8 @@ export function approvalNotAllowed(reason: ApprovalRefusal): AppError {
     // A market review's own exclusions (#78, ADR-0099), refused by MarketAdminService first.
     creator: 'The creator of the market cannot decide its review',
     editor: 'An admin who edited the market cannot decide its review',
-    // A market's rule supplement (#80, ADR-0101), refused when asked (`hasDecider`).
+    // A market's rule supplement (#80, ADR-0101), a pause's next path (#114) and a judgement's
+    // registration (#152, ADR-0103), refused when asked (`hasDecider`).
     no_decider: 'No admin but the requester could decide the request',
   };
   return new AppError('APPROVAL_NOT_ALLOWED', {
@@ -122,8 +123,9 @@ export class ApprovalService {
    * `excluded` — its requester, who decides nothing of theirs (ADR-0056 decision 4), and whoever
    * else the consumer excludes (#139's member, about themselves). A consumer asks it before taking
    * a request, so none waits for a decider who does not exist: #139's account restriction requests
-   * (MODERATION_NOT_ALLOWED `no_decider`, ADR-0085) and #80's rule supplements
-   * (APPROVAL_NOT_ALLOWED `no_decider`, ADR-0101). Read through the caller's transaction under the
+   * (MODERATION_NOT_ALLOWED `no_decider`, ADR-0085), and #80's rule supplements, #114's next
+   * paths and #152's judgements (APPROVAL_NOT_ALLOWED `no_decider`, ADR-0101, ADR-0102,
+   * ADR-0103). Read through the caller's transaction under the
    * admin-roles lock it took first (shared), so a grant or a revoke in flight is waited for. A
    * decider revoked after the request leaves it to wait, for the one who asked to retract or for
    * an admin granted since.

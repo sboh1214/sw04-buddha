@@ -8,7 +8,9 @@ import { markets } from './markets.js';
  * items 1·14): a `settling` market becomes `settled` only once every step of SETTLEMENT_STEPS
  * (@buddha/shared) is `done`.
  *
- * The transition to `resolved` inserts one `pending` row per step in its own transaction; the
+ * The transition to `resolved` inserts one `pending` row per step in its own transaction — since
+ * #152 the worker's confirmation at the dispute deadline (`resolveProvisionalMarket`, ADR-0103),
+ * before it ADR-0046's interim judgement in the API — so the table never lags the status; the
  * worker moves the market on to `settling` and `finalizeMarket` runs the steps that are not
  * `done` under the market lock and marks each `done` with `completed_at`. A step that throws
  * rolls its transaction back, and the worker then records the attempt in a separate one —
@@ -18,7 +20,10 @@ import { markets } from './markets.js';
  *
  * `step` and `status` are varchar validated by zod (the `market_events.type` convention), so a
  * step added later needs no enum migration. Not append-only: the worker updates rows.
- * No row for a market whose result was never confirmed, nor for a CANCELLED one.
+ * No row for a market whose result was never confirmed — a PROVISIONAL one included — nor for a
+ * CANCELLED one. Keyed by market, not by judgement version: a market is confirmed once, for its
+ * last version (`markets.judgement_version`, which the `resolved` event names), since a
+ * correction happens in PROVISIONAL only (#173 item 8); #126 keys its payouts by the version.
  */
 export const marketSettlementSteps = pgTable(
   'market_settlement_steps',

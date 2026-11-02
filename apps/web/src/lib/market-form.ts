@@ -4,8 +4,6 @@ import {
   MARKET_IMAGE_URL_MAX,
   MARKET_LONG_DELAY_DAYS_MAX,
   MARKET_LONG_DELAY_DAYS_MIN,
-  MARKET_RESOLVE_EVIDENCE_URL_MAX,
-  MARKET_RESOLVE_NOTE_MAX,
   MARKET_SOURCE_MAX,
   MARKET_SOURCE_URL_MAX,
   MARKET_TAGS_MAX,
@@ -13,7 +11,6 @@ import {
   MARKET_TITLE_MAX,
   type MarketRuleItems,
   type MarketSource,
-  OUTCOMES,
   PAUSED_SUPPLEMENT_ITEMS,
   type RuleItem,
   TAG_NAME_MAX,
@@ -42,7 +39,6 @@ import {
   type CreateMarketFields,
   type MarketRuleContent,
   type MarketSupplementChanges,
-  type ResolveMarketBody,
   type UpdateMarketFields,
 } from './api';
 import { isoToKstLocal, kstLocalToIso } from './datetime';
@@ -700,54 +696,6 @@ export const AFTER_SAVE_RESET = {
   keepDirty: false,
   keepFieldsRef: true,
 } satisfies KeepStateOptions;
-
-/**
- * The 판정 dialog (PLAN 12 정산 화면, ADR-0046): the result is the one required field, chosen
- * by radio, so an untouched form holds no `result` at all rather than a sentinel. The field's
- * INPUT therefore admits `undefined` and its OUTPUT does not — the
- * `.optional().pipe(...)` is what lets `zodResolver` type the form's values one way and the
- * submitted values the other (`ResolveMarketFormValues` / `ResolveMarketFormOutput`), so the
- * dialog says 결과를 선택해 주세요 for a blank and the submit handler still receives a result
- * it need not re-check. Note and evidence are the strings the inputs hold; blanks become null
- * on the wire (`toResolveMarketBody`), and the API bounds both the same way
- * (`resolveMarketBodySchema`). There is no "same result" rule: a market is judged once, and the
- * API refuses a second 판정 naming `status` (`transitionErrorMessage`).
- */
-export const resolveMarketFormSchema = z.object({
-  result: z
-    .enum(OUTCOMES, copy.errMarketResultRequired)
-    .optional()
-    .pipe(z.enum(OUTCOMES, copy.errMarketResultRequired)),
-  note: z.string().trim().max(MARKET_RESOLVE_NOTE_MAX, copy.errMarketResolveNote),
-  evidenceUrl: z
-    .string()
-    .trim()
-    .refine(
-      (value) =>
-        value === '' || (value.length <= MARKET_RESOLVE_EVIDENCE_URL_MAX && isHttpUrl(value)),
-      copy.errMarketResolveEvidence,
-    ),
-});
-/** What the inputs hold: `result` is absent until a radio is chosen. */
-export type ResolveMarketFormValues = z.input<typeof resolveMarketFormSchema>;
-/** What the schema hands the submit handler: a result, always. */
-export type ResolveMarketFormOutput = z.output<typeof resolveMarketFormSchema>;
-
-/**
- * Only for values `resolveMarketFormSchema` accepted: trimmed, blanks to null — and the admin on
- * screen, who judges (`useOperatorId`, ADR-0092: the server refuses another account's).
- */
-export function toResolveMarketBody(
-  values: ResolveMarketFormOutput,
-  operatorId: string,
-): ResolveMarketBody {
-  return {
-    result: values.result,
-    note: orNull(values.note),
-    evidenceUrl: orNull(values.evidenceUrl),
-    expectedAccountId: operatorId,
-  };
-}
 
 /**
  * Only for values `marketFormSchema` accepted: `closeAt` parses and `categoryId` is digits. The

@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import * as z from 'zod';
 import { ADMIN_ACTION_TYPES, RELEASE_SETTING_STATUSES } from './enums.js';
 import {
+  DISPUTE_WINDOW_MAX_MINUTES,
+  DISPUTE_WINDOW_MIN_MINUTES,
+  disputeDeadlineOf,
+} from './market-judgement.js';
+import {
+  DISPUTE_WINDOW_SETTING,
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
   LEAD_CLOSE_GAP_SETTING,
@@ -46,11 +52,13 @@ const window = defineReleaseSetting({
 });
 
 describe('release settings registry', () => {
-  it('ships the items the issues that use them registered: the start grant (#70), the lead-close gap (#22) and the retention periods (#184, #77)', () => {
+  it('ships the items the issues that use them registered: the start grant (#70), the lead-close gap (#22), the dispute window (#152) and the retention periods (#184, #77)', () => {
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       'grant.start_coin',
       // 선행 마감 최소 간격 (#22, ADR-0093 #172 item 13): the operating values come first.
       'market.lead_close_gap',
+      // 이의 기간 (#152, ADR-0093 #173 item 5): one value for every market.
+      'market.dispute_window',
       'retention.consent_records',
       'retention.phone_verification_records',
       'retention.deleted_posts',
@@ -61,6 +69,7 @@ describe('release settings registry', () => {
     ]);
     expect(RELEASE_SETTINGS.get('grant.start_coin')).toBe(START_COIN_SETTING);
     expect(RELEASE_SETTINGS.get('market.lead_close_gap')).toBe(LEAD_CLOSE_GAP_SETTING);
+    expect(RELEASE_SETTINGS.get('market.dispute_window')).toBe(DISPUTE_WINDOW_SETTING);
     // The worker reads each period through the very object the registry holds.
     for (const definition of Object.values(RETENTION_PERIOD_SETTINGS)) {
       expect(RELEASE_SETTINGS.get(definition.key)).toBe(definition);
@@ -227,6 +236,42 @@ describe('release settings registry', () => {
       'leadClose',
     ]);
     expect(timeRuleViolations(times, 60)).toEqual([]);
+  });
+
+  it('takes the dispute window in whole minutes, a minute to a week (#152, #173 item 5)', () => {
+    const accepts = (value: unknown) => DISPUTE_WINDOW_SETTING.schema.safeParse(value).success;
+    expect(DISPUTE_WINDOW_SETTING).toMatchObject({ label: '이의 기간', unit: '분' });
+    // The approved design proposal is 1,440 (24 hours); 1 is the shortest, which e2e uses.
+    for (const value of [DISPUTE_WINDOW_MIN_MINUTES, 1_440, DISPUTE_WINDOW_MAX_MINUTES]) {
+      expect(accepts(value), String(value)).toBe(true);
+    }
+    expect([DISPUTE_WINDOW_MIN_MINUTES, DISPUTE_WINDOW_MAX_MINUTES]).toEqual([1, 7 * 24 * 60]);
+    // No zero: a result is never confirmed at its publication.
+    for (const value of [0, -1, 1.5, '1440', DISPUTE_WINDOW_MAX_MINUTES + 1, null]) {
+      expect(accepts(value), String(value)).toBe(false);
+    }
+    expect(
+      readReleaseSetting(RELEASE_SETTINGS, DISPUTE_WINDOW_SETTING, {
+        status: 'approved',
+        value: 1_440,
+      }),
+    ).toEqual({ key: 'market.dispute_window', status: 'approved', value: 1_440 });
+    expect(readReleaseSetting(RELEASE_SETTINGS, DISPUTE_WINDOW_SETTING, undefined)).toEqual({
+      key: 'market.dispute_window',
+      status: 'undecided',
+      value: null,
+    });
+    // Where the owner enters it, it says what the value fixes and what an undecided one does.
+    const { description } = DISPUTE_WINDOW_SETTING;
+    expect(description).toContain('설계 제안 1,440분 = 24시간');
+    expect(description).toContain('모든 시장에 같은 값이다');
+    expect(description).toContain('승인할 때 이 값을 읽어 그 시장의 이의 기한을 고정하고');
+    expect(description).toContain('이미 공개한 시장의 기한은 그대로다');
+    expect(description).toContain('미정이면 판정을 등록하거나 승인할 수 없어');
+    expect(description).not.toMatch(/환불|원금/);
+    // The deadline the reading fixes: the publication plus the window, to the millisecond.
+    const publishedAt = new Date('2026-11-02T03:04:05.678Z');
+    expect(disputeDeadlineOf(publishedAt, 1_440).toISOString()).toBe('2026-11-03T03:04:05.678Z');
   });
 
   it('labels every status, and only proposal and test are distinct from approved', () => {

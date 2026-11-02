@@ -149,8 +149,9 @@ export const marketTradeEventSchema = z
 export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
 
 /**
- * Room `market:<id>`: a status transition (every one `MARKET_LIFECYCLE_TRANSITIONS` and the interim
- * edge allow, published by the API's admin actions and the worker's jobs; an approval or a
+ * Room `market:<id>`: a status transition (every one `MARKET_LIFECYCLE_TRANSITIONS` allows,
+ * published by the API's admin actions — a judgement's approval among them, #152 — and the
+ * worker's jobs, its confirmation at the dispute deadline among them; an approval or a
  * reschedule that opens the market at once publishes once, the OPEN market with the `opened`
  * event's key, #21), or the same status republished so subscribers refetch a descriptive edit
  * (A-M4-36, `MarketAdminService` `update`) or a supplement's new rule version (#80, ADR-0101: the

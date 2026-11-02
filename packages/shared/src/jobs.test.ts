@@ -6,12 +6,13 @@ import {
   marketFinalizeJobId,
   marketJobDataSchema,
   marketOpenJobId,
+  marketResolveJobId,
 } from './jobs.js';
 
 const marketId = '3f2504e0-4f89-41d3-9a0c-0305e82c3301';
 
 describe('jobs (PLAN 9)', () => {
-  it('declares the seven queues and the nine job names, the market open first (#21)', () => {
+  it('declares the seven queues and the ten job names, the market jobs in lifecycle order', () => {
     expect(QUEUE_NAMES).toEqual([
       'markets',
       'audit',
@@ -22,8 +23,10 @@ describe('jobs (PLAN 9)', () => {
       'retention',
     ]);
     expect(Object.values(JOB_NAMES)).toEqual([
+      // The open first (#21), the confirmation of a provisional result before the payout (#152).
       'market.open',
       'market.close',
+      'market.resolve',
       'market.finalize',
       'ledger.audit',
       'market.trader_count',
@@ -48,8 +51,8 @@ describe('jobs (PLAN 9)', () => {
     const id = marketCloseJobId(marketId, closeAt);
     expect(id).toBe(`market.close.${marketId}.${String(closeAt.getTime())}`);
     expect(id).not.toContain(':'); // BullMQ: "Custom Id cannot contain :"
-    // The finalize job runs right after the judgement; its id carries the judgement's instant
-    // (`resolved_at`, ADR-0046).
+    // The finalize job runs right after the confirmation (→ RESOLVED, #152); its id carries that
+    // instant (`resolved_at`).
     const resolvedAt = new Date('2026-10-02T09:30:00.123Z');
     expect(marketFinalizeJobId(marketId, resolvedAt)).toBe(
       `market.finalize.${marketId}.${String(resolvedAt.getTime())}`,
@@ -68,5 +71,17 @@ describe('jobs (PLAN 9)', () => {
     // The same market and instant never collide with the close's or the finalize's id.
     expect(id).not.toBe(marketCloseJobId(marketId, scheduledOpenAt));
     expect(id).not.toBe(marketFinalizeJobId(marketId, scheduledOpenAt));
+  });
+
+  it('builds the resolve job id from the dispute deadline the approval fixed (#152)', () => {
+    const disputeDeadline = new Date('2026-11-03T09:30:00.123Z');
+    const id = marketResolveJobId(marketId, disputeDeadline);
+    expect(id).toBe(`market.resolve.${marketId}.${String(disputeDeadline.getTime())}`);
+    expect(id).not.toContain(':');
+    // A correction's new deadline (#176) is a new job; no other market job shares the id.
+    expect(marketResolveJobId(marketId, new Date(disputeDeadline.getTime() + 1))).not.toBe(id);
+    for (const other of [marketOpenJobId, marketCloseJobId, marketFinalizeJobId]) {
+      expect(other(marketId, disputeDeadline)).not.toBe(id);
+    }
   });
 });

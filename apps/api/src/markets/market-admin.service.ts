@@ -14,6 +14,7 @@ import {
   categoryUnselectableReason,
   changedRuleVersionItems,
   decodeKeyset,
+  DISPUTE_WINDOW_SETTING,
   encodeKeyset,
   LEAD_CLOSE_GAP_SETTING,
   MARKET_REVIEW_APPROVAL_KIND,
@@ -51,7 +52,6 @@ import {
   type OpenItem,
   type RejectMarketReviewBody,
   type RescheduleMarketOpenBody,
-  type ResolveMarketBody,
   type RevertMarketBody,
   type RuleVersionItem,
   type RulesEditedValues,
@@ -109,6 +109,7 @@ import {
   sameSources,
   type MarketSources,
 } from './market-sources.js';
+import { readMarketJudgement } from './market-judgement.js';
 import { readMarketPause } from './market-pause.js';
 import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
 import {
@@ -487,14 +488,17 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
 /**
  * Admin market CRUD and transitions (PLAN 5.2, 5.5, 7.3, 12; M3 design 3.4, M5 design 3.3,
  * ADR-0046). Every write is one transaction with its `admin_actions` row and, for a
- * transition, its `market_events` row; resolve and the review's writes take the market's
- * advisory lock first (`lockMarket`) so nothing interleaves with another writer of the same
- * market — the worker's open, close and finalize jobs among them.
+ * transition, its `market_events` row; the review's writes take the market's advisory lock first
+ * (`lockMarket`) so nothing interleaves with another writer of the same market — the worker's
+ * open, close, confirmation and finalize jobs among them.
  * Realtime events are published, and the worker's jobs registered or cancelled, only after
  * COMMIT, best effort (MarketPublisher, MarketJobs).
  *
- * Resolve is the interim admin action ADR-0047 result 3 and ADR-0093 result 2 keep until #152's
- * judgement replaces it (closed → resolved). The interim draft → open went with #21 (ADR-0100): a
+ * The interim one-admin judgement (closed → resolved, final at once — ADR-0046) went with #152
+ * (ADR-0103): a CLOSED market's judgement is registered by one admin and approved by another
+ * (MarketJudgementService), which publishes the provisional result (CLOSED → PROVISIONAL), and the
+ * worker confirms it once its dispute deadline has passed (PROVISIONAL → RESOLVED, with the
+ * settlement steps), then pays it out. The interim draft → open went with #21 (ADR-0100): a
  * market opens from SCHEDULED alone, by `openScheduledMarket` (@buddha/db) — the worker's job at
  * its scheduled open, or the approval or the reschedule that finds that instant come, in its own
  * transaction. The interim one-admin open → closed went with #114 (ADR-0102): a market closes at
@@ -906,86 +910,6 @@ export class MarketAdminService {
     // transaction has not written yet. No job moves: a draft has none, and an open market's
     // close moves by a supplement alone (MarketSupplementService).
     if (moved) await this.publishStatus(market);
-    return market;
-  }
-
-  /**
-   * The judgement (PLAN 5.5, 7.3; ADR-0046): closed → resolved, final at once — the interim edge
-   * until #152's judgement, which another admin approves and which publishes a PROVISIONAL
-   * result first (`INTERIM_MARKET_TRANSITIONS`). The result is YES or NO (VOID is chosen in
-   * #152's judgement and paid by #126). Any other status — `provisional` and `resolved`
-   * included, whatever the result sent — is refused naming `status`; there is no way to change a
-   * judgement here (a correction is #176's, in PROVISIONAL only).
-   *
-   * One transaction writes the `resolved` event (its id is the new `status_event_id`), the
-   * market row (`resolved_result`, `resolved_at`), one `pending` `market_settlement_steps` row
-   * per SETTLEMENT_STEPS step — the worker's to-do list, so the step table never lags the
-   * status — and the `admin_actions` row. After COMMIT the `market.finalize` job is registered
-   * with no delay: the worker moves the market to `settling` and pays it out at once, and its
-   * per-minute scan picks up any `resolved` market whose job never made it to Redis.
-   *
-   * No price tick is written: the chart ends at the last trade, and a settlement is not a
-   * price (PRICE_TICK_TRIGGERS 'resolve' stays unused — Q-M5).
-   */
-  async resolve(
-    adminId: string,
-    id: string,
-    body: WithoutExpectedAccount<ResolveMarketBody>,
-  ): Promise<AdminMarket> {
-    const { market, now } = await this.db.transaction(async (tx) => {
-      await lockMarket(tx, id);
-      const current = await lockedMarketRow(tx, id);
-      if (current.status !== 'closed') throw wrongStatus(current.status);
-      // After the market lock (clock.ts): the judgement sorts after whatever committed on this
-      // market while the transaction queued, and the job id carries this instant.
-      const now = await clockTimestamp(tx);
-      const tags = await marketTagNames(tx, id);
-      const sources = await readMarketSources(tx, id);
-      const detail = {
-        result: body.result,
-        note: body.note ?? null,
-        evidenceUrl: body.evidenceUrl ?? null,
-      };
-      const row = await this.transition(tx, current, {
-        to: 'resolved',
-        type: 'resolved',
-        actorId: adminId,
-        payload: detail,
-        at: now,
-        set: { resolvedResult: body.result, resolvedAt: now },
-      });
-      // A closed market has never been judged, so no step row exists yet: a plain insert, and
-      // the primary key (market_id, step) turns any surprise into a rollback, not a duplicate.
-      await tx.insert(schema.marketSettlementSteps).values(
-        SETTLEMENT_STEPS.map((step) => ({
-          marketId: id,
-          step,
-          status: 'pending',
-          attempts: 0,
-          createdAt: now,
-          updatedAt: now,
-        })),
-      );
-      await tx.insert(schema.adminActions).values({
-        adminId,
-        type: 'market_resolve',
-        targetType: 'market',
-        targetId: current.id,
-        payload: {
-          ...detail,
-          before: snapshot(current, tags, sources),
-          after: snapshot(row, tags, sources),
-        },
-        createdAt: now,
-      });
-      return { market: await this.toAdminMarket(tx, row, tags, sources), now };
-    });
-    // `resolved_at` was written as `now`, so the job is due at once; its id carries the
-    // judgement instant (marketFinalizeJobId).
-    await Promise.all([
-      this.publishStatus(market),
-      this.jobs.scheduleFinalize(market.id, now, now),
-    ]);
     return market;
   }
 
@@ -1473,6 +1397,19 @@ export class MarketAdminService {
   }
 
   /**
+   * The release setting `market.dispute_window` in minutes (#152, DISPUTE_WINDOW_SETTING; ADR-0093
+   * decision 1 #173 item 5): its value in any status (proposal, test or approved, as the lead-close
+   * gap's), null while undecided — when a judgement is neither registered nor approved (ADR-0103:
+   * no deadline can be fixed from no value). Read through `executor` once per write: the approval
+   * fixes the market's deadline with the value it read (MarketJudgementService), and the admin
+   * detail says whether it is undecided (`AdminMarket.judgement.disputeWindowUndecided`).
+   */
+  async disputeWindowSetting(executor: Executor): Promise<number | null> {
+    const reading = await this.settings.get(DISPUTE_WINDOW_SETTING, executor);
+    return reading.status === 'undecided' ? null : reading.value;
+  }
+
+  /**
    * The 선행 마감 gap `row` is held to (#22, ADR-0098; `AdminMarket.leadCloseGapMinutes`): the one
    * its lead close was last checked against (`lead_close_gap_minutes`, which the review submission
    * stores, the open keeps (#21) and a 반려 or 되돌리기 clears, ADR-0099) once it has one, else the
@@ -1488,11 +1425,14 @@ export class MarketAdminService {
    * the market is held to (`leadCloseGap`, which it reports too), the review (#78,
    * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록), and
    * the rule versions with who asked for and made each and the supplement requests (#80,
-   * `readAdminRuleVersions`, `readMarketSupplement`: one statement each), and the pauses with the
-   * next-path requests (#114, `readMarketPause`: one statement each). Reads through `executor` so a
-   * transition returns the state it just committed; `tags` are the market's names in order
+   * `readAdminRuleVersions`, `readMarketSupplement`: one statement each), the pauses with the
+   * next-path requests (#114, `readMarketPause`: one statement each), and the judgement — the
+   * current one, its version and dispute deadline, the registrations and whether the dispute window
+   * is undecided (#152, `readMarketJudgement`, `disputeWindowSetting`). Reads through `executor` so
+   * a transition returns the state it just committed; `tags` are the market's names in order
    * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
-   * already. MarketSupplementService's and MarketPauseService's writes answer with it too.
+   * already. MarketSupplementService's, MarketPauseService's and MarketJudgementService's writes
+   * answer with it too.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1554,9 +1494,10 @@ export class MarketAdminService {
       else openInterest.no = Number(line.qty);
     }
 
-    // ADR-0046: where the worker stands on a judged market, one row per step (none before the
-    // judgement or for a cancelled market). Ordered here rather than in SQL: SETTLEMENT_STEPS is
-    // the order the worker runs them in, which no column of the table records.
+    // ADR-0046: where the worker stands on a confirmed market, one row per step (none before the
+    // result's confirmation — a PROVISIONAL market's included, #152 — or for a cancelled market).
+    // Ordered here rather than in SQL: SETTLEMENT_STEPS is the order the worker runs them in, which
+    // no column of the table records.
     const stepRows = await executor
       .select()
       .from(schema.marketSettlementSteps)
@@ -1598,6 +1539,13 @@ export class MarketAdminService {
       review: await readMarketReview(executor, row),
       supplement: await readMarketSupplement(executor, row.id, ruleVersions),
       pause: await readMarketPause(executor, row.id),
+      judgementVersion: row.judgementVersion,
+      disputeDeadline: row.disputeDeadline?.toISOString() ?? null,
+      judgement: await readMarketJudgement(
+        executor,
+        row,
+        (await this.disputeWindowSetting(executor)) === null,
+      ),
     };
   }
 
@@ -1608,7 +1556,9 @@ export class MarketAdminService {
    * submission, 반려 or 되돌리기 from REVIEW, which no member sees; an approval or a reschedule that
    * opens the market sends one, the OPEN status with the `opened` event's key (#21); a pause, and
    * the approval of its next path — the OPEN status of a resume, which goes back in rank, or the
-   * CLOSED of an early close (#114, MarketPauseService) — and by an edit that moves an open or
+   * CLOSED of an early close (#114, MarketPauseService); a judgement's approval, the PROVISIONAL
+   * status with its result (#152, MarketJudgementService — the worker's confirmation publishes the
+   * RESOLVED one itself) — and by an edit that moves an open or
    * paused market's category, tags or image, a SCHEDULED market's open-time change that leaves it
    * SCHEDULED (#78) and a supplement's approval, which moves an open or paused market's rules to a
    * new version (#80, MarketSupplementService), where the status is

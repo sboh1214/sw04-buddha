@@ -3,6 +3,7 @@ import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
 import { expectedAccountIdSchema } from './expected-account.js';
+import { disputeWindowMinutesSchema } from './market-judgement.js';
 import { LEAD_CLOSE_GAP_MAX_MINUTES } from './market-times.js';
 import { RETENTION_PERIOD_MAX_DAYS, type RetentionPeriod } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
@@ -214,6 +215,27 @@ export const LEAD_CLOSE_GAP_SETTING = defineReleaseSetting({
 });
 
 /**
+ * 이의 기간 (#152, ADR-0103; ADR-0093 decision 1 #173 item 5, result 3): how many minutes after a
+ * provisional result is published disputes are taken (#175) before the worker confirms it — one
+ * value for every market, not a rule item. The approval that publishes the result reads it once
+ * and fixes that market's deadline with it (`market_judgements.dispute_window_minutes` and
+ * `dispute_deadline`): a changed value applies to the results published after the change, never
+ * to one already published, and a corrected result (#176) gets a deadline of the length its first
+ * one had. Whatever the status, a value is used (as the lead-close gap's); while it is undecided a
+ * judgement can be neither registered nor approved (the safe side: no deadline is fixed from no
+ * value), and the market stays CLOSED. The design proposal, which the owner approved, is 1,440
+ * (24 hours). An integer, DISPUTE_WINDOW_MIN_MINUTES to DISPUTE_WINDOW_MAX_MINUTES (a week).
+ */
+export const DISPUTE_WINDOW_SETTING = defineReleaseSetting({
+  key: 'market.dispute_window',
+  label: '이의 기간',
+  unit: '분',
+  description:
+    '판정을 승인해 잠정 결과를 공개한 순간부터 이의를 받는 기간(#152·#175, ADR-0093 #173 5항, 설계 제안 1,440분 = 24시간). 모든 시장에 같은 값이다. 승인할 때 이 값을 읽어 그 시장의 이의 기한을 고정하고, 기한이 지나고 처리하지 않은 이의와 대기 중인 정정 요청이 없으면 결과를 자동으로 확정한다. 바꾼 값은 그 뒤에 공개하는 잠정 결과부터 적용하고 이미 공개한 시장의 기한은 그대로다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 판정을 등록하거나 승인할 수 없어 시장이 거래 마감에 남는다.',
+  schema: disputeWindowMinutesSchema,
+});
+
+/**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
  * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
  * one value says exactly when a record is due; a year is entered as its days.
@@ -348,15 +370,16 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
 /**
  * The shipped registry, in the order the admin screen lists it: the operating values, then the
  * retention periods. #170 built the mechanism, and each value is registered by the issue that uses
- * it (#70 the start grant, #22 the lead-close gap, #184 the retention periods, #77 the market
- * proposals' retention period;
- * #74, #119, #152·#175, … to come) — define it with `defineReleaseSetting` and list it here, then
+ * it (#70 the start grant, #22 the lead-close gap, #152 the dispute window, #184 the retention
+ * periods, #77 the market proposals' retention period;
+ * #74, #119, … to come) — define it with `defineReleaseSetting` and list it here, then
  * update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own
  * registry (`createTestApp({ releaseSettings })` in apps/api).
  */
 export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   START_COIN_SETTING,
   LEAD_CLOSE_GAP_SETTING,
+  DISPUTE_WINDOW_SETTING,
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,

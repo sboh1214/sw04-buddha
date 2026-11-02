@@ -529,6 +529,9 @@ describe('excluded features on screens (#113)', () => {
       // 거래 일시 중단's (#114): the note, the publication instant and the operators likewise (what
       // the public judging record shows of a pause is #24's).
       at('lib', 'market-pause.ts'),
+      // 판정's (#152): the evidence, the reasons, the instants and the registrant and approver
+      // likewise (#24 decides what the public judging record shows, never who judged: #173 13).
+      at('lib', 'market-judgement.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }

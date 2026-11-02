@@ -9,6 +9,7 @@ import {
   AUTH_USER_NAME,
   CONSENT_ITEMS,
   DEFAULT_JUDGEMENT_TIME_ZONE,
+  MARKET_JUDGEMENT_APPROVAL_KIND,
   MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_REVIEW_CHECKLIST,
@@ -23,6 +24,8 @@ import {
   ceilToMinute,
   closedAccountEmail,
   floorToMinute,
+  isBeforeScheduledJudgement,
+  isFallbackSourcePriority,
   marketReviewExclusion,
   marketSupplementChangesSchema,
   orphanMediaRetryHours,
@@ -33,6 +36,8 @@ import {
   relatedMarketPair,
   tagKey,
   type ImageContentType,
+  type JudgementSource,
+  type MarketJudgementRequestPayload,
   type MarketPauseDecisionRequestPayload,
   type MarketPausePath,
   type MarketPauseReason,
@@ -58,8 +63,13 @@ import {
   type LinkFlagReason,
   type WriteLimitAction,
 } from '@buddha/shared';
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
+import {
+  approveMarketJudgement,
+  resolveProvisionalMarket,
+  type MarketJudgementRow,
+} from '../market-judgement.js';
 import { openScheduledMarket } from '../market-open.js';
 import {
   currentMarketPause,
@@ -312,12 +322,22 @@ export interface CreateMarketInput {
    * Resolution columns, stored as given and null by default: a test that needs a market
    * mid-settlement sets `status: 'settling'` with a result. The factory writes no market event,
    * so `statusEventId` stays null unless given — the rank fallback of `statusSupersedes` is what
-   * such a row orders by.
+   * such a row orders by. A `provisional` market has a result by default: YES (migration 0055's
+   * `markets_provisional_check` wants one).
    */
   resolvedResult?: MarketResult | null;
   resolvedAt?: Date | null;
   settledAt?: Date | null;
   statusEventId?: number | null;
+  /**
+   * The current judgement's version and dispute deadline (#152, ADR-0103), stored as given. Null
+   * by default — a market not judged yet, or judged by the interim route before #152 — but for a
+   * `provisional` market, which has both (`markets_provisional_check`): version 1 and a deadline a
+   * day from now. A market made here has no `market_judgements` row, whatever its status:
+   * `createProvisionalMarket` writes one with its history, and `resolveMarketNow` confirms it.
+   */
+  judgementVersion?: number | null;
+  disputeDeadline?: Date | null;
   /**
    * `market_settlement_steps` rows (ADR-0046) as the real paths leave them: for `resolved` and
    * `settling`, one `pending` row per SETTLEMENT_STEPS step (the transition to `resolved` writes
@@ -372,6 +392,7 @@ function ruleItemsOf(input: CreateMarketInput, t: string, closeAt: Date) {
 }
 
 const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
 
 /**
  * The market times `createMarket` writes (#22, ADR-0098): complete and in order with the close and
@@ -445,10 +466,27 @@ export async function createMarket(db: Db, input: CreateMarketInput = {}) {
       scheduledJudgementAt: times.scheduledJudgementAt,
       judgementTimeZone: times.judgementTimeZone,
       leadCloseGapMinutes: input.leadCloseGapMinutes ?? null,
-      resolvedResult: input.resolvedResult ?? null,
+      resolvedResult:
+        input.resolvedResult !== undefined
+          ? input.resolvedResult
+          : status === 'provisional'
+            ? 'YES'
+            : null,
       resolvedAt: input.resolvedAt ?? null,
       settledAt: input.settledAt ?? null,
       statusEventId: input.statusEventId ?? null,
+      judgementVersion:
+        input.judgementVersion !== undefined
+          ? input.judgementVersion
+          : status === 'provisional'
+            ? 1
+            : null,
+      disputeDeadline:
+        input.disputeDeadline !== undefined
+          ? input.disputeDeadline
+          : status === 'provisional'
+            ? new Date(now.getTime() + DAY_MS)
+            : null,
       createdBy,
     })
     .returning();
@@ -1479,6 +1517,8 @@ type ReviewedMarketFields = Omit<
   | 'resolvedAt'
   | 'settledAt'
   | 'statusEventId'
+  | 'judgementVersion'
+  | 'disputeDeadline'
   | 'settlementSteps'
 >;
 
@@ -2298,6 +2338,313 @@ export async function resumeMarket(
   input: DecidePauseInput = {},
 ): Promise<PauseDecided> {
   return approvePauseDecision(db, marketId, 'resume', input);
+}
+
+/** The description a judgement factory writes unless given (확인한 내용의 설명, the request's reason). */
+const JUDGEMENT_DESCRIPTION = '1차 출처의 발표에서 결과를 확인했다.';
+
+/** The reason a judgement factory gives a fallback source unless given. */
+const JUDGEMENT_FALLBACK_REASON = '1차 출처가 발표하지 않아 대체 출처로 확인했다.';
+
+/** The reason a judgement factory gives a VOID unless given. */
+const JUDGEMENT_VOID_REASON = '판정 불가: 규칙의 출처로 결과를 확인할 수 없다.';
+
+/** The evidence link a judgement factory writes unless given. */
+const JUDGEMENT_EVIDENCE_LINK = 'https://example.com/evidence';
+
+/** The approval's reason a judgement factory writes unless given (the decision reason). */
+const JUDGEMENT_APPROVAL_REASON = '증거와 출처가 규칙에 맞다.';
+
+/**
+ * The dispute window a judgement factory publishes with unless given: the design proposal the
+ * owner approved, 1,440 minutes (ADR-0093 decision 1 #173 item 5).
+ */
+const JUDGEMENT_DISPUTE_WINDOW_MINUTES = 1_440;
+
+export interface CreateJudgementRequestInput {
+  /** The market judged: a CLOSED one, unless a test of the route's refusal wants another. */
+  marketId: string;
+  /** Default YES. */
+  result?: MarketResult;
+  /**
+   * The source by its priority (0 the 1차 출처, 1..3 the 대체 출처), its name and address copied
+   * from the market's `market_sources` row as the route does unless given — the factory throws
+   * when the market has no row at that priority and neither is given (the route's `source`
+   * 'unknown'). Null for none. Default: the primary for a YES or NO, none for a VOID.
+   */
+  source?: { priority: number; name?: string; url?: string } | null;
+  /** Default: a sentence for a fallback source (priority 1 or more), null for any other. */
+  fallbackReason?: string | null;
+  /** Default: a sentence for a VOID, null for a YES or NO. */
+  voidReason?: string | null;
+  /** Default: one link (https://example.com/evidence), collected a minute before the request. */
+  evidence?: { links?: string[]; collectedAt?: Date };
+  /** 확인한 내용의 설명: the request's reason. Default: a sentence. */
+  description?: string;
+  /** The rule version the judgement follows. Default: the market's `rule_version` now. */
+  ruleVersion?: number | null;
+  /** The registering admin. Default: a fresh admin. */
+  by?: string;
+  /** The registration's instant. Default: the database clock. */
+  requestedAt?: Date;
+  /**
+   * A 반려 by another admin instead (`createApprovalRequest`'s decision), a millisecond after the
+   * request unless `at` is given. Left out with `retracted`: pending.
+   */
+  rejected?: { by: string; reason?: string; at?: Date };
+  /** The registrant's 철회 instead, a millisecond after the request unless `at` is given. */
+  retracted?: { at?: Date };
+}
+
+/**
+ * A judgement's registration (#152, ADR-0103) as `POST /admin/markets/:id/judgements` leaves it:
+ * a `market_judgement` approval request about the market (target `market`, payload `{result,
+ * source, fallbackReason, voidReason, evidence, ruleVersion}` — MarketJudgementRequestPayload,
+ * the source's name and address copied from the rules — and the description as its reason),
+ * pending, or rejected or retracted as asked. Changes nothing of the market and writes no event,
+ * as the route; nor its `market_judgement_request` record. The route's checks are not made (the
+ * status, one waiting per market, the setting, the result and source rules, the evidence's
+ * instant): a test gives what the route would take, or tests the approval's refusal of it. Stored
+ * as given otherwise. `createProvisionalMarket` approves one.
+ */
+export async function createJudgementRequest(db: Db, input: CreateJudgementRequestInput) {
+  const [market] = await db
+    .select({ id: markets.id, ruleVersion: markets.ruleVersion })
+    .from(markets)
+    .where(eq(markets.id, input.marketId));
+  if (!market) throw new Error(`createJudgementRequest: market ${input.marketId} not found`);
+  const result = input.result ?? 'YES';
+  const picked =
+    input.source !== undefined ? input.source : result === 'VOID' ? null : { priority: 0 };
+  let source: JudgementSource | null = null;
+  if (picked !== null) {
+    const [row] = await db
+      .select()
+      .from(marketSources)
+      .where(
+        and(eq(marketSources.marketId, market.id), eq(marketSources.priority, picked.priority)),
+      );
+    const name = picked.name ?? row?.name;
+    const url = picked.url ?? row?.url;
+    if (name === undefined || url === undefined) {
+      throw new Error(
+        `createJudgementRequest: market ${market.id} has no source at ${String(picked.priority)}`,
+      );
+    }
+    source = { priority: picked.priority, name, url };
+  }
+  const requestedAt = input.requestedAt ?? (await clockTimestamp(db));
+  const payload: MarketJudgementRequestPayload = {
+    result,
+    source,
+    fallbackReason:
+      input.fallbackReason !== undefined
+        ? input.fallbackReason
+        : source !== null && isFallbackSourcePriority(source.priority)
+          ? JUDGEMENT_FALLBACK_REASON
+          : null,
+    voidReason:
+      input.voidReason !== undefined
+        ? input.voidReason
+        : result === 'VOID'
+          ? JUDGEMENT_VOID_REASON
+          : null,
+    evidence: {
+      links: input.evidence?.links ?? [JUDGEMENT_EVIDENCE_LINK],
+      collectedAt: (
+        input.evidence?.collectedAt ?? new Date(requestedAt.getTime() - MINUTE_MS)
+      ).toISOString(),
+    },
+    ruleVersion: input.ruleVersion !== undefined ? input.ruleVersion : market.ruleVersion,
+  };
+  const by = input.by ?? (await createUser(db, { role: 'admin' })).user.id;
+  return createApprovalRequest(db, {
+    kind: MARKET_JUDGEMENT_APPROVAL_KIND,
+    targetType: 'market',
+    targetId: market.id,
+    payload: { ...payload },
+    requestedBy: by,
+    reason: input.description ?? JUDGEMENT_DESCRIPTION,
+    requestedAt,
+    ...(input.rejected === undefined
+      ? {}
+      : { decision: { status: 'rejected', ...input.rejected } }),
+    ...(input.retracted === undefined ? {} : { retracted: input.retracted }),
+  });
+}
+
+export interface CreateProvisionalMarketInput extends Omit<
+  CreateJudgementRequestInput,
+  'marketId' | 'by' | 'requestedAt' | 'rejected' | 'retracted'
+> {
+  /**
+   * A CLOSED market to judge — `closeMarketEarly`'s, or one the worker closed. Default: a market
+   * `createMarket` writes CLOSED with `market`'s fields, its close an hour before the publication
+   * (no event: the provisional one is its first).
+   */
+  marketId?: string;
+  /** createMarket's fields of the default CLOSED market. Ignored with `marketId`. */
+  market?: Omit<
+    CreateMarketInput,
+    | 'status'
+    | 'resolvedResult'
+    | 'resolvedAt'
+    | 'settledAt'
+    | 'statusEventId'
+    | 'judgementVersion'
+    | 'disputeDeadline'
+    | 'settlementSteps'
+  >;
+  /** The registering admin: the request's requester. Default: a fresh admin. */
+  registeredBy?: string;
+  /** The approving admin, never the registrant (the factory throws). Default: a fresh admin. */
+  approvedBy?: string;
+  /** The approval's reason (the request's decision reason). Default: a sentence. */
+  approvalReason?: string;
+  /**
+   * The approval's instant — the publication, the `provisional` event's and `published_at`. The
+   * registration is a millisecond before it. Default: the database clock. One more than the window
+   * ago gives a market whose deadline has passed, as the worker's confirmation finds it.
+   */
+  publishedAt?: Date;
+  /** The window the approval reads (`market.dispute_window`), in minutes. Default 1,440. */
+  disputeWindowMinutes?: number;
+  /** Default: true before the market's scheduled judgement (as the route needs), false after. */
+  eventDeadlineConfirmed?: boolean;
+}
+
+/** A judgement a factory published: the market, the judgement, the request and the event. */
+export interface ProvisionalMarket {
+  /** The market read back after the approval: `provisional`, its result, version and deadline. */
+  market: typeof markets.$inferSelect;
+  /** Its `market_judgements` row, version 1 for a first judgement. */
+  judgement: MarketJudgementRow;
+  /** The `market_judgement` request, approved. */
+  request: typeof approvalRequests.$inferSelect;
+  /** The `provisional` event's id, the market's `status_event_id`. */
+  eventId: number;
+}
+
+/**
+ * A PROVISIONAL market (#152, ADR-0103) as the routes leave it: a CLOSED market (`marketId`, or
+ * a fresh one), its judgement registered by one admin (`createJudgementRequest`, a millisecond
+ * before the approval), then in one transaction under the market lock with the row FOR UPDATE that
+ * request approved by another admin with a reason, and `approveMarketJudgement` at the approval's
+ * instant — the `provisional` event, the market `provisional` with its result, version and dispute
+ * deadline (the instant plus the window), and the `market_judgements` row. No admin records and
+ * no job (the API's). `approveMarketJudgement`'s checks are made: a market not CLOSED, a rule
+ * version moved since the registration, or an early approval left unconfirmed throws.
+ */
+export async function createProvisionalMarket(
+  db: Db,
+  input: CreateProvisionalMarketInput = {},
+): Promise<ProvisionalMarket> {
+  const {
+    marketId,
+    market: fields,
+    registeredBy,
+    approvedBy,
+    approvalReason,
+    publishedAt,
+    disputeWindowMinutes,
+    eventDeadlineConfirmed,
+    ...registration
+  } = input;
+  const registrant = registeredBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const approver = approvedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  if (approver === registrant) {
+    throw new Error('createProvisionalMarket: the registrant never approves the judgement');
+  }
+  const at = publishedAt ?? (await clockTimestamp(db));
+  const id =
+    marketId ??
+    (
+      await createMarket(db, {
+        closeAt: new Date(at.getTime() - HOUR_MS),
+        ...fields,
+        status: 'closed',
+      })
+    ).id;
+  const request = await createJudgementRequest(db, {
+    ...registration,
+    marketId: id,
+    by: registrant,
+    requestedAt: new Date(at.getTime() - 1),
+  });
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, id);
+    const [current] = await tx.select().from(markets).where(eq(markets.id, id)).for('update');
+    if (!current) throw new Error(`createProvisionalMarket: market ${id} not found`);
+    const [approved] = await tx
+      .update(approvalRequests)
+      .set({
+        status: 'approved',
+        decidedBy: approver,
+        decisionReason: approvalReason ?? JUDGEMENT_APPROVAL_REASON,
+        decidedAt: at,
+      })
+      .where(eq(approvalRequests.id, request.id))
+      .returning();
+    const result = await approveMarketJudgement(tx, {
+      market: current,
+      request: approved!,
+      now: at,
+      approverId: approver,
+      eventDeadlineConfirmed:
+        eventDeadlineConfirmed ??
+        isBeforeScheduledJudgement(current.scheduledJudgementAt, at.getTime()),
+      disputeWindowMinutes: disputeWindowMinutes ?? JUDGEMENT_DISPUTE_WINDOW_MINUTES,
+    });
+    if (!result.published) {
+      throw new Error(
+        `createProvisionalMarket: the judgement was not published (${result.reason})`,
+      );
+    }
+    return {
+      market: result.market,
+      judgement: result.judgement,
+      request: approved!,
+      eventId: result.eventId,
+    };
+  });
+}
+
+/**
+ * The worker's confirmation (#152, ADR-0103) of a PROVISIONAL market, now: in one transaction
+ * under the market lock, `resolveProvisionalMarket` at the database clock (or `at`) — the
+ * `resolved` event (no actor, payload `{version, result, source: 'deadline'}`), the market
+ * `resolved` with `resolved_at`, and the pending settlement steps — for an API or worker test that
+ * needs a RESOLVED market with its history (`createProvisionalMarket`'s, or a `provisional` one of
+ * `createMarket`). A deadline still ahead is first brought to that instant on the market
+ * (`markets.dispute_deadline`); the judgement row keeps the one its approval fixed — it takes no
+ * UPDATE — so a test that wants the two to agree publishes early enough that the deadline has
+ * passed (`createProvisionalMarket`'s `publishedAt`), and then nothing moves. No job, no publish
+ * (the worker's): `market.finalize` is the test's to run. A market not PROVISIONAL throws.
+ */
+export async function resolveMarketNow(
+  db: Db,
+  marketId: string,
+  input: { at?: Date } = {},
+): Promise<{ market: typeof markets.$inferSelect; eventId: number }> {
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const now = input.at ?? (await clockTimestamp(tx));
+    await tx
+      .update(markets)
+      .set({ disputeDeadline: now })
+      .where(
+        and(
+          eq(markets.id, marketId),
+          eq(markets.status, 'provisional'),
+          gt(markets.disputeDeadline, now),
+        ),
+      );
+    const result = await resolveProvisionalMarket(tx, { marketId, now });
+    if (!result.resolved) {
+      throw new Error(`resolveMarketNow: market ${marketId} was not confirmed (${result.reason})`);
+    }
+    return { market: result.market, eventId: result.eventId };
+  });
 }
 
 export interface CreateReportInput {

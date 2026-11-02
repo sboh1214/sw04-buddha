@@ -156,9 +156,11 @@ export function AdminMarkets() {
                       {copy.adminMarketClosingSoon}
                     </Badge>
                   )}
-                  {/* The two "waits on someone" badges (ADR-0046): closed waits for the admin's
-                      판정, resolved and settling for the worker's payout — a settling row that
-                      keeps its badge is a failing step, which the detail's 정산 단계 panel names. */}
+                  {/* The two "waits on someone" badges (ADR-0046): closed waits for the admins'
+                      판정 (registered and approved, #152), resolved and settling for the worker's
+                      payout — a settling row that keeps its badge is a failing step, which the
+                      detail's 정산 단계 panel names. A provisional one waits for its deadline,
+                      which its detail shows. */}
                   {isAwaitingResolution(market.status) && (
                     <Badge colorPalette="brand" variant="solid">
                       {copy.adminMarketAwaitingResolution}

@@ -16,7 +16,7 @@ function allowedPairs(): string[] {
 }
 
 describe('market lifecycle transitions (N03 §3, ADR-0093, #174)', () => {
-  it("is exactly N03 §3's order, OPEN ↔ PAUSED, ADR-0093's additions and one interim edge", () => {
+  it("is exactly N03 §3's order, OPEN ↔ PAUSED and ADR-0093's additions, no interim edge", () => {
     expect(allowedPairs().sort()).toEqual(
       [
         // N03 §3, in order.
@@ -39,10 +39,24 @@ describe('market lifecycle transitions (N03 §3, ADR-0093, #174)', () => {
         'paused>closed',
         'open>cancelled',
         'paused>cancelled',
-        // Interim: today's immediate judgement (#152). #21 removed the direct open from a draft.
-        'closed>resolved',
+        // No interim edge: #21 removed the direct open from a draft, #152 the immediate judgement.
       ].sort(),
     );
+  });
+
+  it('judges a closed market only through PROVISIONAL (#152, #173 item 1)', () => {
+    // ADR-0046's immediate judgement by one admin is gone: another admin's approval publishes the
+    // provisional result, and the worker confirms it at its dispute deadline.
+    expect(INTERIM_MARKET_TRANSITIONS).toEqual([]);
+    expect(canTransitionMarket('closed', 'resolved')).toBe(false);
+    expect(MARKET_LIFECYCLE_TRANSITIONS.closed).toEqual(['provisional']);
+    expect(MARKET_LIFECYCLE_TRANSITIONS.provisional).toEqual(['resolved']);
+    expect(MARKET_STATUSES.filter((from) => canTransitionMarket(from, 'resolved'))).toEqual([
+      'provisional',
+    ]);
+    expect(MARKET_STATUSES.filter((from) => canTransitionMarket(from, 'provisional'))).toEqual([
+      'closed',
+    ]);
   });
 
   it('opens a market only from SCHEDULED, besides the resume of a paused one (#21)', () => {

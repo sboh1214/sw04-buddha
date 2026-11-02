@@ -23,40 +23,70 @@ describe.skipIf(!hasTestDb())('transitionMarket (#174, docker test profile)', ()
     t.db.select().from(marketEvents).where(eq(marketEvents.marketId, marketId));
 
   it('writes who, when, from and to, and keys the market on that event', async () => {
+    // The judgement's publication (#152) as the shape of an admin's transition with columns set
+    // beside the status; `approveMarketJudgement` (market-judgement.test.ts) is the real one.
     const { user: admin } = await createUser(t.db, { role: 'admin' });
     const market = await createMarket(t.db, { status: 'closed' });
     const at = new Date('2026-11-02T03:04:05.678Z');
+    const disputeDeadline = new Date(at.getTime() + 24 * 60 * 60 * 1000);
     const eventId = await t.db.transaction((tx) =>
       transitionMarket(tx, {
         marketId: market.id,
         from: 'closed',
-        to: 'resolved',
-        type: 'resolved',
+        to: 'provisional',
+        type: 'provisional',
         actorId: admin.id,
-        payload: { result: 'YES' },
+        payload: { version: 1, result: 'YES' },
         at,
-        set: { resolvedResult: 'YES', resolvedAt: at },
+        set: { resolvedResult: 'YES', judgementVersion: 1, disputeDeadline },
       }),
     );
     expect(await eventsOf(market.id)).toEqual([
       expect.objectContaining({
         id: eventId,
-        type: 'resolved',
+        type: 'provisional',
         actorId: admin.id,
         fromStatus: 'closed',
-        toStatus: 'resolved',
-        payload: { result: 'YES' },
+        toStatus: 'provisional',
+        payload: { version: 1, result: 'YES' },
         createdAt: at,
       }),
     ]);
     const [row] = await t.db.select().from(markets).where(eq(markets.id, market.id));
     expect(row).toMatchObject({
-      status: 'resolved',
+      status: 'provisional',
       statusEventId: eventId,
       updatedAt: at,
       resolvedResult: 'YES',
-      resolvedAt: at,
+      judgementVersion: 1,
+      disputeDeadline,
+      resolvedAt: null,
     });
+  });
+
+  it('refuses the interim closed → resolved edge since #152 (ADR-0103)', async () => {
+    // ADR-0046's immediate judgement by one admin is gone: a CLOSED market goes PROVISIONAL first,
+    // and only the worker confirms it at its dispute deadline.
+    expect(canTransitionMarket('closed', 'resolved')).toBe(false);
+    const { user: admin } = await createUser(t.db, { role: 'admin' });
+    const market = await createMarket(t.db, { status: 'closed' });
+    await expect(
+      t.db.transaction((tx) =>
+        transitionMarket(tx, {
+          marketId: market.id,
+          from: 'closed',
+          to: 'resolved',
+          type: 'resolved',
+          actorId: admin.id,
+          payload: { result: 'YES' },
+          at: new Date(),
+          set: { resolvedResult: 'YES', resolvedAt: new Date() },
+        }),
+      ),
+    ).rejects.toThrow(new MarketTransitionError('closed', 'resolved'));
+    expect(await eventsOf(market.id)).toEqual([]);
+    const [row] = await t.db.select().from(markets).where(eq(markets.id, market.id));
+    expect(row).toMatchObject({ status: 'closed', resolvedResult: null, resolvedAt: null });
   });
 
   it('records the worker as a null actor', async () => {

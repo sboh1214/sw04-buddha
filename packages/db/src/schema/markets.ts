@@ -178,11 +178,34 @@ export const markets = pgTable(
      */
     ruleVersion: integer(),
     /**
-     * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
-     * on a CANCELLED market (ADR-0093 decision 1 item 10). Not the contract side `outcome`.
+     * The judgement's result type (YES·NO·VOID, #174): the current judgement's, written by the
+     * approval that publishes it (CLOSED → PROVISIONAL, #152 — ADR-0095 8-2: a provisional result
+     * is a judged result too, and 8-7 hides a provisional VOID from related markets by it) and kept
+     * through RESOLVED and the settlement. Null before a judgement publishes one and on a CANCELLED
+     * market (ADR-0093 decision 1 item 10). Not the contract side `outcome`.
      */
     resolvedResult: marketResultEnum(),
-    /** When the result was confirmed (→ `resolved`). */
+    /**
+     * The current judgement (#152, ADR-0103): its `market_judgements.version` — 1 from the
+     * approval that published the first one, then one more per correction (#176). Null until a
+     * judgement is approved, and for a market judged by ADR-0046's interim route before #152 (D4,
+     * no backfill: no judgement row). No foreign key (the judgement row references the market):
+     * the approval writes both in one transaction. The settlement of a RESOLVED market is that
+     * version's (the `resolved` event names it too; #126 keys its payouts by it).
+     */
+    judgementVersion: integer(),
+    /**
+     * 이의 기한 of the current judgement (#152, ADR-0103; ADR-0093 decision 1 #173 item 5): its
+     * `market_judgements.dispute_deadline`, mirrored here for the worker's scan (`market.resolve`,
+     * the index below) and kept after the confirmation. Null until a judgement is approved. Not
+     * named `dispute_until`: that M5 column was dropped with its dispute flow (migration 0016).
+     */
+    disputeDeadline: timestampTz(),
+    /**
+     * When the result was confirmed (→ `resolved`): since #152 the worker's confirmation once the
+     * dispute deadline passed (`resolveProvisionalMarket`), never the provisional publication —
+     * theme results read it as 확정 시각 (ADR-0095 결과 5). Before #152, the interim judgement's.
+     */
     resolvedAt: timestampTz(),
     /** When the settlement steps all finished (→ `settled`). */
     settledAt: timestampTz(),
@@ -239,6 +262,14 @@ export const markets = pgTable(
      * ADR-0065 `newest` is the open time and has its own index above.
      */
     index('markets_created_at_id_idx').on(desc(t.createdAt), desc(t.id)),
+    /**
+     * The worker's confirmation scan (`market.resolve`, #152): the PROVISIONAL markets whose
+     * dispute deadline has passed, the earliest first. Partial: a market keeps its deadline after
+     * the confirmation, and the PROVISIONAL set is the few awaiting one.
+     */
+    index('markets_provisional_dispute_deadline_idx')
+      .on(t.disputeDeadline, t.id)
+      .where(sql`${t.status} = 'provisional'`),
     check('markets_last_price_check', sql`${t.lastPrice} >= 1 AND ${t.lastPrice} <= 99`),
     check('markets_volume_coin_check', sql`${t.volumeCoin} >= 0`),
     check('markets_trade_count_check', sql`${t.tradeCount} >= 0`),
@@ -266,6 +297,16 @@ export const markets = pgTable(
     ),
     check('markets_lead_close_gap_minutes_check', sql`${t.leadCloseGapMinutes} >= 0`),
     check('markets_rule_version_check', sql`${t.ruleVersion} >= 1`),
+    check('markets_judgement_version_check', sql`${t.judgementVersion} >= 1`),
+    /**
+     * A PROVISIONAL market has a published judgement (#152): its version, its deadline and its
+     * result — the approval writes all three with the status. No CHECK ties them to the other
+     * statuses: a market judged by the interim route before #152 has neither version nor deadline.
+     */
+    check(
+      'markets_provisional_check',
+      sql`${t.status} <> 'provisional' OR (${t.judgementVersion} IS NOT NULL AND ${t.disputeDeadline} IS NOT NULL AND ${t.resolvedResult} IS NOT NULL)`,
+    ),
     check(
       'markets_fee_bps_check',
       sql`${t.takerFeeBps} BETWEEN 0 AND 10000 AND ${t.settlementFeeBps} BETWEEN 0 AND 10000`,

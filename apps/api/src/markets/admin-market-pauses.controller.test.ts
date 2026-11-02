@@ -943,7 +943,8 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     // The close job under the scheduled close is cancelled (hygiene).
     expect(await jobQueue.getJob(marketCloseJobId(market.id, market.closeAt))).toBeUndefined();
     // Never reopened (#173 item 4): nothing pauses or asks again, and the judgement takes it as
-    // any closed market (VOID is the judgement's, #152; the interim resolve until then).
+    // any closed market — VOID alone, reviewed 판정 불가 ("판정이 VOID 규칙을 따른다", #152,
+    // ADR-0103; admin-market-judgements.controller.test has the rest).
     expectRefused(await pause(market.id), 'status', 'not open');
     expectRefused(
       await requestDecision(market.id, { path: 'resume', reviewResult: 'judgeable' }),
@@ -952,9 +953,48 @@ describe.skipIf(!hasTestInfra)('admin market pauses (integration)', () => {
     );
     const pub = data<Market>(await publicDetail(market.id));
     expect(pub).toMatchObject({ status: 'closed', closeAt: market.closeAt.toISOString() });
-    const resolved = await post(`${marketUrl(market.id)}/resolve`, approver, { result: 'NO' });
-    expect(resolved.statusCode).toBe(200);
-    expect(detail(resolved).status).toBe('resolved');
+    const window = await t.app.inject({
+      method: 'PATCH',
+      url: '/api/v1/admin/release-settings/market.dispute_window',
+      headers: { ...jsonHeaders, cookie: asker.cookie },
+      payload: {
+        status: 'test',
+        value: 1_440,
+        reason: '이의 기간 시험값',
+        expectedAccountId: asker.id,
+      },
+    });
+    expect(window.statusCode).toBe(200);
+    const judgements = `${marketUrl(market.id)}/judgements`;
+    const evidence = {
+      links: ['https://example.com/schedule'],
+      collectedAt: new Date(Date.now() - MINUTE_MS).toISOString(),
+    };
+    expectRefused(
+      await post(judgements, approver, {
+        result: 'NO',
+        source: { priority: 0 },
+        evidence,
+        description: '사건 일정이 바뀌었다.',
+      }),
+      'result',
+      'void only',
+    );
+    const registered = await post(judgements, approver, {
+      result: 'VOID',
+      source: null,
+      voidReason: '조기 마감 검토에서 판정 불가로 보았다.',
+      evidence,
+      description: '사건 일정이 바뀌어 규칙으로 판정할 수 없다.',
+    });
+    expect(registered.statusCode, registered.body).toBe(200);
+    const judged = await post(
+      `${judgements}/${detail(registered).judgement.pending!.requestId}/approve`,
+      asker,
+      { reason: '판정 불가가 맞다.', eventDeadlineConfirmed: true },
+    );
+    expect(judged.statusCode, judged.body).toBe(200);
+    expect(detail(judged)).toMatchObject({ status: 'provisional', resolvedResult: 'VOID' });
   });
 
   it.each([
