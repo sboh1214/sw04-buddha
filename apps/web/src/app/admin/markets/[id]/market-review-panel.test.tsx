@@ -61,6 +61,7 @@ const base: AdminMarket = {
   ruleVersion: null,
   ruleVersions: [],
   supplement: { pending: null, log: [] },
+  pause: { history: [], pending: null, log: [] },
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
   review: { pending: null, createdBy: CREATOR, editors: [EDITOR], sameCondition: [], log: [] },

@@ -3,6 +3,8 @@ import {
   AUDIT_FAILURE_KINDS,
   CATEGORY_UNSELECTABLE_REASONS,
   MARKET_EVENT_TYPES,
+  MARKET_PAUSE_REASONS,
+  MARKET_PAUSE_REVIEW_RESULTS,
   MARKET_RESULTS,
   MARKET_STATUSES,
   type MarketStatus,
@@ -30,6 +32,8 @@ import {
   MARKET_STATUS_PALETTE,
   type MarketSourceInputs,
   OPEN_ITEM_LABEL,
+  PAUSE_REASON_LABEL,
+  PAUSE_REVIEW_RESULT_LABEL,
   RULE_VERSION_ITEM_LABEL,
   SETTLEMENT_STEP_LABEL,
   SETTLEMENT_STEP_STATUS_LABEL,
@@ -39,6 +43,7 @@ import {
   compactJson,
   deltaLabel,
   deltaMoveKey,
+  editsAfterOpen,
   formatBp,
   formatContracts,
   formatNoPrice,
@@ -50,6 +55,7 @@ import {
   isClosingSoon,
   isEditable,
   marketIdParam,
+  marketEventLabel,
   marketEventRows,
   marketFormError,
   openItemsNotice,
@@ -58,10 +64,12 @@ import {
   MAX_TIMEOUT_MS,
   SCHEDULED_OPEN_POLL_MS,
   SETTLEMENT_POLL_INTERVAL_MS,
+  TRADING_CLOSE_POLL_MS,
   adminMarketPollInterval,
   scheduledMarketPollDelay,
   settlementPollInterval,
   settlementStepViews,
+  tradingMarketPollDelay,
   transitionErrorMessage,
 } from './market-admin';
 
@@ -228,8 +236,11 @@ describe('status predicates', () => {
     expect(settlementPollInterval(undefined)).toBe(false);
   });
 
-  it('allows edits while draft or open (an open market’s category, tags and image, #80)', () => {
-    expect(MARKET_STATUSES.filter(isEditable)).toEqual(['draft', 'open']);
+  it('allows edits while draft, open or paused (an opened market’s category, tags and image)', () => {
+    // #80 (ADR-0101) for an open market; a paused one alike since #114 (ADR-0102; ADR-0093
+    // decision 2 #172 item 14: 'after the open' takes the pause in) — its version items off.
+    expect(MARKET_STATUSES.filter(isEditable)).toEqual(['draft', 'open', 'paused']);
+    expect(MARKET_STATUSES.filter(editsAfterOpen)).toEqual(['open', 'paused']);
   });
 
   it('judges a closed market only', () => {
@@ -503,6 +514,98 @@ describe('marketEventRows', () => {
     expect(marketEventRows('closed', { closedAt: closeAt })).toEqual([
       { label: copy.adminMarketCloseAtShort, value: formatKst(closeAt) },
     ]);
+    // The worker's close of an open or a paused market (#114): the instant, its `source` the 시스템
+    // actor already says.
+    expect(marketEventRows('closed', { closedAt: closeAt, source: 'job' })).toEqual([
+      { label: copy.adminMarketCloseAtShort, value: formatKst(closeAt) },
+    ]);
+  });
+
+  describe('the pause (#114, ADR-0102)', () => {
+    const ids = {
+      pauseId: 'a1b2c3d4-0000-4000-8000-000000000001',
+      approvalId: 'a1b2c3d4-0000-4000-8000-000000000002',
+      requestedBy: 'requester-account-id',
+    };
+    const publishedAt = '2026-11-05T03:10:00.000Z';
+
+    it('reads a pause as its reason, and an early result’s publication instant in KST', () => {
+      expect(
+        marketEventRows('paused', {
+          pauseId: ids.pauseId,
+          reason: 'early_result',
+          resultPublishedAt: publishedAt,
+        }),
+      ).toEqual([
+        { label: '중단 사유', value: '사건 선공개(조기 결과)' },
+        { label: '결과 공개 시각', value: formatKst(publishedAt) },
+      ]);
+      expect(
+        marketEventRows('paused', {
+          pauseId: ids.pauseId,
+          reason: 'ledger_failure',
+          resultPublishedAt: null,
+        }),
+      ).toEqual([{ label: '중단 사유', value: '담보·원장 장애' }]);
+      expect(MARKET_EVENT_LABEL.paused).toBe('일시 중단');
+      // Not its shape: the JSON line.
+      expect(marketEventRows('paused', { reason: 'bot_stop', resultPublishedAt: null })).toBe(
+        undefined,
+      );
+      expect(marketEventRows('paused', { reason: 'basis_change' })).toBeUndefined();
+    });
+
+    it('reads a resume and an early close by their review result, never by an account id', () => {
+      const resumed = { ...ids, reviewResult: 'judgeable' };
+      expect(marketEventRows('resumed', resumed)).toEqual([
+        { label: '검토 결과', value: '기존 규칙으로 판정 가능' },
+      ]);
+      // Without a review result (a pause for another reason) the actor and the badge say it all.
+      expect(marketEventRows('resumed', { ...ids, reviewResult: null })).toEqual([]);
+      expect(MARKET_EVENT_LABEL.resumed).toBe('재개');
+      const early = {
+        ...ids,
+        closedAt: closeAt,
+        source: 'early_close',
+        reviewResult: 'not_judgeable',
+      };
+      const rows = marketEventRows('closed', early);
+      expect(rows).toEqual([
+        { label: copy.adminMarketCloseAtShort, value: formatKst(closeAt) },
+        { label: '검토 결과', value: '판정 불가' },
+      ]);
+      for (const row of [...(rows ?? []), ...(marketEventRows('resumed', resumed) ?? [])]) {
+        expect(row.value).not.toContain(ids.requestedBy);
+        expect(row.value).not.toContain(ids.approvalId);
+      }
+      expect(marketEventRows('closed', { ...early, reviewResult: null })).toEqual([
+        { label: copy.adminMarketCloseAtShort, value: formatKst(closeAt) },
+      ]);
+      expect(marketEventRows('resumed', { reviewResult: 'maybe' })).toBeUndefined();
+    });
+
+    it('names an approved early close 조기 마감, every other close 마감', () => {
+      const early = { ...ids, closedAt: closeAt, source: 'early_close', reviewResult: null };
+      expect(marketEventLabel('closed', early)).toBe('조기 마감');
+      expect(marketEventLabel('closed', { closedAt: closeAt, source: 'job' })).toBe('마감');
+      expect(marketEventLabel('closed', { closedAt: closeAt })).toBe('마감');
+      expect(marketEventLabel('closed', null)).toBe('마감');
+      expect(marketEventLabel('paused', early)).toBe('일시 중단');
+    });
+
+    it('names every pause reason and review result, the three reasons only (#173 item 3)', () => {
+      expect(Object.keys(PAUSE_REASON_LABEL)).toEqual([...MARKET_PAUSE_REASONS]);
+      expect(Object.keys(PAUSE_REVIEW_RESULT_LABEL)).toEqual([...MARKET_PAUSE_REVIEW_RESULTS]);
+      expect(Object.values(PAUSE_REASON_LABEL)).toEqual([
+        '사건 선공개(조기 결과)',
+        '담보·원장 장애',
+        '실질 기준 변경',
+      ]);
+      expect(Object.values(PAUSE_REVIEW_RESULT_LABEL)).toEqual([
+        '기존 규칙으로 판정 가능',
+        '판정 불가',
+      ]);
+    });
   });
 
   it('reads the 판정 as its result, note and evidence; blanks are left out', () => {
@@ -943,8 +1046,11 @@ describe('transitionErrorMessage', () => {
     expect(transitionErrorMessage(apiError(403, 'FORBIDDEN'))).toBe(copy.errUnknown);
   });
 
-  it('names the specific refusals of the submission and of close', () => {
-    expect(transitionErrorMessage(apiError(409, 'MARKET_NOT_OPEN'))).toBe(copy.errMarketNotOpen);
+  it('names the specific refusals of the submission and of a 판정', () => {
+    // The one-admin close went with #114 (ADR-0102): no route answers MARKET_NOT_OPEN any more, and
+    // the pause's refusals are its own (`pauseFailure`, lib/market-pause.ts).
+    expect(transitionErrorMessage(apiError(409, 'MARKET_NOT_OPEN'))).toBe(copy.errUnknown);
+    expect(Object.keys(copy)).not.toContain('errMarketNotOpen');
     expect(
       transitionErrorMessage(
         apiError(400, 'VALIDATION_ERROR', 'x', [{ path: ['status'], message: 'market is draft' }]),
@@ -1429,6 +1535,44 @@ describe('scheduledMarketPollDelay (#21, ADR-0100)', () => {
   });
 });
 
+describe('tradingMarketPollDelay (#114, ADR-0102)', () => {
+  const closeAt = '2026-11-20T00:00:00.000Z';
+  const at = (iso: string) => new Date(iso).getTime();
+
+  it('reads an open or a paused market again at its close', () => {
+    for (const status of ['open', 'paused'] as const) {
+      expect(tradingMarketPollDelay({ status, closeAt }, at('2026-11-19T23:59:00.000Z'))).toBe(
+        60_000,
+      );
+      expect(tradingMarketPollDelay({ status, closeAt }, at('2026-11-19T23:59:59.999Z'))).toBe(1);
+    }
+  });
+
+  it('then every few seconds until the worker closed it, never at once', () => {
+    // A paused market closes on schedule too (#173 items 1·3), which makes a waiting next path
+    // moot: the detail follows it without a reload. A failed read refires at the poll, not at once.
+    expect(TRADING_CLOSE_POLL_MS).toBe(5_000);
+    for (const now of [closeAt, '2026-11-20T00:00:00.001Z', '2026-11-21T00:00:00.000Z']) {
+      expect(tradingMarketPollDelay({ status: 'paused', closeAt }, at(now)), now).toBe(
+        TRADING_CLOSE_POLL_MS,
+      );
+    }
+  });
+
+  it('is nothing for any other status or an unreadable close, and caps a far close', () => {
+    for (const status of MARKET_STATUSES.filter(
+      (value) => value !== 'open' && value !== 'paused',
+    )) {
+      expect(tradingMarketPollDelay({ status, closeAt }, at(closeAt)), status).toBe(false);
+    }
+    expect(tradingMarketPollDelay(undefined)).toBe(false);
+    expect(tradingMarketPollDelay({ status: 'open', closeAt: 'nope' })).toBe(false);
+    expect(
+      tradingMarketPollDelay({ status: 'open', closeAt: '2027-07-01T00:00:00.000Z' }, at(closeAt)),
+    ).toBe(MAX_TIMEOUT_MS);
+  });
+});
+
 describe('adminMarketPollInterval', () => {
   const market = (status: MarketStatus) => ({
     status,
@@ -1440,12 +1584,15 @@ describe('adminMarketPollInterval', () => {
     const readAt = Date.now();
     for (const status of MARKET_STATUSES) {
       const interval = adminMarketPollInterval({ data: market(status), dataUpdatedAt: readAt });
+      // A trading market's close is centuries off here: the longest timer, then again (#114).
       const expected =
         status === 'resolved' || status === 'settling'
           ? SETTLEMENT_POLL_INTERVAL_MS
           : status === 'scheduled'
             ? SCHEDULED_OPEN_POLL_MS
-            : false;
+            : status === 'open' || status === 'paused'
+              ? MAX_TIMEOUT_MS
+              : false;
       expect(interval, status).toBe(expected);
     }
     expect(adminMarketPollInterval({ data: undefined, dataUpdatedAt: 0 })).toBe(false);

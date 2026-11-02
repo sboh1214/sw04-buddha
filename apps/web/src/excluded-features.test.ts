@@ -526,6 +526,9 @@ describe('excluded features on screens (#113)', () => {
       at('lib', 'market-form.ts'),
       // 규칙 보충's (#80): the 정산 영향 검토 and the operators are an admin's alone.
       at('lib', 'market-supplement.ts'),
+      // 거래 일시 중단's (#114): the note, the publication instant and the operators likewise (what
+      // the public judging record shows of a pause is #24's).
+      at('lib', 'market-pause.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }

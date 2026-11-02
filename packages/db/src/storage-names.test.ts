@@ -8,6 +8,10 @@ import {
   LEDGER_REF_TYPES,
   LINK_FLAG_REASONS,
   MARKET_EVENT_TYPES,
+  MARKET_PAUSE_DECISION_APPROVAL_KIND,
+  MARKET_PAUSE_END_KINDS,
+  MARKET_PAUSE_REASONS,
+  MARKET_PAUSE_REVIEW_RESULTS,
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_SUPPLEMENT_APPROVAL_KIND,
   MEDIA_KINDS,
@@ -102,15 +106,21 @@ const VARCHAR_VALUES: Readonly<Record<string, readonly string[]>> = {
   'write_limit_events.action': WRITE_LIMIT_ACTIONS,
   'link_flags.reason': LINK_FLAG_REASONS,
   // #171's two-person rule: each consumer's kinds — the account restriction's four (#139) the
-  // first, the market review (#78), the rule supplement (#80); #130's bot control and the rest add
-  // theirs here.
+  // first, the market review (#78), the rule supplement (#80), a paused market's next path (#114);
+  // #130's bot control and the rest add theirs here.
   'approval_requests.kind': [
     ...Object.values(ACCOUNT_RESTRICTION_APPROVAL_KINDS),
     MARKET_REVIEW_APPROVAL_KIND,
     MARKET_SUPPLEMENT_APPROVAL_KIND,
+    MARKET_PAUSE_DECISION_APPROVAL_KIND,
   ],
   // #80: the items a rule version changed (a text[] of the version items' keys, held by a CHECK).
   'market_rule_versions.changed_items': RULE_VERSION_ITEMS,
+  // #114: a pause's reason (three only, ADR-0093 #173 item 3), a `basis_change` pause's review
+  // result and how a pause ended, each held by a CHECK.
+  'market_pauses.reason': MARKET_PAUSE_REASONS,
+  'market_pauses.review_result': MARKET_PAUSE_REVIEW_RESULTS,
+  'market_pauses.end_kind': MARKET_PAUSE_END_KINDS,
   // #184's purge records: the kinds a run counts (no personal content), and whether a kind was
   // done or failed (owner decision 2026-10-24 14).
   'retention_purges.kind': RETENTION_PURGE_KINDS,
@@ -355,6 +365,61 @@ describe('excluded features in stored data (#113)', () => {
           where: 'market_rule_versions.changed_items value',
           name,
         })),
+      ]),
+    );
+  });
+
+  it('names the pauses, their CHECKs and the pause’s stored values, each read above (#114)', () => {
+    // ADR-0102, migration 0054: the table of a market's pauses, its CHECKs and indexes under the
+    // names the schema test spells, and the pause's approval kind, market event types and admin
+    // action types, which the test above reads for an excluded feature ('pause', 'resume',
+    // 'judgeable', 'early_close' name none).
+    const pauses = TABLES.find((table) => table.name === 'market_pauses');
+    expect(pauses?.columns.map((column) => column.name)).toEqual([
+      'id',
+      'marketId',
+      'reason',
+      'note',
+      'resultPublishedAt',
+      'pausedAt',
+      'pausedBy',
+      'pauseEventId',
+      'reviewResult',
+      'endKind',
+      'endedAt',
+      'endedBy',
+      'endEventId',
+      'endApprovalId',
+    ]);
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_pauses' },
+        ...[
+          'market_pauses_reason_check',
+          'market_pauses_note_check',
+          'market_pauses_result_published_at_check',
+          'market_pauses_review_result_check',
+          'market_pauses_end_kind_check',
+          'market_pauses_end_check',
+          'market_pauses_review_check',
+          'market_pauses_market_id_lasting_unique',
+          'market_pauses_market_id_paused_at_idx',
+        ].map((name) => ({ where: 'market_pauses constraint', name })),
+        { where: 'approval_requests.kind value', name: 'market_pause_decision' },
+        ...['paused', 'resumed'].map((name) => ({ where: 'market_events.type value', name })),
+        ...[
+          'market_pause',
+          'market_pause_decision_request',
+          'market_pause_decision_approve',
+          'market_pause_decision_reject',
+          'market_pause_decision_retract',
+        ].map((name) => ({ where: 'admin_actions.type value', name })),
+        ...MARKET_PAUSE_REASONS.map((name) => ({ where: 'market_pauses.reason value', name })),
+        ...MARKET_PAUSE_REVIEW_RESULTS.map((name) => ({
+          where: 'market_pauses.review_result value',
+          name,
+        })),
+        ...MARKET_PAUSE_END_KINDS.map((name) => ({ where: 'market_pauses.end_kind value', name })),
       ]),
     );
   });

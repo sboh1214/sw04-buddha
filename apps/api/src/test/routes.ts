@@ -32,7 +32,7 @@ import { envSchema } from '../config/env.js';
 
 export interface DiscoveredRoute {
   method: string;
-  /** `/admin/markets/:id/close`, without the global `api` prefix and the `v1` version. */
+  /** `/admin/markets/:id/pause`, without the global `api` prefix and the `v1` version. */
   path: string;
   /** `METHOD /path`. */
   key: string;

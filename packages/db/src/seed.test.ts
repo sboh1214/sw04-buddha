@@ -927,8 +927,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // was seeded long before — and the seed never rewrites an existing row. That half used
       // to pass in silence: the warning was guarded on having just inserted the market.
       const slug = 'cpi-september-2026-above-2pct';
-      // This one opened (the trading gap allows it, #125) before its cutoff passed.
+      // This one opened (the trading gap allows it, #125) before its cutoff passed, and this one
+      // was paused after it opened (#114): the worker closes both on schedule.
       const opened = 'seoul-october-2026-rain-above-50mm';
+      const paused = 'bok-october-rate-cut-2026';
       runSeed();
       // The times move with the close, as an admin's edit would have to (#22): the database holds
       // the scheduled open before the close and the close at or before the judgement.
@@ -942,6 +944,10 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         .update(markets)
         .set({ status: 'open', ...pastClose })
         .where(eq(markets.slug, opened));
+      await t.db
+        .update(markets)
+        .set({ status: 'paused', ...pastClose })
+        .where(eq(markets.slug, paused));
 
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain('markets: 0 inserted, 14 already existed');
@@ -957,18 +963,25 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // opens (#21): the admin has to move the close first.
       expect(mine[0]).toContain('cannot be submitted for review until');
       expect(mine[0]).toContain('수정');
-      // An open one is the worker's to close.
-      const openLine = stderr.split(NEWLINE).filter((line) => line.includes(opened));
-      expect(openLine).toHaveLength(1);
-      expect(openLine[0]).toContain('market.close');
-      expect(openLine[0]).toContain('마감');
-      // And both are untouched — the seed reports, it does not rewrite.
+      // An open one is the worker's to close, and a paused one too (#114, ADR-0093 decision 1
+      // #173 item 3): no admin closes one by hand any more — an earlier end is a pause and an
+      // approved 조기 마감.
+      for (const trading of [opened, paused]) {
+        const line = stderr.split(NEWLINE).filter((entry) => entry.includes(trading));
+        expect(line, trading).toHaveLength(1);
+        expect(line[0]).toContain('market.close');
+        expect(line[0]).toContain('paused or not');
+        expect(line[0]).toContain('조기 마감');
+        expect(line[0]).not.toContain('시장 상세 → 마감');
+      }
+      // And all are untouched — the seed reports, it does not rewrite.
       const statuses = await t.db
         .select({ slug: markets.slug, status: markets.status })
         .from(markets)
-        .where(sql`${markets.slug} in (${slug}, ${opened})`)
+        .where(sql`${markets.slug} in (${slug}, ${opened}, ${paused})`)
         .orderBy(asc(markets.slug));
       expect(statuses).toEqual([
+        { slug: paused, status: 'paused' },
         { slug, status: 'draft' },
         { slug: opened, status: 'open' },
       ]);

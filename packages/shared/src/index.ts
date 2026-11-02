@@ -32,6 +32,7 @@ export * from './market.js';
 export * from './market-edits.js';
 export * from './market-lifecycle.js';
 export * from './market-open-items.js';
+export * from './market-pause.js';
 export * from './market-review.js';
 export * from './market-rules.js';
 export * from './market-supplement.js';

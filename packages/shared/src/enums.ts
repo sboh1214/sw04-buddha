@@ -188,8 +188,8 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review, below; #114 pause, #152 judgement, #20 cancel) — #21's scheduled open writes
- * the `opened` the interim open wrote before it.
+ * makes (#78 review and #114 pause, below; #152 judgement, #20 cancel) — #21's scheduled open
+ * writes the `opened` the interim open wrote before it.
  */
 export const MARKET_EVENT_TYPES = [
   /** → draft: the row is written (`to_status` only). */
@@ -234,7 +234,15 @@ export const MARKET_EVENT_TYPES = [
    * transaction, with no event of its own: this one is its record.
    */
   'opened',
-  /** open → closed: the admin's close (until #114) or the worker at `close_at`. */
+  /**
+   * open or paused → closed: the worker at `close_at` (actor NULL; ADR-0093 decision 1 #173 items
+   * 1·3 — a PAUSED market too, on schedule, #114), payload `{closedAt, source: 'job'}`; or the
+   * approved 조기 마감 of a PAUSED market (#114, ADR-0102; #173 items 2·4 — the actor is the
+   * approver), payload `{closedAt, source: 'early_close', pauseId, approvalId, requestedBy,
+   * reviewResult}` (`MarketEarlyClosedPayload`, market-pause.ts). `closedAt` is the actual close;
+   * `close_at` stays the scheduled one. Rows of the one-admin close that #114 retired (open →
+   * closed, ADR-0027) carry `{closedAt}` alone.
+   */
   'closed',
   /** settling → settled: the worker finished every SETTLEMENT_STEPS step. */
   'finalized',
@@ -260,6 +268,20 @@ export const MARKET_EVENT_TYPES = [
    * requester. A supplement's one market event: its request, 반려 and 철회 are admin actions alone.
    */
   'rules_supplemented',
+  /**
+   * open → paused: 거래 일시 중단 by one admin (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·3),
+   * the actor, with one of MARKET_PAUSE_REASONS and a note (its `market_pauses` row). Payload
+   * `{pauseId, reason, resultPublishedAt}` (`MarketPausedPayload`, market-pause.ts): the pause row,
+   * its reason and, for `early_result` alone, the result's publication instant (ISO, else null).
+   */
+  'paused',
+  /**
+   * paused → open: 재개, asked for by one admin and approved by another (#114; #173 item 2) — the
+   * actor is the approver. Payload `{pauseId, approvalId, requestedBy, reviewResult}`
+   * (`MarketResumedPayload`). The next path's request, 반려 and 철회 are admin actions alone; its
+   * other end is `closed` with `source: 'early_close'`.
+   */
+  'resumed',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -338,10 +360,10 @@ export const ADMIN_ACTION_TYPES = [
   'coupon_update',
   /**
    * A market's draft (payload `{after}`) and an edit of it (`{before, after}`): the snapshot holds
-   * every field a PATCH reaches, its tags (#17) included, so an edit of an open market's category
-   * or tags is recorded with the actor, the time and both values (ADR-0093 decision 2 #172 item
-   * 14). Its version items change by a supplement alone after the open (#80,
-   * `market_supplement_approve`).
+   * every field a PATCH reaches, its tags (#17) included, so an edit of an OPEN or PAUSED market's
+   * category or tags is recorded with the actor, the time and both values (ADR-0093 decision 2
+   * #172 item 14; PAUSED since #114). Its version items change by a supplement alone after the
+   * open (#80, `market_supplement_approve`).
    */
   'market_create',
   'market_update',
@@ -381,11 +403,40 @@ export const ADMIN_ACTION_TYPES = [
   /** Its requester retracted it before anyone decided it, nothing changed: `{approvalId}`. */
   'market_supplement_retract',
   /**
+   * 거래 일시 중단 (#114, ADR-0102; ADR-0093 decision 1 #173 items 2·3): target `market` / its id,
+   * as each pause record below. One admin paused an OPEN market (its `paused` event): payload
+   * `{pauseId, reason, note, resultPublishedAt, before, after}` (`MarketPauseActionPayload`,
+   * market-pause.ts) — the pause row, the body's fields and `market_update`'s snapshot.
+   */
+  'market_pause',
+  /**
+   * An admin asked for a PAUSED market's next path, 재개 or 조기 마감 (#173 item 2), which opens a
+   * `market_pause_decision` approval request and changes nothing yet: payload `{approvalId,
+   * pauseId, path, reviewResult, reason}` — the review result of a `basis_change` pause alone.
+   */
+  'market_pause_decision_request',
+  /**
+   * Another admin approved it, and the market resumed (`resumed`) or closed early (`closed`) in the
+   * same transaction: payload `{approvalId, pauseId, path, reviewResult, reason, before, after}` —
+   * the approver's reason and `market_update`'s snapshot before and after.
+   */
+  'market_pause_decision_approve',
+  /** Another admin rejected it, nothing changed: payload `{approvalId, pauseId, path, reason}`. */
+  'market_pause_decision_reject',
+  /** Its requester retracted it before anyone decided it: payload `{approvalId, pauseId, path}`. */
+  'market_pause_decision_retract',
+  /**
    * Retired (#21, ADR-0100): the interim open (ADR-0027, draft → open) wrote it until #21 removed
    * that action. Kept so the rows it wrote still parse and render; nothing writes it now — an open
    * is recorded by its `opened` market event (the actor and `source`).
    */
   'market_open',
+  /**
+   * Retired (#114, ADR-0102): the one-admin close (ADR-0027, open → closed, payload `{before,
+   * after}`) wrote it until #114 made an early end a pause and another admin's approved 조기 마감
+   * (ADR-0093 decision 1 #173 items 2·4, decision 2 #172 item 14). Kept so the rows it wrote still
+   * parse and render; nothing writes it now.
+   */
   'market_close',
   'market_resolve',
   /**

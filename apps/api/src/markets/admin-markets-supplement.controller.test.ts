@@ -6,7 +6,8 @@
  * its text (unchanged, the item rules the open market's PATCH held until #80); approved by another
  * admin with everything checked again — the new text, the next version read back, one
  * `rules_supplemented` event, the record, the republished status and the moved close job — and
- * refused for a request no longer waiting, the requester, a market paused, closed or moved since;
+ * refused for a request no longer waiting, the requester, a market paused (by the pause route,
+ * #114), closed (an approved early close) or moved since;
  * rejected and retracted in any status; the 규칙 보충 대기 queue; the database guard never hit by a
  * route; two writes at once; and the public history, the current version first, naming nobody.
  * The PATCH's refusal of an open market's version items is admin-markets.controller.test's. Skips
@@ -14,6 +15,7 @@
  */
 import { readRuleContent, schema } from '@buddha/db';
 import {
+  closeMarketEarly,
   completeOnboarding,
   createCategory,
   createMarket,
@@ -504,11 +506,13 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
       'changes',
       'unchanged',
     );
-    // A millisecond earlier is an early close (#173 item 4), never a supplement.
+    // A millisecond earlier is an early close (#173 item 4: a pause and its approved next path,
+    // #114), never a supplement.
     const earlier = await requestSupplement(market.id, { closeAt: iso(c + 29_999) });
     expect(errorOf(earlier)).toEqual({
       code: 'VALIDATION_ERROR',
-      message: 'The close time cannot move earlier while the market is open: close it instead',
+      message:
+        'The close time cannot move earlier: pause the market and ask for an early close instead',
       details: [{ path: ['closeAt'], message: 'cannot move earlier while open' }],
     });
     expectRefused(
@@ -1029,17 +1033,21 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
 
   it('checks the request again at the approval: a market paused, closed or moved past its version since', async () => {
     const c = week();
-    // Paused since: its title still changes, its close no longer (#172 item 14).
+    // Paused since (#114, one admin): its title still changes, its close no longer (#172 item 14).
     const paused = await opened({ closeAt: new Date(c) });
     expect(
       (await requestSupplement(paused.id, { title: '고친 제목', closeAt: iso(c + HOUR_MS) }))
         .statusCode,
     ).toBe(200);
     const pausedRequest = await pendingId(paused.id);
-    await t.db
-      .update(schema.markets)
-      .set({ status: 'paused' })
-      .where(eq(schema.markets.id, paused.id));
+    expect(
+      (
+        await post(`${marketUrl(paused.id)}/pause`, third, {
+          reason: 'basis_change',
+          note: '판정 기준을 검토한다.',
+        })
+      ).statusCode,
+    ).toBe(200);
     expectRefused(await approve(paused.id, pausedRequest), 'closeAt', 'fixed while paused');
     expect((await reject(paused.id, pausedRequest)).statusCode).toBe(200);
     expectRefused(
@@ -1051,11 +1059,11 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
     const title = await approve(paused.id, await pendingId(paused.id));
     expect(detail(title)).toMatchObject({ status: 'paused', title: '고친 제목', ruleVersion: 2 });
 
-    // Closed since (the interim close): no supplement after the close.
+    // Closed since (an approved early close, #114): no supplement after the close.
     const closed = await opened();
     expect((await requestSupplement(closed.id, { description: '고친 배경' })).statusCode).toBe(200);
     const closedRequest = await pendingId(closed.id);
-    expect((await post(`${marketUrl(closed.id)}/close`, third)).statusCode).toBe(200);
+    await closeMarketEarly(t.db, closed.id, { requestedBy: third.id, approvedBy: approver.id });
     expectRefused(await approve(closed.id, closedRequest), 'status', 'not open or paused');
 
     // Moved past its version since (a factory's supplement, which asks for no waiting request).
@@ -1129,7 +1137,7 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
     // A request waiting at the close ends by a 반려 or a 철회 alone, after the close too.
     expect((await requestSupplement(market.id, { title: '고친 제목' })).statusCode).toBe(200);
     const late = await pendingId(market.id);
-    expect((await post(`${marketUrl(market.id)}/close`, third)).statusCode).toBe(200);
+    await closeMarketEarly(t.db, market.id, { requestedBy: third.id, approvedBy: approver.id });
     expectNotAllowed(await retract(market.id, late, third), 'not_requester');
     const retracted = await retract(market.id, late);
     expect(retracted.statusCode).toBe(200);
@@ -1162,7 +1170,7 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
     expect((await requestSupplement(last.id, { description: '셋째' })).statusCode).toBe(200);
     // Decided and retracted ones leave the queue; one on a closed market stays.
     expect((await retract(last.id, await pendingId(last.id))).statusCode).toBe(200);
-    expect((await post(`${marketUrl(second.id)}/close`, third)).statusCode).toBe(200);
+    await closeMarketEarly(t.db, second.id, { requestedBy: third.id, approvedBy: approver.id });
     const page = (await queue()).json<QueuePage>();
     expect(page.data).toEqual([
       {
@@ -1333,8 +1341,8 @@ describe.skipIf(!hasTestInfra)('admin market supplements (integration)', () => {
     for (const hidden of [asker.id, approver.id, IMPACT]) {
       expect(res.body).not.toContain(hidden);
     }
-    // After the close it stays.
-    expect((await post(`${marketUrl(market.id)}/close`, third)).statusCode).toBe(200);
+    // After the close it stays (an approved early close, #114).
+    await closeMarketEarly(t.db, market.id, { requestedBy: third.id, approvedBy: approver.id });
     expect(data<Market>(await publicDetail(market.id)).ruleVersions).toEqual(pub.ruleVersions);
   });
 

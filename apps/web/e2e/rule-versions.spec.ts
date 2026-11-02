@@ -36,9 +36,9 @@ import {
  * visitor's open detail follows without a reload — 현재 v2, and in the history the reason and each
  * changed item's text before and after, every earlier version's full text in a disclosure — with
  * no admin's name and no 정산 영향 검토. A reviewer who reads a change of meaning rejects it as 의미
- * 변경 and the rules stay as they were (the pause procedure is #114's). Once the market is closed
- * nothing is supplemented or approved; a request still waiting ends only by its 반려 or 철회, and
- * the history stays public.
+ * 변경 and the rules stay as they were — stopping trading is the pause the admin detail then offers
+ * (#114, pause.spec.ts). Once the market is closed nothing is supplemented or approved; a request
+ * still waiting ends only by its 반려 or 철회, and the history stays public.
  *
  * Admin 1 (`admin`) makes, opens and asks for every supplement here, so admin 2 — `secondAdmin`,
  * or the reviewer `admin` is paired with (helpers.ts `approveSupplementAsReviewer`) — is the one
@@ -47,8 +47,8 @@ import {
  *
  * Every refusal's details and order, the records (the version rows, the one `rules_supplemented`
  * event, the admin actions), the database's guard of a versioned market, the lock order, two
- * approvals at once and a PAUSED market (unreachable on screen until #114) are the API's and the
- * database's integration tests (admin-markets-supplement.controller.test.ts,
+ * approvals at once and a PAUSED market's supplements (pause.spec.ts pauses one on screen, #114)
+ * are the API's and the database's integration tests (admin-markets-supplement.controller.test.ts,
  * markets.controller.test.ts, private-data.test.ts, packages/db market-rules-content.test.ts and
  * schema.test.ts); the card, the panel, the form's rules and what a refusal says are unit-tested
  * (rule-versions-section.test.tsx, market-supplement-panel.test.tsx, lib/market-supplement.test.ts,
@@ -501,8 +501,9 @@ test.describe('규칙 버전', () => {
       const rejectedId = asked.supplement.pending?.requestId ?? '';
 
       // --- admin 2 reads it and rejects it as 의미 변경: the dialog says a 반려 keeps the rules and
-      // does not pause the market — stopping trading to review is done apart (#114; AC 8 is the
-      // request form's boundary note); its confirm waits for a reason from the list and a 설명.
+      // does not pause the market — stopping trading to review is the 거래 일시 중단 after it, which
+      // the detail then offers (#114, pause.spec.ts; AC 8 is the request form's boundary note); its
+      // confirm waits for a reason from the list and a 설명.
       const secondPage = await secondContext.newPage();
       await signIn(secondPage, secondAdminAccount.email, secondAdminAccount.password);
       await secondPage.goto(`/admin/markets/${market.id}`);
@@ -621,8 +622,9 @@ test.describe('규칙 버전', () => {
       });
       const requestId = waiting.supplement.pending?.requestId ?? '';
 
-      // --- closed (#172 item 15: no supplement after the close): neither a new request nor the
-      // waiting one's approval is taken.
+      // --- closed early (#172 item 15: no supplement after the close; a pause and another admin's
+      // approved 조기 마감, #114 — the supplement still waits through both): neither a new request
+      // nor the waiting one's approval is taken.
       expect((await closeMarket(admin, market.id)).status).toBe('closed');
       const notOpen = [{ path: ['status'], message: 'not open or paused' }];
       expect(

@@ -575,12 +575,24 @@ describe.skipIf(!hasTestInfra)('admin market times (integration)', () => {
     expect(nothing.statusCode).toBe(200);
     expect(detail(nothing).missingOpenItems).toEqual(blank);
 
-    // Any other status refuses everything naming `status`: a paused market's PATCH is #114's.
+    // A paused market is after the open as an open one is (#114, ADR-0102): its times are refused
+    // the same way, and its tags change (admin-market-pauses.controller.test.ts has the rest).
     const paused = await openMarket(c, { status: 'paused' });
     const refused = await patch(marketUrl(paused.id), { closeAt: iso(c + DAY_MS) });
-    expect(refused.statusCode).toBe(400);
-    expect(errorOf(refused)).toMatchObject({ message: 'Market is paused' });
-    expect(detailPath(refused)).toEqual(['status']);
+    expect(errorOf(refused)).toEqual({
+      code: 'VALIDATION_ERROR',
+      message: 'closeAt cannot change until the close: the market opened before rule versions',
+      details: [{ path: ['closeAt'], message: 'supplement only while open' }],
+    });
+    const retagged = await patch(marketUrl(paused.id), { tags: ['일시 중단 중의 태그'] });
+    expect(retagged.statusCode).toBe(200);
+    expect(detail(retagged)).toMatchObject({ status: 'paused', closeAt: iso(c) });
+    // Any other status refuses everything naming `status`.
+    const closed = await openMarket(c, { status: 'closed' });
+    const late = await patch(marketUrl(closed.id), { tags: ['마감 뒤의 태그'] });
+    expect(late.statusCode).toBe(400);
+    expect(errorOf(late)).toMatchObject({ message: 'Market is closed' });
+    expect(detailPath(late)).toEqual(['status']);
   });
 
   // --- records ----------------------------------------------------------------------------

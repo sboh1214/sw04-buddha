@@ -7,6 +7,7 @@
  * `admin-markets-resolve.controller.test` for the market transitions,
  * `admin-markets-review.controller.test` for the market review (#78),
  * `admin-markets-supplement.controller.test` for the rule supplements (#80),
+ * `admin-market-pauses.controller.test` for the pauses and their next paths (#114),
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
@@ -64,7 +65,14 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/supplements/:requestId/approve': 'market_supplement_approve',
   'POST /admin/markets/:id/supplements/:requestId/reject': 'market_supplement_reject',
   'POST /admin/markets/:id/supplements/:requestId/retract': 'market_supplement_retract',
-  'POST /admin/markets/:id/close': 'market_close',
+  // #114: one admin pauses (with the market's `paused` event); the next path is a request, then
+  // another admin's decision or its requester's retraction, and only the approval also writes the
+  // market's event (`resumed` or `closed`).
+  'POST /admin/markets/:id/pause': 'market_pause',
+  'POST /admin/markets/:id/pause-decisions': 'market_pause_decision_request',
+  'POST /admin/markets/:id/pause-decisions/:requestId/approve': 'market_pause_decision_approve',
+  'POST /admin/markets/:id/pause-decisions/:requestId/reject': 'market_pause_decision_reject',
+  'POST /admin/markets/:id/pause-decisions/:requestId/retract': 'market_pause_decision_retract',
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/markets/:id/related': 'market_link',
   'DELETE /admin/markets/:id/related/:relatedMarketId': 'market_unlink',
@@ -134,6 +142,9 @@ const RETIRED: Readonly<Partial<Record<AdminActionType, string>>> = {
   // The interim draft → open, `POST /admin/markets/:id/open`, gone with #21 (ADR-0100): a market
   // opens from SCHEDULED alone, recorded by its `opened` event.
   market_open: 'POST /admin/markets/:id/open',
+  // The interim one-admin open → closed, `POST /admin/markets/:id/close`, gone with #114
+  // (ADR-0102): a market closes at its close, or early from PAUSED by another admin's approval.
+  market_close: 'POST /admin/markets/:id/close',
 };
 
 const adminRoutes = discoverRoutes().filter((route) => isAdminPath(route.path));

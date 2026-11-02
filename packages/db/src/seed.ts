@@ -895,9 +895,11 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
     // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed. A
-    // market not yet open — a draft, or one in review or scheduled (#78, #21) — or an open one has
-    // a close time still ahead of it to care about; #114 says what a paused one does.
-    if (!['draft', 'review', 'scheduled', 'open'].includes(outcome.status)) continue;
+    // market not yet open — a draft, or one in review or scheduled (#78, #21) — or an open or a
+    // paused one (#114: the close comes on schedule while PAUSED) has a close time still ahead of
+    // it to care about.
+    const trading = ['open', 'paused'].includes(outcome.status);
+    if (!trading && !['draft', 'review', 'scheduled'].includes(outcome.status)) continue;
     const remainingMs = outcome.closeAt.getTime() - reportedAt.getTime();
     if (remainingMs <= 0 && outcome.status === 'draft') {
       // Seeded as written rather than skipped: skipping would make the fixture's size a
@@ -908,7 +910,7 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       console.warn(
         `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it cannot be submitted for review until its close time is moved forward (관리자 → 시장 상세 → 수정); refresh the seed copy`,
       );
-    } else if (remainingMs <= 0 && outcome.status !== 'open') {
+    } else if (remainingMs <= 0 && !trading) {
       // Submitted, or approved, before its cutoff passed. The approval refuses a passed close
       // (#78) and the open never opens one (#21, ADR-0100), so it stays where it is — a
       // scheduled one public as 개장 예정 — until an admin sends it back to a draft and moves the
@@ -918,10 +920,11 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
       );
     } else if (remainingMs <= 0) {
       // It opened — approved, then opened at its scheduled open (#21) — and its cutoff has since
-      // passed: the worker's per-minute `market.close` scan closes it (PLAN 5.5, M5), or an admin
-      // does.
+      // passed: the worker's per-minute `market.close` scan closes it (PLAN 5.5, M5), paused or
+      // not (#114, ADR-0093 decision 1 #173 item 3). No admin closes a market by hand any more: it
+      // ends at its close, or earlier by a pause and an early close another admin approves.
       console.warn(
-        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — the worker's market.close scan will close it within a minute (or 관리자 → 시장 상세 → 마감); refresh the seed copy`,
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — the worker's market.close scan will close it within a minute, paused or not (it ends at its close, or earlier by 거래 일시 중단 and an approved 조기 마감); refresh the seed copy`,
       );
     } else if (remainingMs <= SEED_CLOSE_SOON_MS) {
       // The M6 half of the same mechanism. The warnings above only fire once the fixture is

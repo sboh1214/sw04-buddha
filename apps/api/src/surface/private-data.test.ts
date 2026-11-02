@@ -16,7 +16,10 @@
  * restrict A again that waits for its approval (#139), two market proposals (#77): one 접수,
  * one adopted into the open market every public call reads, with the operators' internal memo on
  * it, and rule supplements of that market A asked for (#80): one approved, with its 정산 영향 검토
- * and the approver's reason, one an admin rejected with a reason, and one waiting. Then:
+ * and the approver's reason, one an admin rejected with a reason, and one waiting; and two pauses
+ * of that market A made, each resumed at A's request by another admin (#114) — the first for an
+ * early result with its publication instant, the second's early close reviewed 판정 불가 rejected
+ * first — each with its note, review and reasons. Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -52,11 +55,13 @@ import {
   createConsents,
   createMarket,
   createMarketLink,
+  createMarketPause,
   createComment,
   createCommentLike,
   createMedia,
   createModerationAction,
   createNotice,
+  createPauseDecision,
   createPhoneVerification,
   createPost,
   createPostLike,
@@ -72,6 +77,7 @@ import {
   createThemeNotice,
   createUser,
   createWatch,
+  resumeMarket,
 } from '@buddha/db/test';
 import {
   CONSENT_ITEMS,
@@ -134,7 +140,9 @@ interface Fixture {
    * A among its watchers: a public answer naming who watches a market would carry them. An admin
    * linked it to one other open market (#65), which its 관련 시장 lists. Opened with rule v1 and
    * supplemented once at A's request (#80), so its detail carries a rule version history; two
-   * later supplements A asked for were never approved — one rejected, one waiting.
+   * later supplements A asked for were never approved — one rejected, one waiting. Paused twice by
+   * A and resumed each time at A's request (#114), so it is open again with a pause history only
+   * operators read.
    */
   market: MarketRow;
   /** The open market linked to `market` (#65): the one item of `market`'s 관련 시장. */
@@ -1189,6 +1197,55 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       reason: pendingSupplement.reason,
       settlementImpact: pendingSupplement.impact,
     });
+    // Then it was paused twice and resumed (#114), A the pausing admin and the one who asked each
+    // time — A holds no admin role; the records are written as the routes write them: for an early
+    // result with when it was published, then for a basis change, whose early close A asked for
+    // reviewed 판정 불가 and the admin rejected before a resume reviewed 판정 가능. The pause notes,
+    // the publication instant, the review and the requests' and decisions' reasons are operators'
+    // until #24 shows the reason and the times, naming nobody (#173 item 13).
+    const pauseText = {
+      note: `leak-pause-note-${tag}`,
+      secondNote: `leak-second-pause-note-${tag}`,
+      resumeReason: `leak-resume-reason-${tag}`,
+      resumeApproval: `leak-resume-approval-${tag}`,
+      rejectedReason: `leak-rejected-pause-decision-${tag}`,
+      rejection: `leak-pause-decision-rejection-${tag}`,
+      secondResumeReason: `leak-second-resume-reason-${tag}`,
+    };
+    // Hours before the pause, at an odd millisecond no other instant of an answer holds.
+    const resultPublishedAt = new Date(Date.now() - 3 * 60 * 60 * 1000 - 777);
+    await resumeMarket(t.db, market.id, {
+      requestedBy: a.id,
+      approvedBy: admin.id,
+      reason: pauseText.resumeReason,
+      approvalReason: pauseText.resumeApproval,
+      pause: {
+        reason: 'early_result',
+        note: pauseText.note,
+        resultPublishedAt,
+        by: a.id,
+      },
+    });
+    await createMarketPause(t.db, {
+      marketId: market.id,
+      reason: 'basis_change',
+      note: pauseText.secondNote,
+      by: a.id,
+    });
+    await createPauseDecision(t.db, {
+      marketId: market.id,
+      path: 'early_close',
+      reviewResult: 'not_judgeable',
+      by: a.id,
+      reason: pauseText.rejectedReason,
+      rejected: { by: admin.id, reason: pauseText.rejection },
+    });
+    await resumeMarket(t.db, market.id, {
+      requestedBy: a.id,
+      approvedBy: admin.id,
+      reviewResult: 'judgeable',
+      reason: pauseText.secondResumeReason,
+    });
     // The other side of A's fill: a resting order of a third account (the counterparty).
     const maker = await createUser(t.db);
     const order = (values: {
@@ -1702,6 +1759,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('pending supplement text', pendingSupplement.text),
         text('pending supplement reason', pendingSupplement.reason),
         text('pending supplement impact', pendingSupplement.impact),
+        text('pause note', pauseText.note),
+        text('second pause note', pauseText.secondNote),
+        text('result published at', resultPublishedAt.toISOString()),
+        text('resume request reason', pauseText.resumeReason),
+        text('resume approval reason', pauseText.resumeApproval),
+        text('rejected pause decision reason', pauseText.rejectedReason),
+        text('pause decision rejection', pauseText.rejection),
+        text('second resume request reason', pauseText.secondResumeReason),
+        text('pause review result', 'not_judgeable'),
         text('account lift reason', accountLiftReason),
         text('pending restriction request', pendingRestriction),
         text('account restriction memo', accountMemo),
@@ -2439,14 +2505,19 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     } finally {
       await raw.quit();
     }
-    // Then a real public event, published after them: the admin closes the market.
-    const closed = await t.app.inject({
+    // Then a real public event, published after them: the admin pauses the market (#114) — the
+    // one-admin transition — with a note only operators read.
+    const paused = await t.app.inject({
       method: 'POST',
-      url: `/api/v1/admin/markets/${f.market.id}/close`,
+      url: `/api/v1/admin/markets/${f.market.id}/pause`,
       headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
-      payload: { expectedAccountId: f.admin.id },
+      payload: {
+        reason: 'ledger_failure',
+        note: f.sentinels.find((s) => s.label === 'pause note')!.value,
+        expectedAccountId: f.admin.id,
+      },
     });
-    expect(closed.statusCode).toBe(200);
+    expect(paused.statusCode).toBe(200);
     const started = Date.now();
     while (received.filter((entry) => entry.event === 'market:status').length < 2) {
       if (Date.now() - started > 5_000) throw new Error('market:status did not reach both');

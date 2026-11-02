@@ -79,6 +79,28 @@ export function showsSupplementPanel(
   );
 }
 
+/**
+ * The supplement form's boundary (#80 AC 8): a change of meaning goes to the pause (#114) — on a
+ * PAUSED market, already paused and its reason fixed, to the pause's next path instead.
+ */
+export function supplementBoundary(status: MarketStatus): string {
+  return status === 'paused'
+    ? copy.adminMarketSupplementBoundaryPaused
+    : copy.adminMarketSupplementBoundary;
+}
+
+/**
+ * The 반려 dialog's body by the market's status: on an OPEN market the way to stop and review is a
+ * pause as 실질 기준 변경; on a PAUSED one the pause's next path; past trading (a request still
+ * waiting at the close) neither.
+ */
+export function supplementRejectBody(status: MarketStatus): string {
+  if (status === 'open') return copy.adminMarketSupplementRejectBody;
+  return status === 'paused'
+    ? copy.adminMarketSupplementRejectBodyPaused
+    : copy.adminMarketSupplementRejectBodyEnded;
+}
+
 function isSupplementStatus(status: MarketStatus): boolean {
   return (MARKET_SUPPLEMENT_STATUSES as readonly MarketStatus[]).includes(status);
 }

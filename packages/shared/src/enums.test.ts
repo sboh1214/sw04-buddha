@@ -182,8 +182,11 @@ describe('enums', () => {
   });
 
   it('records a rule supplement as one market event and four admin actions (#80)', () => {
-    // Appended: the first types stay where #78 pinned them, and a supplement changes no status.
-    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('rules_supplemented');
+    // Appended after #78's and the lifecycle's types (#114 appended after it), and a supplement
+    // changes no status.
+    expect(enums.MARKET_EVENT_TYPES.indexOf('rules_supplemented')).toBe(
+      enums.MARKET_EVENT_TYPES.indexOf('settling') + 1,
+    );
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type.startsWith('rules_'))).toEqual([
       'rules_edited',
       'rules_supplemented',
@@ -200,6 +203,31 @@ describe('enums', () => {
     ]);
     // admin_actions.type and market_events.type are varchar(40).
     for (const type of [...supplement, 'rules_supplemented']) {
+      expect(type.length).toBeLessThanOrEqual(40);
+    }
+    expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
+  });
+
+  it('records a pause and its next path as two market events and five admin actions (#114)', () => {
+    // Appended: a pause (open → paused) and a resume (paused → open); an early close is `closed`
+    // with its own `source`, the worker's close too.
+    expect(enums.MARKET_EVENT_TYPES.slice(-2)).toEqual(['paused', 'resumed']);
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'closed')).toHaveLength(1);
+    // The pause is one admin's; the next path's request, approval, 반려 and 철회 are each an admin
+    // action, and only the approval writes a market event.
+    const pause = enums.ADMIN_ACTION_TYPES.filter((type) => type.startsWith('market_pause'));
+    expect(pause).toEqual([
+      'market_pause',
+      'market_pause_decision_request',
+      'market_pause_decision_approve',
+      'market_pause_decision_reject',
+      'market_pause_decision_retract',
+    ]);
+    // Retired by #114 (nothing writes it), kept so the one-admin close's rows still parse.
+    expect(enums.adminActionTypeSchema.parse('market_close')).toBe('market_close');
+    // admin_actions.type and market_events.type are varchar(40).
+    for (const type of [...pause, 'paused', 'resumed']) {
       expect(type.length).toBeLessThanOrEqual(40);
     }
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);

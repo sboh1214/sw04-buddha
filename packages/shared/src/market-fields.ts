@@ -60,7 +60,8 @@ export const timeItemFields = {
   /**
    * 거래 마감 시각: from STORABLE_INSTANT_MIN on (#22), and in the future (the service's). At or
    * before the scheduled judgement, in whole minutes (#172 item 12). After the open only a
-   * supplement moves it, later only and never while PAUSED (#172 item 14, #80).
+   * supplement moves it, later only and never while PAUSED (#172 item 14, #80); trading ends
+   * earlier only by a pause and an approved 조기 마감, which keeps it (#114, market-pause.ts).
    */
   closeAt: storableInstantSchema,
   /**

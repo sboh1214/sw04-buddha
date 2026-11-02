@@ -6,6 +6,10 @@ import { RedisModule } from '../infra/redis/redis.module.js';
 import { JobsModule } from '../jobs/jobs.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
+import {
+  AdminMarketPauseDecisionQueueController,
+  AdminMarketPausesController,
+} from './admin-market-pauses.controller.js';
 import { AdminMarketReviewsController } from './admin-market-reviews.controller.js';
 import {
   AdminMarketSupplementQueueController,
@@ -13,6 +17,7 @@ import {
 } from './admin-market-supplements.controller.js';
 import { AdminMarketsController } from './admin-markets.controller.js';
 import { MarketAdminService } from './market-admin.service.js';
+import { MarketPauseService } from './market-pause.service.js';
 import { MarketSupplementService } from './market-supplement.service.js';
 import { MarketService } from './market.service.js';
 import { CategoriesController, MarketsController } from './markets.controller.js';
@@ -29,7 +34,8 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * (#171) the review takes its `market_review` requests through (#78, ADR-0099), and
  * AdminMarketReviewsController the 검수 대기 queue; the rule supplement (#80, ADR-0101) takes its
  * `market_supplement` requests through it too (MarketSupplementService), with its routes and its
- * 규칙 보충 대기 queue.
+ * 규칙 보충 대기 queue, and the pause (#114, ADR-0102) its `market_pause_decision` requests — 재개 and
+ * 조기 마감 of a paused market (MarketPauseService) — with its routes and its 일시 중단 결정 대기 queue.
  */
 @Module({
   imports: [
@@ -48,8 +54,16 @@ import { RelatedMarketsService } from './related-markets.service.js';
     AdminMarketReviewsController,
     AdminMarketSupplementsController,
     AdminMarketSupplementQueueController,
+    AdminMarketPausesController,
+    AdminMarketPauseDecisionQueueController,
   ],
-  providers: [MarketService, MarketAdminService, MarketSupplementService, RelatedMarketsService],
+  providers: [
+    MarketService,
+    MarketAdminService,
+    MarketSupplementService,
+    MarketPauseService,
+    RelatedMarketsService,
+  ],
   // MarketAdminService for the proposals (#77): a 채택 makes its draft through `createIn`.
   exports: [MarketService, MarketAdminService],
 })

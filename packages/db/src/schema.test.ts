@@ -8,6 +8,7 @@ import {
   NOTICE_PIN_LIMIT,
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
+  MARKET_PAUSE_DECISION_APPROVAL_KIND,
   MARKET_RESULTS,
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_REVIEW_CHECKLIST,
@@ -57,6 +58,7 @@ import {
   linkUses,
   marketEvents,
   marketLinks,
+  marketPauses,
   marketProposals,
   marketRuleVersions,
   marketSearchTerms,
@@ -2291,6 +2293,385 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(
         await t.db.select().from(marketSources).where(eq(marketSources.marketId, market.id)),
       ).toHaveLength(1);
+    });
+  });
+
+  describe('market pauses (migration 0054, #114)', () => {
+    /** The note a pause row carries in these cases. */
+    const NOTE = '거래를 멈추고 검토한다.';
+
+    /** A PAUSED market, its `paused` event and the admin who paused: what a pause row names. */
+    async function pausedFixture() {
+      const market = await createMarket(t.db, { status: 'paused' });
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const [event] = await t.db
+        .insert(marketEvents)
+        .values({
+          marketId: market.id,
+          type: 'paused',
+          actorId: admin.id,
+          fromStatus: 'open',
+          toStatus: 'paused',
+        })
+        .returning();
+      return { market, admin, event: event! };
+    }
+
+    /** A `market_pause_decision` request about `marketId`, approved by another admin. */
+    async function approvedDecision(marketId: string) {
+      const { user: requester } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const request = await createApprovalRequest(t.db, {
+        kind: MARKET_PAUSE_DECISION_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: marketId,
+        payload: { pauseId: randomUUID(), path: 'resume', reviewResult: 'judgeable' },
+        requestedBy: requester.id,
+        decision: { status: 'approved', by: approver.id },
+      });
+      return { approver, request };
+    }
+
+    /** The refusal the guard raises: 23000 with its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), message: errorMessage(error) };
+    }
+
+    it('adds market_pauses with its keys, CHECKs and indexes', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, is_nullable AS nullable,
+          column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'market_pauses'
+        ORDER BY ordinal_position`);
+      const instant = 'timestamp with time zone';
+      expect(columns).toEqual([
+        { column: 'id', type: 'uuid', nullable: 'NO', default: 'gen_random_uuid()' },
+        { column: 'market_id', type: 'uuid', nullable: 'NO', default: null },
+        { column: 'reason', type: 'character varying', nullable: 'NO', default: null },
+        { column: 'note', type: 'text', nullable: 'NO', default: null },
+        { column: 'result_published_at', type: instant, nullable: 'YES', default: null },
+        { column: 'paused_at', type: instant, nullable: 'NO', default: null },
+        { column: 'paused_by', type: 'text', nullable: 'NO', default: null },
+        { column: 'pause_event_id', type: 'bigint', nullable: 'NO', default: null },
+        { column: 'review_result', type: 'character varying', nullable: 'YES', default: null },
+        { column: 'end_kind', type: 'character varying', nullable: 'YES', default: null },
+        { column: 'ended_at', type: instant, nullable: 'YES', default: null },
+        { column: 'ended_by', type: 'text', nullable: 'YES', default: null },
+        { column: 'end_event_id', type: 'bigint', nullable: 'YES', default: null },
+        { column: 'end_approval_id', type: 'uuid', nullable: 'YES', default: null },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_pauses'::regclass ORDER BY conname`);
+      // Every reference RESTRICTs (`r`): a market, an event, a request and an account outlive no
+      // pause.
+      expect(constraints).toEqual([
+        {
+          name: 'market_pauses_end_approval_id_approval_requests_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_pauses_end_approval_id_unique', type: 'u', action: ' ' },
+        { name: 'market_pauses_end_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_end_event_id_market_events_id_fk', type: 'f', action: 'r' },
+        { name: 'market_pauses_end_kind_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_ended_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_pauses_market_id_markets_id_fk', type: 'f', action: 'r' },
+        { name: 'market_pauses_note_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_pause_event_id_market_events_id_fk', type: 'f', action: 'r' },
+        { name: 'market_pauses_paused_by_user_id_fk', type: 'f', action: 'r' },
+        { name: 'market_pauses_pkey', type: 'p', action: ' ' },
+        { name: 'market_pauses_reason_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_result_published_at_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_review_check', type: 'c', action: ' ' },
+        { name: 'market_pauses_review_result_check', type: 'c', action: ' ' },
+      ]);
+      const { rows: indexes } = await t.db.execute<{ name: string; definition: string }>(sql`
+        SELECT indexname AS name, indexdef AS definition FROM pg_indexes
+        WHERE tablename = 'market_pauses' ORDER BY indexname`);
+      expect(indexes).toEqual([
+        {
+          name: 'market_pauses_end_approval_id_unique',
+          definition: expect.stringContaining('(end_approval_id)') as unknown,
+        },
+        {
+          name: 'market_pauses_market_id_lasting_unique',
+          definition: expect.stringMatching(
+            /^CREATE UNIQUE INDEX .+ \(market_id\) WHERE \(ended_at IS NULL\)$/,
+          ) as unknown,
+        },
+        {
+          name: 'market_pauses_market_id_paused_at_idx',
+          definition: expect.stringContaining('(market_id, paused_at)') as unknown,
+        },
+        {
+          name: 'market_pauses_pkey',
+          definition: expect.stringContaining('(id)') as unknown,
+        },
+      ]);
+    });
+
+    it('holds each pause to its reason, note, publication instant, end and review', async () => {
+      const { market, admin, event } = await pausedFixture();
+      const { approver, request } = await approvedDecision(market.id);
+      const pausedAt = new Date(Date.now() - 60_000);
+      const lasting = {
+        marketId: market.id,
+        reason: 'ledger_failure' as string,
+        note: NOTE,
+        pausedAt,
+        pausedBy: admin.id,
+        pauseEventId: event.id,
+      };
+      const resumed = {
+        endKind: 'resumed' as string,
+        endedAt: new Date(pausedAt.getTime() + 1_000),
+        endedBy: approver.id,
+        endEventId: event.id,
+        endApprovalId: request.id,
+      };
+      const atClose = {
+        endKind: 'closed_at_close',
+        endedAt: new Date(pausedAt.getTime() + 1_000),
+        endEventId: event.id,
+      };
+      const insert = (values: Record<string, unknown>) =>
+        t.db
+          .insert(marketPauses)
+          .values({ ...lasting, ...values } as typeof marketPauses.$inferInsert)
+          .returning();
+      const refused = (constraint: string) => ({ state: '23514', constraint });
+      const cases: [Record<string, unknown>, string][] = [
+        // The three reasons only (#173 item 3).
+        [{ reason: 'bot_stop' }, 'market_pauses_reason_check'],
+        // A note of 1–500 characters, not blank.
+        [{ note: '' }, 'market_pauses_note_check'],
+        [{ note: '  ' }, 'market_pauses_note_check'],
+        [{ note: '가'.repeat(501) }, 'market_pauses_note_check'],
+        // The publication instant: exactly an early result's, never after the pause.
+        [{ reason: 'early_result' }, 'market_pauses_result_published_at_check'],
+        [{ resultPublishedAt: pausedAt }, 'market_pauses_result_published_at_check'],
+        [
+          { reason: 'early_result', resultPublishedAt: new Date(pausedAt.getTime() + 1) },
+          'market_pauses_result_published_at_check',
+        ],
+        // The end: kind, instant and event together, never before the pause; an approver and a
+        // request exactly for an approved path's end.
+        [{ endKind: 'closed_at_close' }, 'market_pauses_end_check'],
+        [{ ...atClose, endEventId: null }, 'market_pauses_end_check'],
+        [{ ...atClose, endKind: null }, 'market_pauses_end_check'],
+        [{ ...atClose, endedAt: new Date(pausedAt.getTime() - 1) }, 'market_pauses_end_check'],
+        [{ ...atClose, endedBy: approver.id }, 'market_pauses_end_check'],
+        [{ ...atClose, endApprovalId: request.id }, 'market_pauses_end_check'],
+        [{ ...resumed, endedBy: null }, 'market_pauses_end_check'],
+        [{ ...resumed, endApprovalId: null }, 'market_pauses_end_check'],
+        [{ ...resumed, endKind: 'early_closed', endApprovalId: null }, 'market_pauses_end_check'],
+        [{ ...atClose, endKind: 'voided' }, 'market_pauses_end_kind_check'],
+        // The review result: exactly a basis_change pause ended by an approved path's, and
+        // not_judgeable only with an early close.
+        [{ reason: 'basis_change', ...resumed }, 'market_pauses_review_check'],
+        [{ ...resumed, reviewResult: 'judgeable' }, 'market_pauses_review_check'],
+        [{ reason: 'basis_change', reviewResult: 'judgeable' }, 'market_pauses_review_check'],
+        [
+          { reason: 'basis_change', ...atClose, reviewResult: 'judgeable' },
+          'market_pauses_review_check',
+        ],
+        [
+          { reason: 'basis_change', ...resumed, reviewResult: 'not_judgeable' },
+          'market_pauses_review_check',
+        ],
+        [
+          { reason: 'basis_change', ...resumed, reviewResult: 'maybe' },
+          'market_pauses_review_result_check',
+        ],
+      ];
+      for (const [values, constraint] of cases) {
+        expect(await refusal(insert(values)), JSON.stringify(values)).toEqual(refused(constraint));
+      }
+
+      // What each reason and end takes, one row per market for the lasting ones.
+      const accepted = [
+        { note: '가'.repeat(500), ...atClose },
+        { reason: 'early_result', resultPublishedAt: pausedAt, ...atClose },
+        { reason: 'basis_change', ...atClose },
+        {
+          reason: 'basis_change',
+          ...resumed,
+          endKind: 'early_closed',
+          reviewResult: 'not_judgeable',
+        },
+      ];
+      for (const values of accepted) {
+        const [row] = await insert(values);
+        expect(row, JSON.stringify(values)).toMatchObject(values);
+      }
+      const [current] = await insert({});
+      expect(current).toMatchObject({ endKind: null, endedAt: null, reviewResult: null });
+      // One lasting pause per market; ended ones beside it, and another market's lasting one.
+      expect(await refusal(insert({}))).toEqual({
+        state: '23505',
+        constraint: 'market_pauses_market_id_lasting_unique',
+      });
+      const { market: other, admin: otherAdmin, event: otherEvent } = await pausedFixture();
+      await insert({ marketId: other.id, pausedBy: otherAdmin.id, pauseEventId: otherEvent.id });
+      // One pause per approved request; a market, an event and an account that exist.
+      expect(await refusal(insert({ marketId: other.id, ...resumed }))).toEqual({
+        state: '23505',
+        constraint: 'market_pauses_end_approval_id_unique',
+      });
+      expect(await refusal(insert({ marketId: randomUUID() }))).toEqual({
+        state: '23503',
+        constraint: 'market_pauses_market_id_markets_id_fk',
+      });
+      expect(await refusal(insert({ ...atClose, pauseEventId: event.id + 1_000_000 }))).toEqual({
+        state: '23503',
+        constraint: 'market_pauses_pause_event_id_market_events_id_fk',
+      });
+      expect(await refusal(insert({ ...atClose, endEventId: event.id + 1_000_000 }))).toEqual({
+        state: '23503',
+        constraint: 'market_pauses_end_event_id_market_events_id_fk',
+      });
+      expect(await refusal(insert({ ...atClose, pausedBy: 'nobody' }))).toEqual({
+        state: '23503',
+        constraint: 'market_pauses_paused_by_user_id_fk',
+      });
+
+      // Relations: a market's pauses, a pause's market, people, events and request.
+      const [ended] = await t.db
+        .select()
+        .from(marketPauses)
+        .where(eq(marketPauses.endApprovalId, request.id));
+      const read = await t.db.query.marketPauses.findFirst({
+        where: eq(marketPauses.id, ended!.id),
+        with: {
+          market: true,
+          pausedByUser: true,
+          pauseEvent: true,
+          endedByUser: true,
+          endEvent: true,
+          endApproval: true,
+        },
+      });
+      expect(read).toMatchObject({
+        market: { id: market.id },
+        pausedByUser: { id: admin.id },
+        pauseEvent: { id: event.id, type: 'paused' },
+        endedByUser: { id: approver.id },
+        endEvent: { id: event.id },
+        endApproval: { id: request.id, kind: MARKET_PAUSE_DECISION_APPROVAL_KIND },
+      });
+      const withPauses = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { pauses: true },
+      });
+      expect(withPauses?.pauses).toHaveLength(accepted.length + 1);
+      const people = await t.db.query.user.findFirst({
+        where: eq(user.id, approver.id),
+        with: { marketPauseEnds: true, marketPauses: true },
+      });
+      expect(people?.marketPauseEnds.map((row) => row.id)).toEqual([ended!.id]);
+      expect(people?.marketPauses).toEqual([]);
+    });
+
+    it('lets an UPDATE only end a lasting pause, once, and keeps every pause: no DELETE, whoever writes', async () => {
+      const { market, admin, event } = await pausedFixture();
+      const { approver, request } = await approvedDecision(market.id);
+      const [pause] = await t.db
+        .insert(marketPauses)
+        .values({
+          marketId: market.id,
+          reason: 'basis_change',
+          note: NOTE,
+          pausedAt: new Date(Date.now() - 60_000),
+          pausedBy: admin.id,
+          pauseEventId: event.id,
+        })
+        .returning();
+      const where = eq(marketPauses.id, pause!.id);
+      const end = {
+        endKind: 'resumed' as const,
+        endedAt: new Date(),
+        endedBy: approver.id,
+        endEventId: event.id,
+        endApprovalId: request.id,
+        reviewResult: 'judgeable' as const,
+      };
+      const changesOnlyByItsEnd = {
+        state: '23000',
+        message: expect.stringContaining('changes only once, by its end') as unknown,
+      };
+      const keepsWhatItRecorded = {
+        state: '23000',
+        message: expect.stringContaining('keeps what its pause recorded') as unknown,
+      };
+      // A lasting pause takes no change but its end, and its end changes nothing it recorded.
+      expect(
+        await guarded(t.db.update(marketPauses).set({ note: '고친 메모' }).where(where)),
+      ).toEqual(changesOnlyByItsEnd);
+      for (const change of [
+        { note: '고친 메모' },
+        { reason: 'ledger_failure' as const, reviewResult: null },
+        { pausedAt: new Date() },
+        { pausedBy: approver.id },
+        { marketId: (await createMarket(t.db)).id },
+      ]) {
+        expect(
+          await guarded(
+            t.db
+              .update(marketPauses)
+              .set({ ...end, ...change })
+              .where(where),
+          ),
+          JSON.stringify(change),
+        ).toEqual(keepsWhatItRecorded);
+      }
+      const [ended] = await t.db.update(marketPauses).set(end).where(where).returning();
+      expect(ended).toEqual({ ...pause, ...end });
+      // An ended pause takes no change at all — another end included.
+      for (const change of [{ endedAt: new Date() }, { endKind: 'early_closed' as const }]) {
+        expect(
+          await guarded(t.db.update(marketPauses).set(change).where(where)),
+          JSON.stringify(change),
+        ).toEqual(changesOnlyByItsEnd);
+      }
+      // buddha_app may not DELETE one (migration 0054's REVOKE), and the owner neither.
+      expect((await refusal(t.db.delete(marketPauses).where(where))).state).toBe('42501');
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        expect(await guarded(owner.delete(marketPauses).where(where))).toEqual({
+          state: '23000',
+          message: expect.stringContaining('is a permanent record and takes no DELETE') as unknown,
+        });
+        expect(
+          await guarded(owner.update(marketPauses).set({ note: '고친 메모' }).where(where)),
+        ).toEqual(changesOnlyByItsEnd);
+      } finally {
+        await closeDb(owner);
+      }
+      expect(await t.db.select().from(marketPauses).where(where)).toEqual([ended]);
+      const { rows: privileges } = await t.db.execute<{ privilege: string; held: boolean }>(sql`
+        SELECT p AS privilege, has_table_privilege('buddha_app', 'market_pauses', p) AS held
+        FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p`);
+      expect(privileges).toEqual([
+        { privilege: 'SELECT', held: true },
+        { privilege: 'INSERT', held: true },
+        { privilege: 'UPDATE', held: true },
+        { privilege: 'DELETE', held: false },
+      ]);
     });
   });
 

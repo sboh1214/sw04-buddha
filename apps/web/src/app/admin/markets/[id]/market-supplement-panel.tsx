@@ -30,6 +30,7 @@ import {
   isSupplementRequester,
   showsSupplementPanel,
   supplementActorName,
+  supplementBoundary,
   supplementChangeRows,
   supplementFailure,
   supplementLogRows,
@@ -702,7 +703,7 @@ export function SupplementRequestForm({
           <Alert.Root status="warning" role="status" data-testid="market-supplement-boundary">
             <Alert.Indicator />
             <Alert.Content>
-              <Alert.Description>{copy.adminMarketSupplementBoundary}</Alert.Description>
+              <Alert.Description>{supplementBoundary(market.status)}</Alert.Description>
             </Alert.Content>
           </Alert.Root>
           {stale && (

@@ -196,7 +196,8 @@ test.describe('시장 상세', () => {
     browser,
     admin,
   }) => {
-    // The change used to be A's buy; with no way to trade (#125) it is the admin's 마감, which
+    // The change used to be A's buy; with no way to trade (#125) it is the admins' 마감 — a pause
+    // and another admin's approved 조기 마감 since #114 (helpers.ts `closeMarket`) — which
     // reaches the readers through the same rooms as `market:status`. In a category no other spec
     // opens markets in (helpers.ts `topLevelCategory`), so B finds it on the home's 신규.
     const market = await createOpenMarket(admin, { topLevelCategory: 3 });
@@ -267,7 +268,8 @@ test.describe('시장 상세', () => {
       await closeMarket(admin, market.id);
 
       // --- the criterion. The three readers were sent one `market:status` at the same instant,
-      // so the budget is spent by the first assertion and the others are already satisfied.
+      // so the budget is spent by the first assertion and the others are already satisfied. (The
+      // pause before it sent 거래 일시 중단 first; the approval's `closed` is the newer and wins.)
       await expect(statusB).toHaveText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
       await expect(cardB).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });
       await expect(cardC).toContainText(copy.marketStatusClosed, { timeout: REALTIME_BUDGET_MS });

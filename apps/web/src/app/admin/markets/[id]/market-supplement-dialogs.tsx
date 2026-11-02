@@ -17,6 +17,7 @@ import { revertDraft } from '@/lib/market-review';
 import {
   SUPPLEMENT_REJECT_REASON_LABEL,
   supplementFailure,
+  supplementRejectBody,
   supplementRejectDraft,
 } from '@/lib/market-supplement';
 import { ReasonField, ReviewDialogShell } from './market-review-dialogs';
@@ -24,17 +25,17 @@ import { ReasonField, ReviewDialogShell } from './market-review-dialogs';
 /**
  * The 규칙 보충's three dialogs (#80, ADR-0101; ADR-0093 decision 2 #172 item 15): 승인 (the reason),
  * 반려 (a reason from the list — 의미 변경 says the change belongs to the pause procedure, #114,
- * which the 반려 itself does not start — and the 설명) and 철회 (the requester's: nothing to fill
- * in). Drawn in the review's frame (`ReviewDialogShell`), each confirm off until what it would send
- * is whole and until the admin on screen is known (`useOperatorId`, ADR-0092): every write names
- * that admin. Mounted only while the panel holds it for the admin who opened it
- * (`useHeldForOperator`), so what was picked and typed for A goes with it once `['me']` turns to B
- * (ADR-0092 answer 1). Each decides the request it was opened on (`useSupplementRequest`). A
- * refusal stays in the dialog, under the field it is about or above the buttons
- * (`supplementFailure`: an item rule the approval meets again — the close while PAUSED, the lead
- * close — is said there too); another account's cookie closes it with a toast. Sent, it closes
- * with a toast and the market as the write committed it goes on screen (`useApplyMarket`) — after
- * an approval, with its new version.
+ * which the 반려 itself does not start: the 거래 일시 중단 panel offers it after, `pauseOffer` — and
+ * the 설명) and 철회 (the requester's: nothing to fill in). Drawn in the review's frame
+ * (`ReviewDialogShell`), each confirm off until what it would send is whole and until the admin on
+ * screen is known (`useOperatorId`, ADR-0092): every write names that admin. Mounted only while
+ * the panel holds it for the admin who opened it (`useHeldForOperator`), so what was picked and
+ * typed for A goes with it once `['me']` turns to B (ADR-0092 answer 1). Each decides the request
+ * it was opened on (`useSupplementRequest`). A refusal stays in the dialog, under the field it is
+ * about or above the buttons (`supplementFailure`: an item rule the approval meets again — the
+ * close while PAUSED, the lead close — is said there too); another account's cookie closes it with
+ * a toast. Sent, it closes with a toast and the market as the write committed it goes on screen
+ * (`useApplyMarket`) — after an approval, with its new version.
  */
 
 export type SupplementDialogKind = 'approve' | 'reject' | 'retract';
@@ -285,7 +286,7 @@ function RejectSupplementDialog({ market, onClose }: { market: AdminMarket; onCl
     <ReviewDialogShell
       testId="market-supplement-reject-dialog"
       title={copy.adminMarketSupplementRejectTitle}
-      body={copy.adminMarketSupplementRejectBody}
+      body={supplementRejectBody(market.status)}
       confirmLabel={copy.adminMarketSupplementReject}
       pending={mutation.isPending}
       confirmDisabled={!draft.ready || operatorId === undefined || decided.changed}

@@ -377,7 +377,9 @@ export class MarketSupplementService {
    * 반려 (#172 item 15): an admin other than the requester ends the market's waiting request
    * `requestId` with one of MARKET_SUPPLEMENT_REJECT_REASONS and a reason — `meaning_change` when
    * the change would alter the market's meaning, which goes to the pause procedure (#173 items
-   * 3·4, #114) — in any status, so a request still waiting at the close ends too. Refused as the
+   * 3·4): the rejection pauses nothing, and an admin pauses the market for `basis_change` with its
+   * own write (MarketPauseService, #114, ADR-0102) — in any status, so a request still waiting at
+   * the close ends too. Refused as the
    * approval is up to its decision: `requestId` 'unknown', APPROVAL_NOT_ALLOWED `retracted`,
    * `decided` or `requester`. Writes `market_supplement_reject`; the market is unchanged, and
    * nothing is published.
@@ -484,7 +486,8 @@ export class MarketSupplementService {
    * change, while PAUSED each one outside PAUSED_SUPPLEMENT_ITEMS (the close) on its own path,
    * 'fixed while paused' (`fixedWhilePaused`), a switch condition with no fallback
    * (`fallbackCondition`), RULES_REQUIRED, the close in the future and not earlier ('cannot move
-   * earlier while open', an instant: an earlier close is an early close, #173 item 4), the order
+   * earlier while open', an instant: an earlier close is an early close, #173 item 4 — a pause and
+   * its approved next path, MarketPauseService), the order
    * (`assertTimeOrder`: A2 keeps the close at or before the scheduled judgement) and the lead close
    * (`assertLeadClose`) when the close or the announcement changes and the market has an
    * announcement — at the gap it was last checked against, else the setting's reading, which the
@@ -516,7 +519,7 @@ export class MarketSupplementService {
       if (closeAt.getTime() < row.closeAt.getTime()) {
         throw fieldError(
           'closeAt',
-          'The close time cannot move earlier while the market is open: close it instead',
+          'The close time cannot move earlier: pause the market and ask for an early close instead',
           'cannot move earlier while open',
         );
       }

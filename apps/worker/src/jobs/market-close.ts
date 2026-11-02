@@ -1,10 +1,35 @@
-import { clockTimestamp, lockMarket, schema, transitionMarket, type Db } from '@buddha/db';
-import { MARKET_SCAN_BATCH_MAX, marketChannel, type MarketStatusEvent } from '@buddha/shared';
-import { and, asc, eq, lte, sql } from 'drizzle-orm';
+import {
+  clockTimestamp,
+  endPauseAtClose,
+  lockMarket,
+  schema,
+  transitionMarket,
+  type Db,
+} from '@buddha/db';
+import {
+  MARKET_SCAN_BATCH_MAX,
+  marketChannel,
+  type MarketStatus,
+  type MarketStatusEvent,
+} from '@buddha/shared';
+import { and, asc, eq, inArray, lte, sql } from 'drizzle-orm';
 import { type Publish } from '../realtime.js';
 import { runScan, type ScanFailure } from './scan.js';
 
-export type CloseSkipReason = 'not_open' | 'not_due';
+/**
+ * The statuses the close at `close_at` takes to CLOSED (ADR-0093 decision 1 #173 items 1·3): OPEN,
+ * and PAUSED on schedule — never later — since #114.
+ */
+export const CLOSABLE_STATUSES = ['open', 'paused'] as const satisfies readonly MarketStatus[];
+
+const isClosable = (status: MarketStatus): status is (typeof CLOSABLE_STATUSES)[number] =>
+  (CLOSABLE_STATUSES as readonly MarketStatus[]).includes(status);
+
+/**
+ * Why `closeMarket` left a market as it was: `not_open_or_paused` — neither OPEN nor PAUSED (a
+ * draft up to SCHEDULED, or closed already); `not_due` — its close is still ahead.
+ */
+export type CloseSkipReason = 'not_open_or_paused' | 'not_due';
 
 export type CloseResult =
   | { outcome: 'closed'; marketId: string; statusEventId: number; closedAt: Date }
@@ -20,13 +45,13 @@ export interface CloseScanResult {
 }
 
 /**
- * open → closed for one market at `close_at` (PLAN 5.5 마감; ADR-0093 decision 1 item 1, an
- * automatic edge), the automatic form of the admin's manual close (market-admin.service.ts
- * `close`): the same lock, the same DB clock read after it, the same transition
- * (`transitionMarket`: the event row with its from/to and the market row's `statusEventId`),
- * minus the admin action (no admin acted — `actorId` is null and the payload says
- * `source: 'job'`). Only `open` is closed: PAUSED → CLOSED on schedule (decision 1 item 3) is
- * #114's, which widens this guard and the scan's WHERE together when PAUSED becomes reachable.
+ * open or paused → closed for one market at `close_at` (PLAN 5.5 마감; ADR-0093 decision 1 #173
+ * items 1·3, an automatic edge — a PAUSED market too, on schedule and never later, #114): the
+ * market lock, the DB clock read after it, the transition (`transitionMarket`: the event row with
+ * its from/to and the market row's `statusEventId`), and no admin action (no admin acted —
+ * `actorId` is null and the payload says `source: 'job'`, a PAUSED market's too). Closing a PAUSED
+ * market ends its lasting pause in the same transaction (`endPauseAtClose`: `closed_at_close`, no
+ * review, no approval, #114, ADR-0102); a next-path request still waiting is moot from then on.
  *
  * Every caller reaches this through the same transaction — the delayed job the API registered
  * at the approval (#21, ADR-0100: before the open, the close locked while SCHEDULED), the
@@ -35,12 +60,14 @@ export interface CloseScanResult {
  * extended (#80, ADR-0101) can leave the old delayed job in the queue, since the approval's
  * cancel of it is best effort (jobs.ts), and here it finds `closeAt > now` and skips; a job that
  * fires while the market is still SCHEDULED (its close came before its open, market-open.ts) or
- * after the admin closed by hand finds it not `open` and skips; two workers racing on one market
- * serialise on `lockMarket` and the second sees the first's status. Never
- * 'not_found': no path deletes one market (every FK is RESTRICT); only a whole-database wipe does
- * (migrations 0017 and 0048, deploy/reset-db.sh). An unknown id is therefore a job left over from
- * before such a wipe — expected, it runs out of attempts (docs/RESET.md) — or a broken producer,
- * and either way the job fails loudly rather than being retried into silence.
+ * after an approved early close (#114: the approval cancels the job after COMMIT, best effort)
+ * finds it neither OPEN nor PAUSED and skips; a PAUSED market keeps its job, which closes it on
+ * schedule; two workers racing on one market serialise on `lockMarket` and the second sees the
+ * first's status. Never 'not_found': no path deletes one market (every FK is RESTRICT); only a
+ * whole-database wipe does (migrations 0017 and 0048, deploy/reset-db.sh). An unknown id is
+ * therefore a job left over from before such a wipe — expected, it runs out of attempts
+ * (docs/RESET.md) — or a broken producer, and either way the job fails loudly rather than being
+ * retried into silence.
  *
  * `transitionMarket` inserts the event row FIRST so the market UPDATE can carry its id as
  * `statusEventId`, the ordering key of `market:status` (A-M3-19, realtime.ts). Published after
@@ -61,9 +88,8 @@ export async function closeMarket(
       .limit(1)
       .for('update');
     if (!current) throw new Error(`Market ${marketId} not found`);
-    // `open` only until #114 adds PAUSED → CLOSED at `close_at` (ADR-0093 decision 1 item 3).
-    if (current.status !== 'open') {
-      return { outcome: 'skipped', marketId, reason: 'not_open' };
+    if (!isClosable(current.status)) {
+      return { outcome: 'skipped', marketId, reason: 'not_open_or_paused' };
     }
     // The database clock after the lock (tx-helpers.ts): an admin edit or transition may have
     // committed while this transaction queued, and the close must be judged and stamped
@@ -82,6 +108,9 @@ export async function closeMarket(
       payload: { closedAt: now.toISOString(), source: 'job' },
       at: now,
     });
+    if (current.status === 'paused') {
+      await endPauseAtClose(tx, { marketId, now, eventId: statusEventId });
+    }
     return { outcome: 'closed', marketId, statusEventId, closedAt: now };
   });
 
@@ -100,8 +129,9 @@ export async function closeMarket(
 }
 
 /**
- * The per-minute safety net (PLAN 5.5: `status='open' AND close_at <= now()`; `paused` joins
- * it with #114): closes every due market, each in its own transaction and each failure caught
+ * The per-minute safety net (PLAN 5.5: `status='open' AND close_at <= now()`, and `paused` since
+ * #114 — CLOSABLE_STATUSES; `markets_status_close_at_idx` serves the list, ADR-0100 7-7): closes
+ * every due market, each in its own transaction and each failure caught
  * (`runScan`), so one market's rejection rolls back that market alone and the rest of the batch
  * still runs. A long lock wait is not isolated the same way — the loop is sequential, so it
  * delays the markets after it, but only for that run. Oldest deadline first, at most
@@ -115,7 +145,12 @@ export async function closeDueMarkets(db: Db, publish: Publish): Promise<CloseSc
   const due = await db
     .select({ id: schema.markets.id })
     .from(schema.markets)
-    .where(and(eq(schema.markets.status, 'open'), lte(schema.markets.closeAt, sql`now()`)))
+    .where(
+      and(
+        inArray(schema.markets.status, [...CLOSABLE_STATUSES]),
+        lte(schema.markets.closeAt, sql`now()`),
+      ),
+    )
     .orderBy(asc(schema.markets.closeAt), asc(schema.markets.id))
     .limit(MARKET_SCAN_BATCH_MAX);
 

@@ -118,10 +118,13 @@ export const markets = pgTable(
      */
     scheduledOpenAt: timestampTz(),
     /**
-     * 거래 마감 시각: the worker closes the market at it. At or before the scheduled judgement
-     * (`markets_close_by_judgement_check`); after the open it only moves later, by a supplement
-     * (#172 item 14, #80: the API's rule, since it depends on the value before; the database holds
-     * only that a versioned market's changes with a supplement, `rule_version` below).
+     * 거래 마감 시각: the worker closes the market at it, an OPEN or a PAUSED one (#114: on
+     * schedule, never later, ADR-0093 decision 1 #173 items 1·3). At or before the scheduled
+     * judgement (`markets_close_by_judgement_check`); after the open it only moves later, by a
+     * supplement (#172 item 14, #80: the API's rule, since it depends on the value before; the
+     * database holds only that a versioned market's changes with a supplement, `rule_version`
+     * below), and not while PAUSED. An earlier end is a pause and an approved 조기 마감 (#114,
+     * ADR-0102), which leaves it as it was: the actual close is the `closed` event's `closedAt`.
      */
     closeAt: timestampTz().notNull(),
     /**
