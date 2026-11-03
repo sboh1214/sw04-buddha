@@ -12355,3 +12355,8 @@ _그 밖._
   - 시험: 스물다섯(새 넷 — `lib/market-judgement-delay`·지연 묶음·공개 상세·`use-instant-reached`, 나머지는 픽스처의 새 칸과 핀).
 - **e2e:** `delay.spec.ts`(새), `{correction,dispute,market-times}.spec.ts`, `helpers.ts`(`recordJudgementDelay`, `waitPast`).
 - **그 밖:** `apps/api/openapi.json`, `packages/api-client/src/generated/schema.ts`, `docs/API.md`, `scripts/generate-api-doc.mjs`, `docs/{GUARDS,OPERATIONS,RESET,SETTINGS,TERMS}.md`, `README.md`.
+
+**7. 머지하며 고친 것 (2026-11-03).**
+
+- 오너가 M8의 PR을 모두 머지하라고 했다. 저장소가 머지 커밋만 받아, 앞의 PR이 머지되면 GitHub이 다음 PR의 base를 main으로 옮겼고 다시 쌓지 않았다(결과 3의 '다시 쌓는다'는 하지 않았다).
+- 이 PR의 GitHub CI에서 `Integration Tests (api)`가 두 번 취소됐다. 91개 파일 1465개 시험이 모두 통과한 뒤였다(시험 19분, 잡 한도 20분). 앞의 PR들도 18.5~19.9분으로 한도에 붙어 있었다. 그래서 `.github/workflows/ci.yml`의 통합 시험 잡 한도를 30분으로 늘렸다. api 통합 시험을 샤드로 나누는 것은 하지 않았다.
