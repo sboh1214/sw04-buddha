@@ -206,12 +206,12 @@ export function AdminMarkets() {
 /**
  * 시장 만들기 → a draft (design 3.4). On success the admin lands on the detail page, where
  * 열기 is: a draft cannot be opened from here, and what it may still lack to open — rule items
- * (#23), tags (#17) — is named there and filled in from its form; a draft may be made without
- * any of them. The draft is made as the admin on screen (`useOperatorId`, ADR-0092): 만들기
- * waits for `GET /me`, and the cookie of another account is refused (`copy.sessionChanged`, the
- * session asked again). The card is drawn for that admin (keyed by it above) and its fields wait
- * for it too (`OperatorFieldset`): `['me']` turning from A to B in place drops what A typed
- * (ADR-0092, owner decision 2026-10-26 17:21 answer 1).
+ * (#23), times (#22), tags (#17) — is named there and filled in from its form; a draft may be
+ * made without any of them. The draft is made as the admin on screen (`useOperatorId`,
+ * ADR-0092): 만들기 waits for `GET /me`, and the cookie of another account is refused
+ * (`copy.sessionChanged`, the session asked again). The card is drawn for that admin (keyed by
+ * it above) and its fields wait for it too (`OperatorFieldset`): `['me']` turning from A to B in
+ * place drops what A typed (ADR-0092, owner decision 2026-10-26 17:21 answer 1).
  */
 function CreateMarketCard() {
   const router = useRouter();

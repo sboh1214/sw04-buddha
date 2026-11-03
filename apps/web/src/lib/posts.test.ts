@@ -354,6 +354,7 @@ describe('an edit screen whose post is gone (postEditGoneAfter, 오너 결정 20
       slug: 'rate-cut',
       title: '금리 인하',
       status: 'open',
+      judgementDelayed: false,
       category: { slug: 'economy', nameKo: '경제' },
     } as const;
     const id = POST.toLowerCase();
@@ -565,6 +566,7 @@ describe('an edit screen whose post an operator hides (postEditHidden, 오너 �
     slug: 'rate-cut',
     title: '금리 인하',
     status: 'open',
+    judgementDelayed: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
   const id = POST.toLowerCase();
@@ -740,6 +742,7 @@ describe('a post taken from under an open screen: one rule for its page and its 
     slug: 'rate-cut',
     title: '금리 인하',
     status: 'open',
+    judgementDelayed: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
   const id = POST.toLowerCase();
@@ -942,6 +945,7 @@ describe('a post page’s metadata', () => {
     slug: 'rate-cut',
     title: '금리 인하',
     status: 'open',
+    judgementDelayed: false,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
   const id = '0b6f6a3e-2c1d-4c8e-9f0a-1b2c3d4e5f60';
@@ -1130,8 +1134,18 @@ describe('a refused write', () => {
 });
 
 describe('the market the write screen’s form shows (writeMarketAfter)', () => {
-  const shown: WriteMarket = { id: market, title: '기준금리 인하?', status: 'open' };
-  const other: WriteMarket = { id: POST.toLowerCase(), title: '환율 1,400원?', status: 'closed' };
+  const shown: WriteMarket = {
+    id: market,
+    title: '기준금리 인하?',
+    status: 'open',
+    judgementDelayed: false,
+  };
+  const other: WriteMarket = {
+    id: POST.toLowerCase(),
+    title: '환율 1,400원?',
+    status: 'closed',
+    judgementDelayed: true,
+  };
 
   it('is the market found, or none when the API says there is no such market', () => {
     expect(writeMarketAfter(null, { kind: 'found', market: shown })).toEqual(shown);
@@ -1149,8 +1163,18 @@ describe('the market the write screen’s form shows (writeMarketAfter)', () => 
 });
 
 describe('the write screen’s market (writeScreenMarket, writeScreenView)', () => {
-  const a: WriteMarket = { id: market, title: '기준금리 인하?', status: 'open' };
-  const b: WriteMarket = { id: POST.toLowerCase(), title: '환율 1,400원?', status: 'closed' };
+  const a: WriteMarket = {
+    id: market,
+    title: '기준금리 인하?',
+    status: 'open',
+    judgementDelayed: false,
+  };
+  const b: WriteMarket = {
+    id: POST.toLowerCase(),
+    title: '환율 1,400원?',
+    status: 'closed',
+    judgementDelayed: true,
+  };
   const found = (shown: WriteMarket): WriteMarketLookup => ({ kind: 'found', market: shown });
   const none = (): WriteMarketLookup => ({ kind: 'none' });
   const failed = (of: WriteMarket): WriteMarketLookup => ({ kind: 'failed', marketId: of.id });
@@ -1192,6 +1216,12 @@ describe('the write screen’s market (writeScreenMarket, writeScreenView)', () 
     });
     // From the picker too.
     expect(writeScreenView(after(none(), picked(a)))).toMatchObject({ kind: 'form', market: a });
+  });
+
+  it('holds of a market picked its title and what its status badge reads, 판정 지연 included (#22)', () => {
+    // The picker hands over the search's whole card; the screen keeps the write screen's share.
+    const card = { ...b, slug: 'krw-usd', lastPrice: 63, closeAt: '2026-10-01T00:00:00.000Z' };
+    expect(after(found(a), picked(card)).shown).toEqual(b);
   });
 
   it('takes the form away only when the API says the market picked is none', () => {

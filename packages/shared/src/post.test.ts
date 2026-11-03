@@ -18,6 +18,7 @@ import {
   postAuthorSchema,
   postDeletionSchema,
   postListQuerySchema,
+  postMarketSchema,
   postNotEditableDetailsSchema,
   postSchema,
   postSummarySchema,
@@ -135,6 +136,8 @@ describe('the public shapes', () => {
     slug: 'base-rate',
     title: '기준금리',
     status: 'closed',
+    // Past its scheduled judgement: its badge reads '판정 지연' (#22, ADR-0098).
+    judgementDelayed: true,
     category: { slug: 'economy', nameKo: '경제' },
   } as const;
 
@@ -142,6 +145,12 @@ describe('the public shapes', () => {
     expect(postAuthorSchema.parse(author)).toEqual(author);
     expect(postAuthorSchema.parse({ kind: 'former_member' })).toEqual({ kind: 'former_member' });
     expect(postAuthorSchema.safeParse({ ...author, publicId: 'Not-Public' }).success).toBe(false);
+  });
+
+  it("says of a post's market whether its badge reads '판정 지연', as the market's cards do (#22)", () => {
+    expect(postMarketSchema.parse(market)).toEqual(market);
+    const { judgementDelayed: _, ...unsaid } = market;
+    expect(postMarketSchema.safeParse(unsaid).success).toBe(false);
   });
 
   it('draws a card and a post page in each state', () => {

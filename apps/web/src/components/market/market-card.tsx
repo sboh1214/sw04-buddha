@@ -19,8 +19,9 @@ import { useState } from 'react';
 import { copy } from '@/copy';
 import { type MarketSummary } from '@/lib/api';
 import { parentCategorySlug } from '@/lib/category-tree';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import { type OutcomeRow, outcomeRows, participantsText } from '@/lib/market-card';
+import { marketStatusLabel } from '@/lib/market-status';
 import { CategoryIcon } from './category-icon';
 import { CountdownBadge } from './countdown-badge';
 
@@ -273,7 +274,7 @@ export function MarketCard({
               variant="subtle"
               flexShrink="0"
             >
-              {MARKET_STATUS_LABEL[market.status]}
+              {marketStatusLabel(market)}
             </Badge>
           )}
         </HStack>

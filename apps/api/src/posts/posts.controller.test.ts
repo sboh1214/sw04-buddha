@@ -586,6 +586,24 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     });
   });
 
+  it("says of a post's market whether its badge reads '판정 지연', as the market's cards do (#22)", async () => {
+    const at = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
+    // CLOSED with its scheduled judgement passed, on the server's clock at the read (ADR-0098).
+    const late = await createMarket(t.db, {
+      title: '판정이 늦은 시장',
+      status: 'closed',
+      closeAt: at(-3),
+      scheduledJudgementAt: at(-1),
+    });
+    const post = await written({ marketId: late.id });
+    expect(post.market).toMatchObject({ id: late.id, status: 'closed', judgementDelayed: true });
+    const [card] = (await page(`marketId=${late.id}`)).data;
+    expect(card?.market).toMatchObject({ id: late.id, judgementDelayed: true });
+    expect((await shown(post.id)).market).toMatchObject({ judgementDelayed: true });
+    // An open market reads no delay, whatever its times.
+    expect((await written()).market).toMatchObject({ status: 'open', judgementDelayed: false });
+  });
+
   it('previews the first lines with text however many blank lines come before and between them', async () => {
     // Text the API takes: blank lines are text inside a code block, and only the whole body must
     // not be blank — 2,200 characters of blank lines (U+3000 too, which trim also removes) before

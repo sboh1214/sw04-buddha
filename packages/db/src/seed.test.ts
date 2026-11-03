@@ -10,7 +10,8 @@ import {
   CATEGORY_SLUGS,
   SEED_ADMIN_GRANT_REASON,
   SUBCATEGORY_SLUGS,
-  missingRuleItems,
+  floorToMinute,
+  missingOpenItems,
   tagKey,
 } from '@buddha/shared';
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
@@ -33,8 +34,13 @@ import {
   tags,
   user,
 } from './schema/index.js';
-import { SEED_MARKETS, SEED_RULE_NO_DELAY_NO, type SeedMarket } from './seed-markets.js';
-import { createUser } from './test/factories.js';
+import {
+  SEED_MARKETS,
+  SEED_RULE_NO_DELAY_NO,
+  type SeedMarket,
+  seedScheduledOpenAt,
+} from './seed-markets.js';
+import { createMarket, createUser } from './test/factories.js';
 import { connectTestDb, hasTestDb, testDbUrls, type TestDb } from './test/harness.js';
 
 /**
@@ -636,6 +642,12 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           statusEventId: markets.statusEventId,
           openAt: markets.openAt,
           closeAt: markets.closeAt,
+          // The times (#22) and the gap a lead close was checked against.
+          scheduledOpenAt: markets.scheduledOpenAt,
+          scheduledAnnouncementAt: markets.scheduledAnnouncementAt,
+          scheduledJudgementAt: markets.scheduledJudgementAt,
+          judgementTimeZone: markets.judgementTimeZone,
+          leadCloseGapMinutes: markets.leadCloseGapMinutes,
           createdAt: markets.createdAt,
           createdBy: markets.createdBy,
         })
@@ -689,14 +701,116 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       }));
     }
 
+    /**
+     * The time columns a seed market is written with (#22, ADR-0098), the scheduled open aside: it
+     * comes from the run's clock (`expectScheduledOpen`). No gap: the seed opens nothing.
+     */
+    function storedTimes(seed: SeedMarket) {
+      return {
+        scheduledAnnouncementAt:
+          seed.scheduledAnnouncementAt === null ? null : new Date(seed.scheduledAnnouncementAt),
+        scheduledJudgementAt: new Date(seed.scheduledJudgementAt),
+        judgementTimeZone: seed.judgementTimeZone,
+        leadCloseGapMinutes: null,
+      };
+    }
+
+    type MarketRow = Awaited<ReturnType<typeof marketState>>['rows'][number];
+
+    /**
+     * The scheduled opens `rows` were written with by one run between the database clock readings
+     * `startedAt` and `readAt` (`seedScheduledOpenAt`): its one reading floored to the minute — the
+     * same for every market whose close is after it — or, for a close that run's minute reached,
+     * the minute before the close.
+     */
+    function expectScheduledOpen(rows: readonly MarketRow[], startedAt: number, readAt: number) {
+      const opens = new Set<number>();
+      for (const row of rows) {
+        expect(row.scheduledOpenAt, row.slug).toBeInstanceOf(Date);
+        const open = row.scheduledOpenAt!.getTime();
+        const lowest = seedScheduledOpenAt(row.closeAt, new Date(startedAt)).getTime();
+        const highest = seedScheduledOpenAt(row.closeAt, new Date(readAt)).getTime();
+        expect(open, row.slug).toBeGreaterThanOrEqual(lowest);
+        expect(open, row.slug).toBeLessThanOrEqual(highest);
+        expect(open % 60_000, row.slug).toBe(0);
+        const beforeClose = floorToMinute(row.closeAt.getTime()) - 60_000;
+        if (beforeClose < floorToMinute(startedAt)) {
+          // Stale before the run began: the minute before the close, whichever minute it read.
+          expect(open, row.slug).toBe(beforeClose);
+        } else if (beforeClose >= floorToMinute(readAt)) {
+          opens.add(open);
+        }
+      }
+      // One reading of the clock for the whole run (ADR-0027).
+      expect(opens.size).toBeLessThanOrEqual(1);
+    }
+
+    /** The market ids of `slugs`. */
+    async function idsOf(slugs: readonly string[]): Promise<string[]> {
+      const rows = await t.db
+        .select({ id: markets.id })
+        .from(markets)
+        .where(inArray(markets.slug, [...slugs]));
+      return rows.map((row) => row.id);
+    }
+
+    async function updatedAts(): Promise<Map<string, number>> {
+      const rows = await t.db
+        .select({ slug: markets.slug, updatedAt: markets.updatedAt })
+        .from(markets);
+      return new Map(rows.map((row) => [row.slug, row.updatedAt.getTime()]));
+    }
+
+    /**
+     * What migration 0050 leaves of a market made before #23: `rules` and `resolution_source`
+     * dropped with their text (D4), every rule item at its column default and no source. 배경 is
+     * the `description` it already had. Done by hand after a fresh seed.
+     */
+    async function blankRuleItems(slugs: readonly string[]) {
+      const ids = await idsOf(slugs);
+      await t.db.delete(marketSources).where(inArray(marketSources.marketId, ids));
+      await t.db
+        .update(markets)
+        .set({
+          yesCondition: '',
+          noCondition: '',
+          eventDeadline: null,
+          fallbackCondition: '',
+          longDelayDays: null,
+          delayHandling: '',
+        })
+        .where(inArray(markets.id, ids));
+    }
+
+    /**
+     * What migration 0051 leaves of a market made before #22 (ADR-0098): every new column null,
+     * nothing converted (D4). Done by hand after a fresh seed.
+     */
+    async function blankTimes(slugs: readonly string[]) {
+      await t.db
+        .update(markets)
+        .set({
+          scheduledOpenAt: null,
+          scheduledAnnouncementAt: null,
+          scheduledJudgementAt: null,
+          judgementTimeZone: null,
+          leadCloseGapMinutes: null,
+        })
+        .where(inArray(markets.slug, [...slugs]));
+    }
+
     it('creates the 14 markets as drafts with a created event, and no price or tick', async () => {
       // Drafts for a reviewer to check and open (N03 §2, #125), and no price before a fill
       // (N02 §5): the direct AMM's initial probability and opening tick are gone.
+      const startedAt = await dbNow();
       runSeed();
+      const readAt = await dbNow();
       const { id: adminId } = await adminState();
-      const { rows, ticks, events, sources } = await marketState();
+      const { rows, ticks, events, sources, linked } = await marketState();
       const seeds = new Map(SEED_MARKETS.map((seed) => [seed.slug, seed]));
       const sourcesBySlug = Object.groupBy(sources, (source) => source.slug);
+      // The times (#22): the run's scheduled open, before each close; the seed's others.
+      expectScheduledOpen(rows, startedAt, readAt);
 
       expect(rows).toHaveLength(SEED_MARKET_COUNT);
       const bySlug = Object.groupBy(rows, (row) => row.category);
@@ -726,23 +840,37 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           tradeCount: 0,
           createdBy: adminId,
         });
-        // Every rule item as written (#23), and the sources in priority order.
+        // Every rule item as written (#23), and the sources in priority order; the times (#22).
         const seed = seeds.get(row.slug)!;
         expect(row, row.slug).toMatchObject(storedRuleItems(seed));
+        expect(row, row.slug).toMatchObject(storedTimes(seed));
         const own = sourcesBySlug[row.slug] ?? [];
         expect(own, row.slug).toEqual(storedSources(seed));
-        // Read back as the API reads them, none is missing: the reviewer can open the draft.
+        // Read back as the API reads them, none is missing and the times keep their order and
+        // the 선행 마감 at the proposed gap of 60 minutes (#22): the reviewer can open the draft
+        // — a stale one aside, whose close has passed — once the owner enters the gap.
+        const iso = (instant: Date | null) => instant?.toISOString() ?? null;
         expect(
-          missingRuleItems({
+          missingOpenItems({
+            title: row.title,
             description: row.description,
             yesCondition: row.yesCondition,
             noCondition: row.noCondition,
-            eventDeadline: row.eventDeadline?.toISOString() ?? null,
+            eventDeadline: iso(row.eventDeadline),
             primarySource: own.find((source) => source.priority === 0) ?? null,
             fallbackSources: own.filter((source) => source.priority > 0),
             fallbackCondition: row.fallbackCondition,
             longDelayDays: row.longDelayDays,
             delayHandling: row.delayHandling,
+            scheduledOpenAt: iso(row.scheduledOpenAt),
+            closeAt: row.closeAt.toISOString(),
+            scheduledAnnouncementAt: iso(row.scheduledAnnouncementAt),
+            scheduledJudgementAt: iso(row.scheduledJudgementAt),
+            judgementTimeZone: row.judgementTimeZone,
+            // Filed under a leaf (checked above) with its tags (the tag tests below).
+            categorySelectable: true,
+            tagCount: linked.filter((link) => link.slug === row.slug).length,
+            leadCloseGapMinutes: 60,
           }),
           row.slug,
         ).toEqual([]);
@@ -778,6 +906,11 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       expect(rows).toHaveLength(SEED_MARKET_COUNT);
       for (const row of rows) expect(row.createdAt.getTime()).toBeLessThanOrEqual(after);
       for (const event of events) expect(event.createdAt.getTime()).toBeLessThanOrEqual(after);
+      // The scheduled open too (#22): from the runner's clock it would be up to an hour ahead,
+      // a market the interim open refuses as not reached yet.
+      for (const row of rows) {
+        expect(row.scheduledOpenAt!.getTime(), row.slug).toBeLessThanOrEqual(after);
+      }
 
       // And the shim really was in the child: better-auth's own columns follow the runner on
       // every real sign-up, so the seeded admin keeps that clock deliberately (A-M3-30).
@@ -796,13 +929,17 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // An admin opened this one (the trading gap allows it, #125) before its cutoff passed.
       const opened = 'seoul-october-2026-rain-above-50mm';
       runSeed();
+      // The times move with the close, as an admin's edit would have to (#22): the database holds
+      // the scheduled open before the close and the close at or before the judgement.
+      const pastClose = {
+        scheduledOpenAt: sql`clock_timestamp() - interval '1 day'`,
+        closeAt: sql`clock_timestamp() - interval '1 minute'`,
+        scheduledJudgementAt: sql`clock_timestamp() + interval '1 day'`,
+      };
+      await t.db.update(markets).set(pastClose).where(eq(markets.slug, slug));
       await t.db
         .update(markets)
-        .set({ closeAt: sql`clock_timestamp() - interval '1 minute'` })
-        .where(eq(markets.slug, slug));
-      await t.db
-        .update(markets)
-        .set({ status: 'open', closeAt: sql`clock_timestamp() - interval '1 minute'` })
+        .set({ status: 'open', ...pastClose })
         .where(eq(markets.slug, opened));
 
       const { stdout, stderr } = runSeedIo();
@@ -840,9 +977,13 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // has done the documented refresh and must not be told about it on every deploy.
       const slug = 'cpi-september-2026-above-2pct';
       runSeed();
+      // The judgement with it (#22): the close stays at or before it.
       await t.db
         .update(markets)
-        .set({ closeAt: sql`clock_timestamp() + interval '30 days'` })
+        .set({
+          closeAt: sql`clock_timestamp() + interval '30 days'`,
+          scheduledJudgementAt: sql`clock_timestamp() + interval '31 days'`,
+        })
         .where(eq(markets.slug, slug));
 
       expect(runSeedIo().stderr).not.toContain(slug);
@@ -854,9 +995,13 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // foreseeable. This is the same signal at a distance that can still be acted on.
       const slug = 'cpi-september-2026-above-2pct';
       runSeed();
+      // The judgement with it (#22): the close stays at or before it.
       await t.db
         .update(markets)
-        .set({ closeAt: sql`clock_timestamp() + interval '3 days'` })
+        .set({
+          closeAt: sql`clock_timestamp() + interval '3 days'`,
+          scheduledJudgementAt: sql`clock_timestamp() + interval '4 days'`,
+        })
         .where(eq(markets.slug, slug));
 
       const { stderr } = runSeedIo();
@@ -948,7 +1093,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout } = runSeedIo();
       expect(stdout).toContain(
-        "markets: 0 inserted, 14 already existed (13 of them given the seed's tags, 0 the seed's rule items), 0 skipped",
+        "markets: 0 inserted, 14 already existed (13 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times), 0 skipped",
       );
       const tagged = stdout.split(NEWLINE).filter((line) => line.includes('(it had none)'));
       expect(tagged).toHaveLength(SEED_MARKET_COUNT - 1);
@@ -969,7 +1114,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
       // And once only: the next run finds every market tagged.
       const again = await marketState();
       expect(runSeed()).toContain(
-        "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items)",
+        "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times)",
       );
       expect(await marketState()).toEqual(again);
     });
@@ -995,7 +1140,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout } = runSeedIo();
       expect(stdout).toContain(
-        `markets: 0 inserted, 14 already existed (${SEED_MARKET_COUNT - 2} of them given the seed's tags, 0 the seed's rule items)`,
+        `markets: 0 inserted, 14 already existed (${SEED_MARKET_COUNT - 2} of them given the seed's tags, 0 the seed's rule items, 0 the seed's times)`,
       );
       const linked = (await marketState()).linked;
       expect(linked.filter((row) => row.slug === cleared || row.slug === opened)).toEqual([]);
@@ -1003,36 +1148,6 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
     });
 
     describe('rule items of a draft seeded before #23 (ADR-0097, ADR-0096 7-14)', () => {
-      /** The market ids of `slugs`. */
-      async function idsOf(slugs: readonly string[]): Promise<string[]> {
-        const rows = await t.db
-          .select({ id: markets.id })
-          .from(markets)
-          .where(inArray(markets.slug, [...slugs]));
-        return rows.map((row) => row.id);
-      }
-
-      /**
-       * What migration 0050 leaves of a market made before #23 deployed: `rules` and
-       * `resolution_source` dropped with their text (D4), every rule item at its column default
-       * and no source. 배경 is the `description` it already had. Done by hand after a fresh seed.
-       */
-      async function blankRuleItems(slugs: readonly string[]) {
-        const ids = await idsOf(slugs);
-        await t.db.delete(marketSources).where(inArray(marketSources.marketId, ids));
-        await t.db
-          .update(markets)
-          .set({
-            yesCondition: '',
-            noCondition: '',
-            eventDeadline: null,
-            fallbackCondition: '',
-            longDelayDays: null,
-            delayHandling: '',
-          })
-          .where(inArray(markets.id, ids));
-      }
-
       /** A market row apart from 배경 and the rule items: what the fill must not touch. */
       function withoutRuleItems(row: Awaited<ReturnType<typeof marketState>>['rows'][number]) {
         const {
@@ -1046,13 +1161,6 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
           ...rest
         } = row;
         return rest;
-      }
-
-      async function updatedAts(): Promise<Map<string, number>> {
-        const rows = await t.db
-          .select({ slug: markets.slug, updatedAt: markets.updatedAt })
-          .from(markets);
-        return new Map(rows.map((row) => [row.slug, row.updatedAt.getTime()]));
       }
 
       it('fills the items 0050 left blank, 배경 only where blank, and the tags on their own', async () => {
@@ -1078,7 +1186,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         const readAt = await dbNow();
         const after = await marketState();
         expect(stdout).toContain(
-          "markets: 0 inserted, 14 already existed (5 of them given the seed's tags, 14 the seed's rule items), 0 skipped",
+          "markets: 0 inserted, 14 already existed (5 of them given the seed's tags, 14 the seed's rule items, 0 the seed's times), 0 skipped",
         );
         const lines = stdout.split(NEWLINE);
         const both = lines.filter((line) =>
@@ -1121,7 +1229,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
         // And once only: the next run finds every item and tag in place.
         expect(runSeed()).toContain(
-          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items)",
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times)",
         );
         expect(await marketState()).toEqual(after);
       }, 60_000);
@@ -1161,7 +1269,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         expect(stdout).toContain(
           `markets: 0 inserted, 14 already existed (0 of them given the seed's tags, ${String(
             SEED_MARKET_COUNT - left.length,
-          )} the seed's rule items), 0 skipped`,
+          )} the seed's rule items, 0 the seed's times), 0 skipped`,
         );
         const after = await marketState();
         for (const slug of left) {
@@ -1234,7 +1342,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
         expect(stdout).toContain(
           `markets: 0 inserted, 14 already existed (1 of them given the seed's tags, ${String(
             SEED_MARKET_COUNT - 2,
-          )} the seed's rule items), 0 skipped`,
+          )} the seed's rule items, 0 the seed's times), 0 skipped`,
         );
         const lineOf = (slug: string) =>
           stdout.split(NEWLINE).filter((line) => line.includes(slug));
@@ -1270,7 +1378,217 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
         // And on every run after: the re-titled drafts stay blank for their admin.
         expect(runSeed()).toContain(
-          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items)",
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times)",
+        );
+        expect(await marketState()).toEqual(after);
+      }, 60_000);
+    });
+
+    describe('times of a draft seeded before #22 (ADR-0098)', () => {
+      /** A market row apart from its times: what the time fill must not touch. */
+      function withoutTimes(row: MarketRow) {
+        const {
+          scheduledOpenAt: _scheduledOpenAt,
+          scheduledAnnouncementAt: _scheduledAnnouncementAt,
+          scheduledJudgementAt: _scheduledJudgementAt,
+          judgementTimeZone: _judgementTimeZone,
+          ...rest
+        } = row;
+        return rest;
+      }
+
+      /** The seed's one stdout line for `slug`. */
+      const lineOf = (stdout: string, slug: string) =>
+        stdout.split(NEWLINE).filter((line) => line.includes(`market ${slug}:`));
+
+      it('fills the times 0051 left blank on a draft that has its tags and rule items', async () => {
+        // What an environment #23 reached holds once 0051 ran: each draft with its tags and its
+        // rule items, and no time. The guard that passes over a draft with both (#17, #23) must
+        // not pass over this one, or the 14 drafts could never open.
+        runSeed();
+        const slugs = SEED_MARKETS.map((seed) => seed.slug);
+        await blankTimes(slugs);
+        const before = await marketState();
+
+        // The child's clock an hour ahead: the scheduled open and `updated_at` are the
+        // database's (ADR-0027).
+        const startedAt = await dbNow();
+        const { stdout } = runSeedIo({ clockShiftMs: 60 * 60 * 1000 });
+        const readAt = await dbNow();
+        const after = await marketState();
+        expect(stdout).toContain(
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, 14 the seed's times), 0 skipped",
+        );
+        for (const slug of slugs) {
+          expect(lineOf(stdout, slug), slug).toEqual([
+            expect.stringMatching(/already exists, given the seed's times \(they were blank\)$/),
+          ]);
+        }
+        expectScheduledOpen(after.rows, startedAt, readAt);
+        const touchedAfter = await updatedAts();
+        for (const seed of SEED_MARKETS) {
+          expect(
+            after.rows.find((row) => row.slug === seed.slug),
+            seed.slug,
+          ).toMatchObject(storedTimes(seed));
+          const touched = touchedAfter.get(seed.slug)!;
+          expect(touched, seed.slug).toBeGreaterThanOrEqual(startedAt);
+          expect(touched, seed.slug).toBeLessThanOrEqual(readAt);
+        }
+        // Nothing else of the rows, the same events, tags and sources, and no record: what is
+        // filled is what a fresh seed would have inserted (as the #23 fill).
+        expect(after.rows.map(withoutTimes)).toEqual(before.rows.map(withoutTimes));
+        expect(after.events).toEqual(before.events);
+        expect(after.linked).toEqual(before.linked);
+        expect(after.sources).toEqual(before.sources);
+        expect(
+          await t.db.select().from(adminActions).where(eq(adminActions.targetType, 'market')),
+        ).toEqual([]);
+
+        // And once only: the next run finds every time in place.
+        expect(runSeed()).toContain(
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times)",
+        );
+        expect(await marketState()).toEqual(after);
+      }, 60_000);
+
+      it('leaves a draft an admin handled, re-scheduled or re-titled, one with any time, an open market and a non-seed draft', async () => {
+        runSeed();
+        await blankTimes(SEED_MARKETS.map((seed) => seed.slug));
+        const [recorded, closeMoved, deadlineMoved, retitled, opened, zoned] = SEED_MARKETS;
+        const { id: adminId } = await adminState();
+        // Handled since #22: every admin record from #22 on names the times in its snapshot, null
+        // ones too — here an admin who cleared the judgement.
+        const [recordedId] = await idsOf([recorded!.slug]);
+        await t.db.insert(adminActions).values({
+          adminId,
+          type: 'market_update',
+          targetType: 'market',
+          targetId: recordedId!,
+          payload: {
+            before: { scheduledJudgementAt: recorded!.scheduledJudgementAt },
+            after: { scheduledJudgementAt: null },
+          },
+        });
+        // Re-scheduled: a close or 사건 기한 that is not the seed's any more. Against this later
+        // deadline the seed's judgement would break the database's order and fail the seed.
+        const later = (iso: string, days: number) => new Date(Date.parse(iso) + days * 86_400_000);
+        await t.db
+          .update(markets)
+          .set({ closeAt: later(closeMoved!.closeAt, 1) })
+          .where(eq(markets.slug, closeMoved!.slug));
+        await t.db
+          .update(markets)
+          .set({ eventDeadline: later(deadlineMoved!.eventDeadline, 7) })
+          .where(eq(markets.slug, deadlineMoved!.slug));
+        expect(Date.parse(deadlineMoved!.scheduledJudgementAt)).toBeLessThan(
+          later(deadlineMoved!.eventDeadline, 7).getTime(),
+        );
+        // Another question: the seed's judgement answers the seed's.
+        await t.db
+          .update(markets)
+          .set({ title: '운영자가 고친 다른 질문일까?' })
+          .where(eq(markets.slug, retitled!.slug));
+        // Past the draft: a market opened before #22 keeps its blank times (D4).
+        await t.db.update(markets).set({ status: 'open' }).where(eq(markets.slug, opened!.slug));
+        // One time written, by whoever, and the times are not blank: the zone alone.
+        await t.db
+          .update(markets)
+          .set({ judgementTimeZone: 'Asia/Tokyo' })
+          .where(eq(markets.slug, zoned!.slug));
+        // Not the seed's at all.
+        const other = await createMarket(t.db, {
+          status: 'draft',
+          blankTimes: true,
+          createdBy: adminId,
+        });
+        const before = await marketState();
+        const touchedBefore = await updatedAts();
+
+        const { stdout } = runSeedIo();
+        const left = [recorded, closeMoved, deadlineMoved, retitled, opened, zoned].map(
+          (seed) => seed!.slug,
+        );
+        expect(stdout).toContain(
+          `markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, ${String(
+            SEED_MARKET_COUNT - left.length,
+          )} the seed's times), 0 skipped`,
+        );
+        const after = await marketState();
+        const touchedAfter = await updatedAts();
+        for (const slug of [...left, other.slug]) {
+          expect(
+            after.rows.find((row) => row.slug === slug),
+            slug,
+          ).toEqual(before.rows.find((row) => row.slug === slug));
+          expect(touchedAfter.get(slug), slug).toBe(touchedBefore.get(slug));
+        }
+        for (const slug of left) {
+          expect(lineOf(stdout, slug), slug).toEqual([expect.stringMatching(/already exists$/)]);
+        }
+        for (const seed of SEED_MARKETS.filter((market) => !left.includes(market.slug))) {
+          expect(
+            after.rows.find((row) => row.slug === seed.slug),
+            seed.slug,
+          ).toMatchObject(storedTimes(seed));
+        }
+      }, 60_000);
+
+      it('fills a draft seeded before #17, #23 and #22 with all three, against the deadline it wrote', async () => {
+        // The times are compared with 사건 기한 as it stands after the rule fill: before it, a
+        // draft seeded before #23 has none, and the seed's judgement answers the seed's deadline.
+        runSeed();
+        const slugs = SEED_MARKETS.map((seed) => seed.slug);
+        const oldest = slugs.slice(0, 3);
+        const beforeTimes = slugs.slice(3, 5);
+        await blankRuleItems([...oldest, ...beforeTimes]);
+        await blankTimes([...oldest, ...beforeTimes]);
+        await t.db.delete(marketTags).where(inArray(marketTags.marketId, await idsOf(oldest)));
+
+        const startedAt = await dbNow();
+        const { stdout } = runSeedIo();
+        const readAt = await dbNow();
+        expect(stdout).toContain(
+          "markets: 0 inserted, 14 already existed (3 of them given the seed's tags, 5 the seed's rule items, 5 the seed's times), 0 skipped",
+        );
+        for (const slug of oldest) {
+          expect(lineOf(stdout, slug), slug).toEqual([
+            expect.stringMatching(
+              /given the seed's tags \(it had none\), rule items \(they were blank\) and times \(they were blank\)$/,
+            ),
+          ]);
+        }
+        for (const slug of beforeTimes) {
+          expect(lineOf(stdout, slug), slug).toEqual([
+            expect.stringMatching(
+              /already exists, given the seed's rule items \(they were blank\) and times \(they were blank\)$/,
+            ),
+          ]);
+        }
+        const after = await marketState();
+        const filled = new Set([...oldest, ...beforeTimes]);
+        expectScheduledOpen(
+          after.rows.filter((row) => filled.has(row.slug)),
+          startedAt,
+          readAt,
+        );
+        const sourcesBySlug = Object.groupBy(after.sources, (source) => source.slug);
+        const linkedBySlug = Object.groupBy(after.linked, (row) => row.slug);
+        for (const seed of SEED_MARKETS) {
+          expect(
+            after.rows.find((row) => row.slug === seed.slug),
+            seed.slug,
+          ).toMatchObject({ ...storedRuleItems(seed), ...storedTimes(seed) });
+          expect(sourcesBySlug[seed.slug], seed.slug).toEqual(storedSources(seed));
+          expect(
+            linkedBySlug[seed.slug]?.map((row) => [row.position, row.name]),
+            seed.slug,
+          ).toEqual(seed.tags.map((name, index) => [index + 1, name]));
+        }
+
+        // And once only.
+        expect(runSeed()).toContain(
+          "markets: 0 inserted, 14 already existed (0 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times)",
         );
         expect(await marketState()).toEqual(after);
       }, 60_000);
@@ -1292,7 +1610,7 @@ describe.skipIf(!hasTestDb())('db:seed (integration, docker test profile)', () =
 
       const { stdout, stderr } = runSeedIo();
       expect(stdout).toContain(
-        "markets: 13 inserted, 0 already existed (0 of them given the seed's tags, 0 the seed's rule items), 1 skipped (category not in the tree)",
+        "markets: 13 inserted, 0 already existed (0 of them given the seed's tags, 0 the seed's rule items, 0 the seed's times), 1 skipped (category not in the tree)",
       );
       const skipped = stderr
         .split(NEWLINE)

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   MARKET_FALLBACK_SOURCES_MAX,
   MARKET_IMAGE_URL_MAX,
   MARKET_LONG_DELAY_DAYS_MAX,
@@ -16,12 +17,19 @@ import {
   type RuleItem,
   TAG_NAME_MAX,
   TAG_NAME_PATTERN,
+  TIME_ORDER_RULES,
+  TIME_RULE_FIELDS,
+  type TimeOrderRule,
+  type TimeRuleField,
+  type TimeRuleInput,
   changedRuleItems,
+  isKnownTimeZone,
   marketSlugSchema,
   missingRuleItems,
   normalizeTagName,
   storableInstantSchema,
   tagKey,
+  timeRuleViolations,
 } from '@buddha/shared';
 import type { KeepStateOptions } from 'react-hook-form';
 import * as z from 'zod';
@@ -34,6 +42,7 @@ import {
   type UpdateMarketFields,
 } from './api';
 import { isoToKstLocal, kstLocalToIso } from './datetime';
+import { leadCloseMessage } from './market-admin';
 
 /**
  * The admin market form (PLAN 12, design §4), shared by create and edit. Field values are the
@@ -81,8 +90,23 @@ export interface MarketFormValues {
    */
   tagInput: string;
   imageUrl: string;
-  /** `datetime-local` in KST (lib/datetime). */
+  /**
+   * The times (#22, ADR-0098; ADR-0093 decision 2 #172 items 11–14), in the form's order after the
+   * rule items, which is OPEN_ITEMS': 예정 개장, 거래 마감, 발표 예정 and 예정 판정 시각, each a
+   * `datetime-local` in KST (lib/datetime) — '' for none, and for the announcement '' is '없음' — and
+   * 판정 기준 시간대, an IANA name. A draft may be saved with any of them blank but the close; the
+   * open-items check names what is.
+   */
+  scheduledOpenAt: string;
   closeAt: string;
+  scheduledAnnouncementAt: string;
+  scheduledJudgementAt: string;
+  /**
+   * The zone's select. A new market starts with DEFAULT_JUDGEMENT_TIME_ZONE for the operator to
+   * confirm (#172 item 11); '' is a stored market's zone not filled in (`marketToFormValues`),
+   * which the edit form's input shows pre-filled the same way (`withJudgementTimeZonePrefilled`).
+   */
+  judgementTimeZone: string;
   /** Blank asks the server to derive one from the title (create only). */
   slug: string;
 }
@@ -103,9 +127,35 @@ export const EMPTY_MARKET_FORM: MarketFormValues = {
   tags: [],
   tagInput: '',
   imageUrl: '',
+  scheduledOpenAt: '',
   closeAt: '',
+  scheduledAnnouncementAt: '',
+  scheduledJudgementAt: '',
+  judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
   slug: '',
 };
+
+/**
+ * The edit form's input values for a stored market (`marketToFormValues`): a zone not filled in —
+ * a draft from before #22 or from an adopted proposal — shows DEFAULT_JUDGEMENT_TIME_ZONE, as a
+ * new market's does, for the operator to confirm (#172 item 11). The diff is still taken against
+ * the stored values, where the zone is '', so saving the form sends it: the save is the
+ * confirmation (`judgementTimeZoneUnconfirmed` keeps the save enabled with nothing else touched).
+ */
+export function withJudgementTimeZonePrefilled(values: MarketFormValues): MarketFormValues {
+  return values.judgementTimeZone === ''
+    ? { ...values, judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE }
+    : values;
+}
+
+/**
+ * Whether the stored market `original` (`marketToFormValues`) has no judgement time zone, so its
+ * form starts with one pre-filled that a save would send (`withJudgementTimeZonePrefilled`): the
+ * edit form may be saved with nothing else changed.
+ */
+export function judgementTimeZoneUnconfirmed(original: MarketFormValues): boolean {
+  return original.judgementTimeZone === '';
+}
 
 /** The API's `z.url({ protocol: /^https?$/ })`, restated only as far as the form needs it. */
 export function isHttpUrl(value: string): boolean {
@@ -224,6 +274,48 @@ export function formRuleItems(values: MarketFormValues): MarketRuleItems {
 }
 
 /**
+ * The times the form holds, as the API would store them (#22): each instant read as KST, null for
+ * a blank (or unparseable) input — '없음' for the announcement — and the zone null while blank;
+ * with 사건 기한 (a rule item, #23), so the time rules (`timeRuleViolations`) can read them. Total,
+ * like `formRuleItems`: the order mirror below, the bodies and the 미리보기 take a half-typed form.
+ */
+export function formTimes(values: MarketFormValues): TimeRuleInput {
+  return {
+    scheduledOpenAt: kstLocalToIso(values.scheduledOpenAt),
+    closeAt: kstLocalToIso(values.closeAt),
+    scheduledAnnouncementAt: kstLocalToIso(values.scheduledAnnouncementAt),
+    scheduledJudgementAt: kstLocalToIso(values.scheduledJudgementAt),
+    judgementTimeZone: orNull(values.judgementTimeZone),
+    eventDeadline: kstLocalToIso(values.eventDeadline),
+  };
+}
+
+/**
+ * The inputs that share a time rule with `field` (#22, TIME_RULE_FIELDS), for react-hook-form's
+ * `deps`: after a submit, a change to one end of a rule re-checks its other ends, so a rule mended
+ * from one side does not leave its message under the other input until the next 저장.
+ */
+export function timeRuleDeps(field: TimeRuleField): TimeRuleField[] {
+  const deps = new Set<TimeRuleField>();
+  for (const ends of Object.values(TIME_RULE_FIELDS)) {
+    if (!(ends as readonly TimeRuleField[]).includes(field)) continue;
+    for (const end of ends) if (end !== field) deps.add(end);
+  }
+  return [...deps];
+}
+
+/** What each order rule says under both of its inputs (#172 item 12, owner answer A1). */
+const TIME_ORDER_MESSAGE: { readonly [R in TimeOrderRule]: string } = {
+  openBeforeClose: copy.errMarketTimeOpenBeforeClose,
+  closeByJudgement: copy.errMarketTimeCloseByJudgement,
+  deadlineByJudgement: copy.errMarketTimeDeadlineByJudgement,
+};
+
+/** Whether a `datetime-local` input holds an instant the API stores and reads back, or nothing. */
+const storableOrBlank = (value: string) =>
+  value === '' || storableInstantSchema.safeParse(kstLocalToIso(value)).success;
+
+/**
  * Where on the form a rule item that counts as missing (`missingRuleItems`) is filled in, as zod
  * issue paths: the field of the same name, but for a source its blank input — the primary's name
  * or address, a listed fallback's name or address.
@@ -280,12 +372,30 @@ const sourceNameField = z.string().trim().max(MARKET_SOURCE_MAX, copy.errMarketS
  * item counts as filled in before. The tags' own rules are the box's (`addTags`), checked again
  * here as a backstop; a name left in the box is refused (`tagInput`). `now` is injectable for
  * tests.
+ *
+ * The times (#22, ADR-0098) are each blank or an instant the API stores (`storableInstantSchema`),
+ * and the zone blank, the stored one, or an IANA name this browser knows (`isKnownTimeZone`, the
+ * API's own check; the select offers only those). The order rules mirror the API's
+ * (`timeRuleViolations`, whole minutes): scheduled open < close ≤ scheduled judgement and 사건 기한
+ * ≤ scheduled judgement (#172 item 12, owner answer 2026-10-31 A1), each broken one said under
+ * BOTH its inputs. The lead close (선행 마감) is never refused on a draft — the open-items check
+ * names it (`leadClose`) — so the create form, which knows no gap, does not check it.
+ *
+ * On an open market (`openMarket`) the form mirrors the API's rules there (#172 item 14, owner
+ * answer A2): the close only moves later — an instant earlier than `original`'s is an early
+ * close, which is 마감 — and stays at or before the unchanged scheduled judgement (the order rule
+ * above); the scheduled open and judgement are fixed (their inputs are locked, and a change is
+ * refused here too); the zone may not be cleared (RULES_REQUIRED); and an edit of the close or the
+ * announcement of a market with an announcement has the lead close checked again with
+ * `leadCloseGapMinutes`, the gap the market is held to (`AdminMarket.leadCloseGapMinutes`) — or,
+ * while that is null (the release setting undecided), refused as the API refuses it.
  */
 export function marketFormSchema(
   options: {
     original?: MarketFormValues;
     now?: () => number;
     openMarket?: boolean;
+    leadCloseGapMinutes?: number | null;
   } = {},
 ) {
   const now = options.now ?? Date.now;
@@ -319,12 +429,7 @@ export function marketFormSchema(
       noCondition: text,
       // Blank, or a KST time the API stores and reads back (`storableInstantSchema`, ADR-0097):
       // from 0100-01-01 09:00 KST on. 0001-01-01 00:00 KST is year 0000 in UTC.
-      eventDeadline: z
-        .string()
-        .refine(
-          (value) => value === '' || storableInstantSchema.safeParse(kstLocalToIso(value)).success,
-          copy.errMarketEventDeadline,
-        ),
+      eventDeadline: z.string().refine(storableOrBlank, copy.errMarketEventDeadline),
       primarySourceName: sourceNameField,
       primarySourceUrl: sourceUrlField,
       fallbackSources: z
@@ -362,11 +467,21 @@ export function marketFormSchema(
           (value) => value === '' || (value.length <= MARKET_IMAGE_URL_MAX && isHttpUrl(value)),
           copy.errMarketImageUrl,
         ),
+      scheduledOpenAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
       closeAt: z.string().refine((value) => {
         if (options.original !== undefined && value === options.original.closeAt) return true;
         const iso = kstLocalToIso(value);
         return iso !== null && new Date(iso).getTime() > now();
       }, copy.errMarketCloseAt),
+      scheduledAnnouncementAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
+      scheduledJudgementAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
+      judgementTimeZone: z
+        .string()
+        .refine(
+          (value) =>
+            value === '' || value === options.original?.judgementTimeZone || isKnownTimeZone(value),
+          copy.errMarketTimeZone,
+        ),
       slug: z
         .string()
         .trim()
@@ -384,6 +499,12 @@ export function marketFormSchema(
           path: ['fallbackCondition'],
         });
       }
+      const times = formTimes(values);
+      for (const { rule, fields } of timeRuleViolations(times, null)) {
+        if (!(TIME_ORDER_RULES as readonly string[]).includes(rule)) continue;
+        const message = TIME_ORDER_MESSAGE[rule as TimeOrderRule];
+        for (const field of fields) ctx.addIssue({ code: 'custom', message, path: [field] });
+      }
       if (!options.openMarket) return;
       for (const item of missingRuleItems(formRuleItems(values))) {
         if (missingBefore.includes(item)) continue;
@@ -391,7 +512,63 @@ export function marketFormSchema(
           ctx.addIssue({ code: 'custom', message: copy.errMarketRulesOpen, path });
         }
       }
+      const original = options.original;
+      if (original === undefined) return;
+      openMarketTimeIssues(values, original, times, options.leadCloseGapMinutes ?? null, ctx);
     });
+}
+
+/**
+ * The open market's time rules (#172 item 14, owner answer 2026-10-31 A2; ADR-0098), as the API
+ * checks them on its PATCH: see `marketFormSchema`. Each compares with `original`, the stored
+ * values the form started from: an input left as it was is never sent, so never refused.
+ */
+function openMarketTimeIssues(
+  values: MarketFormValues,
+  original: MarketFormValues,
+  times: TimeRuleInput,
+  gapMinutes: number | null,
+  ctx: z.RefinementCtx,
+): void {
+  for (const field of ['scheduledOpenAt', 'scheduledJudgementAt'] as const) {
+    if (values[field] !== original[field]) {
+      ctx.addIssue({ code: 'custom', message: copy.errMarketTimeFixed, path: [field] });
+    }
+  }
+  const closeMoved = values.closeAt !== original.closeAt;
+  const before = kstLocalToIso(original.closeAt);
+  // An instant, as the API compares it: any earlier close is an early close (#173 item 4).
+  if (
+    closeMoved &&
+    times.closeAt !== null &&
+    before !== null &&
+    Date.parse(times.closeAt) < Date.parse(before)
+  ) {
+    ctx.addIssue({ code: 'custom', message: copy.errMarketCloseEarlier, path: ['closeAt'] });
+  }
+  if (original.judgementTimeZone !== '' && values.judgementTimeZone.trim() === '') {
+    ctx.addIssue({
+      code: 'custom',
+      message: copy.errMarketRulesOpen,
+      path: ['judgementTimeZone'],
+    });
+  }
+  const announcementMoved = values.scheduledAnnouncementAt !== original.scheduledAnnouncementAt;
+  if (times.scheduledAnnouncementAt === null || (!closeMoved && !announcementMoved)) return;
+  const sent = TIME_RULE_FIELDS.leadClose.filter((field) =>
+    field === 'closeAt' ? closeMoved : announcementMoved,
+  );
+  if (gapMinutes === null) {
+    // The gap is undecided and the market has none of its own: the API cannot check it.
+    for (const field of sent) {
+      ctx.addIssue({ code: 'custom', message: copy.errMarketLeadCloseUndecided, path: [field] });
+    }
+    return;
+  }
+  const lead = timeRuleViolations(times, gapMinutes).find(({ rule }) => rule === 'leadClose');
+  if (lead === undefined) return;
+  const message = leadCloseMessage(gapMinutes);
+  for (const field of lead.fields) ctx.addIssue({ code: 'custom', message, path: [field] });
 }
 
 /**
@@ -474,19 +651,34 @@ export function toResolveMarketBody(
  * fields alone — the 미리보기 draws them too; the press adds the admin on screen (ADR-0092). The
  * tags always go, in entry order: none makes a draft without tags (#17), which the open-items
  * check then names. So does every rule item (`formRuleItems`, #23), blank or not: a draft may be
- * made with any of them blank, and the open-items check names those too.
+ * made with any of them blank, and the open-items check names those too — and every time (#22,
+ * `formTimes`): a blank one null ('없음' for the announcement), the zone as picked.
  */
 export function toCreateMarketBody(values: MarketFormValues): CreateMarketFields {
+  const times = formTimes(values);
   return {
     title: values.title.trim(),
     ...formRuleItems(values),
     categoryId: Number(values.categoryId),
     tags: [...values.tags],
     imageUrl: orNull(values.imageUrl),
-    closeAt: kstLocalToIso(values.closeAt) ?? '',
+    scheduledOpenAt: times.scheduledOpenAt,
+    closeAt: times.closeAt ?? '',
+    scheduledAnnouncementAt: times.scheduledAnnouncementAt,
+    scheduledJudgementAt: times.scheduledJudgementAt,
+    judgementTimeZone: times.judgementTimeZone,
     ...(values.slug.trim() ? { slug: values.slug.trim() } : {}),
   };
 }
+
+/** The time inputs, each sent when it changed (`toUpdateMarketBody`). */
+const TIME_INPUTS = [
+  'scheduledOpenAt',
+  'closeAt',
+  'scheduledAnnouncementAt',
+  'scheduledJudgementAt',
+  'judgementTimeZone',
+] as const satisfies readonly (keyof MarketFormValues & keyof CreateMarketFields)[];
 
 /**
  * The PATCH body: only the fields that differ from the prefilled `original`, so an unchanged
@@ -498,6 +690,10 @@ export function toCreateMarketBody(values: MarketFormValues): CreateMarketFields
  * instant, a source by name and address. The fallbacks go as the whole ordered list (the API
  * replaces the set), and always with the switch condition, so a list emptied goes with the
  * condition the field cleared and the API never meets a condition without a fallback.
+ * A time goes when its input changed (#22) — compared as the inputs hold them, so a stored close
+ * with seconds the input does not show is never sent back as a different instant — and the zone
+ * when it differs from the stored one: a market with none, whose input shows the pre-filled
+ * Asia/Seoul (`withJudgementTimeZonePrefilled`), sends it on its next save (#172 item 11).
  * `{}` when nothing changed; the caller must not send that (the API refuses an update that names no
  * field beside the admin, which the press adds — ADR-0092).
  */
@@ -518,16 +714,24 @@ export function toUpdateMarketBody(
   }
   if (!sameTags(values.tags, original.tags)) body.tags = [...values.tags];
   if (next.imageUrl !== before.imageUrl) body.imageUrl = next.imageUrl;
-  if (values.closeAt !== original.closeAt) body.closeAt = next.closeAt;
+  for (const field of TIME_INPUTS) {
+    if (values[field] !== original[field]) Object.assign(body, { [field]: next[field] });
+  }
   return body;
 }
+
+/** A stored instant as its `datetime-local` input in KST; '' for none. */
+const localOrBlank = (iso: string | null): string => (iso === null ? '' : isoToKstLocal(iso));
 
 /**
  * The edit form's starting values. `AdminMarket` carries the category by slug, not id, so the
  * id is looked up in the active list; a market whose category has since been retired starts
  * with '' (the select shows the placeholder, and the unchanged value is never sent). The tags
  * are the stored spellings, in order. The rule items are `formRuleItems`' inverse: a null as a
- * blank input, the event deadline in KST, the sources as their name and address inputs.
+ * blank input, the event deadline in KST, the sources as their name and address inputs. So are the
+ * times (`formTimes`): each instant in KST to the minute, a null as blank, the zone as stored —
+ * '' when there is none, which the edit form's input shows pre-filled
+ * (`withJudgementTimeZonePrefilled`) and the diff against these values then sends.
  */
 export function marketToFormValues(market: AdminMarket, categories: Category[]): MarketFormValues {
   const category = categories.find((c) => c.slug === market.category.slug);
@@ -536,7 +740,7 @@ export function marketToFormValues(market: AdminMarket, categories: Category[]):
     description: market.description ?? '',
     yesCondition: market.yesCondition,
     noCondition: market.noCondition,
-    eventDeadline: market.eventDeadline === null ? '' : isoToKstLocal(market.eventDeadline),
+    eventDeadline: localOrBlank(market.eventDeadline),
     primarySourceName: market.primarySource?.name ?? '',
     primarySourceUrl: market.primarySource?.url ?? '',
     fallbackSources: market.fallbackSources.map((source) => ({
@@ -550,7 +754,11 @@ export function marketToFormValues(market: AdminMarket, categories: Category[]):
     tags: [...market.tags],
     tagInput: '',
     imageUrl: market.imageUrl ?? '',
+    scheduledOpenAt: localOrBlank(market.scheduledOpenAt),
     closeAt: isoToKstLocal(market.closeAt),
+    scheduledAnnouncementAt: localOrBlank(market.scheduledAnnouncementAt),
+    scheduledJudgementAt: localOrBlank(market.scheduledJudgementAt),
+    judgementTimeZone: market.judgementTimeZone ?? '',
     slug: market.slug,
   };
 }

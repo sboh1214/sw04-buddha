@@ -159,10 +159,11 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
             base: <LiveBackgroundSection fallback={market} width="base" />,
           }}
           // PLAN 11.1's Kalshi principle: 규칙 is never collapsed on the detail — every rule item
-          // (#23), the VOID payout and the close time. It promises no 판정 schedule (#22's '일정'
-          // panel will). The row fetched here is the FALLBACK, not the source: the section
-          // follows the live cache so an admin's edit to a rule item or the close time cannot
-          // leave this panel describing a market the countdown above has already moved past.
+          // (#23), the VOID payout and the market's times with its 판정 기준 시간대 (#22, ADR-0098:
+          // the times are rules, #172 item 7, so they are rows here rather than an '일정' panel).
+          // The row fetched here is the FALLBACK, not the source: the section follows the live
+          // cache so an admin's edit to a rule item or a time cannot leave this panel describing
+          // a market the countdown above has already moved past.
           rules={{
             md: <LiveRulesSection fallback={market} width="md" />,
             base: <LiveRulesSection fallback={market} width="base" />,

@@ -23,6 +23,10 @@ import {
  * The market's close is a day out, so New York reads it as EDT or EST depending on the calendar:
  * the marker is matched as either. A 시간대 card still showing the account a tab was signed in as
  * after the tab switched to another names the account it shows and is refused (ADR-0090).
+ *
+ * The markets here are judged in Seoul (helpers.ts `timesFor`), so a reader in New York also
+ * reads each time of the rules in Seoul on a second line (#22, ADR-0098): the checks read the
+ * viewer's own line by its element. market-times.spec.ts takes the second line.
  */
 
 /** `formatInTimeZone`'s style with no marker: what Seoul, and every admin screen, reads. */
@@ -57,16 +61,17 @@ async function profileLoaded(page: Page): Promise<void> {
 }
 
 /**
- * The detail's close time (규칙's 마감 시각) in the copy of 규칙 this page's width draws: the detail
- * holds one copy per width, each under its own ids (ADR-0067).
+ * The detail's close time (규칙's 거래 마감 시각) in the copy of 규칙 this page's width draws: the
+ * detail holds one copy per width, each under its own ids (ADR-0067). The viewer's line, by its
+ * element: a market judged in another zone than the viewer's has a second line under it (#22).
  */
 function closeAtTestId(page: Page): string {
-  return `${detailCopyTestId(page, 'market-rules')}-close-at`;
+  return `${detailCopyTestId(page, 'market-rules')}-close-at-viewer-zone`;
 }
 
 /** 규칙's 사건 기한 (#23) in the same copy: an absolute time read in the same zone as 마감. */
 function eventDeadlineTestId(page: Page): string {
-  return `${detailCopyTestId(page, 'market-rules')}-event-deadline`;
+  return `${detailCopyTestId(page, 'market-rules')}-event-deadline-viewer-zone`;
 }
 
 /** React's report of a server/client mismatch: dev "Hydration failed …", production #418/#423/#425. */
@@ -218,7 +223,7 @@ test.describe('사용자 시간대', () => {
     const detail = (await (await admin.get(`/api/v1/admin/markets/${market.id}`)).json()) as {
       data: { closeAt: string; eventDeadline: string | null };
     };
-    // The 마감 시각 field as KST wall-clock minutes, the way the admin form fills it.
+    // The 거래 마감 시각 field as KST wall-clock minutes, the way the admin form fills it.
     const kstLocal = new Date(Date.parse(detail.data.closeAt) + 9 * 60 * 60 * 1000)
       .toISOString()
       .slice(0, 16);
@@ -259,9 +264,17 @@ test.describe('사용자 시간대', () => {
       // ...and the admin detail reads KST, unmarked: the preview it borrows from the member
       // screens, the datetime-local field, and every other time on the page.
       await page.goto(`/admin/markets/${market.id}`);
-      await expect(page.getByTestId('market-preview-rules-close-at')).toHaveText(UNMARKED);
+      await expect(page.getByTestId('market-preview-rules-close-at-viewer-zone')).toHaveText(
+        UNMARKED,
+      );
       await expect(page.getByTestId('market-close-at')).toHaveValue(kstLocal);
-      await expect(page.getByTestId('market-preview-rules-event-deadline')).toHaveText(UNMARKED);
+      await expect(page.getByTestId('market-preview-rules-event-deadline-viewer-zone')).toHaveText(
+        UNMARKED,
+      );
+      // KST alone: no judgement zone line on an admin screen (ADR-0093 decision 3 '#22 시간대').
+      await expect(
+        page.getByTestId('market-preview-rules').locator('[data-testid$="-judgement-zone"]'),
+      ).toHaveCount(0);
       await expect(page.getByTestId('market-event-deadline')).toHaveValue(deadlineKstLocal);
       await expect(page.locator('main')).not.toContainText(ANY_MARKER);
     } finally {

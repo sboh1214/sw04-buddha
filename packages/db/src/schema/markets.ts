@@ -1,5 +1,6 @@
 import { desc, sql } from 'drizzle-orm';
 import {
+  type AnyPgColumn,
   bigint,
   check,
   index,
@@ -14,6 +15,13 @@ import { user } from './auth.js';
 import { categories } from './categories.js';
 import { createdAt, timestampTz, updatedAt } from './columns.js';
 import { marketResultEnum, marketStatusEnum, marketVisibilityEnum } from './enums.js';
+
+/**
+ * `column`'s whole minute in UTC: the unit the market times' order CHECKs compare (#22, ADR-0098),
+ * as `minuteOf` of @buddha/shared counts it. `AT TIME ZONE 'UTC'` first, because a bare
+ * `date_trunc` on a timestamptz truncates in the session's TimeZone.
+ */
+const utcMinute = (column: AnyPgColumn) => sql`date_trunc('minute', ${column} AT TIME ZONE 'UTC')`;
 
 /**
  * Binary markets (PLAN 5.2, 6.2). A market holds no pricing-engine state: the direct AMM's
@@ -43,15 +51,18 @@ export const markets = pgTable(
     noCondition: text().notNull().default(''),
     /**
      * 사건 기한 (#172 item 8): the instant the event must happen by. A result published after it
-     * is a judgement delay, never a NO by itself (#173 item 11). No order against the close time
-     * is held here or by the API yet (#22).
+     * is a judgement delay, never a NO by itself (#173 item 11). At or before the scheduled
+     * judgement, in whole minutes (owner answer 2026-10-31 A1, ADR-0098:
+     * `markets_deadline_by_judgement_check` below). No order against the close time (ADR-0097
+     * result 4 (a)).
      */
     eventDeadline: timestampTz(),
     /** 전환 조건: when the judgement moves to a 대체 출처. Blank while the market has none. */
     fallbackCondition: text().notNull().default(''),
     /**
      * 장기 지연 기한 in whole days, 1..365 (MARKET_LONG_DELAY_DAYS_MIN/MAX): N × 24 hours after
-     * the scheduled judgement (#172 item 10; that instant is #22's).
+     * `scheduled_judgement_at` (#172 item 10), the instant `longDelayDeadline` of @buddha/shared
+     * computes (#22).
      */
     longDelayDays: smallint(),
     /**
@@ -82,8 +93,54 @@ export const markets = pgTable(
     takerFeeBps: smallint().notNull().default(0),
     settlementFeeBps: smallint().notNull().default(0),
     // schedule / resolution
+    /**
+     * The ACTUAL open, stamped by the open path: the 신규 order and its index below read it
+     * (ADR-0065). The planned one is `scheduled_open_at`.
+     */
     openAt: timestampTz(),
+    /**
+     * The market times (#22, ADR-0098; ADR-0093 decision 2 #172 items 11–14), TIME_ITEMS of
+     * @buddha/shared. Each is null until written — a draft may stay partial, and every market from
+     * before #22 has them null, as migration 0051 left it (D4, no conversion) — and the open-items
+     * check names the required ones. Stored as entered, to the millisecond (columns.ts); every
+     * order between them compares whole UTC minutes (#172 item 12), in the API and in the CHECKs
+     * below, which the API's refusals precede.
+     *
+     * 예정 개장 시각: the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before the
+     * close (`markets_open_before_close_check`).
+     */
+    scheduledOpenAt: timestampTz(),
+    /**
+     * 거래 마감 시각: the worker closes the market at it. At or before the scheduled judgement
+     * (`markets_close_by_judgement_check`); after the open it only moves later (#172 item 14, the
+     * API's alone: it depends on the value before).
+     */
     closeAt: timestampTz().notNull(),
+    /**
+     * 발표 예정 시각 (#172 item 13); null is '없음'. The close leads it by the release setting
+     * `market.lead_close_gap` (선행 마감), which only the API and the open-items check hold.
+     */
+    scheduledAnnouncementAt: timestampTz(),
+    /**
+     * 예정 판정 시각: never edited once the market is open (#172 item 14). A CLOSED market past it
+     * reads '판정 지연' (#173 item 11), and the long delay counts from it.
+     */
+    scheduledJudgementAt: timestampTz(),
+    /**
+     * 판정 기준 시간대 (#172 item 11): one IANA name, stored as given and checked on entry only
+     * (`timeZoneSchema`), like `profiles.time_zone` — no CHECK can read `pg_timezone_names`. No
+     * default: the admin form pre-fills Asia/Seoul for the operator to confirm, so a null is a
+     * zone nobody confirmed.
+     */
+    judgementTimeZone: varchar({ length: 64 }),
+    /**
+     * The 선행 마감 gap in minutes this market's lead close was last checked against: the release
+     * setting's reading the open stored, or that an open market's first lead re-check (a close or
+     * announcement edit) stored; later re-checks use it (docs/SETTINGS.md: a long-lived piece of
+     * work keeps the value it started with). Null until one of those happens — before the open,
+     * or after an open with the setting undecided and no edit since (#22, ADR-0098).
+     */
+    leadCloseGapMinutes: integer(),
     /**
      * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
      * on a CANCELLED market (ADR-0093 decision 1 item 10). Not the contract side `outcome`.
@@ -147,6 +204,27 @@ export const markets = pgTable(
     check('markets_trade_count_check', sql`${t.tradeCount} >= 0`),
     check('markets_trader_count_check', sql`${t.traderCount} >= 0`),
     check('markets_long_delay_days_check', sql`${t.longDelayDays} BETWEEN 1 AND 365`),
+    /**
+     * The order of the market times (#22, ADR-0098): scheduled open < close ≤ scheduled judgement
+     * (#172 item 12) and 사건 기한 ≤ scheduled judgement (owner answer 2026-10-31 A1). Each holds
+     * only once both of its columns are set — a NULL passes, as in every SQL CHECK — so a draft may
+     * stay partial. Whole minutes (`utcMinute`), as the owner set. Every writer is held: the API
+     * refuses first, so a violation here is a bug, and the seed and the factories are held too. The
+     * lead close is not: it depends on a release setting.
+     */
+    check(
+      'markets_open_before_close_check',
+      sql`${utcMinute(t.scheduledOpenAt)} < ${utcMinute(t.closeAt)}`,
+    ),
+    check(
+      'markets_close_by_judgement_check',
+      sql`${utcMinute(t.closeAt)} <= ${utcMinute(t.scheduledJudgementAt)}`,
+    ),
+    check(
+      'markets_deadline_by_judgement_check',
+      sql`${utcMinute(t.eventDeadline)} <= ${utcMinute(t.scheduledJudgementAt)}`,
+    ),
+    check('markets_lead_close_gap_minutes_check', sql`${t.leadCloseGapMinutes} >= 0`),
     check(
       'markets_fee_bps_check',
       sql`${t.takerFeeBps} BETWEEN 0 AND 10000 AND ${t.settlementFeeBps} BETWEEN 0 AND 10000`,

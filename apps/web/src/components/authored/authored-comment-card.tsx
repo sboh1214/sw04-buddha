@@ -14,7 +14,8 @@ import { PostByline } from '@/components/post/post-author';
 import { type AuthoredComment } from '@/lib/api';
 import { commentKindLabel, commentedPostText } from '@/lib/authored';
 import { likeCountText } from '@/lib/likes';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { marketStatusLabel } from '@/lib/market-status';
 import { authorPublicIdOf } from '@/lib/moderation';
 import { postPath } from '@/lib/posts';
 
@@ -91,7 +92,7 @@ export function AuthoredCommentCard({
               flexShrink="0"
               colorPalette={MARKET_STATUS_PALETTE[comment.market.status]}
             >
-              {MARKET_STATUS_LABEL[comment.market.status]}
+              {marketStatusLabel(comment.market)}
             </Badge>
           )}
         </HStack>

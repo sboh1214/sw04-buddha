@@ -9,6 +9,7 @@ import {
 } from './constants.js';
 import { findExcludedIdentifier } from './guards/excluded.js';
 import { STORABLE_INSTANT_MIN, STORABLE_INSTANT_TOO_EARLY } from './market-rules.js';
+import { TIME_ITEMS } from './market-times.js';
 import {
   ALL_MARKET_STATUSES,
   DEFAULT_MARKET_SORT,
@@ -52,6 +53,7 @@ const summary = {
   category: { slug: 'economy', nameKo: '경제' },
   imageUrl: null,
   status: 'open',
+  judgementDelayed: false,
   lastPrice: 52,
   volumeCoin: '12345',
   tradeCount: 3,
@@ -73,6 +75,10 @@ const market = {
   fallbackCondition: '1차 출처에 종가가 없으면 대체 출처를 본다.',
   longDelayDays: 14,
   delayHandling: '장기 지연 기한까지 종가가 나오지 않으면 무효로 판정한다.',
+  scheduledOpenAt: '2026-09-01T00:00:00.000Z',
+  scheduledAnnouncementAt: '2026-12-30T06:30:00.000Z',
+  scheduledJudgementAt: '2026-12-31T01:00:00.000Z',
+  judgementTimeZone: 'Asia/Seoul',
   tags: ['코스피', 'S&P500'],
   resolvedAt: null,
   settledAt: null,
@@ -198,6 +204,7 @@ describe('read DTOs', () => {
       ],
       events: [event],
       missingOpenItems: [],
+      leadCloseGapMinutes: 60,
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
     expect(
@@ -212,6 +219,30 @@ describe('read DTOs', () => {
     expect(adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['rules'] }).success).toBe(
       false,
     );
+    // #22's items, the relation items among them; the announcement is no open item.
+    expect(
+      adminMarketSchema.parse({
+        ...admin,
+        missingOpenItems: ['scheduledOpenAt', 'judgementTimeZone', 'timeOrder', 'leadClose'],
+      }).missingOpenItems,
+    ).toEqual(['scheduledOpenAt', 'judgementTimeZone', 'timeOrder', 'leadClose']);
+    expect(
+      adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['scheduledAnnouncementAt'] })
+        .success,
+    ).toBe(false);
+    // The lead-close gap the check used: whole minutes from 0, or null while undecided (#22).
+    for (const leadCloseGapMinutes of [0, 60, null]) {
+      expect(adminMarketSchema.parse({ ...admin, leadCloseGapMinutes }).leadCloseGapMinutes).toBe(
+        leadCloseGapMinutes,
+      );
+    }
+    for (const leadCloseGapMinutes of [-1, 1.5, '60', undefined]) {
+      expect(
+        adminMarketSchema.safeParse({ ...admin, leadCloseGapMinutes }).success,
+        String(leadCloseGapMinutes),
+      ).toBe(false);
+    }
+    expect(marketSchema.parse(admin)).not.toHaveProperty('leadCloseGapMinutes');
     expect(adminMarketSchema.safeParse(market).success).toBe(false);
     // No LMSR state on the admin shape either (#125).
     expect(
@@ -269,6 +300,46 @@ describe('read DTOs', () => {
     for (const key of ['description', 'yesCondition', 'primarySource', 'fallbackSources']) {
       expect(card).not.toHaveProperty(key);
     }
+  });
+
+  it('carry the times and the judgement time zone on the detail and none on a card (#22)', () => {
+    // The close is the summary's; the four others are the detail's, each null while not filled in.
+    expect(TIME_ITEMS.filter((item) => item in marketSchema.shape)).toEqual([...TIME_ITEMS]);
+    const card = marketSummarySchema.parse(market);
+    expect(TIME_ITEMS.filter((item) => item in card)).toEqual(['closeAt']);
+    // A market opened before #22: every new time null, the zone too.
+    const older = {
+      ...market,
+      scheduledOpenAt: null,
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: null,
+      judgementTimeZone: null,
+    };
+    expect(marketSchema.parse(older)).toEqual(older);
+    const { scheduledJudgementAt: _judgement, ...withoutJudgement } = market;
+    expect(marketSchema.safeParse(withoutJudgement).success).toBe(false);
+    // An instant before the storage bound is no market's (ADR-0097); a read zone is not checked.
+    expect(
+      marketSchema.safeParse({ ...market, scheduledOpenAt: '0099-12-31T23:59:59.999Z' }).success,
+    ).toBe(false);
+    expect(marketSchema.parse({ ...market, judgementTimeZone: 'Mars/Olympus' })).toEqual({
+      ...market,
+      judgementTimeZone: 'Mars/Olympus',
+    });
+  });
+
+  it('say on the card and the detail whether the judgement is delayed (#22, #173 item 11)', () => {
+    // '판정 지연' is a display the server works out at the read, so a card needs no time for it.
+    expect(
+      marketSummarySchema.parse({ ...summary, status: 'closed', judgementDelayed: true }),
+    ).toEqual({ ...summary, status: 'closed', judgementDelayed: true });
+    expect(marketSchema.parse({ ...market, judgementDelayed: true }).judgementDelayed).toBe(true);
+    const { judgementDelayed: _delayed, ...withoutDelay } = summary;
+    expect(marketSummarySchema.safeParse(withoutDelay).success).toBe(false);
+    expect(marketSummarySchema.safeParse({ ...summary, judgementDelayed: 'yes' }).success).toBe(
+      false,
+    );
+    expect(findExcludedIdentifier('judgementDelayed', 'api')).toEqual([]);
   });
 
   it('describe a price series by the stride and the window the server served', () => {
@@ -670,7 +741,8 @@ describe('the rule items of the create and update bodies (#23)', () => {
   });
 
   it('takes an event deadline from STORABLE_INSTANT_MIN on, with no order against closeAt', () => {
-    // Storage's bound only (ADR-0097): how it orders against the other times is #22's.
+    // Storage's bound only (ADR-0097). It has no order against the close (owner answer 2026-10-31
+    // A1); its order against the scheduled judgement is the service's (#22), not the schema's.
     for (const eventDeadline of [STORABLE_INSTANT_MIN, '9999-12-31T23:59:59.999Z']) {
       expect(createMarketBodySchema.parse({ ...body, eventDeadline }).eventDeadline).toBe(
         eventDeadline,
@@ -686,6 +758,123 @@ describe('the rule items of the create and update bodies (#23)', () => {
     expect(early.error?.issues).toMatchObject([
       { path: ['eventDeadline'], message: STORABLE_INSTANT_TOO_EARLY },
     ]);
+  });
+});
+
+describe('the time items of the create and update bodies (#22)', () => {
+  const body = { title: '2026년 안에 코스피 3000?', categoryId: 1, closeAt: at, ...account };
+  const times = {
+    scheduledOpenAt: '2026-09-01T00:00:00.000Z',
+    scheduledAnnouncementAt: '2026-12-30T06:30:00.000Z',
+    scheduledJudgementAt: '2026-12-31T01:00:00.000Z',
+    judgementTimeZone: 'Asia/Seoul',
+  };
+
+  it('takes each one optionally on a create, the close required, the zone trimmed', () => {
+    expect(createMarketBodySchema.parse({ ...body, ...times })).toEqual({ ...body, ...times });
+    expect(
+      createMarketBodySchema.parse({ ...body, ...times, judgementTimeZone: ' America/New_York ' })
+        .judgementTimeZone,
+    ).toBe('America/New_York');
+    // An alias is an IANA name too, and stored as given (ADR-0063).
+    expect(
+      createMarketBodySchema.parse({ ...body, judgementTimeZone: 'ROK' }).judgementTimeZone,
+    ).toBe('ROK');
+    // None sent: the draft starts without them (the minimal draft above).
+    const parsed = createMarketBodySchema.parse(body);
+    for (const item of TIME_ITEMS.filter((key) => key !== 'closeAt')) {
+      expect(parsed, item).not.toHaveProperty(item);
+    }
+    const { closeAt: _close, ...withoutClose } = body;
+    expect(issuePaths(createMarketBodySchema.safeParse(withoutClose))).toEqual(['closeAt']);
+    // The order between them is the service's, on the stored values merged with the body.
+    expect(
+      createMarketBodySchema.safeParse({
+        ...body,
+        ...times,
+        scheduledJudgementAt: STORABLE_INSTANT_MIN,
+      }).success,
+    ).toBe(true);
+  });
+
+  it('clears each one but the close with null; an announcement of null is 없음', () => {
+    const cleared = {
+      scheduledOpenAt: null,
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: null,
+      judgementTimeZone: null,
+      ...account,
+    };
+    expect(updateMarketBodySchema.parse(cleared)).toEqual(cleared);
+    expect(createMarketBodySchema.parse({ ...body, scheduledAnnouncementAt: null })).toEqual({
+      ...body,
+      scheduledAnnouncementAt: null,
+    });
+    expect(issuePaths(updateMarketBodySchema.safeParse({ closeAt: null, ...account }))).toEqual([
+      'closeAt',
+    ]);
+    expect(updateMarketBodySchema.parse({ scheduledJudgementAt: at, ...account })).toEqual({
+      scheduledJudgementAt: at,
+      ...account,
+    });
+  });
+
+  it('refuses a zone that is no IANA name: unknown, an offset, a case-only spelling, too long', () => {
+    for (const judgementTimeZone of ['Mars/Olympus', '+09:00', 'asia/seoul', 'ASIA/SEOUL']) {
+      for (const parsed of [
+        createMarketBodySchema.safeParse({ ...body, judgementTimeZone }),
+        updateMarketBodySchema.safeParse({ judgementTimeZone, ...account }),
+      ]) {
+        expect(parsed.error?.issues, judgementTimeZone).toMatchObject([
+          { path: ['judgementTimeZone'], message: 'must be an IANA time zone name' },
+        ]);
+      }
+    }
+    for (const judgementTimeZone of ['', '  ', `Asia/${'X'.repeat(60)}`, 9]) {
+      const parsed = createMarketBodySchema.safeParse({ ...body, judgementTimeZone });
+      expect(parsed.success, String(judgementTimeZone)).toBe(false);
+      expect(new Set(issuePaths(parsed))).toEqual(new Set(['judgementTimeZone']));
+    }
+  });
+
+  it('holds every time, the close included, to an ISO instant from STORABLE_INSTANT_MIN on', () => {
+    for (const field of [
+      'scheduledOpenAt',
+      'closeAt',
+      'scheduledAnnouncementAt',
+      'scheduledJudgementAt',
+    ]) {
+      for (const value of [STORABLE_INSTANT_MIN, '9999-12-31T23:59:59.999Z']) {
+        expect(createMarketBodySchema.safeParse({ ...body, [field]: value }).success, field).toBe(
+          true,
+        );
+        expect(
+          updateMarketBodySchema.safeParse({ [field]: value, ...account }).success,
+          field,
+        ).toBe(true);
+      }
+      // Year 0000 (Postgres refuses it) and any year below 100 (read back as another), ADR-0097:
+      // a close too, which before #22 only the future check refused.
+      for (const value of ['0000-12-31T15:00:00Z', '0099-12-31T23:59:59.999Z']) {
+        for (const parsed of [
+          createMarketBodySchema.safeParse({ ...body, [field]: value }),
+          updateMarketBodySchema.safeParse({ [field]: value, ...account }),
+        ]) {
+          expect(parsed.error?.issues, `${field} ${value}`).toMatchObject([
+            { path: [field], message: STORABLE_INSTANT_TOO_EARLY },
+          ]);
+        }
+      }
+      for (const value of [
+        '2026-12-30',
+        '2026-12-30T15:30:00+09:00',
+        'tomorrow',
+        1_798_675_200_000,
+      ]) {
+        const parsed = createMarketBodySchema.safeParse({ ...body, [field]: value });
+        expect(issuePaths(parsed), `${field} ${value}`).toEqual([field]);
+      }
+    }
   });
 });
 

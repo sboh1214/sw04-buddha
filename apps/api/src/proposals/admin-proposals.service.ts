@@ -298,12 +298,15 @@ export class AdminProposalsService {
    * question, the background as its 배경 (`description`), the YES condition as its YES condition,
    * and the sources as its primary source's name (#23, ADR-0097; ADR-0089 decision 4: 판정 출처는
    * 예상 출처) whose address the operator fills in, so the open-items check names the primary
-   * source until then; its other rule items start blank, and the proposal's date — the day the
-   * result is to be known — is its close time's, never its event deadline — in the category given,
-   * else the proposal's where a market may sit (`requireDraftCategory`), closing at the time given,
-   * else `proposalDraftCloseAt`. A draft that cannot be made — no category, one a new market may
-   * not be filed under, a close time not in the future — is VALIDATION_ERROR naming the field under
-   * `market`, and nothing is written.
+   * source until then; its other rule items start blank, and so do its times but the close (#22,
+   * ADR-0098: the check names the scheduled open and judgement and the judgement time zone, which
+   * the operator fills in the form, the zone pre-filled); the proposal's date — the day the
+   * result is to be known — is its close time's, never its event deadline or its scheduled
+   * judgement (00:00 of that day would precede a release later that day, and any other hour would
+   * be invented) — in the category given, else the proposal's where a market may sit
+   * (`requireDraftCategory`), closing at the time given, else `proposalDraftCloseAt`. A draft
+   * that cannot be made — no category, one a new market may not be filed under, a close time not
+   * in the future — is VALIDATION_ERROR naming the field under `market`, and nothing is written.
    */
   private async marketFor(
     tx: Tx,

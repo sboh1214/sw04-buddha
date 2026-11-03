@@ -23,6 +23,7 @@ const traded: MarketSummary = {
   category: { slug: 'weather', nameKo: '날씨' },
   imageUrl: null,
   status: 'open',
+  judgementDelayed: false,
   lastPrice: 70,
   volumeCoin: '1250000',
   tradeCount: 42,
@@ -101,6 +102,18 @@ describe('toPreviewMarket', () => {
     }
   });
 
+  it('previews a closed market whose judgement is late as visitors see it: 판정 지연 (#22)', () => {
+    // The flag is the API's, read on its clock (`judgementDelayed`); the card draws the label.
+    const late = { ...traded, status: 'closed' as const, judgementDelayed: true };
+    expect(toPreviewMarket(body, categories, late).judgementDelayed).toBe(true);
+    expect(toPreviewMarket(body, categories, traded).judgementDelayed).toBe(false);
+    // A draft, and 시장 만들기, are never late: no visitor sees them, and they have not closed.
+    expect(toPreviewMarket(body, categories, { ...late, status: 'draft' }).judgementDelayed).toBe(
+      false,
+    );
+    expect(toPreviewMarket(body, categories).judgementDelayed).toBe(false);
+  });
+
   it('carries no status ordering key, even over a base that has one', () => {
     // `statusEventId` orders `market:status` events for a live subscriber (A-M3-19); the preview
     // card subscribes to nothing, so the key is dropped rather than copied from the base.
@@ -130,9 +143,13 @@ describe('toPreviewMarket', () => {
 });
 
 describe('toPreviewRules', () => {
-  it('hands the rules area every rule item the body holds but 배경, and the close time (#23)', () => {
+  it('hands the rules area every rule item the body holds but 배경, and the times (#23, #22)', () => {
     const full: CreateMarketFields = {
       ...body,
+      scheduledOpenAt: '2026-11-01T00:00:00.000Z',
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: '2026-12-01T01:00:00.000Z',
+      judgementTimeZone: 'Asia/Seoul',
       description: '배경은 따로 그린다',
       noCondition: '사건 기한까지 발표가 없으면 NO',
       eventDeadline: '2026-11-30T14:59:00.000Z',
@@ -152,9 +169,21 @@ describe('toPreviewRules', () => {
       fallbackCondition: '1차 출처에 없으면',
       longDelayDays: 14,
       delayHandling: '무효로 판정한다.',
+      scheduledOpenAt: '2026-11-01T00:00:00.000Z',
       closeAt: '2026-12-01T00:00:00.000Z',
+      // 없음: an event with no scheduled release (#172 item 13).
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: '2026-12-01T01:00:00.000Z',
+      judgementTimeZone: 'Asia/Seoul',
+      // 시장 만들기: a draft, which draws the 예정 개장 시각 row.
+      status: 'draft',
     });
     expect(toPreviewRules(full)).not.toHaveProperty('description');
+  });
+
+  it("carries the edited market's status, which says whether the 예정 개장 시각 row is drawn", () => {
+    expect(toPreviewRules(body, 'open').status).toBe('open');
+    expect(toPreviewRules(body, 'scheduled').status).toBe('scheduled');
   });
 
   it('draws an item the body leaves out as not filled in: blank, null, no fallback', () => {
@@ -167,7 +196,12 @@ describe('toPreviewRules', () => {
       fallbackCondition: '',
       longDelayDays: null,
       delayHandling: '',
+      scheduledOpenAt: null,
       closeAt: body.closeAt,
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: null,
+      judgementTimeZone: null,
+      status: 'draft',
     });
   });
 });

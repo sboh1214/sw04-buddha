@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  MARKET_FALLBACK_SOURCES_MAX,
   MARKET_LONG_DELAY_DAYS_MAX,
   MARKET_LONG_DELAY_DAYS_MIN,
   MARKET_SOURCE_MAX,
@@ -18,7 +17,6 @@ import {
   marketSourceSchema,
   missingRuleItems,
   ruleItemSchema,
-  rulesEditedPayload,
   storableInstantSchema,
 } from './market-rules.js';
 
@@ -367,36 +365,5 @@ describe('changedRuleItems (#23)', () => {
       'fallbackSources',
       'fallbackCondition',
     ]);
-  });
-});
-
-describe('rulesEditedPayload (#23)', () => {
-  it('carries the changed items and each one’s value before and after, or nothing', () => {
-    expect(rulesEditedPayload(complete, { ...complete })).toBeNull();
-    const after = {
-      ...complete,
-      description: null,
-      fallbackSources: [fallback],
-      fallbackCondition: '1차 출처에 발표가 없으면 대체 출처를 본다.',
-    };
-    expect(rulesEditedPayload(complete, after)).toEqual({
-      items: ['description', 'fallbackSources', 'fallbackCondition'],
-      before: {
-        description: complete.description,
-        fallbackSources: [],
-        fallbackCondition: '',
-      },
-      after: {
-        description: null,
-        fallbackSources: [fallback],
-        fallbackCondition: '1차 출처에 발표가 없으면 대체 출처를 본다.',
-      },
-    });
-    // A JSON column keeps it as it is.
-    const payload = rulesEditedPayload(blank, complete);
-    expect(JSON.parse(JSON.stringify(payload))).toEqual(payload);
-    expect(payload?.after.primarySource).toEqual(primary);
-    expect(payload?.before.eventDeadline).toBeNull();
-    expect(MARKET_FALLBACK_SOURCES_MAX).toBe(3);
   });
 });

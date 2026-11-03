@@ -7,12 +7,15 @@ import {
   createOpenMarket,
   expect,
   fillRuleItemInputs,
+  fillTimeInputs,
   freshEmail,
   freshTag,
+  kstLocalOf,
   ruleItemsFor,
   signIn,
   signUp,
   test,
+  timesFor,
 } from './helpers';
 
 /**
@@ -21,12 +24,12 @@ import {
  * 넣기, a comma-separated list at once, a second name of one tag refused on the spot — and a name
  * some tag already has in another case is linked to that tag in its first spelling. A draft may be
  * made without everything 열기 needs: its detail says what is missing (the open-items check: 질문,
- * the rule items of #23, 카테고리, 태그 1~5개), 열기 is refused naming it, and once it is filled the
- * notice goes and 열기 opens it. An open market cannot be edited down to no tags. A reader then
- * sees the tags on the detail as '#이름' chips in the order entered, each opening that tag's search
- * — which lists the market although its title holds no such word, and which, opened by its
- * address, is not recorded in the reader's recent searches (ADR-0066). The public search matches a
- * tag's whole name in any case, never a part of it.
+ * the rule items of #23, the times of #22, 카테고리, 태그 1~5개), 열기 is refused naming it, and
+ * once it is filled the notice goes and 열기 opens it. An open market cannot be edited down to no
+ * tags. A reader then sees the tags on the detail as '#이름' chips in the order entered, each
+ * opening that tag's search — which lists the market although its title holds no such word, and
+ * which, opened by its address, is not recorded in the reader's recent searches (ADR-0066). The
+ * public search matches a tag's whole name in any case, never a part of it.
  *
  * The rules themselves (the name pattern, the count, the order kept, the first spelling winning)
  * are unit-tested on both sides (lib/market-form.test.ts, admin-markets.controller.test.ts); this
@@ -34,12 +37,6 @@ import {
  */
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const KST_OFFSET_MS = 9 * 60 * 60 * 1000;
-
-/** `days` from now as the admin's `datetime-local` takes it, in KST (`YYYY-MM-DDTHH:mm`). */
-function kstLocalIn(days: number): string {
-  return new Date(Date.now() + KST_OFFSET_MS + days * DAY_MS).toISOString().slice(0, 16);
-}
 
 /** `{ data }` out of the success envelope, with the body in the message on a failure. */
 async function dataOf<T>(response: APIResponse): Promise<T> {
@@ -58,11 +55,13 @@ async function letToastsGo(page: Page): Promise<void> {
 }
 
 /**
- * What the open-items check names for a draft made on the form with its question, category and
- * tags and no rule item (#23): every rule item but the fallbacks — none is fine, '없음' — and their
- * switch condition, asked for only with one. In OPEN_ITEMS order, joined as the notice joins them.
+ * What the open-items check names for a draft made on the form with its question, category, tags
+ * and close and no rule item (#23): every rule item but the fallbacks — none is fine, '없음' — and
+ * their switch condition, asked for only with one; then the scheduled open and judgement (#22) —
+ * the 판정 기준 시간대 is pre-filled, so it is not. In OPEN_ITEMS order, joined as the notice joins
+ * them.
  */
-const MISSING_RULE_ITEMS = [
+const MISSING_ITEMS = [
   copy.openItemDescription,
   copy.openItemYesCondition,
   copy.openItemNoCondition,
@@ -70,6 +69,8 @@ const MISSING_RULE_ITEMS = [
   copy.openItemPrimarySource,
   copy.openItemLongDelayDays,
   copy.openItemDelayHandling,
+  copy.openItemScheduledOpenAt,
+  copy.openItemScheduledJudgementAt,
 ].join(' · ');
 
 const card = (page: Page, id: string) => page.getByTestId(`market-card-${id}`);
@@ -141,7 +142,8 @@ test.describe('태그', () => {
       await box.fill('');
       await expect(adminPage.getByTestId('market-tags-error')).toHaveCount(0);
 
-      await adminPage.getByTestId('market-close-at').fill(kstLocalIn(2));
+      const closeAt = new Date(Date.now() + 2 * DAY_MS).toISOString();
+      await adminPage.getByTestId('market-close-at').fill(kstLocalOf(closeAt));
       const sent = adminPage.waitForRequest(
         (request) =>
           request.method() === 'POST' &&
@@ -159,12 +161,12 @@ test.describe('태그', () => {
         own,
       ]);
       await expect(adminPage.getByTestId('market-open-items')).toHaveText(
-        `${copy.adminMarketOpenItems}: ${MISSING_RULE_ITEMS}`,
+        `${copy.adminMarketOpenItems}: ${MISSING_ITEMS}`,
       );
       await letToastsGo(adminPage);
       await adminPage.getByTestId('market-open').click();
       await expect(
-        adminPage.getByText(`${copy.errMarketOpenItemsMissing}: ${MISSING_RULE_ITEMS}`, {
+        adminPage.getByText(`${copy.errMarketOpenItemsMissing}: ${MISSING_ITEMS}`, {
           exact: true,
         }),
       ).toBeVisible();
@@ -172,9 +174,11 @@ test.describe('태그', () => {
         copy.marketStatusDraft,
       );
 
-      // --- the rule items filled in (market-rules.spec.ts takes each through the form): the notice
-      // goes, and 열기 opens it.
-      await fillRuleItemInputs(adminPage, ruleItemsFor(own));
+      // --- the rule items and the times filled in (market-rules.spec.ts and market-times.spec.ts
+      // take each through the form): the notice goes, and 열기 opens it.
+      const items = ruleItemsFor(own);
+      await fillRuleItemInputs(adminPage, items);
+      await fillTimeInputs(adminPage, timesFor(closeAt, items.eventDeadline));
       await letToastsGo(adminPage);
       await adminPage.getByTestId('market-save').click();
       await expect(adminPage.getByText(copy.adminMarketSaved)).toBeVisible();

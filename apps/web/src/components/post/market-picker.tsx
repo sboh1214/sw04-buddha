@@ -20,9 +20,10 @@ import { LoadMoreFailed } from '@/components/ui/load-more-failed';
 import { copy } from '@/copy';
 import { marketSearchInfiniteQueryOptions } from '@/hooks/use-markets';
 import { type MarketSummary } from '@/lib/api';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import { DEFAULT_SEARCH_FILTERS, type MarketSearch } from '@/lib/market-keys';
 import { SEARCH_INPUT_MAX_LENGTH, searchErrorMessage } from '@/lib/market-search';
+import { marketStatusLabel } from '@/lib/market-status';
 
 /**
  * Picks a market by its title or a tag (#46, ADR-0073; tags #17): the write screen's first step
@@ -128,7 +129,7 @@ export function MarketPicker({
                       variant="subtle"
                       colorPalette={MARKET_STATUS_PALETTE[market.status]}
                     >
-                      {MARKET_STATUS_LABEL[market.status]}
+                      {marketStatusLabel(market)}
                     </Badge>
                   </HStack>
                 </Stack>

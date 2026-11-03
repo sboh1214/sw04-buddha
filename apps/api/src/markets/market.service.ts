@@ -6,6 +6,7 @@ import {
   PUBLIC_MARKET_STATUSES,
   TICKS_MAX_POINTS,
   TICKS_SCAN_MAX,
+  isJudgementDelayed,
   serializeCoinAmount,
   tagKey,
   tickBucketSeconds,
@@ -16,6 +17,7 @@ import {
   type MarketListQuery,
   type MarketRuleItems,
   type MarketSummary,
+  type MarketTimes,
   type PriceSeries,
   type PriceTick,
   type TickBucketSeconds,
@@ -74,7 +76,18 @@ export const marketWithCategory = {
   category: { slug: schema.categories.slug, nameKo: schema.categories.nameKo },
 };
 
-export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSummary {
+/**
+ * A market's card (PLAN 7.1). `judgementDelayed` is '판정 지연' (#22, ADR-0098; ADR-0093 decision 1
+ * #173 item 11): a CLOSED market whose scheduled judgement has passed, by `nowMs` — the API host's
+ * clock when the answer is built, so no client clock decides it and the server-rendered page and
+ * the browser read the same answer. A display, not a status: nothing is written at that instant, so
+ * unlike the instants a write orders its rows by it needs no database clock (clock.ts).
+ */
+export function toMarketSummary(
+  row: MarketRow,
+  category: CategoryRef,
+  nowMs: number = Date.now(),
+): MarketSummary {
   return {
     id: row.id,
     slug: row.slug,
@@ -82,6 +95,13 @@ export function toMarketSummary(row: MarketRow, category: CategoryRef): MarketSu
     category,
     imageUrl: row.imageUrl,
     status: row.status,
+    judgementDelayed: isJudgementDelayed(
+      {
+        status: row.status,
+        scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
+      },
+      nowMs,
+    ),
     lastPrice: row.lastPrice,
     volumeCoin: serializeCoinAmount(row.volumeCoin),
     tradeCount: row.tradeCount,
@@ -116,9 +136,24 @@ export function ruleItemsOf(row: MarketRow, sources: MarketSources): MarketRuleI
 }
 
 /**
+ * A market's times beside its close (#22, ADR-0098; `marketTimesSchema`): each instant as ISO and
+ * the judgement time zone as its IANA name, null for one not filled in — the announcement's null is
+ * '없음'. The DTO's, the open-items check's, the snapshot's and the time rules' one reading of them.
+ */
+export function timesOf(row: MarketRow): MarketTimes {
+  return {
+    scheduledOpenAt: row.scheduledOpenAt?.toISOString() ?? null,
+    scheduledAnnouncementAt: row.scheduledAnnouncementAt?.toISOString() ?? null,
+    scheduledJudgementAt: row.scheduledJudgementAt?.toISOString() ?? null,
+    judgementTimeZone: row.judgementTimeZone,
+  };
+}
+
+/**
  * Public detail (PLAN 7.1): no author, exposure or settlement steps. `tags` are the market's
  * (`marketTagNames`) and `sources` its sources (`readMarketSources`) — the detail's alone, never a
- * card's (#17, #23): the rule items are public in every public status, signed in or not (N02 §2).
+ * card's (#17, #23): the rule items and the times (`timesOf`, #22) are public in every public
+ * status, signed in or not (N02 §2, N03 §4).
  */
 export function toMarket(
   row: MarketRow,
@@ -129,6 +164,7 @@ export function toMarket(
   return {
     ...toMarketSummary(row, category),
     ...ruleItemsOf(row, sources),
+    ...timesOf(row),
     tags,
     resolvedAt: row.resolvedAt?.toISOString() ?? null,
     settledAt: row.settledAt?.toISOString() ?? null,

@@ -10,8 +10,10 @@ import {
   accountIdOf,
   adminAccount,
   createOpenMarket,
+  DEFAULT_JUDGEMENT_TIME_ZONE,
   E2E_PASSWORD,
   expect,
+  fillTimeInputs,
   freshEmail,
   freshTag,
   logOut,
@@ -28,6 +30,7 @@ import {
   switchAccountUnderScreen,
   switchMeBeforeSession,
   test,
+  timesFor,
 } from './helpers';
 
 /**
@@ -117,8 +120,8 @@ async function proposeThroughApi(page: Page, question: string): Promise<Proposal
 
 /**
  * A draft market straight at the admin API (not opened), titled with `title`: with every rule item
- * (`ruleItemsFor`, #23), under a category a market may be filed under and with a tag, so the
- * operators can open it later (#17).
+ * (`ruleItemsFor`, #23) and its times (`timesFor`, #22), under a category a market may be filed
+ * under and with a tag, so the operators can open it later (#17).
  */
 async function createDraftMarket(
   admin: APIRequestContext,
@@ -126,15 +129,18 @@ async function createDraftMarket(
 ): Promise<{ id: string; slug: string; title: string }> {
   const { leaf: category } = await marketCategoryOf(admin);
   const tag = freshTag();
+  const items = ruleItemsFor(tag);
+  const closeAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString();
   const draft = await dataOf<{ id: string; slug: string }>(
     await admin.post('/api/v1/admin/markets', {
       data: {
         title,
-        ...ruleItemsFor(tag),
+        ...items,
         categoryId: category.id,
         tags: [tag],
         imageUrl: null,
-        closeAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1_000).toISOString(),
+        closeAt,
+        ...timesFor(closeAt, items.eventDeadline),
         slug: `e2e-${tag}`,
         expectedAccountId: await accountIdOf(admin),
       },
@@ -321,9 +327,10 @@ test.describe('시장 제안', () => {
 
       // --- the operators open the market through its own steps; then the member sees its link.
       // A 채택's draft takes the question as its title, the 배경 설명 as its 배경, the YES 조건 as
-      // its own and the 예상 출처 as its 1차 출처's name with no address (#23, ADR-0097); the rest
-      // of the rule items, that address and the tags (#17) are those steps, before 열기. The
-      // proposal's date is no 사건 기한.
+      // its own and the 예상 출처 as its 1차 출처's name with no address (#23, ADR-0097), and the
+      // proposal's date as its close (00:00 KST that day) and as nothing else — no 사건 기한, no
+      // other time and no 판정 기준 시간대 (#22, ADR-0098); the rest of the rule items, that
+      // address, the tags (#17) and the times are those steps, before 열기.
       const adopted = await dataOf<AdminMarket>(
         await admin.get(`/api/v1/admin/markets/${marketId}`),
       );
@@ -337,8 +344,17 @@ test.describe('시장 제안', () => {
         'primarySource',
         'longDelayDays',
         'delayHandling',
+        'scheduledOpenAt',
+        'scheduledJudgementAt',
+        'judgementTimeZone',
         'tags',
       ]);
+      expect(adopted).toMatchObject({
+        scheduledOpenAt: null,
+        scheduledAnnouncementAt: null,
+        scheduledJudgementAt: null,
+        judgementTimeZone: null,
+      });
       const items = ruleItemsFor(tag);
       const filled = await dataOf<AdminMarket>(
         await admin.patch(`/api/v1/admin/markets/${marketId}`, {
@@ -357,11 +373,43 @@ test.describe('시장 제안', () => {
         }),
       );
       expect(filled.tags).toEqual([tag]);
-      expect(filled.missingOpenItems).toEqual([]);
-      const opened = await dataOf<{ slug: string; status: string }>(
-        await admin.post(`/api/v1/admin/markets/${marketId}/open`, {
-          data: { expectedAccountId: await accountIdOf(admin) },
-        }),
+      expect(filled.missingOpenItems).toEqual([
+        'scheduledOpenAt',
+        'scheduledJudgementAt',
+        'judgementTimeZone',
+      ]);
+
+      // --- the times, on the draft's own screen: the zone shows Asia/Seoul pre-filled (#172 item
+      // 11), and the operator fills only the scheduled open and judgement — the save sends the
+      // zone with them, which confirms it — and opens it there.
+      await adminPage.goto(`/admin/markets/${marketId}`);
+      await expect(adminPage.getByTestId('market-judgement-time-zone')).toHaveValue(
+        DEFAULT_JUDGEMENT_TIME_ZONE,
+      );
+      const times = timesFor(filled.closeAt, filled.eventDeadline);
+      await fillTimeInputs(adminPage, { ...times, judgementTimeZone: null });
+      const saved = adminPage.waitForRequest(
+        (sent) =>
+          sent.method() === 'PATCH' &&
+          new URL(sent.url()).pathname === `/api/v1/admin/markets/${marketId}`,
+      );
+      await adminPage.getByTestId('market-save').click();
+      expect((await saved).postDataJSON()).toEqual({
+        scheduledOpenAt: times.scheduledOpenAt,
+        scheduledJudgementAt: times.scheduledJudgementAt,
+        judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+        expectedAccountId: await accountIdOf(admin),
+      });
+      await expect(adminPage.getByText(copy.adminMarketSaved)).toBeVisible();
+      await expect(adminPage.getByTestId('market-open-items')).toHaveCount(0);
+      // The toast gone first: it pauses under the pointer, and on a phone it covers the buttons.
+      await adminPage.mouse.move(0, 0);
+      await expect(adminPage.locator('[data-scope="toast"][data-part="root"]')).toHaveCount(0);
+      await adminPage.getByTestId('market-open').click();
+      await expect(adminPage.getByText(copy.adminMarketOpened)).toBeVisible();
+      await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
+      const opened = await dataOf<AdminMarket>(
+        await admin.get(`/api/v1/admin/markets/${marketId}`),
       );
       expect(opened.status).toBe('open');
       await page.reload();

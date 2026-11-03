@@ -30,7 +30,8 @@ import { copy } from '@/copy';
 import { useOnboardingEntry } from '@/hooks/use-onboarding-entry';
 import { postQueryOptions, useDeletePost, usePostWriter } from '@/hooks/use-posts';
 import { type Post, type PostMarket } from '@/lib/api';
-import { MARKET_STATUS_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { MARKET_STATUS_PALETTE } from '@/lib/market-admin';
+import { marketStatusLabel } from '@/lib/market-status';
 import { adminPostModerationPath, authorPublicIdOf, postReportItem } from '@/lib/moderation';
 import {
   COMMUNITY_PATH,
@@ -238,7 +239,7 @@ function MarketBox({ market }: { market: PostMarket }) {
         </ChakraLink>
         {market.status !== 'open' && (
           <Badge size="sm" variant="subtle" colorPalette={MARKET_STATUS_PALETTE[market.status]}>
-            {MARKET_STATUS_LABEL[market.status]}
+            {marketStatusLabel(market)}
           </Badge>
         )}
       </HStack>

@@ -15,6 +15,9 @@ import {
   createSettlementStep,
 } from '@buddha/db/test';
 import {
+  DEFAULT_JUDGEMENT_TIME_ZONE,
+  ceilToMinute,
+  floorToMinute,
   marketChannel,
   marketCloseJobId,
   marketFinalizeJobId,
@@ -38,6 +41,7 @@ import { sleep, waitForMessages } from '../test/wait.js';
 
 const jsonHeaders = { origin: 'http://localhost:3000', 'content-type': 'application/json' };
 const DAY_MS = 24 * 60 * 60 * 1000;
+const MINUTE_MS = 60_000;
 
 type ErrorBody = {
   error: { code: string; message: string; details?: { path: (string | number)[] }[] };
@@ -104,22 +108,30 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
   const get = (url: string, cookie = admin.cookie) =>
     t.app.inject({ method: 'GET', url, headers: { cookie } });
 
-  const create = (overrides: Record<string, unknown> = {}) =>
-    post('/api/v1/admin/markets', {
+  const create = (overrides: Record<string, unknown> = {}) => {
+    const closeAt = Date.now() + 7 * DAY_MS;
+    const eventDeadline = Date.now() + 8 * DAY_MS;
+    return post('/api/v1/admin/markets', {
       title: '기준금리 3% 이하로 인하?',
-      // Every rule item (#23) and a tag, so the draft passes the open-items check (#17).
+      // Every rule item (#23), every time (#22) and a tag, so the draft passes the open-items
+      // check (#17): the scheduled open passed, the judgement a day after the deadline, raised to
+      // the minute, and no announcement time.
       description: '한국은행 금융통화위원회가 기준금리를 정한다.',
       yesCondition: '사건 기한까지 기준금리를 3% 이하로 내리면 YES.',
       noCondition: '사건 기한까지 3% 이하로 내리지 않으면 NO.',
-      eventDeadline: new Date(Date.now() + 8 * DAY_MS).toISOString(),
+      eventDeadline: new Date(eventDeadline).toISOString(),
       primarySource: { name: '한국은행 보도자료', url: 'https://www.bok.or.kr' },
       longDelayDays: 14,
       delayHandling: '장기 지연 기한까지 발표가 없으면 무효로 판정한다.',
       categoryId: category.id,
-      closeAt: new Date(Date.now() + 7 * DAY_MS).toISOString(),
+      scheduledOpenAt: new Date(floorToMinute(Date.now()) - MINUTE_MS).toISOString(),
+      closeAt: new Date(closeAt).toISOString(),
+      scheduledJudgementAt: new Date(ceilToMinute(eventDeadline) + DAY_MS).toISOString(),
+      judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
       tags: ['금리'],
       ...overrides,
     });
+  };
   const open = (id: string) => post(`/api/v1/admin/markets/${id}/open`);
   const close = (id: string) => post(`/api/v1/admin/markets/${id}/close`);
   const resolve = (id: string, body: Record<string, unknown>, who?: TestUser) =>
@@ -454,8 +466,10 @@ describe.skipIf(!hasTestInfra)('admin markets M5 (integration)', () => {
     expect(retitled.statusCode).toBe(200);
     expect(await jobIds()).toEqual([firstId]);
 
-    // A moved close time is a new job (the instant is part of the id) and the old one is gone.
-    const laterCloseAt = new Date(Date.now() + 30 * DAY_MS).toISOString();
+    // A moved close time is a new job (the instant is part of the id) and the old one is gone. On
+    // an open market it only moves later, up to the scheduled judgement (#22, owner answer
+    // 2026-10-31 A2): a day later stays before it.
+    const laterCloseAt = new Date(Date.now() + 8 * DAY_MS).toISOString();
     const moved = detail(
       await patch(`/api/v1/admin/markets/${draft.id}`, { closeAt: laterCloseAt }),
     );

@@ -1,0 +1,744 @@
+import { type APIResponse, type Page, type Request } from '@playwright/test';
+import type { AdminMarket, Market } from '@buddha/shared';
+import { copy } from '../src/copy';
+import { formatKst } from '../src/lib/datetime';
+import {
+  accountIdOf,
+  adminAccount,
+  closeMarket,
+  createDraftMarket,
+  createOpenMarket,
+  DEFAULT_JUDGEMENT_TIME_ZONE,
+  detailCopyTestId,
+  expect,
+  fillRuleItemInputs,
+  fillTimeInputs,
+  freshTag,
+  kstLocalOf,
+  ruleItemsFor,
+  signIn,
+  test,
+  timesFor,
+} from './helpers';
+
+/**
+ * 시장 시간 (#22, ADR-0098; ADR-0093 decision 2 #172 items 11–14, decision 3 '#22 시간대' and '#21
+ * 앞당긴 개장', the owner's answers A1 and A2 of 2026-10-31): an operator enters a market's 예정
+ * 개장·거래 마감·발표 예정·예정 판정 시각 on the market form in KST, one input each after the rule
+ * items, and picks its 판정 기준 시간대 — Asia/Seoul pre-filled for the operator to confirm, from the
+ * zones MY 설정 lists, with no "follow the browser" row. Times out of order — the scheduled open at
+ * or after the close, the close after the scheduled judgement, the 사건 기한 after it (A1) — are
+ * refused under both inputs before anything is sent; a close later than the announcement time
+ * less the 선행 마감 gap (the release setting `market.lead_close_gap`) is not refused on a draft but
+ * named by the open-items check, which 열기 then refuses. A draft made without its times names
+ * them; saving the pre-filled zone confirms it. 열기 is refused before the scheduled open — move it
+ * earlier to open sooner. Once open, the scheduled open and judgement are fixed, and the close only
+ * moves later, never past the scheduled judgement (A2) — refused on the form and by the API.
+ *
+ * A visitor reads every time of the rules in their own zone and, when the market's 판정 기준
+ * 시간대 is another, in that zone too on a second line — after hydration only: the server's HTML
+ * holds one KST line per time, with no marker (ADR-0063). A closed market whose scheduled
+ * judgement has passed reads '판정 지연' in place of '거래 마감' (#173 item 11).
+ *
+ * No spec writes the release setting: a value would stay in the e2e database and change
+ * release-settings.spec.ts's counts (docs/SETTINGS.md). The lead close is read off the setting the
+ * database holds, 미정 on a fresh one; its decided-gap cases are the API's integration tests
+ * (admin-markets-times.controller.test.ts), as are every refusal's details, the minute precision
+ * and the records. The form's rules, the rows and the second line are unit-tested
+ * (lib/market-form.test.ts, rules-section.test.tsx, time-zone-provider.test.tsx). Both projects
+ * run in Seoul (playwright.config.ts); a context of its own reads New York.
+ */
+
+const MINUTE_MS = 60 * 1_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/** A zone other than Seoul that every engine knows, with daylight saving time. */
+const NEW_YORK_ZONE = 'America/New_York';
+
+/** `formatInTimeZone`'s style with no marker: what Seoul, and every admin screen, reads. */
+const DATE_TIME = '\\d{4}\\. \\d{1,2}\\. \\d{1,2}\\. (오전|오후) \\d{1,2}:\\d{2}';
+
+/**
+ * The same in New York, its offset after it. The instants are relative to the run's clock, so
+ * whether New York is on EDT or EST that day decides which.
+ */
+const NEW_YORK = new RegExp(`^${DATE_TIME} \\((GMT-4|GMT-5)\\)$`);
+
+/** The judgement zone's line of a market judged in New York, read in another zone. */
+const NEW_YORK_LINE = new RegExp(
+  `^${copy.rulesJudgementZoneLine} ${DATE_TIME} \\((GMT-4|GMT-5)\\)$`,
+);
+
+/** Any zone marker, anywhere in a text. */
+const ANY_MARKER = /\(GMT/;
+
+/** Every judgement zone line inside an element (`DateTimeText`'s `<row>-judgement-zone`). */
+const JUDGEMENT_LINES = '[data-testid$="-judgement-zone"]';
+
+/** React's report of a server/client mismatch: dev "Hydration failed …", prod #418/#423/#425. */
+const HYDRATION_ERROR = /hydrat|#418|#423|#425/i;
+
+/** The ISO instant of the whole minute `ms` falls in: what a `datetime-local` input holds. */
+function minuteIso(ms: number): string {
+  return new Date(Math.floor(ms / MINUTE_MS) * MINUTE_MS).toISOString();
+}
+
+/**
+ * The row's judgement zone line lies under its viewer's line, not beside it: the value cell is a
+ * block (rules-section.tsx — a DataList value is a flex row, which would put the two side by side
+ * with nothing between them). Only the boxes tell, the texts being whole either way.
+ */
+async function expectSecondLineUnder(page: Page, rowTestId: string): Promise<void> {
+  const first = await page.getByTestId(`${rowTestId}-viewer-zone`).boundingBox();
+  const second = await page.getByTestId(`${rowTestId}-judgement-zone`).boundingBox();
+  if (first === null || second === null) throw new Error(`${rowTestId} has no two lines`);
+  expect(second.y).toBeGreaterThanOrEqual(first.y + first.height - 1);
+}
+
+/** A time the spec set, which the type allows to be null. */
+function present(iso: string | null): string {
+  if (iso === null) throw new Error('the market has no such time');
+  return iso;
+}
+
+/** A stored time as an instant, whatever ISO spelling the API wrote it in. */
+function instantOf(iso: string | null): number | null {
+  return iso === null ? null : Date.parse(iso);
+}
+
+/** `{ data }` out of the success envelope, with the body in the message on a failure. */
+async function dataOf<T>(response: APIResponse): Promise<T> {
+  const body = await response.text();
+  expect(response.ok(), `${response.url()} -> ${String(response.status())} ${body}`).toBe(true);
+  return (JSON.parse(body) as { data: T }).data;
+}
+
+/** The first detail of a `VALIDATION_ERROR` (400): the field the request sent comes first. */
+async function firstDetail(response: APIResponse): Promise<unknown> {
+  expect(response.status(), await response.text()).toBe(400);
+  const { error } = (await response.json()) as { error: { code: string; details: unknown[] } };
+  expect(error.code).toBe('VALIDATION_ERROR');
+  return error.details[0];
+}
+
+/**
+ * Lets the page's toasts go before the next press (themes.spec.ts's `letToastsGo`): a toast pauses
+ * while the pointer rests on the stack, and on a phone the stack covers the form's buttons.
+ */
+async function letToastsGo(page: Page): Promise<void> {
+  await page.mouse.move(0, 0);
+  await expect(page.locator('[data-scope="toast"][data-part="root"]')).toHaveCount(0);
+}
+
+/** The `PATCH /admin/markets/:id` this page sends next. */
+function nextPatch(page: Page, marketId: string): Promise<Request> {
+  return page.waitForRequest(
+    (request) =>
+      request.method() === 'PATCH' &&
+      new URL(request.url()).pathname === `/api/v1/admin/markets/${marketId}`,
+  );
+}
+
+/** A row of the admin market detail (`market-detail-…`): its value. */
+const detailRow = (page: Page, testId: string) => page.getByTestId(testId).locator('dd');
+
+/** Waits until the header knows nobody is signed in: the zone has settled (ADR-0063). */
+async function signedOutSettled(page: Page): Promise<void> {
+  await expect(page.getByRole('banner').getByRole('link', { name: copy.login })).toBeVisible();
+}
+
+/** The hydration errors `page` reports from now on (time-zone.spec.ts's `watchHydration`). */
+function watchHydration(page: Page): string[] {
+  const errors: string[] = [];
+  page.on('console', (message) => {
+    if (message.type() === 'error' && HYDRATION_ERROR.test(message.text())) {
+      errors.push(message.text());
+    }
+  });
+  page.on('pageerror', (error) => {
+    if (HYDRATION_ERROR.test(error.message)) errors.push(error.message);
+  });
+  return errors;
+}
+
+test.describe('시장 시간', () => {
+  test('관리자가 시장 만들기에서 네 시각을 한국 시간으로 넣고 판정 기준 시간대를 고르면 그대로 저장되고, 어긋난 순서는 두 입력 아래에서 거절되며, 발표 예정 시각보다 늦은 마감은 선행 마감으로 열기가 거절되고 없음으로 고치면 열린다. 서울의 방문자는 시각마다 판정 기준 시간대의 줄을 함께 읽는다', async ({
+    admin,
+    browser,
+    page,
+    request,
+  }) => {
+    const own = `t${freshTag()}`;
+    const title = `E2E 시각 ${own}`;
+    // An ASCII address, as every e2e market has (helpers.ts `createDraftMarket`).
+    const slug = `e2e-${own}`;
+    const start = Date.now();
+    // Whole minutes, as the inputs hold them, so what is typed is the instant stored.
+    const closeAt = minuteIso(start + DAY_MS);
+    const items = { ...ruleItemsFor(own), eventDeadline: minuteIso(start + 2 * DAY_MS) };
+    const times = timesFor(closeAt, items.eventDeadline, start);
+    const openAt = present(times.scheduledOpenAt);
+    const judgementAt = present(times.scheduledJudgementAt);
+    // Before the close: a lead close no gap can pass (close ≤ announcement − gap, #172 item 13).
+    const announcementAt = minuteIso(Date.parse(closeAt) - 30 * MINUTE_MS);
+    const deadlineAt = present(items.eventDeadline);
+    const longDelayAt = new Date(
+      Date.parse(judgementAt) + (items.longDelayDays ?? 0) * DAY_MS,
+    ).toISOString();
+
+    const adminContext = await browser.newContext();
+    try {
+      const adminPage = await adminContext.newPage();
+      await signIn(adminPage, adminAccount.email, adminAccount.password);
+      // Every market create this page sends, to prove the form's refusals send none.
+      const creates: unknown[] = [];
+      adminPage.on('request', (sent) => {
+        if (sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/v1/admin/markets') {
+          creates.push(sent.postDataJSON());
+        }
+      });
+
+      // --- 시장 만들기: 시각 is one group after the rule items, the four times in KST in OPEN_ITEMS
+      // order and then the 판정 기준 시간대 — Asia/Seoul pre-filled, MY 설정's zones with no
+      // "follow the browser" row (#172 item 11).
+      await adminPage.goto('/admin/markets');
+      await expect(adminPage.getByTestId('market-create')).toBeEnabled();
+      const zone = adminPage.getByTestId('market-judgement-time-zone');
+      await expect(zone).toHaveValue(DEFAULT_JUDGEMENT_TIME_ZONE);
+      expect(
+        await adminPage
+          .locator('[data-testid="market-rule-items"], [data-testid="market-times"]')
+          .evaluateAll((groups) => groups.map((group) => group.getAttribute('data-testid'))),
+      ).toEqual(['market-rule-items', 'market-times']);
+      expect(
+        await adminPage
+          .getByTestId('market-times')
+          .locator('input, select')
+          .evaluateAll((inputs) =>
+            inputs.map((input) => [input.getAttribute('data-testid'), input.getAttribute('type')]),
+          ),
+      ).toEqual([
+        ['market-scheduled-open-at', 'datetime-local'],
+        ['market-close-at', 'datetime-local'],
+        ['market-scheduled-announcement-at', 'datetime-local'],
+        ['market-scheduled-judgement-at', 'datetime-local'],
+        ['market-judgement-time-zone', null],
+      ]);
+      await expect(zone.locator('option[value=""]')).toHaveCount(0);
+      await expect(zone.locator(`option[value="${NEW_YORK_ZONE}"]`)).toHaveText(
+        /^America\/New_York — \S*[가-힣]/,
+      );
+
+      await adminPage.getByTestId('market-title').fill(title);
+      await adminPage.getByTestId('market-slug').fill(slug);
+      const category = adminPage.getByTestId('market-category');
+      // A leaf: a top-level category with sub-categories is a group label, not an option.
+      const choices = await category
+        .locator('option:not([disabled])')
+        .evaluateAll((options) =>
+          options.map((option) => (option as HTMLOptionElement).value).filter(Boolean),
+        );
+      await category.selectOption(choices[0]!);
+      await adminPage.getByTestId('market-tags-input').fill(own);
+      await adminPage.getByTestId('market-tags-input').press('Enter');
+      await fillRuleItemInputs(adminPage, items);
+
+      const openInput = adminPage.getByTestId('market-scheduled-open-at');
+      const closeInput = adminPage.getByTestId('market-close-at');
+      const judgementInput = adminPage.getByTestId('market-scheduled-judgement-at');
+      const deadlineInput = adminPage.getByTestId('market-event-deadline');
+      // The zone left as pre-filled until the times are in order.
+      const typed = { ...times, closeAt, judgementTimeZone: null };
+
+      // --- the scheduled open after the close (#172 item 12): refused under both.
+      await fillTimeInputs(adminPage, {
+        ...typed,
+        scheduledOpenAt: minuteIso(Date.parse(closeAt) + HOUR_MS),
+      });
+      await adminPage.getByTestId('market-create').click();
+      await expect(openInput).toHaveAccessibleErrorMessage(copy.errMarketTimeOpenBeforeClose);
+      await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketTimeOpenBeforeClose);
+
+      // --- the scheduled judgement before the close: refused under both, and under the 사건 기한,
+      // which is after it too (A1).
+      await fillTimeInputs(adminPage, {
+        ...typed,
+        scheduledJudgementAt: minuteIso(Date.parse(closeAt) - HOUR_MS),
+      });
+      await adminPage.getByTestId('market-create').click();
+      await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketTimeCloseByJudgement);
+      await expect(judgementInput).toHaveAccessibleErrorMessage(copy.errMarketTimeCloseByJudgement);
+      await expect(deadlineInput).toHaveAccessibleErrorMessage(
+        copy.errMarketTimeDeadlineByJudgement,
+      );
+      await expect(openInput).not.toHaveAttribute('aria-invalid', 'true');
+
+      // --- the judgement at the close's minute, which is fine, but before the 사건 기한 (A1):
+      // refused under those two, the close no more.
+      await fillTimeInputs(adminPage, { ...typed, scheduledJudgementAt: closeAt });
+      await adminPage.getByTestId('market-create').click();
+      await expect(deadlineInput).toHaveAccessibleErrorMessage(
+        copy.errMarketTimeDeadlineByJudgement,
+      );
+      await expect(judgementInput).toHaveAccessibleErrorMessage(
+        copy.errMarketTimeDeadlineByJudgement,
+      );
+      await expect(closeInput).not.toHaveAttribute('aria-invalid', 'true');
+      expect(creates).toEqual([]);
+
+      // --- in order, with an announcement time before the close and New York picked: a draft
+      // takes it — the lead close is never refused on entry (ADR-0098) — every time as typed.
+      await fillTimeInputs(adminPage, {
+        ...times,
+        closeAt,
+        scheduledAnnouncementAt: announcementAt,
+        judgementTimeZone: NEW_YORK_ZONE,
+      });
+      await expect(zone).toHaveValue(NEW_YORK_ZONE);
+      const created = adminPage.waitForRequest(
+        (sent) =>
+          sent.method() === 'POST' && new URL(sent.url()).pathname === '/api/v1/admin/markets',
+      );
+      await adminPage.getByTestId('market-create').click();
+      expect((await created).postDataJSON()).toMatchObject({
+        scheduledOpenAt: openAt,
+        closeAt,
+        scheduledAnnouncementAt: announcementAt,
+        scheduledJudgementAt: judgementAt,
+        judgementTimeZone: NEW_YORK_ZONE,
+      });
+      await expect(adminPage).toHaveURL(/\/admin\/markets\/[0-9a-f-]{36}$/);
+      const marketId = adminPage.url().split('/').at(-1) ?? '';
+      const stored = await dataOf<AdminMarket>(
+        await admin.get(`/api/v1/admin/markets/${marketId}`),
+      );
+      expect(
+        [
+          stored.scheduledOpenAt,
+          stored.closeAt,
+          stored.scheduledAnnouncementAt,
+          stored.scheduledJudgementAt,
+        ].map(instantOf),
+      ).toEqual([openAt, closeAt, announcementAt, judgementAt].map(instantOf));
+      expect(stored.judgementTimeZone).toBe(NEW_YORK_ZONE);
+      expect(stored.missingOpenItems).toEqual(['leadClose']);
+
+      // --- the admin detail reads each time in KST, the zone by its names, and the gap the lead
+      // close is held to: the release setting's, 미정 unless someone entered one.
+      await expect(detailRow(adminPage, 'market-detail-scheduled-open-at')).toHaveText(
+        formatKst(openAt),
+      );
+      await expect(detailRow(adminPage, 'market-detail-close-at')).toHaveText(formatKst(closeAt));
+      await expect(detailRow(adminPage, 'market-detail-scheduled-announcement-at')).toHaveText(
+        formatKst(announcementAt),
+      );
+      await expect(detailRow(adminPage, 'market-detail-scheduled-judgement-at')).toHaveText(
+        formatKst(judgementAt),
+      );
+      await expect(detailRow(adminPage, 'market-detail-judgement-time-zone')).toHaveText(
+        /^America\/New_York — /,
+      );
+      const gap = stored.leadCloseGapMinutes;
+      await expect(detailRow(adminPage, 'market-detail-lead-close-gap')).toHaveText(
+        gap === null
+          ? copy.adminMarketLeadCloseGapUndecided
+          : `${String(gap)}${copy.adminMarketLeadCloseGapMinutes}`,
+      );
+      // The preview is the visitor's rules in KST alone (decision 3 '#22 시간대': admin screens
+      // are KST): the scheduled open while a draft, and no judgement zone line.
+      const preview = adminPage.getByTestId('market-preview-rules');
+      await expect(
+        adminPage.getByTestId('market-preview-rules-scheduled-open-at-viewer-zone'),
+      ).toHaveText(formatKst(openAt));
+      await expect(adminPage.getByTestId('market-preview-rules-close-at-viewer-zone')).toHaveText(
+        formatKst(closeAt),
+      );
+      await expect(preview.locator(JUDGEMENT_LINES)).toHaveCount(0);
+
+      // --- the open-items check names 선행 마감, with a line that says why, and 열기 is refused.
+      const leadLine =
+        gap === null
+          ? copy.openItemRuleLeadCloseUndecided
+          : `${copy.openItemRuleLeadCloseBefore} ${String(gap)}${copy.openItemRuleLeadCloseTail}`;
+      const notice = adminPage.getByTestId('market-open-items');
+      await expect(notice).toHaveText(
+        [
+          `${copy.adminMarketOpenItems}: ${copy.openItemLeadClose}`,
+          `${copy.openItemLeadClose}: ${leadLine}`,
+        ].join('\n'),
+      );
+      await letToastsGo(adminPage);
+      await adminPage.getByTestId('market-open').click();
+      await expect(
+        adminPage.getByText(`${copy.errMarketOpenItemsMissing}: ${copy.openItemLeadClose}`, {
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect(adminPage.getByTestId('market-detail-status')).toHaveText(
+        copy.marketStatusDraft,
+      );
+
+      // --- the announcement cleared, '없음' (#172 item 13): only it is sent, and the market opens.
+      await letToastsGo(adminPage);
+      const announcementInput = adminPage.getByTestId('market-scheduled-announcement-at');
+      await expect(announcementInput).toHaveValue(kstLocalOf(announcementAt));
+      await announcementInput.fill('');
+      const saved = nextPatch(adminPage, marketId);
+      await adminPage.getByTestId('market-save').click();
+      const body = (await saved).postDataJSON() as Record<string, unknown>;
+      expect(body).toMatchObject({ scheduledAnnouncementAt: null });
+      expect(Object.keys(body).sort()).toEqual(['expectedAccountId', 'scheduledAnnouncementAt']);
+      await expect(adminPage.getByText(copy.adminMarketSaved)).toBeVisible();
+      await expect(notice).toHaveCount(0);
+      await expect(detailRow(adminPage, 'market-detail-scheduled-announcement-at')).toHaveText(
+        copy.adminMarketAnnouncementNone,
+      );
+      await letToastsGo(adminPage);
+      await adminPage.getByTestId('market-open').click();
+      await expect(adminPage.getByText(copy.adminMarketOpened)).toBeVisible();
+      await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
+      // Open, its scheduled open and judgement are fixed (#172 item 14): the inputs are locked.
+      await expect(openInput).toBeDisabled();
+      await expect(judgementInput).toBeDisabled();
+    } finally {
+      await adminContext.close();
+    }
+
+    // --- a visitor in Seoul, signed out: the times close 규칙 in the form's order — no 예정 개장
+    // 시각 once open — each in Seoul and, the market being judged in New York, in New York on a
+    // second line (decision 3 '#22 시간대': both, as they differ).
+    await page.goto(`/markets/${slug}`);
+    await signedOutSettled(page);
+    const id = detailCopyTestId(page, 'market-rules');
+    await expect(page.getByTestId(id).locator('dt')).toHaveText([
+      copy.rulesYes,
+      copy.rulesNo,
+      copy.rulesEventDeadline,
+      copy.rulesPrimarySource,
+      copy.rulesFallbackSources,
+      copy.rulesLongDelay,
+      copy.rulesDelayHandling,
+      copy.rulesVoidPayout,
+      copy.rulesCloseAt,
+      copy.rulesAnnouncementAt,
+      copy.rulesJudgementAt,
+      copy.rulesJudgementTimeZone,
+    ]);
+    await expect(page.getByTestId(`${id}-scheduled-open-at`)).toHaveCount(0);
+    for (const [row, at] of [
+      ['close-at', closeAt],
+      ['judgement-at', judgementAt],
+      ['event-deadline', deadlineAt],
+      ['long-delay', longDelayAt],
+    ] as const) {
+      await expect(page.getByTestId(`${id}-${row}-viewer-zone`)).toHaveText(formatKst(at));
+      await expect(page.getByTestId(`${id}-${row}-judgement-zone`)).toHaveText(NEW_YORK_LINE);
+      await expectSecondLineUnder(page, `${id}-${row}`);
+    }
+    await expect(page.getByTestId(`${id}-announcement-at`)).toHaveText(copy.rulesAnnouncementNone);
+    await expect(page.getByTestId(`${id}-judgement-time-zone`)).toHaveText(
+      /^America\/New_York — \S*[가-힣]/,
+    );
+
+    // The server's HTML: one KST line per time, the zone by its IANA name, no marker (ADR-0063).
+    const html = await (await request.get(`/markets/${slug}`)).text();
+    expect(html).toContain(formatKst(closeAt));
+    expect(html).toContain(formatKst(judgementAt));
+    expect(html).toContain(NEW_YORK_ZONE);
+    expect(html).not.toMatch(ANY_MARKER);
+    expect(html).not.toContain('-judgement-zone"');
+  });
+
+  test('시각 없이 만든 초안은 예정 개장·예정 판정 시각과 판정 기준 시간대를 채울 항목으로 이름 대고, 미리 채운 서울은 저장으로 확인되며, 예정 개장 시각 전의 열기는 거절되고 앞당기면 열린다. 연 시장의 마감은 예정 판정 시각까지 늦추기만 하고 예정 판정 시각은 바뀌지 않는다', async ({
+    admin,
+    page,
+  }) => {
+    // A draft from before #22, or an adopted proposal: every time but the close blank.
+    const market = await createDraftMarket(admin, {
+      times: { scheduledOpenAt: null, scheduledJudgementAt: null, judgementTimeZone: null },
+    });
+    const judgementAt = present(
+      timesFor(market.closeAt, market.ruleItems.eventDeadline).scheduledJudgementAt,
+    );
+    const expectedAccountId = await accountIdOf(admin);
+
+    await signIn(page, adminAccount.email, adminAccount.password);
+    // Every save this page sends, to prove the form's refusals send none.
+    const patches: string[] = [];
+    page.on('request', (sent) => {
+      if (
+        sent.method() === 'PATCH' &&
+        new URL(sent.url()).pathname === `/api/v1/admin/markets/${market.id}`
+      ) {
+        patches.push(sent.url());
+      }
+    });
+    await page.goto(`/admin/markets/${market.id}`);
+    const status = page.getByTestId('market-detail-status');
+
+    // --- the draft names the missing times, in OPEN_ITEMS order; 열기 is refused naming them.
+    const missing = [
+      copy.openItemScheduledOpenAt,
+      copy.openItemScheduledJudgementAt,
+      copy.openItemJudgementTimeZone,
+    ].join(' · ');
+    const notice = page.getByTestId('market-open-items');
+    await expect(notice).toHaveText(`${copy.adminMarketOpenItems}: ${missing}`);
+    for (const row of [
+      'market-detail-scheduled-open-at',
+      'market-detail-scheduled-judgement-at',
+      'market-detail-judgement-time-zone',
+    ]) {
+      await expect(detailRow(page, row)).toHaveText('—');
+    }
+    await expect(detailRow(page, 'market-detail-scheduled-announcement-at')).toHaveText(
+      copy.adminMarketAnnouncementNone,
+    );
+    await letToastsGo(page);
+    await page.getByTestId('market-open').click();
+    await expect(
+      page.getByText(`${copy.errMarketOpenItemsMissing}: ${missing}`, { exact: true }),
+    ).toBeVisible();
+    await expect(status).toHaveText(copy.marketStatusDraft);
+
+    // --- the zone shows Asia/Seoul pre-filled, and the form may be saved for it alone: saving is
+    // the operator's confirmation (#172 item 11). With the scheduled open an hour ahead and the
+    // judgement, the save sends the three and nothing else.
+    await expect(page.getByTestId('market-judgement-time-zone')).toHaveValue(
+      DEFAULT_JUDGEMENT_TIME_ZONE,
+    );
+    await expect(page.getByTestId('market-save')).toBeEnabled();
+    const aheadAt = minuteIso(Date.now() + HOUR_MS);
+    await letToastsGo(page);
+    await fillTimeInputs(page, {
+      scheduledOpenAt: aheadAt,
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: judgementAt,
+      judgementTimeZone: null,
+    });
+    const confirmed = nextPatch(page, market.id);
+    await page.getByTestId('market-save').click();
+    expect((await confirmed).postDataJSON()).toEqual({
+      scheduledOpenAt: aheadAt,
+      scheduledJudgementAt: judgementAt,
+      judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+      expectedAccountId,
+    });
+    await expect(page.getByText(copy.adminMarketSaved)).toBeVisible();
+    await expect(notice).toHaveCount(0);
+    await expect(detailRow(page, 'market-detail-judgement-time-zone')).toHaveText(/^Asia\/Seoul/);
+
+    // --- 열기 before the scheduled open is refused: there is no early open, the operator moves the
+    // scheduled open earlier (ADR-0093 decision 3 '#21 앞당긴 개장').
+    await letToastsGo(page);
+    await page.getByTestId('market-open').click();
+    await expect(
+      page.getByText(copy.errMarketScheduledOpenNotReached, { exact: true }),
+    ).toBeVisible();
+    await expect(status).toHaveText(copy.marketStatusDraft);
+    await letToastsGo(page);
+    const passedAt = minuteIso(Date.now() - MINUTE_MS);
+    await page.getByTestId('market-scheduled-open-at').fill(kstLocalOf(passedAt));
+    const movedEarlier = nextPatch(page, market.id);
+    await page.getByTestId('market-save').click();
+    expect((await movedEarlier).postDataJSON()).toMatchObject({ scheduledOpenAt: passedAt });
+    await expect(page.getByText(copy.adminMarketSaved)).toBeVisible();
+    await letToastsGo(page);
+    await page.getByTestId('market-open').click();
+    await expect(page.getByText(copy.adminMarketOpened)).toBeVisible();
+    await expect(status).toHaveText(copy.marketStatusOpen);
+
+    // --- open: the scheduled open and judgement are locked (#172 item 14), and the API refuses a
+    // change to either (ADR-0098).
+    const closeInput = page.getByTestId('market-close-at');
+    await expect(page.getByTestId('market-scheduled-open-at')).toBeDisabled();
+    await expect(page.getByTestId('market-scheduled-judgement-at')).toBeDisabled();
+    const path = `/api/v1/admin/markets/${market.id}`;
+    expect(
+      await firstDetail(
+        await admin.patch(path, {
+          data: {
+            scheduledJudgementAt: new Date(Date.parse(judgementAt) + DAY_MS).toISOString(),
+            expectedAccountId,
+          },
+        }),
+      ),
+    ).toMatchObject({ path: ['scheduledJudgementAt'], message: 'immutable while open' });
+
+    // --- the close earlier is an early close, not an edit (#172 item 14): refused under the input
+    // and by the API, nothing sent or confirmed.
+    const sent = patches.length;
+    await letToastsGo(page);
+    await closeInput.fill(kstLocalOf(minuteIso(Date.parse(market.closeAt) - HOUR_MS)));
+    await page.getByTestId('market-save').click();
+    await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketCloseEarlier);
+    expect(
+      await firstDetail(
+        await admin.patch(path, {
+          data: {
+            closeAt: new Date(Date.parse(market.closeAt) - MINUTE_MS).toISOString(),
+            expectedAccountId,
+          },
+        }),
+      ),
+    ).toMatchObject({ path: ['closeAt'], message: 'cannot move earlier while open' });
+
+    // --- later, past the scheduled judgement: refused under the input and by the API (A2).
+    const pastJudgementAt = minuteIso(Date.parse(judgementAt) + MINUTE_MS);
+    await closeInput.fill(kstLocalOf(pastJudgementAt));
+    await page.getByTestId('market-save').click();
+    await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketTimeCloseByJudgement);
+    await expect(page.getByTestId('market-edit-confirm')).toHaveCount(0);
+    expect(patches).toHaveLength(sent);
+    expect(
+      await firstDetail(
+        await admin.patch(path, { data: { closeAt: pastJudgementAt, expectedAccountId } }),
+      ),
+    ).toMatchObject({ path: ['closeAt'], message: 'must be at or before scheduledJudgementAt' });
+
+    // --- later, up to the scheduled judgement itself: confirmed and saved; only the close is sent,
+    // and the judgement stays as it was (#22 AC 2).
+    await closeInput.fill(kstLocalOf(judgementAt));
+    const extended = nextPatch(page, market.id);
+    await page.getByTestId('market-save').click();
+    await page.getByTestId('market-edit-confirm').click();
+    const body = (await extended).postDataJSON() as Record<string, unknown>;
+    expect(body).toMatchObject({ closeAt: judgementAt });
+    expect(Object.keys(body)).not.toContain('scheduledJudgementAt');
+    await expect(page.getByText(copy.adminMarketSaved)).toBeVisible();
+    await expect(detailRow(page, 'market-detail-close-at')).toHaveText(formatKst(judgementAt));
+    const stored = await dataOf<AdminMarket>(await admin.get(path));
+    expect(stored.status).toBe('open');
+    expect(
+      [stored.scheduledOpenAt, stored.closeAt, stored.scheduledJudgementAt].map(instantOf),
+    ).toEqual([passedAt, judgementAt, judgementAt].map(instantOf));
+  });
+
+  test('뉴욕 브라우저의 방문자는 규칙의 시각을 뉴욕 시간으로 읽고 판정 기준 시간대가 다를 때만 그 시간대의 줄을 함께 읽으며, 서버 HTML은 시각마다 한국 시간 한 줄이다', async ({
+    admin,
+    browser,
+    page,
+    request,
+  }) => {
+    const seoul = await createOpenMarket(admin);
+    const newYork = await createOpenMarket(admin, {
+      times: { judgementTimeZone: NEW_YORK_ZONE },
+    });
+    const judgementAt = present(seoul.times.scheduledJudgementAt);
+    const rows = [
+      ['close-at', seoul.closeAt],
+      ['judgement-at', judgementAt],
+      ['event-deadline', present(seoul.ruleItems.eventDeadline)],
+      [
+        'long-delay',
+        new Date(
+          Date.parse(judgementAt) + (seoul.ruleItems.longDelayDays ?? 0) * DAY_MS,
+        ).toISOString(),
+      ],
+    ] as const;
+
+    // --- a visitor in Seoul, the projects' own zone: a market judged in Seoul reads one line per
+    // time — the zones are the same.
+    await page.goto(`/markets/${seoul.slug}`);
+    await signedOutSettled(page);
+    const seoulId = detailCopyTestId(page, 'market-rules');
+    await expect(page.getByTestId(`${seoulId}-close-at-viewer-zone`)).toHaveText(
+      formatKst(seoul.closeAt),
+    );
+    await expect(page.getByTestId(seoulId).locator(JUDGEMENT_LINES)).toHaveCount(0);
+
+    const context = await browser.newContext({ timezoneId: NEW_YORK_ZONE });
+    try {
+      const nyPage = await context.newPage();
+      const hydrationErrors = watchHydration(nyPage);
+
+      // --- in New York, signed out (ADR-0061 #60-8: the browser's zone): each time in New York,
+      // marked, and under it the same instant in Seoul, the market's 판정 기준 시간대.
+      await nyPage.goto(`/markets/${seoul.slug}`);
+      await signedOutSettled(nyPage);
+      const id = detailCopyTestId(nyPage, 'market-rules');
+      for (const [row, at] of rows) {
+        await expect(nyPage.getByTestId(`${id}-${row}-viewer-zone`)).toHaveText(NEW_YORK);
+        await expect(nyPage.getByTestId(`${id}-${row}-judgement-zone`)).toHaveText(
+          `${copy.rulesJudgementZoneLine} ${formatKst(at)}`,
+        );
+        await expectSecondLineUnder(nyPage, `${id}-${row}`);
+      }
+      await expect(nyPage.getByTestId(`${id}-announcement-at`)).toHaveText(
+        copy.rulesAnnouncementNone,
+      );
+      await expect(nyPage.getByTestId(`${id}-judgement-time-zone`)).toHaveText(/^Asia\/Seoul — /);
+      // Open: the scheduled open is history, not a rule row.
+      await expect(nyPage.getByTestId(`${id}-scheduled-open-at`)).toHaveCount(0);
+      expect(hydrationErrors).toEqual([]);
+
+      // The server's HTML is every visitor's: KST, one line per time, no marker (ADR-0063).
+      const html = await (await request.get(`/markets/${seoul.slug}`)).text();
+      for (const [, at] of rows) expect(html).toContain(formatKst(at));
+      expect(html).not.toMatch(ANY_MARKER);
+      expect(html).not.toContain('-judgement-zone"');
+
+      // --- a market judged in New York reads one line per time here: the zones are the same.
+      await nyPage.goto(`/markets/${newYork.slug}`);
+      await signedOutSettled(nyPage);
+      await expect(nyPage.getByTestId(`${id}-close-at-viewer-zone`)).toHaveText(NEW_YORK);
+      await expect(nyPage.getByTestId(`${id}-judgement-at-viewer-zone`)).toHaveText(NEW_YORK);
+      await expect(nyPage.getByTestId(id).locator(JUDGEMENT_LINES)).toHaveCount(0);
+      await expect(nyPage.getByTestId(`${id}-judgement-time-zone`)).toHaveText(
+        /^America\/New_York — /,
+      );
+      expect(hydrationErrors).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  test('예정 판정 시각이 지난 거래 마감 시장은 상세와 검색의 카드에서 거래 마감 대신 판정 지연으로 보인다', async ({
+    admin,
+    page,
+    request,
+  }) => {
+    // Closes and is judged in 25 seconds: room for making and opening it, which needs the close
+    // ahead, and then a short wait. The 사건 기한 is at the judgement too (A1).
+    const dueAt = new Date(Date.now() + 25_000).toISOString();
+    const market = await createOpenMarket(admin, {
+      closeAt: dueAt,
+      ruleItems: { eventDeadline: dueAt },
+      times: { scheduledJudgementAt: dueAt },
+    });
+    // 마감 by the operator now (the interim manual close): closed, its judgement still ahead.
+    const closed = await closeMarket(admin, market.id);
+    expect(closed.status).toBe('closed');
+
+    // The label is the server's, read at the read (#173 item 11): wait for the judgement to pass.
+    await expect
+      .poll(
+        async () =>
+          (await dataOf<Market>(await request.get(`/api/v1/markets/${market.slug}`)))
+            .judgementDelayed,
+        { timeout: 60_000, intervals: [1_000] },
+      )
+      .toBe(true);
+    const adminView = await dataOf<AdminMarket>(
+      await admin.get(`/api/v1/admin/markets/${market.id}`),
+    );
+    expect(adminView).toMatchObject({ status: 'closed', judgementDelayed: true });
+
+    // --- the detail: '판정 지연' in place of '거래 마감', and a notice that says no result is out —
+    // never that a late result means NO.
+    await page.goto(`/markets/${market.slug}`);
+    await expect(page.getByTestId('market-status-badge')).toHaveText(
+      copy.marketStatusJudgementDelayed,
+    );
+    await expect(page.getByTestId('market-status-notice')).toContainText(
+      copy.marketJudgementDelayedNotice,
+    );
+
+    // --- its card where the search lists it (every status is searched, ADR-0066).
+    await page.goto(`/search?q=${market.tag}`);
+    const card = page.getByTestId(`market-card-${market.id}`);
+    await expect(card).toContainText(copy.marketStatusJudgementDelayed);
+    await expect(card).not.toContainText(copy.marketStatusClosed);
+  });
+});

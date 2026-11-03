@@ -4,19 +4,22 @@ import { copy } from '../src/copy';
 import { accountIdOf, adminAccount, expect, freshEmail, signIn, signUp, test } from './helpers';
 
 /**
- * 출시 설정 (#170, ADR-0055) as the shipped build has it: seven registered items — 시작 지급액
- * (`grant.start_coin`, #70, ADR-0071) and the six retention periods (`retention.*` — #184's five,
- * ADR-0087, and #77's market proposals, ADR-0089) — which the screen and the API list alike, in the registry's order. Changing and
- * recording an item are fixed by the API suite with injected test items (`createTestApp({
- * releaseSettings })`), paying the start Coin once a value is entered by the API and worker suites,
- * and deleting what a retention period has kept by the worker's suite; a browser cannot register
- * one.
+ * 출시 설정 (#170, ADR-0055) as the shipped build has it: eight registered items — 시작 지급액
+ * (`grant.start_coin`, #70, ADR-0071), 선행 마감 최소 간격 (`market.lead_close_gap`, #22,
+ * ADR-0098) and the six retention periods (`retention.*` — #184's five, ADR-0087, and #77's
+ * market proposals, ADR-0089) — which the screen and the API list alike, in the registry's order.
+ * Changing and recording an item are fixed by the API suite with injected test items
+ * (`createTestApp({ releaseSettings })`), paying the start Coin once a value is entered by the API
+ * and worker suites, deleting what a retention period has kept by the worker's suite, and the
+ * lead-close gap's use by the API suite (admin-markets-times.controller.test.ts); a browser
+ * cannot register one.
  *
  * Nothing here changes an item. A value entered in a run would be paid by the worker to every
  * waiting grant — or, for an approved retention period, delete the records older than it at the
- * worker's next daily run — and stay for the runs after it, so the spec reads the status the
- * database holds — 미정 on a fresh one, as nothing writes a value (docs/SETTINGS.md) — and checks
- * the screen against it. The change dialogs are opened and cancelled only.
+ * worker's next daily run; for the lead-close gap, decide which markets with an announcement time
+ * may open — and stay for the runs after it, so the spec reads the status the database holds —
+ * 미정 on a fresh one, as nothing writes a value (docs/SETTINGS.md) — and checks the screen
+ * against it. The change dialogs are opened and cancelled only.
  */
 
 const LIST = '/api/v1/admin/release-settings';
@@ -24,6 +27,12 @@ const CHANGES = '/api/v1/admin/release-settings/changes';
 
 /** The start grant's key (`START_COIN_SETTING`). */
 const START_COIN_KEY = 'grant.start_coin';
+
+/**
+ * The lead-close gap's key (`LEAD_CLOSE_GAP_SETTING`, #22): how far a market's close must lead its
+ * announcement time, in whole minutes.
+ */
+const LEAD_CLOSE_GAP_KEY = 'market.lead_close_gap';
 
 /**
  * The retention periods (`RETENTION_PERIOD_SETTINGS`, #184 and #77) with their names, restated:
@@ -40,8 +49,11 @@ const RETENTION_ITEMS = [
   ['retention.market_proposals', '시장 제안 기록 보존기간'],
 ] as const;
 
-/** Every key the shipped registry holds, in its order (`RELEASE_SETTINGS`). */
-const SHIPPED_KEYS = [START_COIN_KEY, ...RETENTION_ITEMS.map(([key]) => key)];
+/**
+ * Every key the shipped registry holds, in its order (`RELEASE_SETTINGS`): the operating values
+ * first, then the retention periods.
+ */
+const SHIPPED_KEYS = [START_COIN_KEY, LEAD_CLOSE_GAP_KEY, ...RETENTION_ITEMS.map(([key]) => key)];
 
 /**
  * The badge names (`RELEASE_SETTING_STATUS_LABELS`), restated: these specs import only types from
@@ -69,17 +81,21 @@ async function expectForbidden(response: APIResponse): Promise<void> {
 }
 
 test.describe('출시 설정 (#170)', () => {
-  test('관리자 메뉴에서 열면 시작 지급액과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
+  test('관리자 메뉴에서 열면 시작 지급액·선행 마감 최소 간격과 여섯 보존기간이 보이고, 미정만 보기는 그 상태대로 거른다', async ({
     page,
     admin,
   }) => {
-    // The API: the six items, as #70 and #184 registered them — whole numbers of Coin and of days.
+    // The API: the eight items, as #70, #22, #184 and #77 registered them — whole numbers of Coin,
+    // of minutes and of days.
     const items = await dataOf<ReleaseSetting[]>(await admin.get(LIST));
     expect(items.map((item) => item.key)).toEqual(SHIPPED_KEYS);
     const startCoin = items.find((item) => item.key === START_COIN_KEY);
     if (startCoin === undefined) throw new Error('unreachable');
     expect(startCoin).toMatchObject({ key: START_COIN_KEY, label: '시작 지급액', unit: 'Coin' });
     expect(startCoin.valueSchema.type).toBe('integer');
+    const leadCloseGap = items.find((item) => item.key === LEAD_CLOSE_GAP_KEY);
+    expect(leadCloseGap).toMatchObject({ label: '선행 마감 최소 간격', unit: '분' });
+    expect(leadCloseGap?.valueSchema.type).toBe('integer');
     for (const [key, label] of RETENTION_ITEMS) {
       const item = items.find((entry) => entry.key === key);
       expect(item, key).toMatchObject({ key, label, unit: '일' });
@@ -148,10 +164,11 @@ test.describe('출시 설정 (#170)', () => {
     }
 
     // A change dialog takes a value as one line of JSON (a whole number), once a status with a
-    // value is picked — the start grant's and a retention period's alike, the period in 일;
-    // cancelled, nothing is written.
+    // value is picked — the start grant's, the lead-close gap's in 분 and a retention period's in
+    // 일 alike; cancelled, nothing is written.
     for (const [key, label, unit] of [
       [START_COIN_KEY, '시작 지급액', 'Coin'],
+      [LEAD_CLOSE_GAP_KEY, '선행 마감 최소 간격', '분'],
       [RETENTION_ITEMS[0][0], RETENTION_ITEMS[0][1], '일'],
     ] as const) {
       await page.getByTestId(`release-setting-edit-${key}`).click();

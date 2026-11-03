@@ -32,11 +32,7 @@ import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
 import { CATEGORY_TRAIL_SEPARATOR, categoryBreadcrumb } from '@/lib/category-label';
-import {
-  MARKET_RESULT_LABEL,
-  MARKET_STATUS_LABEL,
-  MARKET_STATUS_PALETTE,
-} from '@/lib/market-admin';
+import { MARKET_RESULT_LABEL, MARKET_STATUS_PALETTE } from '@/lib/market-admin';
 import {
   type CopiedSection,
   DEFAULT_DETAIL_VIEW,
@@ -55,6 +51,7 @@ import {
   statusNotice,
   viewDisplay,
 } from '@/lib/market-detail';
+import { marketStatusLabel } from '@/lib/market-status';
 import { HEADER_HEIGHT_PX } from '@/lib/nav';
 import { type RecentMove, recentMove } from '@/lib/ticks';
 import { useSession } from '@/lib/use-session';
@@ -463,7 +460,8 @@ function MarketHeaderRow({ market, now }: { market: Market; now?: number }) {
         variant="subtle"
         data-testid="market-status-badge"
       >
-        {MARKET_STATUS_LABEL[market.status]}
+        {/* '판정 지연' in place of '거래 마감' once the scheduled judgement has passed (#22). */}
+        {marketStatusLabel(market)}
       </Badge>
       {/* Until the market has closed — 개장 예정, 거래 중 and 거래 일시 중단, which closes on schedule
           (ADR-0093 decision 1, item 3) — the time left to the close; after it, the status says it. */}

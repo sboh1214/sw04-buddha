@@ -238,6 +238,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
         slug: market.slug,
         title: '기준금리 인하',
         status: 'open',
+        judgementDelayed: false,
         category: expect.objectContaining({ slug: expect.any(String) as unknown }) as unknown,
       },
       createdAt: post.createdAt.toISOString(),

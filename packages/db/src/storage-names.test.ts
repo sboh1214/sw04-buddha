@@ -248,6 +248,34 @@ describe('excluded features in stored data (#113)', () => {
     ]);
   });
 
+  it('names the market times and their CHECKs explicitly, each read by the test above (#22)', () => {
+    // ADR-0098, migration 0051: the scheduled times, the judgement zone and the lead-close gap
+    // the open stored beside the close, and the order CHECKs and the gap's own, under the names
+    // the API's tests and the migration spell.
+    const marketsTable = TABLES.find((table) => table.name === 'markets');
+    expect(marketsTable?.columns.map((column) => column.name)).toEqual(
+      expect.arrayContaining([
+        'openAt',
+        'scheduledOpenAt',
+        'closeAt',
+        'scheduledAnnouncementAt',
+        'scheduledJudgementAt',
+        'judgementTimeZone',
+        'leadCloseGapMinutes',
+      ]),
+    );
+    expect(storageNames().filter(({ where }) => where === 'markets constraint')).toEqual(
+      expect.arrayContaining(
+        [
+          'markets_open_before_close_check',
+          'markets_close_by_judgement_check',
+          'markets_deadline_by_judgement_check',
+          'markets_lead_close_gap_minutes_check',
+        ].map((name) => ({ where: 'markets constraint', name })),
+      ),
+    );
+  });
+
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {
     const tables = TABLES.map((table) => table.name);
     expect(tables).toEqual(

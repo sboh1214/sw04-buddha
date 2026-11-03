@@ -1,6 +1,6 @@
 'use client';
 
-import { Field, HStack, Input, NativeSelect, Stack } from '@chakra-ui/react';
+import { Field, Input, NativeSelect, Stack } from '@chakra-ui/react';
 import { type UseFormReturn } from 'react-hook-form';
 import { copy } from '@/copy';
 import { type Category, type MarketSummary } from '@/lib/api';
@@ -9,6 +9,7 @@ import { type MarketFormValues } from '@/lib/market-form';
 import { MarketPreview } from './market-preview';
 import { MarketRuleFields } from './market-rule-fields';
 import { MarketTagsField } from './market-tags-field';
+import { MarketTimeFields } from './market-time-fields';
 
 interface MarketFormFieldsProps {
   form: UseFormReturn<MarketFormValues>;
@@ -17,6 +18,16 @@ interface MarketFormFieldsProps {
   disabled?: boolean;
   /** The slug is chosen at creation only. */
   showSlug?: boolean;
+  /**
+   * The open market's edit form: its scheduled open and scheduled judgement are fixed (#172 item
+   * 14), so their inputs are locked (`MarketTimeFields`).
+   */
+  timesFixed?: boolean;
+  /**
+   * The 선행 마감 gap the edited market is held to (`AdminMarket.leadCloseGapMinutes`), shown under
+   * the announcement time; absent on 시장 만들기.
+   */
+  leadCloseGapMinutes?: number | null;
   /**
    * The market being edited, passed straight to the 미리보기 so an already-traded market previews
    * at its LIVE price and volume rather than as an untraded draft. Absent on 시장 만들기.
@@ -28,9 +39,10 @@ interface MarketFormFieldsProps {
  * The inputs of the market form (PLAN 12), shared by 시장 만들기 and the detail's 수정 card so
  * the two cannot drift. The owner holds the `useForm` and decides what a submit means.
  *
- * The order is the open-items check's (OPEN_ITEMS, #23): the question (and the slug, chosen with
- * it at creation), the rule items as one group (`MarketRuleFields`), the category and the tags;
- * then the image and the close time, which the check does not ask for.
+ * The order is the open-items check's (OPEN_ITEMS, #23, #22): the question (and the slug, chosen
+ * with it at creation), the rule items as one group (`MarketRuleFields`), the times and the
+ * judgement time zone as another (`MarketTimeFields`, the close time among them), the category and
+ * the tags; then the image, which the check does not ask for.
  *
  * The 미리보기 beneath them (Q-M3-6) is fed from the same `watch()`, so both screens got it at
  * once and neither can show a stale card.
@@ -40,6 +52,8 @@ export function MarketFormFields({
   categories,
   disabled = false,
   showSlug = false,
+  timesFixed = false,
+  leadCloseGapMinutes,
   base,
 }: MarketFormFieldsProps) {
   const {
@@ -72,6 +86,13 @@ export function MarketFormFields({
       )}
 
       <MarketRuleFields form={form} disabled={disabled} />
+
+      <MarketTimeFields
+        form={form}
+        disabled={disabled}
+        fixed={timesFixed}
+        leadCloseGapMinutes={leadCloseGapMinutes}
+      />
 
       <Field.Root invalid={!!errors.categoryId} required disabled={disabled} maxW="md">
         <Field.Label>{copy.adminMarketCategory}</Field.Label>
@@ -132,24 +153,17 @@ export function MarketFormFields({
 
       <MarketTagsField form={form} disabled={disabled} />
 
-      <HStack gap="2" align="start" flexWrap="wrap">
-        <Field.Root invalid={!!errors.imageUrl} disabled={disabled} flex="1" minW="56">
-          <Field.Label>{copy.adminMarketImageUrl}</Field.Label>
-          <Input
-            type="url"
-            autoComplete="off"
-            placeholder={copy.adminMarketImageUrlPlaceholder}
-            data-testid="market-image-url"
-            {...register('imageUrl')}
-          />
-          <Field.ErrorText>{errors.imageUrl?.message}</Field.ErrorText>
-        </Field.Root>
-        <Field.Root invalid={!!errors.closeAt} required disabled={disabled} maxW="56">
-          <Field.Label>{copy.adminMarketCloseAt}</Field.Label>
-          <Input type="datetime-local" data-testid="market-close-at" {...register('closeAt')} />
-          <Field.ErrorText>{errors.closeAt?.message}</Field.ErrorText>
-        </Field.Root>
-      </HStack>
+      <Field.Root invalid={!!errors.imageUrl} disabled={disabled}>
+        <Field.Label>{copy.adminMarketImageUrl}</Field.Label>
+        <Input
+          type="url"
+          autoComplete="off"
+          placeholder={copy.adminMarketImageUrlPlaceholder}
+          data-testid="market-image-url"
+          {...register('imageUrl')}
+        />
+        <Field.ErrorText>{errors.imageUrl?.message}</Field.ErrorText>
+      </Field.Root>
 
       <MarketPreview values={values} categories={categories} base={base} />
     </Stack>

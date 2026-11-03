@@ -5,7 +5,7 @@ import { MARKET_LONG_DELAY_DAYS_MAX, MARKET_LONG_DELAY_DAYS_MIN } from '@buddha/
 import { type UseFormReturn } from 'react-hook-form';
 import { copy } from '@/copy';
 import { voidPayoutText } from '@/lib/market-detail';
-import { type MarketFormValues } from '@/lib/market-form';
+import { type MarketFormValues, timeRuleDeps } from '@/lib/market-form';
 import { MarketSourcesField } from './market-sources-field';
 
 interface MarketRuleFieldsProps {
@@ -69,7 +69,8 @@ export function MarketRuleFields({ form, disabled }: MarketRuleFieldsProps) {
           <Input
             type="datetime-local"
             data-testid="market-event-deadline"
-            {...register('eventDeadline')}
+            // 사건 기한 ≤ 예정 판정 (#22): a change re-checks the judgement's input after a submit.
+            {...register('eventDeadline', { deps: timeRuleDeps('eventDeadline') })}
           />
           <Field.ErrorText>{errors.eventDeadline?.message}</Field.ErrorText>
         </Field.Root>

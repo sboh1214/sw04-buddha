@@ -358,6 +358,13 @@
       "when": 1793436640186,
       "tag": "0050_market_rule_items",
       "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1793451366724,
+      "tag": "0051_market_times",
+      "breakpoints": true
     }
   ]
 }

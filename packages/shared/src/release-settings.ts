@@ -3,6 +3,7 @@ import { type ValidationIssue } from './api/errors.js';
 import { cursorQuerySchema } from './api/pagination.js';
 import { releaseSettingStatusSchema, type ReleaseSettingStatus } from './enums.js';
 import { expectedAccountIdSchema } from './expected-account.js';
+import { LEAD_CLOSE_GAP_MAX_MINUTES } from './market-times.js';
 import { RETENTION_PERIOD_MAX_DAYS, type RetentionPeriod } from './retention.js';
 import { START_GRANT_MAX_COIN } from './start-grant.js';
 
@@ -189,6 +190,27 @@ export const START_COIN_SETTING = defineReleaseSetting({
 });
 
 /**
+ * 선행 마감 최소 간격 (#22, ADR-0098; ADR-0093 decision 2 #172 item 13 and result 3): how many
+ * minutes a market with an announcement time (발표 예정 시각) must close before it — close ≤
+ * announcement − gap, in whole minutes (`timeRuleViolations`'s `leadClose`). The open-items check
+ * reads it (`leadClose`), and so does an open market's close or announcement edit when the market
+ * has no gap of its own; a draft's create or edit is never refused for it. Whatever the status, a
+ * value is used (as the start grant's); while it is undecided a market with an announcement fails
+ * `leadClose` and cannot open, and one with '없음' is not concerned. The open stores the reading on
+ * the market (`markets.lead_close_gap_minutes`), and its later checks keep using it: work under
+ * way keeps the value it started with (docs/SETTINGS.md). The design proposal is 60. An integer,
+ * 0 (the close at or before the announcement) to LEAD_CLOSE_GAP_MAX_MINUTES.
+ */
+export const LEAD_CLOSE_GAP_SETTING = defineReleaseSetting({
+  key: 'market.lead_close_gap',
+  label: '선행 마감 최소 간격',
+  unit: '분',
+  description:
+    '발표 예정 시각이 있는 시장의 거래 마감이 그 시각보다 적어도 이만큼 앞서야 한다(#22, ADR-0093 #172 13항, 설계 제안 60분). 개설 항목 검사의 선행 마감이 이 값으로 본다. 초안을 만들거나 고칠 때는 거절하지 않는다. 값이 있으면 상태와 상관없이 쓰고, 미정이면 발표 예정 시각이 있는 시장은 선행 마감을 통과하지 못해 열 수 없다(발표 예정 시각이 없는 시장은 상관없다). 시장은 열 때 읽은 값을 저장해, 거래 중에 마감을 늦추거나 발표 예정 시각을 고칠 때 그 값으로 다시 본다(저장한 값이 없으면 지금 값). 바꾼 값은 그 뒤의 검사와 개장부터 적용한다.',
+  schema: z.number().int().min(0).max(LEAD_CLOSE_GAP_MAX_MINUTES),
+});
+
+/**
  * A retention period (#184, retention.ts): whole days, 1 to RETENTION_PERIOD_MAX_DAYS. Days, the
  * unit every count of this project's periods uses (a day is 24 hours of the database clock), so
  * one value says exactly when a record is due; a year is entered as its days.
@@ -321,15 +343,17 @@ export const RETENTION_PERIOD_SETTINGS: Readonly<
 };
 
 /**
- * The shipped registry, in the order the admin screen lists it. #170 built the mechanism, and each
- * value is registered by the issue that uses it (#70 the start grant, #184 the retention periods,
- * #77 the market proposals' retention period;
+ * The shipped registry, in the order the admin screen lists it: the operating values, then the
+ * retention periods. #170 built the mechanism, and each value is registered by the issue that uses
+ * it (#70 the start grant, #22 the lead-close gap, #184 the retention periods, #77 the market
+ * proposals' retention period;
  * #74, #119, #152·#175, … to come) — define it with `defineReleaseSetting` and list it here, then
  * update every test that pins the list (docs/SETTINGS.md, 항목 등록하기). Tests inject their own
  * registry (`createTestApp({ releaseSettings })` in apps/api).
  */
 export const RELEASE_SETTINGS: ReleaseSettingsRegistry = defineReleaseSettings([
   START_COIN_SETTING,
+  LEAD_CLOSE_GAP_SETTING,
   CONSENT_RECORDS_RETENTION_SETTING,
   PHONE_VERIFICATION_RECORDS_RETENTION_SETTING,
   DELETED_POSTS_RETENTION_SETTING,

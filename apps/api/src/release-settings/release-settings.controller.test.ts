@@ -1,7 +1,8 @@
 /**
  * Release settings (#170) against the docker `test` profile, with a registry of test items
  * injected through `createTestApp({ releaseSettings })` — the shipped one holds the items the
- * issues that use them registered (the start grant, #70), checked at the end. Covers
+ * issues that use them registered (the start grant, #70; the lead-close gap, #22; the retention
+ * periods, #184), checked at the end. Covers
  * register → list → get → change → change log, the reason and value rules (text jsonb cannot hold
  * included), the refusal of a change to the current state, the undecided filter, the admin-only
  * surface and that a change and its record commit together. Skips when TEST_* are unset.
@@ -12,6 +13,7 @@ import {
   CONSENT_RECORDS_RETENTION_SETTING,
   JSONB_LONE_SURROGATE_MESSAGE,
   JSONB_NUL_MESSAGE,
+  LEAD_CLOSE_GAP_SETTING,
   RELEASE_SETTINGS,
   RELEASE_SETTING_UNCHANGED_MESSAGE,
   RETENTION_PERIOD_MAX_DAYS,
@@ -623,10 +625,11 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
     await t.app.get(AdminGuard).invalidate(admin.id);
   });
 
-  it('lists the start grant amount (#70) and the retention periods (#184), undecided until an admin enters a value', async () => {
+  it('lists the start grant amount (#70), the lead-close gap (#22) and the retention periods (#184), undecided until an admin enters a value', async () => {
     const retention = Object.values(RETENTION_PERIOD_SETTINGS);
     expect([...RELEASE_SETTINGS.keys()]).toEqual([
       START_COIN_SETTING.key,
+      LEAD_CLOSE_GAP_SETTING.key,
       ...retention.map((definition) => definition.key),
     ]);
     const res = await t.app.inject({
@@ -645,6 +648,22 @@ describe.skipIf(!hasTestInfra)('the shipped registry (integration)', () => {
           type: 'integer',
           minimum: 1,
           maximum: 1_000_000,
+        }) as unknown,
+        status: 'undecided',
+        value: null,
+        updatedAt: null,
+        updatedBy: null,
+      },
+      {
+        key: 'market.lead_close_gap',
+        label: '선행 마감 최소 간격',
+        unit: '분',
+        description: LEAD_CLOSE_GAP_SETTING.description,
+        // Whole minutes, 0 (the close at or before the announcement) to a week (ADR-0098).
+        valueSchema: expect.objectContaining({
+          type: 'integer',
+          minimum: 0,
+          maximum: 10_080,
         }) as unknown,
         status: 'undecided',
         value: null,

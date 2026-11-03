@@ -105,6 +105,17 @@ export function holdTimeZone(
 }
 
 /**
+ * Whether a zone is held for this viewer — the one TimeZoneProvider hands down then
+ * (`displayTimeZone`) is the zone that applies, not Seoul standing in for one not known yet: the
+ * server's render, the hydrating one, the round trips until the profile is known, and the start
+ * over after a viewer change. Only a settled zone may draw what the server's HTML never holds,
+ * the judgement zone's second line beside a time (`DateTimeText`, #22, ADR-0098).
+ */
+export function timeZoneSettled(held: HeldTimeZone | null, viewer: string | null): boolean {
+  return held !== null && held.viewer === viewer;
+}
+
+/**
  * The zone TimeZoneProvider hands down: the one held for this viewer, or Seoul while none is —
  * the server's render, the hydrating one, the round trips until the profile is known. So a
  * page's times switch once at most (ADR-0063).
@@ -115,7 +126,47 @@ export function holdTimeZone(
  * previous one's zone.
  */
 export function displayTimeZone(held: HeldTimeZone | null, viewer: string | null): string {
-  return held !== null && held.viewer === viewer ? held.zone : SEOUL_TIME_ZONE;
+  return held !== null && timeZoneSettled(held, viewer) ? held.zone : SEOUL_TIME_ZONE;
+}
+
+/**
+ * The engine's own name for `zone` (`resolvedOptions().timeZone`): `ROK` reads Asia/Seoul,
+ * `US/Eastern` America/New_York. `zone` itself for a name this engine cannot read.
+ */
+function resolvedTimeZone(zone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
+  } catch (error) {
+    if (error instanceof RangeError) return zone;
+    throw error;
+  }
+}
+
+/**
+ * Whether `a` and `b` are one zone (ADR-0063 result 3: zones differ by name, not by offset, as
+ * Asia/Tokyo is not Seoul at the same offset): the same name, or two names this engine resolves
+ * to one — `ROK` and Asia/Seoul, `US/Eastern` and America/New_York. A name it cannot read is
+ * compared as written.
+ */
+export function sameTimeZone(a: string, b: string): boolean {
+  return a === b || resolvedTimeZone(a) === resolvedTimeZone(b);
+}
+
+/**
+ * The zone a market time's second line is read in (#22, ADR-0098; ADR-0061 decision 1 item 8,
+ * ADR-0093 decision 3 '#22 시간대': both zones, only when they differ): the market's 판정 기준
+ * 시간대 when it is another zone than `displayZone`, the one the time is read in. `null` for no
+ * second line — no zone set (a market opened before #22), the same zone under any spelling
+ * (`sameTimeZone`), or one this browser cannot read (`isKnownTimeZone`: stored from a browser with
+ * newer tzdata), which it could not format.
+ */
+export function judgementLineZone(
+  displayZone: string,
+  judgementTimeZone: string | null | undefined,
+): string | null {
+  if (judgementTimeZone === null || judgementTimeZone === undefined) return null;
+  if (!isKnownTimeZone(judgementTimeZone)) return null;
+  return sameTimeZone(displayZone, judgementTimeZone) ? null : judgementTimeZone;
 }
 
 /**

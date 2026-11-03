@@ -26,8 +26,10 @@ import {
  *   CANCELLED status.
  *
  * VOID's 50/50 payout is no item: one rule for every market (#173 item 9, ADR-0093 result 1), shown
- * from `PROPOSED_CONTRACT_TERMS`. The title and #22's times join these items in #80's versions
- * (#172 item 7) but are not rule items.
+ * from `PROPOSED_CONTRACT_TERMS`. The title and #22's time items (`TIME_ITEMS`, market-times.ts)
+ * join these items in #80's versions (#172 item 7) but are not rule items; of the times, the
+ * announcement and the judgement time zone join them in the `rules_edited` event too
+ * (`RULES_EDITED_ITEMS`, market-edits.ts).
  */
 export const RULE_ITEMS = [
   'description',
@@ -82,10 +84,10 @@ export const STORABLE_INSTANT_TOO_EARLY = `must be ${STORABLE_INSTANT_MIN} or la
 const isIsoInstant = (value: string) => z.iso.datetime().safeParse(value).success;
 
 /**
- * An ISO instant in UTC (`z.iso.datetime()`) from STORABLE_INSTANT_MIN on: 사건 기한 as the body
- * sends it and as `Market` carries it. The bound is checked on an ISO instant only, so a malformed
- * value is the format's one issue, never a second one (zod runs the refinement after the format
- * check failed too).
+ * An ISO instant in UTC (`z.iso.datetime()`) from STORABLE_INSTANT_MIN on: 사건 기한 and #22's
+ * market times (market-times.ts, the close included) as the body sends them and as `Market`
+ * carries them. The bound is checked on an ISO instant only, so a malformed value is the format's
+ * one issue, never a second one (zod runs the refinement after the format check failed too).
  */
 export const storableInstantSchema = z.iso
   .datetime()
@@ -194,35 +196,9 @@ function sameItem<K extends RuleItem>(item: K, before: MarketRuleItems, after: M
 /**
  * The rule items whose value an edit changed, in RULE_ITEMS order (#23): a text by its trimmed
  * value, null and blank alike; the event deadline by its instant; the sources by name and address,
- * in order, so a reordered fallback list is a change. The `rules_edited` event lists them, and
- * #80's versions can.
+ * in order, so a reordered fallback list is a change. The `rules_edited` event lists them
+ * (`changedRulesEditedItems`, market-edits.ts), and #80's versions can.
  */
 export function changedRuleItems(before: MarketRuleItems, after: MarketRuleItems): RuleItem[] {
   return RULE_ITEMS.filter((item) => !sameItem(item, before, after));
-}
-
-/**
- * The payload of a `rules_edited` market event (#23, ADR-0097): the items an edit changed
- * (`changedRuleItems`) and each one's value before and after it — a source as `{name, url}`, the
- * fallbacks as their ordered list, the event deadline as an ISO instant or null. Rows written
- * before #23 carry `{before, after}` as the old rules text instead.
- */
-export interface RulesEditedPayload {
-  items: RuleItem[];
-  before: Partial<MarketRuleItems>;
-  after: Partial<MarketRuleItems>;
-}
-
-function pickRuleItems(values: MarketRuleItems, items: readonly RuleItem[]) {
-  return Object.fromEntries(items.map((item) => [item, values[item]])) as Partial<MarketRuleItems>;
-}
-
-/** The `rules_edited` payload of an edit from `before` to `after`; null when no item changed. */
-export function rulesEditedPayload(
-  before: MarketRuleItems,
-  after: MarketRuleItems,
-): RulesEditedPayload | null {
-  const items = changedRuleItems(before, after);
-  if (items.length === 0) return null;
-  return { items, before: pickRuleItems(before, items), after: pickRuleItems(after, items) };
 }

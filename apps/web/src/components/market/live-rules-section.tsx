@@ -10,7 +10,8 @@ import { type DetailWidth, copyTestId } from '@/lib/market-detail';
  * component happened to fetch.
  *
  * What this section shows is EDITABLE while a market is open — every rule item (#23) until #80's
- * supplements replace that, and the close time (`market-admin.service.ts`) — and the rest of the
+ * supplements replace that, and of its times (#22) the close, which only moves later, the
+ * announcement time and the judgement zone (`market-admin.service.ts`) — and the rest of the
  * detail already follows the row: a focus refetch could move the countdown to a new `closeAt`
  * while this section still quoted the old deadline and the old rules until a full route reload.
  * That is the one panel PLAN 11.1 asks a visitor to trust before spending Coin, so it may not be

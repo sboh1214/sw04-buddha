@@ -10,6 +10,7 @@ import { copy } from '@/copy';
 import { system } from '@/theme/system';
 import { type Market } from './api';
 import { formatNoPrice } from './market-admin';
+import { readsJudgementDelayed } from './market-status';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
 
 /**
@@ -59,8 +60,9 @@ export type SharedSection =
  *   거래량, 참여자 and the status notice. It is the mobile first screen's '요약' as well.
  * - `background`: 배경 (`Market.description`), only when the market has one.
  * - `rules`: 규칙 — every rule item but 배경 (#23: YES·NO 조건, 사건 기한, 1차·대체 출처 and 전환
- *   조건, 장기 지연 기한, 지연·취소·무효 처리), the fixed VOID payout line and 마감. 예정 판정일 has
- *   no data before #22 and so no slot.
+ *   조건, 장기 지연 기한, 지연·취소·무효 처리), the fixed VOID payout line, then the market's times
+ *   (#22: 예정 개장 시각 before the open, 거래 마감·발표 예정·예정 판정 시각) and its 판정 기준 시간대.
+ *   The times are rules too (ADR-0093 decision 2 #172 item 7), so they need no slot of their own.
  * - `judging`: 공개 판정 기록 (#24), right after the rules it applies, on every public status
  *   (owner decision 2026-10-17).
  * - `chart`: 가격 차트.
@@ -268,11 +270,19 @@ const STATUS_NOTICE: Partial<Record<MarketStatus, Omit<StatusNotice, 'detail'>>>
  * finalize wrote it, PLAN 5.5), and 내 손익 is the 내 포지션 card below, not this notice. 100 Coin
  * per winning contract is a YES or NO result's alone; a 무효 one has no winning side, so its line
  * names only where 내 손익 is (VOID's own payout, 50/50, is #126's to state).
+ *
+ * A closed market whose scheduled judgement has passed (`judgementDelayed`, #22, ADR-0098) says
+ * so, as its badge reads '판정 지연' (`marketStatusLabel`): still no trading, and no result yet —
+ * never that a late result means NO. The delay's reason and next review time are #142's.
  */
 export function statusNotice(market: {
   status: MarketStatus;
+  judgementDelayed: boolean;
   resolvedResult: MarketResult | null;
 }): StatusNotice | undefined {
+  if (readsJudgementDelayed(market)) {
+    return { tone: 'warning', message: copy.marketJudgementDelayedNotice };
+  }
   const notice = STATUS_NOTICE[market.status];
   if (notice === undefined) return undefined;
   if (market.status !== 'settled' || market.resolvedResult === null) return notice;
@@ -424,12 +434,29 @@ export function sourceView(source: RuleSource | null): SourceView | null {
 
 /**
  * 장기 지연 기한 as 규칙 words it: '예정 판정 시각에서 N일 뒤' (#172 item 10), or `null` while it is
- * not set ('—'). The instant itself needs #22's scheduled judgement time.
+ * not set ('—'). With a scheduled judgement the row adds the instant itself after
+ * LONG_DELAY_SEPARATOR (`longDelayDeadline`, #22, ADR-0098), so the reader adds no days.
  */
 export function longDelayText(days: number | null): string | null {
   return days === null
     ? null
     : `${copy.rulesLongDelayBefore} ${String(days)}${copy.rulesLongDelayTail}`;
+}
+
+/**
+ * Between 장기 지연 기한's words and its instant: '예정 판정 시각에서 14일 뒤 · 2026. 12. 15. 오전
+ * 10:00' — the instant being `longDelayDeadline(scheduledJudgementAt, longDelayDays)`, the one
+ * #142 and #145 act on, so the shown one cannot differ.
+ */
+export const LONG_DELAY_SEPARATOR = ' · ';
+
+/**
+ * Whether 규칙 has the 예정 개장 시각 row (#22, ADR-0098): before the open only — a draft in the
+ * admin preview, a market in review, a SCHEDULED one in public. From the open on, the market's own
+ * open time is history, not a rule a reader trades by, and the actual one is `openAt`.
+ */
+export function showsScheduledOpen(status: MarketStatus): boolean {
+  return status === 'draft' || status === 'review' || status === 'scheduled';
 }
 
 /**

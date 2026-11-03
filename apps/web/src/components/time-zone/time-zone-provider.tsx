@@ -1,5 +1,6 @@
 'use client';
 
+import { Text } from '@chakra-ui/react';
 import {
   type ReactNode,
   createContext,
@@ -8,6 +9,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react';
+import { copy } from '@/copy';
 import { useMe } from '@/hooks/use-me';
 import { SEOUL_TIME_ZONE, formatInTimeZone } from '@/lib/datetime';
 import {
@@ -15,7 +17,10 @@ import {
   browserTimeZone,
   displayTimeZone,
   holdTimeZone,
+  judgementLineZone,
   settledTimeZone,
+  timeZoneLabel,
+  timeZoneSettled,
 } from '@/lib/time-zone';
 import { useSession } from '@/lib/use-session';
 
@@ -49,8 +54,18 @@ import { useSession } from '@/lib/use-session';
 
 const TimeZoneContext = createContext<string>(SEOUL_TIME_ZONE);
 
+/**
+ * Whether the zone in effect is the viewer's own (`timeZoneSettled`) rather than Seoul standing in
+ * for it: false on the server, in the hydrating render, until the profile is known, and under
+ * `KstTimeZone` — so the judgement zone's second line (`DateTimeText`, #22, ADR-0098) is never in
+ * the server's HTML, never drawn by the server's ICU, and never on an admin screen.
+ */
+const TimeZoneSettledContext = createContext<boolean>(false);
+
 const noopSubscribe = () => () => undefined;
 const beforeHydration = (): string | null => null;
+const hydrated = () => true;
+const notHydrated = () => false;
 
 /**
  * Root provider (components/ui/provider.tsx): Seoul until the tab has hydrated AND the profile is
@@ -70,22 +85,51 @@ export function TimeZoneProvider({ children }: { children: ReactNode }) {
   const held = holdTimeZone(last, viewer, settled);
   // Stored while rendering (react.dev, "Storing information from previous renders"), not in an
   // effect: `react-hooks/set-state-in-effect` is an error here, and an effect would commit once
-  // more. `zone` below already reads `held`; the state only carries it to the next render, and
+  // more. The scope below already reads `held`; the state only carries it to the next render, and
   // React re-runs this component with it before any child renders. `holdTimeZone` answers
   // `last` itself when nothing changed, which is what stops the re-run.
   if (held !== last) setLast(held);
-  const zone = displayTimeZone(held, viewer);
-  return <TimeZoneContext.Provider value={zone}>{children}</TimeZoneContext.Provider>;
+  return (
+    <TimeZoneScope zone={displayTimeZone(held, viewer)} settled={timeZoneSettled(held, viewer)}>
+      {children}
+    </TimeZoneScope>
+  );
+}
+
+/**
+ * The zone everything inside reads times in, and whether it is the viewer's own (`settled`) —
+ * what TimeZoneProvider and KstTimeZone hand down, and what a test renders a settled zone with
+ * (the server's render never settles).
+ */
+export function TimeZoneScope({
+  zone,
+  settled,
+  children,
+}: {
+  zone: string;
+  settled: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <TimeZoneContext.Provider value={zone}>
+      <TimeZoneSettledContext.Provider value={settled}>{children}</TimeZoneSettledContext.Provider>
+    </TimeZoneContext.Provider>
+  );
 }
 
 /**
  * Seoul for everything inside, whatever the member picked: the admin layout wraps its pages in
  * this (ADR-0061 #60-8: 관리자 화면은 표시와 입력 모두 한국 시간이다). It reaches what the admin
  * screens borrow from the member screens — the preview's card and rules — while the admin's own
- * lists keep calling `formatKst` directly.
+ * lists keep calling `formatKst` directly. Never settled, so the preview's rules draw no judgement
+ * zone line (ADR-0093 decision 3 '#22 시간대': admin screens are KST alone).
  */
 export function KstTimeZone({ children }: { children: ReactNode }) {
-  return <TimeZoneContext.Provider value={SEOUL_TIME_ZONE}>{children}</TimeZoneContext.Provider>;
+  return (
+    <TimeZoneScope zone={SEOUL_TIME_ZONE} settled={false}>
+      {children}
+    </TimeZoneScope>
+  );
 }
 
 /** The zone in effect here: Seoul outside any provider, on the server and in an admin page. */
@@ -103,11 +147,60 @@ export function useFormatDateTime(): (iso: string) => string {
   return useCallback((iso: string) => formatInTimeZone(iso, zone), [zone]);
 }
 
+export interface DateTimeTextProps {
+  iso: string;
+  /**
+   * A market's 판정 기준 시간대 (#22, ADR-0098), for the rules' times: when it is another zone than
+   * the one in effect, a second line under the time reads it in that zone too (ADR-0061 decision 1
+   * item 8, ADR-0093 decision 3 '#22 시간대': 둘이 다를 때만 둘 다). Only once the zone is settled
+   * (`TimeZoneSettledContext`): the server's HTML and the first client render hold the one KST
+   * line, as every other time (ADR-0063), and an admin screen never draws the second.
+   */
+  judgementTimeZone?: string | null;
+  /**
+   * The row's test id: the viewer's line is `<testId>-viewer-zone` and the second one
+   * `<testId>-judgement-zone`, so a test reads each line by its element. Without it, the bare text.
+   */
+  testId?: string;
+}
+
 /**
  * One absolute time as text, for a component that has no directive and must stay renderable by
- * a server component (rules-section.tsx): the hook lives here, the caller passes the instant.
+ * a server component (rules-section.tsx): the hooks live here, the caller passes the instant —
+ * and, for a market's rules, the zone it is judged in (`judgementTimeZone`). The second line is
+ * labelled (`rulesJudgementZoneLine`): a Seoul time carries no marker, so beside a marked viewer's
+ * line it would not say which zone it is in. Its zone is told apart by name (`judgementLineZone`).
  */
-export function DateTimeText({ iso }: { iso: string }) {
-  const format = useFormatDateTime();
-  return <>{format(iso)}</>;
+export function DateTimeText({ iso, judgementTimeZone, testId }: DateTimeTextProps) {
+  const zone = useDisplayTimeZone();
+  const settled = useContext(TimeZoneSettledContext);
+  const viewer = formatInTimeZone(iso, zone);
+  const second = settled ? judgementLineZone(zone, judgementTimeZone) : null;
+  return (
+    <>
+      {testId === undefined ? viewer : <span data-testid={`${testId}-viewer-zone`}>{viewer}</span>}
+      {second !== null && (
+        <Text
+          as="span"
+          display="block"
+          color="fg.muted"
+          data-testid={testId === undefined ? undefined : `${testId}-judgement-zone`}
+        >
+          {copy.rulesJudgementZoneLine} {formatInTimeZone(iso, second)}
+        </Text>
+      )}
+    </>
+  );
+}
+
+/**
+ * A zone's name as the settings select labels it (`timeZoneLabel`: `America/New_York — 미 동부
+ * 시간`), for a component that must stay renderable by a server component (rules-section.tsx, the
+ * 판정 기준 시간대 row, #22). The Korean name is the ICU's that renders it, so the server's HTML and
+ * the hydrating render hold the IANA name alone — every visitor's bytes the same, no mismatch
+ * between the server's ICU and the browser's (ADR-0063) — and the label follows after hydration.
+ */
+export function TimeZoneNameText({ zone }: { zone: string }) {
+  const afterHydration = useSyncExternalStore(noopSubscribe, hydrated, notHydrated);
+  return <>{afterHydration ? timeZoneLabel(zone) : zone}</>;
 }

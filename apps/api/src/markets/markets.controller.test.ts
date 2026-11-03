@@ -1,7 +1,7 @@
 /**
  * Public market reads (PLAN 7.1, M3 design 3.2) against the docker `test` profile: list
- * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories.
- * Skips when TEST_* are unset.
+ * filters and the three sort-specific keysets, id/slug lookup, fills, ticks, categories, and the
+ * market times and '판정 지연' (#22). Skips when TEST_* are unset.
  */
 import { clockTimestamp, schema } from '@buddha/db';
 import { createCategory, createFill, createMarket, createUser } from '@buddha/db/test';
@@ -1051,6 +1051,88 @@ describe.skipIf(!hasTestInfra)('markets public reads (integration)', () => {
     // Longer than any slug or uuid: malformed, not merely unknown.
     expect((await get(`/api/v1/markets/${'a'.repeat(81)}`)).statusCode).toBe(400);
     expect((await get('/api/v1/markets/not-a-uuid/fills')).statusCode).toBe(400);
+  });
+
+  it('shows the times and the judgement time zone signed out, and 판정 지연 on a closed market past its scheduled judgement (#22)', async () => {
+    const at = (days: number) => new Date(Date.now() + days * DAY_MS);
+    // Whole minutes, as the admin form writes them; the zone stored as the admin picked it.
+    const minute = (date: Date) => new Date(Math.floor(date.getTime() / 60_000) * 60_000);
+    const times = {
+      scheduledOpenAt: minute(at(-1)),
+      closeAt: minute(at(7)),
+      scheduledAnnouncementAt: minute(at(8)),
+      scheduledJudgementAt: minute(at(9)),
+      judgementTimeZone: 'America/New_York',
+    };
+    const live = await market({ ...times, eventDeadline: minute(at(8)) });
+    const detail = (await get(`/api/v1/markets/${live.id}`)).json<{ data: Market }>().data;
+    // Public in every public status, signed out (N03 §4: the user sees the judgement time zone).
+    expect(detail).toMatchObject({
+      scheduledOpenAt: times.scheduledOpenAt.toISOString(),
+      closeAt: times.closeAt.toISOString(),
+      scheduledAnnouncementAt: times.scheduledAnnouncementAt.toISOString(),
+      scheduledJudgementAt: times.scheduledJudgementAt.toISOString(),
+      judgementTimeZone: 'America/New_York',
+      judgementDelayed: false,
+    });
+    // Nothing of the admin's: the gap its lead close was checked against is AdminMarket's.
+    expect(detail).not.toHaveProperty('leadCloseGapMinutes');
+    // '없음' and a market from before #22 read null; nothing is converted (D4).
+    const none = await market({ scheduledAnnouncementAt: null });
+    const legacy = await market({ blankTimes: true });
+    expect((await get(`/api/v1/markets/${none.id}`)).json<{ data: Market }>().data).toMatchObject({
+      scheduledAnnouncementAt: null,
+      judgementTimeZone: 'Asia/Seoul',
+    });
+    expect((await get(`/api/v1/markets/${legacy.id}`)).json<{ data: Market }>().data).toMatchObject(
+      {
+        scheduledOpenAt: null,
+        scheduledAnnouncementAt: null,
+        scheduledJudgementAt: null,
+        judgementTimeZone: null,
+        judgementDelayed: false,
+      },
+    );
+
+    // '판정 지연' (#173 item 11, ADR-0098): CLOSED with the scheduled judgement passed, on the
+    // server's clock at the read — no operator record needed. A display, not a status: the card
+    // carries it so it needs no time of its own; an open market past its close (A-M3-31), a
+    // closed one before its judgement, a judged one and one with no judgement never read it.
+    const late = await market({ status: 'closed', closeAt: at(-3), scheduledJudgementAt: at(-1) });
+    const due = await market({ status: 'closed', closeAt: at(-1), scheduledJudgementAt: at(1) });
+    const lingering = await market({
+      status: 'open',
+      closeAt: at(-3),
+      scheduledJudgementAt: at(-1),
+    });
+    const judged = await market({
+      status: 'resolved',
+      resolvedResult: 'YES',
+      resolvedAt: at(-1),
+      closeAt: at(-3),
+      scheduledJudgementAt: at(-2),
+    });
+    const undated = await market({ status: 'closed', closeAt: at(-3), blankTimes: true });
+    const expected = new Map([
+      [late.id, true],
+      [due.id, false],
+      [lingering.id, false],
+      [judged.id, false],
+      [undated.id, false],
+    ]);
+    const cards = (await get('/api/v1/markets?status=all&limit=100')).json<ListPage>().data;
+    for (const [id, delayed] of expected) {
+      const card = cards.find((row) => row.id === id);
+      expect({ id, delayed: card?.judgementDelayed }).toEqual({ id, delayed });
+      expect(card).not.toHaveProperty('scheduledJudgementAt');
+      const shown = (await get(`/api/v1/markets/${id}`)).json<{ data: Market }>().data;
+      expect({ id, delayed: shown.judgementDelayed }).toEqual({ id, delayed });
+    }
+    // No list filters by it (ADR-0095 8-6): the closed list holds a delayed market and one that
+    // is not, under the one status.
+    const closed = (await get('/api/v1/markets?status=closed')).json<ListPage>().data;
+    expect(closed.map((row) => row.id).sort()).toEqual([late.id, due.id, undated.id].sort());
+    expect(closed.every((row) => row.status === 'closed')).toBe(true);
   });
 
   it('refuses NUL in a path or query parameter as bad input, never as a 500', async () => {

@@ -422,7 +422,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       .where(eq(schema.markets.id, marketId));
     // The rule items (#23, ADR-0097): the background as 배경, the YES condition as the YES
     // condition, the expected sources as the primary source's name with the address left for
-    // the operator; the rest blank — the proposal's date is no event deadline.
+    // the operator; the rest blank — the proposal's date is no event deadline. The times but the
+    // close blank too (#22, ADR-0098): the date is no scheduled judgement, and nobody confirmed a
+    // zone.
     expect(market).toMatchObject({
       status: 'draft',
       title: submitted.question,
@@ -436,6 +438,11 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       categoryId: category.id,
       createdBy: admin.id,
       openAt: null,
+      scheduledOpenAt: null,
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: null,
+      judgementTimeZone: null,
+      leadCloseGapMinutes: null,
     });
     expect(await sourcesOf(marketId)).toEqual([
       { priority: 0, name: submitted.expectedSources, url: '' },
@@ -456,6 +463,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/admin/proposals (integration)', () => {
       'primarySource',
       'longDelayDays',
       'delayHandling',
+      'scheduledOpenAt',
+      'scheduledJudgementAt',
+      'judgementTimeZone',
       'tags',
     ]);
     expect((await actions()).map((row) => row.type)).toEqual([
