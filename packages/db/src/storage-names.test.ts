@@ -592,6 +592,48 @@ describe('excluded features in stored data (#113)', () => {
     expect(MARKET_EVENT_TYPES).toContain('judgement_corrected');
   });
 
+  it('names the delay records, their CHECKs and the record’s stored values, each read above (#142)', () => {
+    // ADR-0106, migration 0058: the table of a market's 판정 지연 기록, its CHECKs and index under
+    // the names the schema test spells, and the record's market event type and admin action type,
+    // which the test above reads for an excluded feature ('delay', 'review', 'recorded' name
+    // none). Its status column is the `market_status` enum (no varchar list), and no word of it
+    // is the cash-out's `withdraw*`: a record is never taken back (owner answer 2026-11-03 (4)).
+    const delays = TABLES.find((table) => table.name === 'market_judgement_delays');
+    expect(delays?.columns.map((column) => column.name)).toEqual([
+      'id',
+      'marketId',
+      'reason',
+      'nextReviewAt',
+      'marketStatus',
+      'judgementVersion',
+      'recordedBy',
+      'recordedAt',
+      'eventId',
+    ]);
+    expect(delays?.columns.find((column) => column.name === 'marketStatus')?.getSQLType()).toBe(
+      'market_status',
+    );
+    expect(storageNames()).toEqual(
+      expect.arrayContaining([
+        { where: 'table', name: 'market_judgement_delays' },
+        ...[
+          'market_judgement_delays_reason_check',
+          'market_judgement_delays_market_status_check',
+          'market_judgement_delays_judgement_version_check',
+          'market_judgement_delays_next_review_at_check',
+          'market_judgement_delays_market_id_event_id_idx',
+        ].map((name) => ({ where: 'market_judgement_delays constraint', name })),
+        { where: 'market_events.type value', name: 'judgement_delay_recorded' },
+        { where: 'admin_actions.type value', name: 'market_delay_record' },
+      ]),
+    );
+    expect(
+      Object.keys(VARCHAR_VALUES).filter((key) => key.startsWith('market_judgement_delays')),
+    ).toEqual([]);
+    // The personal table it is (a recorder's), holding no personal probability (the test below).
+    expect(personalTables().map((table) => table.name)).toContain('market_judgement_delays');
+  });
+
   it('passes with the payment and coupon structures kept for paid Coin (D9)', () => {
     const tables = TABLES.map((table) => table.name);
     expect(tables).toEqual(

@@ -20,7 +20,6 @@ import {
   MY_DISPUTES_KEY,
   MY_DISPUTES_PATH,
   myDisputesKey,
-  disputeDeadlineWait,
   disputeDraft,
   disputeLoginPath,
   disputePath,
@@ -202,18 +201,6 @@ describe('a dispute’s status', () => {
 
 describe('the 이의 기한 on screen (#173 item 5)', () => {
   const deadline = '2026-12-01T03:00:00.000Z';
-  const at = Date.parse(deadline);
-
-  it('waits until the deadline, to the millisecond, and no more once it has come', () => {
-    expect(disputeDeadlineWait(deadline, at - 60_000)).toBe(60_000);
-    expect(disputeDeadlineWait(deadline, at - 1)).toBe(1);
-    // `now < deadline` takes disputes, so the deadline's own instant is closed (`isDisputeOpen`).
-    expect(disputeDeadlineWait(deadline, at)).toBeNull();
-    expect(disputeDeadlineWait(deadline, at + 1)).toBeNull();
-    expect(disputeDeadlineWait('nope', at)).toBeNull();
-    // A day at most at once: the timer waits again (no timer outlives 2^31 ms).
-    expect(disputeDeadlineWait(deadline, at - 3 * 24 * 60 * 60 * 1_000)).toBe(24 * 60 * 60 * 1_000);
-  });
 
   it('times only a deadline the API says is still open', () => {
     expect(openDisputeDeadline({ disputeOpen: true, disputeDeadline: deadline })).toBe(deadline);

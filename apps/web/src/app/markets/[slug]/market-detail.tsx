@@ -33,6 +33,7 @@ import { WatchButton } from '@/components/market/watch-button';
 import { DateTimeText } from '@/components/time-zone/time-zone-provider';
 import { copy } from '@/copy';
 import { useDisputeOpen } from '@/hooks/use-disputes';
+import { useInstantReached } from '@/hooks/use-instant-reached';
 import { useMarketSocket } from '@/hooks/use-market-socket';
 import { useCategories, useMarket, useMarketTicks } from '@/hooks/use-markets';
 import { type Market } from '@/lib/api';
@@ -52,9 +53,11 @@ import {
   copyTestId,
   detailViewOf,
   marketRefreshNotice,
+  nextReviewWaitAt,
   perWidth,
   personalAreaView,
   showsOrderArea,
+  shownJudgementDelay,
   statusNotice,
   viewDisplay,
 } from '@/lib/market-detail';
@@ -537,6 +540,16 @@ function MarketSummary({
  * (`useDisputeOpen`, a one-shot timer from the server's `now`). Both are public data, in the
  * server's HTML and the same for every visitor; who may dispute is the submission screen's.
  *
+ * A market that reads '판정 지연' with an operator's 판정 지연 기록 (#142, ADR-0106; ADR-0093 decision
+ * 3 '#142 지연 사유', #173 items 11·13) adds its 지연 사유 — the one public sentence — and its 다음
+ * 검토 시각 in the viewer's zone and the market's 판정 기준 시간대 (`DateTimeText`), never who
+ * recorded it nor when (`shownJudgementDelay`). Once that time has passed with no new record —
+ * the API's `nextReviewPassed`, or the time come on screen by a one-shot timer from the server's
+ * `now` (`useInstantReached`, owner answer 2026-11-03 (2)) — the row is marked '갱신 대기' and says
+ * that no result comes of the time passing; the reason stays. The detail reads the market again
+ * then, as at the deadline, and a new record's `market:status` repeat (A-M4-36) brings it in.
+ * Below md the two rows put the label above the value, as the rules' rows do.
+ *
  * `role="status"` rather than `role="alert"`: a market closing while someone reads it is worth
  * announcing, but it is not an emergency that should interrupt them mid-sentence.
  *
@@ -548,12 +561,18 @@ export function StatusNotice({ market, now }: { market: Market; now?: number }) 
   // At the deadline a held market publishes nothing: its label turns 판정 지연 on a fresh read. A
   // waiting correction holds one too (#176, ADR-0105), which the public market cannot tell apart
   // (it has no 이의 검토 중), so every 잠정 결과 is read again then; an unheld one is soon confirmed.
-  const open = useDisputeOpen(market, now, () => {
+  const readAgain = () => {
     void queryClient.invalidateQueries({ queryKey: marketKey(market.id) });
-  });
+  };
+  const open = useDisputeOpen(market, now, readAgain);
+  const delay = shownJudgementDelay(market);
+  // 갱신 대기 without a reload: nothing is published as the next review time passes (#173 item 11).
+  const reviewCame = useInstantReached(nextReviewWaitAt(delay), now, readAgain);
   const notice = statusNotice(market);
   if (notice === undefined) return null;
   const deadline = market.status === 'provisional' ? market.disputeDeadline : null;
+  const reviewPassed = delay !== null && (delay.nextReviewPassed || reviewCame);
+  const resultRows = market.resolvedResult !== null || deadline !== null;
   return (
     <Alert.Root status={notice.tone} role="status" data-testid="market-status-notice">
       <Alert.Indicator />
@@ -564,7 +583,7 @@ export function StatusNotice({ market, now }: { market: Market; now?: number }) 
             {notice.detail}
           </Alert.Description>
         )}
-        {(market.resolvedResult !== null || deadline !== null) && (
+        {resultRows && (
           <DataList.Root orientation="horizontal" size="sm">
             {market.resolvedResult !== null && (
               <DataList.Item>
@@ -588,6 +607,64 @@ export function StatusNotice({ market, now }: { market: Market; now?: number }) 
                 </DataList.ItemValue>
               </DataList.Item>
             )}
+          </DataList.Root>
+        )}
+        {delay !== null && (
+          // Label above value below md, as the rules' rows: beside a 120px label column a reason of
+          // up to 500 characters and the two zones' times would get a strip of a phone's width. A
+          // list of its own, so the result and deadline rows keep theirs; `mt` makes up the lists'
+          // gap between the two. Each item restates its direction (`RuleRow`): the horizontal
+          // recipe sets none, so the vertical one's column would last past md.
+          <DataList.Root
+            orientation={{ base: 'vertical', md: 'horizontal' }}
+            size="sm"
+            mt={resultRows ? '2' : undefined}
+            data-testid="market-detail-delay-rows"
+          >
+            <DataList.Item flexDirection={{ base: 'column', md: 'row' }} alignItems="flex-start">
+              <DataList.ItemLabel>{copy.marketJudgementDelayReason}</DataList.ItemLabel>
+              <DataList.ItemValue
+                display="block"
+                whiteSpace="pre-wrap"
+                wordBreak="break-word"
+                data-testid="market-detail-delay-reason"
+              >
+                {delay.reason}
+              </DataList.ItemValue>
+            </DataList.Item>
+            <DataList.Item
+              flexDirection={{ base: 'column', md: 'row' }}
+              alignItems="flex-start"
+              data-testid="market-detail-next-review"
+              data-passed={reviewPassed}
+            >
+              <DataList.ItemLabel>{copy.marketNextReviewAt}</DataList.ItemLabel>
+              <DataList.ItemValue display="block">
+                <DateTimeText
+                  iso={delay.nextReviewAt}
+                  judgementTimeZone={market.judgementTimeZone}
+                  testId="market-detail-next-review"
+                />
+                {reviewPassed && (
+                  <Text as="span" display="block" mt="1">
+                    <Badge
+                      colorPalette="orange"
+                      variant="subtle"
+                      data-testid="market-detail-next-review-passed"
+                    >
+                      {copy.marketNextReviewPassed}
+                    </Badge>{' '}
+                    <Text
+                      as="span"
+                      color="fg.muted"
+                      data-testid="market-detail-next-review-passed-note"
+                    >
+                      {copy.marketNextReviewPassedNote}
+                    </Text>
+                  </Text>
+                )}
+              </DataList.ItemValue>
+            </DataList.Item>
           </DataList.Root>
         )}
         {open && (

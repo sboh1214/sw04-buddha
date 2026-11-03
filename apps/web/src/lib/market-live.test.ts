@@ -83,6 +83,8 @@ const detail: Market = {
   // No rule version (#80): not opened yet, or opened before #80 (D4).
   ruleVersion: null,
   ruleVersions: [],
+  // No 판정 지연 기록 (#142): not reading 판정 지연.
+  judgementDelay: null,
 };
 
 const tick = (patch: Partial<MarketTickEvent> = {}): MarketTickEvent => ({
@@ -331,6 +333,39 @@ describe('applyStatus', () => {
     });
   });
 
+  it('resets the 판정 지연 기록 read with the old status, and adds none to a card (#142)', () => {
+    // ADR-0106: `judgementDelay` is the current record of the status it was read with — a CLOSED
+    // market's must not stand on the 잠정 결과 the approval brings; the refetch fills it in.
+    const late: Market = {
+      ...detail,
+      status: 'closed',
+      statusEventId: '3',
+      judgementDelayed: true,
+      judgementDelay: {
+        reason: '출처의 발표가 늦어지고 있습니다.',
+        nextReviewAt: '2026-10-05T00:00:00.000Z',
+        nextReviewPassed: true,
+      },
+    };
+    const approved = statusEvent({
+      status: 'provisional',
+      resolvedResult: 'NO',
+      statusEventId: '4',
+    });
+    expect(applyStatus(late, approved)).toMatchObject({
+      status: 'provisional',
+      judgementDelayed: false,
+      judgementDelay: null,
+    });
+    // A record's own repeat (A-M4-36: the key unchanged) writes nothing; its refetch brings it.
+    expect(
+      applyStatus(late, statusEvent({ status: 'closed', statusEventId: '3' })),
+    ).toBeUndefined();
+    // A card carries no record, and the event gives it none.
+    const moved = applyStatus({ ...card, status: 'closed', statusEventId: '3' }, approved);
+    expect(moved === undefined ? true : 'judgementDelay' in moved).toBe(false);
+  });
+
   it('writes nothing for a status no member sees: a scheduled market sent back (#78)', () => {
     // ADR-0099: 되돌리기 from 개장 예정 publishes `draft` under a newer key. The card and the detail
     // keep 개장 예정 rather than call it 초안, an admin's label; the refetch beside it answers 404.
@@ -566,6 +601,42 @@ describe('joinMarket', () => {
       disputeUnderReview: true,
       disputeOpen: true,
     });
+  });
+
+  it('keeps the 판정 지연 기록 with the status it was read for, and takes a tie’s new one (#142)', () => {
+    // ADR-0106: a `GET` that left while the market was CLOSED and delayed lands after the
+    // approval's `provisional`: its record was the CLOSED market's and must not label the 잠정 결과.
+    const record = {
+      reason: '출처의 발표가 늦어지고 있습니다.',
+      nextReviewAt: '2026-11-05T00:00:00.000Z',
+      nextReviewPassed: false,
+    };
+    const late: Market = {
+      ...detail,
+      status: 'closed',
+      statusEventId: '3',
+      judgementDelayed: true,
+      judgementDelay: record,
+    };
+    const provisional: Market = {
+      ...detail,
+      status: 'provisional',
+      resolvedResult: 'NO',
+      statusEventId: '4',
+      judgementVersion: 1,
+    };
+    for (const joined of [joinMarket(provisional, late), joinMarket(late, provisional)]) {
+      expect(joined.judgementDelay).toBeNull();
+    }
+    // The same key: a new record's republish keeps it, so the refetch's record comes in whole.
+    const renewed: Market = {
+      ...late,
+      judgementDelay: { ...record, reason: '다음 주에 다시 확인합니다.' },
+    };
+    expect(joinMarket(late, renewed).judgementDelay).toEqual(renewed.judgementDelay);
+    // A card has none, and the join gives it none.
+    const joinedCard = joinMarket({ ...card, statusEventId: '4' }, card);
+    expect('judgementDelay' in joinedCard).toBe(false);
   });
 
   it('keeps the higher key with its result, whatever the status says', () => {

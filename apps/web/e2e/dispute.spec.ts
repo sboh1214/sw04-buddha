@@ -58,7 +58,10 @@ import {
  * disputes it closes as 정정으로 종결, the accepted ones a rejected or retracted correction sends
  * back to 검토 중 and a second dispute on the corrected version
  * (admin-market-judgements.controller.test.ts, packages/db market-dispute.test.ts); the
- * correction itself, with no dispute, is correction.spec.ts's. The screens' states are
+ * correction itself, with no dispute, is correction.spec.ts's. A 판정 지연 기록 on a market a
+ * dispute holds (#142, ADR-0106) is the API's integration test too
+ * (admin-market-judgement-delays.controller.test.ts); correction.spec.ts records one on a market a
+ * waiting correction holds. The screens' states are
  * unit-tested (dispute-screen.test.tsx, my-disputes.test.tsx, market-dispute-panel.test.tsx,
  * admin-disputes.test.tsx). What stays here is real: the refusals a
  * member without a fill and an operator meet, the deadline the API keeps on its own clock, the

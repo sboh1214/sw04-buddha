@@ -275,6 +275,25 @@ export function tickingNow(anchor: number | undefined, elapsedMs: number, wallNo
 }
 
 /**
+ * The longest a one-shot wait for an instant holds at once — a day: `setTimeout` takes no more than
+ * about 24.8 days, and a longer wait is waited again from where it ends.
+ */
+const INSTANT_WAIT_MAX_MS = 24 * 60 * 60 * 1_000;
+
+/**
+ * How long from `now` until `at` (ISO) has come — `now >= at` — plus `marginMs` (a timer may fire a
+ * little early), at most a day; `null` once it has come, or for an unreadable instant. A screen
+ * whose data nothing reads again at an instant — a held market's 이의 기한 (#175), a 판정 지연
+ * 기록's 다음 검토 시각 (#142) — waits this long with a one-shot timer (`useInstantReached`), never
+ * by a clock read in render.
+ */
+export function instantWait(at: string, now: number, marginMs = 0): number | null {
+  const instant = Date.parse(at);
+  if (Number.isNaN(instant) || instant <= now) return null;
+  return Math.min(instant - now + marginMs, INSTANT_WAIT_MAX_MS);
+}
+
+/**
  * The server instant a grid row may anchor its countdown to, or `undefined` for a row that must
  * fall back to the wall clock.
  *

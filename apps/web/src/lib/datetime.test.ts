@@ -8,6 +8,7 @@ import {
   isoToKstLocal,
   kstLocalToIso,
   rowAnchor,
+  instantWait,
   tickingNow,
 } from './datetime';
 
@@ -211,6 +212,29 @@ describe('formatRemaining', () => {
     expect(formatRemaining(closeAt, Date.parse(closeAt) + 1000)).toBe('');
     expect(formatRemaining('not-a-date', Date.parse(closeAt))).toBe('');
     expect(formatRemaining('', Date.parse(closeAt))).toBe('');
+  });
+});
+
+describe('instantWait (#175, #142)', () => {
+  const at = '2026-12-02T01:00:00.000Z';
+  const AT = Date.parse(at);
+
+  it('waits until the instant has come, at most a day, and not once it has', () => {
+    expect(instantWait(at, AT - 60_000)).toBe(60_000);
+    expect(instantWait(at, AT - 1)).toBe(1);
+    // `now >= at` is come: the timer fires its callback, no wait left.
+    expect(instantWait(at, AT)).toBeNull();
+    expect(instantWait(at, AT + 1)).toBeNull();
+    // A longer wait is waited again from where it ends.
+    expect(instantWait(at, AT - 3 * 86_400_000)).toBe(86_400_000);
+    // An unreadable instant counts as come: nothing to wait for.
+    expect(instantWait('nope', AT)).toBeNull();
+  });
+
+  it('adds a margin past the instant when the caller asks, within the same day cap', () => {
+    expect(instantWait(at, AT - 60_000, 1_000)).toBe(61_000);
+    expect(instantWait(at, AT, 1_000)).toBeNull();
+    expect(instantWait(at, AT - 86_400_000, 1_000)).toBe(86_400_000);
   });
 });
 

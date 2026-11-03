@@ -336,8 +336,9 @@ const DAY_MS = 86_400_000;
 /**
  * 장기 지연 기한 as an instant (#172 item 10): `days` × 24 hours after the scheduled judgement, an
  * addition of instants, so across a daylight-saving change the wall clock of the judgement zone
- * moves by the hour. Null while either is not filled in. The public detail shows it, and #142 and
- * #145 reuse it, so the instant the system acts on and the shown one are the same.
+ * moves by the hour. Null while either is not filled in. The public detail shows it, the admin
+ * 판정 panel warns from it (`isLongDelayDeadlineReached`, #142, ADR-0106) and #145's list is to
+ * reuse it, so the instant the operators act on and the shown one are the same.
  */
 export function longDelayDeadline(judgementIso: string | null, days: number | null): string | null {
   if (judgementIso === null || days === null) return null;
@@ -373,7 +374,9 @@ export interface MarketDisplayState {
  *   come. A waiting correction alone reads '잠정 결과' before the deadline: no dispute is under
  *   review (`isDisputeUnderReview`).
  * It is a display, not a status: nothing changes at either instant, and no list filters by it
- * (ADR-0095 8-6). The delay record's reason and next review time are #142's.
+ * (ADR-0095 8-6). An operator's 판정 지연 기록 (#142, ADR-0106, market-judgement-delay.ts) adds a
+ * reason and a next review time while it holds; a record is taken only then, and never makes a
+ * market read delayed.
  */
 export function isJudgementDelayed(market: MarketDisplayState, nowMs: number): boolean {
   if (market.status === 'closed') {

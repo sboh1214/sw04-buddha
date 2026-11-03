@@ -89,6 +89,8 @@ const snapshot: Market = {
   // No rule version (#80): not opened yet, or opened before #80 (D4).
   ruleVersion: null,
   ruleVersions: [],
+  // No 판정 지연 기록 (#142): not reading 판정 지연.
+  judgementDelay: null,
 };
 
 const card: MarketSummary = { ...summary };

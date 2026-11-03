@@ -31,6 +31,7 @@ import {
   LONG_DELAY_SEPARATOR,
   longDelayText,
   marketRefreshNotice,
+  nextReviewWaitAt,
   openOrderSheet,
   orderEntryLabel,
   orderSheetBody,
@@ -39,6 +40,7 @@ import {
   ruleText,
   showsOrderArea,
   showsScheduledOpen,
+  shownJudgementDelay,
   sourceView,
   statusNotice,
   viewDisplay,
@@ -464,6 +466,49 @@ describe('statusNotice (PLAN 11.3, #174)', () => {
     expect(notice?.message).toBe(copy.marketCancelledNotice);
     expect(notice?.message).not.toContain('환불');
     expect(notice?.detail).toBeUndefined();
+  });
+});
+
+describe('the 판정 지연 기록 on the detail (#142, ADR-0106)', () => {
+  const delay = {
+    reason: '출처의 발표가 늦어지고 있습니다.',
+    nextReviewAt: '2026-12-02T01:00:00.000Z',
+    nextReviewPassed: false,
+  };
+
+  it('is shown while the market reads 판정 지연, CLOSED or PROVISIONAL, and never otherwise', () => {
+    const base = { judgementDelayed: true, disputeUnderReview: false, judgementDelay: delay };
+    expect(shownJudgementDelay({ ...base, status: 'closed' })).toBe(delay);
+    expect(shownJudgementDelay({ ...base, status: 'provisional', disputeUnderReview: true })).toBe(
+      delay,
+    );
+    // A row the socket moved on, its flag reset (`applyStatus`): no record stands on it.
+    expect(shownJudgementDelay({ ...base, status: 'closed', judgementDelayed: false })).toBeNull();
+    for (const status of MARKET_STATUSES.filter((s) => s !== 'closed' && s !== 'provisional')) {
+      expect(shownJudgementDelay({ ...base, status }), status).toBeNull();
+    }
+    expect(shownJudgementDelay({ ...base, status: 'closed', judgementDelay: null })).toBeNull();
+  });
+
+  it('waits for the next review time while the API read it ahead, and for nothing after', () => {
+    expect(nextReviewWaitAt(delay)).toBe(delay.nextReviewAt);
+    // 갱신 대기 already: nothing left to wait for; no record, nothing either.
+    expect(nextReviewWaitAt({ ...delay, nextReviewPassed: true })).toBeNull();
+    expect(nextReviewWaitAt(null)).toBeNull();
+  });
+
+  it('keeps the notice’s own sentence, with or without a record', () => {
+    // The rows are the detail's (`StatusNotice`); the sentence never says a late result is NO.
+    const delayed = {
+      status: 'closed',
+      judgementDelayed: true,
+      disputeUnderReview: false,
+      resolvedResult: null,
+    } as const;
+    expect(statusNotice(delayed)).toEqual({
+      tone: 'warning',
+      message: copy.marketJudgementDelayedNotice,
+    });
   });
 });
 

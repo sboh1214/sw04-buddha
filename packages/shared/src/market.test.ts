@@ -101,6 +101,7 @@ const market = {
   settledAt: null,
   ruleVersion: 1,
   ruleVersions: [versionOne],
+  judgementDelay: null,
 };
 const event = {
   id: '1',
@@ -250,6 +251,7 @@ describe('read DTOs', () => {
         disputeWindowUndecided: true,
       },
       disputes: { holding: 0, items: [] },
+      judgementDelays: [],
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
     // So are the judgement's registrations (#152) and the 판정 이의 (#175, #173 item 13): the
@@ -578,6 +580,114 @@ describe('read DTOs', () => {
     expect(card).not.toHaveProperty('ruleVersions');
     for (const name of ['ruleVersion', 'ruleVersions', 'changedItems', 'content']) {
       expect(findExcludedIdentifier(name, 'api')).toEqual([]);
+    }
+  });
+
+  it('carry the current delay record on the detail and every one on the admin one (#142)', () => {
+    // A CLOSED market past its scheduled judgement with a record: its reason, its next review
+    // time and whether it passed — nobody's name and no record time (#173 item 13).
+    const delay = {
+      reason: '출처의 발표가 늦어지고 있습니다.',
+      nextReviewAt: '2027-01-02T01:00:00.000Z',
+      nextReviewPassed: false,
+    };
+    const delayed = { ...market, status: 'closed', judgementDelayed: true, judgementDelay: delay };
+    expect(marketSchema.parse(delayed)).toEqual(delayed);
+    expect(
+      marketSchema.parse({ ...delayed, judgementDelay: { ...delay, nextReviewPassed: true } }),
+    ).toMatchObject({ judgementDelay: { nextReviewPassed: true } });
+    // Delayed with no record yet (#173 item 11): null, required and never defaulted.
+    expect(marketSchema.parse({ ...delayed, judgementDelay: null }).judgementDelay).toBeNull();
+    const { judgementDelay: _delay, ...withoutDelay } = delayed;
+    expect(issuePaths(marketSchema.safeParse(withoutDelay))).toEqual(['judgementDelay']);
+    for (const field of ['reason', 'nextReviewAt', 'nextReviewPassed'] as const) {
+      const { [field]: _gone, ...partial } = delay;
+      expect(
+        issuePaths(marketSchema.safeParse({ ...delayed, judgementDelay: partial })),
+        field,
+      ).toEqual([`judgementDelay.${field}`]);
+    }
+    expect(
+      issuePaths(
+        marketSchema.safeParse({
+          ...delayed,
+          judgementDelay: { ...delay, nextReviewAt: '2027-01-02 10:00' },
+        }),
+      ),
+    ).toEqual(['judgementDelay.nextReviewAt']);
+    // Who recorded it and when stay out of the public answer.
+    const recorded = {
+      ...delay,
+      recordedAt: at,
+      recordedBy: { id: 'admin-1', nickname: '운영자1' },
+    };
+    expect(marketSchema.parse({ ...delayed, judgementDelay: recorded }).judgementDelay).toEqual(
+      delay,
+    );
+    // A card carries none of it: the badge is `judgementDelayed` alone.
+    expect(marketSummarySchema.parse(delayed)).not.toHaveProperty('judgementDelay');
+    // The admin detail lists every record, newest first, with the episode, who and when, and the
+    // current one marked; the public `judgementDelay` is inherited.
+    const record = {
+      id: marketId,
+      reason: delay.reason,
+      nextReviewAt: delay.nextReviewAt,
+      marketStatus: 'closed',
+      judgementVersion: null,
+      recordedAt: at,
+      recordedBy: { id: 'admin-1', nickname: null },
+      current: true,
+    };
+    const earlier = {
+      ...record,
+      id: '6c1d2e3f-4a5b-4c6d-9e7f-8091a2b3c4d5',
+      reason: '출처 확인 중',
+      current: false,
+    };
+    const admin = {
+      ...delayed,
+      createdBy: 'admin-1',
+      updatedAt: at,
+      netCollectedCoin: '0',
+      openInterest: { yes: 0, no: 0 },
+      settlementSteps: [],
+      events: [],
+      missingOpenItems: [],
+      leadCloseGapMinutes: null,
+      review: {
+        pending: null,
+        createdBy: { id: 'admin-1', nickname: '운영자1' },
+        editors: [],
+        sameCondition: [],
+        log: [],
+      },
+      ruleVersions: [],
+      supplement: { pending: null, log: [] },
+      pause: { history: [], pending: null, log: [] },
+      judgement: {
+        current: null,
+        history: [],
+        pending: null,
+        log: [],
+        disputeWindowUndecided: false,
+      },
+      disputes: { holding: 0, items: [] },
+      judgementDelays: [record, earlier],
+    };
+    expect(adminMarketSchema.parse(admin)).toEqual(admin);
+    expect(marketSchema.parse(admin)).not.toHaveProperty('judgementDelays');
+    const { judgementDelays: _records, ...withoutRecords } = admin;
+    expect(issuePaths(adminMarketSchema.safeParse(withoutRecords))).toEqual(['judgementDelays']);
+    expect(
+      issuePaths(
+        adminMarketSchema.safeParse({
+          ...admin,
+          judgementDelays: [{ ...record, marketStatus: 'open' }],
+        }),
+      ),
+    ).toEqual(['judgementDelays.0.marketStatus']);
+    for (const name of ['judgementDelay', 'judgementDelays', 'nextReviewAt', 'nextReviewPassed']) {
+      expect(findExcludedIdentifier(name, 'api'), name).toEqual([]);
     }
   });
 

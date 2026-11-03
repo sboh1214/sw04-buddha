@@ -8,7 +8,7 @@ import {
 } from '@buddha/shared';
 import { copy } from '@/copy';
 import { system } from '@/theme/system';
-import { type Market, isApiError } from './api';
+import { type Market, type MarketJudgementDelay, isApiError } from './api';
 import { formatNoPrice } from './market-admin';
 import { readsDisputeUnderReview, readsJudgementDelayed } from './market-status';
 import { BOTTOM_TABS_HEIGHT_PX, ORDER_ENTRY_BAR_HEIGHT_PX } from './nav';
@@ -290,7 +290,9 @@ const STATUS_NOTICE: Partial<Record<MarketStatus, Omit<StatusNotice, 'detail'>>>
  *
  * A closed market whose scheduled judgement has passed (`judgementDelayed`, #22, ADR-0098) says
  * so, as its badge reads '판정 지연' (`marketStatusLabel`): still no trading, and no result yet —
- * never that a late result means NO. The delay's reason and next review time are #142's.
+ * never that a late result means NO. An operator's 판정 지연 기록 (#142, ADR-0106) adds its reason
+ * and next review time under it as rows (`shownJudgementDelay`, drawn by the detail's
+ * `StatusNotice`), a 판정 지연 잠정 결과 too; the sentence stays the same with or without one.
  *
  * A 잠정 결과 keeps its own sentence and adds why it is not confirmed yet while a 판정 이의 holds it
  * (#175, ADR-0104; #173 item 12): under review before its 이의 기한 ('이의 검토 중'), and past it
@@ -333,6 +335,30 @@ export function statusNotice(market: {
     detail:
       market.resolvedResult === 'VOID' ? copy.marketSettledPayoutVoid : copy.marketSettledPayout,
   };
+}
+
+/**
+ * The 판정 지연 기록 the detail's 상태별 안내 shows (#142, ADR-0106; ADR-0093 decision 3 '#142 지연
+ * 사유', #173 items 11·13): the market's current record — its one public sentence and its next
+ * review time, nobody's name and no record time — while the market reads '판정 지연'
+ * (`readsJudgementDelayed`), CLOSED or PROVISIONAL alike; null otherwise. The API sends one only
+ * then; gating on the flag too keeps a row the socket moved to another status (`applyStatus`
+ * resets both) from pairing a CLOSED market's record with its 잠정 결과.
+ */
+export function shownJudgementDelay(
+  market: Pick<Market, 'status' | 'judgementDelayed' | 'disputeUnderReview' | 'judgementDelay'>,
+): MarketJudgementDelay | null {
+  return readsJudgementDelayed(market) ? market.judgementDelay : null;
+}
+
+/**
+ * The next review time a detail waits for to mark '갱신 대기' by itself (owner answer 2026-11-03
+ * (2)): the shown record's while the API read it ahead (`nextReviewPassed` false), else null —
+ * nothing left to wait for. Passing it creates nothing (#173 item 11): the reason stays, the time
+ * reads as passed, and no result comes of it. `useInstantReached` waits for it.
+ */
+export function nextReviewWaitAt(delay: MarketJudgementDelay | null): string | null {
+  return delay === null || delay.nextReviewPassed ? null : delay.nextReviewAt;
 }
 
 /**
@@ -488,7 +514,8 @@ export function longDelayText(days: number | null): string | null {
 /**
  * Between 장기 지연 기한's words and its instant: '예정 판정 시각에서 14일 뒤 · 2026. 12. 15. 오전
  * 10:00' — the instant being `longDelayDeadline(scheduledJudgementAt, longDelayDays)`, the one
- * #142 and #145 act on, so the shown one cannot differ.
+ * the admin 판정 panel's long-delay warning (#142) and #145's list act on, so the shown one cannot
+ * differ.
  */
 export const LONG_DELAY_SEPARATOR = ' · ';
 

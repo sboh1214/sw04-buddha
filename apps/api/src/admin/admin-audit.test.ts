@@ -9,6 +9,7 @@
  * `admin-markets-supplement.controller.test` for the rule supplements (#80),
  * `admin-market-pauses.controller.test` for the pauses and their next paths (#114),
  * `admin-market-judgements.controller.test` for the judgements (#152),
+ * `admin-market-judgement-delays.controller.test` for the judgement delay records (#142),
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
@@ -84,6 +85,9 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   // market event (the member's submission and 철회 are no admin route and write none).
   'POST /admin/markets/:id/disputes/:disputeId/dismiss': 'market_dispute_dismiss',
   'POST /admin/markets/:id/disputes/:disputeId/accept': 'market_dispute_accept',
+  // #142: a 판정 지연 기록 is one admin's, not an approval request, with the market's own event
+  // (`judgement_delay_recorded`); there is no edit or withdrawal route.
+  'POST /admin/markets/:id/judgement-delays': 'market_delay_record',
   'POST /admin/markets/:id/related': 'market_link',
   'DELETE /admin/markets/:id/related/:relatedMarketId': 'market_unlink',
   'POST /admin/themes': 'theme_create',

@@ -1,5 +1,5 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { schema, type Db } from '@buddha/db';
+import { readPublicJudgementDelay, schema, type Db } from '@buddha/db';
 import {
   ALL_MARKET_STATUSES,
   FILLS_RECENT_LIMIT,
@@ -9,12 +9,14 @@ import {
   isDisputeOpen,
   isDisputeUnderReview,
   isJudgementDelayed,
+  marketJudgementDelayOf,
   serializeCoinAmount,
   tagKey,
   tickBucketSeconds,
   uuidParamSchema,
   type Category,
   type Fill,
+  type JudgementDelayRecord,
   type Market,
   type MarketDisplayState,
   type MarketListQuery,
@@ -188,7 +190,13 @@ export function timesOf(row: MarketRow): MarketTimes {
  * card's (#17, #23): the rule items and the times (`timesOf`, #22) are public in every public
  * status, signed in or not (N02 §2, N03 §4). So are its current rule version and `ruleVersions`,
  * the history (#80, ADR-0101; `readPublicRuleVersions`, which names nobody), read by the caller in
- * the same snapshot as the row.
+ * the same snapshot as the row, and while the market reads '판정 지연' its current 판정 지연 기록
+ * (#142, ADR-0106; `judgementDelay`, `marketJudgementDelayOf`): `judgementDelays` are the market's
+ * records the newest first, read likewise — the public detail's one current record
+ * (`readPublicJudgementDelay`, which names nobody and carries no record time), the admin detail's
+ * every record (`readJudgementDelays`). Every display is read at ONE `nowMs`, the card's flags
+ * (`toMarketSummary`) and the record's '갱신 대기' alike, so `judgementDelayed` and
+ * `judgementDelay` never disagree.
  */
 export function toMarket(
   row: MarketRow,
@@ -196,9 +204,11 @@ export function toMarket(
   tags: string[],
   sources: MarketSources,
   ruleVersions: MarketRuleVersion[],
+  judgementDelays: readonly JudgementDelayRecord[],
+  nowMs: number = Date.now(),
 ): Market {
   return {
-    ...toMarketSummary(row, category),
+    ...toMarketSummary(row, category, nowMs),
     ...ruleItemsOf(row, sources),
     ...timesOf(row),
     tags,
@@ -206,6 +216,11 @@ export function toMarket(
     settledAt: row.settledAt?.toISOString() ?? null,
     ruleVersion: row.ruleVersion,
     ruleVersions,
+    judgementDelay: marketJudgementDelayOf(
+      judgementDelays,
+      { ...displayStateOf(row), judgementVersion: row.judgementVersion },
+      nowMs,
+    ),
   };
 }
 
@@ -358,8 +373,8 @@ export class MarketService {
    * `GET /markets/:idOrSlug`: a uuid-shaped parameter is an id, anything else a slug (which
    * `marketSlugSchema` keeps from ever looking like a uuid). The slug is NFC-normalised like
    * the stored one, so a decomposed Korean URL still finds the market. The tags and the sources
-   * are a statement each (#17, #23), and so are the rule versions (#80): the detail alone carries
-   * them.
+   * are a statement each (#17, #23), and so are the rule versions (#80) and the current 판정 지연
+   * 기록 (#142): the detail alone carries them.
    */
   async getPublic(idOrSlug: string): Promise<Market> {
     const { markets, categories } = schema;
@@ -372,7 +387,9 @@ export class MarketService {
     // to a draft (#78's 되돌리기), so the public check and the tags and sources read after it must
     // describe one version — else a revert and a draft edit committing between them would answer
     // 200 with the draft's new tags and sources. The rule versions too (#80): a supplement
-    // approved between the reads would otherwise pair the old text with the new history.
+    // approved between the reads would otherwise pair the old text with the new history. And the
+    // delay record (#142): the current one as of the row, never a newer record beside an older
+    // status, reason or '판정 지연' reading.
     return this.db.transaction(
       async (tx) => {
         const [row] = await tx
@@ -392,7 +409,15 @@ export class MarketService {
         const tags = await marketTagNames(tx, row.market.id);
         const sources = await readMarketSources(tx, row.market.id);
         const ruleVersions = await readPublicRuleVersions(tx, row.market.id);
-        return toMarket(row.market, row.category, tags, sources, ruleVersions);
+        const delay = await readPublicJudgementDelay(tx, row.market);
+        return toMarket(
+          row.market,
+          row.category,
+          tags,
+          sources,
+          ruleVersions,
+          delay === null ? [] : [delay],
+        );
       },
       { isolationLevel: 'repeatable read', accessMode: 'read only' },
     );

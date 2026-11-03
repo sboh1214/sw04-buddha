@@ -25,6 +25,7 @@ import {
   leaveNoJudgement,
   markDocument,
   meOf,
+  recordJudgementDelay,
   registerCorrection,
   secondAdminAccount,
   sendJudgementDecision,
@@ -35,6 +36,7 @@ import {
   subscribed,
   test,
   waitForResolved,
+  waitPast,
 } from './helpers';
 
 /**
@@ -48,10 +50,13 @@ import {
  * length runs from the approval (#173 item 5) — a visitor's open detail follows without a reload,
  * the replaced version stays in the 판정 버전 이력, a member's dispute must name the new version, and
  * the worker confirms the new result at the new deadline. A correction left waiting holds the
- * market past its deadline — 판정 지연 on the public detail, the admin detail saying why — and its
- * 반려 carries on with the version as it was: the worker confirms it within seconds. A confirmed
- * market takes no correction (#173 item 8). No correction is made to 무효 here, nor a 무효 approved:
- * a confirmed 무효 stays 지급 중 until #126 pays it (ADR-0103), on a database kept between runs.
+ * market past its deadline — 판정 지연 on the public detail, the admin detail saying why — so any
+ * admin may leave it a 판정 지연 기록 (#142, ADR-0106), whose reason the public detail then shows
+ * under the result, and its 반려 carries on with the version as it was: the worker confirms it
+ * within seconds, and the record stays as v1's history (delay.spec.ts walks the record on a
+ * 거래 마감 market, its 갱신 대기 and a second record). A confirmed market takes no correction
+ * (#173 item 8). No correction is made to 무효 here, nor a 무효 approved: a confirmed 무효 stays
+ * 지급 중 until #126 pays it (ADR-0103), on a database kept between runs.
  *
  * Admin 1 (`admin`) judges the market and registers the correction, admin 2 — `secondAdmin`, the
  * reviewer `admin` is paired with — approves the judgement (`judgeMarket`) and decides the
@@ -175,12 +180,6 @@ async function sendDispute(
 /** The member's standing on the market (`GET /me/disputes/markets/:marketId`). */
 async function standingOf(context: APIRequestContext, marketId: string): Promise<MyMarketDispute> {
   return dataOf<MyMarketDispute>(await context.get(`/api/v1/me/disputes/markets/${marketId}`));
-}
-
-/** Waits on `page` until `ms` past `iso`, an instant on the API's clock (the same box's). */
-async function waitPast(page: Page, iso: string, ms: number): Promise<void> {
-  const wait = Date.parse(iso) + ms - Date.now();
-  if (wait > 0) await page.waitForTimeout(wait);
 }
 
 /**
@@ -773,7 +772,7 @@ test.describe('판정 정정', () => {
     }
   });
 
-  test('판정 정정이 승인을 기다리는 동안 이의 기한이 지나면 워커가 확정하지 않고, 공개 상세는 판정 지연과 판정을 다시 검토한다는 줄을, 관리자 상세는 기다리는 정정을 말하며, 다른 관리자가 그 정정을 반려하면 원래 판정 v1과 그 결과대로 워커가 몇 초 안에 확정한다', async ({
+  test('판정 정정이 승인을 기다리는 동안 이의 기한이 지나면 워커가 확정하지 않고, 공개 상세는 판정 지연과 판정을 다시 검토한다는 줄을, 관리자 상세는 기다리는 정정을 말하며, 그때 한 관리자가 남긴 판정 지연 기록은 공개 상세에 그 사유로 보이고, 다른 관리자가 그 정정을 반려하면 원래 판정 v1과 그 결과대로 워커가 몇 초 안에 확정하며 그 기록은 이력으로 남는다', async ({
     admin,
     secondAdmin,
     browser,
@@ -783,7 +782,7 @@ test.describe('판정 정정', () => {
     // v1's dispute window waited out with the correction waiting, then the confirmation.
     test.slow();
     await skipUnlessResolvable(admin);
-    const second = await meOf(secondAdmin);
+    const [first, second] = await Promise.all([meOf(admin), meOf(secondAdmin)]);
     const secondContext = await browser.newContext();
     let marketId: string | null = null;
     try {
@@ -848,9 +847,12 @@ test.describe('판정 정정', () => {
         disputeUnderReview: false,
         judgementDelayed: true,
       });
-      // A visitor's detail, read now: 판정 지연 and the line that the judgement is reviewed again —
-      // never that the result will change (the correction may be rejected) — its result, no link.
+      // A visitor's detail, read now in the market's room: 판정 지연 and the line that the
+      // judgement is reviewed again — never that the result will change (the correction may be
+      // rejected) — its result, no link, and no 판정 지연 기록 yet.
+      const joined = subscribed(page, market.id);
       await page.goto(`/markets/${market.slug}`);
+      await joined;
       await expect(page.getByTestId('market-status-badge')).toHaveText(
         copy.marketStatusJudgementDelayed,
       );
@@ -860,10 +862,62 @@ test.describe('판정 정정', () => {
       );
       await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
       await expect(notice.getByTestId('market-dispute-link')).toHaveCount(0);
-      // Admin 2's detail, read again: 판정 지연 because a correction waits for its approval.
+      await expect(notice.getByTestId('market-detail-delay-reason')).toHaveCount(0);
+      await markDocument(page);
+      // Admin 2's detail, read again: 판정 지연 because a correction waits for its approval, and the
+      // 판정 지연 기록 open to any admin (#173 items 7·11 — a held 잠정 결과 past its deadline).
       await secondPage.reload();
       await expect(secondPage.getByTestId('market-detail-judgement-delayed')).toContainText(
         copy.adminMarketCorrectionDelayedNote,
+      );
+      await expect(secondPage.getByTestId('market-judgement-delays')).toHaveAttribute(
+        'data-delayed',
+        'true',
+      );
+      await expect(secondPage.getByTestId('market-judgement-delay-record')).toBeEnabled();
+
+      // --- a 판정 지연 기록 on the held 잠정 결과 (#142, ADR-0106; #173 items 2·7·11): admin 1 — the
+      // correction's registrant, who may — records why it is late, alone and at once. Its reason
+      // says no 정정: a waiting correction is not public (ADR-0105). Nothing of the market changes
+      // — its version, result, deadline and the waiting correction stand — and the visitor's
+      // detail, never reloaded, adds the reason and the next review time under the result.
+      const delayReason = `1차 출처의 발표를 다시 확인하고 있습니다 ${market.tag}`;
+      const delayed = await recordJudgementDelay(admin, market.id, { reason: delayReason });
+      expect(delayed).toMatchObject({
+        status: 'provisional',
+        resolvedResult: 'YES',
+        judgementVersion: 1,
+        disputeDeadline: deadline,
+        judgementDelayed: true,
+        judgementDelay: { reason: delayReason, nextReviewPassed: false },
+      });
+      expect(pendingOf(delayed)).toBe(requestId);
+      // The record is v1's: the 잠정 결과 and its version it was made on.
+      expect(delayed.judgementDelays).toMatchObject([
+        {
+          reason: delayReason,
+          marketStatus: 'provisional',
+          judgementVersion: 1,
+          recordedBy: { id: first.id },
+          current: true,
+        },
+      ]);
+      await expect(notice.getByTestId('market-detail-delay-reason')).toHaveText(delayReason);
+      await expect(notice.getByTestId('market-detail-next-review')).toHaveAttribute(
+        'data-passed',
+        'false',
+      );
+      await expect(notice.getByTestId('market-detail-result')).toHaveText(copy.yes);
+      expect(await documentSurvived(page)).toBe(true);
+      // Admin 2's 판정 panel: the record, current, as made on 잠정 결과 v1.
+      await secondPage.reload();
+      const delayEntry = secondPage.getByTestId('market-judgement-delay-history-0');
+      await expect(delayEntry).toHaveAttribute('data-current', 'true');
+      await expect(delayEntry.getByTestId('market-judgement-delay-history-0-episode')).toHaveText(
+        `${copy.marketStatusProvisional} ${copy.ruleVersionName}1`,
+      );
+      await expect(secondPage.getByTestId('market-judgement-delay-current-reason')).toHaveText(
+        delayReason,
       );
 
       // --- 반려 by admin 2: the dialog says the move and what a 반려 leaves — read past the
@@ -935,6 +989,11 @@ test.describe('판정 정정', () => {
       };
       expect(eventOf(confirmed, 'resolved').payload).toEqual(resolvedPayload);
       expect(confirmed.events.some((event) => event.type === 'judgement_corrected')).toBe(false);
+      // The 판정 지연 기록 is v1's 잠정 결과's, history once confirmed (ADR-0106): kept, no longer
+      // current, and on no public answer.
+      expect(confirmed.judgementDelay).toBeNull();
+      expect(confirmed.judgementDelays).toMatchObject([{ reason: delayReason, current: false }]);
+      expect((await publicMarketOf(request, market.id)).judgementDelay).toBeNull();
       // Admin 2's detail, left open, reads again past the deadline now nothing waits.
       await expect(secondPage.getByTestId('market-detail-status')).not.toHaveText(
         copy.marketStatusProvisional,

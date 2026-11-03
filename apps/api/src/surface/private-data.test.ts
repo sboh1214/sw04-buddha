@@ -31,7 +31,11 @@
  * A's and the operators' alone, the decider the operators' alone, #173 item 13); and one more
  * there whose v1 a 판정 정정 A registered replaced, another admin approving it (#176: v1's grounds,
  * the 정정 사유, the new grounds and both approvals are operators' until #24, the card and the
- * detail carry v2 alone). Then:
+ * detail carry v2 alone); and 판정 지연 기록 A made (#142) — two on a CLOSED market past its scheduled
+ * judgement, and on a PROVISIONAL one a waiting 판정 정정 holds past its deadline one made while it was
+ * CLOSED and one on its version: the detail shows the current record's reason and next review time
+ * alone, never who recorded one, when, its id or an earlier record (#173 item 13, decision 3; #24
+ * decides any public history). Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -54,9 +58,10 @@
  * - the market room is listened to, anonymously and as B, while A's own events are published and
  *   smuggled onto the market channel and the API publishes real market events: a pause (#114),
  *   the approval of a judgement A registered, which publishes its provisional result (#152), the
- *   dismissal of A's pending 판정 이의, which republishes the market's unchanged status (#175), and
- *   the approval of a 판정 정정 of that judgement A registered, which publishes the new version's
- *   result under a new key (#176).
+ *   dismissal of A's pending 판정 이의, which republishes the market's unchanged status (#175), the
+ *   approval of a 판정 정정 of that judgement A registered, which publishes the new version's
+ *   result under a new key (#176), and a 판정 지연 기록 of the delayed market, which republishes
+ *   its unchanged status (#142).
  *
  * The routes come from the registry, which registry.test.ts holds to the module graph; this file
  * only knows how to call them. A route whose parameters, query keys or body it does not know
@@ -72,6 +77,7 @@ import {
   createCorrectedMarket,
   createCorrectionRequest,
   createDispute,
+  createJudgementDelay,
   createMarket,
   createMarketLink,
   createMarketPause,
@@ -115,6 +121,7 @@ import {
   findPrivateField,
   marketChannel,
   namesPersonalProbability,
+  type AdminMarket,
   type UserRealtimeEvent,
 } from '@buddha/shared';
 import { eq, isNotNull } from 'drizzle-orm';
@@ -226,6 +233,20 @@ interface Fixture {
    * carry v2, its result and deadline alone.
    */
   correctedMarket: MarketRow;
+  /**
+   * CLOSED past its scheduled judgement (#142), in `theme` too, with two 판정 지연 기록 A made: the
+   * earlier one history, the newer one current — whose reason and next review time
+   * (`delays.closed`) its detail shows, and nothing else of either record.
+   */
+  delayedMarket: MarketRow;
+  /**
+   * PROVISIONAL, a waiting 판정 정정 holding it past its 이의 기한 (#142), in `theme` too, with a
+   * record A made while it was CLOSED (another episode's: history) and one A made on its version
+   * (current: `delays.held`).
+   */
+  heldMarket: MarketRow;
+  /** The current records' public reason and next review time, by market. */
+  delays: Record<'closed' | 'held', { reason: string; nextReviewAt: string }>;
   /**
    * Closed, and on A's watchlist alone (#89). Closed so no public call here lists it — `GET
    * /markets` is called without a query and lists open markets, and the detail routes are called
@@ -1820,7 +1841,73 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       approvedBy: admin.id,
       approvalReason: correctionText.approval,
     });
-    for (const linked of [market, judged, disputed, corrected]) {
+    // 판정 지연 기록 (#142): a CLOSED market past its scheduled judgement (three days ago) with two
+    // records A made (the records, as the fixture's, need no admin role of A's) — the earlier one
+    // history, the newer one current — and a PROVISIONAL one a waiting 판정 정정 holds past its
+    // deadline, with a record A made while it was CLOSED and one A made on its version. The current
+    // records' reasons and next review times are public (decision 3 '#142 지연 사유'); who recorded
+    // one, when, its id and every earlier record are operators' (#173 item 13; #24 decides any
+    // public history). Odd milliseconds, as above.
+    const clockAt = (ms: number) => new Date(Date.now() + ms);
+    const delayText = {
+      earlier: `leak-earlier-delay-reason-${tag}`,
+      closedEra: `leak-closed-era-delay-reason-${tag}`,
+      closed: `1차 출처의 발표가 미뤄져 판정을 미룬다 (${tag}).`,
+      held: `판정 이의를 검토하느라 판정이 늦어진다 (${tag}).`,
+    };
+    const delayed = await createMarket(t.db, {
+      createdBy: admin.id,
+      status: 'closed',
+      closeAt: clockAt(-5 * 24 * 60 * 60 * 1000),
+    });
+    const { delay: earlierDelay } = await createJudgementDelay(t.db, {
+      marketId: delayed.id,
+      by: a.id,
+      reason: delayText.earlier,
+      recordedAt: clockAt(-2 * 24 * 60 * 60 * 1000 - 111),
+      nextReviewAt: clockAt(-24 * 60 * 60 * 1000 - 222),
+    });
+    const { delay: closedDelay } = await createJudgementDelay(t.db, {
+      marketId: delayed.id,
+      by: a.id,
+      reason: delayText.closed,
+      recordedAt: clockAt(-60 * 60 * 1000 - 333),
+      nextReviewAt: clockAt(24 * 60 * 60 * 1000 + 444),
+    });
+    const heldClosed = await createMarket(t.db, {
+      createdBy: admin.id,
+      status: 'closed',
+      closeAt: clockAt(-5 * 24 * 60 * 60 * 1000),
+    });
+    const { delay: closedEraDelay } = await createJudgementDelay(t.db, {
+      marketId: heldClosed.id,
+      by: a.id,
+      reason: delayText.closedEra,
+      recordedAt: clockAt(-2 * 24 * 60 * 60 * 1000 - 555),
+      nextReviewAt: clockAt(-24 * 60 * 60 * 1000 - 666),
+    });
+    const { market: heldJudged } = await createProvisionalMarket(t.db, {
+      marketId: heldClosed.id,
+      publishedAt: clockAt(-24 * 60 * 60 * 1000 - 777),
+      disputeWindowMinutes: 60,
+    });
+    await createCorrectionRequest(t.db, {
+      marketId: heldJudged.id,
+      by: admin.id,
+      requestedAt: clockAt(-3 * 60 * 60 * 1000 - 888),
+    });
+    const { delay: heldDelay } = await createJudgementDelay(t.db, {
+      marketId: heldJudged.id,
+      by: a.id,
+      reason: delayText.held,
+      recordedAt: clockAt(-2 * 60 * 60 * 1000 - 999),
+      nextReviewAt: clockAt(2 * 24 * 60 * 60 * 1000 + 123),
+    });
+    const [held] = await t.db
+      .select()
+      .from(schema.markets)
+      .where(eq(schema.markets.id, heldJudged.id));
+    for (const linked of [market, judged, disputed, corrected, delayed, held!]) {
       await createThemeMarket(t.db, {
         themeId: theme.id,
         marketId: linked.id,
@@ -1906,6 +1993,12 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       disputedMarket: disputed,
       disputeId: dispute.id,
       correctedMarket: corrected,
+      delayedMarket: delayed,
+      heldMarket: held!,
+      delays: {
+        closed: { reason: delayText.closed, nextReviewAt: closedDelay.nextReviewAt.toISOString() },
+        held: { reason: delayText.held, nextReviewAt: heldDelay.nextReviewAt.toISOString() },
+      },
       watchedCategory: watchedCategory!.slug,
       searchId: search.id,
       proposalId: proposal.id,
@@ -1986,6 +2079,14 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('correction evidence link', correctionText.link),
         text('correction approval reason', correctionText.approval),
         text('correction request id', correction.id),
+        text('earlier delay reason', delayText.earlier),
+        text('earlier delay next review', earlierDelay.nextReviewAt.toISOString()),
+        text('closed-era delay reason', delayText.closedEra),
+        text('closed-era delay next review', closedEraDelay.nextReviewAt.toISOString()),
+        ...[earlierDelay, closedDelay, closedEraDelay, heldDelay].flatMap((delay, index) => [
+          text(`delay record id ${String(index)}`, delay.id),
+          text(`delay recorded at ${String(index)}`, delay.recordedAt.toISOString()),
+        ]),
         text('rejected judgement description', judgementText.rejectedDescription),
         text('rejected judgement void reason', judgementText.rejectedVoidReason),
         text('judgement rejection', judgementText.rejection),
@@ -2145,6 +2246,24 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         leaks: [...leaked(res.body), ...forbiddenFields(res.body)],
       });
     }
+    // And the delayed markets' own details (#142), where their records are read: the current
+    // one's reason and next review time alone — no recorder, record time, id or earlier record.
+    const delayBodies = new Map<string, string>();
+    for (const delayedMarket of [f.delayedMarket, f.heldMarket]) {
+      for (const [caller, cookie] of callers) {
+        const res = await call(correctedDetail, {
+          params: { idOrSlug: delayedMarket.slug },
+          cookie,
+        });
+        if (caller === 'anonymous') delayBodies.set(delayedMarket.id, res.body);
+        answers.push({
+          route: correctedDetail.key,
+          caller,
+          status: res.statusCode,
+          leaks: [...leaked(res.body), ...forbiddenFields(res.body)],
+        });
+      }
+    }
     expect(answers).toEqual(
       answers.map(({ route, caller }) => ({
         route,
@@ -2300,7 +2419,14 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     expect(ids('GET /themes')).toEqual([f.theme.id]);
     expect(ids('GET /markets/:id/themes')).toEqual([f.theme.id]);
     expect(ids('GET /themes/:id/markets').sort()).toEqual(
-      [f.market.id, f.judgedMarket.id, f.disputedMarket.id, f.correctedMarket.id].sort(),
+      [
+        f.market.id,
+        f.judgedMarket.id,
+        f.disputedMarket.id,
+        f.correctedMarket.id,
+        f.delayedMarket.id,
+        f.heldMarket.id,
+      ].sort(),
     );
     // The disputed market's card carried its public deadline, its version and '이의 검토 중' (#175,
     // #173 items 6·12) — and none of A's dispute, which the check above found in no answer.
@@ -2338,6 +2464,27 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         disputeOpen: true,
       },
     });
+    // The delayed markets' cards read '판정 지연' (#22, #175) and carry no record (ADR-0095 8-6); their
+    // details carried the current record, so the check above read a record that could have named A.
+    const themeCards = (
+      parse(bodies.get('GET /themes/:id/markets')!) as { data: Record<string, unknown>[] }
+    ).data;
+    for (const [delayedMarket, delay, status] of [
+      [f.delayedMarket, f.delays.closed, 'closed'],
+      [f.heldMarket, f.delays.held, 'provisional'],
+    ] as const) {
+      const card = themeCards.find((row) => row.id === delayedMarket.id);
+      expect(card).toMatchObject({ status, judgementDelayed: true });
+      expect(card).not.toHaveProperty('judgementDelay');
+      expect(parse(delayBodies.get(delayedMarket.id)!)).toMatchObject({
+        data: {
+          id: delayedMarket.id,
+          status,
+          judgementDelayed: true,
+          judgementDelay: { ...delay, nextReviewPassed: false },
+        },
+      });
+    }
     expect(ids('GET /themes/:id/results', 'marketId')).toEqual([f.judgedMarket.id]);
     const page = parse(bodies.get('GET /themes/:idOrSlug')!) as { data: { notices: object[] } };
     expect(page.data.notices).toHaveLength(1);
@@ -2790,7 +2937,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     const watchers = { anonymous: await openSocket(), B: await openSocket(f.b.cookie) };
     const received: { watcher: string; event: string; payload: unknown }[] = [];
     for (const [watcher, socket] of Object.entries(watchers)) {
-      for (const marketId of [f.market.id, closed.id, f.disputedMarket.id]) {
+      for (const marketId of [f.market.id, closed.id, f.disputedMarket.id, f.delayedMarket.id]) {
         const refusal = JSON.stringify(await subscribe(socket, marketId));
         // The refusal envelope a socket is sent directly carries nothing of A's either.
         expect({
@@ -2909,8 +3056,44 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       },
     });
     expect(corrected.statusCode, corrected.body).toBe(200);
+    // And a 판정 지연 기록 (#142): the admin records the delayed market's reason and next review
+    // time, and its unchanged status is published again so open details refetch the record —
+    // never its id, when or who recorded it (#173 item 13: the admin is no sentinel of A's, so
+    // they are looked for by name below), nor any record A made.
+    const recorded = await t.app.inject({
+      method: 'POST',
+      url: `/api/v1/admin/markets/${f.delayedMarket.id}/judgement-delays`,
+      headers: { origin: ORIGIN, 'content-type': 'application/json', cookie: f.admin.cookie },
+      payload: {
+        reason: '발표가 다시 미뤄졌다.',
+        nextReviewAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+        expectedAccountId: f.admin.id,
+      },
+    });
+    expect(recorded.statusCode, recorded.body).toBe(200);
+    const delay = recorded.json<{ data: AdminMarket }>().data.judgementDelays[0]!;
+    expect(delay.recordedBy).toEqual({ id: f.admin.id, nickname: expect.any(String) as string });
+    /** The labels of the record's operator-only values an answer holds. */
+    const delayLeaks = (body: string) =>
+      Object.entries({
+        'delay record id': delay.id,
+        'delay recorded at': delay.recordedAt,
+        'delay recorder id': delay.recordedBy.id,
+        'delay recorder nickname': delay.recordedBy.nickname!,
+      }).flatMap(([label, value]) => (body.includes(value) ? [label] : []));
+    // The detail it is refetched for shows the record's reason and next review time alone.
+    for (const cookie of [undefined, f.b.cookie]) {
+      const res = await call(routeOf('GET /markets/:idOrSlug'), {
+        params: { idOrSlug: f.delayedMarket.slug },
+        cookie,
+      });
+      expect(parse(res.body)).toMatchObject({
+        data: { judgementDelay: { reason: delay.reason, nextReviewAt: delay.nextReviewAt } },
+      });
+      expect(delayLeaks(res.body)).toEqual([]);
+    }
     const started = Date.now();
-    while (received.filter((entry) => entry.event === 'market:status').length < 8) {
+    while (received.filter((entry) => entry.event === 'market:status').length < 10) {
       if (Date.now() - started > 5_000) throw new Error('market:status did not reach both');
       await sleep(20);
     }
@@ -2918,14 +3101,8 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // Delivered in publish order on one subscriber connection, so everything A's events could
     // have caused has arrived by now.
     expect(received.map(({ watcher, event }) => `${watcher} ${event}`).sort()).toEqual([
-      'B market:status',
-      'B market:status',
-      'B market:status',
-      'B market:status',
-      'anonymous market:status',
-      'anonymous market:status',
-      'anonymous market:status',
-      'anonymous market:status',
+      ...Array.from({ length: 5 }, () => 'B market:status'),
+      ...Array.from({ length: 5 }, () => 'anonymous market:status'),
     ]);
     const payloadsOf = (marketId: string) =>
       received
@@ -2942,6 +3119,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         .sort(),
     ).toEqual(['NO', 'NO', 'YES', 'YES']);
     expect(statusesOf(f.disputedMarket.id)).toEqual(['provisional', 'provisional']);
+    expect(statusesOf(f.delayedMarket.id)).toEqual(['closed', 'closed']);
     for (const { event, payload } of received) {
       const registered = REALTIME_EVENT_REGISTRY[event as keyof typeof REALTIME_EVENT_REGISTRY];
       expect({ event, channel: registered?.channel }).toEqual({ event, channel: 'market' });
@@ -2952,6 +3130,7 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
           ...leaked(body),
           ...forbiddenFields(body),
           ...(body.includes(correction.id) ? ['correction request id'] : []),
+          ...delayLeaks(body),
         ],
       }).toEqual({ event, leaks: [] });
     }

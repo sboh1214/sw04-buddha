@@ -3,6 +3,7 @@ import {
   type AdminSettlementStep,
   type AuditFailureKind,
   COIN_UNIT,
+  type JudgementDelayStatus,
   LEAD_CLOSE_GAP_UNDECIDED,
   LEAD_CLOSE_GAP_UNDECIDED_MESSAGE,
   MARKET_REVIEW_CHECKLIST,
@@ -40,6 +41,7 @@ import {
   type TimeRuleViolation,
   formatCoin,
   isCompleteSource,
+  judgementDelayStatusSchema,
   marketPauseReasonSchema,
   marketPauseReviewResultSchema,
   marketRejectReasonSchema,
@@ -141,7 +143,9 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
  * 잠정 결과 공개 and 결과 확정 are #152's (ADR-0103): the approved judgement's CLOSED → PROVISIONAL, and
  * the worker's PROVISIONAL → RESOLVED at the dispute deadline — named, as the payout's two, by the
  * status each leads to; a `resolved` row written before #152 is the one-admin 판정, final at once.
- * 판정 정정 is #176's (ADR-0105): an approved correction, which changes no status.
+ * 판정 정정 is #176's (ADR-0105): an approved correction, which changes no status. 판정 지연 기록 is
+ * #142's (ADR-0106): one admin's record of a delay's reason and next review time, which changes no
+ * status either.
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -161,6 +165,7 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   paused: copy.eventPaused,
   resumed: copy.eventResumed,
   judgement_corrected: copy.eventJudgementCorrected,
+  judgement_delay_recorded: copy.eventJudgementDelayRecorded,
 };
 
 /**
@@ -755,6 +760,18 @@ const JUDGEMENT_CORRECTED_PAYLOAD = z.object({
   closedDisputes: z.number().int().nonnegative(),
 });
 /**
+ * 판정 지연 기록 (#142, ADR-0106: no status change, the actor the admin who recorded it): the reason
+ * — the public sentence — the next review time, and the status and judgement version it was made
+ * on (null on CLOSED). The record's id is an id, which no row prints: the 판정 panel's 지연 기록 이력
+ * shows the record whole, its recorder by nickname.
+ */
+const JUDGEMENT_DELAY_RECORDED_PAYLOAD = z.object({
+  reason: z.string(),
+  nextReviewAt: kstInstant,
+  marketStatus: judgementDelayStatusSchema,
+  judgementVersion: z.number().int().min(1).nullable(),
+});
+/**
  * 결과 확정 since #152 (provisional → resolved, the worker at the dispute deadline): the version
  * confirmed and its result; its `source` ('deadline') is what the 시스템 actor already says.
  */
@@ -786,6 +803,20 @@ export function judgementVersionName(version: number): string {
   return ruleVersionName(version);
 }
 
+/**
+ * What a 판정 지연 기록 was made on (#142, ADR-0106), as its history and the 이벤트 로그 say it: the
+ * status's label — 거래 마감 — or, on a 잠정 결과, with its judgement version ('잠정 결과 v1').
+ */
+export function judgementDelayEpisodeText(episode: {
+  marketStatus: JudgementDelayStatus;
+  judgementVersion: number | null;
+}): string {
+  const status = MARKET_STATUS_LABEL[episode.marketStatus];
+  return episode.judgementVersion === null
+    ? status
+    : `${status} ${judgementVersionName(episode.judgementVersion)}`;
+}
+
 /** A correction's move from one judgement version to the next, as 'v1 → v2' (#176). */
 export function judgementVersionMove(from: number, to: number = from + 1): string {
   return `${judgementVersionName(from)} → ${judgementVersionName(to)}`;
@@ -813,7 +844,8 @@ function interimResolveRows(detail: {
  * ADR-0101 9-11), the 잠정 결과 공개 with its version, result and dispute deadline and the 결과 확정
  * with its version and result (#152) — a 결과 확정 before #152 with its note and evidence — a 판정
  * 정정 with the version and result before and after it, the new deadline and the disputes it
- * closed (#176) — the
+ * closed (#176) — a 판정 지연 기록 with its reason, next review time and the status it was made on
+ * (#142) — the
  * finalize summary, the 개설 검수's records
  * (#78, `reviewDetailRows`) — and no row at all for the start of the payout, whose only field is
  * the `source` the 시스템 actor beside it already says, nor for a resume without a review result.
@@ -851,6 +883,18 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
         {
           label: copy.eventClosedDisputes,
           value: `${closed}${copy.adminMarketDisputesHoldingUnit}`,
+        },
+      ];
+    }
+    case 'judgement_delay_recorded': {
+      const parsed = JUDGEMENT_DELAY_RECORDED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      return [
+        { label: copy.adminMarketJudgementDelayReason, value: parsed.data.reason },
+        { label: copy.eventNextReviewAt, value: formatKst(parsed.data.nextReviewAt) },
+        {
+          label: copy.adminMarketJudgementDelayEpisode,
+          value: judgementDelayEpisodeText(parsed.data),
         },
       ];
     }

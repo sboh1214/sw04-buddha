@@ -7,7 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
-import { useEffect, useRef, useState } from 'react';
+import { useInstantReached } from '@/hooks/use-instant-reached';
 import { refreshOwnMe } from '@/hooks/use-me';
 import {
   type Market,
@@ -18,10 +18,8 @@ import {
   isForAnotherAccount,
   unwrap,
 } from '@/lib/api';
-import { tickingNow } from '@/lib/datetime';
 import {
   DISPUTES_KEY,
-  disputeDeadlineWait,
   disputeSubmitFailure,
   myDisputesKey,
   myMarketDisputeKey,
@@ -295,8 +293,9 @@ export function useRetractDispute() {
  * Whether the market takes 판정 이의 now, as a screen shows it (#173 items 5·6, ADR-0104): the API's
  * `disputeOpen` — the server's clock at the read — until its 이의 기한 comes on this screen's
  * clock. A held market publishes nothing at its deadline (the worker skips it), so a one-shot timer
- * takes the link and the note away then, without a reload; a later read that says otherwise wins
- * (an approved correction's new deadline, #176, ADR-0105, starts a new wait).
+ * takes the link and the note away then, without a reload (`useInstantReached`, whose core this
+ * was before #142 waited for a next review time the same way); a later read that says otherwise
+ * wins (an approved correction's new deadline, #176, ADR-0105, starts a new wait).
  *
  * `anchor` is the server's own instant at the read when the screen has one (the detail's `now`,
  * `detailWindowEnd`): the deadline is then judged at that instant plus the time elapsed since, as
@@ -311,37 +310,7 @@ export function useDisputeOpen(
   onClosed?: () => void,
 ): boolean {
   const deadline = openDisputeDeadline(market);
-  // The deadline the timer saw come; open again for a new one (another read, another version).
-  const [closedAt, setClosedAt] = useState<string | null>(null);
-  // The monotonic origin the anchor's elapsed time counts from, taken once (as CountdownBadge's).
-  const originRef = useRef<number | undefined>(undefined);
-  const [anchorAt] = useState(anchor);
-  const closedRef = useRef(onClosed);
-  useEffect(() => {
-    closedRef.current = onClosed;
-  });
-  // At the first commit, whatever the deadline: the anchor is the first render's, so a deadline
-  // that comes later (a market judged while the screen is open) still counts from the anchor.
-  useEffect(() => {
-    originRef.current ??= performance.now();
-  }, []);
-  useEffect(() => {
-    if (deadline === null) return;
-    const startedAt = originRef.current ?? performance.now();
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const check = () => {
-      const now = tickingNow(anchorAt, performance.now() - startedAt, Date.now());
-      const wait = disputeDeadlineWait(deadline, now);
-      if (wait === null) {
-        setClosedAt(deadline);
-        closedRef.current?.();
-        return;
-      }
-      timer = setTimeout(check, wait);
-    };
-    // Never synchronously in the effect body (`react-hooks/set-state-in-effect`).
-    timer = setTimeout(check, 0);
-    return () => clearTimeout(timer);
-  }, [deadline, anchorAt]);
-  return deadline !== null && closedAt !== deadline;
+  // Open again for a new deadline (another read, another version): the timer waits for it afresh.
+  const closed = useInstantReached(deadline, anchor, onClosed);
+  return deadline !== null && !closed;
 }

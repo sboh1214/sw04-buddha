@@ -77,6 +77,13 @@ export const MARKET_FALLBACK_SOURCES_MAX = 3;
  */
 export const MARKET_LONG_DELAY_DAYS_MIN = 1;
 export const MARKET_LONG_DELAY_DAYS_MAX = 365;
+/**
+ * 다음 검토 시각 of a 판정 지연 기록 (#142, ADR-0106; owner answer 2026-11-03 (1)): a future instant
+ * at most this many days — N × 24 hours, as the long delay's — after the record, on a CLOSED and
+ * a PROVISIONAL market alike. A product rule, no release setting (market-judgement-delay.ts);
+ * `market_judgement_delays` has the same CHECK, in hours.
+ */
+export const JUDGEMENT_DELAY_REVIEW_MAX_DAYS = 7;
 export const MARKET_IMAGE_URL_MAX = 500;
 
 /**

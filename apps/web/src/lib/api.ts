@@ -110,6 +110,16 @@ export type MarketJudgementCorrection = components['schemas']['MarketJudgementCo
 export type JudgementSource = components['schemas']['JudgementSource'];
 export type RegisterJudgementBody = components['schemas']['RegisterJudgementBody'];
 export type AdminMarketJudgementQueueItem = components['schemas']['AdminMarketJudgementQueueItem'];
+/**
+ * 판정 지연 기록 (#142, ADR-0106): the current record as every detail reads it while the market reads
+ * '판정 지연' (`Market.judgementDelay`: the reason, the next review time and whether it has passed —
+ * nobody's name, no record time), one record as the admin's history lists it
+ * (`AdminMarket.judgementDelays`, newest first, with who recorded it, when and on what) and the
+ * record's body.
+ */
+export type MarketJudgementDelay = components['schemas']['MarketJudgementDelay'];
+export type AdminJudgementDelay = components['schemas']['AdminJudgementDelay'];
+export type RecordJudgementDelayBody = components['schemas']['RecordJudgementDelayBody'];
 /** One row of `AdminMarket.settlementSteps` (ADR-0046): a judged market's settlement step. */
 export type AdminSettlementStep = components['schemas']['AdminSettlementStep'];
 export type MarketEvent = components['schemas']['MarketEvent'];

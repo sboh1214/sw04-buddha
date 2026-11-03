@@ -185,8 +185,9 @@ export function RuleTime({
 
 /**
  * 장기 지연 기한: '예정 판정 시각에서 N일 뒤' (`longDelayText`), and once the market has a scheduled
- * judgement the instant itself (`longDelayDeadline`, #172 item 10: N×24 hours) — the one #142 and
- * #145 act on — so the reader adds no days (#22, ADR-0098). '—' while the days are not set.
+ * judgement the instant itself (`longDelayDeadline`, #172 item 10: N×24 hours) — the one the admin
+ * 판정 panel warns from (#142) and #145's list acts on — so the reader adds no days (#22, ADR-0098).
+ * '—' while the days are not set.
  */
 export function RuleLongDelay({
   market,

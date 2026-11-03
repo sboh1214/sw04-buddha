@@ -77,6 +77,11 @@ const SCREENS: Readonly<Record<string, readonly string[]>> = {
     'body: { reason, expectedAccountId: by },',
     'body: { expectedAccountId: by },',
   ],
+  // 판정 지연 기록 (#142, ADR-0106), new since and written the same way: one admin's 지연 기록 등록
+  // from its dialog, the 판정 panel's section holding it for the admin who opened it
+  '../app/admin/markets/[id]/market-judgement-delay-dialogs.tsx': [
+    "await api.POST('/api/v1/admin/markets/{id}/judgement-delays', {\n          params: { path: { id: market.id } },\n          body: { reason, nextReviewAt, expectedAccountId: by },",
+  ],
   // 판정 이의 (#175, ADR-0104), new since and written the same way: 기각 · 수용 from their dialog
   // (each naming the dispute in its path), the block holding it for the admin who opened it
   '../app/admin/markets/[id]/market-dispute-dialogs.tsx': [
@@ -196,6 +201,10 @@ describe('the admin the admin writes name (ADR-0092)', () => {
       '../app/admin/markets/[id]/market-judgement-panel.tsx': 7,
       // the confirms of 승인, 반려 and 철회 (#152)
       '../app/admin/markets/[id]/market-judgement-dialogs.tsx': 3,
+      // the button opening 지연 기록 등록 (#142)
+      '../app/admin/markets/[id]/market-judgement-delay-panel.tsx': 1,
+      // the confirm of 지연 기록 등록 (#142)
+      '../app/admin/markets/[id]/market-judgement-delay-dialogs.tsx': 1,
       // the buttons opening 기각 and 수용 (#175), and an accepted one's 정정 등록 (#176)
       '../app/admin/markets/[id]/market-dispute-panel.tsx': 3,
       // the confirm of 기각 or 수용 (#175: one dialog, its kind's route)
@@ -309,6 +318,10 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     // 판정 이의 (#175): the 기각 or 수용 dialog, with the dispute it was opened on and the reason
     '../app/admin/markets/[id]/market-dispute-panel.tsx': [
       'const [action, setAction] = useHeldForOperator<DisputeAction>();',
+    ],
+    // 판정 지연 기록 (#142): the 지연 기록 등록 dialog, with the reason and the time typed
+    '../app/admin/markets/[id]/market-judgement-delay-panel.tsx': [
+      'const [action, setAction] = useHeldForOperator<JudgementDelayAction>();',
     ],
     // 비공개로 돌리기, a market's 빼기, the notice opened for editing and a notice's 숨기기
     '../app/admin/themes/[id]/admin-theme-detail.tsx': [
@@ -447,6 +460,13 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
     expect(source('../app/admin/markets/[id]/market-dispute-panel.tsx')).toContain(
       '{action !== null && (\n        <DisputeDecisionDialog\n          action={action}\n          market={market}',
     );
+    // And the 판정 지연 기록 section's dialog (#142), drawn in the judgement panel.
+    expect(source('../app/admin/markets/[id]/market-judgement-delay-panel.tsx')).toContain(
+      '{action !== null && (\n        <JudgementDelayDialog\n          market={market}',
+    );
+    expect(judgement).toContain(
+      'delays={<MarketJudgementDelays market={market} readAt={readAt} />}',
+    );
     // An accepted dispute's 정정 등록 opens the panel's correction form, held as the panel's (#176):
     // every action opens through `open`, which holds it (and notes what opened a form, for focus).
     expect(judgement).toContain(
@@ -552,6 +572,12 @@ describe('what an admin screen opened or typed is the admin on screen’s (owner
         "disabled={operatorId === undefined || requester !== false}\n          onClick={() => onOpen('reject')}",
         "disabled={operatorId === undefined}\n            onClick={() => onOpen('retract')}",
         '<JudgementPanelBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={open}',
+      ],
+      // The 판정 지연 기록 section likewise (#142): 지연 기록 등록 for any admin while the market reads
+      // 판정 지연 — the registrant of a waiting judgement included (#173 item 2).
+      '../app/admin/markets/[id]/market-judgement-delay-panel.tsx': [
+        "disabled={operatorId === undefined || unavailable !== null}\n            onClick={() => onOpen('record')}",
+        '<JudgementDelaysBody\n        market={market}\n        readAt={readAt}\n        operatorId={operatorId}\n        onOpen={setAction}',
       ],
     };
     for (const [file, buttons] of Object.entries(opens)) {

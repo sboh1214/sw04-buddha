@@ -99,6 +99,8 @@ const draft: AdminMarket = {
   disputeDeadline: null,
   disputeOpen: false,
   disputes: { holding: 0, items: [] },
+  judgementDelay: null,
+  judgementDelays: [],
   judgement: { current: null, history: [], pending: null, log: [], disputeWindowUndecided: false },
   missingOpenItems: [],
   leadCloseGapMinutes: null,

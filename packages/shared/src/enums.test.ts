@@ -210,9 +210,9 @@ describe('enums', () => {
   });
 
   it('records a pause and its next path as two market events and five admin actions (#114)', () => {
-    // Appended: a pause (open → paused) and a resume (paused → open), #152's and #176's after
-    // them; an early close is `closed` with its own `source`, the worker's close too.
-    expect(enums.MARKET_EVENT_TYPES.slice(-4, -2)).toEqual(['paused', 'resumed']);
+    // Appended: a pause (open → paused) and a resume (paused → open), #152's, #176's and #142's
+    // after them; an early close is `closed` with its own `source`, the worker's close too.
+    expect(enums.MARKET_EVENT_TYPES.slice(-5, -3)).toEqual(['paused', 'resumed']);
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type === 'closed')).toHaveLength(1);
     // The pause is one admin's; the next path's request, approval, 반려 and 철회 are each an admin
     // action, and only the approval writes a market event.
@@ -274,8 +274,13 @@ describe('enums', () => {
     expect(enums.ADMIN_ACTION_TYPES.indexOf('market_dispute_dismiss')).toBe(
       enums.ADMIN_ACTION_TYPES.indexOf('market_judgement_retract') + 1,
     );
-    // No market event of its own: #152's `provisional` is followed by #176's correction alone.
-    expect(enums.MARKET_EVENT_TYPES.slice(-2)).toEqual(['provisional', 'judgement_corrected']);
+    // No market event of its own: #152's `provisional` is followed by #176's correction and
+    // #142's delay record alone.
+    expect(enums.MARKET_EVENT_TYPES.slice(-3)).toEqual([
+      'provisional',
+      'judgement_corrected',
+      'judgement_delay_recorded',
+    ]);
     expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('dispute'))).toEqual([]);
     // The M5 review type stays gone; admin_actions.type is varchar(40).
     expect(enums.ADMIN_ACTION_TYPES).not.toContain('dispute_review');
@@ -283,10 +288,11 @@ describe('enums', () => {
   });
 
   it('records a correction as one market event and the judgement’s admin actions (#176)', () => {
-    // Appended last, after #152's: a correction's approval changes no status (PROVISIONAL stays)
-    // and is the one market event a correction writes. Its name says nothing of disputes, whose
-    // records are no market events (#175), though it closes the replaced version's pending ones.
-    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('judgement_corrected');
+    // Appended after #152's (#142's after it): a correction's approval changes no status
+    // (PROVISIONAL stays) and is the one market event a correction writes. Its name says nothing of
+    // disputes, whose records are no market events (#175), though it closes the replaced
+    // version's pending ones.
+    expect(enums.MARKET_EVENT_TYPES.at(-2)).toBe('judgement_corrected');
     expect(enums.MARKET_EVENT_TYPES.indexOf('judgement_corrected')).toBe(
       enums.MARKET_EVENT_TYPES.indexOf('provisional') + 1,
     );
@@ -298,6 +304,48 @@ describe('enums', () => {
     ).toHaveLength(4);
     expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('correct'))).toEqual([]);
     expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
+  });
+
+  it('records a delay record as one market event and one admin action (#142)', () => {
+    // Appended last, after #176's: a record changes no status (CLOSED or PROVISIONAL stays) and
+    // is one event and one admin action — one admin, no approval kind (#173 item 2).
+    expect(enums.MARKET_EVENT_TYPES.at(-1)).toBe('judgement_delay_recorded');
+    expect(enums.MARKET_EVENT_TYPES.indexOf('judgement_delay_recorded')).toBe(
+      enums.MARKET_EVENT_TYPES.indexOf('judgement_corrected') + 1,
+    );
+    expect(enums.marketEventTypeSchema.parse('judgement_delay_recorded')).toBe(
+      'judgement_delay_recorded',
+    );
+    expect(enums.ADMIN_ACTION_TYPES.indexOf('market_delay_record')).toBe(
+      enums.ADMIN_ACTION_TYPES.indexOf('market_dispute_accept') + 1,
+    );
+    expect(enums.adminActionTypeSchema.parse('market_delay_record')).toBe('market_delay_record');
+    // The one type of each that names a delay; neither joins the prefix families above (#80's
+    // supplement, #114's pause, #152's judgement, #175's dispute), nor names a dispute or a
+    // correction, and neither withdraws (owner answer 2026-11-03 (4): no withdrawal).
+    expect(enums.MARKET_EVENT_TYPES.filter((type) => type.includes('delay'))).toEqual([
+      'judgement_delay_recorded',
+    ]);
+    expect(enums.ADMIN_ACTION_TYPES.filter((type) => type.includes('delay'))).toEqual([
+      'market_delay_record',
+    ]);
+    for (const prefix of [
+      'market_supplement_',
+      'market_pause',
+      'market_judgement',
+      'market_dispute',
+    ]) {
+      expect('market_delay_record'.startsWith(prefix), prefix).toBe(false);
+    }
+    for (const type of ['judgement_delay_recorded', 'market_delay_record']) {
+      for (const word of ['dispute', 'correct', 'withdraw', 'retract']) {
+        expect(type.includes(word), `${type} ${word}`).toBe(false);
+      }
+      // admin_actions.type and market_events.type are varchar(40).
+      expect(type.length).toBeLessThanOrEqual(40);
+    }
+    expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
   });
 
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {
