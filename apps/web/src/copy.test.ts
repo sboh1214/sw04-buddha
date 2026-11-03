@@ -94,9 +94,49 @@ describe('copy', () => {
       copy.marketProvisionalDelayedCorrection,
       copy.adminMarketDisputeDelayedNote,
       copy.adminMarketCorrectionDelayedNote,
+      // The 판정 지연 기록's (#142): the public rows and 갱신 대기, the admin section, its warnings —
+      // the late update and the long delay, whose rule is applied through 판정 등록 — and the dialog.
+      copy.marketJudgementDelayReason,
+      copy.marketNextReviewAt,
+      copy.marketNextReviewPassed,
+      copy.marketNextReviewPassedNote,
+      copy.adminMarketJudgementDelaysIntro,
+      copy.adminMarketJudgementDelayLate,
+      copy.adminMarketJudgementLongDelay,
+      copy.adminMarketJudgementDelayBody,
+      copy.adminMarketJudgementDelayReasonHint,
+      copy.adminMarketJudgementDelayNextReviewHint,
+      copy.adminMarketJudgementDelayUnscheduled,
+      copy.adminMarketJudgementDelayEarly,
+      copy.adminMarketJudgementDelayUnheld,
+      copy.adminMarketJudgementDelayNoCurrent,
+      copy.eventJudgementDelayRecorded,
     ]) {
       expect(text).not.toMatch(/NO|환불|원금/);
     }
+  });
+
+  it('names no operator in the public 판정 지연 기록 and offers no withdrawal of one (#142)', () => {
+    // #173 item 13, decision 3 '#142 지연 사유': the public detail shows the reason and the time,
+    // never who recorded it nor when — those words are the admin section's alone.
+    for (const [key, text] of Object.entries(copy).filter(
+      ([key]) => key.startsWith('marketJudgementDelay') || key.startsWith('marketNextReview'),
+    )) {
+      expect(text, key).not.toMatch(/관리자|운영자|기록한|기록 시각/);
+    }
+    // Owner answer 2026-11-03 (4): a change is a new record — no 철회 or 수정 of one.
+    for (const [key, text] of Object.entries(copy).filter(([key]) =>
+      key.startsWith('adminMarketJudgementDelay'),
+    )) {
+      expect(text, key).not.toMatch(/철회|수정/);
+    }
+    // What the admin words say stays off the public detail is who recorded it and the record's
+    // time — never read as the next review time, which is public.
+    for (const text of [copy.adminMarketJudgementDelaysIntro, copy.adminMarketJudgementDelayBody]) {
+      expect(text).toContain('기록한 관리자와 기록 시각');
+    }
+    // '갱신 대기' is the same word on both sides (owner answer (2)).
+    expect(copy.adminMarketJudgementDelayPassed).toBe(copy.marketNextReviewPassed);
   });
 
   it('keeps the public rule history to versions, texts and reasons (#80, #172 item 15)', () => {

@@ -115,26 +115,12 @@ export const DISPUTE_STATUS_PALETTE: Record<MarketDisputeStatus, 'gray' | 'orang
 
 // ---- the deadline ---------------------------------------------------------------------
 
-/** The longest a one-shot wait for the deadline holds at once — a day; it then waits again. */
-const DISPUTE_DEADLINE_WAIT_MAX_MS = 24 * 60 * 60 * 1_000;
-
-/**
- * How long from `now` until the 이의 기한 has come (`deadline`, `now < deadline` takes disputes —
- * `isDisputeOpen`, the submission's own rule), at most a day; `null` once it has come or for an
- * unreadable deadline. A held market publishes nothing at its deadline (the worker skips it), so
- * the detail's link and the discussion's note go by a one-shot timer of this length
- * (`useDisputeOpen`), never by a clock read in render.
- */
-export function disputeDeadlineWait(deadline: string, now: number): number | null {
-  const at = Date.parse(deadline);
-  if (Number.isNaN(at) || at <= now) return null;
-  return Math.min(at - now, DISPUTE_DEADLINE_WAIT_MAX_MS);
-}
-
 /**
  * The deadline a screen waits for: the market's 이의 기한 while the API says disputes are taken
  * (`disputeOpen`, the server's clock at the read), else null — nothing to wait for, and the link
- * is not drawn.
+ * is not drawn. A held market publishes nothing at its deadline (the worker skips it), so the
+ * detail's link and the discussion's note wait for it by a one-shot timer (`useDisputeOpen`,
+ * through `useInstantReached`), never by a clock read in render.
  */
 export function openDisputeDeadline(
   market: Pick<Market, 'disputeOpen' | 'disputeDeadline'>,

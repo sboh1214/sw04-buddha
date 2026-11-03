@@ -6826,6 +6826,123 @@
         ]
       }
     },
+    "/api/v1/admin/markets/{id}/judgement-delays": {
+      "post": {
+        "operationId": "adminRecordMarketJudgementDelay",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordJudgementDelayBody"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "$ref": "#/components/schemas/AdminMarket"
+                    }
+                  },
+                  "required": [
+                    "data"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "VALIDATION_ERROR",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "UNAUTHENTICATED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "FORBIDDEN",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NOT_FOUND",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "ONBOARDING_REQUIRED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "RATE_LIMITED",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "session": []
+          }
+        ],
+        "summary": "Record why a delayed market’s judgement is late and when it is next reviewed (판정 지연 기록) by one admin, at once: on a closed market past its scheduled judgement or a provisional one a dispute or a waiting correction holds past its dispute deadline, a public reason and a next review time after now and at most 7 days ahead. Each record is a new one — the earlier ones stay as history, none is edited or withdrawn — and the public detail shows the current one without who recorded it. Nothing of the market changes: no status, no result, no scheduled judgement, and the time passing creates nothing",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/markets/{id}/disputes": {
       "post": {
         "operationId": "submitMarketDispute",
@@ -23494,6 +23611,14 @@
             "items": {
               "$ref": "#/components/schemas/MarketRuleVersion"
             }
+          },
+          "judgementDelay": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketJudgementDelay"
+              }
+            ]
           }
         },
         "required": [
@@ -23534,7 +23659,8 @@
           "resolvedAt",
           "settledAt",
           "ruleVersion",
-          "ruleVersions"
+          "ruleVersions",
+          "judgementDelay"
         ],
         "additionalProperties": false
       },
@@ -23706,6 +23832,28 @@
           "scheduledAnnouncementAt",
           "scheduledJudgementAt",
           "judgementTimeZone"
+        ],
+        "additionalProperties": false
+      },
+      "MarketJudgementDelay": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "nextReviewAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "nextReviewPassed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "reason",
+          "nextReviewAt",
+          "nextReviewPassed"
         ],
         "additionalProperties": false
       },
@@ -24278,6 +24426,14 @@
               "$ref": "#/components/schemas/AdminRuleVersion"
             }
           },
+          "judgementDelay": {
+            "nullable": true,
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/MarketJudgementDelay"
+              }
+            ]
+          },
           "createdBy": {
             "type": "string"
           },
@@ -24347,6 +24503,12 @@
           },
           "disputes": {
             "$ref": "#/components/schemas/AdminMarketDisputes"
+          },
+          "judgementDelays": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AdminJudgementDelay"
+            }
           }
         },
         "required": [
@@ -24388,6 +24550,7 @@
           "settledAt",
           "ruleVersion",
           "ruleVersions",
+          "judgementDelay",
           "createdBy",
           "updatedAt",
           "netCollectedCoin",
@@ -24400,7 +24563,8 @@
           "supplement",
           "pause",
           "judgement",
-          "disputes"
+          "disputes",
+          "judgementDelays"
         ],
         "additionalProperties": false
       },
@@ -24549,7 +24713,8 @@
               "paused",
               "resumed",
               "provisional",
-              "judgement_corrected"
+              "judgement_corrected",
+              "judgement_delay_recorded"
             ]
           },
           "actorId": {
@@ -25918,6 +26083,62 @@
           "closed_by_correction"
         ]
       },
+      "AdminJudgementDelay": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "nextReviewAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "marketStatus": {
+            "$ref": "#/components/schemas/JudgementDelayStatus"
+          },
+          "judgementVersion": {
+            "nullable": true,
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "recordedAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "recordedBy": {
+            "$ref": "#/components/schemas/AdminAccountActor"
+          },
+          "current": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "reason",
+          "nextReviewAt",
+          "marketStatus",
+          "judgementVersion",
+          "recordedAt",
+          "recordedBy",
+          "current"
+        ],
+        "additionalProperties": false
+      },
+      "JudgementDelayStatus": {
+        "type": "string",
+        "enum": [
+          "closed",
+          "provisional"
+        ]
+      },
       "CreateMarketBody": {
         "type": "object",
         "properties": {
@@ -26884,6 +27105,31 @@
           "requestedAt"
         ],
         "additionalProperties": false
+      },
+      "RecordJudgementDelayBody": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 500
+          },
+          "nextReviewAt": {
+            "type": "string",
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$"
+          },
+          "expectedAccountId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "reason",
+          "nextReviewAt",
+          "expectedAccountId"
+        ]
       },
       "SubmitDisputeBody": {
         "type": "object",

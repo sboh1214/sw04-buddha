@@ -535,6 +535,9 @@ describe('excluded features on screens (#113)', () => {
       // 판정 이의's operator side (#175): the submitter, the body and the decider are no member's
       // (#173 13) — 이의 접수 and the 판정 panel's block alone read it.
       at('lib', 'admin-disputes.ts'),
+      // 판정 지연 기록's operator side (#142): who recorded a delay and when are no member's (#173
+      // 13, decision 3) — the 판정 panel's section and its dialog alone read it.
+      at('lib', 'market-judgement-delay.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(true);
     }
@@ -556,6 +559,9 @@ describe('excluded features on screens (#113)', () => {
       at('hooks', 'use-disputes.ts'),
       at('components', 'market', 'dispute-discussion-note.tsx'),
       at('components', 'disputes', 'dispute-item.tsx'),
+      // The one-shot timer the detail's 이의 기한 and 판정 지연 기록's 갱신 대기 wait with (#175,
+      // #142): a member screen's, held to the member's rules.
+      at('hooks', 'use-instant-reached.ts'),
     ]) {
       expect(ADMIN.has(file), file).toBe(false);
     }

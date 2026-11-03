@@ -301,6 +301,11 @@ describe('findPrivateField', () => {
     'disputeWindowMinutes',
     'decisionReason',
     'links',
+    // A market's 판정 지연 기록 is public as its reason and next review time (#142, decision 3
+    // '#142 지연 사유'), with no whose-word beside them (#173 item 13).
+    'judgementDelay',
+    'nextReviewAt',
+    'nextReviewPassed',
   ])('lets %s through', (name) => {
     expect(findPrivateField(name)).toEqual([]);
   });

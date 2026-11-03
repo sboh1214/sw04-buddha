@@ -66,6 +66,7 @@ import {
   SETTLEMENT_POLL_INTERVAL_MS,
   TRADING_CLOSE_POLL_MS,
   adminMarketPollInterval,
+  judgementDelayEpisodeText,
   judgementDelayedNote,
   judgementVersionMove,
   judgementVersionName,
@@ -691,6 +692,54 @@ describe('marketEventRows', () => {
     ]) {
       expect(marketEventRows('judgement_corrected', bad)).toBeUndefined();
     }
+  });
+
+  it('reads a 판정 지연 기록 as its reason, next review time and the status it was made on (#142)', () => {
+    // The record's `judgement_delay_recorded` event (ADR-0106): no status change; the record's id
+    // is an id, which no row prints, and the actor beside it is the admin who recorded it.
+    const nextReviewAt = '2026-12-02T01:00:00.000Z';
+    const payload = {
+      delayId: '3f2504e0-4f89-11d3-9a0c-0305e82c3309',
+      reason: '출처의 발표가\n늦어지고 있습니다.',
+      nextReviewAt,
+      marketStatus: 'closed',
+      judgementVersion: null,
+    };
+    const rows = marketEventRows('judgement_delay_recorded', payload);
+    expect(rows).toEqual([
+      { label: copy.adminMarketJudgementDelayReason, value: payload.reason },
+      { label: copy.eventNextReviewAt, value: formatKst(nextReviewAt) },
+      { label: copy.adminMarketJudgementDelayEpisode, value: MARKET_STATUS_LABEL.closed },
+    ]);
+    expect(JSON.stringify(rows)).not.toContain(payload.delayId);
+    expect(MARKET_EVENT_LABEL.judgement_delay_recorded).toBe(copy.eventJudgementDelayRecorded);
+    expect(marketEventLabel('judgement_delay_recorded', payload)).toBe('판정 지연 기록');
+    // On a 잠정 결과, with the version it was made on.
+    expect(
+      marketEventRows('judgement_delay_recorded', {
+        ...payload,
+        marketStatus: 'provisional',
+        judgementVersion: 2,
+      }),
+    ).toContainEqual({ label: copy.adminMarketJudgementDelayEpisode, value: '잠정 결과 v2' });
+    for (const bad of [
+      { ...payload, marketStatus: 'open' },
+      { ...payload, nextReviewAt: 'nope' },
+      { ...payload, judgementVersion: 0 },
+      { ...payload, reason: undefined },
+      null,
+    ]) {
+      expect(marketEventRows('judgement_delay_recorded', bad)).toBeUndefined();
+    }
+  });
+
+  it('words what a 판정 지연 기록 was made on: 거래 마감, or 잠정 결과 with its version (#142)', () => {
+    expect(judgementDelayEpisodeText({ marketStatus: 'closed', judgementVersion: null })).toBe(
+      '거래 마감',
+    );
+    expect(judgementDelayEpisodeText({ marketStatus: 'provisional', judgementVersion: 1 })).toBe(
+      '잠정 결과 v1',
+    );
   });
 
   it('reads the worker’s 결과 확정 at the deadline as its version and result (#152)', () => {

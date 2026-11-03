@@ -20,6 +20,7 @@ import { commentLikes, postLikes } from './likes.js';
 import { linkFlags } from './link-review.js';
 import { marketDisputes } from './market-disputes.js';
 import { marketEvents } from './market-events.js';
+import { marketJudgementDelays } from './market-judgement-delays.js';
 import { marketJudgements } from './market-judgements.js';
 import { marketLinks } from './market-links.js';
 import { marketPauses } from './market-pauses.js';
@@ -176,6 +177,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   judgements: many(marketJudgements),
   // 판정 이의 (#175): every dispute of every version, `submitted_at` the order.
   disputes: many(marketDisputes),
+  // 판정 지연 기록 (#142): every record of every episode, `event_id` the order.
+  judgementDelays: many(marketJudgementDelays),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -461,6 +464,22 @@ export const marketDisputesRelations = relations(marketDisputes, ({ one }) => ({
   }),
 }));
 
+// One reference to `user` (who recorded) and one to `market_events`, named as the user's other
+// admin records are.
+export const marketJudgementDelaysRelations = relations(marketJudgementDelays, ({ one }) => ({
+  market: one(markets, { fields: [marketJudgementDelays.marketId], references: [markets.id] }),
+  recordedByUser: one(user, {
+    fields: [marketJudgementDelays.recordedBy],
+    references: [user.id],
+    relationName: 'market_judgement_delay_recorded_by',
+  }),
+  /** Its `judgement_delay_recorded` event. */
+  event: one(marketEvents, {
+    fields: [marketJudgementDelays.eventId],
+    references: [marketEvents.id],
+  }),
+}));
+
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({
   theme: one(themes, { fields: [themeNotices.themeId], references: [themes.id] }),
   creator: one(user, { fields: [themeNotices.createdBy], references: [user.id] }),
@@ -553,6 +572,9 @@ export const userRelations = relations(user, ({ one, many }) => ({
   judgementsApproved: many(marketJudgements, { relationName: 'market_judgement_approved_by' }),
   disputesSubmitted: many(marketDisputes, { relationName: 'market_dispute_submitter' }),
   disputesDecided: many(marketDisputes, { relationName: 'market_dispute_decider' }),
+  judgementDelaysRecorded: many(marketJudgementDelays, {
+    relationName: 'market_judgement_delay_recorded_by',
+  }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

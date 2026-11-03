@@ -10,6 +10,7 @@ import {
   AdminMarketDisputeQueueController,
   AdminMarketDisputesController,
 } from './admin-market-disputes.controller.js';
+import { AdminMarketJudgementDelaysController } from './admin-market-judgement-delays.controller.js';
 import {
   AdminMarketJudgementQueueController,
   AdminMarketJudgementsController,
@@ -27,6 +28,7 @@ import { AdminMarketsController } from './admin-markets.controller.js';
 import { MarketAdminService } from './market-admin.service.js';
 import { MarketDisputeService } from './market-dispute.service.js';
 import { MarketDisputesController, MeDisputesController } from './market-disputes.controller.js';
+import { MarketJudgementDelayService } from './market-judgement-delay.service.js';
 import { MarketJudgementService } from './market-judgement.service.js';
 import { MarketPauseService } from './market-pause.service.js';
 import { MarketSupplementService } from './market-supplement.service.js';
@@ -53,6 +55,8 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * queue. 판정 이의 (#175, ADR-0104; MarketDisputeService) are no approval kind: a member's
  * submission (MarketDisputesController) and own reads and 철회 (MeDisputesController,
  * `/me/disputes`), one admin's 기각·수용 (AdminMarketDisputesController) and the 이의 접수 list.
+ * Nor is 판정 지연 기록 (#142, ADR-0106; MarketJudgementDelayService): one admin records a delayed
+ * market's reason and next review time (AdminMarketJudgementDelaysController).
  */
 @Module({
   imports: [
@@ -75,6 +79,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     AdminMarketPauseDecisionQueueController,
     AdminMarketJudgementsController,
     AdminMarketJudgementQueueController,
+    AdminMarketJudgementDelaysController,
     MarketDisputesController,
     MeDisputesController,
     AdminMarketDisputesController,
@@ -86,6 +91,7 @@ import { RelatedMarketsService } from './related-markets.service.js';
     MarketSupplementService,
     MarketPauseService,
     MarketJudgementService,
+    MarketJudgementDelayService,
     MarketDisputeService,
     RelatedMarketsService,
   ],

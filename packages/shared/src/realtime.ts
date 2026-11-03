@@ -159,11 +159,12 @@ export type MarketTradeEvent = z.infer<typeof marketTradeEventSchema>;
  * later write; or the same status republished so subscribers refetch a descriptive edit
  * (A-M4-36, `MarketAdminService` `update`), a supplement's new rule version (#80, ADR-0101: the
  * approval), a 판정 이의's submission, retraction or decision (#175, ADR-0104: the labels'
- * flags) or a correction's registration, 반려 or 철회 (#176: the flags, and the disputes a 반려 or
- * 철회 reopens). `statusEventId` is the market's `status_event_id` — the key `statusSupersedes`
- * orders by — and the repeat carries the UNCHANGED one, which is what makes it safe: a client
- * drops it as not newer, and only the REST snapshot it triggers carries `closeAt`, `title`, the
- * rules, their versions, the judgement version, its deadline or the dispute flags. Required
+ * flags), a correction's registration, 반려 or 철회 (#176: the flags, and the disputes a 반려 or
+ * 철회 reopens) or a 판정 지연 기록 (#142, ADR-0106: the detail's `judgementDelay`).
+ * `statusEventId` is the market's `status_event_id` — the key `statusSupersedes` orders by — and
+ * the repeat carries the UNCHANGED one, which is what makes it safe: a client drops it as not
+ * newer, and only the REST snapshot it triggers carries `closeAt`, `title`, the rules, their
+ * versions, the judgement version, its deadline, the dispute flags or the delay record. Required
  * (nullable, never absent) so every publisher states it; null only from a row that has no
  * transition event.
  */

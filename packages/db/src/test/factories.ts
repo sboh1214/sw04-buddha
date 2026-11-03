@@ -68,6 +68,7 @@ import {
 import { and, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import { confirmationHold, type MarketDisputeRow } from '../market-dispute.js';
+import { recordJudgementDelay, type MarketJudgementDelayRow } from '../market-judgement-delay.js';
 import {
   approveMarketJudgement,
   correctMarketJudgement,
@@ -3016,6 +3017,73 @@ export async function createDispute(db: Db, input: CreateDisputeInput = {}): Pro
           .returning()
       : [market];
     return { dispute: dispute!, market: row!, fill };
+  });
+}
+
+/** The 지연 사유 a delay record factory writes unless given (one public sentence, #142). */
+const JUDGEMENT_DELAY_REASON = '1차 출처의 발표가 늦어져 판정을 미룬다.';
+
+export interface CreateJudgementDelayInput {
+  /**
+   * A market that reads '판정 지연' at `recordedAt`: a CLOSED one past its scheduled judgement
+   * (`createMarket`'s with `status: 'closed'` and a past `scheduledJudgementAt`), or a PROVISIONAL
+   * one past its 이의 기한 that a 판정 이의 or a waiting correction holds (`createDispute`'s,
+   * `createCorrectionRequest`'s on `createProvisionalMarket`'s market) — `recordJudgementDelay`
+   * throws for any other, as the route refuses it.
+   */
+  marketId: string;
+  /** 지연 사유. Default: a sentence. Stored as given (the database holds 1–500, trimmed). */
+  reason?: string;
+  /** 다음 검토 시각. Default: a day after the record. */
+  nextReviewAt?: Date;
+  /** The recording admin. Default: a fresh admin. */
+  by?: string;
+  /**
+   * The record's instant — its `recorded_at`, its event's `created_at`, and the clock the market
+   * and the next review time are judged on. Default: the database clock. An earlier one backdates
+   * the record (the bound CHECK is relative to it): a record whose next review time has passed.
+   */
+  recordedAt?: Date;
+}
+
+/** A delay record a factory made: the row and its `judgement_delay_recorded` event. */
+export interface JudgementDelayMade {
+  delay: MarketJudgementDelayRow;
+  /** The event's id; the market's `status_event_id` does not move. */
+  eventId: number;
+}
+
+/**
+ * A 판정 지연 기록 (#142, ADR-0106) as `POST /admin/markets/:id/judgement-delays` leaves it, at
+ * `recordedAt` or now: `recordJudgementDelay` in one transaction under the market lock, with the
+ * row read FOR UPDATE — the `judgement_delay_recorded` event (actor `by`, payload `{delayId,
+ * reason, nextReviewAt, marketStatus, judgementVersion}`) and its `market_judgement_delays` row
+ * on the market's status and version; nothing of the market changes. No `market_delay_record`
+ * record, as no factory writes a route's. The route's checks are the writer's: a market that does
+ * not read '판정 지연' at the instant, or a next review time not after it or more than
+ * JUDGEMENT_DELAY_REVIEW_MAX_DAYS × 24 hours later, throws.
+ */
+export async function createJudgementDelay(
+  db: Db,
+  input: CreateJudgementDelayInput,
+): Promise<JudgementDelayMade> {
+  const by = input.by ?? (await createUser(db, { role: 'admin' })).user.id;
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, input.marketId);
+    const [current] = await tx
+      .select()
+      .from(markets)
+      .where(eq(markets.id, input.marketId))
+      .for('update');
+    if (!current) throw new Error(`createJudgementDelay: market ${input.marketId} not found`);
+    const now = input.recordedAt ?? (await clockTimestamp(tx));
+    return recordJudgementDelay(tx, {
+      market: current,
+      reason: input.reason ?? JUDGEMENT_DELAY_REASON,
+      nextReviewAt: input.nextReviewAt ?? new Date(now.getTime() + DAY_MS),
+      recordedBy: by,
+      now,
+    });
   });
 }
 

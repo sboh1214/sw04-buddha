@@ -1253,8 +1253,8 @@ function EventLog({ market }: { market: AdminMarket }) {
 
 /**
  * The known payloads (rules diff, open/close instants, a pause's reason, a resume's or an early
- * close's review result, 판정, 정산) as Korean rows; the create body and anything unexpected stay
- * one JSON line (`marketEventRows`).
+ * close's review result, 판정, a 판정 지연 기록's reason and next review time, 정산) as Korean rows;
+ * the create body and anything unexpected stay one JSON line (`marketEventRows`).
  */
 function EventPayload({ type, payload }: { type: MarketEventType; payload: unknown }) {
   if (payload === null || payload === undefined) return null;

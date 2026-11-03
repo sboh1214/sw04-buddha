@@ -384,7 +384,8 @@ export const copy = {
   // (ADR-0104)가 판정 이의를 더해, 이의가 잡아 둔 잠정 결과 시장은 이의 기한 전에는 '이의 검토 중'
   // (marketStatusDisputeUnderReview), 기한이 지나도 확정되지 않았으면 '판정 지연'으로 보인다(#173 12항, 오너 답
   // 2026-11-03). #176(ADR-0105)의 승인을 기다리는 판정 정정이 잡아 둔 시장도 기한이 지나면 '판정 지연'이다(결정
-  // 3 '#176 정정 대기'). 지연의 사유와 다음 검토 시각은 #142가 붙인다. 검색 필터는 없다(ADR-0095 8-6).
+  // 3 '#176 정정 대기'). 판정 지연 기록(#142, ADR-0106)이 있으면 상세가 그 사유와 다음 검토 시각을 함께 보인다
+  // (카드는 라벨만). 검색 필터는 없다(ADR-0095 8-6).
   // 홈은 거래 중만 보이고(ADR-0065), 다른 상태는 검색(#15)이 고른다. 카운트다운의 marketCloseAt '마감'·
   // marketClosed '마감됨'과는 다른 자리다.
   marketStatusDraft: '초안',
@@ -1255,6 +1256,71 @@ export const copy = {
   errMarketJudgementCorrectionUnchanged:
     '지금 판정과 결과·근거가 모두 같습니다. 결과나 근거를 바꿀 것이 없으면 정정하지 않습니다.',
   errMarketJudgementCorrectionReason: '정정 사유를 1~500자로 입력해 주세요.',
+  // 판정 지연 기록 (#142, ADR-0106; ADR-0093 결정 1 #173 2·7·11·13항, 결정 2 #172 14항, 결정 3 '#142 지연
+  // 사유', 결정 4, 오너 답 2026-11-03 (1)~(4)): 판정 칸 안의 묶음. 판정 지연으로 보이는 시장(예정 판정 시각이
+  // 지난 거래 마감, 이의 기한이 지나도 판정 이의나 승인을 기다리는 판정 정정이 잡아 둔 잠정 결과)에 관리자 한
+  // 명이 승인 없이 지연 사유(공개 문장 하나, 500자까지, 분류 없음)와 다음 검토 시각(기록한 때부터 7일 안, 한국
+  // 시간으로 입력)을 기록한다. 다시 기록하면 새 기록이 지금의 기록이 되고 이전 것은 이력으로 남는다. 고치거나
+  // 지우지 않는다. 기록은 상태와 결과를 바꾸지 않고 예정 판정 시각도 그대로이며, 다음 검토 시각이 지나도 아무
+  // 일도 일어나지 않는다(늦은 갱신 경고만, 공개 상세는 '갱신 대기'). 시장의 판정이 승인·정정·확정되면 그 전의
+  // 기록은 이력이 된다. 공개 상세에는 판정 지연인 동안 지금의 기록의 사유와 다음 검토 시각만 보이고 기록한
+  // 관리자와 기록 시각은 보이지 않는다.
+  adminMarketJudgementDelays: '판정 지연 기록',
+  adminMarketJudgementDelaysIntro:
+    '판정 지연으로 보이는 동안 관리자 한 명이 지연 사유와 다음 검토 시각을 기록합니다. 그동안 공개 상세에는 지금의 기록(시장의 지금 상태·판정 버전에서 한 가장 최근 기록)의 지연 사유와 다음 검토 시각이 보이고, 기록한 관리자와 기록 시각은 보이지 않습니다. 판정이 승인·정정·확정되면 그 전의 기록은 이력으로만 남습니다. 기록은 고치거나 지울 수 없고 바꾸려면 새로 기록합니다. 기록해도 시장의 상태와 결과는 바뀌지 않습니다.',
+  adminMarketJudgementDelayRecord: '지연 기록 등록',
+  // 기록 버튼을 끈 까닭(판정 지연으로 보이는 동안만 기록한다, #173 11·7항): 예정 판정 시각이 없는 거래 마감
+  // 시장(#22 전에 연 시장), 예정 판정 시각 전의 거래 마감 시장, 판정 지연이 아닌 잠정 결과 시장.
+  adminMarketJudgementDelayUnscheduled:
+    '예정 판정 시각이 없는 시장이라 판정 지연으로 보이지 않아 기록할 수 없습니다.',
+  adminMarketJudgementDelayEarly: '예정 판정 시각이 지나 판정 지연으로 보이면 기록할 수 있습니다.',
+  adminMarketJudgementDelayUnheld:
+    '이의 기한이 지난 뒤 판정 이의나 승인을 기다리는 판정 정정이 결과 확정을 잡아 둔 동안에만 기록할 수 있습니다.',
+  // 지금의 기록: 시장의 지금 상태와 판정 버전에서 한 가장 최근 기록. 이력의 줄마다 기록 당시의 상태(거래 마감,
+  // 잠정 결과 v1)를 보이고 지금의 기록에 '현재'를 붙인다.
+  adminMarketJudgementDelayCurrent: '지금의 지연 기록',
+  // 판정 지연인 시장에 기록이 있어도 모두 이력일 때(판정이나 정정이 승인되기 전의 기록): 지금의 기록 자리.
+  adminMarketJudgementDelayNoCurrent:
+    '지금의 판정 버전에는 지연 기록이 없습니다. 공개 상세에는 사유 없이 판정 지연으로 보입니다.',
+  adminMarketJudgementDelayReason: '지연 사유',
+  adminMarketJudgementDelayNextReviewAt: '다음 검토 시각 (KST)',
+  adminMarketJudgementDelayRecordedBy: '기록한 관리자',
+  adminMarketJudgementDelayRecordedAt: '기록 시각',
+  adminMarketJudgementDelayEpisode: '기록 당시',
+  adminMarketJudgementDelayPassed: '갱신 대기',
+  adminMarketJudgementDelayCurrentBadge: '현재',
+  adminMarketJudgementDelayHistory: '지연 기록 이력',
+  adminMarketJudgementDelayHistoryEmpty: '지연 기록이 없습니다.',
+  // 늦은 갱신 경고(오너 답 (2)): 판정 지연인 시장의 지금의 기록의 다음 검토 시각이 지났다.
+  adminMarketJudgementDelayLate:
+    '다음 검토 시각이 지났습니다. 공개 상세에는 갱신 대기로 보입니다. 새 지연 기록으로 사유와 다음 검토 시각을 알려 주세요. 시각이 지난 것만으로 결과가 생기지는 않습니다.',
+  // 장기 지연 경고(오너 답 (3)): 장기 지연 기한(예정 판정 시각 + 장기 지연 기한의 날수)이 지난 거래 마감 시장의
+  // 판정 칸 맨 위. 규칙의 처리를 판정 등록으로 적용한다(무효도 등록과 다른 관리자의 승인, #152). 목록은 #145.
+  adminMarketJudgementLongDelay:
+    '장기 지연 기한이 지났습니다. 규칙의 지연·취소·무효 처리를 적용하려면 판정을 등록하고 다른 관리자의 승인을 받습니다. 자동으로 처리되는 것은 없습니다.',
+  adminMarketJudgementLongDelayDeadline: '장기 지연 기한',
+  // 기록 창. 사유는 지금의 기록의 것으로 채워 열고(바꾸지 않으면 같은 사유로 새 기록), 다음 검토 시각은 비워 연다.
+  adminMarketJudgementDelayTitle: '판정 지연을 기록합니다',
+  adminMarketJudgementDelayBody:
+    '지연 사유와 다음 검토 시각이 공개 상세에 바로 보입니다. 기록한 관리자와 기록 시각은 관리자 화면에만 남습니다. 시장의 상태와 결과는 바뀌지 않고, 기록은 고치거나 지울 수 없습니다.',
+  adminMarketJudgementDelayReasonHint:
+    '공개 상세에 그대로 보이는 한 문장입니다. 관리자의 이름, 예상하는 결과, 승인되지 않은 판정 정정은 적지 않습니다. 500자까지 쓸 수 있습니다.',
+  // '7일'은 JUDGEMENT_DELAY_REVIEW_MAX_DAYS(출시 설정이 아닌 고정값, 오너 답 (1))다. 이 문장과 거절 문장의
+  // '7일'은 lib/market-judgement-delay.test가 그 값에 맞춰 본다.
+  adminMarketJudgementDelayNextReviewHint:
+    '지금부터 7일 안의 시각을 한국 시간으로 적습니다. 그 시각이 지나도 결과는 생기지 않고, 새 기록이 없으면 공개 상세에 갱신 대기로 보입니다.',
+  adminMarketJudgementDelayConfirm: '기록',
+  adminMarketJudgementDelayRecorded: '판정 지연을 기록했습니다.',
+  // 기록의 거절(VALIDATION_ERROR가 짚는 곳마다, MARKET_JUDGEMENT_DELAY_REFUSALS). 시각의 두 거절은 서버가
+  // 데이터베이스 시계로 다시 본다.
+  errMarketJudgementDelayReason: '지연 사유를 1~500자로 입력해 주세요.',
+  errMarketJudgementDelayNextReviewTime: '날짜와 시각으로 입력해 주세요.',
+  errMarketJudgementDelayNextReviewAfter: '다음 검토 시각은 지금보다 뒤여야 합니다.',
+  errMarketJudgementDelayNextReviewTooFar: '다음 검토 시각은 지금부터 7일 안이어야 합니다.',
+  errMarketJudgementDelayStatus:
+    '거래 마감이나 잠정 결과인 시장만 판정 지연을 기록할 수 있습니다. 화면을 새로 고쳐 주세요.',
+  errMarketJudgementDelayNotDelayed:
+    '이 시장은 지금 판정 지연으로 보이지 않아 기록할 수 없습니다. 화면을 새로 고쳐 주세요.',
   // 판정 승인 대기 (GET /admin/market-judgements): 기다리는 판정 등록, 오래 기다린 것부터. 검수 대기 화면의
   // 넷째 묶음이다. 예정 판정 시각 전의 판정은 그렇다고 표시하고, 판정 정정(#176)은 '판정 정정 v1 → v2'로
   // 표시한다.
@@ -1298,7 +1364,8 @@ export const copy = {
   // 결과, 이의 기한), 이의 기한이 지나면 워커가 잠정 결과 → 결과 확정(resolved; 판정 버전, 결과 — 판정 이의가
   // 잡아 두었으면 마지막 기각 뒤, #175, 행위자 없음). 판정 정정(#176)의 승인은 상태를 바꾸지 않는 '판정 정정'
   // 하나를 남긴다(행위자는 승인한 관리자; 이전 → 새 판정 버전과 결과, 새 이의 기한, 정정으로 종결한 판정 이의의
-  // 수). #152 전의
+  // 수). 판정 지연 기록(#142)도 상태를 바꾸지 않는 '판정 지연 기록' 하나를 남긴다(행위자는 기록한 관리자;
+  // 지연 사유, 다음 검토 시각, 기록 당시의 상태와 판정 버전). #152 전의
   // 결과 확정 기록은 관리자 한 명이 바로 확정한 판정이다(결과, 메모, 근거 URL). 워커가 결과 확정 → 지급
   // 중으로 옮기고(settling) 지급 중 → 지급 완료로 끝낸다(finalized). 이름은 그 상태의 라벨을 따른다
   // (ADR-0093 결정 1의 12, #174).
@@ -1309,6 +1376,8 @@ export const copy = {
   eventJudgementCorrected: '판정 정정',
   // '정정으로 종결한 판정 이의 2건': 뒤에 수와 adminMarketDisputesHoldingUnit이 붙는다.
   eventClosedDisputes: '정정으로 종결한 판정 이의',
+  eventJudgementDelayRecorded: '판정 지연 기록',
+  eventNextReviewAt: '다음 검토 시각',
   eventResolveNote: '메모',
   eventResolveEvidence: '근거 URL',
   eventSettling: '지급 시작',
@@ -2057,9 +2126,19 @@ export const copy = {
   marketPausedNotice: '거래가 일시 중단된 시장입니다. 지금은 거래할 수 없습니다.',
   marketClosedNotice: '마감된 시장입니다. 더 이상 거래할 수 없습니다.',
   // 판정 지연(#173 11항, #22): 예정 판정 시각이 지난 거래 마감 시장. 늦어진 것만으로 결과를 정하지 않는다.
-  // 지연의 사유와 다음 검토 시각은 #142가 붙인다.
+  // 운영자의 판정 지연 기록(#142)이 있으면 그 사유와 다음 검토 시각이 이 문장 아래 줄로 붙는다.
   marketJudgementDelayedNotice:
     '예정 판정 시각이 지났지만 아직 결과가 나오지 않았습니다. 더 이상 거래할 수 없습니다.',
+  // 판정 지연 기록 (#142, ADR-0106; ADR-0093 결정 3 '#142 지연 사유', #173 11·13항, 오너 답 2026-11-03 (2)):
+  // 판정 지연으로 보이는 시장(예정 판정 시각이 지난 거래 마감, 이의 기한이 지나도 확정되지 않은 잠정 결과)에
+  // 운영자가 남긴 최신 기록의 공개 문장 하나와 다음 검토 시각이 상태별 안내 안의 줄로 보인다. 누가·언제
+  // 기록했는지는 보이지 않는다. 다음 검토 시각이 지나도록 새 기록이 없으면 사유를 그대로 두고 '갱신 대기'로
+  // 표시하며, 시각이 지난 것만으로 결과가 정해지지 않는다고 말한다. 이전 기록의 공개는 #24.
+  marketJudgementDelayReason: '지연 사유',
+  marketNextReviewAt: '다음 검토 시각',
+  marketNextReviewPassed: '갱신 대기',
+  marketNextReviewPassedNote:
+    '다음 검토 시각이 지났지만 아직 새 안내가 없습니다. 시각이 지난 것만으로 결과가 정해지지는 않습니다.',
   marketProvisionalNotice: '잠정 결과가 나온 시장입니다. 결과는 아직 확정되지 않았습니다.',
   marketResolvedNotice: '결과가 확정된 시장입니다.',
   marketSettlingNotice: '결과가 확정되어 지급을 진행하고 있습니다.',
@@ -3562,7 +3641,7 @@ export const copy = {
   // 잠정 결과 안내 아래의 한 줄: 이의가 잡아 둔 동안('이의 검토 중'), 그리고 기한이 지나도 그런 동안('판정 지연',
   // 오너 답 2026-11-03). 기한이 지나도 승인을 기다리는 판정 정정이 잡아 둔 동안(#176, 결정 3 '#176 정정 대기')은
   // 이의가 아니라 판정을 다시 검토한다고만 말한다: 정정은 반려될 수 있어 결과가 바뀐다고 약속하지 않는다. 검토
-  // 기한은 없고 지연의 사유는 #142가 붙인다.
+  // 기한은 없고, 늦어지면 운영자의 판정 지연 기록(#142)이 사유와 다음 검토 시각을 이 줄 아래에 붙인다.
   marketProvisionalUnderReview:
     '판정 이의를 검토하고 있습니다. 검토가 끝날 때까지 결과는 확정되지 않습니다.',
   marketProvisionalDelayed:

@@ -144,7 +144,9 @@ jobs:
   test-integration:
     name: Integration Tests (${{ matrix.name }})
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # api's suite alone ran 19 minutes on a hosted runner at #142 (1465 tests, 2026-11-03): the
+    # old 20 cancelled the job after its last test had passed (ADR-0106 결과 7).
+    timeout-minutes: 30
 
     strategy:
       fail-fast: false

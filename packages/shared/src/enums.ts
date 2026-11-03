@@ -188,9 +188,9 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review, #114 pause, #152 judgement and #176 correction, below; #20 cancel) — #21's
- * scheduled open writes the `opened` the interim open wrote before it, and #152's confirmation
- * the `resolved` the interim judgement wrote.
+ * makes (#78 review, #114 pause, #152 judgement, #176 correction and #142 delay record, below;
+ * #20 cancel) — #21's scheduled open writes the `opened` the interim open wrote before it, and
+ * #152's confirmation the `resolved` the interim judgement wrote.
  */
 export const MARKET_EVENT_TYPES = [
   /** → draft: the row is written (`to_status` only). */
@@ -313,6 +313,19 @@ export const MARKET_EVENT_TYPES = [
    * admin actions alone, as a first judgement's.
    */
   'judgement_corrected',
+  /**
+   * No status change (`from_status`/`to_status` null): 판정 지연 기록 (#142, ADR-0106; ADR-0093
+   * decision 1 #173 items 2·11, decision 3 '#142 지연 사유') — one admin, the actor, recorded the
+   * reason and the next review time of a market that reads '판정 지연' (a CLOSED one past its
+   * scheduled judgement, a held PROVISIONAL one past its 이의 기한; its `market_judgement_delays`
+   * row). No result and no market column change, and the market's `status_event_id` stays, so
+   * `market:status` republishes the unchanged key. Payload `{delayId, reason, nextReviewAt,
+   * marketStatus, judgementVersion}` (`MarketJudgementDelayRecordedPayload`,
+   * market-judgement-delay.ts): the record, its public reason, the time as ISO, and the status and
+   * judgement version it was made on (null on CLOSED). Each change is a new record and a new event
+   * (no edit, no withdrawal).
+   */
+  'judgement_delay_recorded',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -506,6 +519,14 @@ export const ADMIN_ACTION_TYPES = [
    * ADR-0105) — this row still records the acceptance.
    */
   'market_dispute_accept',
+  /**
+   * 판정 지연 기록 (#142, ADR-0106; ADR-0093 decision 1 #173 items 2·11): target `market` / its id.
+   * One admin, no approval request, recorded a delayed market's reason and next review time (its
+   * `judgement_delay_recorded` event): payload `{delayId, reason, nextReviewAt, marketStatus,
+   * judgementVersion}` (`MarketDelayRecordActionPayload`, market-judgement-delay.ts) — the event's
+   * fields; no before and after, the market row being unchanged.
+   */
+  'market_delay_record',
   /**
    * Retired (#21, ADR-0100): the interim open (ADR-0027, draft → open) wrote it until #21 removed
    * that action. Kept so the rows it wrote still parse and render; nothing writes it now — an open

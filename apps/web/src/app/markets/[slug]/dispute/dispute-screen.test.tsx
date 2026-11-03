@@ -34,6 +34,7 @@ const provisional: Market = {
   judgementVersion: 1,
   disputeDeadline: DEADLINE,
   disputeOpen: true,
+  judgementDelay: null,
   statusEventId: '4',
   createdAt: '2026-10-01T00:00:00.000Z',
   description: null,

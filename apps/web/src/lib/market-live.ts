@@ -11,7 +11,7 @@ import {
   supersedes,
 } from '@buddha/shared';
 import { type InfiniteData } from '@tanstack/react-query';
-import { type MarketSummary, type Me, type Position } from './api';
+import { type MarketJudgementDelay, type MarketSummary, type Me, type Position } from './api';
 
 /**
  * The reducers every realtime writer shares (PLAN 8, 11.5), in two contracts.
@@ -68,6 +68,13 @@ export interface LiveMarket {
    */
   judgementVersion: number | null;
   disputeDeadline: string | null;
+  /**
+   * The detail's 판정 지연 기록 (#142, ADR-0106: `Market.judgementDelay` — no card carries it, so
+   * optional here): the current record's reason and next review time, read with the status like
+   * the flags above — null unless the read found the market '판정 지연' — so it is reset with them
+   * (`applyStatus`) and moves with the status group (`joinMarket`).
+   */
+  judgementDelay?: MarketJudgementDelay | null;
 }
 
 /**
@@ -197,8 +204,10 @@ export function tickRestartsMarket(
  * The display flags are RESET (`NO_STATUS_DISPLAY`, #175, ADR-0104): `judgementDelayed`,
  * `disputeUnderReview` and `disputeOpen` were read for the old status — a CLOSED market's delay,
  * a PROVISIONAL one's hold or open deadline — and none of them may label the status the event
- * brings (ADR-0098 8-11's reason, now that PROVISIONAL reads flags too). The REST refetch the
- * handler fires beside the event (realtime-provider.tsx) fills them in for the new status.
+ * brings (ADR-0098 8-11's reason, now that PROVISIONAL reads flags too). So is the detail's 판정
+ * 지연 기록 (#142, ADR-0106), where the row carries one: a CLOSED market's record must not stand on
+ * the 잠정 결과 the approval brings. The REST refetch the handler fires beside the event
+ * (realtime-provider.tsx) fills them in for the new status.
  *
  * `undefined` for an event that is not NEWER covers two senders: a late or duplicate
  * transition, and the deliberate repeat an admin edit publishes (A-M4-36) — the same id the row
@@ -224,6 +233,8 @@ export function applyStatus<T extends LiveMarket>(
     resolvedResult: event.resolvedResult ?? null,
     statusEventId: event.statusEventId,
     ...NO_STATUS_DISPLAY,
+    // A card has none to reset, and gains none.
+    ...(held.judgementDelay === undefined ? {} : { judgementDelay: null }),
   };
 }
 
@@ -283,6 +294,9 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
   // held would read 판정 지연 on PROVISIONAL, which a held market past its deadline now means. So
   // do the version and the 이의 기한: a pre-판정 snapshot's nulls would take the detail's deadline
   // row and link away, and hold the dispute screen on its skeleton, while `disputeOpen` says open.
+  // The detail's 판정 지연 기록 rides with them too (#142, ADR-0106): read with the status, an older
+  // snapshot's CLOSED-era record joined to the held 잠정 결과 would stand under its 판정 지연. A tie
+  // — a record's own `market:status` repeat (A-M4-36) keeps the key — lets `incoming` bring it.
   if (statusSupersedes(held, incoming)) {
     next = {
       ...next,
@@ -294,6 +308,7 @@ export function joinMarket<T extends LiveMarket>(held: T | undefined, incoming: 
       disputeOpen: held.disputeOpen,
       judgementVersion: held.judgementVersion,
       disputeDeadline: held.disputeDeadline,
+      ...(held.judgementDelay === undefined ? {} : { judgementDelay: held.judgementDelay }),
     };
   }
   return next;

@@ -406,7 +406,8 @@ describe('longDelayDeadline (#172 item 10)', () => {
 
   it('adds instants, so across a daylight-saving change the wall clock moves by the hour', () => {
     // America/New_York leaves daylight saving on 2026-11-01: 10:00 EDT plus three days of 24
-    // hours is 09:00 EST — the instant #142 and #145 act on is the one shown.
+    // hours is 09:00 EST — the instant the admin warning (#142) and #145's list act on is the one
+    // shown.
     const judgement = '2026-10-31T14:00:00.000Z';
     const deadline = longDelayDeadline(judgement, 3);
     expect(deadline).toBe('2026-11-03T14:00:00.000Z');

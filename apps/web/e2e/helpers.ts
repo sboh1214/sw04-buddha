@@ -53,6 +53,7 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * in every 판정 정정 since #176: the first registers it and the second approves it — the next
  * judgement version, its result and a new deadline of the first one's length (`registerCorrection`
  * and `approveJudgementAsReviewer`) — or rejects it; while it waits, it holds the confirmation.
+ * A 판정 지연 기록 since #142 is one admin's alone and at once, no approval (`recordJudgementDelay`).
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -2678,6 +2679,84 @@ export function documentSurvived(page: Page): Promise<boolean> {
     (key) => (window as unknown as Record<string, boolean | undefined>)[key] === true,
     NO_RELOAD_MARKER,
   );
+}
+
+// ---- 판정 지연 기록 (#142) ----------------------------------------------------------------
+
+/**
+ * The 지연 사유 every helper record gives unless told otherwise (1..500 characters): the one public
+ * sentence (ADR-0093 decision 3 '#142 지연 사유') — no admin's name, no expected result and no
+ * correction not yet approved (docs/OPERATIONS.md '판정 지연 기록').
+ */
+export const HELPER_JUDGEMENT_DELAY_REASON =
+  '1차 출처의 발표가 늦어지고 있습니다. 발표를 확인하는 대로 판정을 등록합니다.';
+
+/** How far ahead a helper record's 다음 검토 시각 is unless given: a day, well inside the bound. */
+const HELPER_JUDGEMENT_DELAY_REVIEW_IN_MS = 24 * 60 * MINUTE_MS;
+
+export interface JudgementDelayOptions {
+  /** The 지연 사유: HELPER_JUDGEMENT_DELAY_REASON unless given. */
+  reason?: string;
+  /**
+   * The 다음 검토 시각, an ISO instant in UTC (seconds and milliseconds taken):
+   * HELPER_JUDGEMENT_DELAY_REVIEW_IN_MS from now unless given. The API takes one after now and at
+   * most 7 × 24 hours ahead on its database clock (owner answer 2026-11-03 (1)); a spec that pins
+   * a refusal sends what it pins.
+   */
+  nextReviewAt?: string;
+}
+
+/**
+ * 판정 지연 기록 (#142, ADR-0106; ADR-0093 decision 1 #173 items 2·11, decision 3 '#142 지연
+ * 사유') through `POST /admin/markets/:id/judgement-delays` as the admin `context` is signed in as
+ * (ADR-0092), one admin and at once — no approval request: the reason and the next review time,
+ * the answer as it came, for a spec that reads a refusal. The UI's `datetime-local` is
+ * minute-precise, so a spec that needs a next review time seconds ahead records through this.
+ */
+export async function sendJudgementDelay(
+  context: APIRequestContext,
+  marketId: string,
+  {
+    reason = HELPER_JUDGEMENT_DELAY_REASON,
+    nextReviewAt = new Date(Date.now() + HELPER_JUDGEMENT_DELAY_REVIEW_IN_MS).toISOString(),
+  }: JudgementDelayOptions = {},
+): Promise<APIResponse> {
+  return context.post(`/api/v1/admin/markets/${marketId}/judgement-delays`, {
+    data: { reason, nextReviewAt, expectedAccountId: await accountIdOf(context) },
+  });
+}
+
+/**
+ * `sendJudgementDelay` as `admin`, which must be taken: the admin market as the record left it —
+ * its status, result and judgement as they were (a record changes nothing of the market, #173
+ * item 11), the new record the first of `judgementDelays` and the current one, the earlier ones
+ * its history (owner answer 2026-11-03 (4): no edit, no withdrawal). The market must read '판정
+ * 지연' on the API's clock: CLOSED past its scheduled judgement, or a PROVISIONAL one a 판정 이의 or
+ * a waiting 판정 정정 holds past its 이의 기한 (#173 items 7·11) — any admin records, the
+ * registrant of a waiting judgement included. The record republishes `market:status` with its
+ * key unchanged, so an open public detail reads it again without a reload (A-M4-36).
+ */
+export async function recordJudgementDelay(
+  admin: APIRequestContext,
+  marketId: string,
+  options: JudgementDelayOptions = {},
+): Promise<AdminMarket> {
+  const recorded = await unwrap<AdminMarket>(await sendJudgementDelay(admin, marketId, options));
+  if (recorded.judgementDelays[0]?.current !== true) {
+    throw new Error(`market ${marketId} has no current delay record after its record`);
+  }
+  return recorded;
+}
+
+/**
+ * Waits on `page` until `ms` past `iso`, an instant on the API's clock — the same box's, so the
+ * runner's clock stands for it — with the screens open: an instant nothing is published at, as a
+ * held market's 이의 기한 (correction.spec.ts) or a 판정 지연 기록's 다음 검토 시각 (delay.spec.ts —
+ * the time passing creates nothing, #173 item 11).
+ */
+export async function waitPast(page: Page, iso: string, ms: number): Promise<void> {
+  const wait = Date.parse(iso) + ms - Date.now();
+  if (wait > 0) await page.waitForTimeout(wait);
 }
 
 // ---- realtime -----------------------------------------------------------------------

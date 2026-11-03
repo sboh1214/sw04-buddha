@@ -30,6 +30,17 @@ export {
   type SubmitMarketDisputeResult,
 } from './market-dispute.js';
 export {
+  readJudgementDelays,
+  readPublicJudgementDelay,
+  recordJudgementDelay,
+  type JudgementDelayMarketRow,
+  type JudgementDelayRead,
+  type MarketJudgementDelayRow,
+  type PublicJudgementDelayRead,
+  type RecordJudgementDelayInput,
+  type RecordJudgementDelayResult,
+} from './market-judgement-delay.js';
+export {
   approveMarketJudgement,
   correctMarketJudgement,
   currentMarketJudgement,

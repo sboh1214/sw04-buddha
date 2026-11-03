@@ -452,6 +452,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/markets/{id}/judgement-delays": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Record why a delayed market’s judgement is late and when it is next reviewed (판정 지연 기록) by one admin, at once: on a closed market past its scheduled judgement or a provisional one a dispute or a waiting correction holds past its dispute deadline, a public reason and a next review time after now and at most 7 days ahead. Each record is a new one — the earlier ones stay as history, none is edited or withdrawn — and the public detail shows the current one without who recorded it. Nothing of the market changes: no status, no result, no scheduled judgement, and the time passing creates nothing */
+        post: operations["adminRecordMarketJudgementDelay"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets/{id}/judgements": {
         parameters: {
             query?: never;
@@ -3234,6 +3251,19 @@ export type components = {
             reason: string;
             userId: string;
         };
+        AdminJudgementDelay: {
+            current: boolean;
+            /** Format: uuid */
+            id: string;
+            judgementVersion: number | null;
+            marketStatus: components["schemas"]["JudgementDelayStatus"];
+            /** Format: date-time */
+            nextReviewAt: string;
+            reason: string;
+            /** Format: date-time */
+            recordedAt: string;
+            recordedBy: components["schemas"]["AdminAccountActor"];
+        };
         AdminLinkFlag: {
             /** Format: date-time */
             flaggedAt: string;
@@ -3330,7 +3360,9 @@ export type components = {
             id: string;
             imageUrl: string | null;
             judgement: components["schemas"]["AdminMarketJudgementState"];
+            judgementDelay: components["schemas"]["MarketJudgementDelay"] | null;
             judgementDelayed: boolean;
+            judgementDelays: components["schemas"]["AdminJudgementDelay"][];
             judgementTimeZone: string | null;
             judgementVersion: number | null;
             lastPrice: number | null;
@@ -4345,6 +4377,8 @@ export type components = {
             code: components["schemas"]["ReportReason"];
             note: string | null;
         };
+        /** @enum {string} */
+        JudgementDelayStatus: "closed" | "provisional";
         JudgementEvidence: {
             /** Format: date-time */
             collectedAt: string;
@@ -4419,6 +4453,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             imageUrl: string | null;
+            judgementDelay: components["schemas"]["MarketJudgementDelay"] | null;
             judgementDelayed: boolean;
             judgementTimeZone: string | null;
             judgementVersion: number | null;
@@ -4465,11 +4500,17 @@ export type components = {
             /** @enum {string|null} */
             toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
-            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected";
+            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling" | "rules_supplemented" | "paused" | "resumed" | "provisional" | "judgement_corrected" | "judgement_delay_recorded";
         };
         MarketJudgementCorrection: {
             baseVersion: number;
             disputeIds: string[];
+            reason: string;
+        };
+        MarketJudgementDelay: {
+            /** Format: date-time */
+            nextReviewAt: string;
+            nextReviewPassed: boolean;
             reason: string;
         };
         MarketJudgementLogEntry: {
@@ -5350,6 +5391,12 @@ export type components = {
                 };
             };
             expectedAccountId: string;
+        };
+        RecordJudgementDelayBody: {
+            expectedAccountId: string;
+            /** Format: date-time */
+            nextReviewAt: string;
+            reason: string;
         };
         RecordSearchBody: {
             expectedAccountId: string;
@@ -8295,6 +8342,87 @@ export interface operations {
                 };
             };
             /** @description ONBOARDING_REQUIRED | DISPUTE_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRecordMarketJudgementDelay: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecordJudgementDelayBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
             409: {
                 headers: {
                     [name: string]: unknown;

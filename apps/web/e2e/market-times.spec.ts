@@ -48,7 +48,8 @@ import {
  * A visitor reads every time of the rules in their own zone and, when the market's 판정 기준
  * 시간대 is another, in that zone too on a second line — after hydration only: the server's HTML
  * holds one KST line per time, with no marker (ADR-0063). A closed market whose scheduled
- * judgement has passed reads '판정 지연' in place of '거래 마감' (#173 item 11).
+ * judgement has passed reads '판정 지연' in place of '거래 마감' (#173 item 11), with no operator's
+ * record — the reason and next review time one adds are delay.spec.ts' (#142, ADR-0106).
  *
  * No spec writes the lead-close gap's release setting: a value would stay in the e2e database and
  * change release-settings.spec.ts's counts (docs/SETTINGS.md; the suite's one write is the dispute

@@ -248,17 +248,14 @@ describe('retractDisputeOptions', () => {
 describe('the deadline’s timer (useDisputeOpen)', () => {
   it('starts from the API’s flag and a timer in an effect, never a clock read in render', () => {
     // No component renders under node with effects, so the hook's wiring is pinned in its source:
-    // the first render is the server's `disputeOpen` alone (the detail's HTML), and the timer —
-    // set from an effect, the anchor's elapsed counted as the countdown counts it — closes it.
+    // the first render is the server's `disputeOpen` alone (the detail's HTML), and the one-shot
+    // timer (`useInstantReached`, use-instant-reached.test.ts) closes it at the deadline.
     const source = readFileSync(new URL('./use-disputes.ts', import.meta.url), 'utf8');
     const hook = source.slice(source.indexOf('export function useDisputeOpen('));
     expect(hook).toContain('const deadline = openDisputeDeadline(market);');
-    expect(hook).toContain('return deadline !== null && closedAt !== deadline;');
-    expect(hook).toContain('tickingNow(anchorAt, performance.now() - startedAt, Date.now())');
-    expect(hook).toContain('timer = setTimeout(check, 0);');
-    // `Date.now()` only inside the effect's timer callback.
-    const body = hook.slice(0, hook.indexOf('useEffect(() => {\n    if (deadline === null)'));
-    expect(body).not.toContain('Date.now()');
+    expect(hook).toContain('const closed = useInstantReached(deadline, anchor, onClosed);');
+    expect(hook).toContain('return deadline !== null && !closed;');
+    expect(hook.slice(0, hook.indexOf('\n}\n'))).not.toContain('Date.now()');
   });
 });
 

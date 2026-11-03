@@ -17,6 +17,7 @@ import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-ac
 import { marketTitleSchema, ruleItemFields, timeItemFields } from './market-fields.js';
 import { adminMarketDisputesSchema } from './market-dispute.js';
 import { adminMarketJudgementStateSchema, judgementVersionSchema } from './market-judgement.js';
+import { adminJudgementDelaySchema, marketJudgementDelaySchema } from './market-judgement-delay.js';
 import { openItemSchema } from './market-open-items.js';
 import { adminMarketPauseStateSchema } from './market-pause.js';
 import { adminMarketReviewSchema } from './market-review.js';
@@ -95,7 +96,8 @@ const marketSummaryFields = {
    * 정정 still holding it once its 이의 기한 has come (#175, owner answer 2026-11-03; #176,
    * ADR-0105) — in place of '잠정 결과' and '이의 검토 중'. On the server's clock at the read, so
    * the card needs no time of its own. A display, not a status: nothing changes at that time, and
-   * no list filters by it (ADR-0095 8-6).
+   * no list filters by it (ADR-0095 8-6). The detail adds the operator's reason and next review
+   * time (`Market.judgementDelay`, #142).
    */
   judgementDelayed: z.boolean(),
   /**
@@ -215,6 +217,16 @@ export const marketSchema = z
      * the same snapshot as the rest of the detail; empty while `ruleVersion` is null.
      */
     ruleVersions: z.array(marketRuleVersionSchema),
+    /**
+     * 판정 지연 기록 (#142, ADR-0106; ADR-0093 decision 1 #173 items 11·13, decision 3 '#142 지연
+     * 사유'): while the market reads '판정 지연' (`judgementDelayed`), its current record — the
+     * newest an operator made on its current status and judgement version — as its reason, its
+     * next review time and whether that has passed ('갱신 대기', owner answer 2026-11-03 (2)), on
+     * the server's clock at the read (`marketJudgementDelayOf`). Null while the market does not
+     * read '판정 지연', and while it has no such record: past its scheduled judgement it reads so
+     * with none. Nobody's name, no record time and no earlier record (#24); cards carry none.
+     */
+    judgementDelay: marketJudgementDelaySchema.nullable(),
   })
   .meta({ id: 'Market' });
 export type Market = z.infer<typeof marketSchema>;
@@ -518,7 +530,8 @@ export const marketEventSchema = z
     /**
      * The status change the event made (#174): both set on a transition, only `toStatus` on
      * `created`, both null on an event that changes no status (`rules_edited`,
-     * `open_rescheduled`, `rules_supplemented`, `judgement_corrected`).
+     * `open_rescheduled`, `rules_supplemented`, `judgement_corrected`,
+     * `judgement_delay_recorded`).
      */
     fromStatus: marketStatusSchema.nullable(),
     toStatus: marketStatusSchema.nullable(),
@@ -622,6 +635,14 @@ export const adminMarketSchema = marketSchema
      * #173 item 13).
      */
     disputes: adminMarketDisputesSchema,
+    /**
+     * 판정 지연 기록 (#142, ADR-0106), in every status: every record of the market, the newest
+     * first, with the status and judgement version it was made on, who made it and when, and
+     * which one is current — none is edited or withdrawn (owner answer 2026-11-03 (4)). The
+     * public `Market` carries the current one's reason and next review time alone
+     * (`judgementDelay`, inherited here; #173 item 13).
+     */
+    judgementDelays: z.array(adminJudgementDelaySchema),
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;

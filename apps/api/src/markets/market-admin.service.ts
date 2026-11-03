@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import {
   MarketTransitionError,
   openScheduledMarket,
+  readJudgementDelays,
   ruleContentOf,
   schema,
   transitionMarket,
@@ -110,6 +111,7 @@ import {
   type MarketSources,
 } from './market-sources.js';
 import { readAdminMarketDisputes } from './market-dispute.js';
+import { toAdminJudgementDelays } from './market-judgement-delay.js';
 import { readMarketJudgement } from './market-judgement.js';
 import { readMarketPause } from './market-pause.js';
 import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
@@ -1451,12 +1453,14 @@ export class MarketAdminService {
    * next-path requests (#114, `readMarketPause`: one statement each), the judgement — the current
    * one, the registrations and whether the dispute window is undecided (#152,
    * `readMarketJudgement`, `disputeWindowSetting`; its version and dispute deadline are the public
-   * shape's since #175) — and the current version's 판정 이의 with how many hold the confirmation
-   * (#175, `readAdminMarketDisputes`: one statement). Reads through `executor` so
-   * a transition returns the state it just committed; `tags` are the market's names in order
+   * shape's since #175) — the current version's 판정 이의 with how many hold the confirmation
+   * (#175, `readAdminMarketDisputes`: one statement), and every 판정 지연 기록 with who made it and
+   * which is current (#142, `readJudgementDelays`: one statement, which the inherited public
+   * `judgementDelay` reads too, at the same `nowMs` as the card's flags). Reads through `executor`
+   * so a transition returns the state it just committed; `tags` are the market's names in order
    * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
-   * already. MarketSupplementService's, MarketPauseService's, MarketJudgementService's and
-   * MarketDisputeService's admin writes answer with it too.
+   * already. MarketSupplementService's, MarketPauseService's, MarketJudgementService's,
+   * MarketDisputeService's and MarketJudgementDelayService's admin writes answer with it too.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1539,8 +1543,16 @@ export class MarketAdminService {
 
     const leadCloseGapMinutes = await this.leadCloseGap(executor, row);
     const ruleVersions = await readAdminRuleVersions(executor, row.id);
+    const judgementDelays = await readJudgementDelays(executor, row.id);
     return {
-      ...toMarket(row, { slug: category.slug, nameKo: category.nameKo }, tags, sources, []),
+      ...toMarket(
+        row,
+        { slug: category.slug, nameKo: category.nameKo },
+        tags,
+        sources,
+        [],
+        judgementDelays,
+      ),
       // The admin's form of the history, in the public list's place (`AdminMarket.ruleVersions`).
       ruleVersions,
       createdBy: row.createdBy,
@@ -1569,6 +1581,7 @@ export class MarketAdminService {
         (await this.disputeWindowSetting(executor)) === null,
       ),
       disputes: await readAdminMarketDisputes(executor, row),
+      judgementDelays: toAdminJudgementDelays(judgementDelays, row),
     };
   }
 
@@ -1586,12 +1599,14 @@ export class MarketAdminService {
    * SCHEDULED (#78), a supplement's approval, which moves an open or paused market's rules to a
    * new version (#80, MarketSupplementService), and every 판정 이의 write — a member's submission
    * or retraction, an admin's dismissal or acceptance (#175, MarketDisputeService), which move the
-   * '이의 검토 중' and '판정 지연' labels (`disputeUnderReview`, `judgementDelayed`) — where the
-   * status is deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct
-   * delivery: the web answers every `market:status` by restarting `['market', id]`
-   * (realtime-provider.tsx) while `applyStatus` drops an event that does not SUPERSEDE what it
-   * holds (market-live.ts) — so a repeat writes nothing into a cache and still forces the REST
-   * snapshot, which is the only thing that carries `closeAt` (and the dispute labels).
+   * '이의 검토 중' and '판정 지연' labels (`disputeUnderReview`, `judgementDelayed`), and every 판정
+   * 지연 기록, which gives the detail its current reason and next review time (#142,
+   * MarketJudgementDelayService; `judgementDelay`) — where the status is deliberately UNCHANGED.
+   * That is not a misuse of the event but the cheapest correct delivery: the web answers every
+   * `market:status` by restarting `['market', id]` (realtime-provider.tsx) while `applyStatus`
+   * drops an event that does not SUPERSEDE what it holds (market-live.ts) — so a repeat writes
+   * nothing into a cache and still forces the REST snapshot, which is the only thing that carries
+   * `closeAt` (and the dispute labels and the delay record).
    *
    * A `market:edit` event carrying the new fields was rejected, and not only for its cost across
    * shared + gateway + client: an event-applied `closeAt` could not defend itself against a REST

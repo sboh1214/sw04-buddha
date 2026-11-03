@@ -227,7 +227,7 @@ describe('searchStatusOptions', () => {
       '지급 완료',
       '취소',
     ]);
-    // A result is no status: no 무효 choice (nor '판정 지연', a display #22·#142 bring).
+    // A result is no status: no 무효 choice (nor '판정 지연', a display #22 brings and #142 records).
     expect(options.map((option) => option.label)).not.toContain(copy.marketResultVoid);
     // One per label: no two statuses share one.
     for (const status of PUBLIC_MARKET_STATUSES) {

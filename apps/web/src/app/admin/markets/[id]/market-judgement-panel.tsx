@@ -74,6 +74,7 @@ import {
   showsJudgementPanel,
 } from '@/lib/market-judgement';
 import { MarketDisputes } from './market-dispute-panel';
+import { JudgementLongDelay, MarketJudgementDelays } from './market-judgement-delay-panel';
 import { type JudgementDialogKind, JudgementDialog } from './market-judgement-dialogs';
 import { ReasonField } from './market-review-dialogs';
 
@@ -101,7 +102,8 @@ function isFormAction(action: JudgementAction | null): action is 'register' | 'c
  * what opened it, an accepted dispute's 정정 등록 included — and after a decision went through
  * (`useJudgementRefocus`). While the form is open the disputes' 정정 등록 are hidden (`formOpen`):
  * they would open nothing more, and would name the form's own submit a second time. The dialogs
- * judge a correction's deadline at `readAt`.
+ * judge a correction's deadline at `readAt`. Its 판정 지연 기록 (#142, ADR-0106) is a section of its
+ * own (`MarketJudgementDelays`), which holds its dialog for its admin the same way.
  */
 export function MarketJudgementPanel({ market, readAt }: { market: AdminMarket; readAt: number }) {
   const operatorId = useOperatorId();
@@ -140,6 +142,7 @@ export function MarketJudgementPanel({ market, readAt }: { market: AdminMarket; 
             onCorrect={() => open('correct')}
           />
         }
+        delays={<MarketJudgementDelays market={market} readAt={readAt} />}
         targets={refocus.targets}
       />
       {action !== null && !isFormAction(action) && (
@@ -222,6 +225,9 @@ function useJudgementRefocus(market: AdminMarket, action: JudgementAction | null
 /**
  * The panel as drawn for `operatorId` (undefined until `GET /me` answers), read at `readAt` (the
  * query's `dataUpdatedAt`, what 'before the scheduled judgement' is judged at):
+ * - on a CLOSED market past its 장기 지연 기한, the warning to apply the rule's 지연·취소·무효 처리
+ *   through 판정 등록 (`JudgementLongDelay`, #142, owner answer 2026-11-03 (3)) — nothing is
+ *   automatic;
  * - while the dispute window is undecided on a CLOSED market, why nothing can be registered or
  *   approved, and where to decide it (`/admin/settings`);
  * - the waiting registration, in any status: what it says, who registered it and when; 승인 and 반려
@@ -237,6 +243,9 @@ function useJudgementRefocus(market: AdminMarket, action: JudgementAction | null
  *   read-only;
  * - its version's 판정 이의 (`disputes`, market-dispute-panel.tsx, #175): their 기각 and 수용, and an
  *   accepted one's 정정 등록 (#176);
+ * - the 판정 지연 기록 (`delays`, market-judgement-delay-panel.tsx, #142, ADR-0106): the late-update
+ *   warning, the current record, 지연 기록 등록 while the market reads '판정 지연' and the records'
+ *   history;
  * - the 판정 버전 이력 (`judgement.history`, #176), newest first, once a correction replaced one;
  * - the 판정 기록, newest first.
  * No market price, volume or count is drawn (#152 AC 8). No button is live until the admin on
@@ -249,6 +258,7 @@ export function JudgementPanelBody({
   onOpen,
   registerForm,
   disputes,
+  delays,
   targets,
 }: {
   market: AdminMarket;
@@ -258,6 +268,8 @@ export function JudgementPanelBody({
   registerForm: ReactNode;
   /** The current version's 판정 이의 (`MarketDisputes`, #175), after the current judgement. */
   disputes?: ReactNode;
+  /** The 판정 지연 기록 (`MarketJudgementDelays`, #142), after the disputes. */
+  delays?: ReactNode;
   targets?: JudgementFocusTargets;
 }) {
   const unavailable = judgementUnavailable(market);
@@ -282,6 +294,7 @@ export function JudgementPanelBody({
       </Card.Header>
       <Card.Body>
         <Stack gap="5">
+          <JudgementLongDelay market={market} readAt={readAt} />
           {market.status === 'closed' && market.judgement.disputeWindowUndecided && (
             <WindowUndecided testId="market-judgement-window-undecided" />
           )}
@@ -325,6 +338,7 @@ export function JudgementPanelBody({
             <CurrentJudgement market={market} judgement={current} headingRef={targets?.current} />
           )}
           {disputes}
+          {delays}
           <JudgementHistory market={market} />
           <JudgementLog market={market} />
         </Stack>

@@ -59,6 +59,7 @@ import {
   linkUses,
   marketDisputes,
   marketEvents,
+  marketJudgementDelays,
   marketJudgements,
   marketLinks,
   marketPauses,
@@ -4036,6 +4037,291 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         correctionPending: false,
         statusEventId: corrected.eventId,
       });
+    });
+  });
+
+  describe('judgement delay records (migration 0058, #142)', () => {
+    const REASON = '1차 출처의 발표가 늦어진다.';
+    const HOUR = 60 * 60 * 1000;
+    const RECORDED_AT = new Date('2026-11-02T03:00:00.000Z');
+
+    /** The refusal the guard raises: 23000 with its message. */
+    async function guarded(write: Promise<unknown>) {
+      const error = await write.then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      return { state: sqlState(error), message: errorMessage(error) };
+    }
+
+    /** A `judgement_delay_recorded` event of `marketId` by `actorId`: what a record row names. */
+    async function delayEvent(marketId: string, actorId: string) {
+      const [event] = await t.db
+        .insert(marketEvents)
+        .values({ marketId, type: 'judgement_delay_recorded', actorId, createdAt: RECORDED_AT })
+        .returning();
+      return event!;
+    }
+
+    /** A CLOSED market, an admin and an event: a record row of the market, every column given. */
+    async function delayRow() {
+      const market = await createMarket(t.db, { status: 'closed' });
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const event = await delayEvent(market.id, admin.id);
+      const row = {
+        marketId: market.id,
+        reason: REASON,
+        nextReviewAt: new Date(RECORDED_AT.getTime() + 24 * HOUR),
+        marketStatus: 'closed' as string,
+        judgementVersion: null as number | null,
+        recordedBy: admin.id,
+        recordedAt: RECORDED_AT,
+        eventId: event.id,
+      };
+      return { market, admin, event, row };
+    }
+
+    const insertDelay = (values: Record<string, unknown>) =>
+      t.db
+        .insert(marketJudgementDelays)
+        .values(values as typeof marketJudgementDelays.$inferInsert)
+        .returning();
+
+    it('adds market_judgement_delays with its keys, CHECKs and index', async () => {
+      const { rows: columns } = await t.db.execute<{
+        column: string;
+        type: string;
+        udt: string;
+        nullable: string;
+        default: string | null;
+      }>(sql`
+        SELECT column_name AS "column", data_type AS type, udt_name AS udt,
+          is_nullable AS nullable, column_default AS "default"
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'market_judgement_delays'
+        ORDER BY ordinal_position`);
+      const instant = { type: 'timestamp with time zone', udt: 'timestamptz' };
+      expect(columns).toEqual([
+        { column: 'id', type: 'uuid', udt: 'uuid', nullable: 'NO', default: 'gen_random_uuid()' },
+        { column: 'market_id', type: 'uuid', udt: 'uuid', nullable: 'NO', default: null },
+        { column: 'reason', type: 'text', udt: 'text', nullable: 'NO', default: null },
+        { column: 'next_review_at', ...instant, nullable: 'NO', default: null },
+        // The markets' own status enum, held to two of its values by a CHECK.
+        {
+          column: 'market_status',
+          type: 'USER-DEFINED',
+          udt: 'market_status',
+          nullable: 'NO',
+          default: null,
+        },
+        {
+          column: 'judgement_version',
+          type: 'integer',
+          udt: 'int4',
+          nullable: 'YES',
+          default: null,
+        },
+        { column: 'recorded_by', type: 'text', udt: 'text', nullable: 'NO', default: null },
+        { column: 'recorded_at', ...instant, nullable: 'NO', default: null },
+        { column: 'event_id', type: 'bigint', udt: 'int8', nullable: 'NO', default: null },
+      ]);
+      const { rows: constraints } = await t.db.execute<{
+        name: string;
+        type: string;
+        action: string;
+      }>(sql`
+        SELECT conname AS name, contype AS type, confdeltype AS action FROM pg_constraint
+        WHERE conrelid = 'market_judgement_delays'::regclass ORDER BY conname`);
+      // Every reference RESTRICTs (`r`): a market, an event and an account outlive no record.
+      expect(constraints).toEqual([
+        {
+          name: 'market_judgement_delays_event_id_market_events_id_fk',
+          type: 'f',
+          action: 'r',
+        },
+        { name: 'market_judgement_delays_event_id_unique', type: 'u', action: ' ' },
+        { name: 'market_judgement_delays_judgement_version_check', type: 'c', action: ' ' },
+        { name: 'market_judgement_delays_market_id_markets_id_fk', type: 'f', action: 'r' },
+        { name: 'market_judgement_delays_market_status_check', type: 'c', action: ' ' },
+        { name: 'market_judgement_delays_next_review_at_check', type: 'c', action: ' ' },
+        { name: 'market_judgement_delays_pkey', type: 'p', action: ' ' },
+        { name: 'market_judgement_delays_reason_check', type: 'c', action: ' ' },
+        { name: 'market_judgement_delays_recorded_by_user_id_fk', type: 'f', action: 'r' },
+      ]);
+      const { rows: indexes } = await t.db.execute<{ name: string; definition: string }>(sql`
+        SELECT indexname AS name, indexdef AS definition FROM pg_indexes
+        WHERE tablename = 'market_judgement_delays' ORDER BY indexname`);
+      expect(indexes).toEqual([
+        {
+          name: 'market_judgement_delays_event_id_unique',
+          definition: expect.stringMatching(/^CREATE UNIQUE INDEX .+ \(event_id\)$/) as unknown,
+        },
+        {
+          name: 'market_judgement_delays_market_id_event_id_idx',
+          definition: expect.stringContaining('(market_id, event_id)') as unknown,
+        },
+        {
+          name: 'market_judgement_delays_pkey',
+          definition: expect.stringContaining('(id)') as unknown,
+        },
+      ]);
+    });
+
+    it('holds each record to its reason, episode and next review time, one per event', async () => {
+      const { market, admin, event, row } = await delayRow();
+      const after = (ms: number) => new Date(RECORDED_AT.getTime() + ms);
+      const refused = (constraint: string) => ({ state: '23514', constraint });
+      const cases: [Record<string, unknown>, string][] = [
+        // 지연 사유: 1–500 characters, not blank (approvalReasonSchema's).
+        [{ reason: '' }, 'market_judgement_delays_reason_check'],
+        [{ reason: '   ' }, 'market_judgement_delays_reason_check'],
+        [{ reason: '가'.repeat(501) }, 'market_judgement_delays_reason_check'],
+        // The two statuses that read 판정 지연 only (JUDGEMENT_DELAY_STATUSES).
+        ...(['open', 'paused', 'resolved', 'settling', 'settled'] as const).map(
+          (marketStatus): [Record<string, unknown>, string] => [
+            { marketStatus },
+            'market_judgement_delays_market_status_check',
+          ],
+        ),
+        // The episode: no version on CLOSED, one (≥ 1) on PROVISIONAL.
+        [{ judgementVersion: 1 }, 'market_judgement_delays_judgement_version_check'],
+        [{ marketStatus: 'provisional' }, 'market_judgement_delays_judgement_version_check'],
+        [
+          { marketStatus: 'provisional', judgementVersion: 0 },
+          'market_judgement_delays_judgement_version_check',
+        ],
+        // 다음 검토 시각: after the record, at most 7 × 24 hours later (owner answer (1)).
+        [{ nextReviewAt: RECORDED_AT }, 'market_judgement_delays_next_review_at_check'],
+        [{ nextReviewAt: after(-1) }, 'market_judgement_delays_next_review_at_check'],
+        [{ nextReviewAt: after(168 * HOUR + 1) }, 'market_judgement_delays_next_review_at_check'],
+      ];
+      for (const [values, constraint] of cases) {
+        expect(await refusal(insertDelay({ ...row, ...values })), JSON.stringify(values)).toEqual(
+          refused(constraint),
+        );
+      }
+
+      // What each episode and bound takes, each with its own event.
+      const accepted = [
+        { nextReviewAt: after(1) },
+        { nextReviewAt: after(168 * HOUR), reason: '가'.repeat(500) },
+        { marketStatus: 'provisional', judgementVersion: 1 },
+        { marketStatus: 'provisional', judgementVersion: 3, reason: ` ${REASON} ` },
+      ];
+      for (const values of accepted) {
+        const own = await delayEvent(market.id, admin.id);
+        const [stored] = await insertDelay({ ...row, eventId: own.id, ...values });
+        expect(stored, JSON.stringify(values)).toMatchObject(values);
+      }
+      // One record per event; a market, an event and an account that exist.
+      const [first] = await insertDelay(row);
+      expect(await refusal(insertDelay(row))).toEqual({
+        state: '23505',
+        constraint: 'market_judgement_delays_event_id_unique',
+      });
+      const fresh = await delayEvent(market.id, admin.id);
+      for (const [values, constraint] of [
+        [{ marketId: randomUUID() }, 'market_judgement_delays_market_id_markets_id_fk'],
+        [{ recordedBy: 'nobody' }, 'market_judgement_delays_recorded_by_user_id_fk'],
+        [{ eventId: fresh.id + 1_000_000 }, 'market_judgement_delays_event_id_market_events_id_fk'],
+      ] as const) {
+        expect(await refusal(insertDelay({ ...row, eventId: fresh.id, ...values }))).toEqual({
+          state: '23503',
+          constraint,
+        });
+      }
+
+      // Relations: a record's market, recorder and event; a market's and an account's records.
+      const read = await t.db.query.marketJudgementDelays.findFirst({
+        where: eq(marketJudgementDelays.id, first!.id),
+        with: { market: true, recordedByUser: true, event: true },
+      });
+      expect(read).toMatchObject({
+        market: { id: market.id },
+        recordedByUser: { id: admin.id },
+        event: { id: event.id, type: 'judgement_delay_recorded' },
+      });
+      const withDelays = await t.db.query.markets.findFirst({
+        where: eq(markets.id, market.id),
+        with: { judgementDelays: true },
+      });
+      expect(withDelays?.judgementDelays).toHaveLength(accepted.length + 1);
+      const recorder = await t.db.query.user.findFirst({
+        where: eq(user.id, admin.id),
+        with: { judgementDelaysRecorded: true },
+      });
+      expect(recorder?.judgementDelaysRecorded).toHaveLength(accepted.length + 1);
+    });
+
+    it('bounds the next review time by 168 elapsed hours across a DST change of the session zone', async () => {
+      // '168 hours', not '7 days': `timestamptz + interval '7 days'` follows the session TimeZone,
+      // so across America/New_York's change of 2026-11-01 it would add 169 hours and take an
+      // instant an hour past the bound the API and the screen keep (JUDGEMENT_DELAY_REVIEW_MAX_MS).
+      const { row } = await delayRow();
+      const recordedAt = new Date('2026-10-29T12:00:00.000Z');
+      const at = (hours: number) => new Date(recordedAt.getTime() + hours * HOUR);
+      const inZone = (values: Record<string, unknown>) =>
+        t.db.transaction(async (tx) => {
+          await tx.execute(sql`SET LOCAL TIME ZONE 'America/New_York'`);
+          return tx
+            .insert(marketJudgementDelays)
+            .values({ ...row, recordedAt, ...values } as typeof marketJudgementDelays.$inferInsert)
+            .returning();
+        });
+      expect(await refusal(inZone({ nextReviewAt: at(168.5) }))).toEqual({
+        state: '23514',
+        constraint: 'market_judgement_delays_next_review_at_check',
+      });
+      const [stored] = await inZone({ nextReviewAt: at(168) });
+      expect(stored?.nextReviewAt).toEqual(at(168));
+    });
+
+    it('keeps every record as it was written: no UPDATE, no DELETE, whoever writes', async () => {
+      const { row } = await delayRow();
+      const [made] = await insertDelay(row);
+      const where = eq(marketJudgementDelays.id, made!.id);
+      // buddha_app may neither UPDATE nor DELETE one (migration 0058's REVOKE)…
+      expect(
+        (
+          await refusal(
+            t.db.update(marketJudgementDelays).set({ reason: '고친 사유' }).where(where),
+          )
+        ).state,
+      ).toBe('42501');
+      expect((await refusal(t.db.delete(marketJudgementDelays).where(where))).state).toBe('42501');
+      // …and the owner neither: the trigger refuses both (owner answer (4): no withdrawal — a
+      // change is a new record).
+      const owner = createDb(testDbUrls()!.migrateUrl, { max: 1 });
+      try {
+        for (const [op, write] of [
+          [
+            'UPDATE',
+            owner
+              .update(marketJudgementDelays)
+              .set({ nextReviewAt: new Date(RECORDED_AT.getTime() + HOUR) })
+              .where(where),
+          ],
+          ['DELETE', owner.delete(marketJudgementDelays).where(where)],
+        ] as const) {
+          expect(await guarded(write)).toEqual({
+            state: '23000',
+            message: expect.stringContaining(`is a permanent record and takes no ${op}`) as unknown,
+          });
+        }
+      } finally {
+        await closeDb(owner);
+      }
+      expect(await t.db.select().from(marketJudgementDelays).where(where)).toEqual([made]);
+      const { rows: privileges } = await t.db.execute<{ privilege: string; held: boolean }>(sql`
+        SELECT p AS privilege,
+          has_table_privilege('buddha_app', 'market_judgement_delays', p) AS held
+        FROM unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE']) AS p`);
+      expect(privileges).toEqual([
+        { privilege: 'SELECT', held: true },
+        { privilege: 'INSERT', held: true },
+        { privilege: 'UPDATE', held: false },
+        { privilege: 'DELETE', held: false },
+      ]);
     });
   });
 
@@ -10086,7 +10372,7 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
             'profile_interest_categories', 'post_likes', 'comment_likes',
             'write_limit_events', 'link_uses', 'link_flags', 'retention_purges',
             'themes', 'theme_markets', 'theme_notices', 'tags', 'market_tags', 'categories',
-            'market_sources', 'market_rule_versions')
+            'market_sources', 'market_rule_versions', 'market_judgement_delays')
         ORDER BY 1, 2`);
       const grants = Object.groupBy(rows, (r) => r.table);
       const privs = (table: string) => grants[table]?.map((r) => r.privilege).sort() ?? [];
@@ -10164,6 +10450,8 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
       expect(privs('market_sources')).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE']);
       // Migration 0053 (#80): a rule version is a permanent fact, written once and kept.
       expect(privs('market_rule_versions')).toEqual(['INSERT', 'SELECT']);
+      // Migration 0058 (#142): a 판정 지연 기록 too — a change is a new record, none withdrawn.
+      expect(privs('market_judgement_delays')).toEqual(['INSERT', 'SELECT']);
     });
 
     it('cannot UPDATE or DELETE a watch event, and refuses an action outside the list (#95)', async () => {

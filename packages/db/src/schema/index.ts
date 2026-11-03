@@ -27,6 +27,7 @@ export * from './likes.js';
 export * from './link-review.js';
 export * from './market-disputes.js';
 export * from './market-events.js';
+export * from './market-judgement-delays.js';
 export * from './market-judgements.js';
 export * from './market-links.js';
 export * from './market-pauses.js';
