@@ -110,6 +110,7 @@ import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
 import { MarketReviewPanel, SubmitReviewButton } from './market-review-panel';
+import { MarketSupplementPanel } from './market-supplement-panel';
 
 export function AdminMarketDetail({ id }: { id: string }) {
   // A malformed id (not a uuid) would be a 400 from the API, which reads as "try again";
@@ -207,6 +208,13 @@ export function AdminMarketDetail({ id }: { id: string }) {
           stale card in the page on every render. `readAt` is when this row was read: the
           close-passed warning judges the row read after the close, not a stale one (#21). */}
       <MarketReviewPanel key={`review-${data.id}`} market={data} readAt={market.dataUpdatedAt} />
+      {/* 규칙 보충 (#80, ADR-0101): keyed and prefixed as the review panel is, for the same reasons —
+          its form and dialogs name the market they were opened on. */}
+      <MarketSupplementPanel
+        key={`supplement-${data.id}`}
+        market={data}
+        readAt={market.dataUpdatedAt}
+      />
 
       <Card.Root>
         <Card.Body>
@@ -704,12 +712,15 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
 /**
  * 수정 (design 3.4). The categories are only the select's options, so their load is gated
  * here (as 시장 만들기 does) and the rest of the page does not depend on it. Inputs follow the
- * status: every field while draft or open (the slug is chosen at creation only), nothing
- * otherwise — 검수 중 and 개장 예정 say why: the content locks at the submission and is changed
- * by sending it back to a draft (#78, #172 item 6 (a)); an open market's rule items stay editable
- * until #80 (ADR-0097). Saving an open market first shows PLAN 12's "경고 후 허용" dialog. The
- * body is the diff against the loaded values, so an untouched field — a past close time on a
- * draft included — is never sent.
+ * status: every field while draft (the slug is chosen at creation only); on an open market the
+ * category, the tags and the image, its version items — the question, the rule items and the
+ * times — drawn but off with the note that they change by a supplement alone (#80, ADR-0101;
+ * ADR-0093 decision 2 #172 item 14: the 규칙 보충 panel above), or, on one opened before #80 with no
+ * rule version (ADR-0101 9-2), that they stay as they are to the close — it takes no supplement;
+ * nothing otherwise — 검수 중 and 개장 예정 say why: the content locks at the submission and is
+ * changed by sending it back to a draft (#78, #172 item 6 (a)). Saving an open market first shows
+ * PLAN 12's "경고 후 허용" dialog. The body is the diff against the loaded values, so an untouched
+ * field — a past close time on a draft included — is never sent.
  */
 function EditMarketCard({ market }: { market: AdminMarket }) {
   const categories = useCategories();
@@ -728,6 +739,18 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
               {market.status === 'review' || market.status === 'scheduled'
                 ? copy.adminMarketEditLockedReview
                 : copy.adminMarketEditLocked}
+            </Text>
+          )}
+          {market.status === 'open' && (
+            <Text
+              fontSize="sm"
+              color="fg.muted"
+              data-testid="market-edit-supplement-only"
+              data-reason={market.ruleVersion === null ? 'none' : 'supplement'}
+            >
+              {market.ruleVersion === null
+                ? copy.adminMarketEditNoVersion
+                : copy.adminMarketEditSupplementOnly}
             </Text>
           )}
         </HStack>
@@ -758,27 +781,26 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
   // The admin on screen, whom a save names (ADR-0092): 저장 waits for `GET /me`.
   const operatorId = useOperatorId();
   const sessionChanged = useSessionChanged();
-  // The stored values, which a save is diffed against; the inputs start from them with a missing
-  // judgement time zone pre-filled (#22, #172 item 11) while the form can save, so a save sends
-  // it — the confirmation — and the save is enabled for it alone (`judgementTimeZoneUnconfirmed`).
-  // A market past the open keeps its '—': nothing could confirm the zone there.
+  // The stored values, which a save is diffed against; a draft's inputs start from them with a
+  // missing judgement time zone pre-filled (#22, #172 item 11), so a save sends it — the
+  // confirmation — and the save is enabled for it alone (`judgementTimeZoneUnconfirmed`). A market
+  // past the open keeps its '—': nothing could confirm the zone there, its zone being a version
+  // item a supplement alone changes (#80).
   const original = useMemo(() => marketToFormValues(market, categories), [market, categories]);
   const editable = isEditable(market.status);
+  const draft = market.status === 'draft';
   const start = useMemo(
-    () => (editable ? withJudgementTimeZonePrefilled(original) : original),
-    [original, editable],
+    () => (draft ? withJudgementTimeZonePrefilled(original) : original),
+    [original, draft],
   );
-  // An open market may not lose a rule item it had (#23), nor be edited down to no tags (#17): the
-  // API refuses both. One opened before #23 with blank items, or before #17 with no tags, keeps its
-  // other fields editable (`marketFormSchema`). Its close only moves later, up to the scheduled
-  // judgement, with the lead close checked again at the gap it is held to, and its scheduled open
-  // and judgement are fixed (#22, #172 item 14, owner answer 2026-10-31 A2).
+  // An open market saves its category, tags and image alone (#80, ADR-0101; #172 item 14): its
+  // version items are off here, and change by the 규칙 보충 panel's request and another admin's
+  // approval, where an emptied rule item (#23) and the close's rules (#22, owner answer 2026-10-31
+  // A2) are checked. It may not be edited down to no tags (#17): the API refuses it; one opened
+  // before #17 with none keeps its other fields editable (`marketFormSchema`).
   const openMarket = market.status === 'open';
   const gap = market.leadCloseGapMinutes;
-  const schema = useMemo(
-    () => marketFormSchema({ original, openMarket, leadCloseGapMinutes: gap }),
-    [original, openMarket, gap],
-  );
+  const schema = useMemo(() => marketFormSchema({ original, openMarket }), [original, openMarket]);
   // The open market's confirmation goes with the form, which EditMarketCard draws again for each
   // admin on screen (`key`): a confirmation A opened never names B (ADR-0092 answer 1).
   const [pending, setPending] = useState<UpdateMarketFields | null>(null);
@@ -816,7 +838,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
       // would inherit FOLLOW_SERVER_RESET and keep the just-saved fields as "dirty" input.
       const savedValues = marketToFormValues(saved, categories);
       reset(
-        isEditable(saved.status) ? withJudgementTimeZonePrefilled(savedValues) : savedValues,
+        saved.status === 'draft' ? withJudgementTimeZonePrefilled(savedValues) : savedValues,
         AFTER_SAVE_RESET,
       );
       // Same row on the card above the form, whatever the refetch does.
@@ -825,9 +847,9 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
     onError: (error) => {
       setPending(null);
       sessionChanged(error);
-      // A refused category also reads the select's list again (#17). RULES_REQUIRED for a
-      // source lands on the input the values sent left blank (#23); a lead close refused says the
-      // gap the market is held to (#22).
+      // A refused category also reads the select's list again (#17). A source's refusal lands on
+      // the input its path names (#23), a time's says the gap the market is held to (#22), and an
+      // open market's version item sent anyway lands on its input ('supplement only while open').
       const fieldError = marketFormError(error, form.getValues(), gap);
       if (fieldError) {
         setError(fieldError.field, { message: fieldError.message });
@@ -861,6 +883,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
               form={form}
               categories={categories}
               disabled={!editable}
+              versionItemsLocked={openMarket}
               timesFixed={openMarket}
               leadCloseGapMinutes={gap}
               // The row itself, so the 미리보기 of a market that has opened shows the price and volume
@@ -874,7 +897,7 @@ function EditMarketForm({ market, categories }: { market: AdminMarket; categorie
               loading={isSubmitting || update.isPending}
               disabled={
                 !editable ||
-                !(isDirty || judgementTimeZoneUnconfirmed(original)) ||
+                !(isDirty || (draft && judgementTimeZoneUnconfirmed(original))) ||
                 operatorId === undefined
               }
               data-testid="market-save"

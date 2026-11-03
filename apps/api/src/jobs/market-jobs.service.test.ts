@@ -111,8 +111,8 @@ describe.skipIf(!hasTestInfra)('MarketJobs (integration)', () => {
     // The first registration stands (its delay was computed from the earlier `now`).
     expect((await queue.getJob(marketCloseJobId(MARKET_ID, closeAt)))!.delay).toBe(HOUR_MS);
 
-    // A different instant for the same market is a different job: what a PATCHed closeAt
-    // relies on.
+    // A different instant for the same market is a different job: what a close a supplement
+    // extended (#80) relies on.
     const later = new Date(closeAt.getTime() + HOUR_MS);
     await jobs.scheduleClose(MARKET_ID, later, now);
     expect(await queue.getJobCountByTypes('delayed', 'waiting')).toBe(2);

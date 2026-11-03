@@ -6,6 +6,7 @@ import {
   accountIdOf,
   adminAccount,
   approveAsReviewer,
+  approveSupplementAsReviewer,
   closeMarket,
   createDraftMarket,
   createOpenMarket,
@@ -16,8 +17,10 @@ import {
   fillTimeInputs,
   freshTag,
   kstLocalOf,
+  leaveNoSupplement,
   openThroughReview,
   ruleItemsFor,
+  sendSupplement,
   signIn,
   submitRefusedItems,
   test,
@@ -36,9 +39,11 @@ import {
  * named by the open-items check, which keeps 검수 제출 off and refuses it (#78). A draft made
  * without its times names them; saving the pre-filled zone confirms it. Approved before its
  * scheduled open, a market waits as 개장 예정 — there is no early open: moved earlier to a time
- * already come, it opens at once (#21, ADR-0100). Once open, the scheduled open and judgement are
- * fixed, and the close only moves later, never past the scheduled judgement (A2) — refused on the
- * form and by the API.
+ * already come, it opens at once (#21, ADR-0100). Once open, its times are rule version items
+ * (#80, ADR-0101): the edit form shows them off and the API refuses a PATCH that changes one. The
+ * scheduled open and judgement are fixed, and the close only moves later by a supplement another
+ * admin approves, never past the scheduled judgement (A2) — refused on the supplement's form and
+ * by the API.
  *
  * A visitor reads every time of the rules in their own zone and, when the market's 판정 기준
  * 시간대 is another, in that zone too on a second line — after hydration only: the server's HTML
@@ -48,10 +53,11 @@ import {
  * No spec writes the release setting: a value would stay in the e2e database and change
  * release-settings.spec.ts's counts (docs/SETTINGS.md). The lead close is read off the setting the
  * database holds, 미정 on a fresh one; its decided-gap cases are the API's integration tests
- * (admin-markets-times.controller.test.ts), as are every refusal's details, the minute precision
- * and the records. The form's rules, the rows and the second line are unit-tested
- * (lib/market-form.test.ts, rules-section.test.tsx, time-zone-provider.test.tsx). Both projects
- * run in Seoul (playwright.config.ts); a context of its own reads New York.
+ * (admin-markets-times.controller.test.ts, and admin-markets-supplement.controller.test.ts for an
+ * open market's), as are every refusal's details, the minute precision and the records. The
+ * form's rules, the rows and the second line are unit-tested (lib/market-form.test.ts,
+ * rules-section.test.tsx, time-zone-provider.test.tsx). Both projects run in Seoul
+ * (playwright.config.ts); a context of its own reads New York.
  */
 
 const MINUTE_MS = 60 * 1_000;
@@ -402,7 +408,8 @@ test.describe('시장 시간', () => {
       await openThroughReview(admin, marketId);
       await adminPage.reload();
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
-      // Open, its scheduled open and judgement are fixed (#172 item 14): the inputs are locked.
+      // Open, its scheduled open and judgement are fixed (#172 item 14) and every time changes by
+      // a supplement alone (#80): the inputs are locked.
       await expect(openInput).toBeDisabled();
       await expect(judgementInput).toBeDisabled();
     } finally {
@@ -454,7 +461,7 @@ test.describe('시장 시간', () => {
     expect(html).not.toContain('-judgement-zone"');
   });
 
-  test('시각 없이 만든 초안은 예정 개장·예정 판정 시각과 판정 기준 시간대를 채울 항목으로 이름 대고 검수 제출이 꺼지며, 미리 채운 서울은 저장으로 확인되고, 예정 개장 시각 전에 승인되면 개장 예정으로 기다리다 예정 개장 시각을 지난 시각으로 앞당기면 바로 열린다. 연 시장의 마감은 예정 판정 시각까지 늦추기만 하고 예정 판정 시각은 바뀌지 않는다', async ({
+  test('시각 없이 만든 초안은 예정 개장·예정 판정 시각과 판정 기준 시간대를 채울 항목으로 이름 대고 검수 제출이 꺼지며, 미리 채운 서울은 저장으로 확인되고, 예정 개장 시각 전에 승인되면 개장 예정으로 기다리다 예정 개장 시각을 지난 시각으로 앞당기면 바로 열린다. 연 시장의 시각은 수정으로 바뀌지 않고, 마감은 다른 관리자가 승인한 보충으로 예정 판정 시각까지 늦추기만 하며 예정 판정 시각은 바뀌지 않는다', async ({
     admin,
     page,
   }) => {
@@ -468,19 +475,16 @@ test.describe('시장 시간', () => {
     const expectedAccountId = await accountIdOf(admin);
 
     await signIn(page, adminAccount.email, adminAccount.password);
-    // Every save this page sends, to prove the form's refusals send none.
-    const patches: string[] = [];
+    const path = `/api/v1/admin/markets/${market.id}`;
+    // Every supplement request this page sends (#80), to prove the form's refusals send none.
+    const requested: string[] = [];
     page.on('request', (sent) => {
-      if (
-        sent.method() === 'PATCH' &&
-        new URL(sent.url()).pathname === `/api/v1/admin/markets/${market.id}`
-      ) {
-        patches.push(sent.url());
+      if (sent.method() === 'POST' && new URL(sent.url()).pathname === `${path}/supplements`) {
+        requested.push(sent.url());
       }
     });
     await page.goto(`/admin/markets/${market.id}`);
     const status = page.getByTestId('market-detail-status');
-    const path = `/api/v1/admin/markets/${market.id}`;
 
     // --- the draft names the missing times, in OPEN_ITEMS order; 검수 제출 is off, and the API
     // refuses it naming them (#78).
@@ -588,69 +592,128 @@ test.describe('시장 시간', () => {
       formatKst(present(opened.openAt)),
     );
 
-    // --- open: the scheduled open and judgement are locked (#172 item 14), and the API refuses a
-    // change to either (ADR-0098).
-    const closeInput = page.getByTestId('market-close-at');
-    await expect(page.getByTestId('market-scheduled-open-at')).toBeDisabled();
-    await expect(page.getByTestId('market-scheduled-judgement-at')).toBeDisabled();
+    // --- open, its times are rule version items (#80, ADR-0101; #172 item 14): the edit form
+    // shows them off under a note, and the API refuses a PATCH that changes the scheduled
+    // judgement or the close — they change by a supplement alone, and no supplement names the
+    // scheduled open or judgement (ADR-0098).
+    expect(opened.ruleVersion).toBe(1);
+    await expect(page.getByTestId('market-edit-supplement-only')).toHaveText(
+      copy.adminMarketEditSupplementOnly,
+    );
+    for (const input of [
+      'market-scheduled-open-at',
+      'market-close-at',
+      'market-scheduled-judgement-at',
+    ]) {
+      await expect(page.getByTestId(input)).toBeDisabled();
+    }
+    const laterJudgementAt = new Date(Date.parse(judgementAt) + DAY_MS).toISOString();
+    for (const [field, value] of [
+      ['scheduledJudgementAt', laterJudgementAt],
+      ['closeAt', judgementAt],
+    ] as const) {
+      expect(
+        await firstDetail(await admin.patch(path, { data: { [field]: value, expectedAccountId } })),
+      ).toMatchObject({ path: [field], message: 'supplement only while open' });
+    }
     expect(
       await firstDetail(
-        await admin.patch(path, {
-          data: {
-            scheduledJudgementAt: new Date(Date.parse(judgementAt) + DAY_MS).toISOString(),
-            expectedAccountId,
-          },
-        }),
+        await sendSupplement(admin, market.id, { scheduledJudgementAt: laterJudgementAt }),
       ),
-    ).toMatchObject({ path: ['scheduledJudgementAt'], message: 'immutable while open' });
+    ).toMatchObject({ path: ['changes'], message: 'not a supplement item: scheduledJudgementAt' });
 
-    // --- the close earlier is an early close, not an edit (#172 item 14): refused under the input
-    // and by the API, nothing sent or confirmed.
-    const sent = patches.length;
-    await letToastsGo(page);
-    await closeInput.fill(kstLocalOf(minuteIso(Date.parse(market.closeAt) - HOUR_MS)));
-    await page.getByTestId('market-save').click();
-    await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketCloseEarlier);
-    expect(
-      await firstDetail(
-        await admin.patch(path, {
-          data: {
-            closeAt: new Date(Date.parse(market.closeAt) - MINUTE_MS).toISOString(),
-            expectedAccountId,
-          },
-        }),
-      ),
-    ).toMatchObject({ path: ['closeAt'], message: 'cannot move earlier while open' });
-
-    // --- later, past the scheduled judgement: refused under the input and by the API (A2).
+    // --- a supplement holds the close to the rules the open market's edit held it to (ADR-0098
+    // result 5): earlier is an early close, not a supplement (#172 item 14), and later stops at
+    // the scheduled judgement (A2) — refused by the API naming the close, nothing left waiting.
+    const earlierAt = minuteIso(Date.parse(market.closeAt) - HOUR_MS);
     const pastJudgementAt = minuteIso(Date.parse(judgementAt) + MINUTE_MS);
-    await closeInput.fill(kstLocalOf(pastJudgementAt));
-    await page.getByTestId('market-save').click();
-    await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketTimeCloseByJudgement);
-    await expect(page.getByTestId('market-edit-confirm')).toHaveCount(0);
-    expect(patches).toHaveLength(sent);
     expect(
-      await firstDetail(
-        await admin.patch(path, { data: { closeAt: pastJudgementAt, expectedAccountId } }),
-      ),
-    ).toMatchObject({ path: ['closeAt'], message: 'must be at or before scheduledJudgementAt' });
+      await firstDetail(await sendSupplement(admin, market.id, { closeAt: earlierAt })),
+    ).toEqual({ path: ['closeAt'], message: 'cannot move earlier while open' });
+    expect(
+      await firstDetail(await sendSupplement(admin, market.id, { closeAt: pastJudgementAt })),
+    ).toEqual({ path: ['closeAt'], message: 'must be at or before scheduledJudgementAt' });
+    expect((await dataOf<AdminMarket>(await admin.get(path))).supplement.pending).toBeNull();
 
-    // --- later, up to the scheduled judgement itself: confirmed and saved; only the close is sent,
-    // and the judgement stays as it was (#22 AC 2).
-    await closeInput.fill(kstLocalOf(judgementAt));
-    const extended = nextPatch(page, market.id);
-    await page.getByTestId('market-save').click();
-    await page.getByTestId('market-edit-confirm').click();
-    const body = (await extended).postDataJSON() as Record<string, unknown>;
-    expect(body).toMatchObject({ closeAt: judgementAt });
-    expect(Object.keys(body)).not.toContain('scheduledJudgementAt');
-    await expect(page.getByText(copy.adminMarketSaved)).toBeVisible();
+    // --- 보충 요청 on screen: the form holds the market's times, the scheduled open and judgement
+    // locked; the same two closes are refused under its close input, and nothing is sent.
+    await letToastsGo(page);
+    await page.getByTestId('market-supplement-request').click();
+    const form = page.getByTestId('market-supplement-form');
+    const closeInput = form.getByTestId('market-close-at');
+    await expect(closeInput).toBeEnabled();
+    await expect(closeInput).toHaveValue(kstLocalOf(market.closeAt));
+    await expect(form.getByTestId('market-scheduled-open-at')).toBeDisabled();
+    await expect(form.getByTestId('market-scheduled-judgement-at')).toBeDisabled();
+    await closeInput.fill(kstLocalOf(earlierAt));
+    await form.getByTestId('market-supplement-submit').click();
+    await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketCloseEarlier);
+    await closeInput.fill(kstLocalOf(pastJudgementAt));
+    await form.getByTestId('market-supplement-submit').click();
+    await expect(closeInput).toHaveAccessibleErrorMessage(copy.errMarketTimeCloseByJudgement);
+    expect(requested).toEqual([]);
+
+    // --- later, up to the scheduled judgement itself, with its reason and 정산 영향 검토: sent with
+    // the close alone, against v1; it waits for another admin, the market unchanged meanwhile.
+    // Whatever fails between the request and its approval, nothing is left waiting (the 규칙 보충
+    // 대기 list of a database later runs reuse).
+    const supplementReason = `사건 일정이 늦춰져 거래 마감을 늦춥니다 ${market.tag}`;
+    const impact = `판정 기준과 출처가 그대로라 정산에 영향이 없습니다 ${market.tag}`;
+    try {
+      await closeInput.fill(kstLocalOf(judgementAt));
+      await form.getByTestId('market-supplement-reason').fill(supplementReason);
+      await form.getByTestId('market-supplement-impact').fill(impact);
+      const sentRequest = page.waitForRequest(
+        (sent) =>
+          sent.method() === 'POST' && new URL(sent.url()).pathname === `${path}/supplements`,
+      );
+      await form.getByTestId('market-supplement-submit').click();
+      expect((await sentRequest).postDataJSON()).toEqual({
+        baseVersion: 1,
+        changes: { closeAt: judgementAt },
+        reason: supplementReason,
+        settlementImpact: impact,
+        expectedAccountId,
+      });
+      await expect(page.getByText(copy.adminMarketSupplementRequested)).toBeVisible();
+      await expect(form).toHaveCount(0);
+      await expect(page.getByTestId('market-supplement-pending-change-closeAt-after')).toHaveText(
+        formatKst(judgementAt),
+      );
+      await expect(page.getByTestId('market-supplement-approve')).toBeDisabled();
+      await expect(detailRow(page, 'market-detail-close-at')).toHaveText(formatKst(market.closeAt));
+
+      // --- approved by the second admin: the close is the scheduled judgement in rule v2, and the
+      // judgement stays as it was (#22 AC 2) — one `rules_supplemented` event names the close.
+      expect(await approveSupplementAsReviewer(admin, market.id)).toMatchObject({
+        status: 'open',
+        ruleVersion: 2,
+      });
+    } finally {
+      await leaveNoSupplement(admin, market.id);
+    }
+    await page.reload();
     await expect(detailRow(page, 'market-detail-close-at')).toHaveText(formatKst(judgementAt));
+    await expect(page.getByTestId('market-supplement-version')).toHaveText(
+      `${copy.adminMarketSupplementVersion} ${copy.ruleVersionName}2`,
+    );
     const stored = await dataOf<AdminMarket>(await admin.get(path));
     expect(stored.status).toBe('open');
     expect(
       [stored.scheduledOpenAt, stored.closeAt, stored.scheduledJudgementAt].map(instantOf),
     ).toEqual([passedAt, judgementAt, judgementAt].map(instantOf));
+    expect(stored.events[0]).toMatchObject({
+      type: 'rules_supplemented',
+      fromStatus: null,
+      toStatus: null,
+      payload: {
+        version: 2,
+        items: ['closeAt'],
+        reason: supplementReason,
+        requestedBy: expectedAccountId,
+      },
+    });
+    expect(stored.events[0]?.actorId).not.toBe(expectedAccountId);
   });
 
   test('뉴욕 브라우저의 방문자는 규칙의 시각을 뉴욕 시간으로 읽고 판정 기준 시간대가 다를 때만 그 시간대의 줄을 함께 읽으며, 서버 HTML은 시각마다 한국 시간 한 줄이다', async ({

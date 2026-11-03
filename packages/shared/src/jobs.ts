@@ -74,8 +74,8 @@ export type MarketJobData = z.infer<typeof marketJobDataSchema>;
 
 /**
  * Deterministic job ids, so the API can remove the job it registered before when the instant
- * moves (a rescheduled `scheduledOpenAt`, a PATCHed `closeAt`) and so a duplicate registration of
- * the same instant is refused by BullMQ rather than run twice.
+ * moves (a rescheduled `scheduledOpenAt`, a close a supplement extended) and so a duplicate
+ * registration of the same instant is refused by BullMQ rather than run twice.
  *
  * The instant is part of the id on purpose: a rescheduled job must be a NEW job even while the
  * old one is active (an active job cannot be removed, and a completed one with a custom id

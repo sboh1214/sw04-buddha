@@ -21,6 +21,7 @@ import { linkFlags } from './link-review.js';
 import { marketEvents } from './market-events.js';
 import { marketLinks } from './market-links.js';
 import { marketProposals } from './market-proposals.js';
+import { marketRuleVersions } from './market-rule-versions.js';
 import { marketSearches } from './market-searches.js';
 import { marketSettlementSteps } from './market-settlement-steps.js';
 import { marketSources } from './market-sources.js';
@@ -164,6 +165,8 @@ export const marketsRelations = relations(markets, ({ one, many }) => ({
   tags: many(marketTags),
   // 출처 (#23): its 1차 출처 (priority 0) and 대체 출처 (1..3), `priority` the order.
   sources: many(marketSources),
+  // 규칙 버전 (#80): v1 from the open and one per approved supplement, `version` the order.
+  ruleVersions: many(marketRuleVersions),
   posts: many(posts),
   // 시장 제안 (#77): the proposals adopted into this market, and the ones rejected as its
   // duplicates. Admin reads only: a market never shows who proposed it.
@@ -348,6 +351,27 @@ export const marketSourcesRelations = relations(marketSources, ({ one }) => ({
   market: one(markets, { fields: [marketSources.marketId], references: [markets.id] }),
 }));
 
+// Two references to `user` (the supplement's requester and the version's maker), so both ends
+// name theirs (as `approval_requester` below).
+export const marketRuleVersionsRelations = relations(marketRuleVersions, ({ one }) => ({
+  market: one(markets, { fields: [marketRuleVersions.marketId], references: [markets.id] }),
+  /** The supplement's approved request; none for v1. */
+  approval: one(approvalRequests, {
+    fields: [marketRuleVersions.approvalId],
+    references: [approvalRequests.id],
+  }),
+  requester: one(user, {
+    fields: [marketRuleVersions.requestedBy],
+    references: [user.id],
+    relationName: 'rule_version_requester',
+  }),
+  creator: one(user, {
+    fields: [marketRuleVersions.createdBy],
+    references: [user.id],
+    relationName: 'rule_version_creator',
+  }),
+}));
+
 export const themeNoticesRelations = relations(themeNotices, ({ one }) => ({
   theme: one(themes, { fields: [themeNotices.themeId], references: [themes.id] }),
   creator: one(user, { fields: [themeNotices.createdBy], references: [user.id] }),
@@ -430,6 +454,8 @@ export const userRelations = relations(user, ({ one, many }) => ({
   releaseSettingUpdates: many(releaseSettings),
   approvalRequests: many(approvalRequests, { relationName: 'approval_requester' }),
   approvalDecisions: many(approvalRequests, { relationName: 'approval_decider' }),
+  ruleVersionRequests: many(marketRuleVersions, { relationName: 'rule_version_requester' }),
+  ruleVersionsMade: many(marketRuleVersions, { relationName: 'rule_version_creator' }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({

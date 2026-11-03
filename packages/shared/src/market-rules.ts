@@ -27,9 +27,9 @@ import {
  *
  * VOID's 50/50 payout is no item: one rule for every market (#173 item 9, ADR-0093 result 1), shown
  * from `PROPOSED_CONTRACT_TERMS`. The title and #22's time items (`TIME_ITEMS`, market-times.ts)
- * join these items in #80's versions (#172 item 7) but are not rule items; of the times, the
- * announcement and the judgement time zone join them in the `rules_edited` event too
- * (`RULES_EDITED_ITEMS`, market-edits.ts).
+ * join these items in #80's versions (#172 item 7, `RULE_VERSION_ITEMS`) but are not rule items;
+ * of the times, the announcement and the judgement time zone join them in the `rules_edited` event
+ * too (`RULES_EDITED_ITEMS`, market-edits.ts).
  */
 export const RULE_ITEMS = [
   'description',
@@ -197,7 +197,8 @@ function sameItem<K extends RuleItem>(item: K, before: MarketRuleItems, after: M
  * The rule items whose value an edit changed, in RULE_ITEMS order (#23): a text by its trimmed
  * value, null and blank alike; the event deadline by its instant; the sources by name and address,
  * in order, so a reordered fallback list is a change. The `rules_edited` event lists them
- * (`changedRulesEditedItems`, market-edits.ts), and #80's versions can.
+ * (`changedRulesEditedItems`, market-edits.ts), and so does a rule version among its changed items
+ * (`changedRuleVersionItems`, market-supplement.ts, #80).
  */
 export function changedRuleItems(before: MarketRuleItems, after: MarketRuleItems): RuleItem[] {
   return RULE_ITEMS.filter((item) => !sameItem(item, before, after));

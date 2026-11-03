@@ -18,9 +18,13 @@ import {
   type OpenItem,
   type PaymentStatus,
   RULES_EDITED_ITEMS,
+  RULE_VERSION_ITEMS,
   type RuleItem,
+  type RuleVersionItem,
   type RulesEditedItem,
   type RulesEditedValues,
+  SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED,
+  SUPPLEMENT_ONLY_WHILE_OPEN,
   type SettlementStep,
   type SettlementStepStatus,
   TIME_RULES,
@@ -38,6 +42,7 @@ import {
   coinAmountSchema,
   parseCoinAmount,
   ruleItemSchema,
+  ruleVersionItemSchema,
   rulesEditedItemSchema,
   timeRuleViolations,
   uuidParamSchema,
@@ -46,6 +51,7 @@ import * as z from 'zod';
 import { copy } from '@/copy';
 import {
   type ApiError,
+  type MarketRuleContent,
   isApiError,
   isForAnotherAccount,
   validationField,
@@ -53,6 +59,7 @@ import {
   validationPath,
 } from './api';
 import { formatKst } from './datetime';
+import { ruleVersionName } from './rule-versions';
 
 /**
  * Pure helpers behind the market screens: status and event labels, the list badges (PLAN 12),
@@ -121,7 +128,8 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
 
 /**
  * Each market event's name in the admin's 이벤트 로그; the five of the 개설 검수 (#78, ADR-0099) are the
- * 검수 기록's names too (lib/market-review.ts).
+ * 검수 기록's names too (lib/market-review.ts). 규칙 수정 is a draft's since #80; after the open the
+ * rules change by an approved supplement alone, which writes 규칙 보충 (ADR-0101).
  */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
@@ -136,6 +144,7 @@ export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   settling: copy.eventSettling,
   finalized: copy.eventFinalized,
   rules_edited: copy.eventRulesEdited,
+  rules_supplemented: copy.eventRulesSupplemented,
 };
 
 export const SETTLEMENT_STEP_LABEL: Record<SettlementStep, string> = {
@@ -303,7 +312,13 @@ export function adminMarketPollInterval(state: {
   );
 }
 
-/** Which form fields a status admits (design 3.4): draft everything, open the text fields. */
+/**
+ * Which statuses the edit form saves in (design 3.4): a draft every field; an open market its
+ * category, tags and image — its version items (the title, the rule items and the times) change by
+ * a supplement alone since #80 (ADR-0101; ADR-0093 decision 2 #172 item 14), so the edit form draws
+ * them off (`MarketFormFields`' `versionItemsLocked`). A paused market's category and tags are
+ * #114's.
+ */
 export function isEditable(status: MarketStatus): boolean {
   return status === 'draft' || status === 'open';
 }
@@ -523,6 +538,17 @@ const RULES_EDITED_PAYLOAD = z
  * 승인 or the 예정 개장 시각 변경 that made it, at the same instant.
  */
 const OPENED_PAYLOAD = z.object({ openAt: kstInstant, closeAt: kstInstant });
+/**
+ * `rules_supplemented` (#80, ADR-0101): an approved supplement — the version it made, the version
+ * items it changed (RULE_VERSION_ITEMS) and the supplement's reason; the event's actor is the
+ * approver. The payload's requester is an account id, which no row of this log prints: the detail's
+ * 보충 기록 shows the request whole, its requester by nickname.
+ */
+const RULES_SUPPLEMENTED_PAYLOAD = z.object({
+  version: z.number().int().min(1),
+  items: z.array(ruleVersionItemSchema).min(1),
+  reason: z.string(),
+});
 const CLOSED_PAYLOAD = z.object({ closedAt: kstInstant });
 /** The worker's resolved → settling (#174): `{source: 'job'}`, which the 시스템 actor already says. */
 const SETTLING_PAYLOAD = z.object({ source: z.string() });
@@ -561,7 +587,8 @@ function resolveDetailRows(detail: {
 /**
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
  * write (design 3.4's 이벤트 로그, 5.5): the rules diff (each changed rule item since #23, the one
- * rules text before it), the open and close instants, the 판정 with its note and evidence, the
+ * rules text before it), a supplement's approval (#80: the version, the items, the reason and the
+ * requester), the open and close instants, the 판정 with its note and evidence, the
  * finalize summary, the 개설 검수's records (#78, `reviewDetailRows`) — and no row at all for the
  * start of the payout, whose only field is the `source` the 시스템 actor beside it already says.
  * The payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
@@ -607,6 +634,16 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
       return [
         { label: copy.eventRulesBefore, value: legacy.data.before || '—' },
         { label: copy.eventRulesAfter, value: legacy.data.after || '—' },
+      ];
+    }
+    case 'rules_supplemented': {
+      const parsed = RULES_SUPPLEMENTED_PAYLOAD.safeParse(payload);
+      if (!parsed.success) return undefined;
+      const { version, items, reason } = parsed.data;
+      return [
+        { label: copy.eventRulesVersion, value: ruleVersionName(version) },
+        { label: copy.eventRulesItems, value: ruleVersionItemList(items) },
+        { label: copy.reviewLogReason, value: reason },
       ];
     }
     case 'opened': {
@@ -798,6 +835,26 @@ const RULES_EDITED_LABEL: Record<RulesEditedItem, string> = {
 };
 
 /**
+ * The names of the rule-version items (RULE_VERSION_ITEMS, #80, ADR-0101): the open-items check's
+ * for every item it has and the announcement time's own, as RULES_EDITED_LABEL. The 규칙 보충 rows,
+ * the supplement panel and the 규칙 보충 대기 queue say them.
+ */
+export const RULE_VERSION_ITEM_LABEL: Record<RuleVersionItem, string> = {
+  title: OPEN_ITEM_LABEL.title,
+  ...RULES_EDITED_LABEL,
+  scheduledOpenAt: OPEN_ITEM_LABEL.scheduledOpenAt,
+  closeAt: OPEN_ITEM_LABEL.closeAt,
+  scheduledJudgementAt: OPEN_ITEM_LABEL.scheduledJudgementAt,
+};
+
+/** Version items as one line of their names, in RULE_VERSION_ITEMS order, each once. */
+export function ruleVersionItemList(items: readonly RuleVersionItem[]): string {
+  return RULE_VERSION_ITEMS.filter((item) => items.includes(item))
+    .map((item) => RULE_VERSION_ITEM_LABEL[item])
+    .join(' · ');
+}
+
+/**
  * A source as one line of text: 'name (url)', or whichever half it has; '—' for none, or a
  * source with both halves blank (`market_sources` refuses that one, but an event row is history).
  */
@@ -849,6 +906,40 @@ function rulesEditedText<K extends RulesEditedItem>(
   time: (iso: string) => string,
 ): string {
   return RULES_EDITED_TEXT[item](RULES_EDITED_VALUE[item].parse(raw), time);
+}
+
+/** `value` of `item` as text (RULES_EDITED_TEXT), the type tying the two together. */
+function editedItemText<K extends RulesEditedItem>(
+  item: K,
+  value: RulesEditedValues[K],
+  time: (iso: string) => string,
+): string {
+  return RULES_EDITED_TEXT[item](value, time);
+}
+
+/**
+ * One item of a rule version's full text (#80, ADR-0101) as text, for the admin's supplement rows:
+ * the title as written, the other times as `time` renders an instant ('—' for none) and the rest as
+ * a `rules_edited` row words them (RULES_EDITED_TEXT) — the admin's KST. The public detail draws
+ * its own (rule-versions-section.tsx), in the viewer's zone.
+ */
+export function ruleVersionItemText(
+  item: RuleVersionItem,
+  content: MarketRuleContent,
+  time: (iso: string) => string,
+): string {
+  switch (item) {
+    case 'title':
+      return textOrDash(content.title);
+    case 'scheduledOpenAt':
+    case 'closeAt':
+    case 'scheduledJudgementAt': {
+      const iso = content[item];
+      return iso === null ? '—' : time(iso) || '—';
+    }
+    default:
+      return editedItemText(item, content[item], time);
+  }
 }
 
 /**
@@ -971,8 +1062,8 @@ export function openItemsRefused(error: ApiError): string {
  * second 판정 of a market another admin has already judged lands here). There is no admin open to
  * refuse since #21 (ADR-0100): a market opens from 개장 예정 by itself, or by its approval or a
  * reschedule, whose refusals are the review's (`reviewFailure`, lib/market-review.ts).
- * RULES_REQUIRED is no transition's: it is the PATCH that leaves an open market without a rule item
- * it had (#23), which `marketFormError` puts on that item's field.
+ * RULES_REQUIRED is no transition's: it is the supplement that leaves an open market without a rule
+ * item it had (#23, #80), which `marketFormError` puts on that item's field.
  * NOT_FOUND is the market itself (every admin write answers 404 for an unknown id): not a "try
  * again". A NOT_FOUND naming `categoryId` never reaches here — the form callers hand it to
  * `marketFormError` first. The cookie of another account (`isForAnotherAccount` — every market
@@ -1077,9 +1168,10 @@ const TIME_FIELD_MESSAGE: { readonly [F in TimeRuleField | 'judgementTimeZone']:
 /**
  * What a refusal naming a time field (#22, ADR-0098) or 사건 기한 says, by its detail message: a
  * broken time rule by the rule its message is (TIME_RULE_MESSAGES — an order rule one sentence on
- * both its ends, the lead close with `gapMinutes`), an open market's fixed time ('immutable while
- * open'), earlier close ('cannot move earlier while open') or lead close it could not check
- * ('lead-close gap undecided'); anything else is the field's own (TIME_FIELD_MESSAGE).
+ * both its ends, the lead close with `gapMinutes`), a supplement's earlier close ('cannot move
+ * earlier while open'), close while PAUSED (SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED, #80) or lead close
+ * it could not check ('lead-close gap undecided'); anything else is the field's own
+ * (TIME_FIELD_MESSAGE).
  */
 function timeRefusal(
   field: TimeRuleField | 'judgementTimeZone',
@@ -1087,8 +1179,8 @@ function timeRefusal(
   gapMinutes: number | null | undefined,
 ): string {
   if (message === LEAD_CLOSE_GAP_UNDECIDED_MESSAGE) return copy.errMarketLeadCloseUndecided;
-  if (message === 'immutable while open') return copy.errMarketTimeFixed;
   if (message === 'cannot move earlier while open') return copy.errMarketCloseEarlier;
+  if (message === SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED) return copy.errMarketSupplementClosePaused;
   const rule = TIME_RULES.find((candidate) => {
     const messages: Partial<Record<string, string>> = TIME_RULE_MESSAGES[candidate];
     return message !== undefined && messages[field] === message;
@@ -1103,9 +1195,10 @@ function isTimeField(field: unknown): field is TimeRuleField | 'judgementTimeZon
 }
 
 /**
- * Where an open market's RULES_REQUIRED lands (#23): the item's field, or for a source, when the
- * form's values do not show its blank input (`blankSourceInput`), the primary's name or the
- * fallback list itself. Each detail names one item; the first is placed, as for any refusal.
+ * Where an open market's RULES_REQUIRED lands (#23 — a supplement's since #80): the item's field,
+ * or for a source, when the form's values do not show its blank input (`blankSourceInput`), the
+ * primary's name or the fallback list itself. Each detail names one item; the first is placed, as
+ * for any refusal.
  */
 const RULE_ITEM_FIELD: { readonly [K in RuleItem]: MarketFormField } = {
   description: 'description',
@@ -1128,6 +1221,21 @@ interface SourceInputs {
 
 const PRIMARY_SOURCE_INPUTS: SourceInputs = { name: 'primarySourceName', url: 'primarySourceUrl' };
 
+/**
+ * Where an edit of an open market that changes a version item is refused
+ * (SUPPLEMENT_ONLY_WHILE_OPEN, #80): the item's input — a rule item's as RULE_ITEM_FIELD, the title
+ * and the times their own.
+ */
+const VERSION_ITEM_FIELD: { readonly [K in RuleVersionItem]: MarketFormField } = {
+  title: 'title',
+  ...RULE_ITEM_FIELD,
+  scheduledOpenAt: 'scheduledOpenAt',
+  closeAt: 'closeAt',
+  scheduledAnnouncementAt: 'scheduledAnnouncementAt',
+  scheduledJudgementAt: 'scheduledJudgementAt',
+  judgementTimeZone: 'judgementTimeZone',
+};
+
 const fallbackSourceInputs = (at: number): SourceInputs => ({
   name: `fallbackSources.${at}.name`,
   url: `fallbackSources.${at}.url`,
@@ -1145,7 +1253,7 @@ export interface MarketSourceInputs {
 }
 
 /**
- * The blank input of a source an open market's RULES_REQUIRED names (#23, ADR-0097), read from
+ * The blank input of a source a supplement's RULES_REQUIRED names (#23, ADR-0097; #80), read from
  * the form's values as sent: the form's own rule puts its refusal under every blank input
  * (`missingItemPaths`, lib/market-form.ts), and this one refusal goes under the first of them in
  * the form's order — the primary's name when it is blank, alone or with the address, else its
@@ -1193,18 +1301,19 @@ function sourceRefusal(
  * parent, or holding sub-categories), `tags` (and `tags.N`) a list the API refused — a second
  * name of one tag, a malformed name, too many, or none left on an open market. The rule items
  * (#23) land on their own fields, a source's on the input the path names (`validationPath`:
- * `['fallbackSources', 1, 'url']` is `fallbackSources.1.url`), and RULES_REQUIRED — an open market
- * edited so a rule item it had goes missing — on the first item it names: its field, or for a
- * source the blank input `values` (the form's, as sent) shows (`blankSourceInput`), as the form's
- * own rule places it; without them, the primary's name or the fallback list. Anything else —
- * including a VALIDATION_ERROR naming `status`, which is not a field the form has — is
- * `undefined` and goes to the generic toast.
+ * `['fallbackSources', 1, 'url']` is `fallbackSources.1.url`), and RULES_REQUIRED — a supplement
+ * that leaves an open market without a rule item it had (#80) — on the first item it names: its
+ * field, or for a source the blank input `values` (the form's, as sent) shows (`blankSourceInput`),
+ * as the form's own rule places it; without them, the primary's name or the fallback list. An edit
+ * of an open market that changes a version item (SUPPLEMENT_ONLY_WHILE_OPEN, #80) lands on that
+ * item's input. Anything else — including a VALIDATION_ERROR naming `status`, which is not a field
+ * the form has — is `undefined` and goes to the generic toast.
  *
  * The times (#22, ADR-0098) land on their own inputs, and so does 사건 기한, each said by what the
- * refusal is (`timeRefusal`): a broken order rule names both its ends, the one the edit sent first,
- * so the sentence goes under the input the admin changed; a lead close takes its minutes from
- * `leadCloseGapMinutes`, the gap the market is held to (`AdminMarket.leadCloseGapMinutes`). An open
- * market's RULES_REQUIRED naming the zone — cleared — lands on its select.
+ * refusal is (`timeRefusal`): a broken order rule names both its ends, the one the write sent
+ * first, so the sentence goes under the input the admin changed; a lead close takes its minutes
+ * from `leadCloseGapMinutes`, the gap the market is held to (`AdminMarket.leadCloseGapMinutes`). A
+ * supplement's RULES_REQUIRED naming the zone — cleared — lands on its select.
  */
 export function marketFormError(
   error: unknown,
@@ -1225,6 +1334,10 @@ export function marketFormError(
   const path = validationPath(error);
   const [named, at, part] = path ?? [];
   const message = validationMessage(error);
+  const versionItem = ruleVersionItemSchema.safeParse(named);
+  if (message === SUPPLEMENT_ONLY_WHILE_OPEN && versionItem.success) {
+    return { field: VERSION_ITEM_FIELD[versionItem.data], message: copy.errMarketSupplementOnly };
+  }
   switch (named) {
     case 'slug':
       // The unique-index refusal (design 3.4) says "already exists" in its issue; the shared

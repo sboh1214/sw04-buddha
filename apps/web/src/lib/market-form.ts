@@ -14,6 +14,7 @@ import {
   type MarketRuleItems,
   type MarketSource,
   OUTCOMES,
+  PAUSED_SUPPLEMENT_ITEMS,
   type RuleItem,
   TAG_NAME_MAX,
   TAG_NAME_PATTERN,
@@ -28,16 +29,19 @@ import {
   missingRuleItems,
   normalizeTagName,
   storableInstantSchema,
+  supplementChanges,
   tagKey,
   timeRuleViolations,
 } from '@buddha/shared';
-import type { KeepStateOptions } from 'react-hook-form';
+import type { KeepStateOptions, UseFormReturn } from 'react-hook-form';
 import * as z from 'zod';
 import { copy } from '@/copy';
 import {
   type AdminMarket,
   type Category,
   type CreateMarketFields,
+  type MarketRuleContent,
+  type MarketSupplementChanges,
   type ResolveMarketBody,
   type UpdateMarketFields,
 } from './api';
@@ -110,6 +114,16 @@ export interface MarketFormValues {
   /** Blank asks the server to derive one from the title (create only). */
   slug: string;
 }
+
+/**
+ * The form's inputs of the version items (#80, ADR-0101; ADR-0093 decision 2 #172 item 7: the
+ * title, the rule items and the times) — every input but the category, the tags, the image and
+ * the slug. What the 규칙 보충 form (`supplementFormSchema`) checks and sends.
+ */
+export type VersionFormValues = Omit<
+  MarketFormValues,
+  'categoryId' | 'tags' | 'tagInput' | 'imageUrl' | 'slug'
+>;
 
 export const EMPTY_MARKET_FORM: MarketFormValues = {
   title: '',
@@ -248,7 +262,7 @@ const trimSource = (source: MarketSource): MarketSource => ({
 });
 
 /** 1차 출처 from its two inputs, trimmed; null when both are blank (no source to store). */
-function primarySourceOf(values: MarketFormValues): MarketSource | null {
+function primarySourceOf(values: VersionFormValues): MarketSource | null {
   const source = trimSource({ name: values.primarySourceName, url: values.primarySourceUrl });
   return source.name === '' && source.url === '' ? null : source;
 }
@@ -256,10 +270,10 @@ function primarySourceOf(values: MarketFormValues): MarketSource | null {
 /**
  * The rule items the form holds, as the API would store them (#23): texts trimmed, a blank 배경
  * null, the event deadline read as KST, the primary source null when both its inputs are blank,
- * the fallbacks trimmed in order. Total, so a half-typed form is safe to hand it: the open-market
- * rule below compares two of these, the bodies are made of one, and the 미리보기 draws one.
+ * the fallbacks trimmed in order. Total, so a half-typed form is safe to hand it: the supplement's
+ * rule below compares two of these (#80), the bodies are made of one, and the 미리보기 draws one.
  */
-export function formRuleItems(values: MarketFormValues): MarketRuleItems {
+export function formRuleItems(values: VersionFormValues): MarketRuleItems {
   return {
     description: orNull(values.description),
     yesCondition: values.yesCondition.trim(),
@@ -279,7 +293,7 @@ export function formRuleItems(values: MarketFormValues): MarketRuleItems {
  * with 사건 기한 (a rule item, #23), so the time rules (`timeRuleViolations`) can read them. Total,
  * like `formRuleItems`: the order mirror below, the bodies and the 미리보기 take a half-typed form.
  */
-export function formTimes(values: MarketFormValues): TimeRuleInput {
+export function formTimes(values: VersionFormValues): TimeRuleInput {
   return {
     scheduledOpenAt: kstLocalToIso(values.scheduledOpenAt),
     closeAt: kstLocalToIso(values.closeAt),
@@ -320,7 +334,7 @@ const storableOrBlank = (value: string) =>
  * issue paths: the field of the same name, but for a source its blank input — the primary's name
  * or address, a listed fallback's name or address.
  */
-function missingItemPaths(item: RuleItem, values: MarketFormValues): (string | number)[][] {
+function missingItemPaths(item: RuleItem, values: VersionFormValues): (string | number)[][] {
   const blank = (text: string) => text.trim() === '';
   switch (item) {
     case 'primarySource':
@@ -362,16 +376,14 @@ const sourceNameField = z.string().trim().max(MARKET_SOURCE_MAX, copy.errMarketS
  * removes it), more than MARKET_FALLBACK_SOURCES_MAX fallbacks, or a switch condition with no
  * fallback to switch to (the fallback field clears it as the last one goes).
  *
- * `openMarket` is the edit form of an open market, which mirrors the API's two refusals there:
- * every rule item `original` had filled in must stay filled in (RULES_REQUIRED names each one an
- * edit would newly leave missing, `missingRuleItems`), said under the input that empties it, and
- * the tags may not be edited down to none (#17; the API names `tags`, 'required while open'). An
- * item, or the tags, already missing in `original` blocks nothing: a market opened before #23 has
- * every rule item blank, and one opened before #17 no tags, and their other fields must stay
- * editable — the form sends no unchanged field, which the API takes. Without `original` every
- * item counts as filled in before. The tags' own rules are the box's (`addTags`), checked again
- * here as a backstop; a name left in the box is refused (`tagInput`). `now` is injectable for
- * tests.
+ * `openMarket` is the edit form of an open market, which since #80 (ADR-0101; ADR-0093 decision 2
+ * #172 item 14) saves only the category, the tags and the image — its version items change by a
+ * supplement alone (`supplementFormSchema`), and their inputs are off. It mirrors the API's one
+ * refusal left there: the tags may not be edited down to none (#17; the API names `tags`,
+ * 'required while open'). Tags already missing in `original` block nothing: a market opened before
+ * #17 has none, and its other fields must stay editable — the form sends no unchanged field, which
+ * the API takes. The tags' own rules are the box's (`addTags`), checked again here as a backstop; a
+ * name left in the box is refused (`tagInput`). `now` is injectable for tests.
  *
  * The times (#22, ADR-0098) are each blank or an instant the API stores (`storableInstantSchema`),
  * and the zone blank, the stored one, or an IANA name this browser knows (`isKnownTimeZone`, the
@@ -380,24 +392,100 @@ const sourceNameField = z.string().trim().max(MARKET_SOURCE_MAX, copy.errMarketS
  * ≤ scheduled judgement (#172 item 12, owner answer 2026-10-31 A1), each broken one said under
  * BOTH its inputs. The lead close (선행 마감) is never refused on a draft — the open-items check
  * names it (`leadClose`) — so the create form, which knows no gap, does not check it.
- *
- * On an open market (`openMarket`) the form mirrors the API's rules there (#172 item 14, owner
- * answer A2): the close only moves later — an instant earlier than `original`'s is an early
- * close, which is 마감 — and stays at or before the unchanged scheduled judgement (the order rule
- * above); the scheduled open and judgement are fixed (their inputs are locked, and a change is
- * refused here too); the zone may not be cleared (RULES_REQUIRED); and an edit of the close or the
- * announcement of a market with an announcement has the lead close checked again with
- * `leadCloseGapMinutes`, the gap the market is held to (`AdminMarket.leadCloseGapMinutes`) — or,
- * while that is null (the release setting undecided), refused as the API refuses it.
  */
 export function marketFormSchema(
   options: {
     original?: MarketFormValues;
     now?: () => number;
     openMarket?: boolean;
-    leadCloseGapMinutes?: number | null;
   } = {},
 ) {
+  return marketFormFields(options).superRefine((values, ctx) => {
+    versionItemIssues(values, ctx);
+  });
+}
+
+/**
+ * The 규칙 보충 request form (#80, ADR-0101; ADR-0093 decision 2 #172 items 14·15, owner answer
+ * 2026-10-31 A2): the version items of an OPEN or PAUSED market, prefilled from `original` (the
+ * market as the form opened on it), each checked as `marketFormSchema` checks it and as the API
+ * checks a supplement's changed items — the inputs it does not draw (the category, the tags, the
+ * image, the slug) are not checked at all:
+ * - every rule item `original` had filled in stays filled in (RULES_REQUIRED names each one a
+ *   supplement would newly leave missing, `missingRuleItems`), said under the input that empties
+ *   it; an item already missing in `original` blocks nothing;
+ * - the close only moves later — an instant earlier than `original`'s is an early close, which is
+ *   마감 — in the future, at or before the unchanged scheduled judgement (the order rule), and not
+ *   at all while PAUSED (`paused`, `supplementCloseFixed`: SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED);
+ * - the scheduled open and judgement are fixed (their inputs are locked, and a change is refused
+ *   here too); the zone may not be cleared (RULES_REQUIRED);
+ * - a change of the close or of the announcement of a market with an announcement has the lead
+ *   close checked again with `leadCloseGapMinutes`, the gap the market is held to
+ *   (`AdminMarket.leadCloseGapMinutes`) — or, while that is null (the release setting undecided),
+ *   is refused as the API refuses it, in the form's words (it asks for the request again).
+ * Each compares with `original`: an input left as it was is never sent (`toSupplementChanges`), so
+ * never refused.
+ */
+export function supplementFormSchema(options: {
+  original: MarketFormValues;
+  paused: boolean;
+  leadCloseGapMinutes: number | null;
+  now?: () => number;
+}) {
+  const { original } = options;
+  const missingBefore = missingRuleItems(formRuleItems(original));
+  return marketFormFields({ original, now: options.now, versionItemsOnly: true }).superRefine(
+    (values, ctx) => {
+      versionItemIssues(values, ctx);
+      for (const item of missingRuleItems(formRuleItems(values))) {
+        if (missingBefore.includes(item)) continue;
+        for (const path of missingItemPaths(item, values)) {
+          ctx.addIssue({ code: 'custom', message: copy.errMarketRulesOpen, path });
+        }
+      }
+      supplementTimeIssues(values, options, ctx);
+    },
+  );
+}
+
+/**
+ * Whether a 규칙 보충 leaves the close as it is (#172 item 14): on a PAUSED market (`paused`), whose
+ * supplement takes PAUSED_SUPPLEMENT_ITEMS alone and the close is not one — the API refuses it
+ * (SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED). The request form locks the close's input then
+ * (`MarketTimeFields`' `closeLocked`) and puts back the close it opened on (`restoreFixedClose`).
+ */
+export function supplementCloseFixed(paused: boolean): boolean {
+  return paused && !PAUSED_SUPPLEMENT_ITEMS.includes('closeAt');
+}
+
+/**
+ * The 규칙 보충 form once the close is fixed (`supplementCloseFixed`, the market is or becomes
+ * PAUSED): a close edited before goes back to `original`'s — the close the form opened on — so
+ * nothing is sent behind the locked input (`toSupplementChanges` finds no change there). Once the
+ * form has been sent (`sent`) what the edited close was refused for is checked again, with every
+ * time rule on the close (`timeRuleDeps`); before, nothing has been said under it.
+ */
+export function restoreFixedClose(
+  form: Pick<UseFormReturn<MarketFormValues>, 'getValues' | 'setValue' | 'trigger'>,
+  original: Pick<MarketFormValues, 'closeAt'>,
+  sent: boolean,
+): void {
+  if (form.getValues('closeAt') === original.closeAt) return;
+  form.setValue('closeAt', original.closeAt);
+  if (sent) void form.trigger(['closeAt', ...timeRuleDeps('closeAt')]);
+}
+
+/**
+ * The fields of the market form, each with its entry rule (`marketFormSchema`). `versionItemsOnly`
+ * (the supplement's form, `supplementFormSchema`) checks the version items alone and takes the
+ * category, the tags, the image and the slug as they are: it neither draws nor sends them.
+ */
+function marketFormFields(options: {
+  original?: MarketFormValues;
+  now?: () => number;
+  openMarket?: boolean;
+  versionItemsOnly?: boolean;
+}) {
   const now = options.now ?? Date.now;
   const tags = z.array(z.string()).superRefine((names, ctx) => {
     const kept: string[] = [];
@@ -415,127 +503,136 @@ export function marketFormSchema(
     }
   });
   const text = z.string().trim().max(MARKET_TEXT_MAX, copy.errMarketText);
-  const missingBefore =
-    options.original === undefined ? [] : missingRuleItems(formRuleItems(options.original));
-  return z
-    .object({
-      title: z
-        .string()
-        .trim()
-        .min(1, copy.errMarketTitle)
-        .max(MARKET_TITLE_MAX, copy.errMarketTitle),
-      description: text,
-      yesCondition: text,
-      noCondition: text,
-      // Blank, or a KST time the API stores and reads back (`storableInstantSchema`, ADR-0097):
-      // from 0100-01-01 09:00 KST on. 0001-01-01 00:00 KST is year 0000 in UTC.
-      eventDeadline: z.string().refine(storableOrBlank, copy.errMarketEventDeadline),
-      primarySourceName: sourceNameField,
-      primarySourceUrl: sourceUrlField,
-      fallbackSources: z
-        .array(
-          z
-            .object({ name: sourceNameField, url: sourceUrlField })
-            .refine((source) => source.name !== '' || source.url !== '', copy.errMarketSourceEmpty),
-        )
-        .max(MARKET_FALLBACK_SOURCES_MAX, copy.errMarketFallbackSourcesMax),
-      fallbackCondition: text,
-      longDelayDays: z
-        .string()
-        .trim()
-        .refine(
-          (value) => value === '' || longDelayDaysOf(value) !== null,
-          copy.errMarketLongDelayDays,
-        ),
-      delayHandling: text,
-      categoryId: z
-        .string()
-        .refine(
-          (value) =>
-            (options.original !== undefined &&
-              value === '' &&
-              options.original.categoryId === '') ||
-            CATEGORY_ID_PATTERN.test(value),
-          copy.errMarketCategory,
-        ),
-      tags,
-      tagInput: z.string().refine((value) => value.trim() === '', copy.errMarketTagPending),
-      imageUrl: z
-        .string()
-        .trim()
-        .refine(
-          (value) => value === '' || (value.length <= MARKET_IMAGE_URL_MAX && isHttpUrl(value)),
-          copy.errMarketImageUrl,
-        ),
-      scheduledOpenAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
-      closeAt: z.string().refine((value) => {
-        if (options.original !== undefined && value === options.original.closeAt) return true;
-        const iso = kstLocalToIso(value);
-        return iso !== null && new Date(iso).getTime() > now();
-      }, copy.errMarketCloseAt),
-      scheduledAnnouncementAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
-      scheduledJudgementAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
-      judgementTimeZone: z
-        .string()
-        .refine(
-          (value) =>
-            value === '' || value === options.original?.judgementTimeZone || isKnownTimeZone(value),
-          copy.errMarketTimeZone,
-        ),
-      slug: z
-        .string()
-        .trim()
-        .refine(
-          (value) => value === '' || marketSlugSchema.safeParse(value).success,
-          copy.errMarketSlug,
-        ),
-    })
-    .superRefine((values, ctx) => {
-      // The API refuses it ('no fallback source'); the fallback field clears it with the last one.
-      if (values.fallbackSources.length === 0 && values.fallbackCondition !== '') {
-        ctx.addIssue({
-          code: 'custom',
-          message: copy.errMarketFallbackConditionNoSource,
-          path: ['fallbackCondition'],
-        });
+  const rest = options.versionItemsOnly
+    ? {
+        categoryId: z.string(),
+        tags: z.array(z.string()),
+        tagInput: z.string(),
+        imageUrl: z.string(),
+        slug: z.string(),
       }
-      const times = formTimes(values);
-      for (const { rule, fields } of timeRuleViolations(times, null)) {
-        if (!(TIME_ORDER_RULES as readonly string[]).includes(rule)) continue;
-        const message = TIME_ORDER_MESSAGE[rule as TimeOrderRule];
-        for (const field of fields) ctx.addIssue({ code: 'custom', message, path: [field] });
-      }
-      if (!options.openMarket) return;
-      for (const item of missingRuleItems(formRuleItems(values))) {
-        if (missingBefore.includes(item)) continue;
-        for (const path of missingItemPaths(item, values)) {
-          ctx.addIssue({ code: 'custom', message: copy.errMarketRulesOpen, path });
-        }
-      }
-      const original = options.original;
-      if (original === undefined) return;
-      openMarketTimeIssues(values, original, times, options.leadCloseGapMinutes ?? null, ctx);
-    });
+    : {
+        categoryId: z
+          .string()
+          .refine(
+            (value) =>
+              (options.original !== undefined &&
+                value === '' &&
+                options.original.categoryId === '') ||
+              CATEGORY_ID_PATTERN.test(value),
+            copy.errMarketCategory,
+          ),
+        tags,
+        tagInput: z.string().refine((value) => value.trim() === '', copy.errMarketTagPending),
+        imageUrl: z
+          .string()
+          .trim()
+          .refine(
+            (value) => value === '' || (value.length <= MARKET_IMAGE_URL_MAX && isHttpUrl(value)),
+            copy.errMarketImageUrl,
+          ),
+        slug: z
+          .string()
+          .trim()
+          .refine(
+            (value) => value === '' || marketSlugSchema.safeParse(value).success,
+            copy.errMarketSlug,
+          ),
+      };
+  return z.object({
+    title: z.string().trim().min(1, copy.errMarketTitle).max(MARKET_TITLE_MAX, copy.errMarketTitle),
+    description: text,
+    yesCondition: text,
+    noCondition: text,
+    // Blank, or a KST time the API stores and reads back (`storableInstantSchema`, ADR-0097):
+    // from 0100-01-01 09:00 KST on. 0001-01-01 00:00 KST is year 0000 in UTC.
+    eventDeadline: z.string().refine(storableOrBlank, copy.errMarketEventDeadline),
+    primarySourceName: sourceNameField,
+    primarySourceUrl: sourceUrlField,
+    fallbackSources: z
+      .array(
+        z
+          .object({ name: sourceNameField, url: sourceUrlField })
+          .refine((source) => source.name !== '' || source.url !== '', copy.errMarketSourceEmpty),
+      )
+      .max(MARKET_FALLBACK_SOURCES_MAX, copy.errMarketFallbackSourcesMax),
+    fallbackCondition: text,
+    longDelayDays: z
+      .string()
+      .trim()
+      .refine(
+        (value) => value === '' || longDelayDaysOf(value) !== null,
+        copy.errMarketLongDelayDays,
+      ),
+    delayHandling: text,
+    scheduledOpenAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
+    closeAt: z.string().refine((value) => {
+      if (options.original !== undefined && value === options.original.closeAt) return true;
+      const iso = kstLocalToIso(value);
+      return iso !== null && new Date(iso).getTime() > now();
+    }, copy.errMarketCloseAt),
+    scheduledAnnouncementAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
+    scheduledJudgementAt: z.string().refine(storableOrBlank, copy.errMarketScheduledTime),
+    judgementTimeZone: z
+      .string()
+      .refine(
+        (value) =>
+          value === '' || value === options.original?.judgementTimeZone || isKnownTimeZone(value),
+        copy.errMarketTimeZone,
+      ),
+    ...rest,
+  });
 }
 
 /**
- * The open market's time rules (#172 item 14, owner answer 2026-10-31 A2; ADR-0098), as the API
- * checks them on its PATCH: see `marketFormSchema`. Each compares with `original`, the stored
- * values the form started from: an input left as it was is never sent, so never refused.
+ * What both forms refuse across the version items: a switch condition with no fallback (the API's
+ * 'no fallback source'; the fallback field clears it with the last one) and each broken order rule
+ * under both its inputs.
  */
-function openMarketTimeIssues(
-  values: MarketFormValues,
-  original: MarketFormValues,
-  times: TimeRuleInput,
-  gapMinutes: number | null,
+function versionItemIssues(values: VersionFormValues, ctx: z.RefinementCtx): void {
+  if (values.fallbackSources.length === 0 && values.fallbackCondition !== '') {
+    ctx.addIssue({
+      code: 'custom',
+      message: copy.errMarketFallbackConditionNoSource,
+      path: ['fallbackCondition'],
+    });
+  }
+  for (const { rule, fields } of timeRuleViolations(formTimes(values), null)) {
+    if (!(TIME_ORDER_RULES as readonly string[]).includes(rule)) continue;
+    const message = TIME_ORDER_MESSAGE[rule as TimeOrderRule];
+    for (const field of fields) ctx.addIssue({ code: 'custom', message, path: [field] });
+  }
+}
+
+/**
+ * A supplement's time rules (#172 item 14, owner answer 2026-10-31 A2; ADR-0098), as the API
+ * checks a supplement's changed times: see `supplementFormSchema`. Each compares with `original`,
+ * the stored values the form started from: an input left as it was is never sent, so never
+ * refused.
+ */
+function supplementTimeIssues(
+  values: VersionFormValues,
+  options: { original: MarketFormValues; paused: boolean; leadCloseGapMinutes: number | null },
   ctx: z.RefinementCtx,
 ): void {
+  const { original } = options;
+  const closeFixed = supplementCloseFixed(options.paused);
+  const times = formTimes(values);
   for (const field of ['scheduledOpenAt', 'scheduledJudgementAt'] as const) {
     if (values[field] !== original[field]) {
       ctx.addIssue({ code: 'custom', message: copy.errMarketTimeFixed, path: [field] });
     }
   }
-  const closeMoved = values.closeAt !== original.closeAt;
+  const closeChanged = values.closeAt !== original.closeAt;
+  if (closeChanged && closeFixed) {
+    ctx.addIssue({
+      code: 'custom',
+      message: copy.errMarketSupplementClosePaused,
+      path: ['closeAt'],
+    });
+  }
+  // A close refused while PAUSED is checked no further: no other rule of it is the one to fix.
+  const closeMoved = closeChanged && !closeFixed;
   const before = kstLocalToIso(original.closeAt);
   // An instant, as the API compares it: any earlier close is an early close (#173 item 4).
   if (
@@ -558,10 +655,15 @@ function openMarketTimeIssues(
   const sent = TIME_RULE_FIELDS.leadClose.filter((field) =>
     field === 'closeAt' ? closeMoved : announcementMoved,
   );
+  const gapMinutes = options.leadCloseGapMinutes;
   if (gapMinutes === null) {
     // The gap is undecided and the market has none of its own: the API cannot check it.
     for (const field of sent) {
-      ctx.addIssue({ code: 'custom', message: copy.errMarketLeadCloseUndecided, path: [field] });
+      ctx.addIssue({
+        code: 'custom',
+        message: copy.errMarketSupplementLeadCloseUndecided,
+        path: [field],
+      });
     }
     return;
   }
@@ -718,6 +820,40 @@ export function toUpdateMarketBody(
     if (values[field] !== original[field]) Object.assign(body, { [field]: next[field] });
   }
   return body;
+}
+
+/**
+ * A rule version's full text as the form holds it (`MarketRuleContent`, #80, ADR-0101): the title
+ * trimmed, the rule items as `formRuleItems` reads them and the times as `formTimes` does — so two
+ * of these, both read from the inputs, compare as the API compares a supplement's items, and a
+ * stored close with seconds the input does not show is the same instant on both sides.
+ */
+export function formRuleContent(values: VersionFormValues): MarketRuleContent {
+  const times = formTimes(values);
+  return {
+    title: values.title.trim(),
+    ...formRuleItems(values),
+    scheduledOpenAt: times.scheduledOpenAt,
+    closeAt: times.closeAt ?? '',
+    scheduledAnnouncementAt: times.scheduledAnnouncementAt,
+    scheduledJudgementAt: times.scheduledJudgementAt,
+    judgementTimeZone: times.judgementTimeZone,
+  };
+}
+
+/**
+ * A supplement's 보충 문구 (`changes`, #80, ADR-0101): the SUPPLEMENT_ITEMS whose value the form
+ * changed from `original` — the market as the form opened on it — each with its new value
+ * (`supplementChanges`, the shared comparison: a text by its trimmed value, an instant by its
+ * moment, a source by name and address). An item typed back to what it was is no change, so a
+ * request holds only what it changes; the scheduled open and judgement are never in it. `{}` when
+ * nothing changed, which the caller must not send (the API refuses it, 'at least one item').
+ */
+export function toSupplementChanges(
+  values: VersionFormValues,
+  original: VersionFormValues,
+): MarketSupplementChanges {
+  return supplementChanges(formRuleContent(original), formRuleContent(values));
 }
 
 /** A stored instant as its `datetime-local` input in KST; '' for none. */

@@ -17,6 +17,7 @@ import type {
   Category,
   MarketReviewChecklistItem,
   MarketRuleItems,
+  MarketSupplementChanges,
   MarketTimes,
   Me,
 } from '@buddha/shared';
@@ -36,7 +37,8 @@ import { E2E_CONSENT_VERSIONS } from './consent-versions';
  * (`createDraftMarket`) and leave it as it is for the other workers. Both are named in the error a
  * helper throws, so a missing seed reads as "run pnpm db:seed" rather than as a 401 or a 404 in
  * the middle of a flow. Both admins take part in every open market since #21: the first submits
- * it for review and the second approves it (`openThroughReview`).
+ * it for review and the second approves it (`openThroughReview`). So in every rule supplement
+ * since #80: the first asks for it and the second approves it (`approveSupplementAsReviewer`).
  *
  * Everything here is re-runnable against a persistent local database: a fresh email per
  * sign-up, a random tag in every market title and slug.
@@ -282,7 +284,10 @@ async function chooseSeedAdminNickname(
   }
 }
 
-/** The reviewer each `admin` context goes with (`test`'s fixtures), for `approveAsReviewer`. */
+/**
+ * The reviewer each `admin` context goes with (`test`'s fixtures), for `approveAsReviewer` and
+ * `approveSupplementAsReviewer`.
+ */
 const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
 
 /**
@@ -294,9 +299,10 @@ const reviewers = new WeakMap<APIRequestContext, APIRequestContext>();
  * `reviewer` is the second seed admin too, once per worker process: the admin who approves what
  * `admin` submits, so `createOpenMarket(admin)` can open a market without every test that wants
  * one asking for a second admin (#21 — a market opens only through the review, which its creator
- * and its submitter never decide, #172 item 5). `admin` depends on it and is paired with it here
- * (`reviewers`); a spec that acts as the second admin itself asks for `secondAdmin`. Worker-scoped
- * fixtures see no test-scoped `baseURL`, so it reads the project's.
+ * and its submitter never decide, #172 item 5), and what `admin` asks to supplement (#80 — its
+ * requester never decides a supplement, #172 item 15). `admin` depends on it and is paired with
+ * it here (`reviewers`); a spec that acts as the second admin itself asks for `secondAdmin`.
+ * Worker-scoped fixtures see no test-scoped `baseURL`, so it reads the project's.
  */
 export const test = base.extend<
   { admin: APIRequestContext; secondAdmin: APIRequestContext },
@@ -1319,8 +1325,9 @@ export function timesFor(
  * time in KST as `kstLocalOf` writes it — to the minute — and a null as blank, which for the
  * announcement is '없음'; the close too when `closeAt` is given. The 판정 기준 시간대 is picked
  * when it is not null; null leaves the select as it is (Asia/Seoul pre-filled, #172 item 11).
- * For 시장 만들기 or a draft's form: on an open market the scheduled open and judgement inputs are
- * locked (#172 item 14), so a spec types its close alone.
+ * For 시장 만들기 or a draft's form: an open market's edit form has every time off (#80), and its
+ * close is typed into the 규칙 보충 form, where the scheduled open and judgement are locked (#172
+ * item 14) — so a spec types its close alone there.
  */
 export async function fillTimeInputs(
   page: Page,
@@ -1362,9 +1369,11 @@ async function unwrap<T>(response: APIResponse): Promise<T> {
  * Creates a draft through `POST /admin/markets` and opens it through the review
  * (`openThroughReview`), so the spec owns a market that is `open` and closes a day from now
  * whatever the calendar says. Its scheduled open has passed (`timesFor`, #22), so the approval
- * opens it at once (#21, ADR-0100). It has no fill — there is no way to trade until the CLOB
- * lands (#119) — so its price reads 체결 없음 and its chart is empty (N02 §5): opening writes no
- * price tick.
+ * opens it at once (#21, ADR-0100), and the open records its content as rule v1 (#80, ADR-0101):
+ * its `ruleVersion` is 1, and its rule version items change by a supplement alone
+ * (`requestSupplement`, `approveSupplementAsReviewer`). It has no fill — there is no way to trade
+ * until the CLOB lands (#119) — so its price reads 체결 없음 and its chart is empty (N02 §5):
+ * opening writes no price tick.
  */
 export async function createOpenMarket(
   admin: APIRequestContext,
@@ -1393,6 +1402,15 @@ export const REVIEW_CHECKLIST = Object.keys(CHECKLIST_ITEMS) as MarketReviewChec
 
 /** The reason every helper approval gives (1..500 characters, #172 item 4). */
 const HELPER_APPROVAL_REASON = '자동화 테스트의 시장입니다. 체크리스트를 모두 확인했습니다.';
+
+/** The second seed admin `admin` was handed with (`test`'s `reviewer`). */
+function reviewerOf(admin: APIRequestContext): APIRequestContext {
+  const reviewer = reviewers.get(admin);
+  if (reviewer === undefined) {
+    throw new Error('no reviewer goes with this context: pass the `admin` fixture of `test`');
+  }
+  return reviewer;
+}
 
 /** `POST /admin/markets/:id/<write>` as the admin `context` is signed in as (ADR-0092). */
 async function marketWrite(
@@ -1433,10 +1451,7 @@ export async function approveAsReviewer(
   marketId: string,
   requestId?: string,
 ): Promise<AdminMarket> {
-  const reviewer = reviewers.get(admin);
-  if (reviewer === undefined) {
-    throw new Error('no reviewer goes with this context: pass the `admin` fixture of `test`');
-  }
+  const reviewer = reviewerOf(admin);
   const pending =
     requestId ??
     (await unwrap<AdminMarket>(await reviewer.get(`/api/v1/admin/markets/${marketId}`))).review
@@ -1487,9 +1502,10 @@ export async function submitRefusedItems(
 /**
  * Opens a complete draft the only way there is since #21 (ADR-0100): `admin` submits it for
  * review and the second seed admin approves it (`approveAsReviewer`) — its scheduled open has
- * passed, so the approval opens it at once (ADR-0093 decision 2 #172 item 6). For a market a spec
- * made on screen: the screen still shows the draft until it is read again. Throws, after sending
- * the market back to a draft, when it does not open — a scheduled open still ahead, say.
+ * passed, so the approval opens it at once (ADR-0093 decision 2 #172 item 6) and records the
+ * content it locked as rule v1 (#80, ADR-0101). For a market a spec made on screen: the screen
+ * still shows the draft until it is read again. Throws, after sending the market back to a draft,
+ * when it does not open — a scheduled open still ahead, say.
  */
 export async function openThroughReview(
   admin: APIRequestContext,
@@ -1511,6 +1527,164 @@ export async function openThroughReview(
     );
   }
   return approved;
+}
+
+// ---- 규칙 보충 (#80) -------------------------------------------------------------------
+
+/**
+ * The reason every helper supplement gives (#172 item 15: 1..500 characters), public in the
+ * market's rule version history once approved.
+ */
+export const HELPER_SUPPLEMENT_REASON = '자동화 테스트의 보충입니다. 문구를 다듬습니다.';
+
+/**
+ * The 정산 영향 검토 every helper supplement gives (1..500 characters): why it moves no judgement
+ * and no Coin. The operators' alone — no public answer carries it.
+ */
+export const HELPER_SUPPLEMENT_IMPACT =
+  '판정 기준과 출처의 의미가 그대로라 판정과 Coin 지급에 영향이 없습니다.';
+
+/** The reason every helper approval of a supplement gives (1..500 characters). */
+const HELPER_SUPPLEMENT_APPROVAL_REASON =
+  '보충 문구와 사유를 확인했습니다. 의미가 바뀌지 않습니다.';
+
+export interface SupplementOptions {
+  /**
+   * The rule version the text is written against: the market's current one unless given (1 for a
+   * market with none, which the API refuses as 'none') — a spec that pins 'stale' names another.
+   */
+  baseVersion?: number;
+  /** The supplement's reason: HELPER_SUPPLEMENT_REASON unless given. */
+  reason?: string;
+  /** Its 정산 영향 검토: HELPER_SUPPLEMENT_IMPACT unless given. */
+  settlementImpact?: string;
+}
+
+/**
+ * 보충 요청 (#80, ADR-0101; ADR-0093 decision 2 #172 item 15) through
+ * `POST /admin/markets/:id/supplements` as the admin `context` is signed in as (ADR-0092): the
+ * answer as it came, for a spec that reads a refusal. `changes` holds the new value of each item to
+ * change, in the update body's shapes (`MarketSupplementChanges`) — or anything else, which the API
+ * refuses ('not a supplement item').
+ */
+export async function sendSupplement(
+  context: APIRequestContext,
+  marketId: string,
+  changes: Record<string, unknown>,
+  {
+    baseVersion,
+    reason = HELPER_SUPPLEMENT_REASON,
+    settlementImpact = HELPER_SUPPLEMENT_IMPACT,
+  }: SupplementOptions = {},
+): Promise<APIResponse> {
+  const base =
+    baseVersion ??
+    (await unwrap<AdminMarket>(await context.get(`/api/v1/admin/markets/${marketId}`)))
+      .ruleVersion ??
+    1;
+  return context.post(`/api/v1/admin/markets/${marketId}/supplements`, {
+    data: {
+      baseVersion: base,
+      changes,
+      reason,
+      settlementImpact,
+      expectedAccountId: await accountIdOf(context),
+    },
+  });
+}
+
+/**
+ * `sendSupplement` as `admin`, which must be taken: the market as the request left it — nothing of
+ * its text or version changes until the approval — with the request in `supplement.pending`, what
+ * `approveSupplementAsReviewer` decides. The market must be OPEN (or PAUSED), its close ahead, its
+ * rule version set (opened since #80) and no other supplement waiting on it.
+ */
+export async function requestSupplement(
+  admin: APIRequestContext,
+  marketId: string,
+  changes: MarketSupplementChanges,
+  options: SupplementOptions = {},
+): Promise<AdminMarket> {
+  const requested = await unwrap<AdminMarket>(
+    await sendSupplement(admin, marketId, changes, options),
+  );
+  if (requested.supplement.pending === null) {
+    throw new Error(`market ${marketId} has no waiting supplement after its request`);
+  }
+  return requested;
+}
+
+/**
+ * `POST /admin/markets/:id/supplements/:requestId/<decision>` as the admin `context` is signed in
+ * as (ADR-0092), the answer as it came: 승인 takes `{reason}`, 반려 `{rejectReason, reason}`, 철회
+ * nothing.
+ */
+export async function sendSupplementDecision(
+  context: APIRequestContext,
+  marketId: string,
+  requestId: string,
+  decision: 'approve' | 'reject' | 'retract',
+  body: Record<string, unknown> = {},
+): Promise<APIResponse> {
+  return context.post(`/api/v1/admin/markets/${marketId}/supplements/${requestId}/${decision}`, {
+    data: { ...body, expectedAccountId: await accountIdOf(context) },
+  });
+}
+
+/** The id of the supplement waiting on a market, as `context` reads it. Throws when none waits. */
+async function pendingSupplementOf(context: APIRequestContext, marketId: string): Promise<string> {
+  const market = await unwrap<AdminMarket>(await context.get(`/api/v1/admin/markets/${marketId}`));
+  const pending = market.supplement.pending?.requestId;
+  if (pending === undefined) throw new Error(`no supplement waits on market ${marketId}`);
+  return pending;
+}
+
+/**
+ * 승인 (#80, #172 item 15) of the supplement waiting on a market, as the second seed admin `admin`
+ * was handed with (`test`'s `reviewer`) — any admin but its requester decides it, so one `admin`
+ * asked for — with a reason, naming the waiting request (`requestId`, read when not given). The
+ * answer is the market with its new text and its next rule version (`ruleVersion`, and the version
+ * history `ruleVersions` the public detail lists); the approval republishes `market:status`, so an
+ * open public detail reads it without a reload.
+ */
+export async function approveSupplementAsReviewer(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const reviewer = reviewerOf(admin);
+  const pending = requestId ?? (await pendingSupplementOf(reviewer, marketId));
+  return unwrap<AdminMarket>(
+    await sendSupplementDecision(reviewer, marketId, pending, 'approve', {
+      reason: HELPER_SUPPLEMENT_APPROVAL_REASON,
+    }),
+  );
+}
+
+/**
+ * 철회 (#80) of the supplement waiting on a market by its requester `admin`, in any status — a
+ * request still waiting at the close ends so, or by another admin's 반려. The answer is the market
+ * with no supplement waiting and its text and version as they were.
+ */
+export async function retractSupplement(
+  admin: APIRequestContext,
+  marketId: string,
+  requestId?: string,
+): Promise<AdminMarket> {
+  const pending = requestId ?? (await pendingSupplementOf(admin, marketId));
+  return unwrap<AdminMarket>(await sendSupplementDecision(admin, marketId, pending, 'retract'));
+}
+
+/**
+ * Retracts the supplement `context`'s admin left waiting on a market, so a run that failed halfway
+ * leaves the 규칙 보충 대기 list of a persistent database no longer. Best effort, for a `finally`:
+ * nothing when none waits, or when another admin asked for it.
+ */
+export async function leaveNoSupplement(
+  context: APIRequestContext,
+  marketId: string,
+): Promise<void> {
+  await retractSupplement(context, marketId).catch(() => undefined);
 }
 
 /**

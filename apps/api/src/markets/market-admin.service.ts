@@ -3,6 +3,7 @@ import { randomBytes } from 'node:crypto';
 import {
   MarketTransitionError,
   openScheduledMarket,
+  ruleContentOf,
   schema,
   transitionMarket,
   type Db,
@@ -11,6 +12,7 @@ import {
 } from '@buddha/db';
 import {
   categoryUnselectableReason,
+  changedRuleVersionItems,
   decodeKeyset,
   encodeKeyset,
   LEAD_CLOSE_GAP_SETTING,
@@ -21,16 +23,14 @@ import {
   marketReviewExclusion,
   marketSlugSchema,
   missingOpenItems,
-  missingRuleItems,
   rulesEditedPayload,
   sameTimeItem,
   serializeCoinAmount,
   SETTLEMENT_STEPS,
   slugify,
+  SUPPLEMENT_ONLY_WHILE_OPEN,
   tagKey,
-  TIME_ORDER_RULES,
   timeRelationMessage,
-  timeRuleIssues,
   timeRuleViolations,
   type AdminMarket,
   type AdminMarketListQuery,
@@ -44,7 +44,6 @@ import {
   type MarketRejectedPayload,
   type MarketRevertedPayload,
   type MarketRuleItems,
-  type MarketStatus,
   type MarketSubmittedPayload,
   type MarketSummary,
   type MarketTimeItems,
@@ -53,11 +52,8 @@ import {
   type RescheduleMarketOpenBody,
   type ResolveMarketBody,
   type RevertMarketBody,
-  type RuleItem,
+  type RuleVersionItem,
   type RulesEditedValues,
-  type TimeItem,
-  type TimeRuleField,
-  type TimeRuleInput,
   type TimeRuleViolation,
   type UpdateMarketBody,
   type WithoutExpectedAccount,
@@ -82,6 +78,20 @@ import { MarketJobs } from '../jobs/market-jobs.service.js';
 import { MarketPublisher } from '../realtime/market-publisher.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { type Page } from '../wallet/wallet.service.js';
+import {
+  assertFallbackCondition,
+  assertFutureCloseAt,
+  assertTimeOrder,
+  fieldError,
+  lockedMarketRow,
+  ruleItemColumns,
+  sentTimeFields,
+  timeColumns,
+  withContent,
+  withRuleItems,
+  withTimes,
+  wrongStatus,
+} from './market-item-rules.js';
 import { lockMarket } from './market-lock.js';
 import {
   approvedReviewRequestId,
@@ -98,6 +108,7 @@ import {
   sameSources,
   type MarketSources,
 } from './market-sources.js';
+import { readAdminRuleVersions, readMarketSupplement } from './market-supplement.js';
 import {
   likePattern,
   marketTagNames,
@@ -150,39 +161,6 @@ export function generateSlug(title: string): string {
   }
 }
 
-function fieldError(path: string, message: string, detail: string): AppError {
-  return new AppError('VALIDATION_ERROR', {
-    message,
-    details: [{ path: [path], message: detail }],
-  });
-}
-
-/** Any state-machine violation other than the ones with their own code names `status`. */
-function wrongStatus(status: MarketStatus): AppError {
-  return fieldError('status', `Market is ${status}`, `market is ${status}`);
-}
-
-/**
- * What RULES_REQUIRED names: a rule item (#23), or the judgement time zone (#22), a 판정 항목 of
- * ADR-0093 decision 2 #172 item 7 too.
- */
-type RequiredWhileOpen = RuleItem | 'judgementTimeZone';
-
-/**
- * PLAN 12: a market trades against its rules, so an edit may not leave a rule item missing on an
- * open market that it had filled (#23, ADR-0097), nor clear its judgement time zone (#22,
- * ADR-0098): one issue per such item, in RULE_ITEMS order, the zone last. An item missing already
- * — every one, on a market opened before #23, and the zone on one opened before #22 — blocks no
- * other edit, and sending null for it again is no change. (A draft without them is refused review
- * by the open-items check, `openItemsMissing`.)
- */
-function rulesRequired(items: readonly RequiredWhileOpen[]): AppError {
-  return new AppError('RULES_REQUIRED', {
-    message: `Rule items cannot be left missing while the market is open: ${items.join(', ')}`,
-    details: items.map((item) => ({ path: [item], message: 'required while open' })),
-  });
-}
-
 /** The rule items a create sends none of start as these: blank, null or none (#23). */
 const BLANK_RULE_ITEMS: MarketRuleItems = {
   description: null,
@@ -196,140 +174,24 @@ const BLANK_RULE_ITEMS: MarketRuleItems = {
   delayHandling: '',
 };
 
-/** The rule-item fields of a create or update body (`marketFields`, #23). */
-type RuleItemsBody = Pick<WithoutExpectedAccount<UpdateMarketBody>, RuleItem>;
-
 /**
- * The rule items a write leaves (#23): the body's value of each item it sends, the stored one of
- * each it does not — null clears a nullable item, and `fallbackSources` replaces the whole ordered
- * list. The event deadline as an ISO instant, as `ruleItemsOf` reads it back.
+ * An edit of an open market that changes a version item (#80, ADR-0101; ADR-0093 decision 2 #172
+ * item 14): after the open they change by an approved supplement alone — and on a market opened
+ * before rule versions (`ruleVersion` null, D4), which takes no supplement, not at all until the
+ * close, which the message says instead. One issue per item, in RULE_VERSION_ITEMS order,
+ * SUPPLEMENT_ONLY_WHILE_OPEN either way (the detail a client maps).
  */
-function withRuleItems(stored: MarketRuleItems, body: RuleItemsBody): MarketRuleItems {
-  const { eventDeadline } = body;
-  return {
-    description: body.description === undefined ? stored.description : body.description,
-    yesCondition: body.yesCondition ?? stored.yesCondition,
-    noCondition: body.noCondition ?? stored.noCondition,
-    eventDeadline:
-      eventDeadline === undefined
-        ? stored.eventDeadline
-        : eventDeadline === null
-          ? null
-          : new Date(eventDeadline).toISOString(),
-    primarySource: body.primarySource === undefined ? stored.primarySource : body.primarySource,
-    fallbackSources: body.fallbackSources ?? stored.fallbackSources,
-    fallbackCondition: body.fallbackCondition ?? stored.fallbackCondition,
-    longDelayDays: body.longDelayDays === undefined ? stored.longDelayDays : body.longDelayDays,
-    delayHandling: body.delayHandling ?? stored.delayHandling,
-  };
-}
-
-/** The time-item fields of a create or update body (`marketFields`, #22); a create has a close. */
-type TimesBody = Partial<Pick<WithoutExpectedAccount<UpdateMarketBody>, TimeItem>>;
-
-/**
- * The time items a write leaves (#22, ADR-0098): the body's value of each item it sends, the stored
- * one of each it does not — null clears one (on a draft; an open market's refusals are `update`'s).
- * Instants as ISO, as `timesOf` reads them back; the zone as sent, trimmed by the body schema.
- */
-function withTimes(stored: MarketTimeItems, body: TimesBody): MarketTimeItems {
-  const instant = (sent: string | null | undefined, kept: string | null) =>
-    sent === undefined ? kept : sent === null ? null : new Date(sent).toISOString();
-  return {
-    scheduledOpenAt: instant(body.scheduledOpenAt, stored.scheduledOpenAt),
-    closeAt: body.closeAt === undefined ? stored.closeAt : new Date(body.closeAt).toISOString(),
-    scheduledAnnouncementAt: instant(body.scheduledAnnouncementAt, stored.scheduledAnnouncementAt),
-    scheduledJudgementAt: instant(body.scheduledJudgementAt, stored.scheduledJudgementAt),
-    judgementTimeZone:
-      body.judgementTimeZone === undefined ? stored.judgementTimeZone : body.judgementTimeZone,
-  };
-}
-
-/** The `markets` columns of the time items (#22). */
-function timeColumns(times: MarketTimeItems) {
-  const at = (iso: string | null) => (iso === null ? null : new Date(iso));
-  return {
-    scheduledOpenAt: at(times.scheduledOpenAt),
-    closeAt: new Date(times.closeAt),
-    scheduledAnnouncementAt: at(times.scheduledAnnouncementAt),
-    scheduledJudgementAt: at(times.scheduledJudgementAt),
-    judgementTimeZone: times.judgementTimeZone,
-  };
-}
-
-/** The fields a time rule compares that a write's body sends, null included (#22). */
-function sentTimeFields(body: TimesBody & { eventDeadline?: string | null }): Set<TimeRuleField> {
-  const fields: TimeRuleField[] = [
-    'scheduledOpenAt',
-    'closeAt',
-    'scheduledAnnouncementAt',
-    'scheduledJudgementAt',
-    'eventDeadline',
-  ];
-  return new Set(fields.filter((field) => body[field] !== undefined));
-}
-
-/**
- * The order of the times a write leaves (#22, ADR-0098): scheduled open < close ≤ scheduled
- * judgement (ADR-0093 decision 2 #172 item 12) and 사건 기한 ≤ scheduled judgement (owner answer
- * 2026-10-31 A1), in whole minutes (`timeRuleViolations`, TIME_ORDER_RULES). A write whose result
- * breaks one is VALIDATION_ERROR naming both ends of each broken rule, the fields the body sent
- * first (`timeRuleIssues`). Only a rule with an end the body sends is checked: the database CHECKs
- * of migration 0051 keep the stored ones in order, and this refusal comes before them, so a CHECK
- * violation is a bug and never an answer. On an open market it is also what keeps an extended
- * close at or before the unchanged scheduled judgement (owner answer 2026-10-31 A2).
- */
-function assertTimeOrder(times: TimeRuleInput, sent: ReadonlySet<TimeRuleField>): void {
-  const broken = timeRuleViolations(times, null).filter(
-    (violation) =>
-      (TIME_ORDER_RULES as readonly string[]).includes(violation.rule) &&
-      violation.fields.some((field) => sent.has(field)),
-  );
-  if (broken.length === 0) return;
-  throw new AppError('VALIDATION_ERROR', {
-    message: `The market times are out of order: ${broken.map((v) => v.rule).join(', ')}`,
-    details: timeRuleIssues(broken, sent),
-  });
-}
-
-/**
- * 선행 마감 on an open market (#22, ADR-0098; ADR-0093 decision 2 #172 items 13–14): an edit that
- * sends the close or the announcement of a market with an announcement time has the close checked
- * again, close ≤ announcement − `gapMinutes` in whole minutes. The gap is the one the market's lead
- * close was last checked against, else the release setting's reading; with neither — the setting
- * undecided — it cannot be checked and is refused on the lead fields sent ('lead-close gap
- * undecided'). A draft is never refused it: its open-items check names `leadClose` instead.
- */
-function assertLeadClose(
-  times: TimeRuleInput,
-  gapMinutes: number | null,
-  sent: ReadonlySet<TimeRuleField>,
-): void {
-  const broken = timeRuleViolations(times, gapMinutes).filter(
-    (violation) => violation.rule === 'leadClose',
-  );
-  if (broken.length === 0) return;
-  throw new AppError('VALIDATION_ERROR', {
-    message:
-      gapMinutes === null
-        ? 'The lead-close gap is undecided: the release setting market.lead_close_gap has no value'
-        : `The close must be at least ${gapMinutes} minutes before the announcement time`,
-    details: timeRuleIssues(broken, sent),
-  });
-}
-
-/** The times an open market keeps once set (#172 item 14; ADR-0093 decision 3 '#21 앞당긴 개장'). */
-const FIXED_WHILE_OPEN = ['scheduledOpenAt', 'scheduledJudgementAt'] as const;
-
-/**
- * An edit of an open market that would change a FIXED_WHILE_OPEN time (#22, ADR-0098): set, moved
- * or cleared — a null one on a market opened before #22 too — names each, 'immutable while open'.
- * Sending the stored instant again is no change.
- */
-function fixedWhileOpen(items: readonly (typeof FIXED_WHILE_OPEN)[number][]): AppError {
+function supplementOnlyWhileOpen(
+  items: readonly RuleVersionItem[],
+  ruleVersion: number | null,
+): AppError {
+  const named = items.join(', ');
   return new AppError('VALIDATION_ERROR', {
-    message: `${items.join(', ')} cannot change while the market is open`,
-    details: items.map((item) => ({ path: [item], message: 'immutable while open' })),
+    message:
+      ruleVersion === null
+        ? `${named} cannot change until the close: the market opened before rule versions`
+        : `${named} change by a supplement alone while the market is open`,
+    details: items.map((item) => ({ path: [item], message: SUPPLEMENT_ONLY_WHILE_OPEN })),
   });
 }
 
@@ -346,35 +208,6 @@ function rulesEditedValues(
     scheduledAnnouncementAt: times.scheduledAnnouncementAt,
     judgementTimeZone: times.judgementTimeZone,
   };
-}
-
-/** The `markets` columns of the rule items; the sources are `market_sources` rows. */
-function ruleItemColumns(items: MarketRuleItems) {
-  return {
-    description: items.description,
-    yesCondition: items.yesCondition,
-    noCondition: items.noCondition,
-    eventDeadline: items.eventDeadline === null ? null : new Date(items.eventDeadline),
-    fallbackCondition: items.fallbackCondition,
-    longDelayDays: items.longDelayDays,
-    delayHandling: items.delayHandling,
-  };
-}
-
-/**
- * A switch condition says when the judgement moves to a fallback source (#172 item 9), so a write
- * whose result has one and no fallback is refused naming it (#23): the body's items over the
- * stored ones. The caller asks only when the write sends either, so a row stored that way by
- * another writer blocks no unrelated edit.
- */
-function assertFallbackCondition(items: MarketRuleItems): void {
-  if (items.fallbackSources.length === 0 && items.fallbackCondition.trim() !== '') {
-    throw fieldError(
-      'fallbackCondition',
-      'A switch condition needs a fallback source to switch to',
-      'no fallback source',
-    );
-  }
 }
 
 /** The top-level message of a category refusal, per reason; the detail is the reason itself. */
@@ -506,12 +339,6 @@ function assertSelectableCategory(category: CategorySelectability): void {
   }
 }
 
-function assertFutureCloseAt(closeAt: Date, now: Date): void {
-  if (closeAt.getTime() <= now.getTime()) {
-    throw fieldError('closeAt', 'closeAt must be in the future', 'must be in the future');
-  }
-}
-
 /**
  * The market's pending `market_review` request (#78), read under the market lock: exactly one
  * while it is in REVIEW, which every review write keeps (they all hold that lock), so anything
@@ -572,8 +399,11 @@ async function assertReviewedRequest(
   throw approvalNotAllowed(status === 'retracted' ? 'retracted' : 'decided');
 }
 
-/** The instant ApprovalService decided `request` at, read after its locks. */
-function decisionInstant(request: ApprovalRequest): Date {
+/**
+ * The instant ApprovalService decided `request` at, read after its locks (MarketSupplementService's
+ * decisions too).
+ */
+export function decisionInstant(request: ApprovalRequest): Date {
   if (request.decidedAt === null) {
     throw new AppError('INTERNAL', { message: 'Approval decision has no instant' });
   }
@@ -586,9 +416,10 @@ function decisionInstant(request: ApprovalRequest): Date {
  * sources (`readMarketSources`; #23): the row holds neither, so the caller hands them in — a tag or
  * source edit is then a `market_update` with its before and after (ADR-0093 decision 2 #172 item
  * 14). The rule items (`ruleItemsOf`) and the times (`timesOf`, #22) are in it whole, with the
- * lead-close gap the market was last checked against, so an edit of any of them moves it.
+ * lead-close gap the market was last checked against, so an edit of any of them moves it. A
+ * supplement's approval records the market before and after with it too (#80).
  */
-function snapshot(
+export function snapshot(
   row: MarketRow,
   tags: readonly string[],
   sources: MarketSources,
@@ -827,41 +658,41 @@ export class MarketAdminService {
   }
 
   /**
-   * PATCH per status: a draft accepts every field; an open market accepts the descriptive
-   * fields, the rule items, the times but the fixed ones, the category and the tags, and refuses
-   * `slug` naming the field; any other status refuses everything naming `status`. REVIEW and
-   * SCHEDULED are refused because the content locks at the review submission (#78, ADR-0099;
-   * ADR-0093 decision 2 #172 item 6 (a)): what was reviewed is what opens, so a change sends the
-   * market back to a draft (`revert`) to be reviewed again, and a SCHEDULED market's scheduled
-   * open, the one exception, moves by its own write with a reason (`reschedule`). PAUSED's edits
-   * are #114's, and the later statuses are past trading.
+   * PATCH per status: a draft accepts every field; an open market accepts its category, tags and
+   * image, and refuses `slug` naming the field; any other status refuses everything naming
+   * `status`. REVIEW and SCHEDULED are refused because the content locks at the review submission
+   * (#78, ADR-0099; ADR-0093 decision 2 #172 item 6 (a)): what was reviewed is what opens, so a
+   * change sends the market back to a draft (`revert`) to be reviewed again, and a SCHEDULED
+   * market's scheduled open, the one exception, moves by its own write with a reason
+   * (`reschedule`). PAUSED's edits are #114's, and the later statuses are past trading.
    *
-   * An open market's rule items stay editable until #80's supplements replace the path (ADR-0096,
-   * ADR-0097), but an edit that would leave one missing that the market had filled, or clear its
-   * judgement time zone, is RULES_REQUIRED naming each (`rulesRequired`).
+   * After the open the version items — the title, the rule items and the times (RULE_VERSION_ITEMS,
+   * #80, ADR-0101; ADR-0093 decision 2 #172 item 14) — change by an approved supplement alone
+   * (MarketSupplementService), which took over the open market's checks this edit made until #80
+   * (RULES_REQUIRED, the fixed times, the close later only and up to the scheduled judgement, the
+   * lead close). An open market's edit that changes one is refused naming each, in
+   * RULE_VERSION_ITEMS order, SUPPLEMENT_ONLY_WHILE_OPEN ('supplement only while open'); the stored
+   * value again is no change (`changedRuleVersionItems`: a text by its trimmed value, an instant by
+   * its moment), so a form that sends every field back is refused only for what it changed. A
+   * market opened before #80 (no rule version, D4) is held the same, and takes no supplement
+   * either: its refusal's message says the items cannot change until the close (the details are
+   * the same).
    *
-   * The times (#22, ADR-0098): a write whose result breaks the order is refused naming both ends
-   * (`assertTimeOrder`). On an open market, until #80's supplement replaces the path, the
-   * scheduled open and judgement are fixed (`fixedWhileOpen`; ADR-0093 decision 2 #172 item 14),
-   * the close only moves later — an earlier one is an early close (#173 item 4), `close` until
-   * #114 — and never past the scheduled judgement (owner answer 2026-10-31 A2, the order rule),
-   * and an edit that sends the close or the announcement has the lead close checked again
-   * (`assertLeadClose`) against the gap the market's was last checked against; when it has none,
-   * the setting's reading is used and stored (`lead_close_gap_minutes`). A draft's lead close is
-   * never refused: the open-items check names it.
+   * The times of a draft (#22, ADR-0098): a write whose result breaks the order is refused naming
+   * both ends (`assertTimeOrder`); its lead close is never refused: the open-items check names it.
    *
-   * Refusals come in this order: status, slug on an open market, a switch condition with no
-   * fallback source (`assertFallbackCondition`), RULES_REQUIRED, tags, category, a fixed time on an
-   * open market, a close time not in the future, an earlier close on an open market, the order,
-   * the lead close, and last a taken slug (the unique index, at the UPDATE).
+   * Refusals come in this order: status, slug on an open market, a version item changed on an open
+   * market, tags, a switch condition with no fallback source (`assertFallbackCondition`), category,
+   * a close time not in the future, the order, and last a taken slug (the unique index, at the
+   * UPDATE).
    *
    * A change of any rule item (`changedRuleItems`: 배경 included, the title not) or of the
    * announcement time or the judgement time zone (#22: 판정 항목 of #172 item 7) is also a
    * `rules_edited` market event (PLAN 12: allowed after a warning, which is the web's dialog)
    * whose payload names the items changed with each one's before and after
-   * (`rulesEditedPayload`, #23, RULES_EDITED_ITEMS). The scheduled open, the close and the
-   * scheduled judgement are in the `market_update` record only, as the title is. It changes no
-   * status: its `from_status`/`to_status` stay null.
+   * (`rulesEditedPayload`, #23, RULES_EDITED_ITEMS) — a draft's alone since #80. The scheduled
+   * open, the close and the scheduled judgement are in the `market_update` record only, as the
+   * title is. It changes no status: its `from_status`/`to_status` stay null.
    *
    * `primarySource` and `fallbackSources` are the market's `market_sources` rows (#23): sending
    * either writes the whole set again (`replaceMarketSources`) unless it is the stored one; the
@@ -869,25 +700,28 @@ export class MarketAdminService {
    *
    * `tags` replace the whole ordered set (#17, ADR-0093 decision 2 #172 items 2 and 14): the
    * market's `market_tags` rows are deleted and the new ones linked — unless they name the same
-   * tags in the same order, which is no change. Absent, the stored ones stay. A category change
-   * must name a category a new market may be filed under; the market's current category is no
-   * change and is not checked, so a market keeps a category hidden after it was filed (#172
-   * item 1). Both land in the `market_update` record's before and after (`snapshot`).
+   * tags in the same order, which is no change. Absent, the stored ones stay; an open market keeps
+   * one at least ('required while open'). A category change must name a category a new market may
+   * be filed under; the market's current category is no change and is not checked, so a market
+   * keeps a category hidden after it was filed (#172 item 1). Both land in the `market_update`
+   * record's before and after (`snapshot`), its admin, its time and both values: an open market's
+   * category and tags change directly, with that record (#172 item 14).
    *
    * An edit that MOVES an open market publishes `market:status` after COMMIT. No live event can
    * carry a descriptive field: `market:tick` and `market:status` carry absolute numbers, and a
-   * client takes `title`, the rule items, the times, `category` and `closeAt` from a REST answer
-   * alone (`joinMarket`, market-live.ts), so without it a viewer would keep the old text and close
-   * time until something else made it refetch (A-M4-36).
+   * client takes `category`, the tags and the image from a REST answer alone (`joinMarket`,
+   * market-live.ts), so without it a viewer would keep the old ones until something else made it
+   * refetch (A-M4-36).
    */
   async update(
     adminId: string,
     id: string,
     body: WithoutExpectedAccount<UpdateMarketBody>,
   ): Promise<AdminMarket> {
-    const { market, moved, closeMoved, now } = await this.db.transaction(async (tx) => {
-      const current = await this.lockedRow(tx, id);
-      if (current.status === 'open') {
+    const { market, moved } = await this.db.transaction(async (tx) => {
+      const current = await lockedMarketRow(tx, id);
+      const isOpen = current.status === 'open';
+      if (isOpen) {
         if (body.slug !== undefined) {
           throw fieldError(
             'slug',
@@ -902,27 +736,16 @@ export class MarketAdminService {
       // replaced.
       const currentSources = await readMarketSources(tx, id);
       const before = ruleItemsOf(current, currentSources);
-      const items = withRuleItems(before, body);
       const storedTimes: MarketTimeItems = {
         ...timesOf(current),
         closeAt: current.closeAt.toISOString(),
       };
-      const times = withTimes(storedTimes, body);
-      if (body.fallbackSources !== undefined || body.fallbackCondition !== undefined) {
-        assertFallbackCondition(items);
-      }
-      const isOpen = current.status === 'open';
       if (isOpen) {
-        // What the review required must hold for as long as the market trades: a draft may keep
-        // rule items missing, no zone or no tags, a live market may not be edited down to them.
-        const missingBefore = missingRuleItems(before);
-        const newlyMissing: RequiredWhileOpen[] = missingRuleItems(items).filter(
-          (item) => !missingBefore.includes(item),
-        );
-        if (storedTimes.judgementTimeZone !== null && times.judgementTimeZone === null) {
-          newlyMissing.push('judgementTimeZone');
-        }
-        if (newlyMissing.length > 0) throw rulesRequired(newlyMissing);
+        // #80: the rule version's items stay as the open recorded them or a supplement since made
+        // them, and a live market keeps the tags its review required.
+        const stored = ruleContentOf(current, currentSources);
+        const changed = changedRuleVersionItems(stored, withContent(stored, body));
+        if (changed.length > 0) throw supplementOnlyWhileOpen(changed, current.ruleVersion);
         if (body.tags !== undefined && body.tags.length < MARKET_TAGS_MIN) {
           throw fieldError(
             'tags',
@@ -930,6 +753,13 @@ export class MarketAdminService {
             'required while open',
           );
         }
+      }
+      // An open market's version items are its stored ones (refused above otherwise), so what
+      // follows writes them for a draft alone.
+      const items = isOpen ? before : withRuleItems(before, body);
+      const times = isOpen ? storedTimes : withTimes(storedTimes, body);
+      if (!isOpen && (body.fallbackSources !== undefined || body.fallbackCondition !== undefined)) {
+        assertFallbackCondition(items);
       }
 
       // A category change takes the new category's rows FOR SHARE (`readCategorySelectability`)
@@ -948,65 +778,42 @@ export class MarketAdminService {
       // must sort after it (clock.ts).
       const now = await clockTimestamp(tx);
       const set: Partial<typeof schema.markets.$inferInsert> = { updatedAt: now };
-      if (body.title !== undefined) set.title = body.title;
-      // The rule items the body sends, as `items` holds them; the sources are written below.
-      const columns = ruleItemColumns(items);
-      if (body.description !== undefined) set.description = columns.description;
-      if (body.yesCondition !== undefined) set.yesCondition = columns.yesCondition;
-      if (body.noCondition !== undefined) set.noCondition = columns.noCondition;
-      if (body.eventDeadline !== undefined) set.eventDeadline = columns.eventDeadline;
-      if (body.fallbackCondition !== undefined) set.fallbackCondition = columns.fallbackCondition;
-      if (body.longDelayDays !== undefined) set.longDelayDays = columns.longDelayDays;
-      if (body.delayHandling !== undefined) set.delayHandling = columns.delayHandling;
       if (body.imageUrl !== undefined) set.imageUrl = body.imageUrl ?? null;
       if (body.slug !== undefined) set.slug = body.slug;
       if (categoryChange) {
         assertSelectableCategory(categoryChange.selectability);
         set.categoryId = categoryChange.id;
       }
-      if (isOpen) {
-        const fixed = FIXED_WHILE_OPEN.filter(
-          (item) => body[item] !== undefined && !sameTimeItem(item, times[item], storedTimes[item]),
-        );
-        if (fixed.length > 0) throw fixedWhileOpen(fixed);
-      }
-      const timeSet = timeColumns(times);
-      if (body.closeAt !== undefined) {
-        assertFutureCloseAt(timeSet.closeAt, now);
-        // An instant, not a minute (ADR-0098): any earlier close is an early close (#173 item 4).
-        if (isOpen && timeSet.closeAt.getTime() < current.closeAt.getTime()) {
-          throw fieldError(
-            'closeAt',
-            'The close time cannot move earlier while the market is open: close it instead',
-            'cannot move earlier while open',
-          );
+      if (!isOpen) {
+        if (body.title !== undefined) set.title = body.title;
+        // The rule items the body sends, as `items` holds them; the sources are written below.
+        const columns = ruleItemColumns(items);
+        if (body.description !== undefined) set.description = columns.description;
+        if (body.yesCondition !== undefined) set.yesCondition = columns.yesCondition;
+        if (body.noCondition !== undefined) set.noCondition = columns.noCondition;
+        if (body.eventDeadline !== undefined) set.eventDeadline = columns.eventDeadline;
+        if (body.fallbackCondition !== undefined) {
+          set.fallbackCondition = columns.fallbackCondition;
         }
-        set.closeAt = timeSet.closeAt;
+        if (body.longDelayDays !== undefined) set.longDelayDays = columns.longDelayDays;
+        if (body.delayHandling !== undefined) set.delayHandling = columns.delayHandling;
+        const timeSet = timeColumns(times);
+        if (body.closeAt !== undefined) {
+          assertFutureCloseAt(timeSet.closeAt, now);
+          set.closeAt = timeSet.closeAt;
+        }
+        assertTimeOrder({ ...times, eventDeadline: items.eventDeadline }, sentTimeFields(body));
+        if (body.scheduledOpenAt !== undefined) set.scheduledOpenAt = timeSet.scheduledOpenAt;
+        if (body.scheduledAnnouncementAt !== undefined) {
+          set.scheduledAnnouncementAt = timeSet.scheduledAnnouncementAt;
+        }
+        if (body.scheduledJudgementAt !== undefined) {
+          set.scheduledJudgementAt = timeSet.scheduledJudgementAt;
+        }
+        if (body.judgementTimeZone !== undefined) {
+          set.judgementTimeZone = timeSet.judgementTimeZone;
+        }
       }
-      const sent = sentTimeFields(body);
-      const ruled: TimeRuleInput = { ...times, eventDeadline: items.eventDeadline };
-      assertTimeOrder(ruled, sent);
-      if (
-        isOpen &&
-        times.scheduledAnnouncementAt !== null &&
-        (sent.has('closeAt') || sent.has('scheduledAnnouncementAt'))
-      ) {
-        // The gap the market's lead close was last checked against (the submission stores it, and
-        // the open keeps it); a market that has none — submitted while the setting was undecided,
-        // or opened before #22 — takes the reading now and keeps it from here on
-        // (`lead_close_gap_minutes`).
-        const gap = current.leadCloseGapMinutes ?? (await this.leadCloseGapSetting(tx));
-        assertLeadClose(ruled, gap, sent);
-        if (current.leadCloseGapMinutes === null) set.leadCloseGapMinutes = gap;
-      }
-      if (body.scheduledOpenAt !== undefined) set.scheduledOpenAt = timeSet.scheduledOpenAt;
-      if (body.scheduledAnnouncementAt !== undefined) {
-        set.scheduledAnnouncementAt = timeSet.scheduledAnnouncementAt;
-      }
-      if (body.scheduledJudgementAt !== undefined) {
-        set.scheduledJudgementAt = timeSet.scheduledJudgementAt;
-      }
-      if (body.judgementTimeZone !== undefined) set.judgementTimeZone = timeSet.judgementTimeZone;
 
       let row: MarketRow | undefined;
       try {
@@ -1076,27 +883,14 @@ export class MarketAdminService {
       // when the next editable column is added.
       return {
         market: await this.toAdminMarket(tx, row, tags, sources),
-        moved:
-          current.status === 'open' &&
-          JSON.stringify(beforeSnapshot) !== JSON.stringify(afterSnapshot),
-        // The delayed close job is keyed by market AND instant (marketCloseJobId), so a moved
-        // close time is a cancel of the old registration plus a new one, never an edit.
-        closeMoved:
-          current.status === 'open' && row.closeAt.getTime() !== current.closeAt.getTime()
-            ? { from: current.closeAt, to: row.closeAt }
-            : undefined,
-        now,
+        moved: isOpen && JSON.stringify(beforeSnapshot) !== JSON.stringify(afterSnapshot),
       };
     });
     // Outside the transaction, exactly as open/close/resolve publish: a subscriber answers
     // `market:status` with a REFETCH, and one issued before COMMIT would read the row this
-    // transaction has not written yet. The job registrations go out with it, awaited together:
-    // each is bounded on its own (MarketJobs), so a Redis that stops answering costs one bound.
-    await Promise.all([
-      moved ? this.publishStatus(market) : undefined,
-      closeMoved ? this.jobs.cancelClose(market.id, closeMoved.from) : undefined,
-      closeMoved ? this.jobs.scheduleClose(market.id, closeMoved.to, now) : undefined,
-    ]);
+    // transaction has not written yet. No job moves: a draft has none, and an open market's
+    // close moves by a supplement alone (MarketSupplementService).
+    if (moved) await this.publishStatus(market);
     return market;
   }
 
@@ -1110,7 +904,7 @@ export class MarketAdminService {
   async close(adminId: string, id: string): Promise<AdminMarket> {
     const { market, closeAt } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       if (current.status !== 'open') {
         throw new AppError('MARKET_NOT_OPEN', { message: `Market is ${current.status}` });
       }
@@ -1169,7 +963,7 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     const { market, now } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       if (current.status !== 'closed') throw wrongStatus(current.status);
       // After the market lock (clock.ts): the judgement sorts after whatever committed on this
       // market while the transaction queued, and the job id carries this instant.
@@ -1241,7 +1035,7 @@ export class MarketAdminService {
   async submit(adminId: string, id: string): Promise<AdminMarket> {
     return this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       if (current.status !== 'draft') throw wrongStatus(current.status);
       const tags = await marketTagNames(tx, id);
       const sources = await readMarketSources(tx, id);
@@ -1312,7 +1106,7 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     const { market, now, closeAt, openJobAt } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       if (current.status !== 'review') throw wrongStatus(current.status);
       const request = await pendingReview(tx, id);
       await assertReviewedRequest(tx, id, request, body.requestId);
@@ -1376,7 +1170,7 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     return this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       if (current.status !== 'review') throw wrongStatus(current.status);
       const request = await pendingReview(tx, id);
       await assertReviewedRequest(tx, id, request, body.requestId);
@@ -1431,7 +1225,7 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     const { market, from, registered } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       const from = current.status;
       if (from !== 'review' && from !== 'scheduled') throw wrongStatus(from);
       let approvalId: string;
@@ -1520,7 +1314,7 @@ export class MarketAdminService {
   ): Promise<AdminMarket> {
     const { market, now, before, openJobAt } = await this.db.transaction(async (tx) => {
       await lockMarket(tx, id);
-      const current = await this.lockedRow(tx, id);
+      const current = await lockedMarketRow(tx, id);
       if (current.status !== 'scheduled') throw wrongStatus(current.status);
       // After the market lock (clock.ts): the change sorts after whatever committed meanwhile.
       const now = await clockTimestamp(tx);
@@ -1627,7 +1421,9 @@ export class MarketAdminService {
     // One read-only REPEATABLE READ snapshot (Codex review of #78): the content and the pending
     // review request it is shown with come from one moment, so a 되돌리기, an edit and a new
     // submission committing between two reads cannot pair the old content with the new request —
-    // the `requestId` a 승인 names would then approve what the reviewer never saw.
+    // the `requestId` a 승인 names would then approve what the reviewer never saw. So do the rule
+    // versions and the waiting supplement (#80): an approval between the reads would otherwise
+    // show the new text beside the old history and request.
     return this.db.transaction(
       async (tx) => {
         const [row] = await tx
@@ -1696,9 +1492,10 @@ export class MarketAdminService {
   /**
    * The release setting `market.lead_close_gap` in minutes (#22, LEAD_CLOSE_GAP_SETTING): its value
    * in any status (proposal, test or approved, as the start grant's), null while undecided. Read
-   * through `executor` once per write, which keeps what it read (docs/SETTINGS.md).
+   * through `executor` once per write, which keeps what it read (docs/SETTINGS.md). A supplement's
+   * lead-close check reads it too (MarketSupplementService, #80).
    */
-  private async leadCloseGapSetting(executor: Executor): Promise<number | null> {
+  async leadCloseGapSetting(executor: Executor): Promise<number | null> {
     const reading = await this.settings.get(LEAD_CLOSE_GAP_SETTING, executor);
     return reading.status === 'undecided' ? null : reading.value;
   }
@@ -1713,26 +1510,16 @@ export class MarketAdminService {
     return row.leadCloseGapMinutes ?? (await this.leadCloseGapSetting(executor));
   }
 
-  /** The row under `FOR UPDATE`, or NOT_FOUND. Callers hold the market lock when it matters. */
-  private async lockedRow(tx: Tx, id: string): Promise<MarketRow> {
-    const [row] = await tx
-      .select()
-      .from(schema.markets)
-      .where(eq(schema.markets.id, id))
-      .limit(1)
-      .for('update');
-    if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    return row;
-  }
-
   /**
    * The admin detail: the public shape plus exposure figures, settlement steps, the event log,
    * what the open-items check finds missing (#17, #23, #22, every status) at the lead-close gap
-   * the market is held to (`leadCloseGap`, which it reports too) and the review (#78,
-   * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록). Reads
-   * through `executor` so a transition returns the state it just committed; `tags` are the
-   * market's names in order (`marketTagNames`) and `sources` its sources (`readMarketSources`),
-   * which every caller holds already.
+   * the market is held to (`leadCloseGap`, which it reports too), the review (#78,
+   * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록), and
+   * the rule versions with who asked for and made each and the supplement requests (#80,
+   * `readAdminRuleVersions`, `readMarketSupplement`: one statement each). Reads through
+   * `executor` so a transition returns the state it just committed; `tags` are the market's names
+   * in order (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every
+   * caller holds already. MarketSupplementService's writes answer with it too.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1740,7 +1527,7 @@ export class MarketAdminService {
    * on the answer (create, a category change, the submission, the approval) read it locked
    * themselves.
    */
-  private async toAdminMarket(
+  async toAdminMarket(
     executor: Executor,
     row: MarketRow,
     tags: string[],
@@ -1813,8 +1600,11 @@ export class MarketAdminService {
       .limit(ADMIN_EVENTS_LIMIT);
 
     const leadCloseGapMinutes = await this.leadCloseGap(executor, row);
+    const ruleVersions = await readAdminRuleVersions(executor, row.id);
     return {
-      ...toMarket(row, { slug: category.slug, nameKo: category.nameKo }, tags, sources),
+      ...toMarket(row, { slug: category.slug, nameKo: category.nameKo }, tags, sources, []),
+      // The admin's form of the history, in the public list's place (`AdminMarket.ruleVersions`).
+      ruleVersions,
       createdBy: row.createdBy,
       updatedAt: row.updatedAt.toISOString(),
       // sum() over bigint is numeric, which pg hands over as a string of digits.
@@ -1833,6 +1623,7 @@ export class MarketAdminService {
       }),
       leadCloseGapMinutes,
       review: await readMarketReview(executor, row),
+      supplement: await readMarketSupplement(executor, row.id, ruleVersions),
     };
   }
 
@@ -1842,9 +1633,10 @@ export class MarketAdminService {
    * Sent by every transition that a member can see — to or from a public status: not a review's
    * submission, 반려 or 되돌리기 from REVIEW, which no member sees; an approval or a reschedule that
    * opens the market sends one, the OPEN status with the `opened` event's key (#21) — and by an
-   * edit to an open market or a SCHEDULED market's open-time change that leaves it SCHEDULED (#78),
-   * where the status is deliberately UNCHANGED. That is not a misuse of the event but the cheapest
-   * correct delivery:
+   * edit that moves an open market's category, tags or image, a SCHEDULED market's open-time change
+   * that leaves it SCHEDULED (#78) and a supplement's approval, which moves an open or paused
+   * market's rules to a new version (#80, MarketSupplementService), where the status is
+   * deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct delivery:
    * the web answers every `market:status` by restarting `['market', id]` (realtime-provider.tsx)
    * while `applyStatus` drops an event that does not SUPERSEDE what it holds (market-live.ts) —
    * so a repeat writes nothing into a cache and still forces the REST snapshot, which is the
@@ -1862,7 +1654,7 @@ export class MarketAdminService {
    * requests per edit — the handler restarts the row AND its ticks series — bounded by editors
    * rather than traders and only for a MOUNTED observer.
    */
-  private async publishStatus(market: AdminMarket): Promise<void> {
+  async publishStatus(market: AdminMarket): Promise<void> {
     await this.publisher.publishMarket(market.id, {
       type: 'market:status',
       marketId: market.id,

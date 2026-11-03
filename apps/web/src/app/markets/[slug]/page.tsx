@@ -150,8 +150,8 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           // (nav.tsx, since M1), and MY and / both title themselves h2 under it. A second h1
           // here would give the page two, and heading level is not a place for one screen to
           // have its own convention (A-M4-31). The row fetched here is the FALLBACK, not the
-          // source: `title` is editable while a market is open, and the chart's label already
-          // follows the live row.
+          // source: `title` changes while a market is open by an approved supplement (#80), and
+          // the chart's label already follows the live row.
           question={<LiveQuestionHeading fallback={market} />}
           // 배경 (N02 §4), the market's description, when it has one.
           background={{
@@ -162,8 +162,8 @@ export default async function MarketPage({ params }: { params: Promise<{ slug: s
           // (#23), the VOID payout and the market's times with its 판정 기준 시간대 (#22, ADR-0098:
           // the times are rules, #172 item 7, so they are rows here rather than an '일정' panel).
           // The row fetched here is the FALLBACK, not the source: the section follows the live
-          // cache so an admin's edit to a rule item or a time cannot leave this panel describing
-          // a market the countdown above has already moved past.
+          // cache so a supplement's new rule version (#80) cannot leave this panel describing a
+          // market the countdown above has already moved past.
           rules={{
             md: <LiveRulesSection fallback={market} width="md" />,
             base: <LiveRulesSection fallback={market} width="base" />,

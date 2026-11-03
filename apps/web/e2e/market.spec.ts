@@ -3,12 +3,15 @@ import { copy } from '../src/copy';
 import {
   accountIdOf,
   adminAccount,
+  approveSupplementAsReviewer,
   closeMarket,
   createOpenMarket,
   detailCopyTestId,
   expect,
   expectYellowWarning,
+  leaveNoSupplement,
   REALTIME_BUDGET_MS,
+  requestSupplement,
   signIn,
   subscribed,
   test,
@@ -319,9 +322,10 @@ test.describe('시장 상세', () => {
      * this market are answered with the API's real answers and a price put in: the row is at 63%
      * after two trades, and its 1D series has the last move, 61 → 63. The server's HTML stays the
      * real, unpriced one. The price arrives the way an admin's edit reaches an open detail: the
-     * edit publishes `market:status`, and the reader refetches the row and every range of its
-     * series (realtime-provider.tsx) — the two requests these routes answer. `joinMarket` and
-     * `joinSeries` take both, since two trades supersede none.
+     * edit — a tag added, which an open market takes directly (#80: its rule version items change
+     * by a supplement alone) — publishes `market:status`, and the reader refetches the row and
+     * every range of its series (realtime-provider.tsx) — the two requests these routes answer.
+     * `joinMarket` and `joinSeries` take both, since two trades supersede none.
      */
     const market = await createOpenMarket(admin);
     const rowPath = `/api/v1/markets/${market.id}`;
@@ -366,7 +370,7 @@ test.describe('시장 상세', () => {
     await expect(page.getByTestId('watch-button')).toBeVisible();
     const edited = await admin.patch(`/api/v1/admin/markets/${market.id}`, {
       data: {
-        description: '가격을 다시 읽게 하는 편집',
+        tags: [...market.tags, `${market.tag}p`],
         expectedAccountId: await accountIdOf(admin),
       },
     });
@@ -452,7 +456,7 @@ test.describe('시장 상세', () => {
     expect(Math.abs(noAfter.y - noBox.y)).toBeLessThanOrEqual(0.5);
   });
 
-  test('배경은 쓴 줄을 지키는 글자이고(마크다운·HTML 없음), 열린 동안 고친 설명을 리프레시 없이 따른다', async ({
+  test('배경은 쓴 줄을 지키는 글자이고(마크다운·HTML 없음), 열린 동안 다른 관리자가 승인한 보충의 배경을 리프레시 없이 따른다', async ({
     admin,
     page,
   }) => {
@@ -474,14 +478,18 @@ test.describe('시장 상세', () => {
     expect(await drawn()).toBe(description);
     await expect(section.locator('b, strong, em')).toHaveCount(0);
 
-    // The description is editable while the market is open, and the section follows the live
-    // row: the edit's `market:status` refetches it (realtime-provider.tsx), with no reload.
+    // While the market is open its 배경 changes by a supplement another admin approves (#80,
+    // ADR-0101), and the section follows the live row: the approval's `market:status` refetches
+    // it (realtime-provider.tsx), with no reload. Asked for, nothing changes yet.
     await markDocument(page);
     const rewritten = '고친 배경\n새 둘째 줄';
-    const edited = await admin.patch(`/api/v1/admin/markets/${market.id}`, {
-      data: { description: rewritten, expectedAccountId: await accountIdOf(admin) },
-    });
-    expect(edited.ok(), await edited.text()).toBe(true);
+    try {
+      await requestSupplement(admin, market.id, { description: rewritten });
+      expect(await drawn()).toBe(description);
+      expect((await approveSupplementAsReviewer(admin, market.id)).description).toBe(rewritten);
+    } finally {
+      await leaveNoSupplement(admin, market.id);
+    }
     await expect.poll(drawn).toBe(rewritten);
     expect(await documentSurvived(page)).toBe(true);
   });
@@ -884,7 +892,8 @@ test.describe('시장 상세 · 375px', () => {
     // N02 §4: the first screen is 요약 and the chart, the switch under them, then the rest in the
     // list's order (lib/market-detail.ts `drawnOrder('base')`). This reader is signed out, so 내
     // 포지션's place holds the one sign-in prompt (below, '시장 상세 · 상태와 로그인'). 배경, 규칙 and
-    // 공개 판정 기록 are this width's copies (`-base`), after the switch in the DOM as on screen.
+    // 공개 판정 기록 are this width's copies (`-base`), after the switch in the DOM as on screen;
+    // 규칙 버전, the open's v1 (#80), is a card of 규칙's copy, under it.
     const switcher = page.getByTestId('market-activity-switch');
     await expectInOrder(page, [
       'market-summary',
@@ -893,6 +902,7 @@ test.describe('시장 상세 · 375px', () => {
       'market-activity-book',
       'market-background-base',
       'market-rules-base',
+      'market-rule-versions-base',
       'market-judging-record-base',
       'market-personal-signed-out',
       'market-discussion',
@@ -904,6 +914,7 @@ test.describe('시장 상세 · 375px', () => {
       copy.marketOrderBook,
       copy.marketBackground,
       copy.rulesSectionTitle,
+      copy.ruleVersionsTitle,
       copy.marketJudgingRecord,
       copy.marketDiscussion,
       copy.marketRelated,
@@ -1019,11 +1030,13 @@ test.describe('시장 상세 · 1280px', () => {
 
     // Signed out, so the one sign-in prompt where 내 포지션 would be (below, '시장 상세 · 상태와
     // 로그인'). The slots carry the owner's titles, 호가창 and 공개 판정 기록 (2026-10-17). 배경, 규칙
-    // and 공개 판정 기록 are this width's copies (`-md`), before the chart in the DOM as on screen.
+    // and 공개 판정 기록 are this width's copies (`-md`), before the chart in the DOM as on screen;
+    // 규칙 버전, the open's v1 (#80), is a card of 규칙's copy, under it.
     await expectInOrder(page, [
       'market-summary',
       'market-background-md',
       'market-rules-md',
+      'market-rule-versions-md',
       'market-judging-record-md',
       'probability-chart',
       'market-order-book',
@@ -1043,6 +1056,7 @@ test.describe('시장 상세 · 1280px', () => {
       market.title,
       copy.marketBackground,
       copy.rulesSectionTitle,
+      copy.ruleVersionsTitle,
       copy.marketJudgingRecord,
       copy.marketOrderBook,
       copy.marketRecentFills,

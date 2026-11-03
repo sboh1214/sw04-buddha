@@ -12,15 +12,18 @@ import {
   MARKET_REVIEW_APPROVAL_KIND,
   MARKET_REVIEW_CHECKLIST,
   MARKET_REVIEW_REQUEST_REASON,
+  MARKET_SUPPLEMENT_APPROVAL_KIND,
   ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PRICE_MAX,
   PRICE_MIN,
   currentConsentVersion,
   SETTLEMENT_STEPS,
+  applySupplementChanges,
   ceilToMinute,
   closedAccountEmail,
   floorToMinute,
   marketReviewExclusion,
+  marketSupplementChangesSchema,
   orphanMediaRetryHours,
   normalizeTagName,
   readPostDocument,
@@ -28,8 +31,11 @@ import {
   tagKey,
   type ImageContentType,
   type MarketResult,
+  type MarketRulesSupplementedPayload,
   type MarketSource,
   type MarketStatus,
+  type MarketSupplementChanges,
+  type MarketSupplementRequestPayload,
   type ModerationActionType,
   type ModerationReason,
   type PostDocument,
@@ -48,6 +54,12 @@ import {
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
 import { openScheduledMarket } from '../market-open.js';
+import {
+  allowRuleSupplement,
+  insertRuleVersion,
+  readRuleContent,
+  type MarketRuleVersionRow,
+} from '../market-rules-content.js';
 import { transitionMarket } from '../market-transitions.js';
 import {
   account,
@@ -61,8 +73,10 @@ import {
   ledgerEntries,
   linkFlags,
   linkUses,
+  marketEvents,
   marketLinks,
   marketProposals,
+  marketRuleVersions,
   marketSearches,
   marketSettlementSteps,
   marketSources,
@@ -226,7 +240,10 @@ export interface CreateMarketInput {
   /**
    * Default `open`. A `review` or `scheduled` market made here has no review request and no event:
    * `createMarketInReview` and `createScheduledMarket` make one as the review's routes leave it,
-   * and `createOpenedMarket` an `open` one with that history and its `opened` event (#21).
+   * and `createOpenedMarket` an `open` one with that history, its `opened` event (#21) and rule v1
+   * (#80). A market of any status made here has no rule version (`rule_version` null), as one
+   * opened before #80 (D4): its rules are not held by migration 0053's guard, and it takes no
+   * supplement.
    */
   status?: MarketStatus;
   /**
@@ -1617,9 +1634,11 @@ export async function createScheduledMarket(
  * A market opened at its scheduled open (#21, ADR-0100) as the worker's `market.open` job leaves
  * it: `createScheduledMarket`'s market, then `openScheduledMarket` in one transaction under the
  * market lock, with the row read FOR UPDATE and the database clock after it, as the worker (actor
- * null, `source: 'job'`) — the `opened` event, and the market `open` with `open_at` and
- * `updated_at` at that instant and `status_event_id` that event's. The returned `market` is the
- * row read back after the open, `request` the approved review. The scheduled open is
+ * null, `source: 'job'`) — the `opened` event, the market `open` with `open_at` and `updated_at`
+ * at that instant, `status_event_id` that event's and `rule_version` 1, and rule v1 (#80, ADR-0101:
+ * the content as the review locked it, made by no one at that instant). From then on its rules
+ * change only by a supplement (`createRuleSupplement`). The returned `market` is the row read back
+ * after the open, `request` the approved review. The scheduled open is
  * createScheduledMarket's (a minute before now) unless given: one still ahead, or a close that has
  * come, opens nothing and the factory throws with the skip reason. A test that needs an open
  * market and none of its history uses `createMarket`.
@@ -1648,6 +1667,287 @@ export async function createOpenedMarket(
     }
     return { market: result.row, request };
   });
+}
+
+/** A rule version (#80): a row of `market_rule_versions`. */
+export type RuleVersionRow = MarketRuleVersionRow;
+
+/** The 보충 문구 a supplement factory writes unless given: a new 배경 (#80). */
+const supplementedDescription = () => `보충한 배경 ${tag()}: 오탈자를 고치고 문장을 다듬었다.`;
+
+/** The reason a supplement factory writes unless given (the request's reason). */
+const SUPPLEMENT_REASON = '오탈자 수정';
+
+/** The 정산 영향 검토 a supplement factory writes unless given. */
+const SETTLEMENT_IMPACT = '판정 기준과 결과의 뜻이 바뀌지 않아 정산에 영향이 없다.';
+
+export interface CreateSupplementRequestInput {
+  /** The market: one with a rule version (`createOpenedMarket`'s, or one supplemented since). */
+  marketId: string;
+  /**
+   * 보충 문구 (#172 item 15): the new value of each item to change, in the request body's shapes
+   * (`marketSupplementChangesSchema` of @buddha/shared, parsed here — texts trimmed, an unknown or
+   * fixed item refused). Default: a new 배경. Not checked against the market (the route's item
+   * rules): a test gives what the route would take, or tests the route's refusal of it.
+   */
+  changes?: MarketSupplementChanges;
+  /** The version the text was written against. Default: the market's current one. */
+  baseVersion?: number;
+  /** The requesting admin. Default: a fresh admin. */
+  requestedBy?: string;
+  /** The supplement's reason — the request's reason. Default '오탈자 수정'. */
+  reason?: string;
+  /** 정산 영향 검토. Default: a sentence saying the meaning does not change. */
+  settlementImpact?: string;
+  /** The request's instant. Default: the database clock. */
+  requestedAt?: Date;
+  /**
+   * A 반려 by another admin instead (`createApprovalRequest`'s decision), a millisecond after the
+   * request unless `at` is given. No record of its reason from the list: that is the route's
+   * `admin_actions` row, which no factory writes. Left out with `retracted`: pending.
+   */
+  rejected?: { by: string; reason?: string; at?: Date };
+  /** The requester's 철회 instead, a millisecond after the request unless `at` is given. */
+  retracted?: { at?: Date };
+}
+
+/**
+ * A supplement request (#80, ADR-0101) as `POST /admin/markets/:id/supplements` leaves it: a
+ * `market_supplement` approval request about the market (target `market`, payload
+ * `{baseVersion, changes, settlementImpact}` — MarketSupplementRequestPayload — and the
+ * supplement's reason as the request's), pending, or rejected or retracted as asked. Changes
+ * nothing of the market and writes no event, as the route; nor its `market_supplement_request`
+ * record, as no factory writes a route's. Throws for a market with no rule version when no
+ * `baseVersion` is given. `createRuleSupplement` makes an approved one, with its version.
+ */
+export async function createSupplementRequest(db: Db, input: CreateSupplementRequestInput) {
+  const changes = marketSupplementChangesSchema.parse(
+    input.changes ?? { description: supplementedDescription() },
+  );
+  let baseVersion = input.baseVersion;
+  if (baseVersion === undefined) {
+    const [market] = await db
+      .select({ ruleVersion: markets.ruleVersion })
+      .from(markets)
+      .where(eq(markets.id, input.marketId));
+    if (!market) throw new Error(`createSupplementRequest: market ${input.marketId} not found`);
+    if (market.ruleVersion === null) {
+      throw new Error('createSupplementRequest: the market has no rule version');
+    }
+    baseVersion = market.ruleVersion;
+  }
+  const requestedBy = input.requestedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const payload: MarketSupplementRequestPayload = {
+    baseVersion,
+    changes,
+    settlementImpact: input.settlementImpact ?? SETTLEMENT_IMPACT,
+  };
+  return createApprovalRequest(db, {
+    kind: MARKET_SUPPLEMENT_APPROVAL_KIND,
+    targetType: 'market',
+    targetId: input.marketId,
+    payload,
+    requestedBy,
+    reason: input.reason ?? SUPPLEMENT_REASON,
+    ...(input.requestedAt === undefined ? {} : { requestedAt: input.requestedAt }),
+    ...(input.rejected === undefined
+      ? {}
+      : { decision: { status: 'rejected', ...input.rejected } }),
+    ...(input.retracted === undefined ? {} : { retracted: input.retracted }),
+  });
+}
+
+export interface CreateRuleSupplementInput extends Omit<
+  CreateSupplementRequestInput,
+  'baseVersion' | 'rejected' | 'retracted'
+> {
+  /**
+   * The approving admin, never the requester: the factory throws, as the route refuses. Default: a
+   * fresh admin.
+   */
+  approvedBy?: string;
+  /** The approval's reason (the request's decision reason). Default '보충 승인'. */
+  approvalReason?: string;
+  /** The approval's instant, the version's. Default: a millisecond after the request. */
+  approvedAt?: Date;
+}
+
+/** A supplement `createRuleSupplement` approved: the market after it, the request, the version. */
+export interface RuleSupplement {
+  /** The market read back after the approval. */
+  market: typeof markets.$inferSelect;
+  /** The `market_supplement` request, approved. */
+  request: typeof approvalRequests.$inferSelect;
+  /** The version the approval made. */
+  version: RuleVersionRow;
+}
+
+/**
+ * A supplement approved (#80, ADR-0101; ADR-0093 decision 2 #172 item 15) as `POST
+ * /admin/markets/:id/supplements/:requestId/approve` leaves it, against the market's current
+ * version, in one transaction under the market lock with the row FOR UPDATE: the request
+ * (`createSupplementRequest`'s) approved by another admin with a reason; the market's new text —
+ * the changed columns and, when the sources change, its `market_sources` rows, written with the
+ * guard opened for it (`allowRuleSupplement`) — with `rule_version` one more and `updated_at` the
+ * approval's instant; the version (`insertRuleVersion`: the full text read back, the changed items,
+ * the reason, the review, the request, the requester, the approver as its maker, at that instant);
+ * and the one `rules_supplemented` event (actor the approver, no status, payload `{version,
+ * approvalId, items, reason, requestedBy}`). No `market_supplement_approve` record, and nothing
+ * published or rescheduled (the close job is the API's).
+ *
+ * The request's instant is the database clock, and never at or before the market's last write, so
+ * a version follows the one before. The route's checks are not made — the status, the close, the
+ * item rules, the lead close: a test gives changes the route would take. Throws, writing nothing,
+ * for a market with no rule version, an approval by the requester, and changes that change nothing
+ * (`insertRuleVersion`).
+ */
+export async function createRuleSupplement(
+  db: Db,
+  input: CreateRuleSupplementInput,
+): Promise<RuleSupplement> {
+  const { marketId } = input;
+  const changes = marketSupplementChangesSchema.parse(
+    input.changes ?? { description: supplementedDescription() },
+  );
+  const requestedBy = input.requestedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const approvedBy = input.approvedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  if (approvedBy === requestedBy) {
+    throw new Error('createRuleSupplement: the requester never approves the supplement');
+  }
+  const reason = input.reason ?? SUPPLEMENT_REASON;
+  const settlementImpact = input.settlementImpact ?? SETTLEMENT_IMPACT;
+  return db.transaction(async (tx) => {
+    await lockMarket(tx, marketId);
+    const [current] = await tx.select().from(markets).where(eq(markets.id, marketId)).for('update');
+    if (!current) throw new Error(`createRuleSupplement: market ${marketId} not found`);
+    if (current.ruleVersion === null) {
+      throw new Error('createRuleSupplement: the market has no rule version');
+    }
+    const baseVersion = current.ruleVersion;
+    const requestedAt =
+      input.requestedAt ??
+      new Date(Math.max((await clockTimestamp(tx)).getTime(), current.updatedAt.getTime() + 1));
+    const at = input.approvedAt ?? new Date(requestedAt.getTime() + 1);
+    const request = await createSupplementRequest(tx as unknown as Db, {
+      marketId,
+      changes,
+      baseVersion,
+      requestedBy,
+      reason,
+      settlementImpact,
+      requestedAt,
+    });
+    const [approved] = await tx
+      .update(approvalRequests)
+      .set({
+        status: 'approved',
+        decidedBy: approvedBy,
+        decisionReason: input.approvalReason ?? '보충 승인',
+        decidedAt: at,
+      })
+      .where(eq(approvalRequests.id, request.id))
+      .returning();
+
+    const after = applySupplementChanges(await readRuleContent(tx, marketId), changes);
+    const instant = (iso: string | null) => (iso === null ? null : new Date(iso));
+    const version = baseVersion + 1;
+    await allowRuleSupplement(tx, marketId);
+    await tx
+      .update(markets)
+      .set({
+        title: after.title,
+        description: after.description,
+        yesCondition: after.yesCondition,
+        noCondition: after.noCondition,
+        eventDeadline: instant(after.eventDeadline),
+        fallbackCondition: after.fallbackCondition,
+        longDelayDays: after.longDelayDays,
+        delayHandling: after.delayHandling,
+        closeAt: new Date(after.closeAt),
+        scheduledAnnouncementAt: instant(after.scheduledAnnouncementAt),
+        judgementTimeZone: after.judgementTimeZone,
+        ruleVersion: version,
+        updatedAt: at,
+      })
+      .where(eq(markets.id, marketId));
+    if (changes.primarySource !== undefined || changes.fallbackSources !== undefined) {
+      // The whole set, as the API's `replaceMarketSources` writes it: no gap but a missing primary.
+      await tx.delete(marketSources).where(eq(marketSources.marketId, marketId));
+      const sources = [
+        ...(after.primarySource === null ? [] : [{ ...after.primarySource, priority: 0 }]),
+        ...after.fallbackSources.map((source, index) => ({ ...source, priority: index + 1 })),
+      ];
+      if (sources.length > 0) {
+        await tx.insert(marketSources).values(sources.map((source) => ({ marketId, ...source })));
+      }
+    }
+    const row = await insertRuleVersion(tx, {
+      marketId,
+      version,
+      createdAt: at,
+      createdBy: approvedBy,
+      supplement: { approvalId: request.id, requestedBy, reason, settlementImpact },
+    });
+    const payload: MarketRulesSupplementedPayload = {
+      version,
+      approvalId: request.id,
+      items: row.changedItems as MarketRulesSupplementedPayload['items'],
+      reason,
+      requestedBy,
+    };
+    await tx.insert(marketEvents).values({
+      marketId,
+      type: 'rules_supplemented',
+      actorId: approvedBy,
+      payload: { ...payload },
+      createdAt: at,
+    });
+    const [market] = await tx.select().from(markets).where(eq(markets.id, marketId));
+    return { market: market!, request: approved!, version: row };
+  });
+}
+
+export interface CreateSupplementedMarketInput extends CreateScheduledMarketInput {
+  /**
+   * The supplements approved one after another, each making the next version (v2, v3…), as
+   * `createRuleSupplement` takes them. Default: one, a new 배경.
+   */
+  supplements?: Omit<CreateRuleSupplementInput, 'marketId'>[];
+}
+
+/** An opened market with approved supplements (#80): the review as `ReviewedMarket`, and more. */
+export interface SupplementedMarket extends ReviewedMarket {
+  /** Each supplement's approved request and the version it made, in order. */
+  supplements: { request: typeof approvalRequests.$inferSelect; version: RuleVersionRow }[];
+  /** Every version of the market, v1 first. */
+  versions: RuleVersionRow[];
+}
+
+/**
+ * An opened market whose rules were supplemented (#80, ADR-0101), for the tests of the version
+ * history and of a later supplement: `createOpenedMarket`'s market (v1 at the open), then each of
+ * `supplements` approved in turn by `createRuleSupplement` (v2, v3…). `market` is the row after
+ * the last; `request` is the review's, as `createOpenedMarket` returns it.
+ */
+export async function createSupplementedMarket(
+  db: Db,
+  input: CreateSupplementedMarketInput = {},
+): Promise<SupplementedMarket> {
+  const { supplements = [{}], ...openedInput } = input;
+  const opened = await createOpenedMarket(db, openedInput);
+  let market = opened.market;
+  const made: SupplementedMarket['supplements'] = [];
+  for (const supplement of supplements) {
+    const result = await createRuleSupplement(db, { ...supplement, marketId: market.id });
+    market = result.market;
+    made.push({ request: result.request, version: result.version });
+  }
+  const versions = await db
+    .select()
+    .from(marketRuleVersions)
+    .where(eq(marketRuleVersions.marketId, market.id))
+    .orderBy(marketRuleVersions.version);
+  return { market, request: opened.request, supplements: made, versions };
 }
 
 export interface CreateReportInput {

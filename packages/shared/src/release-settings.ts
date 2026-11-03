@@ -193,12 +193,13 @@ export const START_COIN_SETTING = defineReleaseSetting({
  * 선행 마감 최소 간격 (#22, ADR-0098; ADR-0093 decision 2 #172 item 13 and result 3): how many
  * minutes a market with an announcement time (발표 예정 시각) must close before it — close ≤
  * announcement − gap, in whole minutes (`timeRuleViolations`'s `leadClose`). The open-items check
- * reads it (`leadClose`), and so does an open market's close or announcement edit when the market
- * has no gap of its own; a draft's create or edit is never refused for it. Whatever the status, a
- * value is used (as the start grant's); while it is undecided a market with an announcement fails
- * `leadClose` and cannot be submitted for review, and one with '없음' is not concerned. The review
- * submission stores the reading on the market (`markets.lead_close_gap_minutes`, #78), and its
- * later checks keep using it — the approval, and an open market's edits; the open neither checks
+ * reads it (`leadClose`), and so does a supplement that changes an open market's close or
+ * announcement (#80) when the market has no gap of its own; a draft's create or edit is never
+ * refused for it. Whatever the status, a value is used (as the start grant's); while it is
+ * undecided a market with an announcement fails `leadClose` and cannot be submitted for review, and
+ * one with '없음' is not concerned. The review submission stores the reading on the market
+ * (`markets.lead_close_gap_minutes`, #78), and its later checks keep using it — the approval, and
+ * an open market's supplements, at the request and again at the approval; the open neither checks
  * nor writes it (#21, ADR-0100; ADR-0098 7-6): work under way keeps the value it started with
  * (docs/SETTINGS.md). The design proposal is 60. An integer, 0 (the close at or before the
  * announcement) to LEAD_CLOSE_GAP_MAX_MINUTES.

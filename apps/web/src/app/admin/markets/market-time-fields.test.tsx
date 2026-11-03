@@ -14,6 +14,7 @@ import {
 interface DrawOptions {
   disabled?: boolean;
   fixed?: boolean;
+  closeLocked?: boolean;
   leadCloseGapMinutes?: number | null;
 }
 
@@ -25,6 +26,7 @@ function Fields({ values, options }: { values: MarketFormValues; options: DrawOp
       form={form}
       disabled={options.disabled ?? false}
       fixed={options.fixed}
+      closeLocked={options.closeLocked}
       leadCloseGapMinutes={options.leadCloseGapMinutes}
     />
   );
@@ -110,7 +112,7 @@ describe('MarketTimeFields', () => {
     expect(byTestId(draw(), 'market-judgement-time-zone')).toBeUndefined();
   });
 
-  it('locks the scheduled open and judgement on an open market, and only those (C5)', () => {
+  it('locks the scheduled open and judgement past the open (the supplement, #80), only those (C5)', () => {
     const open = draw({ fixed: true });
     expect(byTestId(open, 'market-scheduled-open-at')?.attributes).toHaveProperty('disabled');
     expect(byTestId(open, 'market-scheduled-judgement-at')?.attributes).toHaveProperty('disabled');
@@ -127,6 +129,21 @@ describe('MarketTimeFields', () => {
     expect(draft).not.toContain(copy.adminMarketTimeFixedHint);
   });
 
+  it('locks the close with its own hint on a PAUSED market’s supplement (#80, #172 item 14)', () => {
+    const paused = draw({ fixed: true, closeLocked: true });
+    expect(byTestId(paused, 'market-close-at')?.attributes).toHaveProperty('disabled');
+    expect(paused).toContain(copy.adminMarketCloseLockedPausedHint);
+    expect(paused).not.toContain(copy.adminMarketCloseAtHint);
+    // The announcement and the zone stay a supplement's.
+    expect(byTestId(paused, 'market-scheduled-announcement-at')?.attributes).not.toHaveProperty(
+      'disabled',
+    );
+    // An OPEN market's close moves later, with the usual hint.
+    const open = draw({ fixed: true });
+    expect(byTestId(open, 'market-close-at')?.attributes).not.toHaveProperty('disabled');
+    expect(open).not.toContain(copy.adminMarketCloseLockedPausedHint);
+  });
+
   it('shows the gap the edited market is held to under the announcement, or 미정', () => {
     // 시장 만들기 knows no market's gap.
     expect(byTestId(draw(), 'market-lead-close-gap')).toBeUndefined();
@@ -139,9 +156,18 @@ describe('MarketTimeFields', () => {
   });
 
   it('is off as a whole when the market is locked', () => {
-    expect(byTestId(draw({ disabled: true }), 'market-times')?.attributes).toHaveProperty(
-      'disabled',
-    );
+    const locked = draw({ disabled: true });
+    expect(byTestId(locked, 'market-times')?.attributes).toHaveProperty('disabled');
+    // Each input is drawn off too: a field's own `disabled` (fixed, closeLocked) would otherwise
+    // override the fieldset's, and the input would look editable while the fieldset holds it.
+    for (const id of [
+      'market-scheduled-open-at',
+      'market-close-at',
+      'market-scheduled-announcement-at',
+      'market-scheduled-judgement-at',
+    ]) {
+      expect(byTestId(locked, id)?.attributes, id).toHaveProperty('disabled');
+    }
   });
 });
 

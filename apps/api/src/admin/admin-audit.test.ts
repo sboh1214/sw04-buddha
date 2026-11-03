@@ -6,6 +6,7 @@
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
  * `admin-markets-resolve.controller.test` for the market transitions,
  * `admin-markets-review.controller.test` for the market review (#78),
+ * `admin-markets-supplement.controller.test` for the rule supplements (#80),
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
@@ -57,6 +58,12 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'POST /admin/markets/:id/reject': 'market_reject',
   'POST /admin/markets/:id/revert': 'market_revert',
   'POST /admin/markets/:id/reschedule': 'market_reschedule',
+  // #80: a rule supplement is a request, then another admin's decision or its requester's
+  // retraction; only the approval also writes the market's event.
+  'POST /admin/markets/:id/supplements': 'market_supplement_request',
+  'POST /admin/markets/:id/supplements/:requestId/approve': 'market_supplement_approve',
+  'POST /admin/markets/:id/supplements/:requestId/reject': 'market_supplement_reject',
+  'POST /admin/markets/:id/supplements/:requestId/retract': 'market_supplement_retract',
   'POST /admin/markets/:id/close': 'market_close',
   'POST /admin/markets/:id/resolve': 'market_resolve',
   'POST /admin/markets/:id/related': 'market_link',

@@ -541,10 +541,12 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         // The reducer above has already moved the badge and the notice — unless the status is one
         // no member sees (a scheduled market sent back to a draft, #78), which it leaves alone and
         // the refetch below answers with NOT_FOUND; this fills in what the event does not carry.
-        // `create` publishes nothing, and an EDIT to an open market publishes this event with the
-        // status unchanged for exactly this refetch — no event carries `closeAt`, `title` or a rule
-        // item (#23), and `applyStatus` drops a repeat on its key, so the restart below is the
-        // whole delivery of an admin edit (A-M4-36).
+        // `create` publishes nothing, and an EDIT to an open market (its category, tags or image)
+        // and the APPROVAL of a supplement (#80, ADR-0101: a new rule version — the title, the
+        // rules, the close) publish this event with the status unchanged for exactly this refetch
+        // — no event carries `closeAt`, `title`, a rule item (#23) or the version history, and
+        // `applyStatus` drops a repeat on its key, so the restart below is the whole delivery of
+        // an admin edit or a supplement (A-M4-36).
         //
         // It is a SANCTIONED refetch, and this file has kept a count of those twice now and been
         // wrong twice — "the second and last" became three, and three became six. So here is the

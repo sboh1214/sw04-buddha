@@ -57,6 +57,10 @@ const base: AdminMarket = {
   statusEventId: '1',
   events: [],
   tags: ['금리'],
+  // No rule version (#80): not opened yet, or opened before #80 (D4).
+  ruleVersion: null,
+  ruleVersions: [],
+  supplement: { pending: null, log: [] },
   missingOpenItems: [],
   leadCloseGapMinutes: 60,
   review: { pending: null, createdBy: CREATOR, editors: [EDITOR], sameCondition: [], log: [] },

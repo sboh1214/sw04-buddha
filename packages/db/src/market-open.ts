@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
+import { insertRuleVersion } from './market-rules-content.js';
 import { transitionMarket } from './market-transitions.js';
 import type * as schema from './schema/index.js';
 import { markets } from './schema/index.js';
@@ -37,7 +38,13 @@ export interface OpenScheduledMarketInput {
 }
 
 export type OpenScheduledMarketResult =
-  | { opened: true; statusEventId: number; row: MarketRow }
+  | {
+      opened: true;
+      statusEventId: number;
+      row: MarketRow;
+      /** The rule version the open recorded: 1, the market's `rule_version` (#80). */
+      ruleVersion: number;
+    }
   | { opened: false; reason: OpenSkipReason };
 
 /**
@@ -47,7 +54,8 @@ export type OpenScheduledMarketResult =
  * - the approval that finds the scheduled open already come ('승인하는 즉시 연다', `approval`);
  * - the reschedule to an instant already come (decision 3 '#21 앞당긴 개장': there is no early
  *   open — an admin moves the scheduled open earlier instead, `reschedule`).
- * #80's rules v1 and #72's liquidity config freeze, both taken at the open, hook in here.
+ * Rule v1 (#80) is recorded here, and #72's liquidity config freeze, also taken at the open, hooks
+ * in here too.
  *
  * Call it under `lockMarket`, with `market` read `FOR UPDATE` after the lock and `now` the DB
  * clock read after that, in the caller's transaction. It opens a market that is SCHEDULED, whose
@@ -64,10 +72,18 @@ export type OpenScheduledMarketResult =
  *
  * The open is `transitionMarket`'s: the `opened` event — from `scheduled`, to `open`, the actor,
  * payload `{openAt, closeAt, source}` with the instants as ISO — and the row with `open_at`,
- * `updated_at` and the event's instant all `now` and `status_event_id` that event's id. Returns
- * the id and the row read back after the write; the caller publishes `market:status` after
- * COMMIT. An actor that does not match the source (an admin for the job, none for an admin's
- * action) is a caller's bug and throws before anything is judged.
+ * `updated_at` and the event's instant all `now`, `status_event_id` that event's id and
+ * `rule_version` 1. Then, in the opened branch only, rule v1 (#80, ADR-0101; ADR-0093 decision 2
+ * #172 item 6 '개장할 때 잠긴 내용을 규칙 v1로 기록한다'): `insertRuleVersion` records the content
+ * locked at the review — read back from the row and its sources after the write, blank items
+ * included (nothing is checked again) — at `now`, made by the actor (null for the job). The
+ * `opened` event is v1's record: it writes no event of its own, and its payload is unchanged. A
+ * skip writes no version, and a second run is a skip (`not_scheduled`), so a market never has two.
+ * From then on its rules change by an approved supplement alone (migration 0053's guard).
+ *
+ * Returns the event's id, the row read back after the writes and the version; the caller publishes
+ * `market:status` after COMMIT. An actor that does not match the source (an admin for the job,
+ * none for an admin's action) is a caller's bug and throws before anything is judged.
  */
 export async function openScheduledMarket(
   tx: Executor,
@@ -92,9 +108,16 @@ export async function openScheduledMarket(
     actorId,
     payload: { openAt: now.toISOString(), closeAt: market.closeAt.toISOString(), source },
     at: now,
-    set: { openAt: now },
+    set: { openAt: now, ruleVersion: 1 },
+  });
+  await insertRuleVersion(tx, {
+    marketId: market.id,
+    version: 1,
+    createdAt: now,
+    createdBy: actorId,
+    supplement: null,
   });
   const [row] = await tx.select().from(markets).where(eq(markets.id, market.id));
   if (!row) throw new Error(`Market ${market.id} was opened but could not be read back`);
-  return { opened: true, statusEventId, row };
+  return { opened: true, statusEventId, row, ruleVersion: 1 };
 }

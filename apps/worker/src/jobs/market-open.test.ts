@@ -2,9 +2,9 @@
  * market.open integration test (#21, ADR-0100) against the docker `test` profile, as
  * market-close.test.ts: the database through the packages/db harness, Redis through
  * TEST_REDIS_URL (the events an open publishes are read back on a raw subscriber). What the open
- * judges is `openScheduledMarket`'s, tested in packages/db (market-open.test.ts); this covers the
- * worker's transaction around it, the publish, and the scan's selection and order. Skips when
- * either is unset, exactly like ledger-audit.test.ts.
+ * judges and writes — rule v1 included (#80) — is `openScheduledMarket`'s, tested in packages/db
+ * (market-open.test.ts); this covers the worker's transaction around it, the publish, and the
+ * scan's selection and order. Skips when either is unset, exactly like ledger-audit.test.ts.
  */
 import { randomUUID } from 'node:crypto';
 import { schema } from '@buddha/db';
@@ -73,6 +73,15 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
       .orderBy(asc(schema.marketEvents.id));
   }
 
+  /** The market's rule versions (#80), v1 first. */
+  async function versionsOf(marketId: string) {
+    return t.db
+      .select()
+      .from(schema.marketRuleVersions)
+      .where(eq(schema.marketRuleVersions.marketId, marketId))
+      .orderBy(asc(schema.marketRuleVersions.version));
+  }
+
   /** A subscriber on the market's channel; messages land in the returned array. */
   async function subscribeTo(marketId: string) {
     const subscriber = new Redis(process.env.TEST_REDIS_URL!, { maxRetriesPerRequest: 1 });
@@ -126,6 +135,27 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
         closeAt: market.closeAt,
         leadCloseGapMinutes: market.leadCloseGapMinutes,
       });
+      // Rule v1 in the same transaction (#80, ADR-0101; ADR-0093 decision 2 #172 item 6): the
+      // market at version 1, its row made by the worker (null) at the open's instant, holding the
+      // content the review locked — and no event of its own (the list above).
+      expect(row.ruleVersion).toBe(1);
+      const versions = await versionsOf(market.id);
+      expect(versions).toEqual([
+        expect.objectContaining({
+          version: 1,
+          createdBy: null,
+          createdAt: result.openedAt,
+          changedItems: [],
+          approvalId: null,
+          reason: null,
+        }),
+      ]);
+      expect(versions[0]!.content).toMatchObject({
+        title: market.title,
+        yesCondition: market.yesCondition,
+        scheduledOpenAt: market.scheduledOpenAt!.toISOString(),
+        closeAt: market.closeAt.toISOString(),
+      });
 
       await waitForMessages(received, 1, 'market:status of the open');
       await sleep(100);
@@ -157,6 +187,7 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
         'submitted',
         'approved',
       ]);
+      expect(await versionsOf(market.id)).toEqual([]);
       await sleep(100);
       expect(received).toEqual([]);
     } finally {
@@ -208,6 +239,7 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
         'submitted',
         'approved',
       ]);
+      expect(await versionsOf(market.id)).toEqual([]);
       await sleep(100);
       expect(received).toEqual([]);
     } finally {
@@ -235,6 +267,8 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
       expect((await eventsOf(market.id)).filter((event) => event.type === 'opened')).toHaveLength(
         1,
       );
+      // Nor a second v1 (#80): the repeat finds the market OPEN before it writes anything.
+      expect((await versionsOf(market.id)).map((version) => version.version)).toEqual([1]);
       await sleep(100);
       expect(received).toEqual([]);
     } finally {
@@ -290,6 +324,11 @@ describe.skipIf(!hasTestInfra)('market.open (integration)', () => {
       for (const market of [closePassed, noScheduledOpen, draft, review, open]) {
         expect(await eventsOf(market.id)).toEqual([]);
       }
+      // A version for each market it opened, none for the rest (#80).
+      for (const market of [earlier, later]) {
+        expect((await versionsOf(market.id)).map((version) => version.createdBy)).toEqual([null]);
+      }
+      for (const market of left) expect(await versionsOf(market.id)).toEqual([]);
 
       await waitForMessages(subscribers[0]!.received, 1, 'status of the later market');
       await waitForMessages(subscribers[1]!.received, 1, 'status of the earlier market');

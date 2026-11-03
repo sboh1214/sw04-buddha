@@ -36,6 +36,14 @@ import { approvalStatusEnum } from './enums.js';
  * the CHECK below holds the last); a 되돌리기 in REVIEW retracts it when its requester sends the
  * market back, and rejects it with the 되돌리기's reason when another admin does. The market's
  * `market_events` rows name the request (`approvalId`); nothing references it by a foreign key.
+ *
+ * The rule supplement (#80, ADR-0101; ADR-0093 decision 2 #172 item 15) — `kind`
+ * `market_supplement` (target `market`, the market's id as text; payload `{baseVersion, changes,
+ * settlementImpact}`, the supplement's reason the request's): at most one waits per market, which
+ * the API holds under the market lock. An admin other than its requester approves it — the
+ * market's next rule version, whose row references it (`market_rule_versions.approval_id`,
+ * migration 0053) — or rejects it, and its requester may retract it, in any status. #184's
+ * retention deletes none of them (migration 0044 names the account restriction's kinds alone).
  */
 export const approvalRequests = pgTable(
   'approval_requests',

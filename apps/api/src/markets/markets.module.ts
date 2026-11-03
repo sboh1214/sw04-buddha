@@ -7,8 +7,13 @@ import { JobsModule } from '../jobs/jobs.module.js';
 import { RealtimeModule } from '../realtime/realtime.module.js';
 import { ReleaseSettingsModule } from '../release-settings/release-settings.module.js';
 import { AdminMarketReviewsController } from './admin-market-reviews.controller.js';
+import {
+  AdminMarketSupplementQueueController,
+  AdminMarketSupplementsController,
+} from './admin-market-supplements.controller.js';
 import { AdminMarketsController } from './admin-markets.controller.js';
 import { MarketAdminService } from './market-admin.service.js';
+import { MarketSupplementService } from './market-supplement.service.js';
 import { MarketService } from './market.service.js';
 import { CategoriesController, MarketsController } from './markets.controller.js';
 import { RelatedMarketsService } from './related-markets.service.js';
@@ -19,10 +24,12 @@ import { RelatedMarketsService } from './related-markets.service.js';
  * Guards are instantiated by the module that declares the controller, so DbModule and
  * RedisModule are imported for AdminGuard (role lookup through the Redis cache). JobsModule
  * is the M5 producer the transitions hand their open/close/finalize jobs to; ReleaseSettingsModule
- * reads the lead-close gap `market.lead_close_gap` the open-items check and an open market's close
- * edit hold a market to (#22, ADR-0098). ApprovalsModule is the two-person rule (#171) the review
- * takes its `market_review` requests through (#78, ADR-0099), and AdminMarketReviewsController the
- * 검수 대기 queue.
+ * reads the lead-close gap `market.lead_close_gap` the open-items check and a supplement's close or
+ * announcement change hold a market to (#22, ADR-0098). ApprovalsModule is the two-person rule
+ * (#171) the review takes its `market_review` requests through (#78, ADR-0099), and
+ * AdminMarketReviewsController the 검수 대기 queue; the rule supplement (#80, ADR-0101) takes its
+ * `market_supplement` requests through it too (MarketSupplementService), with its routes and its
+ * 규칙 보충 대기 queue.
  */
 @Module({
   imports: [
@@ -39,8 +46,10 @@ import { RelatedMarketsService } from './related-markets.service.js';
     CategoriesController,
     AdminMarketsController,
     AdminMarketReviewsController,
+    AdminMarketSupplementsController,
+    AdminMarketSupplementQueueController,
   ],
-  providers: [MarketService, MarketAdminService, RelatedMarketsService],
+  providers: [MarketService, MarketAdminService, MarketSupplementService, RelatedMarketsService],
   // MarketAdminService for the proposals (#77): a 채택 makes its draft through `createIn`.
   exports: [MarketService, MarketAdminService],
 })

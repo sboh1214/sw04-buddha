@@ -5,6 +5,7 @@ import {
   MARKET_LONG_DELAY_DAYS_MIN,
   MARKET_TAGS_MAX,
   MARKET_TAGS_MIN,
+  PAUSED_SUPPLEMENT_ITEMS,
   TAG_NAME_MAX,
   type TimeRuleField,
   marketTagsSchema,
@@ -27,13 +28,18 @@ import {
   formTimes,
   isHttpUrl,
   judgementTimeZoneUnconfirmed,
+  formRuleContent,
   marketFormSchema,
   marketToFormValues,
   resolveMarketFormSchema,
+  restoreFixedClose,
   toCreateMarketBody,
   sameTags,
+  supplementCloseFixed,
+  supplementFormSchema,
   timeRuleDeps,
   toResolveMarketBody,
+  toSupplementChanges,
   toUpdateMarketBody,
   withJudgementTimeZonePrefilled,
 } from './market-form';
@@ -627,6 +633,85 @@ describe('toUpdateMarketBody', () => {
   });
 });
 
+describe('toSupplementChanges (#80, ADR-0101)', () => {
+  // The market as a supplement's form opens on it (`marketToFormValues`).
+  const opened: MarketFormValues = { ...valid, tags: ['금리'] };
+
+  it('is empty when nothing changed — an item typed back to what it was is no change', () => {
+    expect(toSupplementChanges(opened, opened)).toEqual({});
+    expect(
+      toSupplementChanges(
+        { ...opened, title: `  ${opened.title}  `, description: '배경 ', longDelayDays: ' 14' },
+        opened,
+      ),
+    ).toEqual({});
+  });
+
+  it('sends each changed supplement item with its new value, as the update body takes it', () => {
+    expect(
+      toSupplementChanges(
+        {
+          ...opened,
+          title: '  새 질문  ',
+          description: '',
+          primarySourceUrl: 'https://www.bok.or.kr/new',
+          closeAt: '2026-10-02T09:00',
+          scheduledAnnouncementAt: '2026-10-03T09:00',
+          judgementTimeZone: 'America/New_York',
+        },
+        opened,
+      ),
+    ).toEqual({
+      title: '새 질문',
+      description: null,
+      primarySource: { name: '한국은행', url: 'https://www.bok.or.kr/new' },
+      closeAt: '2026-10-02T00:00:00.000Z',
+      scheduledAnnouncementAt: '2026-10-03T00:00:00.000Z',
+      judgementTimeZone: 'America/New_York',
+    });
+  });
+
+  it('never sends the scheduled open or judgement, nor the category, the tags or the image', () => {
+    const elsewhere: MarketFormValues = {
+      ...opened,
+      scheduledOpenAt: '2026-09-08T09:00',
+      scheduledJudgementAt: '2026-11-03T10:00',
+      categoryId: '9',
+      tags: [],
+      imageUrl: '',
+    };
+    expect(toSupplementChanges(elsewhere, opened)).toEqual({});
+  });
+
+  it('sends the fallbacks as their whole ordered list, and the condition only once it changed', () => {
+    const fallback = { name: '연합뉴스', url: 'https://yna.co.kr' };
+    const withFallback = { ...opened, fallbackSources: [fallback], fallbackCondition: '없으면' };
+    const second = { name: '통계청', url: 'https://kostat.go.kr' };
+    expect(
+      toSupplementChanges({ ...withFallback, fallbackSources: [second, fallback] }, withFallback),
+    ).toEqual({ fallbackSources: [second, fallback] });
+    // The last one gone, the field clears the condition with it: both go.
+    expect(
+      toSupplementChanges(
+        { ...withFallback, fallbackSources: [], fallbackCondition: '' },
+        withFallback,
+      ),
+    ).toEqual({ fallbackSources: [], fallbackCondition: '' });
+  });
+
+  it('reads both sides as the inputs hold them: a full text with no time to the second', () => {
+    expect(formRuleContent(opened)).toEqual({
+      title: '10월 기준금리가 인하될까?',
+      ...formRuleItems(opened),
+      scheduledOpenAt: '2026-09-07T00:00:00.000Z',
+      closeAt: '2026-10-01T00:00:00.000Z',
+      scheduledAnnouncementAt: null,
+      scheduledJudgementAt: '2026-11-02T01:00:00.000Z',
+      judgementTimeZone: 'Asia/Seoul',
+    });
+  });
+});
+
 describe('addTags', () => {
   it('normalises a typed name and adds it at the end', () => {
     expect(addTags([], '  서울  ')).toEqual({ tags: ['서울'], rest: '' });
@@ -807,6 +892,10 @@ const market: AdminMarket = {
   statusEventId: '1',
   events: [],
   tags: [],
+  // No rule version (#80): not opened yet, or opened before #80 (D4).
+  ruleVersion: null,
+  ruleVersions: [],
+  supplement: { pending: null, log: [] },
   missingOpenItems: [],
   leadCloseGapMinutes: null,
   // Never submitted (#78): no request, no editor, no record.
@@ -882,11 +971,11 @@ describe('marketFormSchema tags', () => {
   });
 });
 
-describe('marketFormSchema openMarket: the rule items (#23)', () => {
+describe('supplementFormSchema: the rule items (#23, #80)', () => {
   const tagged = { ...valid, tags: ['금리'] };
   const fallback = { name: '연합뉴스', url: 'https://yna.co.kr' };
-  const issues = (original: MarketFormValues | undefined, values: MarketFormValues) =>
-    marketFormSchema({ now, original, openMarket: true })
+  const issues = (original: MarketFormValues, values: MarketFormValues) =>
+    supplementFormSchema({ now, original, paused: false, leadCloseGapMinutes: 60 })
       .safeParse(values)
       .error?.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`) ?? [];
 
@@ -945,13 +1034,29 @@ describe('marketFormSchema openMarket: the rule items (#23)', () => {
     ]);
   });
 
-  it('asks nothing of a draft, and every item of an open market with no original', () => {
+  it('asks none of it of a draft, nor of the open market’s edit, which sends no rule item', () => {
+    // Since #80 an open market's rule items change by a supplement alone: the edit form draws them
+    // off, and its schema refuses only what it still saves (the tags).
     const blank = { ...tagged, ...pick(EMPTY_MARKET_FORM, RULE_FIELDS) };
     expect(marketFormSchema({ now, original: tagged }).safeParse(blank).success).toBe(true);
     expect(marketFormSchema({ now }).safeParse(blank).success).toBe(true);
-    expect(issues(undefined, { ...tagged, delayHandling: '' })).toEqual([
-      `delayHandling: ${copy.errMarketRulesOpen}`,
-    ]);
+    expect(
+      marketFormSchema({ now, original: tagged, openMarket: true }).safeParse(blank).success,
+    ).toBe(true);
+  });
+
+  it('checks the version items alone: never the category, the tags, the image or the slug', () => {
+    // The form draws none of them and sends none: a retired category, a stored name the tag box
+    // would refuse or a stored slug of another age block no supplement.
+    const odd = {
+      ...tagged,
+      categoryId: 'x',
+      tags: [],
+      tagInput: '서울#',
+      imageUrl: 'ftp://a',
+      slug: '!',
+    };
+    expect(issues(odd, odd)).toEqual([]);
   });
 
   it("matches the shared check's missing items, so the form refuses what the API would", () => {
@@ -1074,9 +1179,7 @@ describe('marketFormSchema times (#22)', () => {
     const announced = { ...valid, scheduledAnnouncementAt: '2026-10-01T08:00' };
     expect(schema.safeParse(announced).success).toBe(true);
     const original = { ...valid };
-    expect(
-      marketFormSchema({ now, original, leadCloseGapMinutes: 60 }).safeParse(announced).success,
-    ).toBe(true);
+    expect(marketFormSchema({ now, original }).safeParse(announced).success).toBe(true);
   });
 
   it('reads the times as the API would store them (formTimes)', () => {
@@ -1100,16 +1203,17 @@ describe('marketFormSchema times (#22)', () => {
   });
 });
 
-describe('marketFormSchema openMarket: the times (#22, #172 item 14, owner answer A2)', () => {
+describe('supplementFormSchema: the times (#22, #80, #172 item 14, owner answer A2)', () => {
   // An open market as stored: opened, closing 10-01 09:00, judged 11-02 10:00.
   const opened: MarketFormValues = { ...valid, tags: ['금리'] };
   const issues = (
     values: Partial<MarketFormValues>,
     original: MarketFormValues = opened,
     leadCloseGapMinutes: number | null = 60,
+    paused = false,
   ) =>
     issuesOf(
-      marketFormSchema({ now, original, openMarket: true, leadCloseGapMinutes }).safeParse({
+      supplementFormSchema({ now, original, paused, leadCloseGapMinutes }).safeParse({
         ...original,
         ...values,
       }),
@@ -1175,20 +1279,88 @@ describe('marketFormSchema openMarket: the times (#22, #172 item 14, owner answe
 
   it('refuses the lead fields sent while the gap is undecided, as the API cannot check them', () => {
     const announced = { ...opened, scheduledAnnouncementAt: '2026-10-01T11:00' };
+    // In the form's own words: its action is 보충 요청, not 저장.
+    expect(copy.errMarketSupplementLeadCloseUndecided).toMatch(/다시 요청해 주세요\.$/);
     expect(issues({ closeAt: '2026-10-01T09:30' }, announced, null)).toEqual([
-      `closeAt: ${copy.errMarketLeadCloseUndecided}`,
+      `closeAt: ${copy.errMarketSupplementLeadCloseUndecided}`,
     ]);
     expect(issues({ scheduledAnnouncementAt: '2026-10-02T11:00' }, opened, null)).toEqual([
-      `scheduledAnnouncementAt: ${copy.errMarketLeadCloseUndecided}`,
+      `scheduledAnnouncementAt: ${copy.errMarketSupplementLeadCloseUndecided}`,
     ]);
     // Cleared to 없음: nothing to check.
     expect(issues({ scheduledAnnouncementAt: '' }, announced, null)).toEqual([]);
   });
 
+  it('fixes the close while PAUSED, said once under it, and keeps the rest (#172 item 14)', () => {
+    expect(issues({ closeAt: '2026-10-01T09:01' }, opened, 60, true)).toEqual([
+      `closeAt: ${copy.errMarketSupplementClosePaused}`,
+    ]);
+    // Earlier, or with an announcement it would break: still the one refusal, the one to fix.
+    const announced = { ...opened, scheduledAnnouncementAt: '2026-10-01T11:00' };
+    expect(issues({ closeAt: '2026-10-01T10:30' }, announced, 60, true)).toEqual([
+      `closeAt: ${copy.errMarketSupplementClosePaused}`,
+    ]);
+    expect(issues({ closeAt: '2026-10-01T08:00' }, opened, 60, true)).toEqual([
+      `closeAt: ${copy.errMarketSupplementClosePaused}`,
+    ]);
+    // Every other item stays a supplement's while PAUSED.
+    expect(issues({ title: '고친 질문', description: '고친 배경' }, opened, 60, true)).toEqual([]);
+  });
+
+  it('fixes the close as the shared PAUSED_SUPPLEMENT_ITEMS leaves it out, and only then', () => {
+    expect(supplementCloseFixed(true)).toBe(!PAUSED_SUPPLEMENT_ITEMS.includes('closeAt'));
+    expect(supplementCloseFixed(true)).toBe(true);
+    expect(supplementCloseFixed(false)).toBe(false);
+  });
+
+  /** The request form as the panel mounts it (market-supplement-panel.tsx), PAUSED. */
+  function pausedForm() {
+    const form = createFormControl<MarketFormValues>({
+      defaultValues: opened,
+      resolver: zodResolver(
+        supplementFormSchema({ now, original: opened, paused: true, leadCloseGapMinutes: 60 }),
+      ),
+    });
+    for (const name of Object.keys(EMPTY_MARKET_FORM) as (keyof MarketFormValues)[]) {
+      form.register(name);
+    }
+    form.control._state.mount = true;
+    return form;
+  }
+
+  it('puts back a close edited before the pause, so nothing is sent behind its locked input', () => {
+    const form = pausedForm();
+    form.setValue('closeAt', '2026-10-02T09:00');
+    form.setValue('title', '고친 질문');
+    restoreFixedClose(form, opened, false);
+    expect(form.getValues().closeAt).toBe(opened.closeAt);
+    // The rest of what was typed stays; the request sends it alone.
+    expect(form.getValues().title).toBe('고친 질문');
+    expect(toSupplementChanges(form.getValues(), opened)).toEqual({ title: '고친 질문' });
+    expect(form.control._formState.errors).toEqual({});
+  });
+
+  it('once sent, takes away what the edited close was refused for', async () => {
+    const form = pausedForm();
+    form.setValue('closeAt', '2026-10-02T09:00');
+    await form.handleSubmit(() => undefined)();
+    const errors = () => form.control._formState.errors;
+    expect(errors().closeAt?.message).toBe(copy.errMarketSupplementClosePaused);
+    restoreFixedClose(form, opened, true);
+    expect(form.getValues().closeAt).toBe(opened.closeAt);
+    await vi.waitFor(() => {
+      expect(errors().closeAt).toBeUndefined();
+    });
+    // As it opened: nothing to put back.
+    const untouched = pausedForm();
+    restoreFixedClose(untouched, opened, true);
+    expect(untouched.getValues()).toEqual(opened);
+  });
+
   it('asks none of this of a draft', () => {
     expect(
       issuesOf(
-        marketFormSchema({ now, original: opened, leadCloseGapMinutes: null }).safeParse({
+        marketFormSchema({ now, original: opened }).safeParse({
           ...opened,
           closeAt: '2026-09-30T09:00',
           scheduledJudgementAt: '2026-11-03T10:00',

@@ -119,8 +119,9 @@ export const markets = pgTable(
     scheduledOpenAt: timestampTz(),
     /**
      * 거래 마감 시각: the worker closes the market at it. At or before the scheduled judgement
-     * (`markets_close_by_judgement_check`); after the open it only moves later (#172 item 14, the
-     * API's alone: it depends on the value before).
+     * (`markets_close_by_judgement_check`); after the open it only moves later, by a supplement
+     * (#172 item 14, #80: the API's rule, since it depends on the value before; the database holds
+     * only that a versioned market's changes with a supplement, `rule_version` below).
      */
     closeAt: timestampTz().notNull(),
     /**
@@ -129,8 +130,8 @@ export const markets = pgTable(
      */
     scheduledAnnouncementAt: timestampTz(),
     /**
-     * 예정 판정 시각: never edited once the market is open (#172 item 14). A CLOSED market past it
-     * reads '판정 지연' (#173 item 11), and the long delay counts from it.
+     * 예정 판정 시각: never edited once the market is open (#172 item 14: no supplement moves it).
+     * A CLOSED market past it reads '판정 지연' (#173 item 11), and the long delay counts from it.
      */
     scheduledJudgementAt: timestampTz(),
     /**
@@ -143,10 +144,11 @@ export const markets = pgTable(
     /**
      * The 선행 마감 gap in minutes this market's lead close was last checked against: the release
      * setting's reading its submission stored, or that an open market's first lead re-check (a
-     * close or announcement edit) stored; later re-checks use it (docs/SETTINGS.md: a long-lived
-     * piece of work keeps the value it started with). Null until one of those stores a reading —
-     * before the submission, or after one with the setting undecided and no edit since (#22,
-     * ADR-0098). A market opened before #21 holds what the interim open stored.
+     * close or announcement supplement's approval since #80, an edit before) stored; later
+     * re-checks use it, and no rule version holds it (docs/SETTINGS.md: a long-lived piece of work
+     * keeps the value it started with). Null until one of those stores a reading — before the
+     * submission, or after one with the setting undecided and no edit since (#22, ADR-0098). A
+     * market opened before #21 holds what the interim open stored.
      *
      * The review (#78, ADR-0099; ADR-0098 결정 7-6 left it to #78): the submission stores the gap
      * it checked (null with the setting undecided and no announcement needing one), the approval
@@ -156,6 +158,22 @@ export const markets = pgTable(
      * writes it (#21, ADR-0100; ADR-0098 7-6). No CHECK ties it to a status.
      */
     leadCloseGapMinutes: integer(),
+    /**
+     * The current rule version (#80, ADR-0101; ADR-0093 decision 2 #172 items 6·7): the market's
+     * newest `market_rule_versions.version` — 1 from the open, which records v1 in its own
+     * transaction (`openScheduledMarket`), then one more per approved supplement. Null before the
+     * open and for a market opened before #80 (D4, no backfill), which takes no supplement. No
+     * foreign key (the version row references the market): the open and the supplement approval
+     * write both in one transaction each. The judgement follows it (#172 item 7).
+     *
+     * While it is set, the version items — the title, the rule items and the times, the columns
+     * RULE_VERSION_ITEMS of @buddha/shared names — the market's `market_sources` and this column
+     * change only in a transaction that names the market in `buddha.rule_supplement`
+     * (`allowRuleSupplement`), which the supplement approval alone does (migration 0053's
+     * triggers: '보충 외 경로로 규칙 버전에 든 항목을 고치는 일을 막는다'). A write of the same value is
+     * no change.
+     */
+    ruleVersion: integer(),
     /**
      * The judgement's result type (YES·NO·VOID, #174): null before a judgement publishes one and
      * on a CANCELLED market (ADR-0093 decision 1 item 10). Not the contract side `outcome`.
@@ -244,6 +262,7 @@ export const markets = pgTable(
       sql`${utcMinute(t.eventDeadline)} <= ${utcMinute(t.scheduledJudgementAt)}`,
     ),
     check('markets_lead_close_gap_minutes_check', sql`${t.leadCloseGapMinutes} >= 0`),
+    check('markets_rule_version_check', sql`${t.ruleVersion} >= 1`),
     check(
       'markets_fee_bps_check',
       sql`${t.takerFeeBps} BETWEEN 0 AND 10000 AND ${t.settlementFeeBps} BETWEEN 0 AND 10000`,

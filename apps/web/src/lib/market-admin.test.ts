@@ -10,13 +10,16 @@ import {
   OPEN_ITEMS,
   type OpenItem,
   PUBLIC_MARKET_STATUSES,
+  RULE_VERSION_ITEMS,
   SETTLEMENT_STEPS,
   SETTLEMENT_STEP_STATUSES,
+  SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED,
+  SUPPLEMENT_ONLY_WHILE_OPEN,
   TIME_RULE_MESSAGES,
 } from '@buddha/shared';
 import { describe, expect, it } from 'vitest';
 import { copy } from '@/copy';
-import { ApiError } from './api';
+import { ApiError, type MarketRuleContent } from './api';
 import { formatKst } from './datetime';
 import {
   AUDIT_FAILURE_KIND_LABEL,
@@ -27,6 +30,7 @@ import {
   MARKET_STATUS_PALETTE,
   type MarketSourceInputs,
   OPEN_ITEM_LABEL,
+  RULE_VERSION_ITEM_LABEL,
   SETTLEMENT_STEP_LABEL,
   SETTLEMENT_STEP_STATUS_LABEL,
   SETTLEMENT_STEP_STATUS_PALETTE,
@@ -49,6 +53,8 @@ import {
   marketEventRows,
   marketFormError,
   openItemsNotice,
+  ruleVersionItemList,
+  ruleVersionItemText,
   MAX_TIMEOUT_MS,
   SCHEDULED_OPEN_POLL_MS,
   SETTLEMENT_POLL_INTERVAL_MS,
@@ -222,7 +228,7 @@ describe('status predicates', () => {
     expect(settlementPollInterval(undefined)).toBe(false);
   });
 
-  it('allows edits while draft or open', () => {
+  it('allows edits while draft or open (an open market’s category, tags and image, #80)', () => {
     expect(MARKET_STATUSES.filter(isEditable)).toEqual(['draft', 'open']);
   });
 
@@ -467,6 +473,28 @@ describe('marketEventRows', () => {
     ).toBeUndefined();
   });
 
+  it('reads an approved supplement as its version, the items and the reason (#80)', () => {
+    // MarketRulesSupplementedPayload (@buddha/shared); the actor beside it is the approver. The
+    // requester's account id is no row: the 보충 기록 names the requester by nickname.
+    const payload = {
+      version: 3,
+      approvalId: 'a1b2c3d4-0000-4000-8000-000000000001',
+      // Listed out of order: the row keeps RULE_VERSION_ITEMS'.
+      items: ['closeAt', 'description', 'title'],
+      reason: '배경의 오타를 고칩니다.',
+      requestedBy: 'requester-id',
+    };
+    expect(marketEventRows('rules_supplemented', payload)).toEqual([
+      { label: copy.eventRulesVersion, value: 'v3' },
+      { label: copy.eventRulesItems, value: '질문 · 배경 · 거래 마감 시각' },
+      { label: copy.reviewLogReason, value: '배경의 오타를 고칩니다.' },
+    ]);
+    // A row of another shape is not read: no item, an unknown item, no version.
+    expect(marketEventRows('rules_supplemented', { ...payload, items: [] })).toBeUndefined();
+    expect(marketEventRows('rules_supplemented', { ...payload, items: ['tags'] })).toBeUndefined();
+    expect(marketEventRows('rules_supplemented', { ...payload, version: 0 })).toBeUndefined();
+  });
+
   it('renders the open and close instants in KST', () => {
     expect(marketEventRows('opened', { openAt, closeAt })).toEqual([
       { label: copy.marketOpenAt, value: formatKst(openAt) },
@@ -631,6 +659,57 @@ describe('marketEventRows', () => {
     );
     expect(marketEventRows('open_rescheduled', { before: null, after: 'soon' })).toBeUndefined();
     expect(marketEventRows('approved', null)).toBeUndefined();
+  });
+});
+
+describe('the rule-version items (#80, ADR-0101)', () => {
+  const content: MarketRuleContent = {
+    title: '첫눈이 올까?',
+    description: null,
+    yesCondition: 'YES 조건',
+    noCondition: '',
+    eventDeadline: '2026-11-30T14:59:00.000Z',
+    primarySource: { name: '기상청', url: 'https://www.weather.go.kr' },
+    fallbackSources: [],
+    fallbackCondition: '',
+    longDelayDays: 14,
+    delayHandling: '무효',
+    scheduledOpenAt: '2026-11-01T00:00:00.000Z',
+    closeAt: '2026-11-29T15:00:00.000Z',
+    scheduledAnnouncementAt: null,
+    scheduledJudgementAt: null,
+    judgementTimeZone: 'Asia/Seoul',
+  };
+
+  it('names every version item as the open-items check does, the announcement its own', () => {
+    expect(Object.keys(RULE_VERSION_ITEM_LABEL).sort()).toEqual([...RULE_VERSION_ITEMS].sort());
+    for (const item of RULE_VERSION_ITEMS) {
+      expect(RULE_VERSION_ITEM_LABEL[item], item).toBe(
+        item === 'scheduledAnnouncementAt'
+          ? copy.openItemScheduledAnnouncementAt
+          : OPEN_ITEM_LABEL[item],
+      );
+    }
+    expect(ruleVersionItemList(['judgementTimeZone', 'title', 'title'])).toBe(
+      '질문 · 판정 기준 시간대',
+    );
+  });
+
+  it('words each item of a full text in KST, blanks as — and no announcement as 없음', () => {
+    const text = (item: (typeof RULE_VERSION_ITEMS)[number]) =>
+      ruleVersionItemText(item, content, formatKst);
+    expect(text('title')).toBe('첫눈이 올까?');
+    expect(text('description')).toBe('—');
+    expect(text('noCondition')).toBe('—');
+    expect(text('eventDeadline')).toBe(formatKst(content.eventDeadline ?? ''));
+    expect(text('primarySource')).toBe('기상청 (https://www.weather.go.kr)');
+    expect(text('fallbackSources')).toBe(copy.adminMarketFallbackNone);
+    expect(text('longDelayDays')).toBe('예정 판정 시각에서 14일 뒤');
+    expect(text('scheduledOpenAt')).toBe(formatKst(content.scheduledOpenAt ?? ''));
+    expect(text('closeAt')).toBe(formatKst(content.closeAt));
+    expect(text('scheduledAnnouncementAt')).toBe(copy.adminMarketAnnouncementNone);
+    expect(text('scheduledJudgementAt')).toBe('—');
+    expect(text('judgementTimeZone')).toBe('Asia/Seoul');
   });
 });
 
@@ -981,10 +1060,10 @@ describe('transitionErrorMessage', () => {
     ).toBeUndefined();
   });
 
-  it('no longer reads RULES_REQUIRED as a refused open: only an open market PATCH answers it', () => {
-    // The interim open answered OPEN_ITEMS_MISSING from #17 until it went with #21; the PATCH's
-    // RULES_REQUIRED lands on the rule item it names (`marketFormError`), so a stray one here is
-    // the generic toast.
+  it('no longer reads RULES_REQUIRED as a refused open: only a supplement answers it', () => {
+    // The interim open answered OPEN_ITEMS_MISSING from #17 until it went with #21; a supplement's
+    // RULES_REQUIRED (#80) lands on the rule item it names (`marketFormError`), so a stray one here
+    // is the generic toast.
     expect(transitionErrorMessage(apiError(422, 'RULES_REQUIRED'))).toBe(copy.errUnknown);
   });
 
@@ -1143,9 +1222,10 @@ describe('marketFormError', () => {
       field: 'closeAt',
       message: copy.errMarketCloseEarlier,
     });
-    expect(refused('scheduledJudgementAt', 'immutable while open')).toEqual({
-      field: 'scheduledJudgementAt',
-      message: copy.errMarketTimeFixed,
+    // A supplement's close while PAUSED (#80, #172 item 14).
+    expect(refused('closeAt', SUPPLEMENT_CLOSE_FIXED_WHILE_PAUSED)).toEqual({
+      field: 'closeAt',
+      message: copy.errMarketSupplementClosePaused,
     });
     expect(refused('scheduledAnnouncementAt', 'lead-close gap undecided')).toEqual({
       field: 'scheduledAnnouncementAt',
@@ -1176,6 +1256,26 @@ describe('marketFormError', () => {
         ]),
       ),
     ).toEqual({ field: 'judgementTimeZone', message: copy.errMarketRulesOpen });
+  });
+
+  it('lands an open market’s edit of a version item on its input: a supplement’s alone (#80)', () => {
+    const refused = (path: string) =>
+      marketFormError(
+        apiError(400, 'VALIDATION_ERROR', 'x', [
+          { path: [path], message: SUPPLEMENT_ONLY_WHILE_OPEN },
+        ]),
+      );
+    const fields: Record<string, string> = {
+      primarySource: 'primarySourceName',
+    };
+    for (const item of RULE_VERSION_ITEMS) {
+      expect(refused(item), item).toEqual({
+        field: fields[item] ?? item,
+        message: copy.errMarketSupplementOnly,
+      });
+    }
+    // Not a version item: the field's own refusal, whatever the message.
+    expect(refused('imageUrl')).toEqual({ field: 'imageUrl', message: copy.errMarketImageUrl });
   });
 
   it('lands a refused source on the input its path names (#23)', () => {

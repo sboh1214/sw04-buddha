@@ -88,8 +88,9 @@ export class MarketsController {
   @ApiOperation({
     operationId: 'getMarket',
     summary:
-      'One market by id or slug, with its tags in order (a draft or in-review one is NOT_FOUND ' +
-      'to the public)',
+      'One market by id or slug, with its tags in order and its rule versions, the current ' +
+      'first (each one’s full text, changed items, reason and time, and nobody’s name); a ' +
+      'draft or in-review one is NOT_FOUND to the public',
   })
   @ApiData(marketSchema)
   @ApiErrors('NOT_FOUND', 'VALIDATION_ERROR')

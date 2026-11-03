@@ -121,7 +121,7 @@ describe.skipIf(!hasTestInfra)('market.close (integration)', () => {
     }
   });
 
-  it('skips a market whose close time has not come (a stale delayed job after a closeAt PATCH)', async () => {
+  it('skips a market whose close time has not come (a stale delayed job after a supplement moved the close)', async () => {
     const market = await createMarket(t.db, { closeAt: new Date(Date.now() + MINUTE_MS) });
     const { received, quit } = await subscribeTo(market.id);
     try {

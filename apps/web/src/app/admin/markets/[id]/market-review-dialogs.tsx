@@ -177,9 +177,10 @@ function useReviewWrite<V>(
 /**
  * The frame every review dialog shares: the title, what the write does, the fields, a refusal above
  * the buttons, 취소 and the confirm. Pinned while the write runs — 취소, Esc and the backdrop wait, as
- * `ConfirmDialog`'s do. `testId` names the content, `-confirm`, `-cancel` and `-refusal`.
+ * `ConfirmDialog`'s do. `testId` names the content, `-confirm`, `-cancel` and `-refusal`. The 규칙
+ * 보충's dialogs (#80, market-supplement-dialogs.tsx) are drawn in it too.
  */
-function ReviewDialogShell({
+export function ReviewDialogShell({
   testId,
   title,
   body,
@@ -271,7 +272,8 @@ function ReviewDialogShell({
 
 /**
  * A reason (or a 반려's 설명): required, at most APPROVAL_REASON_MAX_LENGTH characters, recorded in
- * the 검수 기록 with the admin and the time. `testId` names the textarea and `-error` its refusal.
+ * the 검수 기록 with the admin and the time — or, under another `hint`, where the 규칙 보충's reasons
+ * go (#80). `testId` names the textarea and `-error` its refusal.
  */
 export function ReasonField({
   testId,
@@ -280,6 +282,7 @@ export function ReasonField({
   onChange,
   error,
   disabled,
+  hint = copy.adminMarketReviewReasonHint,
 }: {
   testId: string;
   label: string;
@@ -287,6 +290,7 @@ export function ReasonField({
   onChange: (value: string) => void;
   error: string | null;
   disabled: boolean;
+  hint?: string;
 }) {
   return (
     <Field.Root invalid={error !== null} required>
@@ -299,7 +303,7 @@ export function ReasonField({
         disabled={disabled}
         data-testid={testId}
       />
-      <Field.HelperText>{copy.adminMarketReviewReasonHint}</Field.HelperText>
+      <Field.HelperText>{hint}</Field.HelperText>
       <Field.ErrorText data-testid={`${testId}-error`}>{error}</Field.ErrorText>
     </Field.Root>
   );

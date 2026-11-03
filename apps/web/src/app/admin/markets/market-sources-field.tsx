@@ -8,7 +8,7 @@ import { type MarketFormValues } from '@/lib/market-form';
 
 interface MarketSourcesFieldProps {
   form: UseFormReturn<MarketFormValues>;
-  /** The whole field; true unless the market is draft or open (design 3.4). */
+  /** The whole field; true unless a draft's edit or a supplement's form (design 3.4, #80). */
   disabled: boolean;
 }
 
@@ -41,7 +41,7 @@ export function MarketSourcesField({ form, disabled }: MarketSourcesFieldProps) 
   const { fields, append, remove, move } = useFieldArray({ control, name: 'fallbackSources' });
   const listError = errors.fallbackSources?.message ?? errors.fallbackSources?.root?.message;
 
-  // The row's own refusal alone. `clearErrors` takes its inputs' with it, and an open market's
+  // The row's own refusal alone. `clearErrors` takes its inputs' with it, and a supplement's (#80)
   // blank row has those too (`errMarketRulesOpen` under each blank input, `missingItemPaths`):
   // they are put back, so the typed input's twin keeps its own and react-hook-form checks the
   // typed one again.

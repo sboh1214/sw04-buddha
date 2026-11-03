@@ -13,9 +13,10 @@
  * with its reason (#50), a report A filed and a report another member filed on A's post (#50), a
  * writing restriction A was given and an operator lifted, with the lift's reason (#185), an
  * account restriction A was given and lifted, each step approved by another admin, a request to
- * restrict A again that waits for its approval (#139), and two market proposals (#77): one 접수,
+ * restrict A again that waits for its approval (#139), two market proposals (#77): one 접수,
  * one adopted into the open market every public call reads, with the operators' internal memo on
- * it. Then:
+ * it, and rule supplements of that market A asked for (#80): one approved, with its 정산 영향 검토
+ * and the approver's reason, one an admin rejected with a reason, and one waiting. Then:
  * - every registered public route (registry.ts) is called anonymously, as another account B and
  *   as A itself, and no answer may hold one of A's values or a field PRIVATE_DATA names, nor a
  *   field naming an excluded feature or keeping a probability — except that a route registered
@@ -62,6 +63,8 @@ import {
   createProfileImage,
   createProposal,
   createReport,
+  createSupplementedMarket,
+  createSupplementRequest,
   createSearch,
   createStartGrant,
   createTheme,
@@ -129,7 +132,9 @@ interface Fixture {
    * Open; A holds a position in it, has two orders in it and one fill, and watches it (#89) — so
    * every public call and market-room event about it runs against A's user id and nickname with
    * A among its watchers: a public answer naming who watches a market would carry them. An admin
-   * linked it to one other open market (#65), which its 관련 시장 lists.
+   * linked it to one other open market (#65), which its 관련 시장 lists. Opened with rule v1 and
+   * supplemented once at A's request (#80), so its detail carries a rule version history; two
+   * later supplements A asked for were never approved — one rejected, one waiting.
    */
   market: MarketRow;
   /** The open market linked to `market` (#65): the one item of `market`'s 관련 시장. */
@@ -425,6 +430,20 @@ const NEVER_SHOWN: readonly string[] = [
   'retracted restriction request',
   // #77: the operators' internal memo is theirs alone — the proposer's own answers included.
   'proposal internal memo',
+  // #80: a rule supplement's 정산 영향 검토 is the operators' record; the public history of the
+  // market's rule versions names nobody and carries the text, the reason and the time alone.
+  'supplement settlement impact',
+  // #80: and of an approved version alone — never a decision's reason (the approval's or a
+  // 반려's), nor anything of a request no one approved: a rejected one's or a waiting one's text,
+  // reason and 정산 영향 검토.
+  'supplement approval reason',
+  'supplement reject reason',
+  'rejected supplement text',
+  'rejected supplement reason',
+  'rejected supplement impact',
+  'pending supplement text',
+  'pending supplement reason',
+  'pending supplement impact',
 ];
 
 interface OwnerCase {
@@ -1122,11 +1141,53 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
       })
       .returning();
 
-    const market = await createMarket(t.db, {
+    // The market every public call reads opened at its scheduled open with rule v1 and was
+    // supplemented once (#80): A asked for the supplement — A holds no admin role; the records
+    // are written as the routes write them — with a 정산 영향 검토 only operators read, so a public
+    // history naming who asked or carrying the review would carry A's id or that sentinel.
+    const supplementImpact = `leak-supplement-impact-${tag}`;
+    const supplementApproval = `leak-supplement-approval-${tag}`;
+    const { market } = await createSupplementedMarket(t.db, {
       createdBy: admin.id,
       lastPrice: 61,
       volumeCoin: PUBLIC_FILL.amountCoin,
       tradeCount: 1,
+      supplements: [
+        {
+          requestedBy: a.id,
+          settlementImpact: supplementImpact,
+          approvalReason: supplementApproval,
+        },
+      ],
+    });
+    // Two later supplements A asked for against v2, never approved: one the admin rejected with a
+    // reason, then one waiting. The public history is the approved versions' alone, so an answer
+    // carrying either's 보충 문구, reason or 정산 영향 검토, or a decision's reason, leaks it.
+    const supplementRejection = `leak-supplement-rejection-${tag}`;
+    const rejectedSupplement = {
+      text: `leak-rejected-supplement-text-${tag}`,
+      reason: `leak-rejected-supplement-reason-${tag}`,
+      impact: `leak-rejected-supplement-impact-${tag}`,
+    };
+    await createSupplementRequest(t.db, {
+      marketId: market.id,
+      requestedBy: a.id,
+      changes: { description: rejectedSupplement.text },
+      reason: rejectedSupplement.reason,
+      settlementImpact: rejectedSupplement.impact,
+      rejected: { by: admin.id, reason: supplementRejection },
+    });
+    const pendingSupplement = {
+      text: `leak-pending-supplement-text-${tag}`,
+      reason: `leak-pending-supplement-reason-${tag}`,
+      impact: `leak-pending-supplement-impact-${tag}`,
+    };
+    await createSupplementRequest(t.db, {
+      marketId: market.id,
+      requestedBy: a.id,
+      changes: { description: pendingSupplement.text },
+      reason: pendingSupplement.reason,
+      settlementImpact: pendingSupplement.impact,
     });
     // The other side of A's fill: a resting order of a third account (the counterparty).
     const maker = await createUser(t.db);
@@ -1632,6 +1693,15 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
         text('account restriction note', accountNote),
         text('approver id', approver.id),
         text('approval reason', approvalReason),
+        text('supplement settlement impact', supplementImpact),
+        text('supplement approval reason', supplementApproval),
+        text('supplement reject reason', supplementRejection),
+        text('rejected supplement text', rejectedSupplement.text),
+        text('rejected supplement reason', rejectedSupplement.reason),
+        text('rejected supplement impact', rejectedSupplement.impact),
+        text('pending supplement text', pendingSupplement.text),
+        text('pending supplement reason', pendingSupplement.reason),
+        text('pending supplement impact', pendingSupplement.impact),
         text('account lift reason', accountLiftReason),
         text('pending restriction request', pendingRestriction),
         text('account restriction memo', accountMemo),
@@ -1903,6 +1973,18 @@ describe.skipIf(!hasTestInfra)('private data in public and owner-only answers (#
     // was something to leak, and the 관련 시장 answer's item had its field names checked rather
     // than an empty page passing for one.
     expect(bodies.get('GET /markets')).toContain(f.market.id);
+    // The market's detail answered its rule version history (#80) — v2, the supplement A asked for
+    // and an admin approved, then v1 — so the check read a history that could have named A or
+    // carried a decision's reason, a 정산 영향 검토 or a request no one approved.
+    const history = parse(bodies.get('GET /markets/:idOrSlug')!) as {
+      data: { ruleVersions: { version: number; changedItems: string[] }[] };
+    };
+    expect(
+      history.data.ruleVersions.map(({ version, changedItems }) => [version, changedItems]),
+    ).toEqual([
+      [2, ['description']],
+      [1, []],
+    ]);
     const related = parse(bodies.get('GET /markets/:id/related')!) as { data: { id: string }[] };
     expect(related.data.map((row) => row.id)).toEqual([f.relatedMarket.id]);
     // The theme routes (#81) answered the theme, its two markets, its one result and the link

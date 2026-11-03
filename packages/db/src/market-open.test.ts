@@ -1,8 +1,12 @@
-import { MARKET_STATUSES } from '@buddha/shared';
+import {
+  DEFAULT_JUDGEMENT_TIME_ZONE,
+  MARKET_STATUSES,
+  marketRuleContentSchema,
+} from '@buddha/shared';
 import { asc, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { openScheduledMarket, type OpenScheduledMarketInput } from './market-open.js';
-import { marketEvents, markets } from './schema/index.js';
+import { marketEvents, marketRuleVersions, markets } from './schema/index.js';
 import {
   createCategory,
   createMarket,
@@ -46,6 +50,14 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
     return row!;
   };
 
+  /** A market's rule versions (#80), v1 first. */
+  const versionsOf = (marketId: string) =>
+    t.db
+      .select()
+      .from(marketRuleVersions)
+      .where(eq(marketRuleVersions.marketId, marketId))
+      .orderBy(asc(marketRuleVersions.version));
+
   /**
    * As every caller opens: the market lock, the row FOR UPDATE after it, then `now` — the database
    * clock after the lock, unless a boundary case gives the instant itself.
@@ -88,7 +100,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
         createdAt: now,
       }),
     );
-    // The row read back, and nothing in it changed but the open's four columns.
+    // The row read back, and nothing in it changed but the open's five columns.
     const row = await rowOf(scheduled.id);
     expect(result.row).toEqual(row);
     expect(row).toEqual({
@@ -97,8 +109,64 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
       statusEventId: result.statusEventId,
       openAt: now,
       updatedAt: now,
+      ruleVersion: 1,
     });
     expect(row.leadCloseGapMinutes).toBe(30);
+  });
+
+  it('records rule v1 in the open: the content the review locked, by the worker, at the open', async () => {
+    // #80, ADR-0101 (ADR-0093 decision 2 #172 item 6): the full text of the version items, read
+    // back from the row and its sources, made by no one (the job) at the open's instant.
+    const fallbackSources = [
+      { name: '대체 하나', url: 'https://example.org/1' },
+      { name: '대체 둘', url: 'https://example.org/2' },
+    ];
+    const { market: scheduled } = await createScheduledMarket(t.db, { fallbackSources });
+    expect(scheduled.ruleVersion).toBeNull();
+    expect(await versionsOf(scheduled.id)).toEqual([]);
+    const { now, result } = await open(scheduled.id);
+    expect(result).toMatchObject({ opened: true, ruleVersion: 1, row: { ruleVersion: 1 } });
+    const [v1, ...more] = await versionsOf(scheduled.id);
+    expect(more).toEqual([]);
+    expect(v1).toEqual({
+      marketId: scheduled.id,
+      version: 1,
+      content: {
+        title: scheduled.title,
+        description: scheduled.description,
+        yesCondition: scheduled.yesCondition,
+        noCondition: scheduled.noCondition,
+        eventDeadline: scheduled.eventDeadline!.toISOString(),
+        primarySource: {
+          name: expect.stringMatching(/^테스트 출처 /) as unknown,
+          url: 'https://example.com/source',
+        },
+        fallbackSources,
+        fallbackCondition: scheduled.fallbackCondition,
+        longDelayDays: 14,
+        delayHandling: scheduled.delayHandling,
+        scheduledOpenAt: scheduled.scheduledOpenAt!.toISOString(),
+        closeAt: scheduled.closeAt.toISOString(),
+        scheduledAnnouncementAt: null,
+        scheduledJudgementAt: scheduled.scheduledJudgementAt!.toISOString(),
+        judgementTimeZone: DEFAULT_JUDGEMENT_TIME_ZONE,
+      },
+      changedItems: [],
+      reason: null,
+      settlementImpact: null,
+      approvalId: null,
+      requestedBy: null,
+      createdBy: null,
+      createdAt: now,
+    });
+    // The shape the API answers it in, as stored.
+    expect(marketRuleContentSchema.parse(v1!.content)).toEqual(v1!.content);
+    // The `opened` event is its record: no event of its own (the review's two and the open).
+    expect((await eventsOf(scheduled.id)).map((event) => event.type)).toEqual([
+      'submitted',
+      'approved',
+      'opened',
+    ]);
   });
 
   it.each(['approval', 'reschedule'] as const)(
@@ -114,6 +182,10 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
         payload: { openAt: now.toISOString(), closeAt: market.closeAt.toISOString(), source },
         createdAt: now,
       });
+      // That admin made v1 (#80), at the open.
+      expect(await versionsOf(market.id)).toMatchObject([
+        { version: 1, createdBy: admin.id, createdAt: now, approvalId: null, requestedBy: null },
+      ]);
     },
   );
 
@@ -130,6 +202,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
     );
     expect(await eventsOf(market.id)).toEqual(review);
     expect(await rowOf(market.id)).toEqual(market);
+    expect(await versionsOf(market.id)).toEqual([]);
   });
 
   it('skips a scheduled open still ahead, or unset, as not_due, writing nothing', async () => {
@@ -143,6 +216,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
       expect((await open(market.id)).result).toEqual({ opened: false, reason: 'not_due' });
       expect(await eventsOf(market.id)).toEqual(review);
       expect(await rowOf(market.id)).toEqual(market);
+      expect(await versionsOf(market.id)).toEqual([]);
     }
   });
 
@@ -154,6 +228,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
       expect((await open(market.id)).result).toEqual({ opened: false, reason: 'not_scheduled' });
       expect(await eventsOf(market.id)).toEqual([]);
       expect(await rowOf(market.id)).toEqual(market);
+      expect(await versionsOf(market.id)).toEqual([]);
     },
   );
 
@@ -166,6 +241,33 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
     expect((await open(market.id)).result).toEqual({ opened: false, reason: 'close_passed' });
     expect(await eventsOf(market.id)).toEqual(review);
     expect(await rowOf(market.id)).toEqual(market);
+    expect(await versionsOf(market.id)).toEqual([]);
+  });
+
+  it('writes no second v1: a second run is not_scheduled, and the open is one transaction', async () => {
+    // #80: v1 is written after the transition, in the opened branch alone, so a repeat finds the
+    // market OPEN and writes nothing — not a second version, nor a primary-key failure.
+    const { market } = await createScheduledMarket(t.db);
+    const first = await open(market.id);
+    expect(first.result.opened).toBe(true);
+    const opened = await rowOf(market.id);
+    const versions = await versionsOf(market.id);
+    expect((await open(market.id)).result).toEqual({ opened: false, reason: 'not_scheduled' });
+    expect(await rowOf(market.id)).toEqual(opened);
+    expect(await versionsOf(market.id)).toEqual(versions);
+    expect(versions.map((version) => version.version)).toEqual([1]);
+
+    // A v1 that cannot be written takes the open with it: here a stray version row, which only a
+    // writer outside the open could leave, makes the insert fail (23505) — the market stays
+    // SCHEDULED with no `opened` event and no version of its own.
+    const { market: other } = await createScheduledMarket(t.db);
+    await t.db.insert(marketRuleVersions).values({ ...versions[0]!, marketId: other.id });
+    const review = await eventsOf(other.id);
+    await expect(open(other.id)).rejects.toSatisfy(
+      (error) => (error as { cause?: { code?: string } }).cause?.code === '23505',
+    );
+    expect(await rowOf(other.id)).toEqual(other);
+    expect(await eventsOf(other.id)).toEqual(review);
   });
 
   it('opens at its scheduled open to the millisecond, and not a millisecond before', async () => {
@@ -213,7 +315,23 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
     expect((await open(market.id)).result).toMatchObject({
       opened: true,
       row: { status: 'open', categoryId: hidden.id, leadCloseGapMinutes: 60, yesCondition: '' },
+      ruleVersion: 1,
     });
+    // And v1 keeps the blanks as they are (#80): the content of a market with no rule written.
+    const [v1] = await versionsOf(market.id);
+    expect(v1?.content).toMatchObject({
+      description: null,
+      yesCondition: '',
+      noCondition: '',
+      eventDeadline: null,
+      primarySource: null,
+      fallbackSources: [],
+      fallbackCondition: '',
+      longDelayDays: null,
+      delayHandling: '',
+      scheduledAnnouncementAt: new Date(closeAt.getTime() + 60_000).toISOString(),
+    });
+    expect(marketRuleContentSchema.safeParse(v1?.content).success).toBe(true);
   });
 
   describe('createOpenedMarket', () => {
@@ -235,6 +353,11 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
       });
       expect(await rowOf(market.id)).toEqual(market);
       expect(request).toMatchObject({ status: 'approved', targetId: market.id });
+      // And rule v1 (#80): the market at version 1, its row made by no one at the open.
+      expect(market.ruleVersion).toBe(1);
+      expect(await versionsOf(market.id)).toMatchObject([
+        { version: 1, createdBy: null, createdAt: opened.createdAt, changedItems: [] },
+      ]);
     });
 
     it('throws with the reason when the market would not open', async () => {
@@ -244,6 +367,7 @@ describe.skipIf(!hasTestDb())('openScheduledMarket (#21, docker test profile)', 
       await expect(
         createOpenedMarket(t.db, { closeAt: new Date(Date.now() - 60_000) }),
       ).rejects.toThrow('createOpenedMarket: the market did not open (close_passed)');
+      expect(await t.db.select().from(marketRuleVersions)).toEqual([]);
     });
   });
 });

@@ -328,12 +328,16 @@ export function reviewWriteSuccess(write: OpeningReviewWrite, status: MarketStat
 
 // ---- what a refusal says ---------------------------------------------------------------------
 
-/** The two-person rule's refusals as the review says them: its exclusions in their own words. */
+/**
+ * The two-person rule's refusals as the review says them: its exclusions in their own words.
+ * `no_decider` is a supplement request's (#80), which no review meets.
+ */
 const REVIEW_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
   ...REVIEW_EXCLUSION_NOTE,
   decided: copy.errApprovalDecided,
   retracted: copy.errApprovalRetracted,
   not_requester: copy.errApprovalNotRequester,
+  no_decider: copy.errApprovalNoDecider,
 };
 
 /** The fields of the review dialogs a refusal can land under. */

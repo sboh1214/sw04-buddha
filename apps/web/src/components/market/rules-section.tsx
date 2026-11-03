@@ -84,76 +84,80 @@ export function RulesSection({ market, 'data-testid': testId }: RulesSectionProp
         {/* Label above value below md, where a label column would leave a 5,000-character text
             a third of a phone's width; beside it from md up. */}
         <DataList.Root orientation={{ base: 'vertical', md: 'horizontal' }} size="sm">
-          <Item label={copy.rulesYes} testId={`${testId}-yes`}>
+          <RuleRow label={copy.rulesYes} testId={`${testId}-yes`}>
             {ruleText(market.yesCondition) ?? EMPTY}
-          </Item>
-          <Item label={copy.rulesNo} testId={`${testId}-no`}>
+          </RuleRow>
+          <RuleRow label={copy.rulesNo} testId={`${testId}-no`}>
             {ruleText(market.noCondition) ?? EMPTY}
-          </Item>
-          <Item label={copy.rulesEventDeadline} testId={`${testId}-event-deadline`}>
-            <Time iso={market.eventDeadline} zone={zone} testId={`${testId}-event-deadline`} />
-          </Item>
-          <Item label={copy.rulesPrimarySource} testId={`${testId}-primary-source`}>
-            <Source source={market.primarySource} />
-          </Item>
-          <Item label={copy.rulesFallbackSources} testId={`${testId}-fallback-sources`}>
+          </RuleRow>
+          <RuleRow label={copy.rulesEventDeadline} testId={`${testId}-event-deadline`}>
+            <RuleTime iso={market.eventDeadline} zone={zone} testId={`${testId}-event-deadline`} />
+          </RuleRow>
+          <RuleRow label={copy.rulesPrimarySource} testId={`${testId}-primary-source`}>
+            <RuleSourceLink source={market.primarySource} />
+          </RuleRow>
+          <RuleRow label={copy.rulesFallbackSources} testId={`${testId}-fallback-sources`}>
             {hasFallback ? (
               <Box as="ol" ps="5" listStyleType="decimal">
                 {market.fallbackSources.map((source, index) => (
                   // A fallback's place is its priority, so its index is its identity.
                   <Box as="li" key={index}>
-                    <Source source={source} />
+                    <RuleSourceLink source={source} />
                   </Box>
                 ))}
               </Box>
             ) : (
               copy.rulesFallbackNone
             )}
-          </Item>
+          </RuleRow>
           {hasFallback && (
-            <Item label={copy.rulesFallbackCondition} testId={`${testId}-fallback-condition`}>
+            <RuleRow label={copy.rulesFallbackCondition} testId={`${testId}-fallback-condition`}>
               {ruleText(market.fallbackCondition) ?? EMPTY}
-            </Item>
+            </RuleRow>
           )}
-          <Item label={copy.rulesLongDelay} testId={`${testId}-long-delay`}>
-            <LongDelay market={market} testId={`${testId}-long-delay`} />
-          </Item>
-          <Item label={copy.rulesDelayHandling} testId={`${testId}-delay-handling`}>
+          <RuleRow label={copy.rulesLongDelay} testId={`${testId}-long-delay`}>
+            <RuleLongDelay market={market} testId={`${testId}-long-delay`} />
+          </RuleRow>
+          <RuleRow label={copy.rulesDelayHandling} testId={`${testId}-delay-handling`}>
             {ruleText(market.delayHandling) ?? EMPTY}
-          </Item>
-          <Item label={copy.rulesVoidPayout} testId={`${testId}-void-payout`}>
+          </RuleRow>
+          <RuleRow label={copy.rulesVoidPayout} testId={`${testId}-void-payout`}>
             {voidPayoutText()}
-          </Item>
+          </RuleRow>
           {showsScheduledOpen(market.status) && (
-            <Item label={copy.rulesScheduledOpenAt} testId={`${testId}-scheduled-open-at`}>
-              <Time
+            <RuleRow label={copy.rulesScheduledOpenAt} testId={`${testId}-scheduled-open-at`}>
+              <RuleTime
                 iso={market.scheduledOpenAt}
                 zone={zone}
                 testId={`${testId}-scheduled-open-at`}
               />
-            </Item>
+            </RuleRow>
           )}
-          <Item label={copy.rulesCloseAt} testId={`${testId}-close-at`}>
-            <Time iso={market.closeAt} zone={zone} testId={`${testId}-close-at`} />
-          </Item>
-          <Item label={copy.rulesAnnouncementAt} testId={`${testId}-announcement-at`}>
+          <RuleRow label={copy.rulesCloseAt} testId={`${testId}-close-at`}>
+            <RuleTime iso={market.closeAt} zone={zone} testId={`${testId}-close-at`} />
+          </RuleRow>
+          <RuleRow label={copy.rulesAnnouncementAt} testId={`${testId}-announcement-at`}>
             {/* No announcement time is '없음', an event with no scheduled release (#172 item 13). */}
             {market.scheduledAnnouncementAt === null ? (
               copy.rulesAnnouncementNone
             ) : (
-              <Time
+              <RuleTime
                 iso={market.scheduledAnnouncementAt}
                 zone={zone}
                 testId={`${testId}-announcement-at`}
               />
             )}
-          </Item>
-          <Item label={copy.rulesJudgementAt} testId={`${testId}-judgement-at`}>
-            <Time iso={market.scheduledJudgementAt} zone={zone} testId={`${testId}-judgement-at`} />
-          </Item>
-          <Item label={copy.rulesJudgementTimeZone} testId={`${testId}-judgement-time-zone`}>
+          </RuleRow>
+          <RuleRow label={copy.rulesJudgementAt} testId={`${testId}-judgement-at`}>
+            <RuleTime
+              iso={market.scheduledJudgementAt}
+              zone={zone}
+              testId={`${testId}-judgement-at`}
+            />
+          </RuleRow>
+          <RuleRow label={copy.rulesJudgementTimeZone} testId={`${testId}-judgement-time-zone`}>
             {zone === null ? EMPTY : <TimeZoneNameText zone={zone} />}
-          </Item>
+          </RuleRow>
         </DataList.Root>
       </Card.Body>
     </Card.Root>
@@ -163,9 +167,18 @@ export function RulesSection({ market, 'data-testid': testId }: RulesSectionProp
 /**
  * A time of the rules: `DateTimeText` in the viewer's zone, with the market's 판정 기준 시간대 as
  * its second line when that differs, or '—' for one not filled in (a draft's, or a market's opened
- * before #22).
+ * before #22). This and the three below draw a rule version's items too (rule-versions-section.tsx,
+ * #80), so a version reads as the rules area does.
  */
-function Time({ iso, zone, testId }: { iso: string | null; zone: string | null; testId: string }) {
+export function RuleTime({
+  iso,
+  zone,
+  testId,
+}: {
+  iso: string | null;
+  zone: string | null;
+  testId: string;
+}) {
   if (iso === null) return EMPTY;
   return <DateTimeText iso={iso} judgementTimeZone={zone} testId={testId} />;
 }
@@ -175,7 +188,13 @@ function Time({ iso, zone, testId }: { iso: string | null; zone: string | null; 
  * judgement the instant itself (`longDelayDeadline`, #172 item 10: N×24 hours) — the one #142 and
  * #145 act on — so the reader adds no days (#22, ADR-0098). '—' while the days are not set.
  */
-function LongDelay({ market, testId }: { market: RulesSectionMarket; testId: string }) {
+export function RuleLongDelay({
+  market,
+  testId,
+}: {
+  market: Pick<RulesSectionMarket, 'longDelayDays' | 'scheduledJudgementAt' | 'judgementTimeZone'>;
+  testId: string;
+}) {
   const text = longDelayText(market.longDelayDays);
   if (text === null) return EMPTY;
   const deadline = longDelayDeadline(market.scheduledJudgementAt, market.longDelayDays);
@@ -190,7 +209,7 @@ function LongDelay({ market, testId }: { market: RulesSectionMarket; testId: str
 }
 
 /** A source: its name as a link to its address, or what `sourceView` leaves of a half one. */
-function Source({ source }: { source: RuleSource | null }) {
+export function RuleSourceLink({ source }: { source: RuleSource | null }) {
   const view = sourceView(source);
   if (view === null) return EMPTY;
   if (view.href === null) return view.text;
@@ -208,7 +227,16 @@ function Source({ source }: { source: RuleSource | null }) {
   );
 }
 
-function Item({ label, testId, children }: { label: string; testId: string; children: ReactNode }) {
+/** One row of the rules: its label, and its value under `testId`. */
+export function RuleRow({
+  label,
+  testId,
+  children,
+}: {
+  label: string;
+  testId: string;
+  children: ReactNode;
+}) {
   return (
     // The direction restated: the horizontal recipe sets none, so the vertical one's column would
     // last past md. Top-aligned: a value of several lines keeps its label on its first. The value

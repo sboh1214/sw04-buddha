@@ -15,7 +15,9 @@ type EditedTimeItem = (typeof EDITED_TIME_ITEMS)[number];
  * time and the judgement time zone — in the form's order. The scheduled open, the close and the
  * scheduled judgement are times of the market, as its title is a version item: an edit of them is
  * in `market_update`'s before and after, not here. The list spans market-rules.ts and
- * market-times.ts, and the second imports the first, so it lives in a module of its own.
+ * market-times.ts, and the second imports the first, so it lives in a module of its own. Since
+ * #80 the event is a draft's: after the open every version item (`RULE_VERSION_ITEMS`, a superset)
+ * changes by a supplement, whose `rules_supplemented` event names them.
  */
 export const RULES_EDITED_ITEMS = [...RULE_ITEMS, ...EDITED_TIME_ITEMS] as const;
 export type RulesEditedItem = (typeof RULES_EDITED_ITEMS)[number];

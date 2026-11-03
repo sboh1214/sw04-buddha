@@ -64,8 +64,9 @@ const summary = {
   statusEventId: '2',
   createdAt: at,
 };
-const market = {
-  ...summary,
+// The full text of the market's rules (#80): every version item, as its v1 holds it.
+const ruleContent = {
+  title: summary.title,
   description: null,
   yesCondition: '12월 30일 코스피 종가가 3000 이상이면 YES.',
   noCondition: '사건 기한까지 3000 이상으로 마감하지 않으면 NO.',
@@ -76,12 +77,27 @@ const market = {
   longDelayDays: 14,
   delayHandling: '장기 지연 기한까지 종가가 나오지 않으면 무효로 판정한다.',
   scheduledOpenAt: '2026-09-01T00:00:00.000Z',
+  closeAt: at,
   scheduledAnnouncementAt: '2026-12-30T06:30:00.000Z',
   scheduledJudgementAt: '2026-12-31T01:00:00.000Z',
   judgementTimeZone: 'Asia/Seoul',
+};
+const versionOne = {
+  version: 1,
+  createdAt: at,
+  changedItems: [],
+  reason: null,
+  content: ruleContent,
+};
+const { title: _title, closeAt: _closeAt, ...ruleAndTimeItems } = ruleContent;
+const market = {
+  ...summary,
+  ...ruleAndTimeItems,
   tags: ['코스피', 'S&P500'],
   resolvedAt: null,
   settledAt: null,
+  ruleVersion: 1,
+  ruleVersions: [versionOne],
 };
 const event = {
   id: '1',
@@ -212,12 +228,35 @@ describe('read DTOs', () => {
         sameCondition: [],
         log: [],
       },
+      ruleVersions: [
+        {
+          ...versionOne,
+          approvalId: null,
+          requestedBy: null,
+          createdBy: null,
+          settlementImpact: null,
+        },
+      ],
+      supplement: { pending: null, log: [] },
     };
     expect(adminMarketSchema.parse(admin)).toEqual(admin);
     // The review (#78) is the admin's, in every status, and never optional.
     expect(marketSchema.parse(admin)).not.toHaveProperty('review');
     const { review: _review, ...withoutReview } = admin;
     expect(adminMarketSchema.safeParse(withoutReview).success).toBe(false);
+    // So is the supplement (#80), and its versions name who asked and who made them.
+    expect(marketSchema.parse(admin)).not.toHaveProperty('supplement');
+    const { supplement: _supplement, ...withoutSupplement } = admin;
+    expect(adminMarketSchema.safeParse(withoutSupplement).success).toBe(false);
+    expect(
+      issuePaths(adminMarketSchema.safeParse({ ...admin, ruleVersions: [versionOne] })),
+    ).toEqual([
+      'ruleVersions.0.approvalId',
+      'ruleVersions.0.requestedBy',
+      'ruleVersions.0.createdBy',
+      'ruleVersions.0.settlementImpact',
+    ]);
+    expect(marketSchema.parse(admin).ruleVersions).toEqual([versionOne]);
     expect(
       adminMarketSchema.safeParse({ ...admin, missingOpenItems: ['tags', 'deadline'] }).success,
     ).toBe(false);
@@ -351,6 +390,57 @@ describe('read DTOs', () => {
       false,
     );
     expect(findExcludedIdentifier('judgementDelayed', 'api')).toEqual([]);
+  });
+
+  it('carry the current rule version and every version on the detail, nobody on them (#80)', () => {
+    // Before the open, and on a market opened before #80 (D4): no version, an empty history.
+    const unversioned = { ...market, ruleVersion: null, ruleVersions: [] };
+    expect(marketSchema.parse(unversioned)).toEqual(unversioned);
+    // A supplement made v2: the newest first, with the items it changed and its reason.
+    const versionTwo = {
+      version: 2,
+      createdAt: '2026-10-01T00:00:00.000Z',
+      changedItems: ['description', 'closeAt'],
+      reason: '배경을 보충한다',
+      content: { ...ruleContent, description: '코스피 지수', closeAt: '2026-12-29T06:00:00.000Z' },
+    };
+    const supplemented = { ...market, ruleVersion: 2, ruleVersions: [versionTwo, versionOne] };
+    expect(marketSchema.parse(supplemented)).toEqual(supplemented);
+    // Both are required, never defaulted, and a version counts from 1.
+    const { ruleVersion: _version, ...withoutVersion } = market;
+    expect(marketSchema.safeParse(withoutVersion).success).toBe(false);
+    const { ruleVersions: _versions, ...withoutVersions } = market;
+    expect(marketSchema.safeParse(withoutVersions).success).toBe(false);
+    for (const ruleVersion of [0, 1.5, '1']) {
+      expect(marketSchema.safeParse({ ...market, ruleVersion }).success).toBe(false);
+    }
+    // A changed item is a version item; the category is none.
+    expect(
+      issuePaths(
+        marketSchema.safeParse({
+          ...market,
+          ruleVersions: [{ ...versionTwo, changedItems: ['category'] }],
+        }),
+      ),
+    ).toEqual(['ruleVersions.0.changedItems.0']);
+    // The public reads nobody's name and no 정산 영향 검토 (#172 item 15, #173 item 13).
+    const adminVersion = {
+      ...versionTwo,
+      approvalId: marketId,
+      requestedBy: { id: 'admin-1', nickname: '운영자1' },
+      createdBy: { id: 'admin-2', nickname: '운영자2' },
+      settlementImpact: '체결과 판정에 영향 없음',
+    };
+    expect(marketSchema.parse({ ...market, ruleVersions: [adminVersion] }).ruleVersions).toEqual([
+      versionTwo,
+    ]);
+    // A card carries neither.
+    const card = marketSummarySchema.parse(supplemented);
+    expect(card).not.toHaveProperty('ruleVersion');
+    expect(card).not.toHaveProperty('ruleVersions');
+    for (const name of ['ruleVersion', 'ruleVersions', 'changedItems', 'content']) {
+      expect(findExcludedIdentifier(name, 'api')).toEqual([]);
+    }
   });
 
   it('describe a price series by the stride and the window the server served', () => {
@@ -535,6 +625,34 @@ describe('createMarketBodySchema', () => {
     expect(
       createMarketBodySchema.parse({ ...body, initialProbBp: 5000, liquidityB: 1000 }),
     ).toEqual({ ...body, title: '2026년 안에 코스피 3000?' });
+  });
+
+  it("takes the fields in the form's order, the version items among them (#80)", () => {
+    // The title, the rule items and the times come from market-fields.ts, which a supplement's
+    // changes share; the order is the form's, the category, tags and image between them.
+    const fields = [
+      'title',
+      'description',
+      'yesCondition',
+      'noCondition',
+      'eventDeadline',
+      'primarySource',
+      'fallbackSources',
+      'fallbackCondition',
+      'longDelayDays',
+      'delayHandling',
+      'categoryId',
+      'tags',
+      'imageUrl',
+      'scheduledOpenAt',
+      'closeAt',
+      'scheduledAnnouncementAt',
+      'scheduledJudgementAt',
+      'judgementTimeZone',
+      'slug',
+    ];
+    expect(Object.keys(createMarketBodySchema.shape)).toEqual([...fields, 'expectedAccountId']);
+    expect(Object.keys(updateMarketBodySchema.shape)).toEqual([...fields, 'expectedAccountId']);
   });
 
   it('accepts the largest category id a serial column can hold', () => {

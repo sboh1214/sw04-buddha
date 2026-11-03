@@ -230,6 +230,8 @@ export const MARKET_EVENT_TYPES = [
    * the scheduled open already come (actor that admin). Payload `{openAt, closeAt, source}`: the
    * instants as ISO and `source` 'job', 'approval' or 'reschedule'. Rows from before #21 are draft
    * → open, the admin's direct open (ADR-0027, the interim open), payload `{openAt, closeAt}`.
+   * Since #80 the open also records the market's rules v1 (`market_rule_versions`, ADR-0101) in its
+   * transaction, with no event of its own: this one is its record.
    */
   'opened',
   /** open → closed: the admin's close (until #114) or the worker at `close_at`. */
@@ -237,16 +239,27 @@ export const MARKET_EVENT_TYPES = [
   /** settling → settled: the worker finished every SETTLEMENT_STEPS step. */
   'finalized',
   /**
-   * No status change (`from_status`/`to_status` null): an edit of a draft or open market (REVIEW
-   * and SCHEDULED are locked, #78) that changed rule items (#23) or the announcement time or
-   * judgement time zone (#22, `RULES_EDITED_ITEMS`), payload `{items, before, after}`
-   * (`rulesEditedPayload`). Rows from before #23 carry `{before, after}` as the old rules text.
+   * No status change (`from_status`/`to_status` null): an edit of a draft (REVIEW and SCHEDULED are
+   * locked, #78, and after the open the rules change by a supplement alone, `rules_supplemented`,
+   * #80) that changed rule items (#23) or the announcement time or judgement time zone (#22,
+   * `RULES_EDITED_ITEMS`), payload `{items, before, after}` (`rulesEditedPayload`). Rows from
+   * before #80 may be an open market's edit, and rows from before #23 carry `{before, after}` as
+   * the old rules text.
    */
   'rules_edited',
   /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}` (until #152). */
   'resolved',
   /** resolved → settling: the worker starts the settlement steps (ADR-0093 decision 1 item 1). */
   'settling',
+  /**
+   * No status change (`from_status`/`to_status` null): another admin approved a 보충 of an OPEN or
+   * PAUSED market and its rules moved to a new version (#80, ADR-0101; ADR-0093 decision 2 #172
+   * items 14·15) — the actor is the approver. Payload `{version, approvalId, items, reason,
+   * requestedBy}` (`MarketRulesSupplementedPayload`, market-supplement.ts): the version it made,
+   * the `market_supplement` request, the items it changed, the supplement's reason and its
+   * requester. A supplement's one market event: its request, 반려 and 철회 are admin actions alone.
+   */
+  'rules_supplemented',
 ] as const;
 export type MarketEventType = (typeof MARKET_EVENT_TYPES)[number];
 export const marketEventTypeSchema = z.enum(MARKET_EVENT_TYPES);
@@ -327,7 +340,8 @@ export const ADMIN_ACTION_TYPES = [
    * A market's draft (payload `{after}`) and an edit of it (`{before, after}`): the snapshot holds
    * every field a PATCH reaches, its tags (#17) included, so an edit of an open market's category
    * or tags is recorded with the actor, the time and both values (ADR-0093 decision 2 #172 item
-   * 14).
+   * 14). Its version items change by a supplement alone after the open (#80,
+   * `market_supplement_approve`).
    */
   'market_create',
   'market_update',
@@ -348,6 +362,24 @@ export const ADMIN_ACTION_TYPES = [
   'market_revert',
   /** A SCHEDULED market's 예정 개장 시각 moved: payload `{before, after, reason}`, ISO instants. */
   'market_reschedule',
+  /**
+   * 규칙 보충 (#80, ADR-0101; ADR-0093 decision 2 #172 item 15): target `market` / its id, as each
+   * supplement record below. An admin asked for one, which opens a `market_supplement` approval
+   * request and changes nothing yet: payload `{approvalId, baseVersion, items, changes, reason,
+   * settlementImpact}` — the version it was written against, the items and their new values, the
+   * reason and the 정산 영향 검토.
+   */
+  'market_supplement_request',
+  /**
+   * Another admin approved it, and the market's rules moved to `version` in the same transaction
+   * (its `rules_supplemented` event): payload `{approvalId, version, items, reason, before,
+   * after}` — the approver's reason and `market_update`'s snapshot before and after.
+   */
+  'market_supplement_approve',
+  /** Another admin rejected it, nothing changed: payload `{approvalId, rejectReason, reason}`. */
+  'market_supplement_reject',
+  /** Its requester retracted it before anyone decided it, nothing changed: `{approvalId}`. */
+  'market_supplement_retract',
   /**
    * Retired (#21, ADR-0100): the interim open (ADR-0027, draft → open) wrote it until #21 removed
    * that action. Kept so the rows it wrote still parse and render; nothing writes it now — an open

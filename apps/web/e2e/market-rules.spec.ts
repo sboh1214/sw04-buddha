@@ -13,6 +13,7 @@ import {
   freshTag,
   kstLocalOf,
   openThroughReview,
+  sendSupplement,
   signIn,
   submitRefusedItems,
   test,
@@ -30,10 +31,12 @@ import {
  * address that is not http(s) and a fallback row left empty are refused under their inputs, the
  * empty row's refusal going as it is typed into. Once every item is filled the notice goes and the
  * market opens through the review (submitted, then approved by the second admin past its scheduled
- * open — #21, ADR-0100), and an open market cannot lose an item it had. 빼기 takes a fallback out,
- * and the last one out takes the switch condition with it: the market saves with no fallback and a
- * blank condition. The market's times (#22) are filled in with the rule items, as the review needs
- * them too (market-times.spec.ts takes them through the form).
+ * open — #21, ADR-0100). Open, its items are rule version items that change by a supplement alone
+ * (#80, ADR-0101): the form shows them off, the API refuses a PATCH of one, and a supplement may
+ * not empty one it had (rule-versions.spec.ts takes a supplement through the screens). 빼기 takes a
+ * fallback out, and the last one out takes the switch condition with it: the market saves with no
+ * fallback and a blank condition. The market's times (#22) are filled in with the rule items, as
+ * the review needs them too (market-times.spec.ts takes them through the form).
  *
  * A visitor who is not signed in reads every item on the detail's 규칙, in the form's order and all
  * of it at once — nothing folds (decision 3 '#23 문장 길이와 표시') — with each source's name a link
@@ -41,8 +44,9 @@ import {
  * HTML holds the texts too. A market with no fallback reads 없음 there, and has no switch row.
  *
  * The entry rules (lengths, schemes, the 500 and 5,000 limits, the empty source, the merged
- * 'no fallback source' check), RULES_REQUIRED item by item, the `rules_edited` record and the
- * public DTO are the API's integration tests (admin-markets.controller.test.ts,
+ * 'no fallback source' check), the open market's refusal item by item, a supplement's
+ * RULES_REQUIRED item by item, the draft's `rules_edited` record and the public DTO are the API's
+ * integration tests (admin-markets.controller.test.ts, admin-markets-supplement.controller.test.ts,
  * markets.controller.test.ts); the form's rules and mappings and the section's rows are unit-tested
  * (lib/market-form.test.ts, lib/market-admin.test.ts, rules-section.test.tsx). This spec follows
  * them through the screens, at both widths.
@@ -365,23 +369,48 @@ test.describe('규칙 항목', () => {
       await adminPage.reload();
       await expect(adminPage.getByTestId('market-detail-status')).toHaveText(copy.marketStatusOpen);
 
-      // --- an open market cannot lose an item it had: the YES 조건 emptied is refused under its
-      // input before anything is sent or confirmed, and the API refuses it too (RULES_REQUIRED).
-      await letToastsGo(adminPage);
+      // --- open, its rule items change by a supplement alone (#80, ADR-0101; ADR-0093 decision
+      // 2 #172 item 14): the form still shows every item as it is, off under a note that says so —
+      // the tags stay live — and sends nothing; the API refuses a PATCH that changes one. An open
+      // market still cannot lose an item it had: a supplement emptying the YES 조건 is refused
+      // naming it (RULES_REQUIRED), and nothing waits.
+      await expect(adminPage.getByTestId('market-edit-supplement-only')).toHaveText(
+        copy.adminMarketEditSupplementOnly,
+      );
       const yesInput = adminPage.getByTestId('market-yes-condition');
       await expect(yesInput).toHaveValue(yes);
-      await yesInput.fill('');
-      await adminPage.getByTestId('market-save').click();
-      await expect(yesInput).toHaveAccessibleErrorMessage(copy.errMarketRulesOpen);
-      await expect(adminPage.getByTestId('market-edit-confirm')).toHaveCount(0);
+      for (const input of [
+        'market-description',
+        'market-yes-condition',
+        'market-primary-source-url',
+        'market-fallback-0-name',
+        'market-fallback-0-remove',
+        'market-fallback-condition',
+        'market-delay-handling',
+      ]) {
+        await expect(adminPage.getByTestId(input)).toBeDisabled();
+      }
+      await expect(adminPage.getByTestId('market-tags-input')).toBeEnabled();
+      await expect(adminPage.getByTestId('market-save')).toBeDisabled();
       expect(patches).toHaveLength(2);
       const refused = await admin.patch(`/api/v1/admin/markets/${marketId}`, {
         data: { yesCondition: '', expectedAccountId: await accountIdOf(admin) },
       });
-      expect(refused.status()).toBe(422);
-      expect(((await refused.json()) as { error: { code: string } }).error.code).toBe(
-        'RULES_REQUIRED',
+      expect(refused.status()).toBe(400);
+      expect(((await refused.json()) as { error: unknown }).error).toMatchObject({
+        code: 'VALIDATION_ERROR',
+        details: [{ path: ['yesCondition'], message: 'supplement only while open' }],
+      });
+      const emptied = await sendSupplement(admin, marketId, { yesCondition: '' });
+      expect(emptied.status()).toBe(422);
+      expect(((await emptied.json()) as { error: unknown }).error).toMatchObject({
+        code: 'RULES_REQUIRED',
+        details: [{ path: ['yesCondition'], message: 'required while open' }],
+      });
+      const kept = await dataOf<{ yesCondition: string; supplement: { pending: unknown } }>(
+        await admin.get(`/api/v1/admin/markets/${marketId}`),
       );
+      expect(kept).toMatchObject({ yesCondition: yes, supplement: { pending: null } });
     } finally {
       await adminContext.close();
     }
