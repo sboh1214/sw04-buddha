@@ -302,7 +302,7 @@ const REALTIME_EVENTS = {
   },
   'market:status': {
     room: '`market:<id>`',
-    note: '상태 전이(개장·마감·결과 확정·지급 시작·지급 완료). 설명만 고친 편집도 같은 상태로 다시 발행된다',
+    note: '상태 전이(검수 승인으로 개장 예정·개장·마감·결과 확정·지급 시작·지급 완료). 설명만 고친 편집과 개장 예정 시장의 예정 개장 시각 변경도 같은 상태·같은 키로 다시 발행된다. 개장 예정에서 초안으로 되돌리면 `draft` 를 새 키로 발행한다 — 회원 화면은 공개되지 않는 상태를 적용하지 않고, 다시 읽으면 NOT_FOUND 다(#78)',
     key: '`statusEventId`',
   },
   'user:balance': {
@@ -373,7 +373,7 @@ const ERROR_NOTES = {
   ROLE_CHANGE_NOT_ALLOWED:
     '관리자 권한 부여·회수의 규칙에 맞지 않는다. `details[0].message` 가 까닭을 말한다 — 부여는 `already_admin`(이미 관리자다), `email_not_verified`(이메일 인증을 마치지 않았다), `phone_not_verified`(휴대전화 본인확인을 마치지 않았다), 회수는 `not_admin`(관리자가 아니다), `min_admins`(회수하면 관리자가 2명 미만이 된다. 자기 회수도 같다).',
   APPROVAL_NOT_ALLOWED:
-    '2인 통제 요청의 결정(승인·거절)이나 철회를 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다), `retracted`(요청한 운영자가 철회한 요청이다 — 아무도 결정하지 않는다), `not_requester`(요청한 운영자만 철회한다). 이 규칙을 쓰는 라우트가 이 코드를 문서화한다 — 계정 제한(#139)의 요청 승인·거절·철회.',
+    '2인 통제 요청의 결정(승인·거절)이나 철회를 받지 않는다. `details[0].message` 가 까닭을 말한다 — `requester`(요청한 계정은 자기 요청을 결정할 수 없다. 어느 환경에서도 예외가 없다), `decided`(이미 결정된 요청이다), `retracted`(요청한 운영자가 철회한 요청이다 — 아무도 결정하지 않는다), `not_requester`(요청한 운영자만 철회한다), 시장 검수(#78)에서만 `creator`(그 시장을 만든 운영자 — 제안을 채택해 만든 시장은 채택한 운영자)·`editor`(그 시장의 내용을 수정한 적이 있는 운영자). 시장 검수의 승인·반려는 `creator`·`editor`·`requester` 가운데 먼저 걸리는 것 하나를 이 순서로 답하고, 본문의 `requestId` 가 더는 기다리는 요청이 아니면(그 사이 초안으로 되돌려 다시 제출한 시장) 그 요청이 끝난 대로 `retracted`·`decided` 를 먼저 답한다. `editor` 는 `market_update` 나 `market_reschedule` 기록이 있는 운영자다. 이 규칙을 쓰는 라우트가 이 코드를 문서화한다 — 계정 제한(#139)의 요청 승인·거절·철회, 시장 검수(#78)의 승인·반려.',
   PHONE_VERIFICATION_NOT_ALLOWED:
     '본인확인을 받지 않는다. `details.reason` 이 까닭을 말한다 — `already_verified`(이미 본인확인을 마쳤다), `phone_in_use`(그 번호는 다른 계정이 본인확인한 번호다. 한 번호에 한 계정, 맞는 인증번호를 확인한 뒤에만 알린다).',
   PHONE_VERIFICATION_LIMITED:
@@ -419,7 +419,7 @@ const ERROR_NOTES = {
   PROPOSAL_LIMITED:
     '시장 제안을 받지 않았다(#77). 한도는 계정이 아니라 본인확인한 번호(키 있는 해시)로 센다. 운영자 계정에는 한도가 없다. `details.reason` 이 걸린 한도를, `details.limit` 이 그 수를 말한다 — `pending`(처리 대기(접수·검토) 제안이 5건이다. 하나가 채택·반려·철회되면 다시 낼 수 있어 `details.retryAfterSeconds` 는 `null`), `daily`(직전 24시간에 3건을 냈다. 그 뒤 철회·반려된 것도 센다. `details.retryAfterSeconds` 가 가장 오래된 것이 24시간을 벗어나기까지의 초를 분 단위로 올린 값).',
   OPEN_ITEMS_MISSING:
-    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, #22, 지금은 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), 시각인 `['scheduledOpenAt']`(예정 개장 시각이 없다)·`['closeAt']`(거래 마감 시각 — 저장된 시장에는 늘 있어 빠지지 않는다)·`['scheduledJudgementAt']`(예정 판정 시각이 없다)·`['judgementTimeZone']`(판정 기준 시간대가 없다), `['timeOrder']`(시각 순서 — 예정 개장 < 거래 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정을 분 단위로 본다. `message` 가 어긴 규칙을 `, ` 로 잇는다. DB 의 CHECK 가 같은 순서를 지키므로 저장된 시장에서는 나오지 않는다), `['leadClose']`(선행 마감 — 발표 예정 시각이 있으면 거래 마감이 그보다 출시 설정 `market.lead_close_gap` 의 분 이상 앞서야 한다. 그 설정이 미정이면 `message` 가 `gap undecided` 이고, 발표 예정 시각이 없음인 시장은 상관없다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다). 이 검사를 통과해도 예정 개장 시각이 되지 않았으면 `VALIDATION_ERROR`(`['scheduledOpenAt']`, `not reached yet`)로 열지 않는다.",
+    "시장이 개설 항목 검사를 통과하지 못해 초안을 벗어날 수 없다(#17, #23, #22 — 검수 제출과 승인(#78), 임시 열기). `details` 가 빠진 항목마다 하나씩 검사의 순서로 온다 — `path` 가 `['title']`(질문이 비었다), 규칙 항목인 `['description']`(배경이 비었다)·`['yesCondition']`·`['noCondition']`·`['eventDeadline']`(사건 기한이 없다)·`['primarySource']`(1차 출처가 없거나 이름·주소 가운데 하나가 비었다)·`['fallbackSources']`(적은 대체 출처의 이름·주소 가운데 하나가 비었다 — 대체 출처가 없는 것은 빠진 것이 아니다)·`['fallbackCondition']`(대체 출처가 있는데 전환 조건이 비었다)·`['longDelayDays']`(장기 지연 기한이 없다)·`['delayHandling']`(지연·취소·무효 처리가 비었다), 시각인 `['scheduledOpenAt']`(예정 개장 시각이 없다)·`['closeAt']`(거래 마감 시각 — 저장된 시장에는 늘 있어 빠지지 않는다)·`['scheduledJudgementAt']`(예정 판정 시각이 없다)·`['judgementTimeZone']`(판정 기준 시간대가 없다), `['timeOrder']`(시각 순서 — 예정 개장 < 거래 마감 ≤ 예정 판정, 사건 기한 ≤ 예정 판정을 분 단위로 본다. `message` 가 어긴 규칙을 `, ` 로 잇는다. DB 의 CHECK 가 같은 순서를 지키므로 저장된 시장에서는 나오지 않는다), `['leadClose']`(선행 마감 — 발표 예정 시각이 있으면 거래 마감이 그보다 출시 설정 `market.lead_close_gap` 의 분 이상 앞서야 한다. 그 설정이 미정이면 `message` 가 `gap undecided` 이고, 발표 예정 시각이 없음인 시장은 상관없다), `['category']`(새 시장을 둘 수 없는 카테고리다 — 숨겼거나, 부모를 숨겼거나, 하위 분류가 있는 상위다. `message` 가 그 까닭이다), `['tags']`(태그가 1개 이상 5개 이하가 아니다). 승인은 제출 때 저장한 선행 마감 간격으로 다시 본다. 임시 열기는 이 검사를 통과해도 예정 개장 시각이 되지 않았으면 `VALIDATION_ERROR`(`['scheduledOpenAt']`, `not reached yet`)로 열지 않는다.",
   INTERNAL: '그 밖의 서버 오류. 본문에 내부 사정을 담지 않는다.',
 };
 

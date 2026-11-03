@@ -154,6 +154,32 @@ describe('enums', () => {
     for (const type of enums.MARKET_EVENT_TYPES) expect(type.length).toBeLessThanOrEqual(40);
   });
 
+  it('records the market review in the market events and the admin log (#78)', () => {
+    // Each status change of the review and the reschedule, in the lifecycle's order after the
+    // draft's creation; the interim open stays until #21.
+    expect(enums.MARKET_EVENT_TYPES.slice(0, 7)).toEqual([
+      'created',
+      'submitted',
+      'approved',
+      'rejected',
+      'reverted',
+      'open_rescheduled',
+      'opened',
+    ]);
+    expect(enums.ADMIN_ACTION_TYPES).toEqual(
+      expect.arrayContaining([
+        'market_submit',
+        'market_approve',
+        'market_reject',
+        'market_revert',
+        'market_reschedule',
+        'market_open',
+      ]),
+    );
+    expect(new Set(enums.MARKET_EVENT_TYPES).size).toBe(enums.MARKET_EVENT_TYPES.length);
+    expect(new Set(enums.ADMIN_ACTION_TYPES).size).toBe(enums.ADMIN_ACTION_TYPES.length);
+  });
+
   it('lists the settlement steps and their statuses (O-6, ADR-0046)', () => {
     // Coin settlement is the only step: Forecast scoring left with Forecast (N02 §1, N04 §4).
     expect(enums.SETTLEMENT_STEPS).toEqual(['coin']);

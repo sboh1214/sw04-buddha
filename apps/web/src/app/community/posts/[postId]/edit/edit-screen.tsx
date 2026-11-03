@@ -204,8 +204,9 @@ function EditForm({
         <Text textStyle="overline" color="fg.muted">
           {copy.postWriteMarketLabel}
         </Text>
+        {/* None while the market is not public (#78 되돌리기, ADR-0099). */}
         <Text textStyle="title" data-testid="post-edit-market">
-          {post.market.title}
+          {post.market?.title ?? copy.postMarketNotPublic}
         </Text>
       </Stack>
       <PostForm

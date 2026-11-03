@@ -11,6 +11,7 @@ import type { Route } from 'next';
 import NextLink from 'next/link';
 import { CardReportButton } from '@/components/moderation/report-button';
 import { PostByline } from '@/components/post/post-author';
+import { copy } from '@/copy';
 import { type AuthoredComment } from '@/lib/api';
 import { commentKindLabel, commentedPostText } from '@/lib/authored';
 import { likeCountText } from '@/lib/likes';
@@ -68,34 +69,41 @@ export function AuthoredCommentCard({
       data-testid={`authored-comment-${comment.id}`}
     >
       <Stack gap="1.5" minW="0">
-        <HStack gap="2" minW="0">
-          <ChakraLink
-            asChild
-            textStyle="overline"
-            color="fg.muted"
-            truncate
-            minW="0"
-            _hover={{ color: 'fg' }}
-          >
-            <NextLink
-              href={`/markets/${comment.market.slug}` as Route}
-              prefetch={false}
-              data-testid="authored-comment-market"
+        {/* A market sent back to a draft (#78 되돌리기, ADR-0099): the API names none of it. */}
+        {comment.market === null ? (
+          <Text textStyle="overline" color="fg.muted" data-testid="authored-comment-market-hidden">
+            {copy.postMarketNotPublic}
+          </Text>
+        ) : (
+          <HStack gap="2" minW="0">
+            <ChakraLink
+              asChild
+              textStyle="overline"
+              color="fg.muted"
+              truncate
+              minW="0"
+              _hover={{ color: 'fg' }}
             >
-              {comment.market.title}
-            </NextLink>
-          </ChakraLink>
-          {comment.market.status !== 'open' && (
-            <Badge
-              size="sm"
-              variant="subtle"
-              flexShrink="0"
-              colorPalette={MARKET_STATUS_PALETTE[comment.market.status]}
-            >
-              {marketStatusLabel(comment.market)}
-            </Badge>
-          )}
-        </HStack>
+              <NextLink
+                href={`/markets/${comment.market.slug}` as Route}
+                prefetch={false}
+                data-testid="authored-comment-market"
+              >
+                {comment.market.title}
+              </NextLink>
+            </ChakraLink>
+            {comment.market.status !== 'open' && (
+              <Badge
+                size="sm"
+                variant="subtle"
+                flexShrink="0"
+                colorPalette={MARKET_STATUS_PALETTE[comment.market.status]}
+              >
+                {marketStatusLabel(comment.market)}
+              </Badge>
+            )}
+          </HStack>
+        )}
         <LinkOverlay asChild display="flex" alignItems="center" gap="2" minW="0">
           <NextLink href={postPath(comment.post.id) as Route} data-testid="authored-comment-link">
             <Badge

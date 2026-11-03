@@ -16,6 +16,10 @@ import * as z from 'zod';
  * the approved work (ApprovalService in apps/api). A retraction, where a consumer allows one (#139
  * does), is the requester's own and closes the request as `retracted` — no decision, decided by no
  * one — with its instant (`retracted_at`, migration 0042).
+ *
+ * A consumer may exclude more deciders than the requester: a market review (#78, `market_review`,
+ * market-review.ts) is decided by neither the market's creator nor anyone who edited it
+ * (`creator`, `editor` below). Its submitter's own 되돌리기 retracts it; anyone else's rejects it.
  */
 
 /** Lower-case words joined by `_` (`market_open`); approval_requests.kind is varchar(40). */
@@ -32,8 +36,19 @@ export const approvalReasonSchema = z.string().trim().min(1).max(APPROVAL_REASON
  * - `decided`: the request was decided already;
  * - `retracted`: its requester retracted it — it is decided by no one, and retracted once (#139,
  *   ADR-0085: a consumer that lets its requests be retracted);
- * - `not_requester`: a retraction by anyone but the requester.
+ * - `not_requester`: a retraction by anyone but the requester;
+ * - `creator`: a market review's decider created the market (#78, #172 item 5);
+ * - `editor`: a market review's decider edited the market's content before (#78, #172 item 5).
+ * A market review refuses its own exclusions before the rule's, in MARKET_REVIEW_EXCLUSIONS'
+ * order (market-review.ts), so its submitter gets `requester` only when neither of the two holds.
  * A decider (or a retracting requester) who is not an admin now gets FORBIDDEN.
  */
-export const APPROVAL_REFUSALS = ['requester', 'decided', 'retracted', 'not_requester'] as const;
+export const APPROVAL_REFUSALS = [
+  'requester',
+  'decided',
+  'retracted',
+  'not_requester',
+  'creator',
+  'editor',
+] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];

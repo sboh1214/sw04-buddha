@@ -5,9 +5,13 @@ import {
   COIN_UNIT,
   LEAD_CLOSE_GAP_UNDECIDED,
   LEAD_CLOSE_GAP_UNDECIDED_MESSAGE,
+  MARKET_REVIEW_CHECKLIST,
   MINUS_SIGN,
   type MarketEventType,
+  type MarketRejectReason,
   type MarketResult,
+  type MarketReviewChecklistItem,
+  type MarketReviewEventType,
   type MarketSource,
   type MarketStatus,
   OPEN_ITEMS,
@@ -29,6 +33,7 @@ import {
   type TimeRuleViolation,
   formatCoin,
   isCompleteSource,
+  marketRejectReasonSchema,
   marketResultSchema,
   coinAmountSchema,
   parseCoinAmount,
@@ -114,8 +119,17 @@ export const MARKET_RESULT_LABEL: Record<MarketResult, string> = {
   VOID: copy.marketResultVoid,
 };
 
+/**
+ * Each market event's name in the admin's 이벤트 로그; the five of the 개설 검수 (#78, ADR-0099) are the
+ * 검수 기록's names too (lib/market-review.ts).
+ */
 export const MARKET_EVENT_LABEL: Record<MarketEventType, string> = {
   created: copy.eventCreated,
+  submitted: copy.eventSubmitted,
+  approved: copy.eventApproved,
+  rejected: copy.eventRejected,
+  reverted: copy.eventReverted,
+  open_rescheduled: copy.eventOpenRescheduled,
   opened: copy.eventOpened,
   closed: copy.eventClosed,
   resolved: copy.eventResolved,
@@ -489,11 +503,11 @@ function resolveDetailRows(detail: {
  * An event's payload as label/value rows in Korean, for the shapes the API and the worker
  * write (design 3.4's 이벤트 로그, 5.5): the rules diff (each changed rule item since #23, the one
  * rules text before it), the open and close instants, the 판정 with its note and evidence, the
- * finalize summary — and no row at all for the start of the payout, whose only field is the
- * `source` the 시스템 actor beside it already says. The payload is `unknown` on the wire (jsonb),
- * so each shape is checked before it is read; `created` (the whole create body) and anything that
- * does not match are `undefined`, and the screen shows those as `compactJson` instead of a
- * half-read row.
+ * finalize summary, the 개설 검수's records (#78, `reviewDetailRows`) — and no row at all for the
+ * start of the payout, whose only field is the `source` the 시스템 actor beside it already says.
+ * The payload is `unknown` on the wire (jsonb), so each shape is checked before it is read;
+ * `created` (the whole create body) and anything that does not match are `undefined`, and the
+ * screen shows those as `compactJson` instead of a half-read row.
  */
 export function marketEventRows(type: MarketEventType, payload: unknown): EventRow[] | undefined {
   switch (type) {
@@ -549,9 +563,133 @@ export function marketEventRows(type: MarketEventType, payload: unknown): EventR
       if (!parsed.success) return undefined;
       return [{ label: copy.adminMarketCloseAtShort, value: formatKst(parsed.data.closedAt) }];
     }
+    case 'submitted':
+    case 'approved':
+    case 'rejected':
+    case 'reverted':
+    case 'open_rescheduled':
+      // A reschedule's times in KST, as every time in these rows.
+      return reviewPayloadRows(type, payload, (iso) => formatKst(iso));
     default:
       return undefined;
   }
+}
+
+/**
+ * 검수 체크리스트의 이름 (#78, ADR-0093 decision 2 #172 item 4), in MARKET_REVIEW_CHECKLIST order: the
+ * plan's three bans, then 필수 항목, 시각 순서 and 선행 마감 (the open-items check's own names for the
+ * last two, OPEN_ITEM_LABEL) and 독립 판정. The approval dialog draws each with its line of what to
+ * confirm (lib/market-review.ts); the 반려 사유 list is these and 기타.
+ */
+export const REVIEW_CHECK_LABEL: Record<MarketReviewChecklistItem, string> = {
+  knownResult: copy.reviewCheckKnownResult,
+  ambiguity: copy.reviewCheckAmbiguity,
+  duplicate: copy.reviewCheckDuplicate,
+  requiredItems: copy.reviewCheckRequiredItems,
+  timeOrder: copy.reviewCheckTimeOrder,
+  leadClose: copy.reviewCheckLeadClose,
+  independence: copy.reviewCheckIndependence,
+};
+
+/** 반려 사유 (#172 item 4): the checklist item the market fails, or 기타 (MARKET_REJECT_REASONS). */
+export const REJECT_REASON_LABEL: Record<MarketRejectReason, string> = {
+  ...REVIEW_CHECK_LABEL,
+  other: copy.reviewRejectOther,
+};
+
+/**
+ * What a review record says beyond who and when (#78), each field absent where its type carries
+ * none: the gap a submission checked the lead close at, a 반려's reason from the list, an
+ * approval's checklist (counted: every item is required, so the count says it was whole), a
+ * reschedule's times, and the reason — a 반려's is its 설명.
+ */
+export interface ReviewDetail {
+  type: MarketReviewEventType;
+  leadCloseGapMinutes?: number | null;
+  rejectReason?: MarketRejectReason | null;
+  checklist?: readonly string[] | null;
+  scheduledOpenBefore?: string | null;
+  scheduledOpenAfter?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * A review record's rows, shared by the 이벤트 로그 (`marketEventRows`, from the event's payload) and
+ * the 검수 기록 (lib/market-review.ts, from `AdminMarket.review.log`): '반려 사유 모호한 기준', '체크리스트
+ * 7/7개 항목 확인', '이전 예정 개장 …' and '이후 예정 개장 …' as `time` renders an instant (the
+ * callers' KST), then '사유 …' (a 반려's '설명 …').
+ */
+export function reviewDetailRows(detail: ReviewDetail, time: (iso: string) => string): EventRow[] {
+  const rows: EventRow[] = [];
+  if (detail.type === 'submitted' && detail.leadCloseGapMinutes !== undefined) {
+    const gap = detail.leadCloseGapMinutes;
+    rows.push({
+      label: copy.adminMarketLeadCloseGap,
+      value:
+        gap === null
+          ? copy.adminMarketLeadCloseGapUndecided
+          : `${String(gap)}${copy.adminMarketLeadCloseGapMinutes}`,
+    });
+  }
+  if (detail.rejectReason) {
+    rows.push({
+      label: copy.reviewLogRejectReason,
+      value: REJECT_REASON_LABEL[detail.rejectReason],
+    });
+  }
+  if (detail.checklist) {
+    const confirmed = MARKET_REVIEW_CHECKLIST.filter((item) => detail.checklist?.includes(item));
+    const total = MARKET_REVIEW_CHECKLIST.length;
+    rows.push({
+      label: copy.reviewLogChecklist,
+      value: `${String(confirmed.length)}/${String(total)}${copy.reviewLogChecklistTail}`,
+    });
+  }
+  if (detail.type === 'open_rescheduled') {
+    const at = (iso: string | null | undefined) => (iso ? time(iso) || '—' : '—');
+    rows.push(
+      { label: copy.reviewLogOpenBefore, value: at(detail.scheduledOpenBefore) },
+      { label: copy.reviewLogOpenAfter, value: at(detail.scheduledOpenAfter) },
+    );
+  }
+  if (detail.reason) {
+    rows.push({
+      label: detail.type === 'rejected' ? copy.reviewLogDescription : copy.reviewLogReason,
+      value: detail.reason,
+    });
+  }
+  return rows;
+}
+
+/**
+ * The review events' payloads as the API writes them (#78; `MarketSubmittedPayload` … in
+ * @buddha/shared market-review.ts): the request each names is not shown — the 검수 기록 above says who
+ * and when — and a reschedule's earlier time may be null (a market made by a test factory).
+ */
+const REVIEW_PAYLOADS: {
+  readonly [T in MarketReviewEventType]: z.ZodType<Omit<ReviewDetail, 'type'>>;
+} = {
+  submitted: z.object({ leadCloseGapMinutes: z.number().int().nullable() }),
+  approved: z.object({ checklist: z.array(z.string()), reason: z.string() }),
+  rejected: z.object({ rejectReason: marketRejectReasonSchema, reason: z.string() }),
+  reverted: z.object({ reason: z.string() }),
+  open_rescheduled: z
+    .object({ before: kstInstant.nullable(), after: kstInstant, reason: z.string() })
+    .transform(({ before, after, reason }) => ({
+      scheduledOpenBefore: before,
+      scheduledOpenAfter: after,
+      reason,
+    })),
+};
+
+/** A review event's payload as rows (`reviewDetailRows`); `undefined` when not of its shape. */
+function reviewPayloadRows(
+  type: MarketReviewEventType,
+  payload: unknown,
+  time: (iso: string) => string,
+): EventRow[] | undefined {
+  const parsed = REVIEW_PAYLOADS[type].safeParse(payload);
+  return parsed.success ? reviewDetailRows({ type, ...parsed.data }, time) : undefined;
 }
 
 /**
@@ -712,10 +850,11 @@ function timeRuleLine(violation: TimeRuleViolation, gapMinutes: number | null): 
 }
 
 /**
- * The admin draft's notice (#17): '열기 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그 1~5개'
- * while the open-items check finds something missing (`AdminMarket.missingOpenItems`), `undefined`
- * when nothing is. A draft only — the check is what leaving the draft takes; an open market whose
- * category was hidden later keeps it (#172 item 1) and gets no notice.
+ * The admin draft's notice (#17): '검수 제출·열기 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그
+ * 1~5개' while the open-items check finds something missing (`AdminMarket.missingOpenItems`),
+ * `undefined` when nothing is. A draft only — the check is what leaving the draft takes, by the
+ * review's submission (#78) or the interim open (until #21); a market past it whose category was
+ * hidden later keeps it (#172 item 1) and gets no notice — an approval meets it as a refusal.
  *
  * 시각 순서 and 선행 마감 (#22, ADR-0098) name a relation, not a field, so each adds a line per rule
  * it breaks, one under another — '시각 순서: 거래 마감 시각이 예정 판정 시각보다 늦습니다', '선행
@@ -756,9 +895,18 @@ function missingItemsOf(error: ApiError): OpenItem[] {
 }
 
 /**
- * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on open (#17 —
- * '열기 전에 채우거나 고칠 항목이 있습니다: …' naming what the refusal names, or the line alone when
- * it names nothing this screen knows), the open before its scheduled open naming `scheduledOpenAt`
+ * The items an OPEN_ITEMS_MISSING names as one line of labels ('' when it names none this screen
+ * knows): the review's approval says them after its own sentence (lib/market-review.ts, #78).
+ */
+export function openItemsRefused(error: ApiError): string {
+  return openItemList(missingItemsOf(error));
+}
+
+/**
+ * The toast for a refused transition (design 3.4/3.6, 5.5): OPEN_ITEMS_MISSING on open and on the
+ * review's submission (#17, #78 — '검수 제출·열기 전에 채우거나 고칠 항목이 있습니다: …' naming what
+ * the refusal names, or the line alone when it names nothing this screen knows), a close already
+ * passed on either naming `closeAt`, the open before its scheduled open naming `scheduledOpenAt`
  * (#22, ADR-0093 decision 3 '#21 앞당긴 개장': no early open; move it earlier), MARKET_NOT_OPEN on
  * close, VALIDATION_ERROR naming `status`
  * for any other state-machine violation — the two "refresh the screen" messages, since the state

@@ -474,9 +474,9 @@ describe.skipIf(!hasTestInfra)('/api/v1/me/watchlist (integration)', () => {
   });
 
   it('leaves a watched market off the list while it is a draft or a review (#174)', async () => {
-    // No path takes a watched market back to DRAFT today, but SCHEDULED → DRAFT is a lifecycle
-    // edge (#21): the list filters by the public statuses as the detail does, and the watch row
-    // stays for when the market is public again.
+    // A watched market goes back to DRAFT by #78's 되돌리기 from SCHEDULED: the list filters by
+    // the public statuses as the detail does, and the watch row stays for when the market is
+    // public again.
     const shown = await market();
     const hidden = [await market({ status: 'draft' }), await market({ status: 'review' })];
     for (const m of [shown, ...hidden]) {

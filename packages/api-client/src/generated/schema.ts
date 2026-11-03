@@ -280,6 +280,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/market-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** The markets waiting for review (REVIEW, with their pending request), the oldest submission first: who submitted and when, who created the market, its category, scheduled open and close */
+        get: operations["adminListMarketReviews"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets": {
         parameters: {
             query?: never;
@@ -305,15 +322,32 @@ export type paths = {
             path?: never;
             cookie?: never;
         };
-        /** One market with its tags, exposure, settlement steps, event log and what the open-items check finds missing */
+        /** One market with its tags, exposure, settlement steps, event log, what the open-items check finds missing and its review (the pending request, the creator, the editors, the unfinished markets with the same conditions and the review log) */
         get: operations["adminGetMarket"];
         put?: never;
         post?: never;
         delete?: never;
         options?: never;
         head?: never;
-        /** Edit a draft (any field) or an open market (text, rule items, times, category, tags; slug refused naming the field, a rule item it had filled or its judgement time zone left missing refused with RULES_REQUIRED naming each, no tags refused naming tags, the scheduled open and judgement fixed, the close moved later only, up to the scheduled judgement, with the lead close checked again); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status */
+        /** Edit a draft (any field) or an open market (text, rule items, times, category, tags; slug refused naming the field, a rule item it had filled or its judgement time zone left missing refused with RULES_REQUIRED naming each, no tags refused naming tags, the scheduled open and judgement fixed, the close moved later only, up to the scheduled judgement, with the lead close checked again); tags and fallbackSources replace the whole ordered list; other statuses refuse naming status — review and scheduled are locked (send back to a draft to edit; reschedule moves a scheduled open) */
         patch: operations["adminUpdateMarket"];
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** review → scheduled (승인) by an admin who neither created, edited nor submitted the market, every checklist item confirmed, with a reason; the open-items check and the close are checked again. The market becomes public as scheduled */
+        post: operations["adminApproveMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/admin/markets/{id}/close": {
@@ -342,8 +376,25 @@ export type paths = {
         };
         get?: never;
         put?: never;
-        /** draft → open (interim, until review and the scheduled open); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the time order, the lead close, the category or the tags missing, then with a past closeAt, then before the scheduled open; stores the lead-close gap it checked against */
+        /** draft → open (interim, until the scheduled open; beside the review); refused with OPEN_ITEMS_MISSING when the open-items check finds the title, a rule item, a time, the time order, the lead close, the category or the tags missing, then with a past closeAt, then before the scheduled open; stores the lead-close gap it checked against */
         post: operations["adminOpenMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** review → draft (반려) by an admin who may approve it, with a reason from the list and a description the creator reads in the review log */
+        post: operations["adminRejectMarket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -385,6 +436,23 @@ export type paths = {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/markets/{id}/reschedule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Move a scheduled market’s scheduled open without a new review, with a reason; it stays before the close in whole minutes, a past instant is allowed (#21’s scheduled-open job opens the market; until #21 a scheduled market does not open), and once the close has passed it is refused (closeAt) — send the market back to a draft (revert) to fix its times */
+        post: operations["adminRescheduleMarketOpen"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/markets/{id}/resolve": {
         parameters: {
             query?: never;
@@ -396,6 +464,40 @@ export type paths = {
         put?: never;
         /** closed → resolved (interim, until the approved provisional judgement): record the final result, YES or NO; the payout starts immediately */
         post: operations["adminResolveMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/revert": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** review or scheduled → draft (되돌리기) by any admin, with a reason, to edit and review again; in review the pending request is retracted when its submitter sends the market back and rejected with the reason when anyone else does */
+        post: operations["adminRevertMarket"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/markets/{id}/submit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** draft → review (검수 제출): refused with OPEN_ITEMS_MISSING as the interim open is, then with a past closeAt; opens the review request another admin decides, stores the lead-close gap it checked against and locks the content (no edit in review or scheduled) */
+        post: operations["adminSubmitMarket"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2878,6 +2980,7 @@ export type components = {
             /** Format: date-time */
             resolvedAt: string | null;
             resolvedResult: components["schemas"]["MarketResult"] | null;
+            review: components["schemas"]["AdminMarketReview"];
             /** Format: date-time */
             scheduledAnnouncementAt: string | null;
             /** Format: date-time */
@@ -2899,6 +3002,28 @@ export type components = {
             updatedAt: string;
             volumeCoin: components["schemas"]["CoinAmount"];
             yesCondition: string;
+        };
+        AdminMarketReview: {
+            createdBy: components["schemas"]["AdminAccountActor"];
+            editors: components["schemas"]["AdminAccountActor"][];
+            log: components["schemas"]["MarketReviewLogEntry"][];
+            pending: components["schemas"]["MarketReviewPending"] | null;
+            sameCondition: components["schemas"]["MarketReviewSameCondition"][];
+        };
+        AdminMarketReviewItem: {
+            categoryName: string;
+            /** Format: date-time */
+            closeAt: string;
+            createdBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            marketId: string;
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: date-time */
+            scheduledOpenAt: string | null;
+            slug: string;
+            title: string;
         };
         AdminModerationAction: {
             /** @description True when the record is about the admin reading it: the reporter, the description and the operators are withheld (null) */
@@ -3340,6 +3465,13 @@ export type components = {
         };
         /** @enum {string} */
         ApprovalStatus: "pending" | "approved" | "rejected" | "retracted";
+        ApproveMarketReviewBody: {
+            checklist: components["schemas"]["MarketReviewChecklistItem"][];
+            expectedAccountId: string;
+            reason: string;
+            /** Format: uuid */
+            requestId: string;
+        };
         AuditFailure: {
             /** Format: date-time */
             createdAt: string;
@@ -3357,7 +3489,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             likeCount: number;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             /** Format: uuid */
             parentId: string | null;
             post: components["schemas"]["CommentedPost"];
@@ -3592,7 +3724,7 @@ export type components = {
             commentCount: number;
             /** Format: uuid */
             id: string;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             /** @enum {string} */
             state: "deleted";
         };
@@ -3647,7 +3779,7 @@ export type components = {
             commentCount: number;
             /** Format: uuid */
             id: string;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             /** @enum {string} */
             state: "hidden";
         };
@@ -3756,10 +3888,48 @@ export type components = {
             /** @enum {string|null} */
             toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
             /** @enum {string} */
-            type: "created" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling";
+            type: "created" | "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled" | "opened" | "closed" | "finalized" | "rules_edited" | "resolved" | "settling";
         };
         /** @enum {string} */
+        MarketRejectReason: "knownResult" | "ambiguity" | "duplicate" | "requiredItems" | "timeOrder" | "leadClose" | "independence" | "other";
+        /** @enum {string} */
         MarketResult: "YES" | "NO" | "VOID";
+        /** @enum {string} */
+        MarketReviewChecklistItem: "knownResult" | "ambiguity" | "duplicate" | "requiredItems" | "timeOrder" | "leadClose" | "independence";
+        /** @enum {string} */
+        MarketReviewEventType: "submitted" | "approved" | "rejected" | "reverted" | "open_rescheduled";
+        MarketReviewLogEntry: {
+            actor: components["schemas"]["AdminAccountActor"] | null;
+            /** Format: date-time */
+            at: string;
+            checklist: components["schemas"]["MarketReviewChecklistItem"][] | null;
+            /** @enum {string|null} */
+            fromStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
+            reason: string | null;
+            rejectReason: components["schemas"]["MarketRejectReason"] | null;
+            /** Format: date-time */
+            scheduledOpenAfter: string | null;
+            /** Format: date-time */
+            scheduledOpenBefore: string | null;
+            /** @enum {string|null} */
+            toStatus: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled" | null;
+            type: components["schemas"]["MarketReviewEventType"];
+        };
+        MarketReviewPending: {
+            /** Format: date-time */
+            requestedAt: string;
+            requestedBy: components["schemas"]["AdminAccountActor"];
+            /** Format: uuid */
+            requestId: string;
+        };
+        MarketReviewSameCondition: {
+            /** Format: uuid */
+            id: string;
+            slug: string;
+            /** @enum {string} */
+            status: "draft" | "review" | "scheduled" | "open" | "paused" | "closed" | "provisional" | "resolved" | "settling" | "settled" | "cancelled";
+            title: string;
+        };
         MarketSource: {
             name: string;
             url: string;
@@ -3898,7 +4068,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             likeCount: number;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             /** Format: uuid */
             parentId: string | null;
             post: components["schemas"]["CommentedPost"];
@@ -3929,7 +4099,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             likeCount: number;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             thumbnailUrl: string | null;
             title: string | null;
         };
@@ -4216,7 +4386,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             likeCount: number;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             thumbnailUrl: string | null;
             title: string | null;
         };
@@ -4362,7 +4532,7 @@ export type components = {
             /** Format: uuid */
             id: string;
             likeCount: number;
-            market: components["schemas"]["PostMarket"];
+            market: components["schemas"]["PostMarket"] | null;
             /** @enum {string} */
             state: "published";
             title: string | null;
@@ -4428,6 +4598,13 @@ export type components = {
         RegisterResult: {
             /** @enum {string} */
             status: "sent";
+        };
+        RejectMarketReviewBody: {
+            expectedAccountId: string;
+            reason: string;
+            rejectReason: components["schemas"]["MarketRejectReason"];
+            /** Format: uuid */
+            requestId: string;
         };
         RejectProposalBody: {
             /** Format: uuid */
@@ -4551,6 +4728,12 @@ export type components = {
             phone: string;
             realName: string;
         };
+        RescheduleMarketOpenBody: {
+            expectedAccountId: string;
+            reason: string;
+            /** Format: date-time */
+            scheduledOpenAt: string;
+        };
         ResolveMarketBody: {
             /** Format: uri */
             evidenceUrl?: string | null;
@@ -4593,6 +4776,10 @@ export type components = {
         RetentionPurgeKind: "nickname_holds" | "post_revisions" | "comment_revisions" | "deleted_posts" | "deleted_comments" | "reports" | "hidden_posts" | "hidden_comments" | "removed_profile_items" | "moderation_actions" | "approval_requests" | "link_flags" | "consent_records" | "phone_verification_records" | "market_proposals";
         /** @enum {string} */
         RetentionPurgeOutcome: "done" | "failed";
+        RevertMarketBody: {
+            expectedAccountId: string;
+            reason: string;
+        };
         SearchHistoryWriteBody: {
             expectedAccountId: string;
         };
@@ -6380,6 +6567,77 @@ export interface operations {
             };
         };
     };
+    adminListMarketReviews: {
+        parameters: {
+            query?: {
+                /** @description Opaque; `meta.nextCursor` of the previous page. */
+                cursor?: string;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarketReviewItem"][];
+                        meta: components["schemas"]["PageMeta"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminListMarkets: {
         parameters: {
             query?: {
@@ -6698,6 +6956,96 @@ export interface operations {
             };
         };
     };
+    adminApproveMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApproveMarketReviewBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description OPEN_ITEMS_MISSING */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminCloseMarket: {
         parameters: {
             query?: never;
@@ -6851,6 +7199,87 @@ export interface operations {
             };
             /** @description OPEN_ITEMS_MISSING */
             422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRejectMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectMarketReviewBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED | APPROVAL_NOT_ALLOWED */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -7107,6 +7536,87 @@ export interface operations {
             };
         };
     };
+    adminRescheduleMarketOpen: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RescheduleMarketOpenBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
     adminResolveMarket: {
         parameters: {
             query?: never;
@@ -7170,6 +7680,177 @@ export interface operations {
             };
             /** @description ONBOARDING_REQUIRED */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminRevertMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RevertMarketBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description RATE_LIMITED */
+            429: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+        };
+    };
+    adminSubmitMarket: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ExpectedAccountBody"];
+            };
+        };
+        responses: {
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        data: components["schemas"]["AdminMarket"];
+                    };
+                };
+            };
+            /** @description VALIDATION_ERROR */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description UNAUTHENTICATED */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description FORBIDDEN */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description NOT_FOUND */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description ONBOARDING_REQUIRED */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description OPEN_ITEMS_MISSING */
+            422: {
                 headers: {
                     [name: string]: unknown;
                 };

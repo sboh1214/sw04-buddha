@@ -569,6 +569,63 @@ describe('marketEventRows', () => {
     expect(marketEventRows('closed', null)).toBeUndefined();
     expect(marketEventRows('closed', undefined)).toBeUndefined();
   });
+
+  it('reads the 개설 검수 records as their rows, the request they name left out (#78)', () => {
+    const approvalId = '3f2504e0-4f89-11d3-9a0c-0305e82c3301';
+    // The gap the submission checked the lead close at, or 미정.
+    expect(marketEventRows('submitted', { approvalId, leadCloseGapMinutes: 60 })).toEqual([
+      { label: copy.adminMarketLeadCloseGap, value: `60${copy.adminMarketLeadCloseGapMinutes}` },
+    ]);
+    expect(marketEventRows('submitted', { approvalId, leadCloseGapMinutes: null })).toEqual([
+      { label: copy.adminMarketLeadCloseGap, value: copy.adminMarketLeadCloseGapUndecided },
+    ]);
+    expect(
+      marketEventRows('approved', {
+        approvalId,
+        checklist: [
+          'knownResult',
+          'ambiguity',
+          'duplicate',
+          'requiredItems',
+          'timeOrder',
+          'leadClose',
+          'independence',
+        ],
+        reason: '모두 확인',
+      }),
+    ).toEqual([
+      { label: '체크리스트', value: '7/7개 항목 확인' },
+      { label: '사유', value: '모두 확인' },
+    ]);
+    expect(
+      marketEventRows('rejected', { approvalId, rejectReason: 'other', reason: '제목 오타' }),
+    ).toEqual([
+      { label: '반려 사유', value: '기타' },
+      { label: '설명', value: '제목 오타' },
+    ]);
+    expect(marketEventRows('reverted', { approvalId, reason: '출처 교체' })).toEqual([
+      { label: '사유', value: '출처 교체' },
+    ]);
+    expect(
+      marketEventRows('open_rescheduled', { before: openAt, after: closeAt, reason: '늦춤' }),
+    ).toEqual([
+      { label: '이전 예정 개장', value: formatKst(openAt) },
+      { label: '이후 예정 개장', value: formatKst(closeAt) },
+      { label: '사유', value: '늦춤' },
+    ]);
+    // Every review type has its name in the 이벤트 로그, the 검수 기록's name.
+    expect(
+      (['submitted', 'approved', 'rejected', 'reverted', 'open_rescheduled'] as const).map(
+        (type) => MARKET_EVENT_LABEL[type],
+      ),
+    ).toEqual(['검수 제출', '승인', '반려', '초안으로 되돌림', '예정 개장 시각 변경']);
+    // Not its shape: the JSON line.
+    expect(marketEventRows('rejected', { approvalId, rejectReason: 'bot', reason: 'x' })).toBe(
+      undefined,
+    );
+    expect(marketEventRows('open_rescheduled', { before: null, after: 'soon' })).toBeUndefined();
+    expect(marketEventRows('approved', null)).toBeUndefined();
+  });
 });
 
 describe('openItemsNotice', () => {
@@ -617,12 +674,13 @@ describe('openItemsNotice', () => {
   });
 
   it("says what a draft still lacks, joined with ' · ' in OPEN_ITEMS order", () => {
+    // The review's submission (#78) and the interim open take the same check.
     expect(draft([...OPEN_ITEMS])).toBe(
-      '열기 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
+      '검수 제출·열기 전에 채우거나 고칠 항목: 질문 · 배경 · YES 조건 · NO 조건 · 사건 기한 · 1차 출처 · ' +
         '대체 출처 · 전환 조건 · 장기 지연 기한 · 지연·취소·무효 처리 · 예정 개장 시각 · ' +
         '거래 마감 시각 · 예정 판정 시각 · 판정 기준 시간대 · 시각 순서 · 선행 마감 · 카테고리 · 태그 1~5개',
     );
-    expect(draft(['tags'])).toBe('열기 전에 채우거나 고칠 항목: 태그 1~5개');
+    expect(draft(['tags'])).toBe('검수 제출·열기 전에 채우거나 고칠 항목: 태그 1~5개');
     expect(draft(['tags', 'primarySource', 'yesCondition'])).toBe(
       `${copy.adminMarketOpenItems}: ` +
         [copy.openItemYesCondition, copy.openItemPrimarySource, copy.openItemTags].join(' · '),
@@ -860,7 +918,9 @@ describe('transitionErrorMessage', () => {
         { path: ['category'], message: 'subcategories' },
         { path: ['tags'], message: 'required' },
       ]),
-    ).toBe('열기 전에 채우거나 고칠 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개');
+    ).toBe(
+      '검수 제출·열기 전에 채우거나 고칠 항목이 있습니다: YES 조건 · 전환 조건 · 카테고리 · 태그 1~5개',
+    );
     expect(refused([{ path: ['tags'], message: 'required' }])).toBe(
       `${copy.errMarketOpenItemsMissing}: ${copy.openItemTags}`,
     );
@@ -881,7 +941,7 @@ describe('transitionErrorMessage', () => {
       `${copy.errMarketOpenItemsMissing}.`,
     );
     // No details, or none this screen knows: the line alone.
-    expect(refused()).toBe('열기 전에 채우거나 고칠 항목이 있습니다.');
+    expect(refused()).toBe('검수 제출·열기 전에 채우거나 고칠 항목이 있습니다.');
     // The times and the relations between them (#22), with their messages.
     expect(
       refused([

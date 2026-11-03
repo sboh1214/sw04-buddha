@@ -9,6 +9,9 @@ import {
   AUTH_USER_NAME,
   CONSENT_ITEMS,
   DEFAULT_JUDGEMENT_TIME_ZONE,
+  MARKET_REVIEW_APPROVAL_KIND,
+  MARKET_REVIEW_CHECKLIST,
+  MARKET_REVIEW_REQUEST_REASON,
   ORPHAN_MEDIA_RETRY_SLACK_MINUTES,
   PRICE_MAX,
   PRICE_MIN,
@@ -17,6 +20,7 @@ import {
   ceilToMinute,
   closedAccountEmail,
   floorToMinute,
+  marketReviewExclusion,
   orphanMediaRetryHours,
   normalizeTagName,
   readPostDocument,
@@ -43,6 +47,7 @@ import {
 } from '@buddha/shared';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { Db } from '../client.js';
+import { transitionMarket } from '../market-transitions.js';
 import {
   account,
   adminActions,
@@ -216,6 +221,10 @@ export interface CreateMarketInput {
    * migration 0050 left it (which kept its 배경, if it had one). Default false.
    */
   blankRuleItems?: boolean;
+  /**
+   * Default `open`. A `review` or `scheduled` market made here has no review request and no event:
+   * `createMarketInReview` and `createScheduledMarket` make one as the review's routes leave it.
+   */
   status?: MarketStatus;
   /**
    * YES price of the last fill, 1..99. Default null: a market nobody traded has no price
@@ -1423,6 +1432,176 @@ export async function createApprovalRequest(db: Db, input: CreateApprovalRequest
     .where(eq(approvalRequests.id, request!.id))
     .returning();
   return decided!;
+}
+
+/** The market fields `createMarketInReview` and `createScheduledMarket` take from createMarket. */
+type ReviewedMarketFields = Omit<
+  CreateMarketInput,
+  | 'status'
+  | 'openAt'
+  | 'resolvedResult'
+  | 'resolvedAt'
+  | 'settledAt'
+  | 'statusEventId'
+  | 'settlementSteps'
+>;
+
+export interface CreateMarketInReviewInput extends ReviewedMarketFields {
+  /**
+   * Tag names, as createMarket takes them. Default `['검수']`: a market under review passed the
+   * open-items check, which wants 1..5.
+   */
+  tags?: string[];
+  /**
+   * The admin who submitted it: the `market_review` request's requester and the `submitted`
+   * event's actor. Default: the creator (`createdBy`, a fresh admin when that is omitted too).
+   */
+  submittedBy?: string;
+  /** The submission's instant, the request's and the event's. Default: the database clock. */
+  submittedAt?: Date;
+  /**
+   * Admins who edited the draft before it was submitted, in this order: one `market_update` record
+   * each on the market, a millisecond apart and the last a millisecond before the submission — the
+   * editors the approval and the 반려 exclude (#78, ADR-0093 decision 2 #172 item 5). An admin may
+   * be named twice. The record's before and after are empty (the API writes snapshots there, which
+   * nothing reads back). Default none.
+   */
+  editedBy?: string[];
+}
+
+/** A market under review or scheduled, with its `market_review` request (#78). */
+export interface ReviewedMarket {
+  market: typeof markets.$inferSelect;
+  request: typeof approvalRequests.$inferSelect;
+}
+
+/**
+ * A market submitted for review (#78, ADR-0099) as `POST /admin/markets/:id/submit` leaves it: a
+ * complete draft (createMarket, with tags), its editors' `market_update` records, a pending
+ * `market_review` request about it by the submitter (target `market`, payload `{title}`,
+ * MARKET_REVIEW_REQUEST_REASON), and the `submitted` transition — the `market_events` row (payload
+ * `{approvalId, leadCloseGapMinutes}`) and the market in `review` with its `status_event_id` —
+ * made by `transitionMarket`, at one instant, in one transaction. The submission stores the gap it
+ * checked: `leadCloseGapMinutes` as given (default null). Writes no `market_submit` record, as no
+ * factory writes the admin records of a route (but the editors', which are the point here).
+ */
+export async function createMarketInReview(
+  db: Db,
+  input: CreateMarketInReviewInput = {},
+): Promise<ReviewedMarket> {
+  const { submittedBy, submittedAt, editedBy, ...fields } = input;
+  const createdBy = fields.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const draft = await createMarket(db, {
+    ...fields,
+    createdBy,
+    tags: fields.tags ?? ['검수'],
+    status: 'draft',
+  });
+  return db.transaction(async (tx) => {
+    const at =
+      submittedAt ??
+      new Date(
+        (await tx.execute<{ now: Date }>(sql`SELECT clock_timestamp() AS now`)).rows[0]!.now,
+      );
+    const editors = editedBy ?? [];
+    if (editors.length > 0) {
+      await tx.insert(adminActions).values(
+        editors.map((adminId, index) => ({
+          adminId,
+          type: 'market_update',
+          targetType: 'market',
+          targetId: draft.id,
+          payload: { before: {}, after: {} },
+          createdAt: new Date(at.getTime() - (editors.length - index)),
+        })),
+      );
+    }
+    const requester = submittedBy ?? createdBy;
+    const request = await createApprovalRequest(tx as unknown as Db, {
+      kind: MARKET_REVIEW_APPROVAL_KIND,
+      targetType: 'market',
+      targetId: draft.id,
+      payload: { title: draft.title },
+      requestedBy: requester,
+      reason: MARKET_REVIEW_REQUEST_REASON,
+      requestedAt: at,
+    });
+    const leadCloseGapMinutes = draft.leadCloseGapMinutes;
+    await transitionMarket(tx, {
+      marketId: draft.id,
+      from: 'draft',
+      to: 'review',
+      type: 'submitted',
+      actorId: requester,
+      payload: { approvalId: request.id, leadCloseGapMinutes },
+      at,
+      set: { leadCloseGapMinutes },
+    });
+    const [market] = await tx.select().from(markets).where(eq(markets.id, draft.id));
+    return { market: market!, request };
+  });
+}
+
+export interface CreateScheduledMarketInput extends CreateMarketInReviewInput {
+  /**
+   * The approving admin: the request's decider and the `approved` event's actor. Neither the
+   * creator, an editor nor the submitter (MARKET_REVIEW_EXCLUSIONS): the factory throws, as the
+   * route refuses. Default: a fresh admin.
+   */
+  approvedBy?: string;
+  /** The approval's instant. Default: a millisecond after the submission. */
+  approvedAt?: Date;
+  /** The approval's reason (the request's decision reason). Default '검수 승인'. */
+  approvalReason?: string;
+}
+
+/**
+ * A market approved for opening (#78, ADR-0099) as `POST /admin/markets/:id/approve` leaves it:
+ * `createMarketInReview`'s market, its request approved by another admin with a reason, and the
+ * `approved` transition — the `market_events` row (payload `{approvalId, checklist, reason}`, every
+ * MARKET_REVIEW_CHECKLIST item) and the market in `scheduled` — in one transaction. The scheduled
+ * open is createMarket's (a minute before now, which #21's job would open at once) unless given.
+ * Writes no `market_approve` record.
+ */
+export async function createScheduledMarket(
+  db: Db,
+  input: CreateScheduledMarketInput = {},
+): Promise<ReviewedMarket> {
+  const { approvedBy, approvedAt, approvalReason, ...reviewInput } = input;
+  const approver = approvedBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const createdBy = reviewInput.createdBy ?? (await createUser(db, { role: 'admin' })).user.id;
+  const exclusion = marketReviewExclusion(approver, {
+    createdBy,
+    editorIds: reviewInput.editedBy ?? [],
+    requestedBy: reviewInput.submittedBy ?? createdBy,
+  });
+  if (exclusion !== null) {
+    throw new Error(`createScheduledMarket: the ${exclusion} never approves the review`);
+  }
+  const { market: review, request } = await createMarketInReview(db, {
+    ...reviewInput,
+    createdBy,
+  });
+  return db.transaction(async (tx) => {
+    const at = approvedAt ?? new Date(request.requestedAt.getTime() + 1);
+    const reason = approvalReason ?? '검수 승인';
+    const [approved] = await tx
+      .update(approvalRequests)
+      .set({ status: 'approved', decidedBy: approver, decisionReason: reason, decidedAt: at })
+      .where(eq(approvalRequests.id, request.id))
+      .returning();
+    await transitionMarket(tx, {
+      marketId: review.id,
+      from: 'review',
+      to: 'scheduled',
+      type: 'approved',
+      actorId: approver,
+      payload: { approvalId: request.id, checklist: [...MARKET_REVIEW_CHECKLIST], reason },
+      at,
+    });
+    const [market] = await tx.select().from(markets).where(eq(markets.id, review.id));
+    return { market: market!, request: approved! };
+  });
 }
 
 export interface CreateReportInput {

@@ -252,6 +252,21 @@ describe('applyStatus', () => {
     expect(settled).not.toHaveProperty('disputeUntil');
   });
 
+  it('writes nothing for a status no member sees: a scheduled market sent back (#78)', () => {
+    // ADR-0099: 되돌리기 from 개장 예정 publishes `draft` under a newer key. The card and the detail
+    // keep 개장 예정 rather than call it 초안, an admin's label; the refetch beside it answers 404.
+    const scheduled: Market = { ...detail, status: 'scheduled', statusEventId: '2' };
+    for (const status of ['draft', 'review'] as const) {
+      expect(applyStatus(scheduled, statusEvent({ status, statusEventId: '9' })), status).toBe(
+        undefined,
+      );
+    }
+    // Approved again later: a public status under a newer key applies as ever.
+    expect(
+      applyStatus(scheduled, statusEvent({ status: 'scheduled', statusEventId: '10' })),
+    ).toEqual({ ...scheduled, statusEventId: '10' });
+  });
+
   it('keeps settled when the judgement arrives after it', () => {
     // The API publishes `resolved` and the worker `settling` and `settled` from two processes,
     // moments apart, so the socket may deliver them in any order. The key decides: `resolved` (4)

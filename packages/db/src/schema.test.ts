@@ -9,6 +9,9 @@ import {
   LEDGER_ENTRY_TYPES,
   PUBLIC_ID_PATTERN,
   MARKET_RESULTS,
+  MARKET_REVIEW_APPROVAL_KIND,
+  MARKET_REVIEW_CHECKLIST,
+  MARKET_REVIEW_REQUEST_REASON,
   MARKET_SOURCE_MAX,
   MARKET_SOURCE_URL_MAX,
   MARKET_STATUSES,
@@ -109,6 +112,7 @@ import {
   createCategory,
   createConsents,
   createMarket,
+  createMarketInReview,
   createMarketLink,
   createComment,
   createCommentLike,
@@ -124,6 +128,7 @@ import {
   createProfileImage,
   createProposal,
   createReport,
+  createScheduledMarket,
   createSearch,
   createSettlementStep,
   createStartGrant,
@@ -1516,6 +1521,267 @@ describe.skipIf(!hasTestDb())('schema (integration, docker test profile)', () =>
         'scheduledOpenAt',
         'scheduledJudgementAt',
       ]);
+    });
+  });
+
+  describe('the market review (migration 0052, #78)', () => {
+    /** A market's `market_events` rows, oldest first, as the review log reads them. */
+    const eventsOf = (marketId: string) =>
+      t.db
+        .select({
+          id: marketEvents.id,
+          type: marketEvents.type,
+          actorId: marketEvents.actorId,
+          fromStatus: marketEvents.fromStatus,
+          toStatus: marketEvents.toStatus,
+          payload: marketEvents.payload,
+          createdAt: marketEvents.createdAt,
+        })
+        .from(marketEvents)
+        .where(eq(marketEvents.marketId, marketId))
+        .orderBy(marketEvents.id);
+
+    it('adds one partial index of a market’s admin records, which the editors’ lookup reads', async () => {
+      const { rows } = await t.db.execute<{ indexname: string; indexdef: string }>(
+        sql`SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'admin_actions' ORDER BY indexname`,
+      );
+      const defs = Object.fromEntries(rows.map((row) => [row.indexname, row.indexdef]));
+      expect(Object.keys(defs)).toEqual([
+        'admin_actions_market_target_idx',
+        'admin_actions_pkey',
+        'admin_actions_role_change_created_at_id_idx',
+        'admin_actions_type_created_at_id_idx',
+      ]);
+      expect(defs['admin_actions_market_target_idx']).toContain(
+        "(target_id, created_at) WHERE ((target_type)::text = 'market'::text)",
+      );
+
+      // Records of many targets and types, so the planner has a choice to make.
+      const { user: admin } = await createUser(t.db, { role: 'admin' });
+      const marketId = randomUUID();
+      const base = Date.now() - 3_600_000;
+      await t.db.insert(adminActions).values(
+        Array.from({ length: 400 }, (_, index) => ({
+          adminId: admin.id,
+          type: ['market_update', 'market_open', 'theme_update', 'release_setting_change'][
+            index % 4
+          ]!,
+          targetType: index % 4 === 2 ? 'theme' : index % 4 === 3 ? 'release_setting' : 'market',
+          targetId: index % 40 === 0 ? marketId : randomUUID(),
+          payload: {},
+          createdAt: new Date(base + index * 1_000),
+        })),
+      );
+      // The editors (#172 item 5): every admin with a `market_update` record on the market, first
+      // edit first — one range of the index, in its order. A table this small would be scanned
+      // whole, so the planner is told not to (buddha_app may not ANALYZE it).
+      const plan = await t.db.transaction(async (tx) => {
+        await tx.execute(sql`SET LOCAL enable_seqscan = off`);
+        const result = await tx.execute<{ 'QUERY PLAN': string }>(sql`
+          EXPLAIN SELECT admin_id FROM admin_actions
+          WHERE target_type = 'market' AND target_id = ${marketId} AND type = 'market_update'
+          ORDER BY created_at`);
+        return result.rows.map((row) => row['QUERY PLAN']).join('\n');
+      });
+      expect(plan).toMatch(/Index Scan using admin_actions_market_target_idx/);
+      expect(plan).not.toMatch(/Sort/);
+    });
+
+    it('ties no CHECK of the stored lead-close gap to a status: the review keeps it, and clears it', async () => {
+      // ADR-0098 결정 7-6 left where the gap is kept to #78: the submission stores the gap it
+      // checked, and a 반려 or a 되돌리기 clears it — in whatever status the market is then.
+      const { rows } = await t.db.execute<{ name: string; def: string }>(sql`
+        SELECT conname AS name, pg_get_constraintdef(oid) AS def FROM pg_constraint
+        WHERE conrelid = 'markets'::regclass AND contype = 'c'
+          AND pg_get_constraintdef(oid) LIKE '%lead_close_gap_minutes%'`);
+      expect(rows).toEqual([
+        {
+          name: 'markets_lead_close_gap_minutes_check',
+          def: 'CHECK ((lead_close_gap_minutes >= 0))',
+        },
+      ]);
+      const { market } = await createMarketInReview(t.db, { leadCloseGapMinutes: 60 });
+      expect(market).toMatchObject({ status: 'review', leadCloseGapMinutes: 60 });
+      for (const leadCloseGapMinutes of [null, 0]) {
+        await t.db.update(markets).set({ leadCloseGapMinutes }).where(eq(markets.id, market.id));
+      }
+    });
+
+    it('createMarketInReview leaves a market as the submission does: a pending request, the event, the editors', async () => {
+      const { user: creator } = await createUser(t.db, { role: 'admin' });
+      const { user: editor } = await createUser(t.db, { role: 'admin' });
+      const { user: submitter } = await createUser(t.db, { role: 'admin' });
+      const before = Date.now();
+      const { market, request } = await createMarketInReview(t.db, {
+        createdBy: creator.id,
+        editedBy: [editor.id, creator.id, editor.id],
+        submittedBy: submitter.id,
+      });
+      expect(market).toMatchObject({
+        status: 'review',
+        createdBy: creator.id,
+        openAt: null,
+        leadCloseGapMinutes: null,
+      });
+      // A pending `market_review` request about the market, as ApprovalService.request writes it.
+      expect(request).toMatchObject({
+        kind: MARKET_REVIEW_APPROVAL_KIND,
+        targetType: 'market',
+        targetId: market.id,
+        payload: { title: market.title },
+        requestedBy: submitter.id,
+        requestReason: MARKET_REVIEW_REQUEST_REASON,
+        status: 'pending',
+        decidedBy: null,
+      });
+      expect(request.requestedAt.getTime()).toBeGreaterThanOrEqual(before);
+      // The `submitted` transition at the request's instant, and the market's status event.
+      const events = await eventsOf(market.id);
+      expect(events).toEqual([
+        {
+          id: market.statusEventId,
+          type: 'submitted',
+          actorId: submitter.id,
+          fromStatus: 'draft',
+          toStatus: 'review',
+          payload: { approvalId: request.id, leadCloseGapMinutes: null },
+          createdAt: request.requestedAt,
+        },
+      ]);
+      expect(market.updatedAt).toEqual(request.requestedAt);
+      // The editors' records, oldest first, each before the submission: read off the new index.
+      const edits = await t.db
+        .select({ adminId: adminActions.adminId, createdAt: adminActions.createdAt })
+        .from(adminActions)
+        .where(
+          and(
+            eq(adminActions.targetType, 'market'),
+            eq(adminActions.targetId, market.id),
+            eq(adminActions.type, 'market_update'),
+          ),
+        )
+        .orderBy(adminActions.createdAt);
+      expect(edits.map((edit) => edit.adminId)).toEqual([editor.id, creator.id, editor.id]);
+      expect(edits.map((edit) => request.requestedAt.getTime() - edit.createdAt.getTime())).toEqual(
+        [3, 2, 1],
+      );
+      // Complete, with a tag: the open-items check passes, as it did for the submission.
+      const tagged = await t.db
+        .select({ name: tags.name })
+        .from(marketTags)
+        .innerJoin(tags, eq(tags.id, marketTags.tagId))
+        .where(eq(marketTags.marketId, market.id));
+      expect(tagged).toEqual([{ name: '검수' }]);
+      const times = {
+        scheduledOpenAt: market.scheduledOpenAt?.toISOString() ?? null,
+        closeAt: market.closeAt.toISOString(),
+        scheduledAnnouncementAt: null,
+        scheduledJudgementAt: market.scheduledJudgementAt?.toISOString() ?? null,
+        judgementTimeZone: market.judgementTimeZone,
+      };
+      expect(
+        missingOpenItems({
+          ...(await ruleItemsOf(market.id)),
+          ...times,
+          title: market.title,
+          categorySelectable: true,
+          tagCount: tagged.length,
+          leadCloseGapMinutes: null,
+        }),
+      ).toEqual([]);
+
+      // By default the creator submits it, at the database clock, with the gap given and nothing
+      // edited; the decision by its requester is refused here too (#171).
+      const { user: other } = await createUser(t.db, { role: 'admin' });
+      const at = new Date('2026-11-01T00:00:00.000Z');
+      const own = await createMarketInReview(t.db, {
+        createdBy: other.id,
+        submittedAt: at,
+        leadCloseGapMinutes: 30,
+        tags: ['선거', '지방선거'],
+      });
+      expect(own.request).toMatchObject({ requestedBy: other.id, requestedAt: at });
+      expect(own.market).toMatchObject({ leadCloseGapMinutes: 30, updatedAt: at });
+      expect((await eventsOf(own.market.id)).map((event) => event.payload)).toEqual([
+        { approvalId: own.request.id, leadCloseGapMinutes: 30 },
+      ]);
+      const decidedByRequester = t.db
+        .update(approvalRequests)
+        .set({
+          status: 'approved',
+          decidedBy: other.id,
+          decisionReason: '결정 사유',
+          decidedAt: new Date(at.getTime() + 1),
+        })
+        .where(eq(approvalRequests.id, own.request.id));
+      expect(await refusal(decidedByRequester)).toEqual({
+        state: '23514',
+        constraint: 'approval_requests_decider_not_requester_check',
+      });
+    });
+
+    it('createScheduledMarket leaves a market as the approval does, by another admin only', async () => {
+      const { user: creator } = await createUser(t.db, { role: 'admin' });
+      const { user: editor } = await createUser(t.db, { role: 'admin' });
+      const { user: submitter } = await createUser(t.db, { role: 'admin' });
+      const { user: approver } = await createUser(t.db, { role: 'admin' });
+      const parties = { createdBy: creator.id, editedBy: [editor.id], submittedBy: submitter.id };
+      const { market, request } = await createScheduledMarket(t.db, {
+        ...parties,
+        approvedBy: approver.id,
+        approvalReason: '체크리스트 확인',
+      });
+      expect(market).toMatchObject({ status: 'scheduled', openAt: null });
+      expect(request).toMatchObject({
+        kind: MARKET_REVIEW_APPROVAL_KIND,
+        targetId: market.id,
+        requestedBy: submitter.id,
+        status: 'approved',
+        decidedBy: approver.id,
+        decisionReason: '체크리스트 확인',
+      });
+      expect(request.decidedAt!.getTime() - request.requestedAt.getTime()).toBe(1);
+      const events = await eventsOf(market.id);
+      expect(
+        events.map(({ type, actorId, fromStatus, toStatus }) => [
+          type,
+          actorId,
+          fromStatus,
+          toStatus,
+        ]),
+      ).toEqual([
+        ['submitted', submitter.id, 'draft', 'review'],
+        ['approved', approver.id, 'review', 'scheduled'],
+      ]);
+      expect(events[1]).toMatchObject({
+        id: market.statusEventId,
+        payload: {
+          approvalId: request.id,
+          checklist: [...MARKET_REVIEW_CHECKLIST],
+          reason: '체크리스트 확인',
+        },
+        createdAt: request.decidedAt,
+      });
+
+      // Neither the creator, an editor nor the submitter approves (#172 item 5): the factory
+      // throws, as the route refuses, before writing anything.
+      const count = async () => (await t.db.select({ id: markets.id }).from(markets)).length;
+      const written = await count();
+      for (const [approvedBy, exclusion] of [
+        [creator.id, 'creator'],
+        [editor.id, 'editor'],
+        [submitter.id, 'requester'],
+      ] as const) {
+        await expect(createScheduledMarket(t.db, { ...parties, approvedBy })).rejects.toThrow(
+          `the ${exclusion} never approves`,
+        );
+      }
+      expect(await count()).toBe(written);
+      // By default a fresh admin approves, a millisecond after the submission.
+      const plain = await createScheduledMarket(t.db);
+      expect(plain.market.status).toBe('scheduled');
+      expect(plain.request.decidedBy).not.toBe(plain.request.requestedBy);
+      expect(plain.request.decidedAt!.getTime() - plain.request.requestedAt.getTime()).toBe(1);
     });
   });
 

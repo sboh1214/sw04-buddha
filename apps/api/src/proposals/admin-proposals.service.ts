@@ -41,7 +41,7 @@ function fieldError(path: string[], message: string, detail: string): AppError {
  * 채택·반려, 접수 → 반려 directly; 채택 and 반려 are never undone; a 반려 picks a reason and explains
  * it to the proposer (a 중복 names the existing market); a 채택 may carry a memo for the proposer
  * and may make a market draft from the proposal or link an existing market — and grants nothing
- * and opens nothing (the draft opens through the market's own steps, #78 later). A 채택 made with
+ * and opens nothing (the draft opens through the market's own steps, #78's review). A 채택 made with
  * no market may take one later, once, the same two ways (owner decision 2026-10-19). Who started
  * the review, who decided, who linked a market later and when are kept on the row and in
  * `admin_actions`, which the admin screen shows (검토 흐름·기록).

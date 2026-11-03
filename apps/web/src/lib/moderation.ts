@@ -1327,11 +1327,18 @@ export function accountRequestMootNotice(
   return standing === 'decide' ? accountRequestMootText(request.moot) : null;
 }
 
+/**
+ * The two-person rule's refusals as the moderation screens say them. `creator` and `editor` are the
+ * market review's (#78), which no account restriction request meets; the review screen says them in
+ * its own words (lib/market-review.ts).
+ */
 const APPROVAL_REFUSAL_MESSAGES: Readonly<Record<ApprovalRefusal, string>> = {
   requester: copy.errApprovalRequester,
   decided: copy.errApprovalDecided,
   retracted: copy.errApprovalRetracted,
   not_requester: copy.errApprovalNotRequester,
+  creator: copy.errApprovalCreator,
+  editor: copy.errApprovalEditor,
 };
 
 const MODERATION_REFUSAL_MESSAGES: Readonly<Record<ModerationRefusal, string>> = {

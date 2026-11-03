@@ -809,6 +809,14 @@ const market: AdminMarket = {
   tags: [],
   missingOpenItems: [],
   leadCloseGapMinutes: null,
+  // Never submitted (#78): no request, no editor, no record.
+  review: {
+    pending: null,
+    createdBy: { id: 'admin', nickname: '운영자' },
+    editors: [],
+    sameCondition: [],
+    log: [],
+  },
 };
 
 describe('marketFormSchema tags', () => {

@@ -192,7 +192,7 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
 
     const page = await profilePosts();
     expect(ids(page)).toEqual(written.map((post) => post.id).reverse());
-    expect(page.data.map((item) => item.market.status)).toEqual([...statuses].reverse());
+    expect(page.data.map((item) => item.market?.status)).toEqual([...statuses].reverse());
     expect(page.meta.nextCursor).toBeNull();
     // The profile counts what its tab lists (ADR-0078).
     expect((await profile()).postCount).toBe(page.data.length);
@@ -310,6 +310,21 @@ describe.skipIf(!hasTestInfra)('/api/v1 authored lists (integration)', () => {
   });
 
   // ---- the profile's 댓글 tab --------------------------------------------------------------------
+
+  it('names no market on an item whose market went back to a draft (#78 되돌리기, ADR-0099)', async () => {
+    const sentBack = await createMarket(t.db, { title: '개장 예정 시장', status: 'scheduled' });
+    const post = await createPost(t.db, { marketId: sentBack.id, authorId: member.id });
+    const comment = await createComment(t.db, { postId: post.id, authorId: member.id });
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'draft', title: '고치는 중인 질문' })
+      .where(eq(schema.markets.id, sentBack.id));
+    const posts = await profilePosts();
+    const comments = await profileComments();
+    expect(posts.data.find((item) => item.id === post.id)?.market).toBeNull();
+    expect(comments.data.find((item) => item.id === comment.id)?.market).toBeNull();
+    expect(JSON.stringify([posts, comments])).not.toContain('고치는 중인 질문');
+  });
 
   it('lists the member’s 댓글 and 대댓글 newest first, with the post and market each leads to (#37-14)', async () => {
     const ended = await createMarket(t.db, { status: 'settled', resolvedResult: 'YES' });

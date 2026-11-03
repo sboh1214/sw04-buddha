@@ -28,10 +28,12 @@ export const metadata: Metadata = { title: `${copy.adminTitle} | ${copy.appName}
  * (ADR-0081 — the report queue, whose own row of links leads on to the action log and to #187's
  * 반복 링크, ADR-0083), 테마 #81's (ADR-0088 — next to 시장, whose markets it groups), 카테고리
  * #17's (ADR-0093 — after 테마: the tree markets are filed under, added to, renamed, ordered and
- * hidden, never deleted). The row wraps rather than scrolling sideways at phone width.
+ * hidden, never deleted), 검수 대기 #78's (ADR-0099 — right after 시장: the markets waiting for
+ * another admin's approval). The row wraps rather than scrolling sideways at phone width.
  */
 const NAV: { href: Route; label: string }[] = [
   { href: '/admin/markets', label: copy.adminMarkets },
+  { href: '/admin/markets/reviews', label: copy.adminMarketReviews },
   { href: '/admin/themes', label: copy.adminThemes },
   { href: '/admin/categories', label: copy.adminCategories },
   // 시장 제안 (#77, ADR-0089): the members' proposals and their review.

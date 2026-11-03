@@ -20,6 +20,7 @@ import {
 } from './constants.js';
 import { expectedAccountIdSchema, namesAFieldBesideAccount } from './expected-account.js';
 import { openItemSchema } from './market-open-items.js';
+import { adminMarketReviewSchema } from './market-review.js';
 import {
   marketLongDelayDaysSchema,
   marketRuleItemsSchema,
@@ -152,8 +153,9 @@ export const marketSchema = z
      * The market's tags (#17), in the order the operator entered them, each as its tag's stored
      * spelling — the one it was first made with. The detail shows them, each a link to its
      * exact-match search; cards do not (ADR-0093 decision 2 #172 item 2). 1..5 once the
-     * open-items check has passed (open requires them); a draft may have none, and so may a market
-     * opened before #17 deployed or a seed market an older seed inserted without them.
+     * open-items check has passed (the review submission requires them, #78); a draft may have
+     * none, and so may a market opened before #17 deployed or a seed market an older seed
+     * inserted without them.
      */
     tags: z.array(z.string()),
     resolvedAt: z.iso.datetime().nullable(),
@@ -460,7 +462,8 @@ export const marketEventSchema = z
     actorId: z.string().nullable(),
     /**
      * The status change the event made (#174): both set on a transition, only `toStatus` on
-     * `created`, both null on an event that changes no status (`rules_edited`).
+     * `created`, both null on an event that changes no status (`rules_edited`,
+     * `open_rescheduled`).
      */
     fromStatus: marketStatusSchema.nullable(),
     toStatus: marketStatusSchema.nullable(),
@@ -506,19 +509,26 @@ export const adminMarketSchema = marketSchema
     events: z.array(marketEventSchema),
     /**
      * What the open-items check finds missing (`missingOpenItems`, #17, #23, #22), in OPEN_ITEMS
-     * order — on a draft, what the open refuses it for; empty once it may open. Every status
-     * reports it, so a market whose category was hidden after it opened shows that too, and so does
-     * one opened before #23 or #22 with its rule items or times blank.
+     * order — on a draft, what the review submission (#78) and the interim open refuse it for; in
+     * REVIEW, what the approval refuses it for; empty once it may go on. Every status reports it,
+     * so a market whose category was hidden after it opened shows that too, and so does one opened
+     * before #23 or #22 with its rule items or times blank.
      */
     missingOpenItems: z.array(openItemSchema),
     /**
-     * The 선행 마감 gap in minutes the check above holds the market to (#22, ADR-0098): the one its
-     * lead close was last checked against (`markets.lead_close_gap_minutes`, which the open stores,
-     * or an open market's first lead check) once there is one, else the release setting
+     * The 선행 마감 gap in minutes the check above holds the market to (#22, ADR-0098; #78,
+     * ADR-0099): the one its lead close was last checked against (`markets.lead_close_gap_minutes`,
+     * which the review submission and the interim open store, a 반려 or a 되돌리기 clears, or an
+     * open market's first lead check) once there is one, else the release setting
      * `market.lead_close_gap`'s current reading; null while that is undecided and the market has
      * none. The admin screen recomputes which time rule is broken from it (`timeRuleViolations`).
      */
     leadCloseGapMinutes: z.number().int().min(0).nullable(),
+    /**
+     * 개설 검수 (#78, ADR-0099), in every status: the pending request, the creator and the editors
+     * the exclusions name, the same-condition markets and the 검수 기록.
+     */
+    review: adminMarketReviewSchema,
   })
   .meta({ id: 'AdminMarket' });
 export type AdminMarket = z.infer<typeof adminMarketSchema>;
@@ -594,7 +604,7 @@ const marketFields = {
     .nullish(),
   /**
    * 예정 개장 시각 (#22): the market opens no earlier (ADR-0093 decision 3 '#21 앞당긴 개장'). Before
-   * the close, in whole minutes.
+   * the close, in whole minutes. Once SCHEDULED it moves by its own write, with a reason (#78).
    */
   scheduledOpenAt: storableInstantSchema.nullish(),
   /**
@@ -626,8 +636,10 @@ export const createMarketBodySchema = z
 export type CreateMarketBody = z.infer<typeof createMarketBodySchema>;
 
 /**
- * `PATCH /admin/markets/:id`: which fields a status admits is the service's decision. At least one
- * field beside the account.
+ * `PATCH /admin/markets/:id`: which fields a status admits is the service's decision — a draft's
+ * or an open market's; a market in REVIEW or SCHEDULED is locked (#78, #172 item 6: sent back to a
+ * draft to edit, its scheduled open moved by `rescheduleMarketOpenBodySchema`). At least one field
+ * beside the account.
  */
 export const updateMarketBodySchema = z
   .object(marketFields)

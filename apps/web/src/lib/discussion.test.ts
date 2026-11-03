@@ -378,7 +378,11 @@ describe('the 토론 cards (#47, owner decision 2026-10-20 6)', () => {
     );
     const card = readFileSync(path.join(SRC, 'components/post/post-card.tsx'), 'utf8');
     expect(card).toContain('showMarket = true');
-    expect(card).toMatch(/\{showMarket && \(\s*<HStack[\s\S]*?data-testid="post-card-market"/);
+    expect(card).toMatch(
+      /\{showMarket && post\.market !== null && \(\s*<HStack[\s\S]*?data-testid="post-card-market"/,
+    );
+    // And the line of a market sent back to a draft (#78 되돌리기, ADR-0099), under the same switch.
+    expect(card).toMatch(/\{showMarket && post\.market === null && \(/);
   });
 });
 

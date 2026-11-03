@@ -894,18 +894,19 @@ async function seedMarkets(db: Db, adminId: string): Promise<void> {
     // seeded before one passes reaches the same state without the seed doing anything — and
     // that is the larger half. Against the row's own close time, so an admin who pushed it
     // forward (the copy refresh Q-M3-4 describes) is not nagged about a market they fixed. Only
-    // a draft or an open market has a close time still ahead of it to care about: the other
-    // statuses before the close (review, scheduled, paused) come with #78·#21·#114, which say
-    // what an admin does about a passed cutoff there.
+    // a draft or an open market has a close time still ahead of it to care about: a market in
+    // review or scheduled whose close has passed is sent back to a draft to move it (#78: the
+    // approval refuses a passed close), and #114 says what a paused one does.
     if (outcome.status !== 'draft' && outcome.status !== 'open') continue;
     const remainingMs = outcome.closeAt.getTime() - reportedAt.getTime();
     if (remainingMs <= 0 && outcome.status === 'draft') {
       // Seeded as written rather than skipped: skipping would make the fixture's size a
       // function of the calendar (every cutoff is in 2026, so a fresh seed would insert
-      // nothing at all from 2027). Opening it is refused until an admin moves the close time
-      // (관리자 → 시장 상세 → 수정). The real fix is fresh copy (Q-M3-4), under a new slug.
+      // nothing at all from 2027). Submitting it for review (#78) and opening it are refused until
+      // an admin moves the close time (관리자 → 시장 상세 → 수정). The real fix is fresh copy
+      // (Q-M3-4), under a new slug.
       console.warn(
-        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it cannot be opened until its close time is moved forward (관리자 → 시장 상세 → 수정); refresh the seed copy`,
+        `[db:seed] market ${seed.slug}: closeAt ${seed.closeAt} is already past — it cannot be submitted for review or opened until its close time is moved forward (관리자 → 시장 상세 → 수정); refresh the seed copy`,
       );
     } else if (remainingMs <= 0) {
       // An admin opened the draft and its cutoff has since passed: the worker's per-minute

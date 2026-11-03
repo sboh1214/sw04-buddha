@@ -153,6 +153,30 @@ describe('the public shapes', () => {
     expect(postMarketSchema.safeParse(unsaid).success).toBe(false);
   });
 
+  it('carries no market while it is not public (#78 되돌리기, ADR-0099)', () => {
+    const card = {
+      id: MARKET,
+      title: null,
+      excerpt: '근거',
+      thumbnailUrl: null,
+      author,
+      createdAt: '2026-10-19T00:00:00.000Z',
+      editedAt: null,
+      commentCount: 0,
+      likeCount: 0,
+    };
+    expect(postSummarySchema.parse({ ...card, market: null }).market).toBeNull();
+    expect(postSummarySchema.safeParse(card).success).toBe(false);
+    for (const state of ['deleted', 'hidden'] as const) {
+      expect(postSchema.parse({ state, id: MARKET, market: null, commentCount: 0 })).toEqual({
+        state,
+        id: MARKET,
+        market: null,
+        commentCount: 0,
+      });
+    }
+  });
+
   it('draws a card and a post page in each state', () => {
     const createdAt = '2026-10-19T00:00:00.000Z';
     expect(

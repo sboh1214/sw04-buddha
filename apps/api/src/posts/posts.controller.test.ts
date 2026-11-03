@@ -604,6 +604,47 @@ describe.skipIf(!hasTestInfra)('/api/v1/posts (integration)', () => {
     expect((await written()).market).toMatchObject({ status: 'open', judgementDelayed: false });
   });
 
+  it('shows no market on a post whose market went back to a draft, until it is public again (#78)', async () => {
+    // A SCHEDULED market's post, then #78's 되돌리기 and an edit of the draft (ADR-0099, owner
+    // answer 2026-11-01): the post stays, but nothing of the draft being fixed is public.
+    const sentBack = await createMarket(t.db, { title: '개장 예정 시장', status: 'scheduled' });
+    const post = await written({ marketId: sentBack.id });
+    expect(post.market).toMatchObject({ id: sentBack.id, status: 'scheduled' });
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'draft', title: '고치는 중인 질문' })
+      .where(eq(schema.markets.id, sentBack.id));
+    const listed = await t.app.inject({ method: 'GET', url: '/api/v1/posts' });
+    const card = (await page()).data.find((item) => item.id === post.id);
+    expect(card?.market).toBeNull();
+    const res = await show(post.id);
+    expect(postSchema.parse(res.json<{ data: unknown }>().data).market).toBeNull();
+    for (const body of [listed.body, res.body]) {
+      expect(body).not.toContain('고치는 중인 질문');
+      expect(body).not.toContain(sentBack.slug);
+    }
+    // Nor do the filters read the draft: neither its id nor its category finds the post.
+    const [category] = await t.db
+      .select({ slug: schema.categories.slug })
+      .from(schema.categories)
+      .where(eq(schema.categories.id, sentBack.categoryId));
+    expect((await page(`marketId=${sentBack.id}`)).data).toEqual([]);
+    expect((await page(`category=${category!.slug}`)).data.map((item) => item.id)).not.toContain(
+      post.id,
+    );
+    // Approved again: the market is back on its posts.
+    await t.db
+      .update(schema.markets)
+      .set({ status: 'scheduled' })
+      .where(eq(schema.markets.id, sentBack.id));
+    expect((await shown(post.id)).market).toMatchObject({
+      id: sentBack.id,
+      title: '고치는 중인 질문',
+      status: 'scheduled',
+    });
+    expect((await page(`marketId=${sentBack.id}`)).data.map((item) => item.id)).toEqual([post.id]);
+  });
+
   it('previews the first lines with text however many blank lines come before and between them', async () => {
     // Text the API takes: blank lines are text inside a code block, and only the whole body must
     // not be blank — 2,200 characters of blank lines (U+3000 too, which trim also removes) before

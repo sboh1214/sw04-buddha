@@ -188,22 +188,52 @@ export const marketResultSchema = z.enum(MARKET_RESULTS).meta({ id: 'MarketResul
 /**
  * market_events.type (varchar(40), PLAN 6.2). A row with a status change also carries
  * `from_status`/`to_status` (#174); each action issue adds the type of the transitions it
- * makes (#78 review, #21 scheduled open, #114 pause, #152 judgement, #20 cancel).
+ * makes (#78 review, below; #21 scheduled open, #114 pause, #152 judgement, #20 cancel).
  */
 export const MARKET_EVENT_TYPES = [
   /** → draft: the row is written (`to_status` only). */
   'created',
-  /** draft → open: the admin's direct open (ADR-0027, until #78·#21). */
+  /**
+   * draft → review: 검수 제출 (#78, ADR-0099; ADR-0093 decision 2 #172 item 6): the open-items
+   * check passed, the close was ahead, and the content locked. Payload `{approvalId,
+   * leadCloseGapMinutes}` (`MarketSubmittedPayload`, market-review.ts) — the `market_review`
+   * approval request it opened and the lead-close gap the check used (null while the release
+   * setting is undecided and no announcement needs it), which the approval checks with again.
+   */
+  'submitted',
+  /**
+   * review → scheduled: an admin other than the creator, the editors and the submitter approved
+   * it, every checklist item confirmed (#172 items 4·5). Payload `{approvalId, checklist, reason}`.
+   */
+  'approved',
+  /**
+   * review → draft: 반려 by such an admin (#173 item 1, #172 item 4). Payload `{approvalId,
+   * rejectReason, reason}` — one of MARKET_REJECT_REASONS and the description the creator reads.
+   */
+  'rejected',
+  /**
+   * review or scheduled → draft: 되돌리기 by any admin, with a reason (#172 item 6). Payload
+   * `{approvalId, reason}`: in REVIEW the request it ended (retracted by its submitter, rejected
+   * with this reason by anyone else), in SCHEDULED the approved one.
+   */
+  'reverted',
+  /**
+   * No status change (`from_status`/`to_status` null): a SCHEDULED market's 예정 개장 시각 moved
+   * without a new review (#172 item 6; ADR-0093 decision 3 '#78 수정 기록의 사유', '#21 앞당긴
+   * 개장'). Payload `{before, after, reason}`, the times as ISO instants.
+   */
+  'open_rescheduled',
+  /** draft → open: the admin's direct open (ADR-0027, until #21). */
   'opened',
   /** open → closed: the admin's close (until #114) or the worker at `close_at`. */
   'closed',
   /** settling → settled: the worker finished every SETTLEMENT_STEPS step. */
   'finalized',
   /**
-   * No status change (`from_status`/`to_status` null): an edit of a draft or open market that
-   * changed rule items (#23) or the announcement time or judgement time zone (#22,
-   * `RULES_EDITED_ITEMS`), payload `{items, before, after}` (`rulesEditedPayload`). Rows from
-   * before #23 carry `{before, after}` as the old rules text.
+   * No status change (`from_status`/`to_status` null): an edit of a draft or open market (REVIEW
+   * and SCHEDULED are locked, #78) that changed rule items (#23) or the announcement time or
+   * judgement time zone (#22, `RULES_EDITED_ITEMS`), payload `{items, before, after}`
+   * (`rulesEditedPayload`). Rows from before #23 carry `{before, after}` as the old rules text.
    */
   'rules_edited',
   /** closed → resolved: the admin's judgement, payload `{result, note, evidenceUrl}` (until #152). */
@@ -294,6 +324,23 @@ export const ADMIN_ACTION_TYPES = [
    */
   'market_create',
   'market_update',
+  /**
+   * 개설 검수 (#78, ADR-0099): target `market` / its id, in the transaction that writes the
+   * market's own review event (MARKET_EVENT_TYPES). A submission: payload `{approvalId, after}` —
+   * the request it opened and the market as submitted, `market_create`'s snapshot.
+   */
+  'market_submit',
+  /** An approval (REVIEW → SCHEDULED): payload `{approvalId, checklist, reason}`. */
+  'market_approve',
+  /** A 반려 (REVIEW → DRAFT): payload `{approvalId, rejectReason, reason}`. */
+  'market_reject',
+  /**
+   * A 되돌리기 (REVIEW or SCHEDULED → DRAFT): payload `{approvalId, reason, from}` — `from` the
+   * status it left.
+   */
+  'market_revert',
+  /** A SCHEDULED market's 예정 개장 시각 moved: payload `{before, after, reason}`, ISO instants. */
+  'market_reschedule',
   'market_open',
   'market_close',
   'market_resolve',

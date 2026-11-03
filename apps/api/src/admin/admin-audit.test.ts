@@ -5,6 +5,7 @@
  * row — `admin.controller.test.ts` for the balance adjustment, `charge-package.controller.test`
  * and `coupon.controller.test` for the catalogue, `admin-markets.controller.test` and
  * `admin-markets-resolve.controller.test` for the market transitions,
+ * `admin-markets-review.controller.test` for the market review (#78),
  * `related-markets.controller.test` for the links between markets,
  * `moderation.controller.test` for the moderation actions and the dismissals of reports (#50),
  * `restrictions.controller.test` for the writing restrictions and their shortenings and lifts
@@ -49,6 +50,12 @@ const AUDITED: Readonly<Record<string, AdminActionType>> = {
   'PATCH /admin/coupons/:id': 'coupon_update',
   'POST /admin/markets': 'market_create',
   'PATCH /admin/markets/:id': 'market_update',
+  // #78: the review's writes, each with the market's own review event.
+  'POST /admin/markets/:id/submit': 'market_submit',
+  'POST /admin/markets/:id/approve': 'market_approve',
+  'POST /admin/markets/:id/reject': 'market_reject',
+  'POST /admin/markets/:id/revert': 'market_revert',
+  'POST /admin/markets/:id/reschedule': 'market_reschedule',
   'POST /admin/markets/:id/open': 'market_open',
   'POST /admin/markets/:id/close': 'market_close',
   'POST /admin/markets/:id/resolve': 'market_resolve',

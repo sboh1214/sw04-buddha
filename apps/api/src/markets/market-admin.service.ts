@@ -12,7 +12,11 @@ import {
   decodeKeyset,
   encodeKeyset,
   LEAD_CLOSE_GAP_SETTING,
+  MARKET_REVIEW_APPROVAL_KIND,
+  MARKET_REVIEW_CHECKLIST,
+  MARKET_REVIEW_REQUEST_REASON,
   MARKET_TAGS_MIN,
+  marketReviewExclusion,
   marketSlugSchema,
   missingOpenItems,
   missingRuleItems,
@@ -28,15 +32,25 @@ import {
   timeRuleViolations,
   type AdminMarket,
   type AdminMarketListQuery,
+  type AdminMarketReviewItem,
   type AdminSettlementStep,
+  type ApproveMarketReviewBody,
   type CategoryUnselectableReason,
   type CreateMarketBody,
+  type CursorQuery,
+  type MarketApprovedPayload,
+  type MarketRejectedPayload,
+  type MarketRevertedPayload,
   type MarketRuleItems,
   type MarketStatus,
+  type MarketSubmittedPayload,
   type MarketSummary,
   type MarketTimeItems,
   type OpenItem,
+  type RejectMarketReviewBody,
+  type RescheduleMarketOpenBody,
   type ResolveMarketBody,
+  type RevertMarketBody,
   type RuleItem,
   type RulesEditedValues,
   type TimeItem,
@@ -48,6 +62,11 @@ import {
 } from '@buddha/shared';
 import { and, count, desc, eq, ilike, inArray, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
+import {
+  ApprovalService,
+  approvalNotAllowed,
+  type ApprovalRequest,
+} from '../approvals/approval.service.js';
 import {
   readCategorySelectability,
   type CategorySelectability,
@@ -62,6 +81,15 @@ import { MarketPublisher } from '../realtime/market-publisher.js';
 import { ReleaseSettingsService } from '../release-settings/release-settings.service.js';
 import { type Page } from '../wallet/wallet.service.js';
 import { lockMarket } from './market-lock.js';
+import {
+  approvedReviewRequestId,
+  listMarketReviews,
+  marketEditors,
+  pendingReviewRequests,
+  readMarketReview,
+  reviewRequestStatus,
+  type ReviewRequest,
+} from './market-review.js';
 import {
   readMarketSources,
   replaceMarketSources,
@@ -382,6 +410,35 @@ function openItemsMissing(
   });
 }
 
+/**
+ * The open-items check of `row` as it is stored (#17, #23, #22): the title and every rule item, the
+ * scheduled open and judgement, the judgement time zone, the times in order, the lead close at
+ * `gapMinutes`, a category a new market may be filed under (`category`, read FOR SHARE by the
+ * caller) and 1..5 tags. OPEN_ITEMS_MISSING naming every missing item (`openItemsMissing`). The
+ * gate of the interim open, the review submission and the approval (#78, ADR-0099).
+ */
+function assertOpenItems(
+  row: MarketRow,
+  tags: readonly string[],
+  sources: MarketSources,
+  category: CategorySelectability,
+  gapMinutes: number | null,
+): void {
+  const input = {
+    title: row.title,
+    ...ruleItemsOf(row, sources),
+    ...timesOf(row),
+    closeAt: row.closeAt.toISOString(),
+    categorySelectable: category.found && category.reason === null,
+    tagCount: tags.length,
+    leadCloseGapMinutes: gapMinutes,
+  };
+  const missing = missingOpenItems(input);
+  if (missing.length > 0) {
+    throw openItemsMissing(missing, category, timeRuleViolations(input, gapMinutes));
+  }
+}
+
 /** Two tag lists are one when they name the same tags in the same order (`tagKey`). */
 function sameTags(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((name, index) => tagKey(name) === tagKey(b[index]!));
@@ -450,6 +507,74 @@ function assertFutureCloseAt(closeAt: Date, now: Date): void {
   if (closeAt.getTime() <= now.getTime()) {
     throw fieldError('closeAt', 'closeAt must be in the future', 'must be in the future');
   }
+}
+
+/**
+ * The market's pending `market_review` request (#78), read under the market lock: exactly one
+ * while it is in REVIEW, which every review write keeps (they all hold that lock), so anything
+ * else is a broken invariant — INTERNAL, never an answer.
+ */
+async function pendingReview(tx: Tx, marketId: string): Promise<ReviewRequest> {
+  const pending = await pendingReviewRequests(tx, marketId);
+  if (pending.length !== 1) {
+    throw new AppError('INTERNAL', {
+      message: `Market ${marketId} in review has ${String(pending.length)} pending review requests`,
+    });
+  }
+  return pending[0]!;
+}
+
+/**
+ * Who may not approve or reject a review (#78, ADR-0093 decision 2 #172 item 5), checked before
+ * ApprovalService's own rule so the refusal names the first that holds, in MARKET_REVIEW_EXCLUSIONS
+ * order (`marketReviewExclusion`): the creator, then an admin with a `market_update` or
+ * `market_reschedule` record on the market at any time (`marketEditors`), then the submitter — APPROVAL_NOT_ALLOWED `creator`,
+ * `editor` or `requester`. Under the market lock, so no edit lands between the check and the
+ * decision (an edit needs a draft, and the market is in REVIEW).
+ */
+async function assertMayDecide(
+  tx: Tx,
+  adminId: string,
+  row: MarketRow,
+  request: ReviewRequest,
+): Promise<void> {
+  const editors = await marketEditors(tx, row.id);
+  const exclusion = marketReviewExclusion(adminId, {
+    createdBy: row.createdBy,
+    editorIds: editors.map((editor) => editor.id),
+    requestedBy: request.requestedBy.id,
+  });
+  if (exclusion !== null) throw approvalNotAllowed(exclusion);
+}
+
+/**
+ * The decision names the request its admin reviewed (`requestId`; Codex review of #78): a market
+ * sent back and submitted again since holds a new request on content that admin never saw, so a
+ * dialog left open on the old one decides nothing. That request ended as ApprovalService would
+ * answer a decision on it — 'retracted' (its submitter's 되돌리기) or 'decided' (another admin's
+ * 되돌리기, a 반려); an id that is no request of this market's review is VALIDATION_ERROR on
+ * `requestId`.
+ */
+async function assertReviewedRequest(
+  tx: Tx,
+  marketId: string,
+  pending: ReviewRequest,
+  requestId: string,
+): Promise<void> {
+  if (pending.id === requestId) return;
+  const status = await reviewRequestStatus(tx, marketId, requestId);
+  if (status === null) {
+    throw fieldError('requestId', 'Not a review request of this market', 'unknown');
+  }
+  throw approvalNotAllowed(status === 'retracted' ? 'retracted' : 'decided');
+}
+
+/** The instant ApprovalService decided `request` at, read after its locks. */
+function decisionInstant(request: ApprovalRequest): Date {
+  if (request.decidedAt === null) {
+    throw new AppError('INTERNAL', { message: 'Approval decision has no instant' });
+  }
+  return request.decidedAt;
 }
 
 /**
@@ -524,8 +649,9 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
 /**
  * Admin market CRUD and transitions (PLAN 5.2, 5.5, 7.3, 12; M3 design 3.4, M5 design 3.3,
  * ADR-0046). Every write is one transaction with its `admin_actions` row and, for a
- * transition, its `market_events` row; open, close and resolve take the market's advisory
- * lock first (`lockMarket`) so nothing interleaves with another writer of the same market.
+ * transition, its `market_events` row; open, close, resolve and the review's writes take the
+ * market's advisory lock first (`lockMarket`) so nothing interleaves with another writer of the
+ * same market.
  * Realtime events are published, and the worker's jobs registered or cancelled, only after
  * COMMIT, best effort (MarketPublisher, MarketJobs).
  *
@@ -541,6 +667,21 @@ function toSettlementSteps(rows: SettlementStepRow[]): AdminSettlementStep[] {
  * republishes an unchanged status (A-M4-36). Each action checks its own `from` first, so its
  * refusal keeps the code it always had; the table is the backstop. A `rules_edited` event is not
  * a transition and leaves the key alone.
+ *
+ * 개설 검수 (#78, ADR-0099; market-review.ts in @buddha/shared): the submission (draft → review),
+ * the approval (review → scheduled), the 반려 (review → draft), the 되돌리기 (review or scheduled →
+ * draft) and a SCHEDULED market's new scheduled open, each a `market_events` row and an
+ * `admin_actions` row. The two-person control is a `market_review` approval request (#171,
+ * ApprovalService) that the submission opens and the approval, the 반려 or the 되돌리기 ends, in the
+ * same transaction as the market's change. Lock order: the market lock, the market row (and the
+ * category's rows, FOR SHARE, where the open-items check runs), then ApprovalService's shared
+ * admin-roles lock and the request row. Nothing takes the admin-roles lock and then a market lock
+ * (a role grant or revoke, and an account closure, lock no market), so the order cannot cycle; a
+ * request row of this kind is written under its market's lock alone, so it never waits. The
+ * instant such a write records is the one ApprovalService reads for its step, after every lock
+ * the write queued on — the request's, the decision's or the retraction's — so the market's event,
+ * its record and the request say the same time (as #139's decisions do, ADR-0085); a write with
+ * no request step reads the clock after the market lock.
  */
 @Injectable()
 export class MarketAdminService {
@@ -549,6 +690,7 @@ export class MarketAdminService {
     private readonly publisher: MarketPublisher,
     private readonly jobs: MarketJobs,
     private readonly settings: ReleaseSettingsService,
+    private readonly approvals: ApprovalService,
   ) {}
 
   /**
@@ -682,11 +824,16 @@ export class MarketAdminService {
   /**
    * PATCH per status: a draft accepts every field; an open market accepts the descriptive
    * fields, the rule items, the times but the fixed ones, the category and the tags, and refuses
-   * `slug` naming the field; any other status — REVIEW, SCHEDULED and PAUSED too, whose edits #78,
-   * #21 and #114 define — refuses everything naming `status`. An open market's rule items stay
-   * editable until #80's supplements replace the path (ADR-0096, ADR-0097), but an edit that would
-   * leave one missing that the market had filled, or clear its judgement time zone, is
-   * RULES_REQUIRED naming each (`rulesRequired`).
+   * `slug` naming the field; any other status refuses everything naming `status`. REVIEW and
+   * SCHEDULED are refused because the content locks at the review submission (#78, ADR-0099;
+   * ADR-0093 decision 2 #172 item 6 (a)): what was reviewed is what opens, so a change sends the
+   * market back to a draft (`revert`) to be reviewed again, and a SCHEDULED market's scheduled
+   * open, the one exception, moves by its own write with a reason (`reschedule`). PAUSED's edits
+   * are #114's, and the later statuses are past trading.
+   *
+   * An open market's rule items stay editable until #80's supplements replace the path (ADR-0096,
+   * ADR-0097), but an edit that would leave one missing that the market had filled, or clear its
+   * judgement time zone, is RULES_REQUIRED naming each (`rulesRequired`).
    *
    * The times (#22, ADR-0098): a write whose result breaks the order is refused naming both ends
    * (`assertTimeOrder`). On an open market, until #80's supplement replaces the path, the
@@ -948,23 +1095,24 @@ export class MarketAdminService {
   }
 
   /**
-   * draft → open, the interim edge until #78's review and #21's scheduled open replace it
-   * (`INTERIM_MARKET_TRANSITIONS`). Any other status — REVIEW and SCHEDULED included — is refused
-   * naming `status`. A draft the open-items check finds wanting (#17, #23: the title and every
-   * rule item, never without them — PLAN 0.2; #22: the scheduled open and judgement, the judgement
-   * time zone, the times in order and the lead close at the gap in force; a category a new market
-   * may be filed under; 1..5 tags) is refused with OPEN_ITEMS_MISSING naming every missing item,
-   * before the past close time is: what the market lacks comes first, as RULES_REQUIRED did. Then
-   * a scheduled open still to come on the database clock is refused naming `scheduledOpenAt`, 'not
-   * reached yet' (#22; ADR-0093 decision 3 '#21 앞당긴 개장': no early open — to open sooner the
-   * admin moves the scheduled open earlier). The category is read FOR SHARE
-   * (`readCategorySelectability`), so a hide that commits meanwhile either precedes this read or
-   * waits for the open to commit. The lead-close gap is read once (`leadCloseGap`) and stored on
-   * the market with the open (`lead_close_gap_minutes`), so its lead close keeps that gap while it
-   * trades (docs/SETTINGS.md). Writes the 'opened' event, then publishes
-   * `market:status` and registers the delayed `market.close` job for `closeAt` (PLAN 5.5). No
-   * price tick: a market has no price before its first fill (N02 §5). Opening stays allowed
-   * while no route takes orders (#125): until the CLOB (#119) an open market is shown, not traded.
+   * draft → open, the interim edge until #21's scheduled open replaces it
+   * (`INTERIM_MARKET_TRANSITIONS`); #78's review stands beside it meanwhile (ADR-0099). Any other
+   * status — REVIEW and SCHEDULED included: #21's job opens a SCHEDULED market — is refused naming
+   * `status`. A draft the open-items check finds wanting (`assertOpenItems`; #17, #23: the title
+   * and every rule item, never without them — PLAN 0.2; #22: the scheduled open and judgement, the
+   * judgement time zone, the times in order and the lead close at the gap in force; a category a
+   * new market may be filed under; 1..5 tags) is refused with OPEN_ITEMS_MISSING naming every
+   * missing item, before the past close time is: what the market lacks comes first, as
+   * RULES_REQUIRED did. Then a scheduled open still to come on the database clock is refused
+   * naming `scheduledOpenAt`, 'not reached yet' (#22; ADR-0093 decision 3 '#21 앞당긴 개장': no
+   * early open — to open sooner the admin moves the scheduled open earlier). The category is read
+   * FOR SHARE (`readCategorySelectability`), so a hide that commits meanwhile either precedes this
+   * read or waits for the open to commit. The lead-close gap is read once (`leadCloseGap`) and
+   * stored on the market with the open (`lead_close_gap_minutes`), so its lead close keeps that gap
+   * while it trades (docs/SETTINGS.md). Writes the 'opened' event, then publishes `market:status`
+   * and registers the delayed `market.close` job for `closeAt` (PLAN 5.5). No price tick: a market
+   * has no price before its first fill (N02 §5). Opening stays allowed while no route takes orders
+   * (#125): until the CLOB (#119) an open market is shown, not traded.
    */
   async open(adminId: string, id: string): Promise<AdminMarket> {
     const { market, now } = await this.db.transaction(async (tx) => {
@@ -975,19 +1123,7 @@ export class MarketAdminService {
       const sources = await readMarketSources(tx, id);
       const category = await readCategorySelectability(tx, current.categoryId);
       const leadCloseGapMinutes = await this.leadCloseGap(tx, current);
-      const input = {
-        title: current.title,
-        ...ruleItemsOf(current, sources),
-        ...timesOf(current),
-        closeAt: current.closeAt.toISOString(),
-        categorySelectable: category.found && category.reason === null,
-        tagCount: tags.length,
-        leadCloseGapMinutes,
-      };
-      const missing = missingOpenItems(input);
-      if (missing.length > 0) {
-        throw openItemsMissing(missing, category, timeRuleViolations(input, leadCloseGapMinutes));
-      }
+      assertOpenItems(current, tags, sources, category, leadCloseGapMinutes);
       // The database clock after the market lock and the category's (clock.ts): this transaction
       // may have waited behind another writer of the market, and its rows must sort after that
       // one's.
@@ -1153,6 +1289,313 @@ export class MarketAdminService {
   }
 
   /**
+   * 검수 제출 (#78, ADR-0099; ADR-0093 decision 2 #172 item 6): draft → review, by any admin. Any
+   * other status is refused naming `status`. The gate is the interim open's: the open-items check
+   * at the gap in force (`assertOpenItems`, `leadCloseGap`) — OPEN_ITEMS_MISSING naming every
+   * missing item, with open's details — then a close still ahead (`closeAt`, 'must be in the
+   * future'). The scheduled open is not asked: a market approved after it is opened by #21's job
+   * when that next runs. Opens the `market_review` request (#171; payload `{title}`), moves the
+   * market with a `submitted` event naming the request and the gap the check used — which the
+   * market keeps (`lead_close_gap_minutes`), so the approval checks with the same one — and writes
+   * `market_submit` with the market as submitted. From here the content is locked (`update`). A
+   * market in REVIEW is not public: nothing is published.
+   */
+  async submit(adminId: string, id: string): Promise<AdminMarket> {
+    return this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await this.lockedRow(tx, id);
+      if (current.status !== 'draft') throw wrongStatus(current.status);
+      const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
+      const category = await readCategorySelectability(tx, current.categoryId);
+      const leadCloseGapMinutes = await this.leadCloseGap(tx, current);
+      assertOpenItems(current, tags, sources, category, leadCloseGapMinutes);
+      const request = await this.approvals.request(
+        {
+          kind: MARKET_REVIEW_APPROVAL_KIND,
+          targetType: 'market',
+          targetId: id,
+          payload: { title: current.title },
+          requestedBy: adminId,
+          reason: MARKET_REVIEW_REQUEST_REASON,
+        },
+        tx,
+      );
+      // The request's instant, read after every lock this write queued on (class doc). A past
+      // close refused after the INSERT rolls it back with the rest.
+      const now = request.requestedAt;
+      assertFutureCloseAt(current.closeAt, now);
+      const row = await this.transition(tx, current, {
+        to: 'review',
+        type: 'submitted',
+        actorId: adminId,
+        payload: { approvalId: request.id, leadCloseGapMinutes } satisfies MarketSubmittedPayload,
+        at: now,
+        set: { leadCloseGapMinutes },
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_submit',
+        targetType: 'market',
+        targetId: id,
+        payload: { approvalId: request.id, after: snapshot(row, tags, sources) },
+        createdAt: now,
+      });
+      return await this.toAdminMarket(tx, row, tags, sources);
+    });
+  }
+
+  /**
+   * 승인 (#78; #172 items 4·5): review → scheduled. Anything but REVIEW is refused naming `status`
+   * — so of an approval and another write at once, the second finds what the first left. Then the
+   * request the admin reviewed, which must still be the pending one (`assertReviewedRequest`: a
+   * market sent back and submitted again is a new request), then the deciding admin's exclusions, before the two-person rule's own (`assertMayDecide`), then the
+   * open-items check again at the gap the submission stored — a category hidden since refuses it
+   * (OPEN_ITEMS_MISSING) — and a close still ahead (`closeAt`). The checklist was complete when the
+   * body parsed (VALIDATION_ERROR on `checklist` before anything is read); the `approved` event and
+   * `market_approve` keep it in MARKET_REVIEW_CHECKLIST order, with the request and the reason the
+   * request's decision keeps too. After COMMIT `market:status`: SCHEDULED is public (#173 item 12).
+   * Approved after its scheduled open, the market is SCHEDULED all the same; #21's job opens it.
+   */
+  async approve(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<ApproveMarketReviewBody>,
+  ): Promise<AdminMarket> {
+    const market = await this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await this.lockedRow(tx, id);
+      if (current.status !== 'review') throw wrongStatus(current.status);
+      const request = await pendingReview(tx, id);
+      await assertReviewedRequest(tx, id, request, body.requestId);
+      await assertMayDecide(tx, adminId, current, request);
+      const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
+      const category = await readCategorySelectability(tx, current.categoryId);
+      assertOpenItems(current, tags, sources, category, current.leadCloseGapMinutes);
+      const decided = await this.approvals.approve(adminId, request.id, body.reason, tx);
+      const now = decisionInstant(decided);
+      assertFutureCloseAt(current.closeAt, now);
+      const detail = {
+        approvalId: request.id,
+        checklist: MARKET_REVIEW_CHECKLIST.filter((item) => body.checklist.includes(item)),
+        reason: body.reason,
+      } satisfies MarketApprovedPayload;
+      const row = await this.transition(tx, current, {
+        to: 'scheduled',
+        type: 'approved',
+        actorId: adminId,
+        payload: detail,
+        at: now,
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_approve',
+        targetType: 'market',
+        targetId: id,
+        payload: detail,
+        createdAt: now,
+      });
+      return await this.toAdminMarket(tx, row, tags, sources);
+    });
+    await this.publishStatus(market);
+    return market;
+  }
+
+  /**
+   * 반려 (#78; #173 item 1, #172 item 4): review → draft, with one of MARKET_REJECT_REASONS and the
+   * description the creator reads in the 검수 기록. Refused as the approval is: `status`, then the
+   * request the admin reviewed (`assertReviewedRequest`), then the deciding admin's exclusions
+   * (`assertMayDecide`); nothing else is asked. Rejects the request
+   * with the description as its reason and clears the stored lead-close gap: the draft is checked
+   * again against the setting in force at its next submission. Not public before or after: nothing
+   * is published.
+   */
+  async reject(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<RejectMarketReviewBody>,
+  ): Promise<AdminMarket> {
+    return this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await this.lockedRow(tx, id);
+      if (current.status !== 'review') throw wrongStatus(current.status);
+      const request = await pendingReview(tx, id);
+      await assertReviewedRequest(tx, id, request, body.requestId);
+      await assertMayDecide(tx, adminId, current, request);
+      const decided = await this.approvals.reject(adminId, request.id, body.reason, tx);
+      const now = decisionInstant(decided);
+      const detail = {
+        approvalId: request.id,
+        rejectReason: body.rejectReason,
+        reason: body.reason,
+      } satisfies MarketRejectedPayload;
+      const row = await this.transition(tx, current, {
+        to: 'draft',
+        type: 'rejected',
+        actorId: adminId,
+        payload: detail,
+        at: now,
+        set: { leadCloseGapMinutes: null },
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_reject',
+        targetType: 'market',
+        targetId: id,
+        payload: detail,
+        createdAt: now,
+      });
+      const tags = await marketTagNames(tx, id);
+      return await this.toAdminMarket(tx, row, tags, await readMarketSources(tx, id));
+    });
+  }
+
+  /**
+   * 되돌리기 (#78; #172 item 6): review or scheduled → draft, by any admin — the creator, an editor
+   * and the submitter too — with a reason, so the market can be edited and reviewed again. Any
+   * other status is refused naming `status`. In REVIEW the pending request ends: the submitter's
+   * own 되돌리기 retracts it, anyone else's rejects it with the 되돌리기's reason, so the request
+   * records who ended it and why. In SCHEDULED the approved request stays as decided. The
+   * `reverted` event and `market_revert` name that request; the stored lead-close gap is cleared,
+   * as a 반려 clears it. After COMMIT, when it left SCHEDULED, `market:status` with `draft`: a
+   * viewer's detail refetches and finds the market gone (404), and a list drops it on its next
+   * read.
+   */
+  async revert(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<RevertMarketBody>,
+  ): Promise<AdminMarket> {
+    const { market, from } = await this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await this.lockedRow(tx, id);
+      const from = current.status;
+      if (from !== 'review' && from !== 'scheduled') throw wrongStatus(from);
+      let approvalId: string;
+      let now: Date;
+      if (from === 'review') {
+        const request = await pendingReview(tx, id);
+        const ended =
+          request.requestedBy.id === adminId
+            ? await this.approvals.retract(adminId, request.id, tx)
+            : await this.approvals.reject(adminId, request.id, body.reason, tx);
+        approvalId = request.id;
+        now = ended.retractedAt ?? decisionInstant(ended);
+      } else {
+        const approved = await approvedReviewRequestId(tx, id);
+        if (approved === null) {
+          throw new AppError('INTERNAL', { message: `Scheduled market ${id} has no approval` });
+        }
+        approvalId = approved;
+        // After the market lock (clock.ts): no request step reads the clock here.
+        now = await clockTimestamp(tx);
+      }
+      const detail = { approvalId, reason: body.reason } satisfies MarketRevertedPayload;
+      const row = await this.transition(tx, current, {
+        to: 'draft',
+        type: 'reverted',
+        actorId: adminId,
+        payload: detail,
+        at: now,
+        set: { leadCloseGapMinutes: null },
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_revert',
+        targetType: 'market',
+        targetId: id,
+        payload: { ...detail, from },
+        createdAt: now,
+      });
+      const tags = await marketTagNames(tx, id);
+      const sources = await readMarketSources(tx, id);
+      return { market: await this.toAdminMarket(tx, row, tags, sources), from };
+    });
+    if (from === 'scheduled') await this.publishStatus(market);
+    return market;
+  }
+
+  /**
+   * 예정 개장 시각 변경 (#78; #172 item 6, ADR-0093 decision 3 '#78 수정 기록의 사유' and '#21 앞당긴
+   * 개장'): a SCHEDULED market's scheduled open moved without a new review, by any admin, with a
+   * reason — the one change the review's lock lets through (ADR-0099 takes it from ADR-0098 결과 5's
+   * #21). Any other status is refused naming `status`; a close already passed is refused as the
+   * approval refuses it (`closeAt`, 'must be in the future'): #172 item 6 sends such a market back
+   * to a draft to fix its times and be reviewed again. The stored instant again is VALIDATION_ERROR
+   * on `scheduledOpenAt`, 'unchanged'; an instant at or after the close in whole minutes is the
+   * order refusal the PATCH gives (`assertTimeOrder`: both ends, `scheduledOpenAt` first), the
+   * only rule the scheduled open is an end of. A past instant is allowed: it is how the market
+   * opens sooner, once #21's scheduled-open job runs (until #21 a SCHEDULED market does not open).
+   * An `open_rescheduled` event (no status change, as `rules_edited`) and `market_reschedule`, each
+   * `{before, after, reason}`; its admin counts as an editor in a later review cycle
+   * (`marketEditors`). After COMMIT `market:status` with the status and key unchanged, as an edit
+   * of an open market republishes it, so a viewer refetches the time.
+   */
+  async reschedule(
+    adminId: string,
+    id: string,
+    body: WithoutExpectedAccount<RescheduleMarketOpenBody>,
+  ): Promise<AdminMarket> {
+    const market = await this.db.transaction(async (tx) => {
+      await lockMarket(tx, id);
+      const current = await this.lockedRow(tx, id);
+      if (current.status !== 'scheduled') throw wrongStatus(current.status);
+      // After the market lock (clock.ts): the change sorts after whatever committed meanwhile.
+      const now = await clockTimestamp(tx);
+      assertFutureCloseAt(current.closeAt, now);
+      const stored: MarketTimeItems = {
+        ...timesOf(current),
+        closeAt: current.closeAt.toISOString(),
+      };
+      const times = withTimes(stored, { scheduledOpenAt: body.scheduledOpenAt });
+      if (sameTimeItem('scheduledOpenAt', times.scheduledOpenAt, stored.scheduledOpenAt)) {
+        throw fieldError('scheduledOpenAt', 'The scheduled open is unchanged', 'unchanged');
+      }
+      assertTimeOrder(
+        { ...times, eventDeadline: current.eventDeadline?.toISOString() ?? null },
+        new Set(['scheduledOpenAt']),
+      );
+      const [row] = await tx
+        .update(schema.markets)
+        .set({ scheduledOpenAt: new Date(body.scheduledOpenAt), updatedAt: now })
+        .where(eq(schema.markets.id, id))
+        .returning();
+      if (!row) throw new AppError('INTERNAL', { message: 'Market update failed' });
+      // `before` is null only for a SCHEDULED market written outside the review (a test factory's).
+      const detail = {
+        before: stored.scheduledOpenAt,
+        after: times.scheduledOpenAt,
+        reason: body.reason,
+      };
+      await tx.insert(schema.marketEvents).values({
+        marketId: id,
+        type: 'open_rescheduled',
+        actorId: adminId,
+        payload: detail,
+        createdAt: now,
+      });
+      await tx.insert(schema.adminActions).values({
+        adminId,
+        type: 'market_reschedule',
+        targetType: 'market',
+        targetId: id,
+        payload: detail,
+        createdAt: now,
+      });
+      const tags = await marketTagNames(tx, id);
+      return await this.toAdminMarket(tx, row, tags, await readMarketSources(tx, id));
+    });
+    await this.publishStatus(market);
+    return market;
+  }
+
+  /** `GET /admin/market-reviews` (검수 대기, #78): `listMarketReviews`, the oldest request first. */
+  listReviews(query: CursorQuery): Promise<Page<AdminMarketReviewItem>> {
+    return listMarketReviews(this.db, query);
+  }
+
+  /**
    * Every status, DRAFT and REVIEW included; newest first over (created_at DESC, id DESC). `q`
    * narrows it to the titles holding the term, as the public list's search does (`ILIKE`,
    * wildcards literal): the 관련 시장 picker of the admin detail finds the market to link by it
@@ -1189,14 +1632,23 @@ export class MarketAdminService {
   }
 
   async get(id: string): Promise<AdminMarket> {
-    const [row] = await this.db
-      .select()
-      .from(schema.markets)
-      .where(eq(schema.markets.id, id))
-      .limit(1);
-    if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
-    const tags = await marketTagNames(this.db, id);
-    return this.toAdminMarket(this.db, row, tags, await readMarketSources(this.db, id));
+    // One read-only REPEATABLE READ snapshot (Codex review of #78): the content and the pending
+    // review request it is shown with come from one moment, so a 되돌리기, an edit and a new
+    // submission committing between two reads cannot pair the old content with the new request —
+    // the `requestId` a 승인 names would then approve what the reviewer never saw.
+    return this.db.transaction(
+      async (tx) => {
+        const [row] = await tx
+          .select()
+          .from(schema.markets)
+          .where(eq(schema.markets.id, id))
+          .limit(1);
+        if (!row) throw new AppError('NOT_FOUND', { message: 'Market not found' });
+        const tags = await marketTagNames(tx, id);
+        return this.toAdminMarket(tx, row, tags, await readMarketSources(tx, id));
+      },
+      { isolationLevel: 'repeatable read', accessMode: 'read only' },
+    );
   }
 
   /**
@@ -1238,8 +1690,9 @@ export class MarketAdminService {
 
   /**
    * The 선행 마감 gap `row` is held to (#22, ADR-0098; `AdminMarket.leadCloseGapMinutes`): the one
-   * its lead close was last checked against (`lead_close_gap_minutes`, which the open stores) once
-   * it has one, else the setting's current reading (`leadCloseGapSetting`).
+   * its lead close was last checked against (`lead_close_gap_minutes`, which the review submission
+   * and the interim open store and a 반려 or 되돌리기 clears, ADR-0099) once it has one, else the
+   * setting's current reading (`leadCloseGapSetting`).
    */
   private async leadCloseGap(executor: Executor, row: MarketRow): Promise<number | null> {
     return row.leadCloseGapMinutes ?? (await this.leadCloseGapSetting(executor));
@@ -1258,12 +1711,13 @@ export class MarketAdminService {
   }
 
   /**
-   * The admin detail: the public shape plus exposure figures, settlement steps, the event log
-   * and what the open-items check finds missing (#17, #23, #22, every status) at the lead-close gap
-   * the market is held to (`leadCloseGap`, which it reports too). Reads through `executor` so a
-   * transition returns the state it just committed; `tags` are the market's names in order
-   * (`marketTagNames`) and `sources` its sources (`readMarketSources`), which every caller holds
-   * already.
+   * The admin detail: the public shape plus exposure figures, settlement steps, the event log,
+   * what the open-items check finds missing (#17, #23, #22, every status) at the lead-close gap
+   * the market is held to (`leadCloseGap`, which it reports too) and the review (#78,
+   * `readMarketReview`: its request, creator, editors, same-condition markets and 검수 기록). Reads
+   * through `executor` so a transition returns the state it just committed; `tags` are the
+   * market's names in order (`marketTagNames`) and `sources` its sources (`readMarketSources`),
+   * which every caller holds already.
    *
    * The category's selectability is read in the same statement as its name and WITHOUT the
    * FOR SHARE locks of `readCategorySelectability`: the detail is also read on the pool (`get`),
@@ -1362,14 +1816,17 @@ export class MarketAdminService {
         leadCloseGapMinutes,
       }),
       leadCloseGapMinutes,
+      review: await readMarketReview(executor, row),
     };
   }
 
   /**
    * `market:status` on the market's channel, after COMMIT (best effort).
    *
-   * Sent by every transition and by an edit to an open market, where the status is
-   * deliberately UNCHANGED. That is not a misuse of the event but the cheapest correct delivery:
+   * Sent by every transition that a member can see — to or from a public status: not a review's
+   * submission, 반려 or 되돌리기 from REVIEW, which no member sees — and by an edit to an open
+   * market or a SCHEDULED market's open-time change (#78), where the status is deliberately
+   * UNCHANGED. That is not a misuse of the event but the cheapest correct delivery:
    * the web answers every `market:status` by restarting `['market', id]` (realtime-provider.tsx)
    * while `applyStatus` drops an event that does not SUPERSEDE what it holds (market-live.ts) —
    * so a repeat writes nothing into a cache and still forces the REST snapshot, which is the

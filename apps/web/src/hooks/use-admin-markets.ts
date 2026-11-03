@@ -9,6 +9,7 @@ import {
 } from '@tanstack/react-query';
 import {
   type AdminMarket,
+  type AdminMarketReviewItem,
   type AdminRelatedMarket,
   type Category,
   type Fill,
@@ -36,6 +37,14 @@ export const ADMIN_MARKETS_KEY = ['admin', 'markets'] as const;
 export const ADMIN_MARKET_KEY = ['admin', 'market'] as const;
 
 export const adminMarketKey = (id: string) => [...ADMIN_MARKET_KEY, id] as const;
+
+/**
+ * 검수 대기 (#78, ADR-0099): `GET /admin/market-reviews`, the markets in review with their pending
+ * requests, under the private `['admin']` root. A root segment of its own rather than under the
+ * list's prefix, whose third element is a status filter: every admin write to a market asks it
+ * again (`invalidateMarket`) — a submission adds a row, an approval, a 반려 and a 되돌리기 take one.
+ */
+export const ADMIN_MARKET_REVIEWS_KEY = ['admin', 'market-reviews'] as const;
 
 /**
  * 관련 시장 (#65, ADR-0068) on the admin detail: one market's links, every status, under the
@@ -154,6 +163,41 @@ export function useAdminRelatedSearch(q: string | undefined) {
   return useInfiniteQuery(adminRelatedSearchQueryOptions(q));
 }
 
+/** One page of the 검수 대기 queue. */
+export interface AdminMarketReviewPage {
+  items: AdminMarketReviewItem[];
+  nextCursor: string | null;
+}
+
+/**
+ * The 검수 대기 queue (#78): the oldest submission first, 20 per page with 더 보기 (the API's default
+ * page) — the cursor paging of the other admin lists. No filter, so nothing to keep while another
+ * loads.
+ */
+export function adminMarketReviewsQueryOptions() {
+  return {
+    queryKey: ADMIN_MARKET_REVIEWS_KEY,
+    queryFn: async ({
+      pageParam,
+    }: {
+      pageParam: string | undefined;
+    }): Promise<AdminMarketReviewPage> => {
+      const { data, meta } = unwrap(
+        await api.GET('/api/v1/admin/market-reviews', {
+          params: { query: pageParam === undefined ? {} : { cursor: pageParam } },
+        }),
+      );
+      return { items: data, nextCursor: meta.nextCursor };
+    },
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (last: AdminMarketReviewPage) => last.nextCursor ?? undefined,
+  };
+}
+
+export function useAdminMarketReviews() {
+  return useInfiniteQuery(adminMarketReviewsQueryOptions());
+}
+
 /**
  * After a link or an unlink: the answer is the market's links as the write committed them, so it
  * goes on screen now — a refetch that fails cannot leave the old list under a toast that says
@@ -191,8 +235,9 @@ export function useMarketFills(id: string, enabled: boolean) {
 }
 
 /**
- * After any admin write: the detail, the fills, every filtered list page, every other market's
- * 관련 시장 list, and every public 관련 시장 list. Each row of an admin list badges the market at
+ * After any admin write: the detail, the fills, every filtered list page, the 검수 대기 queue (#78:
+ * a submission, an approval, a 반려 and a 되돌리기 each change it), every other market's 관련 시장
+ * list, and every public 관련 시장 list. Each row of an admin list badges the market at
  * its other end with its status and title, so a market linked to this one would otherwise go on
  * showing it as it was — a draft just opened still '초안' under the hint that says a draft is not
  * shown, for as long as `staleTime` keeps that list fresh (review on #65). Which lists hold this
@@ -221,6 +266,7 @@ function invalidateMarket(queryClient: QueryClient, id: string) {
     queryClient.invalidateQueries({ queryKey: adminMarketKey(id) }),
     queryClient.invalidateQueries({ queryKey: marketFillsKey(id) }),
     queryClient.invalidateQueries({ queryKey: ADMIN_MARKETS_KEY }),
+    queryClient.invalidateQueries({ queryKey: ADMIN_MARKET_REVIEWS_KEY }),
     queryClient.invalidateQueries({
       queryKey: ADMIN_RELATED_MARKETS_KEY,
       predicate: (query) => query.queryHash !== ownLinks,

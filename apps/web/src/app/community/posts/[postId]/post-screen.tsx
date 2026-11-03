@@ -209,9 +209,32 @@ function PostOperatorLink({ postId }: { postId: string }) {
 
 /**
  * The market a post belongs to: its title (a link to the detail, in every status — #46's
- * acceptance criteria), category and status, and the community list of that market's posts.
+ * acceptance criteria), category and status, and the community list of that market's posts. Null
+ * while the market is not public (#78 되돌리기, ADR-0099): '공개되지 않은 시장', no link.
  */
-function MarketBox({ market }: { market: PostMarket }) {
+function MarketBox({ market }: { market: PostMarket | null }) {
+  if (market === null) {
+    return (
+      <Stack
+        as="section"
+        aria-labelledby="post-market-heading"
+        gap="2"
+        p="4"
+        borderWidth="1px"
+        borderColor="border.subtle"
+        borderRadius="card"
+        bg="surface.card"
+        data-testid="post-market"
+      >
+        <Text id="post-market-heading" textStyle="overline" color="fg.muted">
+          {copy.postMarketHeading}
+        </Text>
+        <Text color="fg.muted" data-testid="post-market-hidden">
+          {copy.postMarketNotPublic}
+        </Text>
+      </Stack>
+    );
+  }
   return (
     <Stack
       as="section"

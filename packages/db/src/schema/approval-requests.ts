@@ -28,6 +28,14 @@ import { approvalStatusEnum } from './enums.js';
  * `account_restriction_cancel` (target `moderation_action`, the restriction); the action rows its
  * approvals bring in name them (`moderation_actions.approval_id`, `cancel_approval_id`,
  * `restriction_end_changes.approval_id`, migration 0042). Its requests may be retracted.
+ *
+ * The market review (#78, ADR-0099) — `kind` `market_review` (target `market`, the market's id as
+ * text; payload `{title}`): the submission's request, pending exactly while the market is in
+ * REVIEW. The approval (→ SCHEDULED) approves it and a 반려 (→ DRAFT) rejects it, each by an admin
+ * other than the creator, the market's editors and the submitter (ADR-0093 decision 2 #172 item 5;
+ * the CHECK below holds the last); a 되돌리기 in REVIEW retracts it when its requester sends the
+ * market back, and rejects it with the 되돌리기's reason when another admin does. The market's
+ * `market_events` rows name the request (`approvalId`); nothing references it by a foreign key.
  */
 export const approvalRequests = pgTable(
   'approval_requests',

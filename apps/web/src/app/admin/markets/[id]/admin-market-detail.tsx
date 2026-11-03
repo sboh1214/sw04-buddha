@@ -110,6 +110,7 @@ import {
 import { LONG_DELAY_SEPARATOR, longDelayText } from '@/lib/market-detail';
 import { timeZoneLabel } from '@/lib/time-zone';
 import { MarketFormFields } from '../market-form-fields';
+import { MarketReviewPanel, SubmitReviewButton } from './market-review-panel';
 
 export function AdminMarketDetail({ id }: { id: string }) {
   // A malformed id (not a uuid) would be a 400 from the API, which reads as "try again";
@@ -201,6 +202,11 @@ export function AdminMarketDetail({ id }: { id: string }) {
 
       <TransitionButtons market={data} />
       <OpenItemsNotice market={data} />
+      {/* 검수 (#78, ADR-0099): keyed by the market, so a dialog held on one market's detail never
+          names the next one a same-condition link opens on this route. Prefixed: a sibling below
+          (RelatedMarketsPanel) is keyed by the id too, and two equal keys in one list leave the
+          stale card in the page on every render. */}
+      <MarketReviewPanel key={`review-${data.id}`} market={data} />
 
       <Card.Root>
         <Card.Body>
@@ -229,10 +235,14 @@ export function AdminMarketDetail({ id }: { id: string }) {
             )}
             <Item label={copy.marketCreatedAt}>{formatKst(data.createdAt)}</Item>
             <Item label={copy.marketUpdatedAt}>{formatKst(data.updatedAt)}</Item>
-            <Item label={copy.marketCreatedBy}>
-              <Text fontFamily="mono" fontSize="xs">
-                {data.createdBy}
-              </Text>
+            {/* By nickname (#78: the creator decides none of its review), the account id under. */}
+            <Item label={copy.marketCreatedBy} testId="market-detail-created-by">
+              <Stack gap="0">
+                <Text as="span">{nicknameShown(data.review.createdBy.nickname)}</Text>
+                <Text fontFamily="mono" fontSize="xs" color="fg.muted">
+                  {data.createdBy}
+                </Text>
+              </Stack>
             </Item>
           </DataList.Root>
         </Card.Body>
@@ -249,7 +259,7 @@ export function AdminMarketDetail({ id }: { id: string }) {
 
       {/* Keyed by the market: a title link in it opens another market's detail on this same
           route, and that one starts with its own empty search. */}
-      <RelatedMarketsPanel key={data.id} market={data} />
+      <RelatedMarketsPanel key={`related-${data.id}`} market={data} />
 
       <TradeStatsPanel market={data} />
       <EventLog market={data} />
@@ -259,11 +269,12 @@ export function AdminMarketDetail({ id }: { id: string }) {
 }
 
 /**
- * What the draft still needs before 열기 (#17, the open-items check): '열기 전에 채우거나 고칠 항목:
- * YES 조건 · 1차 출처 · 태그 1~5개', from the server's `missingOpenItems` (`openItemsNotice`) — so a
- * category hidden after it was picked shows here too — with a line under it per time rule the
- * market breaks (#22: '시각 순서: …', '선행 마감: …'). Nothing once nothing is missing, and nothing
- * on any other status. Beside 열기 rather than in the form: it is what 열기 will refuse, and the
+ * What the draft still needs before 검수 제출 (#78) or the interim 열기 (#17, the open-items check):
+ * '검수 제출·열기 전에 채우거나 고칠 항목: YES 조건 · 1차 출처 · 태그 1~5개', from the server's
+ * `missingOpenItems` (`openItemsNotice`) — so a category hidden after it was picked shows here
+ * too — with a line under it per time rule the market breaks (#22: '시각 순서: …', '선행 마감:
+ * …'). Nothing once nothing is missing, and nothing on any other status. Beside the two buttons
+ * rather than in the form: it is what both refuse — 검수 제출 is off while it shows — and the
  * form below is where each item is filled in.
  */
 function OpenItemsNotice({ market }: { market: AdminMarket }) {
@@ -463,6 +474,8 @@ function SourceLine({ source }: { source: MarketSource }) {
 }
 
 /**
+ * 검수 제출 (#78, ADR-0099: `SubmitReviewButton`, the way a draft leaves for review and then, approved
+ * by another admin, for 개장 예정) beside the interim 열기, which stays until #21.
  * 열기 / 마감 / 판정 (PLAN 12, design 3.4, ADR-0046). Each is a Dialog except 열기, whose refusal —
  * the open-items check (#17, #23, #22: 질문, the rule items, the times, 시각 순서, 선행 마감, 카테고리,
  * 태그 1~5개), which the draft's notice says beforehand — is reversible from the form below and is
@@ -542,6 +555,7 @@ function TransitionButtons({ market }: { market: AdminMarket }) {
 
   return (
     <HStack gap="2" flexWrap="wrap">
+      <SubmitReviewButton market={market} />
       {market.status === 'draft' && (
         <Button
           size="sm"
@@ -725,9 +739,11 @@ function ResolveDialog({ market, onClose }: { market: AdminMarket; onClose: () =
  * 수정 (design 3.4). The categories are only the select's options, so their load is gated
  * here (as 시장 만들기 does) and the rest of the page does not depend on it. Inputs follow the
  * status: every field while draft or open (the slug is chosen at creation only), nothing
- * otherwise; an open market's rule items stay editable until #80 (ADR-0097). Saving an open market
- * first shows PLAN 12's "경고 후 허용" dialog. The body is the diff against the loaded values, so an
- * untouched field — a past close time on a draft included — is never sent.
+ * otherwise — 검수 중 and 개장 예정 say why: the content locks at the submission and is changed
+ * by sending it back to a draft (#78, #172 item 6 (a)); an open market's rule items stay editable
+ * until #80 (ADR-0097). Saving an open market first shows PLAN 12's "경고 후 허용" dialog. The
+ * body is the diff against the loaded values, so an untouched field — a past close time on a
+ * draft included — is never sent.
  */
 function EditMarketCard({ market }: { market: AdminMarket }) {
   const categories = useCategories();
@@ -742,8 +758,10 @@ function EditMarketCard({ market }: { market: AdminMarket }) {
         <HStack justify="space-between" flexWrap="wrap" gap="2">
           <Text fontWeight="semibold">{copy.adminMarketEdit}</Text>
           {!editable && (
-            <Text fontSize="sm" color="fg.muted">
-              {copy.adminMarketEditLocked}
+            <Text fontSize="sm" color="fg.muted" data-testid="market-edit-locked">
+              {market.status === 'review' || market.status === 'scheduled'
+                ? copy.adminMarketEditLockedReview
+                : copy.adminMarketEditLocked}
             </Text>
           )}
         </HStack>

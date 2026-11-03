@@ -42,7 +42,8 @@ export const ERROR_CODES = [
   /**
    * A decision on a two-person request the rule refuses: the decider requested it, it is decided
    * already, or its requester retracted it; or a retraction by anyone but the requester, or of one
-   * no longer pending. The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
+   * no longer pending; or, for a market review (#78), the decider created or edited the market.
+   * The first detail names which, one of APPROVAL_REFUSALS in approvals.ts.
    */
   'APPROVAL_NOT_ALLOWED',
   /**
@@ -195,7 +196,8 @@ export const ERROR_CODES = [
    */
   'PROPOSAL_LIMITED',
   /**
-   * The market misses items the open-items check requires before it leaves the draft (#17): a
+   * The market misses items the open-items check requires before it leaves the draft (#17), or
+   * again at the approval of its review, with the gap its submission stored (#78): a
    * blank title, a rule item not filled in (#23), a scheduled open, judgement or judgement time
    * zone not filled in, its times out of order or its close not leading its announcement time by
    * the lead-close gap (#22), a category no new market may be filed under, or too few tags.
